@@ -16,7 +16,7 @@ import { TitleBar, type PluginButton, type TabView } from "@/components/title-ba
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
-import { PluginHost, type Badge, type DiffView } from "@/lib/plugins";
+import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession } from "@/lib/terminal";
 
@@ -92,7 +92,7 @@ export default function App() {
   /** The plugin sidebar on the right, as `pluginId:sidebarId`, and every one opened so far (kept running). */
   const [rightSidebar, setRightSidebar] = useState<string | null>(null);
   const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
-  const [sidebarLabels, setSidebarLabels] = useState<Record<string, string>>({});
+  const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
   /** Bumped when a plugin stops, so its sidebar pages mount fresh next time. */
   const [epochs, setEpochs] = useState<Record<string, number>>({});
 
@@ -114,7 +114,8 @@ export default function App() {
       id: s.id,
       title: s.title,
       icon: s.icon,
-      label: sidebarLabels[`${p.id}:${s.id}`],
+      label: sidebarLabels[`${p.id}:${s.id}`]?.text,
+      rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
       active: rightSidebar === `${p.id}:${s.id}`,
     })),
     ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),

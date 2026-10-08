@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { Fragment, useRef } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   CalendarIcon,
@@ -41,6 +41,8 @@ export type PluginButton = {
   icon: string;
   /** Short text from the plugin, like a running timer. */
   label?: string;
+  /** Shown when you point at the button. */
+  rows?: { label: string; value: string }[];
   /** Its sidebar is open. */
   active?: boolean;
 };
@@ -148,7 +150,22 @@ export function TitleBar(props: {
         return (
           <IconButton
             key={button.key}
-            label={button.title}
+            label={button.label ? `${button.title}, ${button.label}` : button.title}
+            tooltip={
+              button.rows?.length ? (
+                <div className="flex flex-col gap-1.5 py-0.5">
+                  <span className="font-medium">{button.title}</span>
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+                    {button.rows.map((row) => (
+                      <Fragment key={row.label}>
+                        <dt className="opacity-60">{row.label}</dt>
+                        <dd className="truncate">{row.value}</dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                </div>
+              ) : undefined
+            }
             aria-pressed={button.kind === "sidebar" ? button.active : undefined}
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
             className={cn(

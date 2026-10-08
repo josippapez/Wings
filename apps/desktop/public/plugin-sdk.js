@@ -6,7 +6,7 @@
   delete window.__wingsNonce;
   let nextId = 1;
   const pending = new Map();
-  const listeners = { panes: [], action: [] };
+  const listeners = { panes: [], action: [], broadcast: [] };
   const tools = new Map();
 
   const call = (method, params, onOutput) =>
@@ -103,8 +103,15 @@
       delete: (name) => call("secretDelete", { name }),
       has: (name) => call("secretHas", { name }),
     }),
-    /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
-    setSidebarLabel: (sidebarId, label) => call("setSidebarLabel", { sidebarId, label }),
+    /**
+     * Short text next to a sidebar's title bar button, like a running timer. `null` clears it. `rows`, up to 6
+     * `{ label, value }`, show when you point at the button.
+     */
+    setSidebarLabel: (sidebarId, label, { rows } = {}) => call("setSidebarLabel", { sidebarId, label, rows }),
+    /** Sends a JSON value to the plugin's other pages (its main script and open sidebars), up to 64 KB. */
+    broadcast: (message) => call("broadcast", { message }),
+    /** Gets what the plugin's other pages send with `broadcast`. */
+    onBroadcast: (listener) => void listeners.broadcast.push(listener),
     /**
      * Opens the Wings diff viewer. Leave out `patch` to open it in a loading state, then fill it with
      * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`.

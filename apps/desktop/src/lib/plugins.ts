@@ -71,7 +71,7 @@ type Callbacks = {
   /** A plugin stopped: drop everything it showed. */
   clearPlugin: (pluginId: string) => void;
   /** Short text next to a sidebar's title bar button, like a running timer; null clears it. */
-  setSidebarLabel: (pluginId: string, sidebarId: string, label: string | null) => void;
+  setSidebarLabel: (pluginId: string, sidebarId: string, label: SidebarLabel | null) => void;
 };
 
 type Running = {
@@ -167,6 +167,9 @@ function cleanDiffUpdate(p: Record<string, unknown>): Partial<DiffView> {
 const pluginUrl = (id: string, run: string, file: string) =>
   `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${run}/${file}`;
 const newRun = () => crypto.randomUUID().slice(0, 8);
+
+/** A sidebar button's live text, and the rows shown when you point at it. */
+export type SidebarLabel = { text: string; rows: { label: string; value: string }[] };
 
 export class PluginHost {
   private frames = new Map<Window, Running>();
@@ -384,7 +387,22 @@ export class PluginHost {
       case "setSidebarLabel": {
         const sidebarId = String(p.sidebarId);
         if (!plugin.sidebars.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar ${sidebarId}`);
-        this.callbacks.setSidebarLabel(pluginId, sidebarId, p.label === null ? null : (str(p.label, 16) ?? null));
+        const text = p.label === null ? undefined : str(p.label, 16);
+        const rows = (Array.isArray(p.rows) ? p.rows : []).slice(0, 6).flatMap((r) => {
+          const label = str(r?.label, 40);
+          const value = str(r?.value, 120);
+          return label && value ? [{ label, value }] : [];
+        });
+        this.callbacks.setSidebarLabel(pluginId, sidebarId, text ? { text, rows } : null);
+        return null;
+      }
+      case "broadcast": {
+        // Only the plugin's own pages hear it, so its main script and sidebars can keep each other current.
+        const text = JSON.stringify(p.message ?? null);
+        if (text.length > 64_000) throw new Error("A broadcast is limited to 64 KB");
+        for (const [win, other] of this.frames) {
+          if (other.id === pluginId && other !== plugin && other.ready) this.post(win, { event: "broadcast", data: JSON.parse(text) });
+        }
         return null;
       }
       case "setBadge": {

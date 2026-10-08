@@ -91,7 +91,8 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |
 | `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
-| `wings.setSidebarLabel(sidebarId, label)` | Up to 16 characters next to the sidebar's title bar button, like a running timer; `null` clears it |
+| `wings.setSidebarLabel(sidebarId, label, { rows })` | Up to 16 characters next to the sidebar's title bar button, like a running timer; `null` clears it. Wings shows it as a green pill. `rows` are up to 6 `{ label, value }` shown when you point at it |
+| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars. Use it so a sidebar refreshes when a tool call changed something |
 
 A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
 

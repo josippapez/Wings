@@ -13,10 +13,13 @@ export function IconButton({
   className,
   children,
   side = "bottom",
+  tooltip,
   ...props
 }: ComponentProps<typeof motion.button> & {
   label: string;
   shortcut?: string;
+  /** Replaces the tooltip's text, for buttons with more to say than their name. */
+  tooltip?: ReactNode;
   side?: "top" | "bottom" | "left" | "right";
   children: ReactNode;
 }) {
@@ -42,7 +45,7 @@ export function IconButton({
         {children}
       </TooltipTrigger>
       <TooltipContent side={side} className="gap-2">
-        {label}
+        {tooltip ?? label}
         {shortcut && <Kbd>{shortcut}</Kbd>}
       </TooltipContent>
     </Tooltip>
