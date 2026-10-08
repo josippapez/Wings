@@ -66,6 +66,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 |---|---|
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
 | `mcpTools` | `{ name, description }` tools the plugin offers Claude through the Wings MCP server. Names are lowercase letters, digits and `_`. Wings doesn't serve them yet |
+| `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
 

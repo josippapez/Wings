@@ -36,7 +36,23 @@ pub struct Contributes {
     pub ui: Vec<String>,
     /// Tools it offers Claude through the Wings MCP server.
     pub mcp_tools: Vec<McpTool>,
+    /// Web pages it shows in a popover from a title bar button.
+    pub panels: Vec<Panel>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Panel {
+    pub id: String,
+    pub title: String,
+    /// One of `PANEL_ICONS`.
+    pub icon: String,
+    /// An https page. It runs as a normal website, with no access to Wings.
+    pub url: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+const PANEL_ICONS: [&str; 5] = ["clock", "globe", "calendar", "chart", "list"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpTool {
@@ -110,6 +126,20 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     let tool_name = |n: &str| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| !tool_name(&t.name)) {
         return Err(format!("MCP tool name {:?} must be lowercase letters, digits and _", tool.name));
+    }
+    if manifest.contributes.panels.len() > 3 {
+        return Err("at most 3 panels".into());
+    }
+    for panel in &manifest.contributes.panels {
+        if !valid_id(&panel.id) || panel.title.is_empty() || panel.title.len() > 40 {
+            return Err(format!("panel {:?} needs an id like a plugin id and a title up to 40 characters", panel.id));
+        }
+        if !PANEL_ICONS.contains(&panel.icon.as_str()) {
+            return Err(format!("panel icon {:?} must be one of {PANEL_ICONS:?}", panel.icon));
+        }
+        if !panel.url.starts_with("https://") || tauri::Url::parse(&panel.url).is_err() {
+            return Err(format!("panel url {:?} must be an https URL", panel.url));
+        }
     }
     Ok(Plugin { manifest, dir: dir.to_path_buf() })
 }

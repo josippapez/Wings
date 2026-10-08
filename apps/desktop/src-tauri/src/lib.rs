@@ -19,7 +19,7 @@ use std::{
 
 use tauri::{
     ipc::{Channel, InvokeResponseBody},
-    AppHandle, Emitter, Manager, State,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -184,13 +184,70 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
 
 /// Turning a plugin on approves `shown`, the access and additions the UI showed, if they still match.
 #[tauri::command]
-fn plugin_set_enabled(state: State<AppState>, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
-    state.plugins.lock().unwrap().set_enabled(&id, enabled, shown)
+fn plugin_set_enabled(app: AppHandle, state: State<AppState>, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
+    let view = state.plugins.lock().unwrap().set_enabled(&id, enabled, shown)?;
+    if !enabled {
+        close_panels(&app, &id);
+    }
+    Ok(view)
 }
 
 #[tauri::command]
-fn plugin_remove(state: State<AppState>, id: String) -> Res<()> {
+fn plugin_remove(app: AppHandle, state: State<AppState>, id: String) -> Res<()> {
+    close_panels(&app, &id);
     state.plugins.lock().unwrap().remove(&id)
+}
+
+fn panel_label(plugin_id: &str, panel_id: &str) -> String {
+    format!("panel-{plugin_id}-{panel_id}")
+}
+
+fn close_panels(app: &AppHandle, plugin_id: &str) {
+    let prefix = panel_label(plugin_id, "");
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(&prefix) {
+            let _ = window.close();
+        }
+    }
+}
+
+/// Shows or hides a plugin's panel: its web page in a small window just under the title bar button
+/// (`right` and `bottom` are the button's edges in the main window, in CSS pixels). It hides when you
+/// click away, and keeps its cookies, so you stay signed in.
+#[tauri::command]
+fn plugin_panel_toggle(app: AppHandle, state: State<AppState>, plugin_id: String, panel_id: String, right: f64, bottom: f64) -> Res<()> {
+    let plugin = plugin(&state, &plugin_id)?;
+    let panel = plugin.manifest.contributes.panels.iter().find(|p| p.id == panel_id).ok_or("unknown panel")?;
+    let label = panel_label(&plugin_id, &panel_id);
+    let main = app.get_webview_window("main").ok_or("no main window")?;
+    let (width, height) = (f64::from(panel.width.unwrap_or(420).clamp(280, 900)), f64::from(panel.height.unwrap_or(640).clamp(240, 1000)));
+    let scale = main.scale_factor().map_err(err)?;
+    let origin = main.inner_position().map_err(err)?.to_logical::<f64>(scale);
+    let (x, y) = (origin.x + right - width, origin.y + bottom + 6.0);
+    if let Some(window) = app.get_webview_window(&label) {
+        if window.is_visible().unwrap_or(false) {
+            return window.hide().map_err(err);
+        }
+        window.set_position(tauri::LogicalPosition::new(x, y)).map_err(err)?;
+        window.show().map_err(err)?;
+        return window.set_focus().map_err(err);
+    }
+    let url = tauri::Url::parse(&panel.url).map_err(err)?;
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+        .title(&panel.title)
+        .inner_size(width, height)
+        .position(x, y)
+        .parent(&main)
+        .map_err(err)?
+        .build()
+        .map_err(err)?;
+    let popover = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::Focused(false) = event {
+            let _ = popover.hide();
+        }
+    });
+    Ok(())
 }
 
 /// A plugin that's turned on and approved. Every call a plugin makes is checked here.
@@ -480,6 +537,7 @@ pub fn run() {
             plugin_latest_version,
             plugin_set_enabled,
             plugin_remove,
+            plugin_panel_toggle,
             plugin_exec,
             plugin_transcript,
             plugin_open_url,

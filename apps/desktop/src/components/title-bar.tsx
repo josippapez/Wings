@@ -1,14 +1,27 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { HistoryIcon, PanelLeftIcon, PlusIcon, PuzzleIcon, XIcon } from "lucide-react";
+import {
+  CalendarIcon,
+  ChartColumnIcon,
+  ClockIcon,
+  GlobeIcon,
+  HistoryIcon,
+  ListIcon,
+  PanelLeftIcon,
+  PlusIcon,
+  PuzzleIcon,
+  XIcon,
+} from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import { LayoutGlyph } from "@/components/layout-glyph";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import { StatusDot } from "@/components/status-dot";
-import type { AgentState, Space } from "@/lib/api";
+import type { AgentState, PluginPanel, Space } from "@/lib/api";
 import type { LayoutNode } from "@/lib/layout";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
+
+const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
 
 /** `state` rolls up every pane's agent, so a blocked agent in a background split still shows on the tab. */
 export type TabView = { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null };
@@ -26,6 +39,9 @@ export function TitleBar(props: {
   onNew: () => void;
   onHistory: () => void;
   onPlugins: () => void;
+  /** Panels from plugins that are on, each a button that opens its page in a popover. */
+  panels: { pluginId: string; panel: PluginPanel }[];
+  onPanel: (pluginId: string, panelId: string, button: DOMRect) => void;
 }) {
   return (
     <header
@@ -103,6 +119,14 @@ export function TitleBar(props: {
         </div>
       </LayoutGroup>
 
+      {props.panels.map(({ pluginId, panel }) => {
+        const Icon = panelIcons[panel.icon] ?? GlobeIcon;
+        return (
+          <IconButton key={`${pluginId}:${panel.id}`} label={panel.title} onClick={(e) => props.onPanel(pluginId, panel.id, e.currentTarget.getBoundingClientRect())}>
+            <Icon />
+          </IconButton>
+        );
+      })}
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <HistoryIcon />
       </IconButton>

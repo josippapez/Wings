@@ -383,6 +383,20 @@ mod tests {
     }
 
     #[test]
+    fn panels_need_an_https_url_and_a_known_icon() {
+        let (mut s, dir) = store();
+        let with_panel = |icon: &str, url: &str| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js",
+                "contributes": { "panels": [{ "id": "tracker", "title": "Tracker", "icon": icon, "url": url }] } });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
+        };
+        assert!(s.install(&with_panel("clock", "https://example.com/"), Source::File, None).is_ok());
+        assert!(s.install(&with_panel("clock", "http://example.com/"), Source::File, None).unwrap_err().contains("https"));
+        assert!(s.install(&with_panel("rocket", "https://example.com/"), Source::File, None).unwrap_err().contains("icon"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn unpacks_from_one_top_folder_and_refuses_escapes() {
         let (mut s, dir) = store();
         let github = package(&[("owner-demo-abc123/wings-plugin.json", &manifest("demo", &[])), ("owner-demo-abc123/main.js", "x")]);
@@ -406,4 +420,5 @@ mod tests {
         }
     }
 }
+
 

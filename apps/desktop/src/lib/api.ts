@@ -23,8 +23,10 @@ export type PaneInfo = { command: string; cwd: string | null };
 
 export type PluginPermissions = { exec: string[]; transcript: string[]; openUrl: string[] };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
-/** What a plugin adds: UI it draws (`badges`, `diff`) and tools it offers Claude over MCP. */
-export type PluginContributes = { ui: string[]; mcpTools: { name: string; description: string }[] };
+/** A web page a plugin shows in a popover from a title bar button. */
+export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
+/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, and panels. */
+export type PluginContributes = { ui: string[]; mcpTools: { name: string; description: string }[]; panels: PluginPanel[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
 export type PluginView = {
   id: string;
@@ -66,6 +68,9 @@ export const api = {
       shown: enabled ? { permissions: plugin.permissions, contributes: plugin.contributes } : null,
     }),
   pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
+  /** `right` and `bottom` are the button's edges in the window, so the panel opens just under it. */
+  pluginPanelToggle: (pluginId: string, panelId: string, right: number, bottom: number) =>
+    invoke<void>("plugin_panel_toggle", { pluginId, panelId, right, bottom }),
   spacesAdd: (path: string) => invoke<Space>("spaces_add", { path }),
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),
   sessionsList: (spaceId: string) => invoke<SessionSummary[]>("sessions_list", { spaceId }),

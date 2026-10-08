@@ -19,9 +19,10 @@ const uiNames: Record<string, string> = { badges: "Pane badges", diff: "Diff vie
 
 /** What a plugin adds, as short chips: UI parts, MCP tools for Claude, and whether it runs commands. */
 function Adds({ plugin }: { plugin: PluginView }) {
-  const { ui, mcpTools } = plugin.contributes;
+  const { ui, mcpTools, panels } = plugin.contributes;
   const chips = [
     ...ui.map((kind) => ({ key: kind, label: uiNames[kind] ?? kind, title: undefined as string | undefined })),
+    ...panels.map((p) => ({ key: `panel:${p.id}`, label: `${p.title} panel`, title: p.url })),
     ...(mcpTools.length
       ? [{ key: "mcp", label: `${mcpTools.length} MCP ${mcpTools.length === 1 ? "tool" : "tools"}`, title: mcpTools.map((t) => t.name).join(", ") }]
       : []),
@@ -48,9 +49,10 @@ function sourceLabel(p: PluginView) {
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
   const { exec, transcript, openUrl } = plugin.permissions;
-  const { ui, mcpTools } = plugin.contributes;
+  const { ui, mcpTools, panels } = plugin.contributes;
   const groups = [
     { title: "Show these in Wings", items: ui.map((kind) => uiNames[kind] ?? kind) },
+    { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
     { title: "Run these commands as you, with your own sign-ins", items: exec },
     { title: "Read these parts of your Claude Code sessions", items: transcript },

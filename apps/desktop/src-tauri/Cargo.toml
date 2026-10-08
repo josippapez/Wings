@@ -35,8 +35,8 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
-codegen-units = 1
-lto = true
+# Thin LTO: most of the speed of full LTO, with a much faster final link.
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true

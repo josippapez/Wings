@@ -483,6 +483,8 @@ export default function App() {
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
             onPlugins={() => setPluginsOpen(true)}
+            panels={plugins.filter((p) => p.enabled && p.approved).flatMap((p) => p.contributes.panels.map((panel) => ({ pluginId: p.id, panel })))}
+            onPanel={(pluginId, panelId, button) => void api.pluginPanelToggle(pluginId, panelId, button.right, button.bottom).catch((e) => console.error(e))}
           />
           <div className="flex min-h-0 flex-1">
             <Sidebar
