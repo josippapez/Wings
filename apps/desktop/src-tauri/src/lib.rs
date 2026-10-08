@@ -234,6 +234,9 @@ fn plugin_panel_toggle(app: AppHandle, state: State<AppState>, plugin_id: String
     }
     let url = tauri::Url::parse(&panel.url).map_err(err)?;
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+        // Only web pages: Wings' own schemes (tauri://, wings-plugin://) count as local to Tauri.
+        .on_navigation(|url| url.scheme() == "https" || url.as_str() == "about:blank")
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .title(&panel.title)
         .inner_size(width, height)
         .position(x, y)
