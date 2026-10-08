@@ -8,7 +8,7 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 Open Plugins (the puzzle icon in the title bar) and paste a GitHub repo link, choose a `.wings-plugin` file, or drop one on the window. A new plugin starts off. Turning it on shows what it can do and what it adds, and approves exactly that. An update that asks for more turns it off until you approve again.
 
-From a GitHub link, Wings installs the newest release's `.wings-plugin` file, or the repo itself if there are no releases, and offers updates when a new release is out. That works for public repos. Share a private plugin as a `.wings-plugin` file.
+From a GitHub link, Wings installs the newest release's `.wings-plugin` file, or the repo itself if there are no releases, and offers updates when a new release is out. Public repos need no sign-in. For a private repo Wings uses your `gh` sign-in, so `gh auth login` as someone who can see it. You can also share a private plugin as a `.wings-plugin` file.
 
 From a terminal or a script, use the `wings plugin` command while Wings is open:
 

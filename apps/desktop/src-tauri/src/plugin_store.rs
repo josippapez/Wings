@@ -315,23 +315,59 @@ struct Release {
 #[derive(Deserialize)]
 struct Asset {
     name: String,
-    browser_download_url: String,
+    /// The API address. Asked for `application/octet-stream`, it redirects to the file, for private repos too.
+    url: String,
 }
 
-fn get(url: &str) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
-    ureq::get(url).header("User-Agent", "Wings").header("Accept", "application/vnd.github+json").call()
+const API: &str = "https://api.github.com/";
+const JSON: &str = "application/vnd.github+json";
+
+/// A sign-in token goes only to GitHub's API, never to an address taken from a response. ureq also drops it
+/// when the API redirects to the download.
+fn auth_for<'a>(url: &str, token: Option<&'a str>) -> Option<&'a str> {
+    token.filter(|_| url.starts_with(API))
+}
+
+fn get(url: &str, accept: &str, token: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let request = ureq::get(url).header("User-Agent", "Wings").header("Accept", accept);
+    match auth_for(url, token) {
+        Some(token) => request.header("Authorization", format!("Bearer {token}")).call(),
+        None => request.call(),
+    }
+}
+
+/// Public repos need no sign-in. A private one answers 404 without one, so then your `gh` sign-in is used.
+fn access(repo: &str) -> Result<Option<String>, String> {
+    let url = format!("{API}repos/{repo}");
+    match get(&url, JSON, None) {
+        Ok(_) => return Ok(None),
+        Err(ureq::Error::StatusCode(404)) => {}
+        Err(e) => return Err(github_error(repo, e)),
+    }
+    let token = gh_token().ok_or_else(|| github_error(repo, ureq::Error::StatusCode(404)))?;
+    get(&url, JSON, Some(&token)).map_err(|e| github_error(repo, e))?;
+    Ok(Some(token))
+}
+
+fn gh_token() -> Option<String> {
+    let gh = crate::plugins::find_program("gh")?;
+    let out = std::process::Command::new(gh).args(["auth", "token", "--hostname", "github.com"]).stdin(std::process::Stdio::null()).output().ok()?;
+    let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !token.is_empty()).then_some(token)
 }
 
 fn github_error(repo: &str, error: ureq::Error) -> String {
     match error {
-        ureq::Error::StatusCode(404) => format!("Couldn't find {repo} on GitHub. If it's private, install its .wings-plugin file instead."),
+        ureq::Error::StatusCode(404) => format!(
+            "Couldn't find {repo} on GitHub. If it's private, sign in with `gh auth login` as someone who can see it, or install its .wings-plugin file."
+        ),
         ureq::Error::StatusCode(403 | 429) => "GitHub's rate limit was hit. Try again in a few minutes.".into(),
         e => format!("Couldn't reach GitHub: {e}"),
     }
 }
 
-fn latest_release(repo: &str) -> Result<Option<Release>, String> {
-    match get(&format!("https://api.github.com/repos/{repo}/releases/latest")) {
+fn latest_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, String> {
+    match get(&format!("{API}repos/{repo}/releases/latest"), JSON, token) {
         Ok(mut response) => {
             let text = response.body_mut().read_to_string().map_err(|e| e.to_string())?;
             serde_json::from_str(&text).map(Some).map_err(|e| e.to_string())
@@ -344,26 +380,36 @@ fn latest_release(repo: &str) -> Result<Option<Release>, String> {
 
 /// The newest release's `.wings-plugin` file, or its source zip, or the default branch when there's no release.
 pub fn download_github(repo: &str) -> Result<Vec<u8>, String> {
-    let url = match latest_release(repo)? {
+    let token = access(repo)?;
+    let (url, accept) = match latest_release(repo, token.as_deref())? {
         Some(release) => match release.assets.into_iter().find(|a| a.name.ends_with(".wings-plugin")) {
-            Some(asset) => asset.browser_download_url,
-            None => release.zipball_url,
+            Some(asset) => (asset.url, "application/octet-stream"),
+            None => (release.zipball_url, JSON),
         },
-        None => format!("https://api.github.com/repos/{repo}/zipball"),
+        None => (format!("{API}repos/{repo}/zipball"), JSON),
     };
-    let mut response = get(&url).map_err(|e| github_error(repo, e))?;
+    let mut response = get(&url, accept, token.as_deref()).map_err(|e| github_error(repo, e))?;
     response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())
 }
 
 /// The newest release's version, without a leading `v`, if the repo has releases.
 pub fn latest_version(repo: &str) -> Result<Option<String>, String> {
-    Ok(latest_release(repo)?.map(|r| r.tag_name.trim_start_matches('v').to_string()))
+    let token = access(repo)?;
+    Ok(latest_release(repo, token.as_deref())?.map(|r| r.tag_name.trim_start_matches('v').to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_github_token_only_goes_to_the_api() {
+        assert_eq!(auth_for("https://api.github.com/repos/o/r/zipball", Some("t")), Some("t"));
+        for url in ["https://codeload.github.com/o/r/zip", "https://api.github.com.evil.dev/x", "http://api.github.com/x", "https://evil.dev/?https://api.github.com/"] {
+            assert_eq!(auth_for(url, Some("t")), None, "{url}");
+        }
+    }
 
     fn package(files: &[(&str, &str)]) -> Vec<u8> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
