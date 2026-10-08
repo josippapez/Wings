@@ -41,7 +41,7 @@ export function RightSidebar(props: {
   const title = props.open ? sidebarOf(props.open)?.title : undefined;
   return (
     <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open} aria-label={title}>
-      <div className="flex h-full min-w-[280px] flex-col pb-2 pl-1">
+      <div className="flex h-full min-w-[250px] flex-col pb-2 pl-1">
         <div className="flex h-8 shrink-0 items-center gap-1 pr-2 pl-1">
           {props.mounted.length > 1 ? (
             // Several plugins' pages are open: one tab each, scrolling sideways if they don't fit. Only the

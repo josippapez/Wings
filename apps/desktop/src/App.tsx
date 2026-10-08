@@ -39,6 +39,11 @@ type SavedWorkspace = {
 
 type Widths = { left: number; right: number };
 
+/** Sidebar sizes in pixels. The right one closes once it's dragged below its minimum. */
+const SIDES = { left: { min: 200, max: 420, initial: 248 }, right: { min: 250, max: 640, initial: 360 } } as const;
+/** A saved width out of range, like a near-zero one WebKit can report while a panel collapses, falls back. */
+const fit = (side: keyof Widths, width: number) => (width >= SIDES[side].min && width <= SIDES[side].max ? width : SIDES[side].initial);
+
 /** Opens a side panel at its saved width, or closes it. */
 function place(panel: PanelImperativeHandle | null, open: boolean, width: number, force: boolean) {
   if (!panel) return;
@@ -79,13 +84,11 @@ export default function App() {
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTabBySpace, setActiveTabBySpace] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [widths, setWidths] = useState<Widths>({ left: 248, right: 360 });
+  const [widths, setWidths] = useState<Widths>({ left: SIDES.left.initial, right: SIDES.right.initial });
   const leftPanel = usePanelRef();
   const rightPanel = usePanelRef();
   const panelGroup = useRef<HTMLDivElement>(null);
   const placed = useRef(false);
-  // Updated on every drag frame; saved into `widths` once the drag ends, so App doesn't re-render per frame.
-  const liveWidths = useRef(widths);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [pluginsOpen, setPluginsOpen] = useState(false);
@@ -312,7 +315,7 @@ export default function App() {
       setTabs(restored);
       setActiveTabBySpace(Object.fromEntries(Object.entries(saved.activeTabBySpace).filter(([, id]) => tabIds.has(id))));
       setSidebarOpen(saved.sidebarOpen);
-      if (saved.widths) setWidths((liveWidths.current = saved.widths));
+      if (saved.widths) setWidths({ left: fit("left", saved.widths.left), right: fit("right", saved.widths.right) });
       setActiveSpaceId(saved.activeSpaceId && known.has(saved.activeSpaceId) ? saved.activeSpaceId : restored[0].spaceId);
       return true;
     },
@@ -586,7 +589,19 @@ export default function App() {
           <ResizablePanelGroup
             orientation="horizontal"
             elementRef={panelGroup}
-            onLayoutChanged={() => setWidths(liveWidths.current)}
+            onLayoutChanged={(_, meta) => {
+              // Only a drag counts. While a sidebar slides the panels report in-between sizes, which once saved
+              // a 1px sidebar. Under its minimum a sidebar closes, so only real widths are kept.
+              if (!meta.isUserInteraction) return;
+              const left = leftPanel.current?.getSize().inPixels ?? 0;
+              const right = rightPanel.current?.getSize().inPixels ?? 0;
+              if (left < SIDES.left.min) setSidebarOpen(false);
+              if (right < SIDES.right.min) setRightSidebar(null);
+              setWidths((w) => ({
+                left: left >= SIDES.left.min ? Math.round(left) : w.left,
+                right: right >= SIDES.right.min ? Math.round(right) : w.right,
+              }));
+            }}
             className="min-h-0 flex-1"
           >
             <ResizablePanel
@@ -594,15 +609,11 @@ export default function App() {
               panelRef={leftPanel}
               collapsible
               collapsedSize={0}
-              minSize={200}
-              maxSize={420}
-              defaultSize={248}
+              minSize={SIDES.left.min}
+              maxSize={SIDES.left.max}
+              defaultSize={SIDES.left.initial}
               groupResizeBehavior="preserve-pixel-size"
               className="overflow-hidden"
-              onResize={(size) => {
-                if (size.inPixels < 1) setSidebarOpen(false);
-                else liveWidths.current = { ...liveWidths.current, left: Math.round(size.inPixels) };
-              }}
             >
               <Sidebar
                 open={sidebarOpen}
@@ -651,15 +662,12 @@ export default function App() {
               panelRef={rightPanel}
               collapsible
               collapsedSize={0}
-              minSize={280}
-              maxSize={640}
+              minSize={SIDES.right.min}
+              maxSize={SIDES.right.max}
+              collapsedThreshold={10}
               defaultSize={0}
               groupResizeBehavior="preserve-pixel-size"
               className="overflow-hidden"
-              onResize={(size) => {
-                if (size.inPixels < 1) setRightSidebar(null);
-                else liveWidths.current = { ...liveWidths.current, right: Math.round(size.inPixels) };
-              }}
             >
               <RightSidebar
                 open={rightRef}
