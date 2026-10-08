@@ -379,28 +379,27 @@ fn fetch_prefix_ok(prefix: &str) -> bool {
 }
 
 /// The URL to send, if the plugin may call it: https, no credentials, under a `permissions.fetch` prefix,
-/// and already in normal form with no encoded `/`, `\\` or `.`, so what's checked is exactly what the server
-/// sees. A server that decoded `..%2F` could otherwise route a request outside the approved prefix.
+/// and already in normal form. The path may only use letters, digits and `-_.~/`, with no `;` or percent
+/// escapes, so no server can read it as a different path (`..;/`, `..%2F`, double encoding) than the one
+/// that was checked.
 pub fn fetch_url(plugin: &Plugin, url: &str) -> Option<String> {
     let parsed = tauri::Url::parse(url).ok()?;
     let normal = parsed.as_str();
-    let lower = normal.to_ascii_lowercase();
+    let plain_path = parsed.path().bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~/".contains(&b));
     let ok = parsed.scheme() == "https"
         && parsed.username().is_empty()
         && parsed.password().is_none()
+        && parsed.fragment().is_none()
         && normal == url
-        && !["%2f", "%5c", "%2e"].iter().any(|bad| lower.contains(bad))
+        && plain_path
         && plugin.manifest.permissions.fetch.iter().any(|prefix| normal.starts_with(prefix));
     ok.then(|| normal.to_string())
 }
 
-/// Headers a plugin may set. Routing headers like `Host` or `X-Forwarded-Host` could send a request, and
-/// the token on it, to a different site behind the same server, so they're refused.
+/// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
+/// different site or path behind the same server (`Host`, `X-Forwarded-*`, `X-HTTP-Host-Override`).
 pub fn fetch_header_ok(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let routing = ["x-forwarded-", "x-real-ip", "x-original-", "x-rewrite-", "x-host"].iter().any(|p| name.starts_with(p));
-    ["accept", "accept-language", "content-type", "if-none-match", "if-modified-since", "cache-control"].contains(&name.as_str())
-        || (name.starts_with("x-") && !routing)
+    ["accept", "accept-language", "content-type", "if-none-match", "if-modified-since", "cache-control"].contains(&name.to_ascii_lowercase().as_str())
 }
 
 pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
@@ -448,13 +447,21 @@ mod tests {
             "https://api.example.com/v1/%2e%2e/admin",
             "https://api.example.com/v1\\..\\admin",
             "https://API.example.com/v1/x",
+            "https://api.example.com/v1/..;/admin",
+            "https://api.example.com/v1/%252e%252e%252fadmin",
+            "https://api.example.com/v1/a%20b",
+            "https://api.example.com/v1/x#frag",
         ] {
             assert!(fetch_url(&p, url).is_none(), "{url}");
         }
-        for name in ["Accept", "content-type", "X-Api-Key", "X-Request-Id"] {
+        assert_eq!(fetch_url(&p, "https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08").as_deref(), Some("https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08"));
+        for name in ["Accept", "content-type", "If-None-Match"] {
             assert!(fetch_header_ok(name), "{name}");
         }
-        for name in ["Host", "x-forwarded-host", "X-Forwarded-For", "Forwarded", "Cookie", "Transfer-Encoding", "Authorization", "X-Real-IP"] {
+        for name in [
+            "Host", "x-forwarded-host", "X-Forwarded", "Forwarded", "Cookie", "Transfer-Encoding", "Authorization", "X-Real-IP",
+            "X-HTTP-Host-Override", "X-HTTP-Method-Override", "X-Override-URL", "X-Api-Key",
+        ] {
             assert!(!fetch_header_ok(name), "{name}");
         }
         assert!(fetch_prefix_ok("https://api.example.com/"));
