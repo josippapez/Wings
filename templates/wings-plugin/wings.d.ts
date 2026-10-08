@@ -55,6 +55,11 @@ interface Wings {
   onPanes(listener: (panes: WingsPane[]) => void): void;
   /** A badge action was clicked. Return a promise: the button spins until it settles, and a thrown error shows in the card. */
   onAction(listener: (action: { paneId: string; actionId: string }) => void | Promise<void>): void;
+  /**
+   * Handles Claude's calls to a tool in `contributes.mcpTools`. Return a string or a JSON value; a thrown error
+   * is sent back as a failed call. `paneId` is the Wings pane Claude runs in, or `null`. Register it in `main`.
+   */
+  onTool(name: string, handler: (input: Record<string, unknown>, context: { paneId: string | null }) => unknown): void;
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /** Claude Code transcript entries of types in `permissions.transcript`, oldest first. */

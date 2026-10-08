@@ -30,10 +30,12 @@ export type PluginSidebar = { id: string; title: string; icon: string; page: str
 /** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels and sidebars. */
 export type PluginContributes = {
   ui: string[];
-  mcpTools: { name: string; description: string }[];
+  mcpTools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
 };
+export type McpStatus = { claude: boolean; connected: boolean };
+export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
 export type PluginView = {
   id: string;
@@ -75,6 +77,13 @@ export const api = {
       shown: enabled ? { permissions: plugin.permissions, contributes: plugin.contributes } : null,
     }),
   pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
+  /** Whether Claude Code is installed, and has the Wings MCP server that serves plugin tools. */
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
+  /** Registers the Wings MCP server with Claude Code, for every project. */
+  mcpConnect: () => invoke<void>("mcp_connect"),
+  mcpToolResult: (callId: number, text: string, isError: boolean) => invoke<void>("mcp_tool_result", { callId, text, isError }),
+  /** Claude called a plugin tool. `paneId` is the pane that Claude runs in, if it's a Wings pane. */
+  onMcpCall: (cb: (call: McpCall) => void): Promise<UnlistenFn> => listen<McpCall>("mcp-call", (e) => cb(e.payload)),
   /** `right` and `bottom` are the button's edges in the window, so the panel opens just under it. */
   pluginPanelToggle: (pluginId: string, panelId: string, right: number, bottom: number) =>
     invoke<void>("plugin_panel_toggle", { pluginId, panelId, right, bottom }),

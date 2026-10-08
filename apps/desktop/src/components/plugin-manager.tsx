@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "motion/react";
-import { CircleAlertIcon, CircleArrowUpIcon, EllipsisIcon, FileArchiveIcon, PuzzleIcon, TrashIcon } from "lucide-react";
+import { CircleAlertIcon, CircleArrowUpIcon, CircleCheckIcon, EllipsisIcon, FileArchiveIcon, PuzzleIcon, TrashIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { api, type PluginView } from "@/lib/api";
+import { api, type McpStatus, type PluginView } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -97,9 +97,6 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
           </DialogDescription>
         </DialogHeader>
         {p && <Permissions plugin={p} />}
-        {p && p.contributes.mcpTools.length > 0 && (
-          <p className="text-[12px] text-muted-foreground">Wings doesn't serve MCP tools to Claude yet. These start working once it does.</p>
-        )}
         <p className="text-[12px] text-muted-foreground">Commands run as you, so only turn on plugins you trust.</p>
         <DialogFooter>
           <Button variant="ghost" onClick={props.onCancel}>
@@ -112,6 +109,62 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Connects Claude Code to Wings once, so its sessions get the tools of the plugins that are on. */
+function ClaudeConnect({ open }: { open: boolean }) {
+  const [status, setStatus] = useState<McpStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) void api.mcpStatus().then(setStatus, () => {});
+  }, [open]);
+
+  async function connect() {
+    setConnecting(true);
+    setError(null);
+    try {
+      await api.mcpConnect();
+      setStatus(await api.mcpStatus());
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  if (!status) return null;
+  return (
+    <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 text-[13px] font-medium">
+            Claude Code
+            {status.connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
+          </p>
+          <p className="text-[12px] leading-snug text-muted-foreground">
+            {!status.claude
+              ? "Install Claude Code to give it plugin tools."
+              : status.connected
+                ? "Its sessions get the tools of the plugins you turn on."
+                : "Connect it once so its sessions can use plugin tools."}
+          </p>
+        </div>
+        {status.claude && (
+          <Button variant={status.connected ? "ghost" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting} onClick={() => void connect()}>
+            {connecting && <Spinner />}
+            {status.connected ? "Reconnect" : "Connect"}
+          </Button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="text-[12px] text-blocked">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -261,6 +314,8 @@ export function PluginManager(props: {
               )}
             </AnimatePresence>
           </div>
+
+          <ClaudeConnect open={props.open} />
 
           <ScrollArea className="min-h-0 flex-1">
             <ul className="flex flex-col gap-1 p-3">

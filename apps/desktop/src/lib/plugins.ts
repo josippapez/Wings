@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-import type { PluginView } from "@/lib/api";
+import { api, type McpCall, type PluginView } from "@/lib/api";
 
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
@@ -168,6 +168,9 @@ export class PluginHost {
   private panes: PluginPane[] = [];
   private actions = new Map<string, { pluginId: string; done: () => void; fail: (error: Error) => void }>();
   private nextDiff = 1;
+  /** MCP tool calls a plugin is running, by the token it answers with. */
+  private tools = new Map<string, { pluginId: string; callId: number }>();
+  private unlistenTools = api.onMcpCall((call) => this.runTool(call));
 
   constructor(private callbacks: Callbacks) {
     window.addEventListener("message", this.onMessage);
@@ -248,6 +251,11 @@ export class PluginHost {
     this.frames.delete(win);
     if (running.kind === "sidebar") return;
     for (const [token, action] of this.actions) if (action.pluginId === running.id) this.settle(token, new Error("The plugin was turned off"));
+    for (const [token, tool] of this.tools) {
+      if (tool.pluginId !== running.id) continue;
+      this.tools.delete(token);
+      void api.mcpToolResult(tool.callId, `${running.id} was turned off in Wings`, true);
+    }
     this.callbacks.clearPlugin(running.id);
   }
 
@@ -273,6 +281,15 @@ export class PluginHost {
     });
   }
 
+  /** Hands an MCP tool call from Claude to the plugin's main frame. Rust has checked the tool is declared. */
+  private runTool(call: McpCall) {
+    const entry = [...this.frames].find(([, p]) => p.id === call.pluginId && p.kind === "main" && p.ready);
+    if (!entry) return void api.mcpToolResult(call.callId, `${call.pluginId} is still starting in Wings. Try again in a moment.`, true);
+    const token = crypto.randomUUID();
+    this.tools.set(token, { pluginId: call.pluginId, callId: call.callId });
+    this.post(entry[0], { event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId } });
+  }
+
   private settle(token: string, error: Error | null) {
     const action = this.actions.get(token);
     this.actions.delete(token);
@@ -282,6 +299,7 @@ export class PluginHost {
 
   dispose() {
     window.removeEventListener("message", this.onMessage);
+    void this.unlistenTools.then((off) => off());
     for (const { frame } of this.frames.values()) frame.remove();
     this.frames.clear();
   }
@@ -373,6 +391,13 @@ export class PluginHost {
       case "actionDone":
         this.settle(String(p.token), typeof p.error === "string" ? new Error(p.error) : null);
         return null;
+      case "toolDone": {
+        const tool = this.tools.get(String(p.token));
+        if (!tool || tool.pluginId !== pluginId) throw new Error("unknown tool call");
+        this.tools.delete(String(p.token));
+        // About 25k tokens, Claude Code's default cap on what one MCP tool returns.
+        return api.mcpToolResult(tool.callId, String(p.text ?? "").slice(0, 100_000), p.isError === true);
+      }
       case "openDiff": {
         needs("diff");
         const title = str(p.title, 200);

@@ -7,6 +7,7 @@
   let nextId = 1;
   const pending = new Map();
   const listeners = { panes: [], action: [] };
+  const tools = new Map();
 
   const call = (method, params, onOutput) =>
     new Promise((resolve, reject) => {
@@ -27,6 +28,7 @@
       return;
     }
     if (message.event === "action") return void runAction(message.data);
+    if (message.event === "tool") return void runTool(message.data);
     for (const listener of listeners[message.event] ?? []) {
       try {
         listener(message.data);
@@ -50,11 +52,33 @@
     call("actionDone", { token, error });
   }
 
+  // Claude called one of the plugin's MCP tools. A thrown error goes back to Claude as a failed call.
+  async function runTool({ token, name, arguments: input, paneId }) {
+    let text;
+    let isError = false;
+    try {
+      const handler = tools.get(name);
+      if (!handler) throw new Error(`The plugin has no handler for ${name}`);
+      const result = await handler(input ?? {}, { paneId: paneId ?? null });
+      text = typeof result === "string" ? result : result === undefined ? "Done" : JSON.stringify(result, null, 2);
+    } catch (e) {
+      text = String(e?.message ?? e);
+      isError = true;
+    }
+    call("toolDone", { token, text, isError });
+  }
+
   window.wings = Object.freeze({
     /** Every terminal pane `{ paneId, cwd, command, project, session }`; `session` is set while Claude runs. Called on every change. */
     onPanes: (listener) => void listeners.panes.push(listener),
     /** A badge action was clicked: `{ paneId, actionId }`. */
     onAction: (listener) => void listeners.action.push(listener),
+    /**
+     * Handles calls to one of the manifest's `contributes.mcpTools`, from the main script. `handler(input, { paneId })`
+     * gets the arguments Claude sent and returns a string or a JSON value, or a promise of one. `paneId` is the
+     * Wings pane Claude runs in, or `null`.
+     */
+    onTool: (name, handler) => void tools.set(name, handler),
     /**
      * Runs a program from the manifest's `permissions.exec`. Resolves `{ code, stdout, stderr }`.
      * `timeoutMs` defaults to 30 s, max 5 min. `onOutput(line)` gets each stdout or stderr line while it runs.

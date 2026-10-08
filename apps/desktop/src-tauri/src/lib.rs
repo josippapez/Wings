@@ -1,6 +1,11 @@
 mod claude;
 mod detect;
 mod menu;
+#[cfg(unix)]
+pub mod bridge;
+// debt: the MCP socket is Unix-only, like plugins themselves; Windows needs a named pipe here.
+#[cfg(unix)]
+mod mcp;
 mod plugin_store;
 mod plugins;
 mod secrets;
@@ -40,6 +45,8 @@ struct AppState {
     agents: Mutex<Vec<Agent>>,
     pane_info: Mutex<HashMap<String, PaneInfo>>,
     git: Mutex<HashMap<String, GitStatus>>,
+    #[cfg(unix)]
+    mcp: mcp::Mcp,
     plugins: Mutex<Store>,
     next_pane: AtomicU64,
 }
@@ -150,22 +157,31 @@ fn plugins_list(state: State<AppState>) -> Vec<PluginView> {
 const PACKAGE_LIMIT: u64 = 50 * 1024 * 1024;
 
 #[tauri::command(async)]
-fn plugin_install_file(state: State<AppState>, path: String) -> Res<PluginView> {
+fn plugin_install_file(app: AppHandle, state: State<AppState>, path: String) -> Res<PluginView> {
     let size = std::fs::metadata(&path).map_err(err)?.len();
     if size > PACKAGE_LIMIT {
         return Err("The package is larger than 50 MB".into());
     }
     let bytes = std::fs::read(&path).map_err(err)?;
-    install(&state, &bytes, Source::File, None)
+    install(&app, &state, &bytes, Source::File, None)
 }
 
 /// Installs a package and deletes the secrets of a plugin it replaced from somewhere else.
-fn install(state: &AppState, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
+fn install(app: &AppHandle, state: &AppState, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
     let (view, dropped) = state.plugins.lock().unwrap().install(bytes, source, expected_id)?;
     if let Some(old) = dropped {
         delete_secrets(&view.manifest.id, &old);
     }
+    tools_changed(app);
     Ok(view)
+}
+
+/// Plugins changed, so Claude Code sessions should refetch the Wings MCP tools.
+fn tools_changed(app: &AppHandle) {
+    #[cfg(unix)]
+    mcp::notify_changed(app);
+    #[cfg(not(unix))]
+    let _ = app;
 }
 
 /// Tries every name. A failure only leaves an orphan: the scope is gone, so nothing can read it.
@@ -178,20 +194,20 @@ fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
 }
 
 #[tauri::command(async)]
-fn plugin_install_github(state: State<AppState>, url: String) -> Res<PluginView> {
+fn plugin_install_github(app: AppHandle, state: State<AppState>, url: String) -> Res<PluginView> {
     let repo = plugin_store::parse_repo(&url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
     let bytes = plugin_store::download_github(&repo)?;
-    install(&state, &bytes, Source::Github { repo }, None)
+    install(&app, &state, &bytes, Source::Github { repo }, None)
 }
 
 /// Reinstalls a GitHub plugin from its newest release or default branch.
 #[tauri::command(async)]
-fn plugin_update(state: State<AppState>, id: String) -> Res<PluginView> {
+fn plugin_update(app: AppHandle, state: State<AppState>, id: String) -> Res<PluginView> {
     let Some(Source::Github { repo }) = state.plugins.lock().unwrap().source(&id) else {
         return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
     };
     let bytes = plugin_store::download_github(&repo)?;
-    install(&state, &bytes, Source::Github { repo }, Some(&id))
+    install(&app, &state, &bytes, Source::Github { repo }, Some(&id))
 }
 
 /// The newest release version on GitHub, if the plugin came from there and the repo has releases.
@@ -208,6 +224,7 @@ fn plugin_set_enabled(app: AppHandle, state: State<AppState>, id: String, enable
     if !enabled {
         close_panels(&app, &id);
     }
+    tools_changed(&app);
     Ok(view)
 }
 
@@ -217,7 +234,75 @@ fn plugin_remove(app: AppHandle, state: State<AppState>, id: String) -> Res<()> 
     if let Some(old) = state.plugins.lock().unwrap().remove(&id)? {
         delete_secrets(&id, &old);
     }
+    tools_changed(&app);
     Ok(())
+}
+
+/// A plugin's answer to an MCP tool call the webview handed it.
+#[tauri::command]
+fn mcp_tool_result(app: AppHandle, call_id: u64, text: String, is_error: bool) {
+    #[cfg(unix)]
+    mcp::resolve(&app, call_id, mcp::ToolResult { text, is_error });
+    #[cfg(not(unix))]
+    let _ = (app, call_id, text, is_error);
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpStatus {
+    /// Claude Code's CLI is installed.
+    claude: bool,
+    /// The Wings MCP server is registered with it.
+    connected: bool,
+}
+
+/// Whether Claude Code has the Wings MCP server. Reading Claude's own list keeps Wings from guessing.
+#[tauri::command(async)]
+fn mcp_status() -> McpStatus {
+    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false } };
+    let connected = std::process::Command::new(claude)
+        .args(["mcp", "get", "wings"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success());
+    McpStatus { claude: true, connected }
+}
+
+/// Registers `wings --mcp` with Claude Code once, at user scope, so every session gets the plugin tools.
+/// It's removed first so a moved app is repointed rather than left dangling.
+#[tauri::command(async)]
+fn mcp_connect(app: AppHandle) -> Res<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = app;
+        return Err("Plugin tools aren't available on Windows yet".into());
+    }
+    #[cfg(unix)]
+    {
+        let claude = plugins::find_program("claude").ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
+        let exe = std::env::current_exe().map_err(err)?;
+        let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
+        let run = |args: &[&std::ffi::OsStr]| std::process::Command::new(&claude).args(args).stdin(std::process::Stdio::null()).output();
+        let _ = run(&["mcp".as_ref(), "remove".as_ref(), "--scope".as_ref(), "user".as_ref(), "wings".as_ref()]);
+        let out = run(&[
+            "mcp".as_ref(),
+            "add".as_ref(),
+            "--scope".as_ref(),
+            "user".as_ref(),
+            "--transport".as_ref(),
+            "stdio".as_ref(),
+            "wings".as_ref(),
+            "--".as_ref(),
+            exe.as_os_str(),
+            "--mcp".as_ref(),
+            socket.as_os_str(),
+        ])
+        .map_err(err)?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    }
 }
 
 /// Stores a secret, like an API token, in the keychain under the plugin's name. Plugins can't read it
@@ -613,8 +698,12 @@ pub fn run() {
                 agents: Mutex::new(Vec::new()),
                 pane_info: Mutex::new(HashMap::new()),
                 git: Mutex::new(HashMap::new()),
+                #[cfg(unix)]
+                mcp: mcp::Mcp::default(),
                 next_pane: AtomicU64::new(1),
             });
+            #[cfg(unix)]
+            mcp::start(app.handle().clone(), mcp::socket_path(&data));
             if bench_mode() {
                 // Keep the window on screen without taking focus, so rendering is not throttled.
                 if let Some(window) = app.get_webview_window("main") {
@@ -655,6 +744,9 @@ pub fn run() {
             plugin_secret_delete,
             plugin_secret_has,
             plugin_fetch,
+            mcp_tool_result,
+            mcp_status,
+            mcp_connect,
             plugin_exec,
             plugin_transcript,
             plugin_open_url,

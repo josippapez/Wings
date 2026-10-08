@@ -69,10 +69,18 @@ pub struct Panel {
 const PANEL_ICONS: [&str; 5] = ["clock", "globe", "calendar", "chart", "list"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpTool {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// JSON Schema for the tool's arguments; an object schema. Defaults to taking no arguments.
+    #[serde(default = "empty_schema")]
+    pub input_schema: Value,
+}
+
+fn empty_schema() -> Value {
+    serde_json::json!({ "type": "object" })
 }
 
 const UI_KINDS: [&str; 2] = ["badges", "diff"];
@@ -137,9 +145,13 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
         return Err(format!("unknown ui {kind:?}, expected one of {UI_KINDS:?}"));
     }
-    let tool_name = |n: &str| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    // Up to 60 so `<plugin id>__<tool>` stays within MCP's 128 characters.
+    let tool_name = |n: &str| !n.is_empty() && n.len() <= 60 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| !tool_name(&t.name)) {
-        return Err(format!("MCP tool name {:?} must be lowercase letters, digits and _", tool.name));
+        return Err(format!("MCP tool name {:?} must be up to 60 lowercase letters, digits and _", tool.name));
+    }
+    if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| t.input_schema.get("type").and_then(Value::as_str) != Some("object")) {
+        return Err(format!("MCP tool {:?} needs an inputSchema with \"type\": \"object\"", tool.name));
     }
     if manifest.contributes.panels.len() > 3 {
         return Err("at most 3 panels".into());

@@ -66,7 +66,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | Field | Means |
 |---|---|
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
-| `mcpTools` | `{ name, description }` tools the plugin offers Claude through the Wings MCP server. Names are lowercase letters, digits and `_`. Wings doesn't serve them yet |
+| `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
 | `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden |
 | `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
@@ -81,6 +81,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | Call | Does |
 |---|---|
 | `wings.onPanes(fn)` | Called with every terminal pane on each change: `{ paneId, cwd, command, project, session }[]`. `cwd` follows `cd`. `session` is `{ sessionId, name, state }` while Claude runs in the pane, else `null` |
+| `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId })` gets Claude's arguments and the Wings pane Claude runs in (or `null`), and returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls |
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |
 | `wings.transcript(sessionId, types)` | Resolves the matching transcript entries, oldest first |
@@ -104,5 +105,7 @@ A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, a
 A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url }`, where `side` is `additions` or `deletions`. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
 
 Wings drops a pane's badges when the pane closes. When several plugins add to the same place, the extra pane badges fold into a "+N" button and title bar buttons past the first three into a menu.
+
+Plugin tools reach Claude through one MCP server, `wings`, which you add once from the Plugins sheet with Connect. It runs `wings --mcp` at user scope, so every Claude Code session gets the tools of the plugins that are on, and the list updates as you turn plugins on and off. The tools only work while Wings is open.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.

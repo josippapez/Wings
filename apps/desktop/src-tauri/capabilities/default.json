@@ -42,6 +42,9 @@
     "allow-plugin-secret-set",
     "allow-plugin-secret-delete",
     "allow-plugin-secret-has",
-    "allow-plugin-fetch"
+    "allow-plugin-fetch",
+    "allow-mcp-tool-result",
+    "allow-mcp-status",
+    "allow-mcp-connect"
   ]
 }
