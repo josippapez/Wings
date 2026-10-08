@@ -1,0 +1,144 @@
+/* Wings base styles for plugin pages, loaded before the page's own CSS. Use the variables to match Wings,
+   and the plain elements (button, input, select) already look native. */
+:root {
+  color-scheme: dark;
+  --wings-bg: transparent;
+  --wings-surface: rgb(255 255 255 / 0.04);
+  --wings-fg: #ece9e4;
+  --wings-muted: #9d978f;
+  --wings-hover: rgb(255 255 255 / 0.06);
+  --wings-pressed: rgb(255 255 255 / 0.1);
+  --wings-hairline: rgb(255 255 255 / 0.07);
+  --wings-hairline-strong: rgb(255 255 255 / 0.16);
+  --wings-input: rgb(255 255 255 / 0.06);
+  --wings-ring: rgb(255 255 255 / 0.32);
+  --wings-primary: #ece9e4;
+  --wings-primary-fg: #17151a;
+  --wings-info: #9cc0ff;
+  --wings-success: #7dd3a7;
+  --wings-warning: #e9b65f;
+  --wings-danger: #f2786a;
+  --wings-radius: 10px;
+  --wings-font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, sans-serif;
+  --wings-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--wings-bg);
+  color: var(--wings-fg);
+  font: 13px/1.45 var(--wings-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 8px;
+  background: var(--wings-input);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 150ms,
+    transform 100ms;
+}
+button:hover {
+  background: var(--wings-pressed);
+}
+button:active {
+  transform: scale(0.97);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+button.primary {
+  border-color: transparent;
+  background: var(--wings-primary);
+  color: var(--wings-primary-fg);
+}
+button.primary:hover {
+  background: color-mix(in srgb, var(--wings-primary) 85%, transparent);
+}
+button.danger {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wings-danger) 85%, transparent);
+  color: #1b0f0d;
+}
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+button.ghost:hover {
+  background: var(--wings-hover);
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 8px;
+  background: var(--wings-input);
+  outline: none;
+}
+textarea {
+  height: auto;
+  padding: 8px 10px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--wings-muted);
+}
+
+:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: 1px;
+}
+
+.muted {
+  color: var(--wings-muted);
+}
+
+.card {
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

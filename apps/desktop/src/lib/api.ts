@@ -21,12 +21,19 @@ export type GitStatus = { branch: string | null; ahead: number; behind: number; 
 /** What a pane runs right now and where: the shell's cwd follows `cd`. */
 export type PaneInfo = { command: string; cwd: string | null };
 
-export type PluginPermissions = { exec: string[]; transcript: string[]; openUrl: string[] };
+export type PluginPermissions = { exec: string[]; transcript: string[]; openUrl: string[]; fetch: string[] };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
 /** A web page a plugin shows in a popover from a title bar button. */
 export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
-/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, and panels. */
-export type PluginContributes = { ui: string[]; mcpTools: { name: string; description: string }[]; panels: PluginPanel[] };
+/** One of the plugin's own pages, shown in the right sidebar from a title bar button. */
+export type PluginSidebar = { id: string; title: string; icon: string; page: string };
+/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels and sidebars. */
+export type PluginContributes = {
+  ui: string[];
+  mcpTools: { name: string; description: string }[];
+  panels: PluginPanel[];
+  sidebars: PluginSidebar[];
+};
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
 export type PluginView = {
   id: string;

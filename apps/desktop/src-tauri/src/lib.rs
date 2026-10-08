@@ -3,6 +3,7 @@ mod detect;
 mod menu;
 mod plugin_store;
 mod plugins;
+mod secrets;
 mod pty;
 mod spaces;
 
@@ -155,14 +156,23 @@ fn plugin_install_file(state: State<AppState>, path: String) -> Res<PluginView> 
         return Err("The package is larger than 50 MB".into());
     }
     let bytes = std::fs::read(&path).map_err(err)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::File, None)
+    install(&state, &bytes, Source::File, None)
+}
+
+/// Installs a package and deletes the secrets of a plugin it replaced from somewhere else.
+fn install(state: &AppState, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
+    let (view, dropped) = state.plugins.lock().unwrap().install(bytes, source, expected_id)?;
+    for name in dropped {
+        secrets::delete(&view.manifest.id, &name)?;
+    }
+    Ok(view)
 }
 
 #[tauri::command(async)]
 fn plugin_install_github(state: State<AppState>, url: String) -> Res<PluginView> {
     let repo = plugin_store::parse_repo(&url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
     let bytes = plugin_store::download_github(&repo)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo }, None)
+    install(&state, &bytes, Source::Github { repo }, None)
 }
 
 /// Reinstalls a GitHub plugin from its newest release or default branch.
@@ -172,7 +182,7 @@ fn plugin_update(state: State<AppState>, id: String) -> Res<PluginView> {
         return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
     };
     let bytes = plugin_store::download_github(&repo)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo }, Some(&id))
+    install(&state, &bytes, Source::Github { repo }, Some(&id))
 }
 
 /// The newest release version on GitHub, if the plugin came from there and the repo has releases.
@@ -195,7 +205,88 @@ fn plugin_set_enabled(app: AppHandle, state: State<AppState>, id: String, enable
 #[tauri::command]
 fn plugin_remove(app: AppHandle, state: State<AppState>, id: String) -> Res<()> {
     close_panels(&app, &id);
-    state.plugins.lock().unwrap().remove(&id)
+    for name in state.plugins.lock().unwrap().remove(&id)? {
+        secrets::delete(&id, &name)?;
+    }
+    Ok(())
+}
+
+/// Stores a secret, like an API token, in the keychain under the plugin's name. Plugins can't read it
+/// back; `plugin_fetch` sends it.
+#[tauri::command]
+fn plugin_secret_set(state: State<AppState>, plugin_id: String, name: String, value: String) -> Res<()> {
+    plugin(&state, &plugin_id)?;
+    if !secrets::valid_name(&name) || value.is_empty() || value.len() > 8192 {
+        return Err("A secret needs a name of letters, digits, - and _, and a value up to 8 KB".into());
+    }
+    secrets::set(&plugin_id, &name, &value)?;
+    state.plugins.lock().unwrap().note_secret(&plugin_id, &name, true)
+}
+
+#[tauri::command]
+fn plugin_secret_delete(state: State<AppState>, plugin_id: String, name: String) -> Res<()> {
+    plugin(&state, &plugin_id)?;
+    secrets::delete(&plugin_id, &name)?;
+    state.plugins.lock().unwrap().note_secret(&plugin_id, &name, false)
+}
+
+#[tauri::command(async)]
+fn plugin_secret_has(state: State<AppState>, plugin_id: String, name: String) -> Res<bool> {
+    plugin(&state, &plugin_id)?;
+    Ok(secrets::valid_name(&name) && secrets::get(&plugin_id, &name)?.is_some())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchRequest {
+    url: String,
+    method: Option<String>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    body: Option<String>,
+    /// A secret's name: Rust sends it as `Authorization: Bearer <secret>`.
+    bearer: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchResponse {
+    status: u16,
+    content_type: Option<String>,
+    body: String,
+}
+
+/// An HTTP call to a URL under the plugin's `permissions.fetch`. It doesn't follow redirects, so a
+/// response can't send the request (and its token) to another host.
+#[tauri::command(async)]
+fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest) -> Res<FetchResponse> {
+    let plugin = plugin(&state, &plugin_id)?;
+    if !plugins::may_fetch(&plugin, &request.url) {
+        return Err(format!("{plugin_id} may not fetch {}", request.url));
+    }
+    let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
+    let mut builder = tauri::http::Request::builder().method(method.as_str()).uri(&request.url);
+    for (name, value) in &request.headers {
+        if !name.eq_ignore_ascii_case("authorization") {
+            builder = builder.header(name, value);
+        }
+    }
+    if let Some(name) = &request.bearer {
+        let token = secrets::get(&plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;
+        builder = builder.header("Authorization", format!("Bearer {token}"));
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into();
+    let mut response = agent
+        .run(builder.body(request.body.unwrap_or_default()).map_err(err)?)
+        .map_err(|e| format!("Couldn't reach {}: {e}", request.url))?;
+    let content_type = response.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let body = response.body_mut().read_to_string().map_err(err)?;
+    Ok(FetchResponse { status: response.status().as_u16(), content_type, body })
 }
 
 fn panel_label(plugin_id: &str, panel_id: &str) -> String {
@@ -541,6 +632,10 @@ pub fn run() {
             plugin_set_enabled,
             plugin_remove,
             plugin_panel_toggle,
+            plugin_secret_set,
+            plugin_secret_delete,
+            plugin_secret_has,
+            plugin_fetch,
             plugin_exec,
             plugin_transcript,
             plugin_open_url,

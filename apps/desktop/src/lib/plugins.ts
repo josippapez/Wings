@@ -70,6 +70,19 @@ type Callbacks = {
   updateDiff: (pluginId: string, id: string, update: Partial<DiffView>) => void;
   /** A plugin stopped: drop everything it showed. */
   clearPlugin: (pluginId: string) => void;
+  /** Short text next to a sidebar's title bar button, like a running timer; null clears it. */
+  setSidebarLabel: (pluginId: string, sidebarId: string, label: string | null) => void;
+};
+
+type Running = {
+  id: string;
+  version: string;
+  ui: string[];
+  sidebars: string[];
+  /** `main` runs the plugin's script; a sidebar frame shows one of its pages. */
+  kind: "main" | "sidebar";
+  ready: boolean;
+  frame: HTMLIFrameElement;
 };
 
 const tones: Tone[] = ["neutral", "info", "success", "warning", "danger", "merged"];
@@ -143,7 +156,7 @@ const pluginUrl = (id: string, file: string) =>
   `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${file}`;
 
 export class PluginHost {
-  private frames = new Map<Window, { id: string; version: string; ui: string[]; ready: boolean; frame: HTMLIFrameElement }>();
+  private frames = new Map<Window, Running>();
   private panes: PluginPane[] = [];
   private actions = new Map<string, { pluginId: string; done: () => void; fail: (error: Error) => void }>();
   private nextDiff = 1;
@@ -174,9 +187,40 @@ export class PluginHost {
     frame.title = `Plugin ${plugin.name}`;
     frame.srcdoc = `<!doctype html><meta charset="utf-8"><script src="${sdk}"></script><script src="${pluginUrl(plugin.id, plugin.main)}"></script>`;
     document.body.appendChild(frame);
-    if (frame.contentWindow) {
-      this.frames.set(frame.contentWindow, { id: plugin.id, version: plugin.version, ui: plugin.contributes.ui, ready: false, frame });
-    }
+    this.track(frame, plugin, "main");
+  }
+
+  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"]) {
+    if (!frame.contentWindow) return;
+    this.frames.set(frame.contentWindow, {
+      id: plugin.id,
+      version: plugin.version,
+      ui: plugin.contributes.ui,
+      sidebars: plugin.contributes.sidebars.map((s) => s.id),
+      kind,
+      ready: false,
+      frame,
+    });
+  }
+
+  /**
+   * Shows one of a plugin's sidebar pages inside `container`, sandboxed like the plugin itself, with the SDK
+   * and Wings' base styles loaded first. The frame lives until the plugin stops, so hiding the sidebar keeps
+   * its state.
+   */
+  async mountSidebar(plugin: PluginView, sidebarId: string, container: HTMLElement) {
+    const sidebar = plugin.contributes.sidebars.find((s) => s.id === sidebarId);
+    if (!sidebar) throw new Error(`${plugin.id} has no sidebar ${sidebarId}`);
+    const html = await (await fetch(pluginUrl(plugin.id, sidebar.page))).text();
+    const base = pluginUrl(plugin.id, sidebar.page.includes("/") ? sidebar.page.slice(0, sidebar.page.lastIndexOf("/") + 1) : "");
+    const head = `<meta charset="utf-8"><base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
+    const frame = document.createElement("iframe");
+    frame.sandbox.add("allow-scripts", "allow-forms");
+    frame.title = sidebar.title;
+    frame.className = "size-full border-0 bg-transparent";
+    frame.srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
+    container.replaceChildren(frame);
+    this.track(frame, plugin, "sidebar");
   }
 
   private stop(win: Window) {
@@ -195,7 +239,7 @@ export class PluginHost {
 
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
   sendAction(pluginId: string, paneId: string, actionId: string): Promise<void> {
-    const entry = [...this.frames].find(([, p]) => p.id === pluginId);
+    const entry = [...this.frames].find(([, p]) => p.id === pluginId && p.kind === "main");
     if (!entry) return Promise.reject(new Error(`plugin ${pluginId} is not running`));
     const token = crypto.randomUUID();
     return new Promise<void>((done, fail) => {
@@ -243,7 +287,7 @@ export class PluginHost {
     }
   };
 
-  private async handle(plugin: { id: string; ui: string[]; ready: boolean }, method: string, p: Record<string, unknown>, output: (line: string) => void) {
+  private async handle(plugin: Running, method: string, p: Record<string, unknown>, output: (line: string) => void) {
     const pluginId = plugin.id;
     // The manager lists what a plugin adds from its manifest, so it can't draw anything it didn't declare.
     const needs = (kind: string) => {
@@ -275,6 +319,31 @@ export class PluginHost {
         });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
+      case "fetch": {
+        const headers = p.headers && typeof p.headers === "object" ? (p.headers as Record<string, unknown>) : {};
+        return invoke("plugin_fetch", {
+          pluginId,
+          request: {
+            url: String(p.url),
+            method: str(p.method, 10) ?? null,
+            headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, String(v)])),
+            body: typeof p.body === "string" ? p.body : null,
+            bearer: str(p.bearer, 64) ?? null,
+          },
+        });
+      }
+      case "secretSet":
+        return invoke("plugin_secret_set", { pluginId, name: String(p.name), value: String(p.value) });
+      case "secretDelete":
+        return invoke("plugin_secret_delete", { pluginId, name: String(p.name) });
+      case "secretHas":
+        return invoke("plugin_secret_has", { pluginId, name: String(p.name) });
+      case "setSidebarLabel": {
+        const sidebarId = String(p.sidebarId);
+        if (!plugin.sidebars.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar ${sidebarId}`);
+        this.callbacks.setSidebarLabel(pluginId, sidebarId, p.label === null ? null : (str(p.label, 16) ?? null));
+        return null;
+      }
       case "setBadge": {
         needs("badges");
         const paneId = String(p.paneId);

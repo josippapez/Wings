@@ -5,11 +5,12 @@ import { MotionConfig } from "motion/react";
 import { DiffViewer } from "@/components/diff-viewer";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginManager } from "@/components/plugin-manager";
+import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp } from "@/components/status-dot";
-import { TitleBar, type TabView } from "@/components/title-bar";
+import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView } from "@/lib/plugins";
@@ -67,6 +68,36 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [droppedPlugin, setDroppedPlugin] = useState<string | null>(null);
+  /** The plugin sidebar on the right, as `pluginId:sidebarId`, and every one opened so far (kept running). */
+  const [rightSidebar, setRightSidebar] = useState<string | null>(null);
+  const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
+  const [sidebarLabels, setSidebarLabels] = useState<Record<string, string>>({});
+  /** Bumped when a plugin stops, so its sidebar pages mount fresh next time. */
+  const [epochs, setEpochs] = useState<Record<string, number>>({});
+
+  const activePlugins = useMemo(() => plugins.filter((p) => p.enabled && p.approved), [plugins]);
+  const sidebarRef = useCallback(
+    (key: string): SidebarRef | null => {
+      const [pluginId, sidebarId] = key.split(":");
+      const plugin = activePlugins.find((p) => p.id === pluginId);
+      if (!plugin?.contributes.sidebars.some((s) => s.id === sidebarId)) return null;
+      return { plugin, sidebarId, id: key, key: `${key}:${plugin.version}:${epochs[pluginId] ?? 0}` };
+    },
+    [activePlugins, epochs],
+  );
+  const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
+    ...p.contributes.sidebars.map((s) => ({
+      key: `${p.id}:${s.id}`,
+      pluginId: p.id,
+      kind: "sidebar" as const,
+      id: s.id,
+      title: s.title,
+      icon: s.icon,
+      label: sidebarLabels[`${p.id}:${s.id}`],
+      active: rightSidebar === `${p.id}:${s.id}`,
+    })),
+    ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
+  ]);
 
   // Dropping a .wings-plugin file anywhere on the window opens the manager and installs it.
   useEffect(() => {
@@ -380,10 +411,16 @@ export default function App() {
           return { ...all, [paneId]: badge ? { ...others, [pluginId]: badge } : others };
         }),
       openDiff: setDiff,
-      clearPlugin: (pluginId) =>
+      clearPlugin: (pluginId) => {
         setBadges((all) =>
           Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
-        ),
+        );
+        setSidebarLabels((all) => Object.fromEntries(Object.entries(all).filter(([key]) => !key.startsWith(`${pluginId}:`))));
+        // Its sidebar frames are gone too; a restart gets a new key so the page loads again.
+        setEpochs((all) => ({ ...all, [pluginId]: (all[pluginId] ?? 0) + 1 }));
+      },
+      setSidebarLabel: (pluginId, sidebarId, label) =>
+        setSidebarLabels(({ [`${pluginId}:${sidebarId}`]: _old, ...rest }) => (label ? { ...rest, [`${pluginId}:${sidebarId}`]: label } : rest)),
       updateDiff: (pluginId, id, update) =>
         setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
     });
@@ -483,8 +520,15 @@ export default function App() {
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
             onPlugins={() => setPluginsOpen(true)}
-            panels={plugins.filter((p) => p.enabled && p.approved).flatMap((p) => p.contributes.panels.map((panel) => ({ pluginId: p.id, panel })))}
-            onPanel={(pluginId, panelId, button) => void api.pluginPanelToggle(pluginId, panelId, button.right, button.bottom).catch((e) => console.error(e))}
+            pluginButtons={pluginButtons}
+            onPluginButton={(button, rect) => {
+              if (button.kind === "panel") {
+                void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
+                return;
+              }
+              setRightSidebar((open) => (open === button.key ? null : button.key));
+              setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
+            }}
           />
           <div className="flex min-h-0 flex-1">
             <Sidebar
@@ -521,6 +565,18 @@ export default function App() {
                 </div>
               )}
             </main>
+            <RightSidebar
+              open={rightSidebar ? sidebarRef(rightSidebar) : null}
+              mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
+              host={pluginHost.current}
+              onSelect={setRightSidebar}
+              onCloseTab={(id) => {
+                const rest = openedSidebars.filter((k) => k !== id);
+                setOpenedSidebars(rest);
+                if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
+              }}
+              onClose={() => setRightSidebar(null)}
+            />
           </div>
         </div>
         <DiffViewer diff={diff} onClose={() => setDiff(null)} />

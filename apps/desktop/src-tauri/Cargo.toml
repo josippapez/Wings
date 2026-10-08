@@ -31,6 +31,7 @@ tauri-plugin-window-state = "2.5.0"
 tauri-plugin-notification = "2.5.1"
 ureq = "3.4.2"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+keyring = "4.2.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

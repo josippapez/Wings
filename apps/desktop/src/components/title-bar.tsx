@@ -1,8 +1,10 @@
+import { useRef } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   CalendarIcon,
   ChartColumnIcon,
   ClockIcon,
+  EllipsisIcon,
   GlobeIcon,
   HistoryIcon,
   ListIcon,
@@ -13,15 +15,33 @@ import {
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { LayoutGlyph } from "@/components/layout-glyph";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import { StatusDot } from "@/components/status-dot";
-import type { AgentState, PluginPanel, Space } from "@/lib/api";
+import type { AgentState, Space } from "@/lib/api";
 import type { LayoutNode } from "@/lib/layout";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
 const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
+
+/** Plugin buttons that fit before the rest move into a menu. */
+const INLINE_BUTTONS = 3;
+
+/** A plugin's title bar button: it opens its sidebar or its web panel. */
+export type PluginButton = {
+  key: string;
+  pluginId: string;
+  kind: "sidebar" | "panel";
+  id: string;
+  title: string;
+  icon: string;
+  /** Short text from the plugin, like a running timer. */
+  label?: string;
+  /** Its sidebar is open. */
+  active?: boolean;
+};
 
 /** `state` rolls up every pane's agent, so a blocked agent in a background split still shows on the tab. */
 export type TabView = { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null };
@@ -39,10 +59,13 @@ export function TitleBar(props: {
   onNew: () => void;
   onHistory: () => void;
   onPlugins: () => void;
-  /** Panels from plugins that are on, each a button that opens its page in a popover. */
-  panels: { pluginId: string; panel: PluginPanel }[];
-  onPanel: (pluginId: string, panelId: string, button: DOMRect) => void;
+  /** Sidebar and panel buttons from plugins that are on. The first few show, the rest go in a menu. */
+  pluginButtons: PluginButton[];
+  onPluginButton: (button: PluginButton, rect: DOMRect) => void;
 }) {
+  const inline = props.pluginButtons.slice(0, INLINE_BUTTONS);
+  const overflow = props.pluginButtons.slice(INLINE_BUTTONS);
+  const more = useRef<HTMLButtonElement>(null);
   return (
     <header
       data-tauri-drag-region="deep"
@@ -119,14 +142,52 @@ export function TitleBar(props: {
         </div>
       </LayoutGroup>
 
-      {props.panels.map(({ pluginId, panel }) => {
-        const Icon = panelIcons[panel.icon] ?? GlobeIcon;
+      {inline.map((button) => {
+        const Icon = panelIcons[button.icon] ?? GlobeIcon;
         return (
-          <IconButton key={`${pluginId}:${panel.id}`} label={panel.title} onClick={(e) => props.onPanel(pluginId, panel.id, e.currentTarget.getBoundingClientRect())}>
+          <IconButton
+            key={button.key}
+            label={button.title}
+            aria-pressed={button.kind === "sidebar" ? button.active : undefined}
+            onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
+            className={cn(button.label && "w-auto gap-1.5 px-2", button.active && "bg-white/[0.08] text-foreground")}
+          >
             <Icon />
+            {button.label && <span className="text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>
         );
       })}
+      {overflow.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                ref={more}
+                type="button"
+                aria-label={`${overflow.length} more from plugins`}
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            }
+          >
+            <EllipsisIcon className="size-4" aria-hidden />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {overflow.map((button) => {
+              const Icon = panelIcons[button.icon] ?? GlobeIcon;
+              return (
+                <DropdownMenuItem
+                  key={button.key}
+                  onClick={() => props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect())}
+                >
+                  <Icon aria-hidden />
+                  <span className="flex-1">{button.title}</span>
+                  {button.label && <span className="text-muted-foreground tabular-nums">{button.label}</span>}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <HistoryIcon />
       </IconButton>

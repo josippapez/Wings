@@ -65,6 +65,20 @@
     /** Opens an https URL matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**
+     * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings
+     * sends as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status;
+     * redirects aren't followed.
+     */
+    fetch: (url, { method, headers, body, bearer } = {}) => call("fetch", { url, method, headers, body, bearer }),
+    /** Secrets, like API tokens, kept in the system keychain. They can be used by `fetch` but not read back. */
+    secrets: Object.freeze({
+      set: (name, value) => call("secretSet", { name, value }),
+      delete: (name) => call("secretDelete", { name }),
+      has: (name) => call("secretHas", { name }),
+    }),
+    /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
+    setSidebarLabel: (sidebarId, label) => call("setSidebarLabel", { sidebarId, label }),
+    /**
      * Opens the Wings diff viewer. Leave out `patch` to open it in a loading state, then fill it with
      * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`.
      */

@@ -26,6 +26,8 @@ pub struct Permissions {
     pub transcript: Vec<String>,
     /// URL prefixes the plugin may open in the browser.
     pub open_url: Vec<String>,
+    /// https URL prefixes the plugin may call with `wings.fetch`, like an API's base URL.
+    pub fetch: Vec<String>,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -38,6 +40,18 @@ pub struct Contributes {
     pub mcp_tools: Vec<McpTool>,
     /// Web pages it shows in a popover from a title bar button.
     pub panels: Vec<Panel>,
+    /// Its own pages shown in the right sidebar from a title bar button.
+    pub sidebars: Vec<Sidebar>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sidebar {
+    pub id: String,
+    pub title: String,
+    /// One of `PANEL_ICONS`.
+    pub icon: String,
+    /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
+    pub page: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,6 +143,21 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     if manifest.contributes.panels.len() > 3 {
         return Err("at most 3 panels".into());
+    }
+    if manifest.contributes.sidebars.len() > 3 {
+        return Err("at most 3 sidebars".into());
+    }
+    for sidebar in &manifest.contributes.sidebars {
+        if !valid_id(&sidebar.id) || sidebar.title.is_empty() || sidebar.title.len() > 40 {
+            return Err(format!("sidebar {:?} needs an id like a plugin id and a title up to 40 characters", sidebar.id));
+        }
+        if !PANEL_ICONS.contains(&sidebar.icon.as_str()) {
+            return Err(format!("sidebar icon {:?} must be one of {PANEL_ICONS:?}", sidebar.icon));
+        }
+        resolve(dir, &sidebar.page).ok_or_else(|| format!("sidebar page {:?} isn't in the plugin folder", sidebar.page))?;
+    }
+    if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
+        return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
     }
     for panel in &manifest.contributes.panels {
         if !valid_id(&panel.id) || panel.title.is_empty() || panel.title.len() > 40 {
@@ -343,6 +372,21 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
         .collect())
 }
 
+/// A fetch prefix has to name a host and end its host part with `/`, so `https://api.example.com` can't
+/// also match `https://api.example.com.evil.net`.
+fn fetch_prefix_ok(prefix: &str) -> bool {
+    prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains('@')))
+}
+
+/// Whether the plugin may call this URL: https, no credentials in it, and under a `permissions.fetch` prefix.
+pub fn may_fetch(plugin: &Plugin, url: &str) -> bool {
+    let Ok(parsed) = tauri::Url::parse(url) else { return false };
+    parsed.scheme() == "https"
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && plugin.manifest.permissions.fetch.iter().any(|prefix| parsed.as_str().starts_with(prefix))
+}
+
 pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
     url.starts_with("https://") && plugin.manifest.permissions.open_url.iter().any(|prefix| url.starts_with(prefix))
 }
@@ -364,11 +408,29 @@ mod tests {
                     exec: exec.iter().map(|s| s.to_string()).collect(),
                     transcript: transcript.iter().map(|s| s.to_string()).collect(),
                     open_url: vec!["https://github.com/".into()],
+                    fetch: vec!["https://api.example.com/v1/".into()],
                 },
                 contributes: Contributes::default(),
             },
             dir: dir.to_path_buf(),
         }
+    }
+
+    #[test]
+    fn fetch_only_reaches_declared_https_prefixes() {
+        let p = plugin(Path::new("/tmp"), &[], &[]);
+        assert!(may_fetch(&p, "https://api.example.com/v1/timers"));
+        for url in [
+            "http://api.example.com/v1/timers",
+            "https://api.example.com/v2/x",
+            "https://api.example.com.evil.net/v1/",
+            "https://user:pw@api.example.com/v1/",
+            "not a url",
+        ] {
+            assert!(!may_fetch(&p, url), "{url}");
+        }
+        assert!(fetch_prefix_ok("https://api.example.com/"));
+        assert!(!fetch_prefix_ok("https://api.example.com") && !fetch_prefix_ok("http://x.com/") && !fetch_prefix_ok("https:///x"));
     }
 
     #[test]

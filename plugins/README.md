@@ -59,6 +59,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments |
 | `transcript` | Reading these Claude Code transcript entry types |
 | `openUrl` | Opening https URLs that start with these prefixes |
+| `fetch` | Calling https URLs that start with these prefixes through `wings.fetch`, like an API's base URL ending in `/` |
 
 `contributes` lists what the plugin adds, which the manager shows next to it:
 
@@ -66,6 +67,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 |---|---|
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
 | `mcpTools` | `{ name, description }` tools the plugin offers Claude through the Wings MCP server. Names are lowercase letters, digits and `_`. Wings doesn't serve them yet |
+| `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden |
 | `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
@@ -86,6 +88,9 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.openUrl(url)` | Opens the URL in the browser |
 | `wings.openDiff({ title, subtitle, patch?, comments? })` | Opens the diff viewer and resolves `{ id }`. Without `patch` it opens in a loading state |
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
+| `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects |
+| `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
+| `wings.setSidebarLabel(sidebarId, label)` | Up to 16 characters next to the sidebar's title bar button, like a running timer; `null` clears it |
 
 A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
 
@@ -98,4 +103,6 @@ A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, a
 
 A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url }`, where `side` is `additions` or `deletions`. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
 
-Wings drops a pane's badges when the pane closes.
+Wings drops a pane's badges when the pane closes. When several plugins add to the same place, the extra pane badges fold into a "+N" button and title bar buttons past the first three into a menu.
+
+`templates/wings-plugin/wings.d.ts` has types for all of this.

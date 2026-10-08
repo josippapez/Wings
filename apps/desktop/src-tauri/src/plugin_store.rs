@@ -44,6 +44,9 @@ struct Entry {
     /// The plugin only runs while its manifest asks for exactly what was approved.
     approved: Option<Grant>,
     source: Source,
+    /// Names of the keychain secrets it stored, so they go when it does.
+    #[serde(default)]
+    secrets: Vec<String>,
 }
 
 /// A plugin as the manager shows it.
@@ -122,8 +125,10 @@ impl Store {
     /// Unpacks a package and installs it, replacing an older version. The previous approval carries over only
     /// for a reinstall from the same GitHub repo, and still only counts if the new version asks for the same
     /// access and adds the same things. A file can come from anyone, so a file install always asks again.
-    /// `expected_id` makes an update fail if the package turns out to be a different plugin.
-    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<PluginView, String> {
+    /// `expected_id` makes an update fail if the package turns out to be a different plugin. Also returns
+    /// the secrets of a plugin it replaced from somewhere else, which the caller must delete: a newcomer
+    /// with the same id mustn't get the old plugin's tokens.
+    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<(PluginView, Vec<String>), String> {
         if cfg!(windows) {
             return Err("Plugins aren't available on Windows yet".into());
         }
@@ -147,13 +152,18 @@ impl Store {
         let _ = fs::remove_dir_all(&dest);
         fs::rename(&staging, &dest).map_err(|e| e.to_string())?;
         let plugin = plugins::load(&dest)?;
-        let old = self.entries.remove(&id).filter(|e| matches!(source, Source::Github { .. }) && e.source == source);
+        let (old, dropped) = match self.entries.remove(&id) {
+            Some(e) if matches!(source, Source::Github { .. }) && e.source == source => (Some(e), Vec::new()),
+            Some(e) => (None, e.secrets),
+            None => (None, Vec::new()),
+        };
         let approved = old.as_ref().and_then(|e| e.approved.clone());
-        let enabled = old.is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
-        self.entries.insert(id.clone(), Entry { enabled, approved, source });
+        let enabled = old.as_ref().is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
+        let secrets = old.map(|e| e.secrets).unwrap_or_default();
+        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets });
         self.plugins.insert(id.clone(), plugin);
         self.save()?;
-        Ok(self.view(&id).expect("just installed"))
+        Ok((self.view(&id).expect("just installed"), dropped))
     }
 
     /// Turning a plugin on approves `shown`, what the user was shown, and only if that's still what the
@@ -164,7 +174,7 @@ impl Store {
         if enabled && shown.as_ref() != Some(&grant) {
             return Err("This plugin changed since you looked at it. Review it again to turn it on.".into());
         }
-        let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File });
+        let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File, secrets: Vec::new() });
         entry.enabled = enabled;
         if enabled {
             entry.approved = Some(grant);
@@ -173,13 +183,25 @@ impl Store {
         Ok(self.view(id).expect("known plugin"))
     }
 
-    pub fn remove(&mut self, id: &str) -> Result<(), String> {
+    /// Returns the plugin's secret names, for the caller to delete from the keychain.
+    pub fn remove(&mut self, id: &str) -> Result<Vec<String>, String> {
         if self.dev.contains(id) {
             return Err(format!("{id} is loaded from the repo in this dev build"));
         }
         let plugin = self.plugins.remove(id).ok_or_else(|| format!("unknown plugin {id}"))?;
-        self.entries.remove(id);
+        let secrets = self.entries.remove(id).map(|e| e.secrets).unwrap_or_default();
         fs::remove_dir_all(&plugin.dir).map_err(|e| e.to_string())?;
+        self.save()?;
+        Ok(secrets)
+    }
+
+    /// Records that the plugin stored (or deleted) a keychain secret with this name.
+    pub fn note_secret(&mut self, id: &str, name: &str, stored: bool) -> Result<(), String> {
+        let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File, secrets: Vec::new() });
+        entry.secrets.retain(|n| n != name);
+        if stored {
+            entry.secrets.push(name.to_string());
+        }
         self.save()
     }
 
@@ -335,7 +357,7 @@ mod tests {
     fn installs_off_and_needs_approval_again_when_permissions_grow() {
         let (mut s, dir) = store();
         let repo = || Source::Github { repo: "owner/demo".into() };
-        let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), None).unwrap();
+        let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), None).unwrap().0;
         assert!(!v1.enabled && !v1.approved && s.active("demo").is_none());
         let stale = Grant::of(&s.plugins["demo"].manifest);
         assert!(s.set_enabled("demo", true, None).is_err());
@@ -344,14 +366,14 @@ mod tests {
         // Same repo, same permissions: stays on. More permissions: off until approved again.
         s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
         assert!(s.active("demo").is_some());
-        let v2 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), repo(), Some("demo")).unwrap().0;
         assert!(!v2.enabled && !v2.approved && s.active("demo").is_none());
         // What the dialog showed before the update doesn't approve the new permissions.
         assert!(s.set_enabled("demo", true, Some(stale)).unwrap_err().contains("changed since"));
 
         // A file or another repo with the same id doesn't inherit the approval.
         s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
-        let same = |s: &mut Store, source| s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), source, None).unwrap();
+        let same = |s: &mut Store, source| s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), source, None).unwrap().0;
         assert!(!same(&mut s, Source::File).approved);
         s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
         assert!(!same(&mut s, Source::Github { repo: "someone/else".into() }).approved);
@@ -371,12 +393,26 @@ mod tests {
     }
 
     #[test]
+    fn secrets_stay_with_the_same_repo_and_go_with_a_newcomer() {
+        let (mut s, dir) = store();
+        let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        let repo = || Source::Github { repo: "owner/demo".into() };
+        s.install(&pkg(), repo(), None).unwrap();
+        s.note_secret("demo", "token", true).unwrap();
+        assert!(s.install(&pkg(), repo(), Some("demo")).unwrap().1.is_empty());
+        assert_eq!(s.install(&pkg(), Source::File, None).unwrap().1, ["token"]);
+        s.note_secret("demo", "token", true).unwrap();
+        assert_eq!(s.remove("demo").unwrap(), ["token"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn adding_mcp_tools_needs_approval_again() {
         let (mut s, dir) = store();
         let repo = || Source::Github { repo: "owner/demo".into() };
         s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &[])), ("main.js", "")]), repo(), None).unwrap();
         s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
-        let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), repo(), Some("demo")).unwrap().0;
         assert!(!v2.approved && s.active("demo").is_none());
         assert!(s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["Bad Name"])), ("main.js", "")]), repo(), None).is_err());
         let _ = fs::remove_dir_all(dir);
@@ -420,5 +456,6 @@ mod tests {
         }
     }
 }
+
 
 

@@ -38,6 +38,10 @@
     "allow-plugin-transcript",
     "allow-plugin-open-url",
     "allow-bench-mode",
-    "allow-bench-report"
+    "allow-bench-report",
+    "allow-plugin-secret-set",
+    "allow-plugin-secret-delete",
+    "allow-plugin-secret-has",
+    "allow-plugin-fetch"
   ]
 }

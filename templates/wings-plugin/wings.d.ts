@@ -66,6 +66,22 @@ interface Wings {
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
   openDiff(diff: { title: string; subtitle?: string; patch?: string; comments?: WingsComment[] }): Promise<{ id: string }>;
   updateDiff(id: string, update: { patch: string; comments?: WingsComment[] } | { error: string }): Promise<void>;
+  /**
+   * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings sends
+   * as `Authorization: Bearer <secret>`. Resolves for any status; redirects aren't followed.
+   */
+  fetch(
+    url: string,
+    init?: { method?: string; headers?: Record<string, string>; body?: string; bearer?: string },
+  ): Promise<{ status: number; contentType: string | null; body: string }>;
+  /** Secrets, like API tokens, in the system keychain. `fetch` can send them, but they can't be read back. */
+  secrets: {
+    set(name: string, value: string): Promise<void>;
+    delete(name: string): Promise<void>;
+    has(name: string): Promise<boolean>;
+  };
+  /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
+  setSidebarLabel(sidebarId: string, label: string | null): Promise<void>;
 }
 
 declare const wings: Wings;

@@ -3,7 +3,9 @@ import { motion } from "motion/react";
 import { Columns2Icon, Maximize2Icon, Minimize2Icon, Rows2Icon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import type { LayoutNode } from "@/lib/layout";
 import type { Badge } from "@/lib/plugins";
@@ -137,18 +139,31 @@ function PaneCard(props: GridProps & { paneKey: string }) {
     >
       <div className="flex h-9 shrink-0 items-center gap-2 pr-1.5 pl-3.5">
         <PaneIcon agent={label?.agent} />
-        <span className={cn("truncate text-[13px] font-semibold", !focused && "text-muted-foreground")}>
+        <span className={cn("max-w-[50%] truncate text-[13px] font-semibold", !focused && "text-muted-foreground")}>
           {label?.title}
         </span>
-        {label?.detail && <span className="truncate text-[12px] text-muted-foreground">{label.detail}</span>}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
-          {props.badges[paneKey]?.map(({ pluginId, badge }) => (
-            <PaneBadge
-              key={pluginId}
-              badge={badge}
-              onAction={(actionId) => props.onBadgeAction(pluginId, paneKey, actionId)}
-            />
-          ))}
+        {label?.detail && <span className="min-w-0 truncate text-[12px] text-muted-foreground">{label.detail}</span>}
+        <div className="flex min-w-0 flex-1 pl-2">
+          <OverflowRow
+            items={props.badges[paneKey] ?? []}
+            keyOf={(b) => b.pluginId}
+            item={({ pluginId, badge }) => <PaneBadge badge={badge} onAction={(actionId) => props.onBadgeAction(pluginId, paneKey, actionId)} />}
+            more={(hidden) => (
+              <Popover>
+                <PopoverTrigger
+                  aria-label={`${hidden.length} more`}
+                  className="inline-flex h-6 shrink-0 items-center rounded-full bg-white/[0.06] px-2 text-[12px] font-medium text-muted-foreground ring-1 ring-white/10 ring-inset transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  +{hidden.length}
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={8} className="flex w-auto flex-col items-end gap-1.5 border-0 bg-popover/95 p-2 backdrop-blur-xl">
+                  {hidden.map(({ pluginId, badge }) => (
+                    <PaneBadge key={pluginId} badge={badge} onAction={(actionId) => props.onBadgeAction(pluginId, paneKey, actionId)} />
+                  ))}
+                </PopoverContent>
+              </Popover>
+            )}
+          />
         </div>
         <div
           className={cn(

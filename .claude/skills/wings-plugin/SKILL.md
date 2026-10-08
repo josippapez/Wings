@@ -23,7 +23,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 1. Create `plugins/<id>/wings-plugin.json`. The `id` is lowercase letters, digits and dashes, and `api` is `1`.
 2. Ask for the least you need. `exec` lists commands with their subcommand, like `gh pr view`, `transcript` lists Claude Code entry types, and `openUrl` lists https prefixes. Pass a folder with `{ cwd }`, not `git -C`, because the subcommand has to come first.
 3. Write `main.js` against `window.wings` only. The frame is hidden, so all UI goes through badges and the diff viewer.
-4. Declare what it adds in `contributes`: `ui` (`badges`, `diff`) and any `mcpTools`. The host refuses UI calls the manifest didn't declare.
+4. Declare what it adds in `contributes`: `ui` (`badges`, `diff`), `sidebars` (its own pages in the right sidebar), `panels` (outside web pages in a popover) and any `mcpTools`. The host refuses UI calls the manifest didn't declare. For an API, declare `permissions.fetch`, keep the token with `wings.secrets.set` and send it with `wings.fetch(url, { bearer })`, so plugin code never holds it after setup. `~/Desktop/wings-cyclops` is a worked sidebar plugin.
 5. Run `pnpm tauri dev` in `apps/desktop`. Debug builds load the repo's `plugins/` folder at startup, always on, so restart Wings after editing one. A plugin in its own repo starts from `templates/wings-plugin/` and installs through the Plugins manager as a `.wings-plugin` file or a GitHub link.
 
 ## Rules that keep plugins fast and safe

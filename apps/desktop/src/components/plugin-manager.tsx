@@ -19,10 +19,12 @@ const uiNames: Record<string, string> = { badges: "Pane badges", diff: "Diff vie
 
 /** What a plugin adds, as short chips: UI parts, MCP tools for Claude, and whether it runs commands. */
 function Adds({ plugin }: { plugin: PluginView }) {
-  const { ui, mcpTools, panels } = plugin.contributes;
+  const { ui, mcpTools, panels, sidebars } = plugin.contributes;
   const chips = [
     ...ui.map((kind) => ({ key: kind, label: uiNames[kind] ?? kind, title: undefined as string | undefined })),
+    ...sidebars.map((s) => ({ key: `sidebar:${s.id}`, label: `${s.title} sidebar`, title: undefined })),
     ...panels.map((p) => ({ key: `panel:${p.id}`, label: `${p.title} panel`, title: p.url })),
+    ...(plugin.permissions.fetch.length ? [{ key: "fetch", label: "Uses the web", title: plugin.permissions.fetch.join(", ") }] : []),
     ...(mcpTools.length
       ? [{ key: "mcp", label: `${mcpTools.length} MCP ${mcpTools.length === 1 ? "tool" : "tools"}`, title: mcpTools.map((t) => t.name).join(", ") }]
       : []),
@@ -48,10 +50,11 @@ function sourceLabel(p: PluginView) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, transcript, openUrl } = plugin.permissions;
-  const { ui, mcpTools, panels } = plugin.contributes;
+  const { exec, transcript, openUrl, fetch } = plugin.permissions;
+  const { ui, mcpTools, panels, sidebars } = plugin.contributes;
   const groups = [
-    { title: "Show these in Wings", items: ui.map((kind) => uiNames[kind] ?? kind) },
+    { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map((s) => `${s.title} sidebar`)] },
+    { title: "Call these web addresses, with tokens you give it", items: fetch },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
     { title: "Run these commands as you, with your own sign-ins", items: exec },
