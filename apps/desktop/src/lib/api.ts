@@ -58,7 +58,13 @@ export const api = {
   pluginInstallGithub: (url: string) => invoke<PluginView>("plugin_install_github", { url }),
   pluginUpdate: (id: string) => invoke<PluginView>("plugin_update", { id }),
   pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
-  pluginSetEnabled: (id: string, enabled: boolean) => invoke<PluginView>("plugin_set_enabled", { id, enabled }),
+  /** Turning on approves exactly what `plugin` shows, and fails if the installed plugin changed since. */
+  pluginSetEnabled: (plugin: PluginView, enabled: boolean) =>
+    invoke<PluginView>("plugin_set_enabled", {
+      id: plugin.id,
+      enabled,
+      shown: enabled ? { permissions: plugin.permissions, contributes: plugin.contributes } : null,
+    }),
   pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
   spacesAdd: (path: string) => invoke<Space>("spaces_add", { path }),
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),

@@ -26,7 +26,7 @@ pub enum Source {
 
 /// What the user agreed to: the access a plugin asks for and what it adds, like MCP tools.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Grant {
+pub struct Grant {
     permissions: Permissions,
     contributes: Contributes,
 }
@@ -119,9 +119,11 @@ impl Store {
         self.entries.get(id).map(|e| e.source.clone())
     }
 
-    /// Unpacks a package and installs it, replacing an older version. It keeps the previous approval, which
-    /// only still counts if the new version asks for the same access and adds the same things.
-    pub fn install(&mut self, bytes: &[u8], source: Source) -> Result<PluginView, String> {
+    /// Unpacks a package and installs it, replacing an older version. The previous approval carries over only
+    /// for a reinstall from the same GitHub repo, and still only counts if the new version asks for the same
+    /// access and adds the same things. A file can come from anyone, so a file install always asks again.
+    /// `expected_id` makes an update fail if the package turns out to be a different plugin.
+    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<PluginView, String> {
         if cfg!(windows) {
             return Err("Plugins aren't available on Windows yet".into());
         }
@@ -131,6 +133,9 @@ impl Store {
         let checked = unpack(bytes, &staging).and_then(|()| plugins::load(&staging));
         let id = match checked {
             Ok(plugin) if self.dev.contains(&plugin.manifest.id) => Err(format!("{} is loaded from the repo in this dev build", plugin.manifest.id)),
+            Ok(plugin) if expected_id.is_some_and(|id| id != plugin.manifest.id) => {
+                Err(format!("The update is a different plugin ({}), so it wasn't installed", plugin.manifest.id))
+            }
             Ok(plugin) => Ok(plugin.manifest.id),
             Err(e) => Err(e),
         }
@@ -142,7 +147,7 @@ impl Store {
         let _ = fs::remove_dir_all(&dest);
         fs::rename(&staging, &dest).map_err(|e| e.to_string())?;
         let plugin = plugins::load(&dest)?;
-        let old = self.entries.remove(&id);
+        let old = self.entries.remove(&id).filter(|e| matches!(source, Source::Github { .. }) && e.source == source);
         let approved = old.as_ref().and_then(|e| e.approved.clone());
         let enabled = old.is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
         self.entries.insert(id.clone(), Entry { enabled, approved, source });
@@ -151,10 +156,14 @@ impl Store {
         Ok(self.view(&id).expect("just installed"))
     }
 
-    /// Turning a plugin on approves what its manifest asks for and adds right now.
-    pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<PluginView, String> {
+    /// Turning a plugin on approves `shown`, what the user was shown, and only if that's still what the
+    /// installed manifest asks for. A plugin replaced while the dialog was open isn't approved by mistake.
+    pub fn set_enabled(&mut self, id: &str, enabled: bool, shown: Option<Grant>) -> Result<PluginView, String> {
         let plugin = self.plugins.get(id).ok_or_else(|| format!("unknown plugin {id}"))?;
         let grant = Grant::of(&plugin.manifest);
+        if enabled && shown.as_ref() != Some(&grant) {
+            return Err("This plugin changed since you looked at it. Review it again to turn it on.".into());
+        }
         let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File });
         entry.enabled = enabled;
         if enabled {
@@ -325,18 +334,35 @@ mod tests {
     #[test]
     fn installs_off_and_needs_approval_again_when_permissions_grow() {
         let (mut s, dir) = store();
-        let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), Source::File).unwrap();
+        let repo = || Source::Github { repo: "owner/demo".into() };
+        let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), None).unwrap();
         assert!(!v1.enabled && !v1.approved && s.active("demo").is_none());
-        assert!(s.set_enabled("demo", true).unwrap().approved && s.active("demo").is_some());
+        let stale = Grant::of(&s.plugins["demo"].manifest);
+        assert!(s.set_enabled("demo", true, None).is_err());
+        assert!(s.set_enabled("demo", true, Some(stale.clone())).unwrap().approved && s.active("demo").is_some());
 
-        // Same permissions: stays on. More permissions: off until approved again.
-        s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), Source::File).unwrap();
+        // Same repo, same permissions: stays on. More permissions: off until approved again.
+        s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
         assert!(s.active("demo").is_some());
-        let v2 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), Source::File).unwrap();
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
         assert!(!v2.enabled && !v2.approved && s.active("demo").is_none());
+        // What the dialog showed before the update doesn't approve the new permissions.
+        assert!(s.set_enabled("demo", true, Some(stale)).unwrap_err().contains("changed since"));
+
+        // A file or another repo with the same id doesn't inherit the approval.
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let same = |s: &mut Store, source| s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), source, None).unwrap();
+        assert!(!same(&mut s, Source::File).approved);
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        assert!(!same(&mut s, Source::Github { repo: "someone/else".into() }).approved);
+
+        // An update that turns out to be another plugin is refused.
+        let other = package(&[("wings-plugin.json", &manifest("other", &[])), ("main.js", "")]);
+        assert!(s.install(&other, repo(), Some("demo")).unwrap_err().contains("different plugin"));
+        assert!(s.view("other").is_none());
 
         // State survives a restart.
-        s.set_enabled("demo", true).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
         let again = Store::load(dir.join("plugins"), dir.join("plugins.json"), None);
         assert!(again.active("demo").is_some());
         s.remove("demo").unwrap();
@@ -347,11 +373,12 @@ mod tests {
     #[test]
     fn adding_mcp_tools_needs_approval_again() {
         let (mut s, dir) = store();
-        s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &[])), ("main.js", "")]), Source::File).unwrap();
-        s.set_enabled("demo", true).unwrap();
-        let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), Source::File).unwrap();
+        let repo = || Source::Github { repo: "owner/demo".into() };
+        s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &[])), ("main.js", "")]), repo(), None).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
         assert!(!v2.approved && s.active("demo").is_none());
-        assert!(s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["Bad Name"])), ("main.js", "")]), Source::File).is_err());
+        assert!(s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["Bad Name"])), ("main.js", "")]), repo(), None).is_err());
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -359,13 +386,13 @@ mod tests {
     fn unpacks_from_one_top_folder_and_refuses_escapes() {
         let (mut s, dir) = store();
         let github = package(&[("owner-demo-abc123/wings-plugin.json", &manifest("demo", &[])), ("owner-demo-abc123/main.js", "x")]);
-        s.install(&github, Source::Github { repo: "owner/demo".into() }).unwrap();
+        s.install(&github, Source::Github { repo: "owner/demo".into() }, None).unwrap();
         assert_eq!(fs::read_to_string(dir.join("plugins/demo/main.js")).unwrap(), "x");
 
         let escape = package(&[("wings-plugin.json", &manifest("evil", &[])), ("main.js", ""), ("../../outside.txt", "x")]);
-        assert!(s.install(&escape, Source::File).unwrap_err().contains("Unsafe path"));
+        assert!(s.install(&escape, Source::File, None).unwrap_err().contains("Unsafe path"));
         assert!(!dir.join("outside.txt").exists() && s.view("evil").is_none());
-        assert!(s.install(b"not a zip", Source::File).unwrap_err().contains("Not a .wings-plugin"));
+        assert!(s.install(b"not a zip", Source::File, None).unwrap_err().contains("Not a .wings-plugin"));
         let _ = fs::remove_dir_all(dir);
     }
 

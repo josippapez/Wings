@@ -184,17 +184,17 @@ export function PluginManager(props: {
   function toggle(plugin: PluginView, on: boolean) {
     if (on && !plugin.approved) return setApproving(plugin);
     void work(plugin.id, async () => {
-      await api.pluginSetEnabled(plugin.id, on);
+      await api.pluginSetEnabled(plugin, on);
       await refresh();
     });
   }
 
   async function approve() {
     if (!approving) return;
-    const id = approving.id;
-    await work(id, async () => {
-      await api.pluginSetEnabled(id, true);
-      await refresh(id);
+    const shown = approving;
+    await work(shown.id, async () => {
+      await api.pluginSetEnabled(shown, true);
+      await refresh(shown.id);
     });
     setApproving(null);
   }

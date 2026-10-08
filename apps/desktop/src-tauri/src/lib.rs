@@ -27,7 +27,7 @@ use tauri_plugin_opener::OpenerExt;
 use claude::SessionSummary;
 use detect::{Agent, AgentState, Detector, PaneInfo, PaneProbe};
 use pty::{Pane, SpawnRequest};
-use plugin_store::{PluginView, Source, Store};
+use plugin_store::{Grant, PluginView, Source, Store};
 use plugins::{ExecResult, Plugin};
 use spaces::{GitStatus, SpaceStore, SpaceView};
 
@@ -155,14 +155,14 @@ fn plugin_install_file(state: State<AppState>, path: String) -> Res<PluginView> 
         return Err("The package is larger than 50 MB".into());
     }
     let bytes = std::fs::read(&path).map_err(err)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::File)
+    state.plugins.lock().unwrap().install(&bytes, Source::File, None)
 }
 
 #[tauri::command(async)]
 fn plugin_install_github(state: State<AppState>, url: String) -> Res<PluginView> {
     let repo = plugin_store::parse_repo(&url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
     let bytes = plugin_store::download_github(&repo)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo })
+    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo }, None)
 }
 
 /// Reinstalls a GitHub plugin from its newest release or default branch.
@@ -172,7 +172,7 @@ fn plugin_update(state: State<AppState>, id: String) -> Res<PluginView> {
         return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
     };
     let bytes = plugin_store::download_github(&repo)?;
-    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo })
+    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo }, Some(&id))
 }
 
 /// The newest release version on GitHub, if the plugin came from there and the repo has releases.
@@ -182,10 +182,10 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
     plugin_store::latest_version(&repo)
 }
 
-/// Turning a plugin on also approves the permissions it asks for, so the UI shows them first.
+/// Turning a plugin on approves `shown`, the access and additions the UI showed, if they still match.
 #[tauri::command]
-fn plugin_set_enabled(state: State<AppState>, id: String, enabled: bool) -> Res<PluginView> {
-    state.plugins.lock().unwrap().set_enabled(&id, enabled)
+fn plugin_set_enabled(state: State<AppState>, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
+    state.plugins.lock().unwrap().set_enabled(&id, enabled, shown)
 }
 
 #[tauri::command]
