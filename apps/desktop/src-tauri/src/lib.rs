@@ -799,17 +799,22 @@ fn start_detection(app: AppHandle) {
             let scan = detector.scan(&probes, focused.as_deref());
             let mut agents = scan.agents;
             agents.sort_by(|a, b| (&a.space_id, &a.pane_id).cmp(&(&b.space_id, &b.pane_id)));
-            let mut current = state.agents.lock().unwrap();
-            if *current != agents {
-                notify_transitions(&app, &current, &agents);
-                *current = agents.clone();
-                drop(current);
+            // Each lock is let go before anything else runs. `agents_list` and `pane_info` wait for them on the
+            // main thread, `tail_transcripts` takes the agents lock again, and asking whether the window is
+            // focused waits for the main thread.
+            let before = {
+                let mut current = state.agents.lock().unwrap();
+                (*current != agents).then(|| std::mem::replace(&mut *current, agents.clone()))
+            };
+            if let Some(before) = before {
+                notify_transitions(&app, &before, &agents);
                 let _ = app.emit("agents", agents);
             }
-            let mut info = state.pane_info.lock().unwrap();
-            if *info != scan.panes {
-                *info = scan.panes.clone();
-                drop(info);
+            let info_changed = {
+                let mut info = state.pane_info.lock().unwrap();
+                (*info != scan.panes).then(|| *info = scan.panes.clone()).is_some()
+            };
+            if info_changed {
                 let _ = app.emit("pane-info", scan.panes);
             }
             tail_transcripts(&app, &mut tailer);
