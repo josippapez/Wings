@@ -151,8 +151,14 @@ export function TitleBar(props: {
             label={button.title}
             aria-pressed={button.kind === "sidebar" ? button.active : undefined}
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
-            className={cn(button.label && "w-auto gap-1.5 px-2", button.active && "bg-white/[0.08] text-foreground")}
+            className={cn(
+              // A label means something is live, like a running timer, so it shows as a green pill like a pane badge.
+              button.label && "h-6 w-auto gap-1.5 rounded-full bg-done/12 px-2.5 text-done ring-1 ring-done/25 ring-inset hover:bg-done/20 hover:text-done",
+              button.active && !button.label && "bg-white/[0.08] text-foreground",
+              button.active && button.label && "bg-done/20",
+            )}
           >
+            {button.label && <span className="size-1.5 shrink-0 rounded-full bg-done motion-safe:animate-pulse" aria-hidden />}
             <Icon />
             {button.label && <span className="text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>
@@ -177,7 +183,7 @@ export function TitleBar(props: {
                 >
                   <Icon aria-hidden />
                   <span className="flex-1">{button.title}</span>
-                  {button.label && <span className="text-muted-foreground tabular-nums">{button.label}</span>}
+                  {button.label && <span className="text-done tabular-nums">{button.label}</span>}
                 </DropdownMenuItem>
               );
             })}
