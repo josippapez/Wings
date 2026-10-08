@@ -50,6 +50,10 @@ pub fn socket_path(app_data: &Path) -> PathBuf {
 pub fn start(app: AppHandle, path: PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::remove_file(&path);
+    // On first launch the app data folder doesn't exist yet, and binding in a missing folder fails.
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let listener = match UnixListener::bind(&path) {
         Ok(listener) => listener,
         Err(e) => return eprintln!("[mcp] couldn't listen on {}: {e}", path.display()),
