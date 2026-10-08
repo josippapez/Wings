@@ -495,7 +495,7 @@ fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, ur
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
 
-/// Serves plugin files at `wings-plugin://localhost/<id>/<path>`.
+/// Serves plugin files at `wings-plugin://localhost/<id>/<run>/<path>`. `run` only keeps WebKit's cache apart.
 fn serve_plugin_file(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let respond = |status: u16, kind: &str, body: Vec<u8>| {
         tauri::http::Response::builder()
@@ -507,7 +507,8 @@ fn serve_plugin_file(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -
             .unwrap()
     };
     let path = request.uri().path().trim_start_matches('/');
-    let (id, file) = path.split_once('/').unwrap_or((path, ""));
+    let mut parts = path.splitn(3, '/');
+    let (id, file) = (parts.next().unwrap_or_default(), parts.nth(1).unwrap_or_default());
     let state = app.state::<AppState>();
     let Some(file) = plugin(&state, id).ok().and_then(|p| plugins::resolve(&p.dir, file)) else {
         return respond(404, "text/plain", b"not found".to_vec());

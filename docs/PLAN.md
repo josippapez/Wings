@@ -268,7 +268,7 @@ placement = "split"
 
 **Runtime:**
 
-- **Asset scheme.** Plugin assets are served from one custom scheme, with the plugin id in the path. That is `wings-plugin://localhost/<id>/` on macOS and Linux, and `http://wings-plugin.localhost/<id>/` on Windows, because WebView2 serves custom schemes under http. The scheme handler sets each plugin's CSP header.
+- **Asset scheme.** Plugin assets are served from one custom scheme, with the plugin id in the path. That is `wings-plugin://localhost/<id>/<run>/` on macOS and Linux, and `http://wings-plugin.localhost/<id>/<run>/` on Windows, where `run` is new on each start so WebKit's cache never serves an old file, because WebView2 serves custom schemes under http. The scheme handler sets each plugin's CSP header.
 - **Views** are `<iframe sandbox="allow-scripts">` with no `allow-same-origin`. That gives every plugin frame an opaque origin, so sharing a scheme doesn't let plugins reach each other. The broker identifies the sender by its frame (`event.source`), never by a claimed id. Each view gets a strict CSP that starts from the MCP Apps default (`connect-src 'none'`) and opens only the hosts in `net`.
 - **Worker.** It runs in a hidden sandboxed iframe as a Web Worker. It receives events and tool calls, and it stays alive while the plugin is enabled.
 - **RPC broker.** The host side is the only door. Every postMessage RPC is checked against the manifest permissions in Rust before it's proxied. Plugins never get Tauri `invoke`.

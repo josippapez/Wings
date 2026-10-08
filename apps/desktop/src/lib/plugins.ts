@@ -160,8 +160,13 @@ function cleanDiffUpdate(p: Record<string, unknown>): Partial<DiffView> {
   };
 }
 
-const pluginUrl = (id: string, file: string) =>
-  `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${file}`;
+/**
+ * `run` is new for every start. WebKit keeps files from non-http schemes in its memory cache for good, so a
+ * reinstalled plugin would otherwise get its old scripts until Wings quits.
+ */
+const pluginUrl = (id: string, run: string, file: string) =>
+  `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${run}/${file}`;
+const newRun = () => crypto.randomUUID().slice(0, 8);
 
 export class PluginHost {
   private frames = new Map<Window, Running>();
@@ -198,7 +203,7 @@ export class PluginHost {
     frame.hidden = true;
     frame.title = `Plugin ${plugin.name}`;
     const nonce = crypto.randomUUID();
-    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, plugin.main)}"></script>`;
+    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, newRun(), plugin.main)}"></script>`;
     document.body.appendChild(frame);
     this.track(frame, plugin, "main", nonce);
   }
@@ -231,8 +236,9 @@ export class PluginHost {
   async mountSidebar(plugin: PluginView, sidebarId: string, container: HTMLElement) {
     const sidebar = plugin.contributes.sidebars.find((s) => s.id === sidebarId);
     if (!sidebar) throw new Error(`${plugin.id} has no sidebar ${sidebarId}`);
-    const html = await (await fetch(pluginUrl(plugin.id, sidebar.page))).text();
-    const base = pluginUrl(plugin.id, sidebar.page.includes("/") ? sidebar.page.slice(0, sidebar.page.lastIndexOf("/") + 1) : "");
+    const run = newRun();
+    const html = await (await fetch(pluginUrl(plugin.id, run, sidebar.page))).text();
+    const base = pluginUrl(plugin.id, run, sidebar.page.includes("/") ? sidebar.page.slice(0, sidebar.page.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
     const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const frame = document.createElement("iframe");
