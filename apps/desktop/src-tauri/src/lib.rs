@@ -68,12 +68,14 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-#[tauri::command]
+// Async, like every command that reads project folders: a folder on the Desktop or in Documents can wait on a
+// macOS permission prompt, and on the main thread that freezes the whole window until it's answered.
+#[tauri::command(async)]
 fn spaces_list(state: State<AppState>) -> Vec<SpaceView> {
     state.spaces.lock().unwrap().spaces.iter().map(spaces::view).collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn spaces_add(state: State<AppState>, path: String) -> SpaceView {
     spaces::view(&state.spaces.lock().unwrap().add(&path))
 }
@@ -646,7 +648,7 @@ struct PanePlan {
 
 /// Checks a plugin's `openPane` against its manifest and your projects. The UI then opens the pane, and
 /// `pane_create` checks its folder again.
-#[tauri::command]
+#[tauri::command(async)]
 fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPaneRequest) -> Res<PanePlan> {
     let plugin = plugin(&state, &plugin_id)?;
     let input = plugins::pane_input(&plugin, request.command.as_deref())?;
