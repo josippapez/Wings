@@ -7,10 +7,24 @@
   "main": "main.js",
   "permissions": {
     "exec": [
-      "gh",
-      "glab",
-      "az",
-      "git"
+      "git remote get-url",
+      "git branch --show-current",
+      "git rev-list",
+      "git fetch",
+      "git diff",
+      "gh pr list",
+      "gh pr view",
+      "gh pr diff",
+      "gh api",
+      "gh auth login",
+      "glab api",
+      "glab mr diff",
+      "glab auth status",
+      "glab auth login",
+      "az repos pr list",
+      "az repos pr policy list",
+      "az devops invoke",
+      "az login"
     ],
     "transcript": [
       "pr-link"

@@ -21,7 +21,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 ## Make a plugin
 
 1. Create `plugins/<id>/wings-plugin.json`. The `id` is lowercase letters, digits and dashes, and `api` is `1`.
-2. Ask for the least you need. `exec` lists programs by name, `transcript` lists Claude Code entry types, and `openUrl` lists https prefixes.
+2. Ask for the least you need. `exec` lists commands with their subcommand, like `gh pr view`, `transcript` lists Claude Code entry types, and `openUrl` lists https prefixes. Pass a folder with `{ cwd }`, not `git -C`, because the subcommand has to come first.
 3. Write `main.js` against `window.wings` only. The frame is hidden, so all UI goes through badges and the diff viewer.
 4. Run `pnpm tauri dev` in `apps/desktop`. Debug builds load the repo's `plugins/` folder. Plugins load at startup, so restart Wings after editing one.
 
@@ -43,7 +43,7 @@ A new `wings.*` call touches four places. Change them together:
 1. `apps/desktop/public/plugin-sdk.js`: the call and its JSDoc.
 2. `apps/desktop/src/lib/plugins.ts`: a case in `handle()` that validates params.
 3. `apps/desktop/src-tauri/src/lib.rs`: the Tauri command, registered in `generate_handler!`.
-4. `apps/desktop/src-tauri/src/plugins.rs`: the permission check, with a test.
+4. `apps/desktop/src-tauri/src/plugins.rs`: the permission check, with a test. `pr_tracker_calls_pass_its_own_manifest` lists the example plugin's calls, so add new ones there.
 
 Then update `plugins/README.md`.
 

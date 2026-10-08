@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { AnimatePresence, motion } from "motion/react";
@@ -112,7 +112,8 @@ function ago(iso: string) {
   return Math.abs(hours) >= 1 ? relative.format(hours, "hour") : relative.format(Math.round((Date.parse(iso) - Date.now()) / 60_000), "minute");
 }
 
-function CommentBody({ comment }: { comment: DiffComment }) {
+/** Comment links come from the plugin, so they go through its `openUrl` permission like any other link it opens. */
+function CommentBody({ comment, onOpen }: { comment: DiffComment; onOpen: (url: string) => void }) {
   return (
     <div className="flex gap-2.5">
       <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[11px] font-semibold uppercase">
@@ -125,7 +126,7 @@ function CommentBody({ comment }: { comment: DiffComment }) {
           {comment.url && (
             <button
               type="button"
-              onClick={() => void openUrl(comment.url)}
+              onClick={() => onOpen(comment.url)}
               aria-label="Open comment in the browser"
               className="ml-auto rounded text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -139,7 +140,7 @@ function CommentBody({ comment }: { comment: DiffComment }) {
   );
 }
 
-function CommentThread({ thread, className }: { thread: Thread; className?: string }) {
+function CommentThread({ thread, className, onOpen }: { thread: Thread; className?: string; onOpen: (url: string) => void }) {
   return (
     <div
       className={cn(
@@ -148,11 +149,11 @@ function CommentThread({ thread, className }: { thread: Thread; className?: stri
       )}
     >
       {thread.root.path !== null && className && <p className="mb-2.5 truncate text-[11px] text-muted-foreground">{thread.root.path}</p>}
-      <CommentBody comment={thread.root} />
+      <CommentBody comment={thread.root} onOpen={onOpen} />
       {thread.replies.length > 0 && (
         <div className="mt-3 flex flex-col gap-3 border-l border-hairline-strong pl-3">
           {thread.replies.map((reply) => (
-            <CommentBody key={reply.id} comment={reply} />
+            <CommentBody key={reply.id} comment={reply} onOpen={onOpen} />
           ))}
         </div>
       )}
@@ -201,6 +202,10 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
   const annotations: DiffLineAnnotation<Thread>[] = (current ? (threads.get(current.file.name) ?? []) : [])
     .filter((t) => t.root.line !== null)
     .map((t) => ({ side: t.root.side, lineNumber: t.root.line!, metadata: t }));
+
+  const openComment = (url: string) => {
+    if (diff) void invoke("plugin_open_url", { pluginId: diff.pluginId, url }).catch((e) => console.error(e));
+  };
 
   const toggleFolder = (path: string) =>
     setCollapsed((all) => {
@@ -449,7 +454,7 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
                 {selected === null ? (
                   <div className="flex flex-col gap-3 p-5">
                     {discussion.map((thread) => (
-                      <CommentThread key={thread.root.id} thread={thread} className="w-full" />
+                      <CommentThread key={thread.root.id} thread={thread} className="w-full" onOpen={openComment} />
                     ))}
                   </div>
                 ) : current ? (
@@ -457,7 +462,7 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
                     key={`${current.file.name}-${split}`}
                     fileDiff={current.file}
                     lineAnnotations={annotations}
-                    renderAnnotation={(a) => <CommentThread thread={a.metadata} />}
+                    renderAnnotation={(a) => <CommentThread thread={a.metadata} onOpen={openComment} />}
                     options={{ theme: "pierre-dark", themeType: "dark", diffStyle: split ? "split" : "unified", stickyHeader: true }}
                   />
                 ) : (

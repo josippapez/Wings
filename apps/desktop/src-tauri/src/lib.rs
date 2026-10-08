@@ -386,7 +386,10 @@ pub fn run() {
                 // The example plugins in the repo, so `pnpm tauri dev` picks up edits to them.
                 plugin_roots.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
             }
-            let plugins = plugins::discover(&plugin_roots);
+            // debt: on Windows WebView2 runs Tauri's IPC script in child frames too, and pages on the
+            // wings-plugin scheme count as local, so a plugin frame could call any command. Plugins stay
+            // off there until each one runs in its own webview with only plugin commands allowed.
+            let plugins = if cfg!(windows) { HashMap::new() } else { plugins::discover(&plugin_roots) };
             app.manage(AppState {
                 plugins,
                 claude_dir,

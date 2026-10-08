@@ -22,20 +22,32 @@ Restart Wings after adding or changing a plugin.
   "api": 1,
   "main": "main.js",
   "permissions": {
-    "exec": ["gh", "glab", "az", "git"],
-    "transcript": ["pr-link"],
-    "openUrl": ["https://github.com/", "https://gitlab.com/", "https://dev.azure.com/"]
+    "exec": [
+      "git branch --show-current",
+      "gh pr list",
+      "gh pr view"
+    ],
+    "transcript": [
+      "pr-link"
+    ],
+    "openUrl": [
+      "https://github.com/"
+    ]
   }
 }
 ```
 
 | Permission | Allows |
 |---|---|
-| `exec` | Running these programs by name, with no shell and no stdin, 30 s timeout by default |
+| `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments |
 | `transcript` | Reading these Claude Code transcript entry types |
 | `openUrl` | Opening https URLs that start with these prefixes |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
+
+A command runs as you, with that CLI's own sign-in, so `gh api` can read anything your GitHub account can. Wings always refuses flags that would run other commands, write or read files outside the repo, change data on the server, or print a token: `git -c`, `--upload-pack`, `--output`, `--no-index`, `gh`/`glab` `-X`, `--method`, `-f`, `-F`, `--input`, `--show-token`, and `az` `--http-method`, `--in-file`.
+
+Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bridge, so each plugin needs its own webview there first.
 
 ## API
 

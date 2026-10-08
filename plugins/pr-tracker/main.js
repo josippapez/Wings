@@ -49,7 +49,7 @@ setInterval(() => [...new Set([...links.values()].map((l) => l.url))].forEach((u
 // ---------- repository detection ----------
 
 async function git(cwd, args) {
-  const out = await wings.exec("git", ["-C", cwd, ...args]);
+  const out = await wings.exec("git", args, { cwd });
   if (out.code !== 0) throw new Error(out.stderr.trim() || `git ${args[0]} failed`);
   return out.stdout.trim();
 }

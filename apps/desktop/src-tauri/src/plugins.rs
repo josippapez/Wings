@@ -19,7 +19,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Permissions {
-    /// CLI programs the plugin may run, by bare name, e.g. `gh`.
+    /// Commands the plugin may run: a program and the subcommand its arguments must start with, e.g.
+    /// `gh pr view`. A bare program name allows any arguments.
     pub exec: Vec<String>,
     /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`.
     pub transcript: Vec<String>,
@@ -137,7 +138,36 @@ fn read_pipe(pipe: impl Read + Send + 'static, on_line: Option<OnLine>) -> JoinH
     })
 }
 
-/// Runs a program the manifest allows. No shell, so arguments can't smuggle in commands.
+/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`.
+fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
+    plugin.manifest.permissions.exec.iter().any(|entry| {
+        let mut words = entry.split_whitespace();
+        words.next() == Some(program) && words.enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word))
+    })
+}
+
+/// Flags that turn an allowed command into running other commands, writing or reading files outside the
+/// repo, changing data on the server, or printing a token. Refused whatever the manifest says.
+fn is_unsafe_flag(program: &str, arg: &str) -> bool {
+    let name = arg.split('=').next().unwrap_or(arg);
+    // Short flags can carry their value attached, like `-XDELETE` or `-ccore.fsmonitor=...`.
+    let short = |flags: &[&str]| !arg.starts_with("--") && flags.iter().any(|f| arg.starts_with(f));
+    match program {
+        // Config overrides can point core.fsmonitor, core.sshCommand or an alias at any command.
+        "git" => {
+            short(&["-c"])
+                || ["--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--output", "--ext-diff", "--textconv", "--no-index"]
+                    .contains(&name)
+        }
+        "gh" | "glab" => {
+            short(&["-X", "-f", "-F", "-t"]) || ["--method", "--field", "--raw-field", "--input", "--show-token"].contains(&name)
+        }
+        "az" => ["--http-method", "--in-file"].contains(&name),
+        _ => false,
+    }
+}
+
+/// Runs a command the manifest allows. No shell, so arguments can't smuggle in commands.
 pub fn exec(
     plugin: &Plugin,
     program: &str,
@@ -146,13 +176,21 @@ pub fn exec(
     timeout: Duration,
     on_line: Option<OnLine>,
 ) -> Result<ExecResult, String> {
-    if !plugin.manifest.permissions.exec.iter().any(|p| p == program) {
-        return Err(format!("{} may not run {program:?}", plugin.manifest.id));
+    let id = &plugin.manifest.id;
+    if !may_exec(plugin, program, args) {
+        let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
+        return Err(format!("{id} may not run {program} {sub}"));
+    }
+    if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
+        return Err(format!("{id} may not pass {flag} to {program}"));
     }
     let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
     let mut cmd = Command::new(path);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    if let Some(dir) = cwd.filter(|d| d.is_dir()) {
+    if let Some(dir) = cwd {
+        if !dir.is_dir() {
+            return Err(format!("{} is not a folder", dir.display()));
+        }
         cmd.current_dir(dir);
     }
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
@@ -257,6 +295,75 @@ mod tests {
             },
             dir: dir.to_path_buf(),
         }
+    }
+
+    #[test]
+    fn exec_needs_the_declared_subcommand() {
+        let p = plugin(Path::new("/tmp"), &["echo hi", "git remote get-url"], &[]);
+        assert_eq!(exec(&p, "echo", &["hi".into(), "there".into()], None, EXEC_TIMEOUT, None).unwrap().stdout, "hi there\n");
+        assert!(exec(&p, "echo", &["bye".into()], None, EXEC_TIMEOUT, None).unwrap_err().contains("may not run echo bye"));
+        assert!(exec(&p, "git", &["status".into()], None, EXEC_TIMEOUT, None).unwrap_err().contains("may not run git status"));
+        let missing = Path::new("/no/such/folder");
+        assert!(exec(&p, "echo", &["hi".into()], Some(missing), EXEC_TIMEOUT, None).unwrap_err().contains("is not a folder"));
+    }
+
+    #[test]
+    fn flags_that_run_code_or_write_are_refused() {
+        for (program, arg) in [
+            ("git", "-c"),
+            ("git", "-ccore.fsmonitor=touch x"),
+            ("git", "--upload-pack=sh"),
+            ("git", "--output=/tmp/x"),
+            ("git", "--no-index"),
+            ("gh", "-XDELETE"),
+            ("gh", "--method=POST"),
+            ("gh", "-fquery=mutation"),
+            ("glab", "--show-token"),
+            ("glab", "-t"),
+            ("az", "--http-method"),
+        ] {
+            assert!(is_unsafe_flag(program, arg), "{program} {arg}");
+        }
+        for (program, arg) in [("git", "-C"), ("git", "--cached"), ("git", "--quiet"), ("gh", "--json"), ("glab", "--paginate"), ("az", "-o")] {
+            assert!(!is_unsafe_flag(program, arg), "{program} {arg}");
+        }
+        // The escape this guards against: a config override that runs a shell command.
+        let p = plugin(Path::new("/tmp"), &["git"], &[]);
+        let args = ["-c".into(), "core.fsmonitor=touch /tmp/wings-pwned".into(), "status".into()];
+        assert!(exec(&p, "git", &args, None, EXEC_TIMEOUT, None).unwrap_err().contains("may not pass -c"));
+    }
+
+    #[test]
+    fn pr_tracker_calls_pass_its_own_manifest() {
+        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"));
+        let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
+        let p = Plugin { manifest, dir: dir.to_path_buf() };
+        let calls: &[(&str, &[&str])] = &[
+            ("git", &["remote", "get-url", "origin"]),
+            ("git", &["branch", "--show-current"]),
+            ("git", &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]),
+            ("git", &["fetch", "--quiet", "origin", "main", "feature/x"]),
+            ("git", &["diff", "--no-color", "--no-ext-diff", "origin/main...origin/feature/x"]),
+            ("gh", &["pr", "list", "--head", "x", "--state", "all", "--limit", "1", "--json", "url,number"]),
+            ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "comments,reviews"]),
+            ("gh", &["pr", "diff", "https://github.com/o/r/pull/1"]),
+            ("gh", &["api", "repos/o/r/pulls/1/comments", "--paginate", "--slurp"]),
+            ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
+            ("glab", &["api", "--hostname", "gitlab.com", "--paginate", "projects/g%2Fp/merge_requests/1/discussions?per_page=100"]),
+            ("glab", &["mr", "diff", "1", "--raw", "--repo", "https://gitlab.com/g/p"]),
+            ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
+            ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
+            ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--source-branch", "x", "-o", "json"]),
+            ("az", &["repos", "pr", "policy", "list", "--id", "1", "-o", "json"]),
+            ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads", "--api-version", "7.1"]),
+            ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+        ];
+        for (program, args) in calls {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+        }
+        assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
     }
 
     #[test]

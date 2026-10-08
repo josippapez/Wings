@@ -4,7 +4,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
  * the app's DOM and storage, and on macOS and Linux Tauri doesn't inject its IPC bridge into frames, so
  * postMessage is its only way out. Anything that touches the machine is re-checked in Rust against the manifest.
- * debt: on Windows wry injects the IPC bridge into every frame; check the caller's origin in Rust before shipping there.
+ * On Windows WebView2 runs the IPC bridge in child frames too, so Rust loads no plugins there yet (see `lib.rs`).
  */
 
 export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "merged";
