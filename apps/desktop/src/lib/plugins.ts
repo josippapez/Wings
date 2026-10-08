@@ -83,7 +83,15 @@ type Running = {
   kind: "main" | "sidebar";
   ready: boolean;
   frame: HTMLIFrameElement;
+  /**
+   * Given only to the frame's own document, and required on every message. A frame that navigates keeps its
+   * window, so this is what stops a page it navigated to from speaking as the plugin.
+   */
+  nonce: string;
 };
+
+/** The first thing in every plugin document: hands the SDK its nonce. */
+const nonceScript = (nonce: string) => `<script>window.__wingsNonce=${JSON.stringify(nonce)}</script>`;
 
 const tones: Tone[] = ["neutral", "info", "success", "warning", "danger", "merged"];
 const icons: BadgeIcon[] = ["pr-open", "pr-merged", "pr-closed", "pr-draft"];
@@ -171,12 +179,13 @@ export class PluginHost {
    */
   sync(plugins: PluginView[], restart?: string) {
     const wanted = new Map(plugins.filter((p) => p.enabled && p.approved).map((p) => [p.id, p]));
+    // Each frame on its own: a plugin has a main frame and maybe sidebar frames, all of which stay.
     for (const [win, running] of this.frames) {
       const next = wanted.get(running.id);
-      if (next && next.version === running.version && running.id !== restart) wanted.delete(running.id);
-      else this.stop(win);
+      if (!next || next.version !== running.version || running.id === restart) this.stop(win);
     }
-    for (const plugin of wanted.values()) this.run(plugin);
+    const live = new Set([...this.frames.values()].filter((r) => r.kind === "main").map((r) => r.id));
+    for (const plugin of wanted.values()) if (!live.has(plugin.id)) this.run(plugin);
   }
 
   private run(plugin: PluginView) {
@@ -185,14 +194,16 @@ export class PluginHost {
     frame.sandbox.add("allow-scripts");
     frame.hidden = true;
     frame.title = `Plugin ${plugin.name}`;
-    frame.srcdoc = `<!doctype html><meta charset="utf-8"><script src="${sdk}"></script><script src="${pluginUrl(plugin.id, plugin.main)}"></script>`;
+    const nonce = crypto.randomUUID();
+    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, plugin.main)}"></script>`;
     document.body.appendChild(frame);
-    this.track(frame, plugin, "main");
+    this.track(frame, plugin, "main", nonce);
   }
 
-  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"]) {
-    if (!frame.contentWindow) return;
-    this.frames.set(frame.contentWindow, {
+  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string) {
+    const win = frame.contentWindow;
+    if (!win) return;
+    this.frames.set(win, {
       id: plugin.id,
       version: plugin.version,
       ui: plugin.contributes.ui,
@@ -200,6 +211,12 @@ export class PluginHost {
       kind,
       ready: false,
       frame,
+      nonce,
+    });
+    // The plugin's own document loads once. A second load means it navigated away, so let it go.
+    let loads = 0;
+    frame.addEventListener("load", () => {
+      if (++loads > 1 && this.frames.get(win)?.frame === frame) this.stop(win);
     });
   }
 
@@ -213,14 +230,15 @@ export class PluginHost {
     if (!sidebar) throw new Error(`${plugin.id} has no sidebar ${sidebarId}`);
     const html = await (await fetch(pluginUrl(plugin.id, sidebar.page))).text();
     const base = pluginUrl(plugin.id, sidebar.page.includes("/") ? sidebar.page.slice(0, sidebar.page.lastIndexOf("/") + 1) : "");
-    const head = `<meta charset="utf-8"><base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
+    const nonce = crypto.randomUUID();
+    const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts", "allow-forms");
     frame.title = sidebar.title;
     frame.className = "size-full border-0 bg-transparent";
     frame.srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
     container.replaceChildren(frame);
-    this.track(frame, plugin, "sidebar");
+    this.track(frame, plugin, "sidebar", nonce);
   }
 
   private stop(win: Window) {
@@ -228,6 +246,7 @@ export class PluginHost {
     if (!running) return;
     running.frame.remove();
     this.frames.delete(win);
+    if (running.kind === "sidebar") return;
     for (const [token, action] of this.actions) if (action.pluginId === running.id) this.settle(token, new Error("The plugin was turned off"));
     this.callbacks.clearPlugin(running.id);
   }
@@ -275,7 +294,7 @@ export class PluginHost {
   private onMessage = async (event: MessageEvent) => {
     const plugin = event.source ? this.frames.get(event.source as Window) : undefined;
     const msg = event.data;
-    if (!plugin || msg?.wings !== 1 || typeof msg.id !== "number") return;
+    if (!plugin || msg?.wings !== 1 || typeof msg.id !== "number" || msg.nonce !== plugin.nonce) return;
     const win = event.source as Window;
     try {
       const output = (line: string) => this.post(win, { output: { call: msg.id, line } });

@@ -378,13 +378,29 @@ fn fetch_prefix_ok(prefix: &str) -> bool {
     prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains('@')))
 }
 
-/// Whether the plugin may call this URL: https, no credentials in it, and under a `permissions.fetch` prefix.
-pub fn may_fetch(plugin: &Plugin, url: &str) -> bool {
-    let Ok(parsed) = tauri::Url::parse(url) else { return false };
-    parsed.scheme() == "https"
+/// The URL to send, if the plugin may call it: https, no credentials, under a `permissions.fetch` prefix,
+/// and already in normal form with no encoded `/`, `\\` or `.`, so what's checked is exactly what the server
+/// sees. A server that decoded `..%2F` could otherwise route a request outside the approved prefix.
+pub fn fetch_url(plugin: &Plugin, url: &str) -> Option<String> {
+    let parsed = tauri::Url::parse(url).ok()?;
+    let normal = parsed.as_str();
+    let lower = normal.to_ascii_lowercase();
+    let ok = parsed.scheme() == "https"
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && plugin.manifest.permissions.fetch.iter().any(|prefix| parsed.as_str().starts_with(prefix))
+        && normal == url
+        && !["%2f", "%5c", "%2e"].iter().any(|bad| lower.contains(bad))
+        && plugin.manifest.permissions.fetch.iter().any(|prefix| normal.starts_with(prefix));
+    ok.then(|| normal.to_string())
+}
+
+/// Headers a plugin may set. Routing headers like `Host` or `X-Forwarded-Host` could send a request, and
+/// the token on it, to a different site behind the same server, so they're refused.
+pub fn fetch_header_ok(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let routing = ["x-forwarded-", "x-real-ip", "x-original-", "x-rewrite-", "x-host"].iter().any(|p| name.starts_with(p));
+    ["accept", "accept-language", "content-type", "if-none-match", "if-modified-since", "cache-control"].contains(&name.as_str())
+        || (name.starts_with("x-") && !routing)
 }
 
 pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
@@ -419,15 +435,27 @@ mod tests {
     #[test]
     fn fetch_only_reaches_declared_https_prefixes() {
         let p = plugin(Path::new("/tmp"), &[], &[]);
-        assert!(may_fetch(&p, "https://api.example.com/v1/timers"));
+        assert_eq!(fetch_url(&p, "https://api.example.com/v1/timers").as_deref(), Some("https://api.example.com/v1/timers"));
         for url in [
             "http://api.example.com/v1/timers",
             "https://api.example.com/v2/x",
             "https://api.example.com.evil.net/v1/",
             "https://user:pw@api.example.com/v1/",
             "not a url",
+            // Paths a server might decode or normalise to somewhere outside /v1/.
+            "https://api.example.com/v1/../admin",
+            "https://api.example.com/v1/..%2Fadmin",
+            "https://api.example.com/v1/%2e%2e/admin",
+            "https://api.example.com/v1\\..\\admin",
+            "https://API.example.com/v1/x",
         ] {
-            assert!(!may_fetch(&p, url), "{url}");
+            assert!(fetch_url(&p, url).is_none(), "{url}");
+        }
+        for name in ["Accept", "content-type", "X-Api-Key", "X-Request-Id"] {
+            assert!(fetch_header_ok(name), "{name}");
+        }
+        for name in ["Host", "x-forwarded-host", "X-Forwarded-For", "Forwarded", "Cookie", "Transfer-Encoding", "Authorization", "X-Real-IP"] {
+            assert!(!fetch_header_ok(name), "{name}");
         }
         assert!(fetch_prefix_ok("https://api.example.com/"));
         assert!(!fetch_prefix_ok("https://api.example.com") && !fetch_prefix_ok("http://x.com/") && !fetch_prefix_ok("https:///x"));

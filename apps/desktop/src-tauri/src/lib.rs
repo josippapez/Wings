@@ -162,10 +162,19 @@ fn plugin_install_file(state: State<AppState>, path: String) -> Res<PluginView> 
 /// Installs a package and deletes the secrets of a plugin it replaced from somewhere else.
 fn install(state: &AppState, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
     let (view, dropped) = state.plugins.lock().unwrap().install(bytes, source, expected_id)?;
-    for name in dropped {
-        secrets::delete(&view.manifest.id, &name)?;
+    if let Some(old) = dropped {
+        delete_secrets(&view.manifest.id, &old);
     }
     Ok(view)
+}
+
+/// Tries every name. A failure only leaves an orphan: the scope is gone, so nothing can read it.
+fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
+    for name in &old.names {
+        if let Err(e) = secrets::delete(plugin_id, &old.scope, name) {
+            eprintln!("[plugins] couldn't delete {plugin_id} secret {name}: {e}");
+        }
+    }
 }
 
 #[tauri::command(async)]
@@ -205,8 +214,8 @@ fn plugin_set_enabled(app: AppHandle, state: State<AppState>, id: String, enable
 #[tauri::command]
 fn plugin_remove(app: AppHandle, state: State<AppState>, id: String) -> Res<()> {
     close_panels(&app, &id);
-    for name in state.plugins.lock().unwrap().remove(&id)? {
-        secrets::delete(&id, &name)?;
+    if let Some(old) = state.plugins.lock().unwrap().remove(&id)? {
+        delete_secrets(&id, &old);
     }
     Ok(())
 }
@@ -219,21 +228,32 @@ fn plugin_secret_set(state: State<AppState>, plugin_id: String, name: String, va
     if !secrets::valid_name(&name) || value.is_empty() || value.len() > 8192 {
         return Err("A secret needs a name of letters, digits, - and _, and a value up to 8 KB".into());
     }
-    secrets::set(&plugin_id, &name, &value)?;
+    let scope = state.plugins.lock().unwrap().secret_scope(&plugin_id)?.scope;
+    secrets::set(&plugin_id, &scope, &name, &value)?;
     state.plugins.lock().unwrap().note_secret(&plugin_id, &name, true)
+}
+
+/// A secret the plugin stored in its current scope, if any.
+fn stored_secret(state: &AppState, plugin_id: &str, name: &str) -> Res<Option<String>> {
+    let scope = state.plugins.lock().unwrap().secret_scope(plugin_id)?;
+    if !scope.names.iter().any(|n| n == name) {
+        return Ok(None);
+    }
+    secrets::get(plugin_id, &scope.scope, name)
 }
 
 #[tauri::command]
 fn plugin_secret_delete(state: State<AppState>, plugin_id: String, name: String) -> Res<()> {
     plugin(&state, &plugin_id)?;
-    secrets::delete(&plugin_id, &name)?;
+    let scope = state.plugins.lock().unwrap().secret_scope(&plugin_id)?.scope;
+    secrets::delete(&plugin_id, &scope, &name)?;
     state.plugins.lock().unwrap().note_secret(&plugin_id, &name, false)
 }
 
 #[tauri::command(async)]
 fn plugin_secret_has(state: State<AppState>, plugin_id: String, name: String) -> Res<bool> {
     plugin(&state, &plugin_id)?;
-    Ok(secrets::valid_name(&name) && secrets::get(&plugin_id, &name)?.is_some())
+    Ok(stored_secret(&state, &plugin_id, &name)?.is_some())
 }
 
 #[derive(serde::Deserialize)]
@@ -261,18 +281,17 @@ struct FetchResponse {
 #[tauri::command(async)]
 fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest) -> Res<FetchResponse> {
     let plugin = plugin(&state, &plugin_id)?;
-    if !plugins::may_fetch(&plugin, &request.url) {
-        return Err(format!("{plugin_id} may not fetch {}", request.url));
-    }
+    let url = plugins::fetch_url(&plugin, &request.url).ok_or_else(|| format!("{plugin_id} may not fetch {}", request.url))?;
     let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
-    let mut builder = tauri::http::Request::builder().method(method.as_str()).uri(&request.url);
+    let mut builder = tauri::http::Request::builder().method(method.as_str()).uri(&url);
     for (name, value) in &request.headers {
-        if !name.eq_ignore_ascii_case("authorization") {
-            builder = builder.header(name, value);
+        if !plugins::fetch_header_ok(name) {
+            return Err(format!("{plugin_id} may not set the {name} header"));
         }
+        builder = builder.header(name, value);
     }
     if let Some(name) = &request.bearer {
-        let token = secrets::get(&plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;
+        let token = stored_secret(&state, &plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;
         builder = builder.header("Authorization", format!("Bearer {token}"));
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()

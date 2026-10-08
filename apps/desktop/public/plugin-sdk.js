@@ -1,6 +1,9 @@
 // Wings plugin SDK, API 1. Loaded into each plugin's sandboxed frame before the plugin's main script.
 // Plugins talk to Wings only through `window.wings`; every call is checked against the manifest.
 (() => {
+  // Set by Wings in this document only; every message carries it, so Wings knows it's really this page.
+  const nonce = window.__wingsNonce;
+  delete window.__wingsNonce;
   let nextId = 1;
   const pending = new Map();
   const listeners = { panes: [], action: [] };
@@ -9,7 +12,7 @@
     new Promise((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve, reject, onOutput });
-      parent.postMessage({ wings: 1, id, method, params }, "*");
+      parent.postMessage({ wings: 1, nonce, id, method, params }, "*");
     });
 
   addEventListener("message", (event) => {

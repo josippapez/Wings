@@ -47,6 +47,31 @@ struct Entry {
     /// Names of the keychain secrets it stored, so they go when it does.
     #[serde(default)]
     secrets: Vec<String>,
+    /// Namespaces its keychain secrets. A new install from somewhere else gets a new one, so it can't
+    /// reach the old plugin's tokens even if deleting them failed.
+    #[serde(default = "new_scope")]
+    scope: String,
+}
+
+/// Unique, not secret: it only has to differ between installs.
+fn new_scope() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("{nanos:x}{:x}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Where a plugin's secrets live, and the names it's known to have stored.
+#[derive(Debug)]
+pub struct SecretScope {
+    pub scope: String,
+    pub names: Vec<String>,
+}
+
+impl Entry {
+    fn new(source: Source) -> Self {
+        Self { enabled: false, approved: None, source, secrets: Vec::new(), scope: new_scope() }
+    }
 }
 
 /// A plugin as the manager shows it.
@@ -126,9 +151,9 @@ impl Store {
     /// for a reinstall from the same GitHub repo, and still only counts if the new version asks for the same
     /// access and adds the same things. A file can come from anyone, so a file install always asks again.
     /// `expected_id` makes an update fail if the package turns out to be a different plugin. Also returns
-    /// the secrets of a plugin it replaced from somewhere else, which the caller must delete: a newcomer
-    /// with the same id mustn't get the old plugin's tokens.
-    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<(PluginView, Vec<String>), String> {
+    /// the secrets of a plugin it replaced from somewhere else, for the caller to delete. A newcomer gets a
+    /// new secret scope either way, so it can't use them.
+    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<(PluginView, Option<SecretScope>), String> {
         if cfg!(windows) {
             return Err("Plugins aren't available on Windows yet".into());
         }
@@ -153,14 +178,14 @@ impl Store {
         fs::rename(&staging, &dest).map_err(|e| e.to_string())?;
         let plugin = plugins::load(&dest)?;
         let (old, dropped) = match self.entries.remove(&id) {
-            Some(e) if matches!(source, Source::Github { .. }) && e.source == source => (Some(e), Vec::new()),
-            Some(e) => (None, e.secrets),
-            None => (None, Vec::new()),
+            Some(e) if matches!(source, Source::Github { .. }) && e.source == source => (Some(e), None),
+            Some(e) => (None, Some(SecretScope { scope: e.scope, names: e.secrets })),
+            None => (None, None),
         };
         let approved = old.as_ref().and_then(|e| e.approved.clone());
         let enabled = old.as_ref().is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
-        let secrets = old.map(|e| e.secrets).unwrap_or_default();
-        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets });
+        let (secrets, scope) = old.map_or_else(|| (Vec::new(), new_scope()), |e| (e.secrets, e.scope));
+        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets, scope });
         self.plugins.insert(id.clone(), plugin);
         self.save()?;
         Ok((self.view(&id).expect("just installed"), dropped))
@@ -174,7 +199,7 @@ impl Store {
         if enabled && shown.as_ref() != Some(&grant) {
             return Err("This plugin changed since you looked at it. Review it again to turn it on.".into());
         }
-        let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File, secrets: Vec::new() });
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
         entry.enabled = enabled;
         if enabled {
             entry.approved = Some(grant);
@@ -183,21 +208,29 @@ impl Store {
         Ok(self.view(id).expect("known plugin"))
     }
 
-    /// Returns the plugin's secret names, for the caller to delete from the keychain.
-    pub fn remove(&mut self, id: &str) -> Result<Vec<String>, String> {
+    /// Returns the plugin's secrets, for the caller to delete from the keychain.
+    pub fn remove(&mut self, id: &str) -> Result<Option<SecretScope>, String> {
         if self.dev.contains(id) {
             return Err(format!("{id} is loaded from the repo in this dev build"));
         }
         let plugin = self.plugins.remove(id).ok_or_else(|| format!("unknown plugin {id}"))?;
-        let secrets = self.entries.remove(id).map(|e| e.secrets).unwrap_or_default();
+        let secrets = self.entries.remove(id).map(|e| SecretScope { scope: e.scope, names: e.secrets });
         fs::remove_dir_all(&plugin.dir).map_err(|e| e.to_string())?;
         self.save()?;
         Ok(secrets)
     }
 
+    /// The plugin's current secret scope and the names it stored there.
+    pub fn secret_scope(&mut self, id: &str) -> Result<SecretScope, String> {
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
+        let scope = SecretScope { scope: entry.scope.clone(), names: entry.secrets.clone() };
+        self.save()?;
+        Ok(scope)
+    }
+
     /// Records that the plugin stored (or deleted) a keychain secret with this name.
     pub fn note_secret(&mut self, id: &str, name: &str, stored: bool) -> Result<(), String> {
-        let entry = self.entries.entry(id.to_string()).or_insert(Entry { enabled: false, approved: None, source: Source::File, secrets: Vec::new() });
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
         entry.secrets.retain(|n| n != name);
         if stored {
             entry.secrets.push(name.to_string());
@@ -399,10 +432,16 @@ mod tests {
         let repo = || Source::Github { repo: "owner/demo".into() };
         s.install(&pkg(), repo(), None).unwrap();
         s.note_secret("demo", "token", true).unwrap();
-        assert!(s.install(&pkg(), repo(), Some("demo")).unwrap().1.is_empty());
-        assert_eq!(s.install(&pkg(), Source::File, None).unwrap().1, ["token"]);
+        let first = s.secret_scope("demo").unwrap().scope;
+        assert!(s.install(&pkg(), repo(), Some("demo")).unwrap().1.is_none());
+        assert_eq!(s.secret_scope("demo").unwrap().scope, first);
+        let dropped = s.install(&pkg(), Source::File, None).unwrap().1.unwrap();
+        assert_eq!((dropped.scope.as_str(), dropped.names.as_slice()), (first.as_str(), ["token".to_string()].as_slice()));
+        // The newcomer gets its own scope and no recorded secrets.
+        let fresh = s.secret_scope("demo").unwrap();
+        assert!(fresh.scope != first && fresh.names.is_empty());
         s.note_secret("demo", "token", true).unwrap();
-        assert_eq!(s.remove("demo").unwrap(), ["token"]);
+        assert_eq!(s.remove("demo").unwrap().unwrap().names, ["token"]);
         let _ = fs::remove_dir_all(dir);
     }
 
