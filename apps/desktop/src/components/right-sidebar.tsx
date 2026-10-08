@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { motion } from "motion/react";
 import { CalendarIcon, ChartColumnIcon, ClockIcon, GlobeIcon, ListIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
@@ -9,8 +8,6 @@ import type { PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 
-const WIDTH = 360;
-const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
 
 /** `id` is `pluginId:sidebarId`; `key` also changes when the plugin restarts, so its page loads again. */
 export type SidebarRef = { plugin: PluginView; sidebarId: string; id: string; key: string };
@@ -43,15 +40,8 @@ export function RightSidebar(props: {
 }) {
   const title = props.open ? sidebarOf(props.open)?.title : undefined;
   return (
-    <motion.aside
-      initial={false}
-      animate={{ width: props.open ? WIDTH : 0, opacity: props.open ? 1 : 0 }}
-      transition={spring}
-      className="shrink-0 overflow-hidden"
-      aria-hidden={!props.open}
-      aria-label={title}
-    >
-      <div className={cn("flex h-full flex-col pb-2 pl-1")} style={{ width: WIDTH }}>
+    <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open} aria-label={title}>
+      <div className="flex h-full min-w-[280px] flex-col pb-2 pl-1">
         <div className="flex h-8 shrink-0 items-center gap-1 pr-2 pl-1">
           {props.mounted.length > 1 ? (
             // Several plugins' pages are open: one tab each, scrolling sideways if they don't fit. Only the
@@ -94,6 +84,6 @@ export function RightSidebar(props: {
           ))}
         </div>
       </div>
-    </motion.aside>
+    </aside>
   );
 }

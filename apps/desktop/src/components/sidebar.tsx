@@ -14,7 +14,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Agent, AgentState, GitStatus, Space } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const WIDTH = 248;
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
 const agentOrder: Record<AgentState, number> = { blocked: 0, done: 1, working: 2, idle: 3 };
 
@@ -56,14 +55,9 @@ export function Sidebar(props: {
   }
 
   return (
-    <motion.aside
-      initial={false}
-      animate={{ width: props.open ? WIDTH : 0, opacity: props.open ? 1 : 0 }}
-      transition={spring}
-      className="shrink-0 overflow-hidden"
-      aria-hidden={!props.open}
-    >
-      <div className="flex h-full flex-col pb-2" style={{ width: WIDTH }}>
+    <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open}>
+      {/* At least the narrowest width, so closing clips the list rather than squeezing it. */}
+      <div className="flex h-full min-w-[200px] flex-col pb-2">
         <div className="flex h-8 items-center justify-between pr-2 pl-4">
           <h2 className="text-[12px] font-medium text-muted-foreground">Projects</h2>
           <span className="flex items-center">
@@ -222,6 +216,6 @@ export function Sidebar(props: {
           </ScrollArea>
         </section>
       </div>
-    </motion.aside>
+    </aside>
   );
 }

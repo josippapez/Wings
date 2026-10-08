@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MotionConfig } from "motion/react";
 
@@ -12,6 +13,7 @@ import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp } from "@/components/status-dot";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView } from "@/lib/plugins";
@@ -27,10 +29,21 @@ type SavedWorkspace = {
   activeSpaceId: string | null;
   activeTabBySpace: Record<string, string>;
   sidebarOpen: boolean;
+  /** Sidebar widths in pixels, as last dragged. */
+  widths?: Widths;
   fontSize: number;
   tabs: Tab[];
   sessions: Record<string, string | null>;
 };
+
+type Widths = { left: number; right: number };
+
+/** Opens a side panel at its saved width, or closes it. */
+function place(panel: PanelImperativeHandle | null, open: boolean, width: number, force: boolean) {
+  if (!panel) return;
+  if (!open) return void (panel.isCollapsed() || panel.collapse());
+  if (force || panel.isCollapsed()) panel.resize(width);
+}
 
 /** The pane next to `key` in a direction, by on-screen position (cards carry `data-pane-key`). */
 function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
@@ -65,6 +78,13 @@ export default function App() {
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTabBySpace, setActiveTabBySpace] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [widths, setWidths] = useState<Widths>({ left: 248, right: 360 });
+  const leftPanel = usePanelRef();
+  const rightPanel = usePanelRef();
+  const panelGroup = useRef<HTMLDivElement>(null);
+  const placed = useRef(false);
+  // Updated on every drag frame; saved into `widths` once the drag ends, so App doesn't re-render per frame.
+  const liveWidths = useRef(widths);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [pluginsOpen, setPluginsOpen] = useState(false);
@@ -288,6 +308,7 @@ export default function App() {
       setTabs(restored);
       setActiveTabBySpace(Object.fromEntries(Object.entries(saved.activeTabBySpace).filter(([, id]) => tabIds.has(id))));
       setSidebarOpen(saved.sidebarOpen);
+      if (saved.widths) setWidths((liveWidths.current = saved.widths));
       setActiveSpaceId(saved.activeSpaceId && known.has(saved.activeSpaceId) ? saved.activeSpaceId : restored[0].spaceId);
       return true;
     },
@@ -339,10 +360,25 @@ export default function App() {
   useEffect(() => {
     if (!ready) return;
     const sessions = Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
-    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, fontSize, tabs, sessions };
+    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, tabs, sessions };
     const timer = setTimeout(() => void api.workspaceSave(JSON.stringify(saved)), 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, fontSize]);
+  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize]);
+
+  const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
+  // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
+  // saved widths, doesn't slide.
+  useEffect(() => {
+    if (!ready) return;
+    const group = panelGroup.current;
+    const first = !placed.current;
+    placed.current = true;
+    if (group && !first) group.dataset.sliding = "";
+    place(leftPanel.current, sidebarOpen, widths.left, first);
+    place(rightPanel.current, rightRef !== null, widths.right, first);
+    const timer = setTimeout(() => group && delete group.dataset.sliding, 340);
+    return () => clearTimeout(timer);
+  }, [ready, sidebarOpen, rightRef !== null]);
 
   // A pane only counts as seen while the window has focus, so "done" survives you switching apps.
   useEffect(() => {
@@ -531,57 +567,98 @@ export default function App() {
               setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
             }}
           />
-          <div className="flex min-h-0 flex-1">
-            <Sidebar
-              open={sidebarOpen}
-              spaces={spaces}
-              git={git}
-              onRefreshGit={() => api.gitRefresh().then(setGit)}
-              agents={agents}
-              activeSpaceId={activeSpaceId}
-              focusedPaneId={focusedPaneId}
-              onSelectSpace={selectSpace}
-              onSelectAgent={selectAgent}
-              onAddSpace={(path) => void addSpace(path)}
-              onRemoveSpace={(id) => void removeSpace(id)}
-            />
-            <main className="relative min-h-0 min-w-0 flex-1">
-              {tabs.map((tab) => (
-                <PaneGrid
-                  key={tab.id}
-                  layout={tab.layout}
-                  visible={tab.id === activeTabId}
-                  focusedPane={tab.focusedPane}
-                  zoomedPane={tab.zoomedPane}
-                  labels={labels}
-                  initialInputs={initialInputs}
-                  badges={paneBadges}
-                  onBadgeAction={onBadgeAction}
-                  actions={actions}
-                />
-              ))}
-              {!activeSpace && (
-                <Empty className="h-full">
-                  <EmptyHeader>
-                    <EmptyTitle>No project open</EmptyTitle>
-                    <EmptyDescription>Add a project with the + next to Projects to open a terminal in it.</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </main>
-            <RightSidebar
-              open={rightSidebar ? sidebarRef(rightSidebar) : null}
-              mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
-              host={pluginHost.current}
-              onSelect={setRightSidebar}
-              onCloseTab={(id) => {
-                const rest = openedSidebars.filter((k) => k !== id);
-                setOpenedSidebars(rest);
-                if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
+          <ResizablePanelGroup
+            orientation="horizontal"
+            elementRef={panelGroup}
+            onLayoutChanged={() => setWidths(liveWidths.current)}
+            className="min-h-0 flex-1"
+          >
+            <ResizablePanel
+              id="left"
+              panelRef={leftPanel}
+              collapsible
+              collapsedSize={0}
+              minSize={200}
+              maxSize={420}
+              defaultSize={248}
+              groupResizeBehavior="preserve-pixel-size"
+              className="overflow-hidden"
+              onResize={(size) => {
+                if (size.inPixels < 1) setSidebarOpen(false);
+                else liveWidths.current = { ...liveWidths.current, left: Math.round(size.inPixels) };
               }}
-              onClose={() => setRightSidebar(null)}
-            />
-          </div>
+            >
+              <Sidebar
+                open={sidebarOpen}
+                spaces={spaces}
+                git={git}
+                onRefreshGit={() => api.gitRefresh().then(setGit)}
+                agents={agents}
+                activeSpaceId={activeSpaceId}
+                focusedPaneId={focusedPaneId}
+                onSelectSpace={selectSpace}
+                onSelectAgent={selectAgent}
+                onAddSpace={(path) => void addSpace(path)}
+                onRemoveSpace={(id) => void removeSpace(id)}
+              />
+            </ResizablePanel>
+            <SideHandle disabled={!sidebarOpen} />
+            <ResizablePanel id="main" minSize={320}>
+              <main className="relative h-full min-h-0 min-w-0">
+                {tabs.map((tab) => (
+                  <PaneGrid
+                    key={tab.id}
+                    layout={tab.layout}
+                    visible={tab.id === activeTabId}
+                    focusedPane={tab.focusedPane}
+                    zoomedPane={tab.zoomedPane}
+                    labels={labels}
+                    initialInputs={initialInputs}
+                    badges={paneBadges}
+                    onBadgeAction={onBadgeAction}
+                    actions={actions}
+                  />
+                ))}
+                {!activeSpace && (
+                  <Empty className="h-full">
+                    <EmptyHeader>
+                      <EmptyTitle>No project open</EmptyTitle>
+                      <EmptyDescription>Add a project with the + next to Projects to open a terminal in it.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </main>
+            </ResizablePanel>
+            <SideHandle disabled={rightRef === null} />
+            <ResizablePanel
+              id="right"
+              panelRef={rightPanel}
+              collapsible
+              collapsedSize={0}
+              minSize={280}
+              maxSize={640}
+              defaultSize={0}
+              groupResizeBehavior="preserve-pixel-size"
+              className="overflow-hidden"
+              onResize={(size) => {
+                if (size.inPixels < 1) setRightSidebar(null);
+                else liveWidths.current = { ...liveWidths.current, right: Math.round(size.inPixels) };
+              }}
+            >
+              <RightSidebar
+                open={rightRef}
+                mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
+                host={pluginHost.current}
+                onSelect={setRightSidebar}
+                onCloseTab={(id) => {
+                  const rest = openedSidebars.filter((k) => k !== id);
+                  setOpenedSidebars(rest);
+                  if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
+                }}
+                onClose={() => setRightSidebar(null)}
+              />
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </div>
         <DiffViewer diff={diff} onClose={() => setDiff(null)} />
         <PluginManager
@@ -607,5 +684,15 @@ export default function App() {
         />
       </TooltipProvider>
     </MotionConfig>
+  );
+}
+
+/** The edge between a sidebar and the panes: invisible until you point at it. Off while that sidebar is closed. */
+function SideHandle({ disabled }: { disabled: boolean }) {
+  return (
+    <ResizableHandle
+      disabled={disabled}
+      className="bg-transparent transition-colors duration-150 after:w-2 data-[separator=active]:bg-hairline-strong data-[separator=hover]:bg-hairline-strong data-[separator=disabled]:pointer-events-none"
+    />
   );
 }

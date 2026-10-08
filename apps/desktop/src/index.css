@@ -168,3 +168,13 @@
     from { transform: translateX(-100%); }
     to { transform: translateX(300%); }
 }
+
+/* Opening or closing a sidebar slides the panels; App sets data-sliding just for that. */
+[data-sliding] > [data-panel] {
+  transition: flex-grow 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-sliding] > [data-panel] {
+    transition: none;
+  }
+}
