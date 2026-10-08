@@ -72,6 +72,26 @@ export type SessionSummary = {
   sizeBytes: number;
 };
 
+/** Where a search matched: a prompt, Claude's reply, or a file the session edited. */
+export type HistorySnippet = { role: "user" | "assistant" | "file"; text: string };
+/** A past session from the history search. `cwd` is where it started, so where it resumes. */
+export type HistoryHit = {
+  id: string;
+  cwd: string | null;
+  title: string | null;
+  firstPrompt: string | null;
+  gitBranch: string | null;
+  lastActiveMs: number;
+  lastActive: string | null;
+  messages: number;
+  /** Messages that match the search. */
+  matches: number;
+  snippets: HistorySnippet[];
+};
+/** `project` also covers folders inside it, like worktrees. Leave it out to search every project. */
+export type HistoryFilter = { project?: string | null; branch?: string | null; sinceMs?: number | null };
+export type HistoryResults = { sessions: HistoryHit[]; total: number; branches: string[] };
+
 export const api = {
   spacesList: () => invoke<Space[]>("spaces_list"),
   pluginsList: () => invoke<PluginView[]>("plugins_list"),
@@ -108,6 +128,9 @@ export const api = {
   spacesAdd: (path: string) => invoke<Space>("spaces_add", { path }),
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),
   sessionsList: (spaceId: string) => invoke<SessionSummary[]>("sessions_list", { spaceId }),
+  /** Past Claude Code sessions, most recent first. Every word or "quoted phrase" in `query` has to match. */
+  historySearch: (query: string, filter: HistoryFilter, limit: number) =>
+    invoke<HistoryResults>("history_search", { query, filter, limit }),
   agentsList: () => invoke<Agent[]>("agents_list"),
   gitStatus: () => invoke<Record<string, GitStatus>>("git_status"),
   gitRefresh: () => invoke<Record<string, GitStatus>>("git_refresh"),

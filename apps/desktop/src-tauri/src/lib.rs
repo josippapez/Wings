@@ -1,5 +1,6 @@
 mod claude;
 mod detect;
+mod history;
 mod menu;
 #[cfg(unix)]
 pub mod bridge;
@@ -44,6 +45,7 @@ use spaces::{GitStatus, SpaceStore, SpaceView};
 
 struct AppState {
     claude_dir: PathBuf,
+    history: history::History,
     spaces: Mutex<SpaceStore>,
     panes: Mutex<HashMap<String, Arc<Pane>>>,
     focused: Mutex<Option<String>>,
@@ -880,6 +882,7 @@ pub fn run() {
                 plugins,
                 storage: plugin_storage::Storage::new(data.join("plugin-storage")),
                 claude_dir,
+                history: history::History::default(),
                 spaces: Mutex::new(store),
                 panes: Mutex::new(HashMap::new()),
                 focused: Mutex::new(None),
@@ -909,6 +912,7 @@ pub fn run() {
             spaces_add,
             spaces_remove,
             sessions_list,
+            history::history_search,
             pane_create,
             pane_write,
             pane_resize,
