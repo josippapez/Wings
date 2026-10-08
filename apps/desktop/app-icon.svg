@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d2545"/>
+      <stop offset="1" stop-color="#110e18"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="590" r="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wingR" x1="540" y1="680" x2="830" y2="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0abfc"/>
+      <stop offset="0.55" stop-color="#c4b5fd"/>
+      <stop offset="1" stop-color="#93c5fd"/>
+    </linearGradient>
+    <linearGradient id="wingL" x1="484" y1="680" x2="194" y2="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0abfc"/>
+      <stop offset="0.55" stop-color="#c4b5fd"/>
+      <stop offset="1" stop-color="#93c5fd"/>
+    </linearGradient>
+    <linearGradient id="cursor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff7ed"/>
+      <stop offset="1" stop-color="#fdba74"/>
+    </linearGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <clipPath id="body">
+      <rect x="100" y="100" width="824" height="824" rx="186"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#body)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+
+    <!-- Wing glow -->
+    <g stroke-linecap="round" fill="none" opacity="0.5" filter="url(#soft)">
+        <path d="M566 548 Q690 520 812 350" stroke="#c084fc" stroke-width="60"/>
+        <path d="M574 616 Q700 612 806 492" stroke="#c084fc" stroke-width="52"/>
+        <path d="M580 684 Q680 700 756 632" stroke="#c084fc" stroke-width="44"/>
+        <path d="M458 548 Q334 520 212 350" stroke="#c084fc" stroke-width="60"/>
+        <path d="M450 616 Q324 612 218 492" stroke="#c084fc" stroke-width="52"/>
+        <path d="M444 684 Q344 700 268 632" stroke="#c084fc" stroke-width="44"/>
+    </g>
+
+    <!-- Wings: three curved feathers each, longest on top -->
+    <g stroke-linecap="round" fill="none">
+        <path d="M566 548 Q690 520 812 350" stroke="url(#wingR)" stroke-width="60"/>
+        <path d="M574 616 Q700 612 806 492" stroke="url(#wingR)" stroke-width="52"/>
+        <path d="M580 684 Q680 700 756 632" stroke="url(#wingR)" stroke-width="44"/>
+        <path d="M458 548 Q334 520 212 350" stroke="url(#wingL)" stroke-width="60"/>
+        <path d="M450 616 Q324 612 218 492" stroke="url(#wingL)" stroke-width="52"/>
+        <path d="M444 684 Q344 700 268 632" stroke="url(#wingL)" stroke-width="44"/>
+    </g>
+
+    <!-- Terminal cursor as the body -->
+    <rect x="474" y="500" width="76" height="210" rx="22" fill="#fb923c" opacity="0.6" filter="url(#soft)"/>
+    <rect x="480" y="504" width="64" height="200" rx="18" fill="url(#cursor)"/>
+
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
+  </g>
+  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="185.25" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1.5"/>
+</svg>
