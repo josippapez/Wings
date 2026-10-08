@@ -155,6 +155,8 @@ export default function App() {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const activeSpaceIdRef = useRef(activeSpaceId);
+  activeSpaceIdRef.current = activeSpaceId;
   const focusedPaneId = activeTab ? (panes[activeTab.focusedPane]?.paneId ?? null) : null;
   const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
   const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.sessionId ? [a.sessionId] : []))), [agents]);
@@ -180,14 +182,18 @@ export default function App() {
 
   /** Creates the terminal for a new pane; it starts its shell once its card mounts. */
   const createPane = useCallback(
-    (spaceId: string, initialInput: string | null, sessionId: string | null = null) => {
+    (spaceId: string, initialInput: string | null, sessionId: string | null = null, cwd: string | null = null) => {
       const key = crypto.randomUUID();
       terminals.set(
         key,
-        new TerminalSession(spaceId, {
-          onFocus: () => focusPane(key),
-          onStarted: (paneId) => setPanes((p) => ({ ...p, [key]: { ...p[key], paneId } })),
-        }),
+        new TerminalSession(
+          spaceId,
+          {
+            onFocus: () => focusPane(key),
+            onStarted: (paneId) => setPanes((p) => ({ ...p, [key]: { ...p[key], paneId } })),
+          },
+          cwd,
+        ),
       );
       setPanes((p) => ({ ...p, [key]: { spaceId, paneId: null, sessionId, live: false } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
@@ -197,12 +203,13 @@ export default function App() {
   );
 
   const openTab = useCallback(
-    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null) => {
-      const key = createPane(spaceId, initialInput, sessionId);
+    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null) => {
+      const key = createPane(spaceId, initialInput, sessionId, cwd);
       const id = crypto.randomUUID();
       setTabs((ts) => [...ts, { id, spaceId, layout: pane(key), focusedPane: key, zoomedPane: null }]);
       setActiveTabBySpace((m) => ({ ...m, [spaceId]: id }));
       setActiveSpaceId(spaceId);
+      return key;
     },
     [createPane],
   );
@@ -254,11 +261,12 @@ export default function App() {
   );
 
   const splitPane = useCallback(
-    (key: string, dir: "row" | "column") => {
+    (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null) => {
       const tab = tabsRef.current.find((t) => paneIds(t.layout).includes(key));
       if (!tab) return;
-      const next = createPane(tab.spaceId, null);
+      const next = createPane(tab.spaceId, initialInput, null, cwd);
       updateTab(tab.id, (t) => ({ layout: split(t.layout, key, dir, next), focusedPane: next, zoomedPane: null }));
+      return next;
     },
     [createPane, updateTab],
   );
@@ -467,6 +475,30 @@ export default function App() {
         setSidebarLabels(({ [`${pluginId}:${sidebarId}`]: _old, ...rest }) => (label ? { ...rest, [`${pluginId}:${sidebarId}`]: label } : rest)),
       updateDiff: (pluginId, id, update) =>
         setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
+      currentProject: () => activeSpaceIdRef.current,
+      openPane: async ({ spaceId, cwd, input, placement }) => {
+        let key: string | undefined;
+        if (placement === "tab") key = openTab(spaceId, input, null, cwd);
+        else {
+          const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+          if (!tab) throw new Error('There is no pane to split. Use placement "tab".');
+          // A tab holds one project's panes.
+          if (tab.spaceId !== spaceId) throw new Error("A split opens beside the focused pane, so its cwd must be in the project on screen");
+          key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd);
+        }
+        const paneId = key && (await terminals.get(key)?.whenStarted);
+        if (!paneId) throw new Error("The pane didn't start");
+        return paneId;
+      },
+      focusPane: (paneId) => {
+        const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
+        const tab = key && tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+        if (!key || !tab) throw new Error(`no pane ${paneId}`);
+        setActiveSpaceId(tab.spaceId);
+        setActiveTabBySpace((m) => ({ ...m, [tab.spaceId]: tab.id }));
+        // A pane zoomed over it would keep it hidden.
+        updateTab(tab.id, (t) => ({ focusedPane: key, zoomedPane: t.zoomedPane === key ? key : null }));
+      },
     });
     pluginHost.current = host;
     void api.pluginsList().then((list) => {

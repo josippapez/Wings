@@ -33,6 +33,8 @@ function Adds({ plugin }: { plugin: PluginView }) {
       ? [{ key: "mcp", label: `${mcpTools.length} MCP ${mcpTools.length === 1 ? "tool" : "tools"}`, title: mcpTools.map((t) => t.name).join(", ") }]
       : []),
     ...(plugin.permissions.exec.length ? [{ key: "exec", label: "Runs commands", title: plugin.permissions.exec.join(", ") }] : []),
+    ...(plugin.permissions.panes ? [{ key: "panes", label: "Opens terminals", title: plugin.permissions.panes.join(", ") || undefined }] : []),
+    ...(plugin.permissions.notify ? [{ key: "notify", label: "Notifications", title: undefined }] : []),
   ];
   if (chips.length === 0) return null;
   return (
@@ -56,30 +58,36 @@ function sourceLabel(p: PluginView) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, transcript, openUrl, fetch } = plugin.permissions;
+  const { exec, transcript, openUrl, fetch, panes, notify } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars } = plugin.contributes;
-  const groups = [
+  // `on` is for a yes/no permission, which has no list to show.
+  const groups: { title: string; items: string[]; on?: boolean }[] = [
     { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map((s) => `${s.title} sidebar`)] },
     { title: "Call these web addresses, with tokens you give it", items: fetch },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
     { title: "Run these commands as you, with your own sign-ins", items: exec },
+    { title: "Open terminals in your projects and move your typing to any pane", items: [], on: panes !== null },
+    { title: "Start these commands in a new terminal, as you", items: panes ?? [] },
+    { title: "Show desktop notifications, up to 3 a minute", items: [], on: notify },
     { title: "Read these parts of your Claude Code sessions", items: transcript },
     { title: "Open links that start with", items: openUrl },
-  ].filter((g) => g.items.length > 0);
+  ].filter((g) => g.items.length > 0 || g.on);
   if (groups.length === 0) return <p className="text-[13px] text-muted-foreground">It doesn't ask for any access beyond showing things in Wings.</p>;
   return (
     <div className="flex flex-col gap-3">
       {groups.map((g) => (
         <div key={g.title}>
           <p className="mb-1.5 text-[12px] font-medium text-muted-foreground">{g.title}</p>
-          <ul className="flex flex-wrap gap-1.5">
-            {g.items.map((item) => (
-              <li key={item} className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[12px]">
-                {item}
-              </li>
-            ))}
-          </ul>
+          {g.items.length > 0 && (
+            <ul className="flex flex-wrap gap-1.5">
+              {g.items.map((item) => (
+                <li key={item} className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[12px]">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ))}
     </div>
