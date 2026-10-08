@@ -98,7 +98,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId })` gets Claude's arguments and the Wings pane Claude runs in (or `null`), and returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls |
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |
-| `wings.transcript(sessionId, types)` | Resolves the matching transcript entries, oldest first |
+| `wings.transcript(sessionId, types, { last? })` | Resolves the matching transcript entries, oldest first. `last` keeps only the newest that many (up to 1000), which is much faster on a long session |
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
 | `wings.openUrl(url)` | Opens the URL in the browser |

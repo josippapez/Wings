@@ -392,7 +392,12 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
 }
 
 /// Entries of the allowed types from a Claude Code session transcript, oldest first.
-pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, types: &[String]) -> Result<Vec<Value>, String> {
+/// The most entries `last` can ask for.
+pub const TRANSCRIPT_LAST_MAX: usize = 1000;
+
+/// With `last`, only the newest that many entries, read from the end. A long session's transcript runs to tens
+/// of MB, and most callers want only its latest state.
+pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
     let allowed = &plugin.manifest.permissions.transcript;
     if let Some(t) = types.iter().find(|t| !allowed.contains(t)) {
         return Err(format!("{} may not read {t:?} transcript entries", plugin.manifest.id));
@@ -408,12 +413,20 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
         .find(|p| p.is_file())
         .ok_or("no transcript for that session")?;
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    Ok(text
-        .lines()
-        .filter(|l| types.iter().any(|t| l.contains(&format!("\"type\":\"{t}\""))))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| v.get("type").and_then(Value::as_str).is_some_and(|t| types.iter().any(|x| x == t)))
-        .collect())
+    let patterns: Vec<String> = types.iter().map(|t| format!("\"type\":\"{t}\"")).collect();
+    let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
+    // A nested object can say `"type":"user"` too, so the entry's own type is checked once it's parsed.
+    let entry = |l: &str| {
+        serde_json::from_str::<Value>(l).ok().filter(|v| v.get("type").and_then(Value::as_str).is_some_and(|t| types.iter().any(|x| x == t)))
+    };
+    Ok(match last {
+        Some(n) => {
+            let mut newest: Vec<Value> = text.lines().rev().filter(mentions).filter_map(entry).take(n.min(TRANSCRIPT_LAST_MAX)).collect();
+            newest.reverse();
+            newest
+        }
+        None => text.lines().filter(mentions).filter_map(entry).collect(),
+    })
 }
 
 /// A fetch prefix has to name a host and end its host part with `/`, so `https://api.example.com` can't
@@ -815,11 +828,33 @@ mod tests {
         )
         .unwrap();
         let p = plugin(&claude, &[], &["pr-link"]);
-        let entries = transcript_entries(&p, &claude, id, &["pr-link".into()]).unwrap();
+        let entries = transcript_entries(&p, &claude, id, &["pr-link".into()], None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["prNumber"], 7);
-        assert!(transcript_entries(&p, &claude, id, &["user".into()]).is_err());
-        assert!(transcript_entries(&p, &claude, "../../x", &["pr-link".into()]).is_err());
+        assert!(transcript_entries(&p, &claude, id, &["user".into()], None).is_err());
+        assert!(transcript_entries(&p, &claude, "../../x", &["pr-link".into()], None).is_err());
+        let _ = fs::remove_dir_all(&claude);
+    }
+
+    #[test]
+    fn transcript_last_gives_the_newest_entries_in_order() {
+        let claude = std::env::temp_dir().join(format!("wings-tr-last-{}", std::process::id()));
+        let id = "4c21b0c5-8113-4f55-9493-fa156c3fa369";
+        fs::create_dir_all(claude.join("projects/-x")).unwrap();
+        // The assistant entry mentions `"type":"user"` inside its content, which mustn't make it a user entry.
+        let lines = [
+            r#"{"type":"user","n":1}"#,
+            r#"{"type":"assistant","n":2,"message":{"content":[{"type":"user"}]}}"#,
+            r#"{"type":"user","n":3}"#,
+            "not json",
+            r#"{"type":"user","n":4}"#,
+        ];
+        fs::write(claude.join(format!("projects/-x/{id}.jsonl")), lines.join("\n")).unwrap();
+        let p = plugin(&claude, &[], &["user"]);
+        let n = |entries: Vec<Value>| entries.iter().map(|e| e["n"].as_i64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], Some(2)).unwrap()), [3, 4]);
+        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], Some(10)).unwrap()), [1, 3, 4]);
+        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], None).unwrap()), [1, 3, 4]);
         let _ = fs::remove_dir_all(&claude);
     }
 

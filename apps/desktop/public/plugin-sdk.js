@@ -86,8 +86,8 @@
      */
     exec: (program, args = [], { cwd = null, timeoutMs = null, onOutput } = {}) =>
       call("exec", { program, args, cwd, timeoutMs, stream: typeof onOutput === "function" }, onOutput),
-    /** Transcript entries of the given types (must be in `permissions.transcript`). */
-    transcript: (sessionId, types) => call("transcript", { sessionId, types }),
+    /** Transcript entries of the given types (must be in `permissions.transcript`), oldest first. `last` keeps only the newest that many, up to 1000. */
+    transcript: (sessionId, types, { last } = {}) => call("transcript", { sessionId, types, last }),
     /**
      * Each transcript entry Claude Code writes while it runs in a pane, as `{ sessionId, paneId, entry }`, for the
      * entry types in `permissions.transcript`. Only entries written after the plugin started, or after the session

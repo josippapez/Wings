@@ -71,7 +71,7 @@ interface Wings {
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /** Claude Code transcript entries of types in `permissions.transcript`, oldest first. */
-  transcript(sessionId: string, types: string[]): Promise<Record<string, unknown>[]>;
+  transcript(sessionId: string, types: string[], options?: { last?: number }): Promise<Record<string, unknown>[]>;
   /**
    * Each transcript entry Claude Code writes while it runs in a pane, for the types in `permissions.transcript`.
    * Only entries written after the plugin started, or after the session started in the pane; `transcript` reads

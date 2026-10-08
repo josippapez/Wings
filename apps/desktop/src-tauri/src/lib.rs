@@ -613,8 +613,8 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
 }
 
 #[tauri::command(async)]
-fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: String, types: Vec<String>) -> Res<Vec<serde_json::Value>> {
-    plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types)
+fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: String, types: Vec<String>, last: Option<usize>) -> Res<Vec<serde_json::Value>> {
+    plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types, last)
 }
 
 #[tauri::command]

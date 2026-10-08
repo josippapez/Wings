@@ -401,6 +401,7 @@ export class PluginHost {
           pluginId,
           sessionId: String(p.sessionId),
           types: Array.isArray(p.types) ? p.types.map(String) : [],
+          last: typeof p.last === "number" && p.last >= 1 ? Math.floor(p.last) : null,
         });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });

@@ -84,7 +84,7 @@ async function remoteFor(cwd) {
 
 async function fromTranscript(sessionId) {
   try {
-    const last = (await wings.transcript(sessionId, ["pr-link"])).at(-1);
+    const last = (await wings.transcript(sessionId, ["pr-link"], { last: 1 })).at(-1);
     if (last?.prUrl) return { provider: "github", url: last.prUrl, number: last.prNumber, repo: last.prRepository };
   } catch {
     // A brand-new session may not have a transcript yet.
