@@ -34,5 +34,11 @@
       "https://gitlab.com/",
       "https://dev.azure.com/"
     ]
+  },
+  "contributes": {
+    "ui": [
+      "badges",
+      "diff"
+    ]
   }
 }

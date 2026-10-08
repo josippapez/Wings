@@ -21,6 +21,27 @@ export type GitStatus = { branch: string | null; ahead: number; behind: number; 
 /** What a pane runs right now and where: the shell's cwd follows `cd`. */
 export type PaneInfo = { command: string; cwd: string | null };
 
+export type PluginPermissions = { exec: string[]; transcript: string[]; openUrl: string[] };
+export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
+/** What a plugin adds: UI it draws (`badges`, `diff`) and tools it offers Claude over MCP. */
+export type PluginContributes = { ui: string[]; mcpTools: { name: string; description: string }[] };
+/** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
+export type PluginView = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  main: string;
+  permissions: PluginPermissions;
+  contributes: PluginContributes;
+  enabled: boolean;
+  /** False until you approve this version's permissions, and again after an update changes them. */
+  approved: boolean;
+  source: PluginSource | null;
+  /** Loaded from the repo by a dev build: always approved, can't be removed. */
+  dev: boolean;
+};
+
 export type SessionSummary = {
   id: string;
   title: string | null;
@@ -32,6 +53,13 @@ export type SessionSummary = {
 
 export const api = {
   spacesList: () => invoke<Space[]>("spaces_list"),
+  pluginsList: () => invoke<PluginView[]>("plugins_list"),
+  pluginInstallFile: (path: string) => invoke<PluginView>("plugin_install_file", { path }),
+  pluginInstallGithub: (url: string) => invoke<PluginView>("plugin_install_github", { url }),
+  pluginUpdate: (id: string) => invoke<PluginView>("plugin_update", { id }),
+  pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
+  pluginSetEnabled: (id: string, enabled: boolean) => invoke<PluginView>("plugin_set_enabled", { id, enabled }),
+  pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
   spacesAdd: (path: string) => invoke<Space>("spaces_add", { path }),
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),
   sessionsList: (spaceId: string) => invoke<SessionSummary[]>("sessions_list", { spaceId }),

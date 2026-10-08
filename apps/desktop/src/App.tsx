@@ -1,15 +1,17 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MotionConfig } from "motion/react";
 
 import { DiffViewer } from "@/components/diff-viewer";
 import { HistorySheet } from "@/components/history-sheet";
+import { PluginManager } from "@/components/plugin-manager";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp } from "@/components/status-dot";
 import { TitleBar, type TabView } from "@/components/title-bar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, type Agent, type GitStatus, type PaneInfo, type Space } from "@/lib/api";
+import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession } from "@/lib/terminal";
@@ -62,6 +64,21 @@ export default function App() {
   const [activeTabBySpace, setActiveTabBySpace] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [plugins, setPlugins] = useState<PluginView[]>([]);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [droppedPlugin, setDroppedPlugin] = useState<string | null>(null);
+
+  // Dropping a .wings-plugin file anywhere on the window opens the manager and installs it.
+  useEffect(() => {
+    const off = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const file = event.payload.paths.find((p) => p.endsWith(".wings-plugin"));
+      if (!file) return;
+      setPluginsOpen(true);
+      setDroppedPlugin(file);
+    });
+    return () => void off.then((unlisten) => unlisten());
+  }, []);
   const [ready, setReady] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   /** Plugin badges by Rust pane id, then plugin id. */
@@ -363,11 +380,18 @@ export default function App() {
           return { ...all, [paneId]: badge ? { ...others, [pluginId]: badge } : others };
         }),
       openDiff: setDiff,
+      clearPlugin: (pluginId) =>
+        setBadges((all) =>
+          Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
+        ),
       updateDiff: (pluginId, id, update) =>
         setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
     });
     pluginHost.current = host;
-    void host.start();
+    void api.pluginsList().then((list) => {
+      setPlugins(list);
+      host.sync(list);
+    });
     return () => host.dispose();
   }, []);
 
@@ -458,6 +482,7 @@ export default function App() {
             onClose={closeTab}
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
+            onPlugins={() => setPluginsOpen(true)}
           />
           <div className="flex min-h-0 flex-1">
             <Sidebar
@@ -497,6 +522,17 @@ export default function App() {
           </div>
         </div>
         <DiffViewer diff={diff} onClose={() => setDiff(null)} />
+        <PluginManager
+          open={pluginsOpen}
+          onOpenChange={setPluginsOpen}
+          plugins={plugins}
+          dropped={droppedPlugin}
+          onDroppedHandled={() => setDroppedPlugin(null)}
+          onChanged={(list, restart) => {
+            setPlugins(list);
+            pluginHost.current?.sync(list, restart);
+          }}
+        />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

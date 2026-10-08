@@ -1,6 +1,7 @@
 mod claude;
 mod detect;
 mod menu;
+mod plugin_store;
 mod plugins;
 mod pty;
 mod spaces;
@@ -26,7 +27,8 @@ use tauri_plugin_opener::OpenerExt;
 use claude::SessionSummary;
 use detect::{Agent, AgentState, Detector, PaneInfo, PaneProbe};
 use pty::{Pane, SpawnRequest};
-use plugins::{ExecResult, Manifest, Plugin};
+use plugin_store::{PluginView, Source, Store};
+use plugins::{ExecResult, Plugin};
 use spaces::{GitStatus, SpaceStore, SpaceView};
 
 struct AppState {
@@ -37,7 +39,7 @@ struct AppState {
     agents: Mutex<Vec<Agent>>,
     pane_info: Mutex<HashMap<String, PaneInfo>>,
     git: Mutex<HashMap<String, GitStatus>>,
-    plugins: HashMap<String, Plugin>,
+    plugins: Mutex<Store>,
     next_pane: AtomicU64,
 }
 
@@ -139,14 +141,61 @@ fn pane_focus(state: State<AppState>, id: Option<String>) {
 }
 
 #[tauri::command]
-fn plugins_list(state: State<AppState>) -> Vec<Manifest> {
-    let mut list: Vec<Manifest> = state.plugins.values().map(|p| p.manifest.clone()).collect();
-    list.sort_by(|a, b| a.id.cmp(&b.id));
-    list
+fn plugins_list(state: State<AppState>) -> Vec<PluginView> {
+    state.plugins.lock().unwrap().list()
 }
 
-fn plugin<'a>(state: &'a AppState, id: &str) -> Res<&'a Plugin> {
-    state.plugins.get(id).ok_or_else(|| format!("unknown plugin {id}"))
+/// Packages are read whole, so a huge file is refused before it's loaded.
+const PACKAGE_LIMIT: u64 = 50 * 1024 * 1024;
+
+#[tauri::command(async)]
+fn plugin_install_file(state: State<AppState>, path: String) -> Res<PluginView> {
+    let size = std::fs::metadata(&path).map_err(err)?.len();
+    if size > PACKAGE_LIMIT {
+        return Err("The package is larger than 50 MB".into());
+    }
+    let bytes = std::fs::read(&path).map_err(err)?;
+    state.plugins.lock().unwrap().install(&bytes, Source::File)
+}
+
+#[tauri::command(async)]
+fn plugin_install_github(state: State<AppState>, url: String) -> Res<PluginView> {
+    let repo = plugin_store::parse_repo(&url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
+    let bytes = plugin_store::download_github(&repo)?;
+    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo })
+}
+
+/// Reinstalls a GitHub plugin from its newest release or default branch.
+#[tauri::command(async)]
+fn plugin_update(state: State<AppState>, id: String) -> Res<PluginView> {
+    let Some(Source::Github { repo }) = state.plugins.lock().unwrap().source(&id) else {
+        return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
+    };
+    let bytes = plugin_store::download_github(&repo)?;
+    state.plugins.lock().unwrap().install(&bytes, Source::Github { repo })
+}
+
+/// The newest release version on GitHub, if the plugin came from there and the repo has releases.
+#[tauri::command(async)]
+fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<String>> {
+    let Some(Source::Github { repo }) = state.plugins.lock().unwrap().source(&id) else { return Ok(None) };
+    plugin_store::latest_version(&repo)
+}
+
+/// Turning a plugin on also approves the permissions it asks for, so the UI shows them first.
+#[tauri::command]
+fn plugin_set_enabled(state: State<AppState>, id: String, enabled: bool) -> Res<PluginView> {
+    state.plugins.lock().unwrap().set_enabled(&id, enabled)
+}
+
+#[tauri::command]
+fn plugin_remove(state: State<AppState>, id: String) -> Res<()> {
+    state.plugins.lock().unwrap().remove(&id)
+}
+
+/// A plugin that's turned on and approved. Every call a plugin makes is checked here.
+fn plugin(state: &AppState, id: &str) -> Res<Plugin> {
+    state.plugins.lock().unwrap().active(id).ok_or_else(|| format!("{id} is turned off or not installed"))
 }
 
 #[derive(serde::Deserialize)]
@@ -170,7 +219,7 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
             let _ = on_output.send(line.to_string());
         })
     });
-    let result = plugins::exec(plugin(&state, &plugin_id)?, &program, &args, cwd.as_deref().map(std::path::Path::new), timeout, on_line);
+    let result = plugins::exec(&plugin(&state, &plugin_id)?, &program, &args, cwd.as_deref().map(std::path::Path::new), timeout, on_line);
     if cfg!(debug_assertions) {
         eprintln!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
     }
@@ -179,13 +228,13 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
 
 #[tauri::command(async)]
 fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: String, types: Vec<String>) -> Res<Vec<serde_json::Value>> {
-    plugins::transcript_entries(plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types)
+    plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types)
 }
 
 #[tauri::command]
 fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, url: String) -> Res<()> {
     let plugin = plugin(&state, &plugin_id)?;
-    if !plugins::may_open_url(plugin, &url) {
+    if !plugins::may_open_url(&plugin, &url) {
         return Err(format!("{plugin_id} may not open {url}"));
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
@@ -205,7 +254,7 @@ fn serve_plugin_file(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -
     let path = request.uri().path().trim_start_matches('/');
     let (id, file) = path.split_once('/').unwrap_or((path, ""));
     let state = app.state::<AppState>();
-    let Some(file) = state.plugins.get(id).and_then(|p| plugins::resolve(&p.dir, file)) else {
+    let Some(file) = plugin(&state, id).ok().and_then(|p| plugins::resolve(&p.dir, file)) else {
         return respond(404, "text/plain", b"not found".to_vec());
     };
     match std::fs::read(&file) {
@@ -381,15 +430,10 @@ pub fn run() {
             let claude_dir = claude::claude_dir();
             let file = app.path().app_data_dir()?.join("spaces.json");
             let store = SpaceStore::load(file);
-            let mut plugin_roots = vec![app.path().app_data_dir()?.join("plugins")];
-            if cfg!(debug_assertions) {
-                // The example plugins in the repo, so `pnpm tauri dev` picks up edits to them.
-                plugin_roots.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
-            }
-            // debt: on Windows WebView2 runs Tauri's IPC script in child frames too, and pages on the
-            // wings-plugin scheme count as local, so a plugin frame could call any command. Plugins stay
-            // off there until each one runs in its own webview with only plugin commands allowed.
-            let plugins = if cfg!(windows) { HashMap::new() } else { plugins::discover(&plugin_roots) };
+            let data = app.path().app_data_dir()?;
+            // The example plugins in the repo, so `pnpm tauri dev` picks up edits to them.
+            let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
+            let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
             app.manage(AppState {
                 plugins,
                 claude_dir,
@@ -430,6 +474,12 @@ pub fn run() {
             workspace_load,
             workspace_save,
             plugins_list,
+            plugin_install_file,
+            plugin_install_github,
+            plugin_update,
+            plugin_latest_version,
+            plugin_set_enabled,
+            plugin_remove,
             plugin_exec,
             plugin_transcript,
             plugin_open_url,

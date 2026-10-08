@@ -1,5 +1,5 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { HistoryIcon, PanelLeftIcon, PlusIcon, XIcon } from "lucide-react";
+import { HistoryIcon, PanelLeftIcon, PlusIcon, PuzzleIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import { LayoutGlyph } from "@/components/layout-glyph";
@@ -25,6 +25,7 @@ export function TitleBar(props: {
   onClose: (id: string) => void;
   onNew: () => void;
   onHistory: () => void;
+  onPlugins: () => void;
 }) {
   return (
     <header
@@ -104,6 +105,9 @@ export function TitleBar(props: {
 
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <HistoryIcon />
+      </IconButton>
+      <IconButton label="Plugins" onClick={props.onPlugins}>
+        <PuzzleIcon />
       </IconButton>
     </header>
   );

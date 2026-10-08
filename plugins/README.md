@@ -4,12 +4,23 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 `pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
 
-## Where plugins live
+## Installing
 
-- `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`)
-- `plugins/` in this repo, in dev builds only
+Open Plugins (the puzzle icon in the title bar) and paste a GitHub repo link, choose a `.wings-plugin` file, or drop one on the window. A new plugin starts off. Turning it on shows what it can do and what it adds, and approves exactly that. An update that asks for more turns it off until you approve again.
 
-Restart Wings after adding or changing a plugin.
+From a GitHub link, Wings installs the newest release's `.wings-plugin` file, or the repo itself if there are no releases, and offers updates when a new release is out. That works for public repos. Share a private plugin as a `.wings-plugin` file.
+
+Plugins start and stop as you turn them on and off, with no restart. Installed plugins live in `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`). Dev builds also load this repo's `plugins/` folder at startup, always on.
+
+## Packaging
+
+A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. From a git repo:
+
+```sh
+git archive --format=zip --output my-plugin.wings-plugin HEAD
+```
+
+`templates/wings-plugin/` is a starter repo with SDK types and a workflow that attaches the package to a GitHub release when you push a version tag.
 
 ## Manifest
 
@@ -33,6 +44,12 @@ Restart Wings after adding or changing a plugin.
     "openUrl": [
       "https://github.com/"
     ]
+  },
+  "contributes": {
+    "ui": [
+      "badges",
+      "diff"
+    ]
   }
 }
 ```
@@ -42,6 +59,13 @@ Restart Wings after adding or changing a plugin.
 | `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments |
 | `transcript` | Reading these Claude Code transcript entry types |
 | `openUrl` | Opening https URLs that start with these prefixes |
+
+`contributes` lists what the plugin adds, which the manager shows next to it:
+
+| Field | Means |
+|---|---|
+| `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
+| `mcpTools` | `{ name, description }` tools the plugin offers Claude through the Wings MCP server. Names are lowercase letters, digits and `_`. Wings doesn't serve them yet |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
 

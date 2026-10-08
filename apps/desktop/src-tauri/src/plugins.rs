@@ -16,7 +16,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Permissions {
     /// Commands the plugin may run: a program and the subcommand its arguments must start with, e.g.
@@ -27,6 +27,25 @@ pub struct Permissions {
     /// URL prefixes the plugin may open in the browser.
     pub open_url: Vec<String>,
 }
+
+/// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Contributes {
+    /// UI it draws: `badges` on pane headers, the `diff` viewer.
+    pub ui: Vec<String>,
+    /// Tools it offers Claude through the Wings MCP server.
+    pub mcp_tools: Vec<McpTool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpTool {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+const UI_KINDS: [&str; 2] = ["badges", "diff"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,8 +59,11 @@ pub struct Manifest {
     pub main: String,
     #[serde(default)]
     pub permissions: Permissions,
+    #[serde(default)]
+    pub contributes: Contributes,
 }
 
+#[derive(Clone)]
 pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
@@ -72,7 +94,7 @@ pub fn discover(roots: &[PathBuf]) -> HashMap<String, Plugin> {
     found
 }
 
-fn load(dir: &Path) -> Result<Plugin, String> {
+pub fn load(dir: &Path) -> Result<Plugin, String> {
     let text = fs::read_to_string(dir.join("wings-plugin.json")).map_err(|e| e.to_string())?;
     let manifest: Manifest = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if !valid_id(&manifest.id) {
@@ -82,6 +104,13 @@ fn load(dir: &Path) -> Result<Plugin, String> {
         return Err(format!("needs plugin API {}, this Wings has {API_VERSION}", manifest.api));
     }
     resolve(dir, &manifest.main).ok_or("main is outside the plugin folder")?;
+    if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
+        return Err(format!("unknown ui {kind:?}, expected one of {UI_KINDS:?}"));
+    }
+    let tool_name = |n: &str| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| !tool_name(&t.name)) {
+        return Err(format!("MCP tool name {:?} must be lowercase letters, digits and _", tool.name));
+    }
     Ok(Plugin { manifest, dir: dir.to_path_buf() })
 }
 
@@ -305,6 +334,7 @@ mod tests {
                     transcript: transcript.iter().map(|s| s.to_string()).collect(),
                     open_url: vec!["https://github.com/".into()],
                 },
+                contributes: Contributes::default(),
             },
             dir: dir.to_path_buf(),
         }

@@ -1,5 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
+import type { PluginView } from "@/lib/api";
+
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
  * the app's DOM and storage, and on macOS and Linux Tauri doesn't inject its IPC bridge into frames, so
@@ -61,12 +63,13 @@ export type PluginPane = {
   session: { sessionId: string; name: string | null; state: string } | null;
 };
 
-type Manifest = { id: string; name: string; main: string };
 
 type Callbacks = {
   setBadge: (pluginId: string, paneId: string, badge: Badge | null) => void;
   openDiff: (view: DiffView) => void;
   updateDiff: (pluginId: string, id: string, update: Partial<DiffView>) => void;
+  /** A plugin stopped: drop everything it showed. */
+  clearPlugin: (pluginId: string) => void;
 };
 
 const tones: Tone[] = ["neutral", "info", "success", "warning", "danger", "merged"];
@@ -140,27 +143,49 @@ const pluginUrl = (id: string, file: string) =>
   `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${file}`;
 
 export class PluginHost {
-  private frames = new Map<Window, { id: string; ready: boolean; frame: HTMLIFrameElement }>();
+  private frames = new Map<Window, { id: string; version: string; ui: string[]; ready: boolean; frame: HTMLIFrameElement }>();
   private panes: PluginPane[] = [];
-  private actions = new Map<string, { done: () => void; fail: (error: Error) => void }>();
+  private actions = new Map<string, { pluginId: string; done: () => void; fail: (error: Error) => void }>();
   private nextDiff = 1;
 
   constructor(private callbacks: Callbacks) {
     window.addEventListener("message", this.onMessage);
   }
 
-  async start() {
-    const manifests = await invoke<Manifest[]>("plugins_list");
-    const sdk = new URL("/plugin-sdk.js", location.href).href;
-    for (const m of manifests) {
-      const frame = document.createElement("iframe");
-      frame.sandbox.add("allow-scripts");
-      frame.hidden = true;
-      frame.title = `Plugin ${m.name}`;
-      frame.srcdoc = `<!doctype html><meta charset="utf-8"><script src="${sdk}"></script><script src="${pluginUrl(m.id, m.main)}"></script>`;
-      document.body.appendChild(frame);
-      if (frame.contentWindow) this.frames.set(frame.contentWindow, { id: m.id, ready: false, frame });
+  /**
+   * Runs the plugins that are on and approved and stops the rest, without a restart. A plugin whose version
+   * changed, or the one named in `restart` (just reinstalled), starts again from scratch.
+   */
+  sync(plugins: PluginView[], restart?: string) {
+    const wanted = new Map(plugins.filter((p) => p.enabled && p.approved).map((p) => [p.id, p]));
+    for (const [win, running] of this.frames) {
+      const next = wanted.get(running.id);
+      if (next && next.version === running.version && running.id !== restart) wanted.delete(running.id);
+      else this.stop(win);
     }
+    for (const plugin of wanted.values()) this.run(plugin);
+  }
+
+  private run(plugin: PluginView) {
+    const sdk = new URL("/plugin-sdk.js", location.href).href;
+    const frame = document.createElement("iframe");
+    frame.sandbox.add("allow-scripts");
+    frame.hidden = true;
+    frame.title = `Plugin ${plugin.name}`;
+    frame.srcdoc = `<!doctype html><meta charset="utf-8"><script src="${sdk}"></script><script src="${pluginUrl(plugin.id, plugin.main)}"></script>`;
+    document.body.appendChild(frame);
+    if (frame.contentWindow) {
+      this.frames.set(frame.contentWindow, { id: plugin.id, version: plugin.version, ui: plugin.contributes.ui, ready: false, frame });
+    }
+  }
+
+  private stop(win: Window) {
+    const running = this.frames.get(win);
+    if (!running) return;
+    running.frame.remove();
+    this.frames.delete(win);
+    for (const [token, action] of this.actions) if (action.pluginId === running.id) this.settle(token, new Error("The plugin was turned off"));
+    this.callbacks.clearPlugin(running.id);
   }
 
   publishPanes(panes: PluginPane[]) {
@@ -177,6 +202,7 @@ export class PluginHost {
       // Just over the 5 min exec cap, so an action waiting on a long exec (like a sign-in) can finish.
       const timer = setTimeout(() => this.settle(token, new Error("The plugin didn't respond")), 310_000);
       this.actions.set(token, {
+        pluginId,
         done: () => (clearTimeout(timer), done()),
         fail: (e) => (clearTimeout(timer), fail(e)),
       });
@@ -217,8 +243,12 @@ export class PluginHost {
     }
   };
 
-  private async handle(plugin: { id: string; ready: boolean }, method: string, p: Record<string, unknown>, output: (line: string) => void) {
+  private async handle(plugin: { id: string; ui: string[]; ready: boolean }, method: string, p: Record<string, unknown>, output: (line: string) => void) {
     const pluginId = plugin.id;
+    // The manager lists what a plugin adds from its manifest, so it can't draw anything it didn't declare.
+    const needs = (kind: string) => {
+      if (!plugin.ui.includes(kind)) throw new Error(`${pluginId} must declare "${kind}" in contributes.ui`);
+    };
     switch (method) {
       case "ready":
         plugin.ready = true;
@@ -246,6 +276,7 @@ export class PluginHost {
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
       case "setBadge": {
+        needs("badges");
         const paneId = String(p.paneId);
         if (!this.panes.some((s) => s.paneId === paneId)) throw new Error(`no pane ${paneId}`);
         this.callbacks.setBadge(pluginId, paneId, p.badge === null ? null : cleanBadge(p.badge));
@@ -255,6 +286,7 @@ export class PluginHost {
         this.settle(String(p.token), typeof p.error === "string" ? new Error(p.error) : null);
         return null;
       case "openDiff": {
+        needs("diff");
         const title = str(p.title, 200);
         if (!title) throw new Error("openDiff needs a title");
         const id = `${pluginId}:${this.nextDiff++}`;
@@ -262,6 +294,7 @@ export class PluginHost {
         return { id };
       }
       case "updateDiff":
+        needs("diff");
         this.callbacks.updateDiff(pluginId, String(p.id), cleanDiffUpdate(p));
         return null;
       default:
