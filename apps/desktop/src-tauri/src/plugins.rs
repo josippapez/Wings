@@ -149,22 +149,25 @@ fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
 /// Flags that turn an allowed command into running other commands, writing or reading files outside the
 /// repo, changing data on the server, or printing a token. Refused whatever the manifest says.
 fn is_unsafe_flag(program: &str, arg: &str) -> bool {
-    let name = arg.split('=').next().unwrap_or(arg);
-    // Short flags can carry their value attached, like `-XDELETE` or `-ccore.fsmonitor=...`.
-    let short = |flags: &[&str]| !arg.starts_with("--") && flags.iter().any(|f| arg.starts_with(f));
-    match program {
+    // `abbrev`: git and az accept any unambiguous prefix of a long option, so `--upload=` means
+    // `--upload-pack=`. gh and glab only take exact names.
+    let (short, long, abbrev): (&[char], &[&str], bool) = match program {
         // Config overrides can point core.fsmonitor, core.sshCommand or an alias at any command.
-        "git" => {
-            short(&["-c"])
-                || ["--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--output", "--ext-diff", "--textconv", "--no-index"]
-                    .contains(&name)
-        }
-        "gh" | "glab" => {
-            short(&["-X", "-f", "-F", "-t"]) || ["--method", "--field", "--raw-field", "--input", "--show-token"].contains(&name)
-        }
-        "az" => ["--http-method", "--in-file"].contains(&name),
-        _ => false,
+        "git" => (
+            &['c'],
+            &["--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--output", "--ext-diff", "--textconv", "--no-index"],
+            true,
+        ),
+        "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--show-token"], false),
+        "az" => (&[], &["--http-method", "--in-file"], true),
+        _ => return false,
+    };
+    let name = arg.split('=').next().unwrap_or(arg);
+    if let Some(option) = name.strip_prefix("--") {
+        return !option.is_empty() && long.iter().any(|flag| if abbrev { flag.starts_with(name) } else { *flag == name });
     }
+    // Short flags group and carry their value attached, like `-iXDELETE` or `-ccore.fsmonitor=...`.
+    name.strip_prefix('-').is_some_and(|group| group.chars().any(|c| short.contains(&c)))
 }
 
 /// Runs a command the manifest allows. No shell, so arguments can't smuggle in commands.
@@ -187,6 +190,10 @@ pub fn exec(
     let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
     let mut cmd = Command::new(path);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if program == "git" {
+        // Makes git reject abbreviated options outright, on top of the prefix check above.
+        cmd.env("GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS", "1");
+    }
     if let Some(dir) = cwd {
         if !dir.is_dir() {
             return Err(format!("{} is not a folder", dir.display()));
@@ -315,7 +322,12 @@ mod tests {
             ("git", "--upload-pack=sh"),
             ("git", "--output=/tmp/x"),
             ("git", "--no-index"),
+            ("git", "--upload=sh"),
+            ("git", "--outp=/tmp/x"),
             ("gh", "-XDELETE"),
+            ("gh", "-iXDELETE"),
+            ("glab", "-pfquery=mutation"),
+            ("az", "--http-meth=POST"),
             ("gh", "--method=POST"),
             ("gh", "-fquery=mutation"),
             ("glab", "--show-token"),
@@ -324,7 +336,18 @@ mod tests {
         ] {
             assert!(is_unsafe_flag(program, arg), "{program} {arg}");
         }
-        for (program, arg) in [("git", "-C"), ("git", "--cached"), ("git", "--quiet"), ("gh", "--json"), ("glab", "--paginate"), ("az", "-o")] {
+        for (program, arg) in [
+            ("git", "-C"),
+            ("git", "--cached"),
+            ("git", "--quiet"),
+            ("git", "--no-ext-diff"),
+            ("git", "--no-color"),
+            ("gh", "--json"),
+            ("gh", "-i"),
+            ("glab", "--paginate"),
+            ("glab", "--raw"),
+            ("az", "-o"),
+        ] {
             assert!(!is_unsafe_flag(program, arg), "{program} {arg}");
         }
         // The escape this guards against: a config override that runs a shell command.
