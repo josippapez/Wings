@@ -11,6 +11,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
+mod launch_args;
+use launch_args::launch_args;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentState {
@@ -31,6 +34,8 @@ pub struct Agent {
     pub name: Option<String>,
     pub state: AgentState,
     pub waiting_for: Option<String>,
+    /// The flags `claude` was started with, to type again when Wings resumes the session.
+    pub args: Vec<String>,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -106,6 +111,11 @@ impl Detector {
                 (None, None) => (None, None),
             })
             .collect();
+        // Read from the argv the scan above loaded to recognise `claude`.
+        let launch: Vec<Vec<String>> = found
+            .iter()
+            .map(|(_, claude)| claude.and_then(|pid| processes.get(&pid)).map(|p| launch_args(p.cmd())).unwrap_or_default())
+            .collect();
         // The working directory changes with every `cd`, so it is re-read each scan, for these processes only.
         let current: Vec<Pid> = found.iter().filter_map(|(pid, _)| *pid).collect();
         self.system.refresh_processes_specifics(ProcessesToUpdate::Some(&current), false, ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always));
@@ -120,7 +130,7 @@ impl Detector {
 
         let mut agents = Vec::new();
         let mut pane_infos = HashMap::new();
-        for ((pane, (_, claude)), info) in panes.iter().zip(found).zip(infos) {
+        for (((pane, (_, claude)), info), args) in panes.iter().zip(found).zip(infos).zip(launch) {
             pane_infos.insert(pane.pane_id.clone(), info);
             let Some(pid) = claude else {
                 self.last.remove(&pane.pane_id);
@@ -147,6 +157,7 @@ impl Detector {
                 name: file.name.or_else(|| strip_title_glyph(&pane.title)),
                 state,
                 waiting_for: if state == AgentState::Blocked { file.waiting_for } else { None },
+                args,
             });
         }
         Scan { agents, panes: pane_infos }
@@ -345,6 +356,39 @@ mod tests {
         assert_eq!(cwd, tmp.canonicalize().unwrap());
         assert_eq!(scan.agents.len(), 1);
         assert_eq!(Some(scan.agents[0].pid), probe.foreground_pid);
+
+        child.kill().unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// The flags come from the live process's argv, cleaned for a resume.
+    #[cfg(unix)]
+    #[test]
+    fn reads_launch_flags_of_foreground_claude() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        let tmp = std::env::temp_dir().join(format!("wings-args-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("claude");
+        let _ = fs::remove_file(&fake);
+        // bash runs `-c` and ignores the arguments after it, so it can stand in for `claude` with any flags.
+        std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+
+        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cmd = CommandBuilder::new(&fake);
+        cmd.args(["-c", "sleep 30; true", "--model", "opus", "--append-system-prompt", "say \"hi\", don't ask", "--resume", "abc", "fix it"]);
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let probe = PaneProbe {
+            pane_id: "p1".into(),
+            space_id: "s1".into(),
+            shell_pid: child.process_id(),
+            foreground_pid: pair.master.process_group_leader().map(|p| p as u32),
+            title: String::new(),
+        };
+        let agents = Detector::new(&tmp).scan(std::slice::from_ref(&probe), None).agents;
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].args, ["--model", "opus", "--append-system-prompt", "say \"hi\", don't ask"]);
 
         child.kill().unwrap();
         let _ = fs::remove_dir_all(&tmp);

@@ -19,12 +19,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
-import { shellQuote } from "@/lib/utils";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession } from "@/lib/terminal";
+import { resumeCommand, shellQuote } from "@/lib/resume";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
-/** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch. */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; live: boolean };
+/** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch; `args` its flags. */
+type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; live: boolean; args: string[] };
 
 type SavedWorkspace = {
   version: 1;
@@ -36,6 +36,8 @@ type SavedWorkspace = {
   fontSize: number;
   tabs: Tab[];
   sessions: Record<string, string | null>;
+  /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
+  sessionArgs?: Record<string, string[]>;
 };
 
 type Widths = { left: number; right: number };
@@ -72,7 +74,6 @@ function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
 
 /** Session ids get typed into a shell, so only accept the UUID shape Claude Code uses. */
 const isSessionId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
-const resumeCommand = (sessionId: string) => `claude --resume ${sessionId}\r`;
 const forkCommand = (sessionId: string) => `claude --resume ${sessionId} --fork-session\r`;
 
 export default function App() {
@@ -184,7 +185,7 @@ export default function App() {
 
   /** Creates the terminal for a new pane; it starts its shell once its card mounts. */
   const createPane = useCallback(
-    (spaceId: string, initialInput: string | null, sessionId: string | null = null, cwd: string | null = null) => {
+    (spaceId: string, initialInput: string | null, sessionId: string | null = null, cwd: string | null = null, args: string[] = []) => {
       const key = crypto.randomUUID();
       terminals.set(
         key,
@@ -197,7 +198,7 @@ export default function App() {
           cwd,
         ),
       );
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: null, sessionId, live: false } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: null, sessionId, live: false, args } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -314,7 +315,8 @@ export default function App() {
           const layout = mapPanes(t.layout, (old) => {
             const session = saved.sessions[old];
             const resume = session && isSessionId(session) ? session : null;
-            keys[old] = createPane(t.spaceId, resume && resumeCommand(resume), resume);
+            const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
+            keys[old] = createPane(t.spaceId, resume && resumeCommand(resume, args), resume, null, args);
             return keys[old];
           });
           const focusedPane = keys[t.focusedPane] ?? paneIds(layout)[0];
@@ -363,8 +365,8 @@ export default function App() {
       for (const [key, meta] of Object.entries(prev)) {
         const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
         let patch: Partial<PaneMeta> | null = null;
-        if (agent?.sessionId && (agent.sessionId !== meta.sessionId || !meta.live)) patch = { sessionId: agent.sessionId, live: true };
-        else if (!agent && meta.live) patch = { sessionId: null, live: false };
+        if (agent?.sessionId && (agent.sessionId !== meta.sessionId || !meta.live)) patch = { sessionId: agent.sessionId, live: true, args: agent.args };
+        else if (!agent && meta.live) patch = { sessionId: null, live: false, args: [] };
         if (patch) {
           next ??= { ...prev };
           next[key] = { ...meta, ...patch };
@@ -377,7 +379,8 @@ export default function App() {
   useEffect(() => {
     if (!ready) return;
     const sessions = Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
-    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, tabs, sessions };
+    const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
+    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, tabs, sessions, sessionArgs };
     const timer = setTimeout(() => void api.workspaceSave(JSON.stringify(saved)), 400);
     return () => clearTimeout(timer);
   }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize]);

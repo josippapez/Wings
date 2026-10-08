@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type HistoryHit, type HistoryResults, type HistorySnippet, type Space } from "@/lib/api";
-import { shellQuote } from "@/lib/utils";
+import { shellQuote } from "@/lib/resume";
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 

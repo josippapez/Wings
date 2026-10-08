@@ -13,6 +13,8 @@ export type Agent = {
   name: string | null;
   state: AgentState;
   waitingFor: string | null;
+  /** The flags `claude` was started with, minus the ones that choose the session and any prompt. */
+  args: string[];
 };
 
 /** Commits to push and pull (as of the last fetch) and changed files, per project. */
