@@ -15,6 +15,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 | Host: runs frames, relays calls, cleans badges and comments | `apps/desktop/src/lib/plugins.ts` |
 | Permission checks, `exec`, transcript reads | `apps/desktop/src-tauri/src/plugins.rs` |
 | Tauri commands `plugin_exec`, `plugin_transcript`, `plugin_open_url` | `apps/desktop/src-tauri/src/lib.rs` |
+| Live transcript entries for `onTranscript`, read each detection tick | `apps/desktop/src-tauri/src/tail.rs`, `tail_transcripts` in `lib.rs` |
 | Badge pill and card | `apps/desktop/src/components/pane-badge.tsx` |
 | Diff viewer | `apps/desktop/src/components/diff-viewer.tsx` |
 
@@ -29,6 +30,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 ## Rules that keep plugins fast and safe
 
 - Work from `wings.onPanes`. Each pane has a live `cwd` and a `session` while Claude runs in it.
+- Follow a session with `wings.onTranscript` rather than polling `wings.transcript`, which rereads the whole file.
 - Cache network lookups per repo and branch, not per pane. Local `git` takes about 25 ms and a network CLI 0.7 to 2 s. The dev log prints `[plugin] <id> <program> took N ms` for every call.
 - Poll slowly: local checks every 15 s, network every 60 s. Offer a Refresh action instead of polling faster.
 - Every action handler returns a promise. The button shows a spinner until it settles.

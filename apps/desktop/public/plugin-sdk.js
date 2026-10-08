@@ -7,6 +7,7 @@
   let nextId = 1;
   const pending = new Map();
   const listeners = { panes: [], action: [], broadcast: [] };
+  listeners.transcript = [];
   const tools = new Map();
 
   const call = (method, params, onOutput) =>
@@ -87,6 +88,12 @@
       call("exec", { program, args, cwd, timeoutMs, stream: typeof onOutput === "function" }, onOutput),
     /** Transcript entries of the given types (must be in `permissions.transcript`). */
     transcript: (sessionId, types) => call("transcript", { sessionId, types }),
+    /**
+     * Each transcript entry Claude Code writes while it runs in a pane, as `{ sessionId, paneId, entry }`, for the
+     * entry types in `permissions.transcript`. Only entries written after the plugin started, or after the session
+     * started in the pane; `transcript` reads earlier ones. Entries over 256 KB are skipped.
+     */
+    onTranscript: (listener) => void listeners.transcript.push(listener),
     /** Shows a badge in a pane's header, or removes it with `null`. */
     setBadge: (paneId, badge) => call("setBadge", { paneId, badge }),
     /** Opens an https URL matching `permissions.openUrl` in the browser. */

@@ -15,6 +15,7 @@ mod plugins;
 mod secrets;
 mod pty;
 mod spaces;
+mod tail;
 
 use std::{
     collections::HashMap,
@@ -667,6 +668,7 @@ fn start_detection(app: AppHandle) {
     thread::spawn(move || {
         let state = app.state::<AppState>();
         let mut detector = Detector::new(&state.claude_dir);
+        let mut tailer = tail::Tailer::new(&state.claude_dir);
         loop {
             let probes: Vec<PaneProbe> = state
                 .panes
@@ -698,9 +700,30 @@ fn start_detection(app: AppHandle) {
                 drop(info);
                 let _ = app.emit("pane-info", scan.panes);
             }
+            tail_transcripts(&app, &mut tailer);
             thread::sleep(Duration::from_millis(500));
         }
     });
+}
+
+/// Sends the running plugins the transcript entries Claude wrote since the last tick, in the sessions running in
+/// panes, each to the plugins allowed its type. Reads nothing while no running plugin may read transcripts.
+fn tail_transcripts(app: &AppHandle, tailer: &mut tail::Tailer) {
+    let state = app.state::<AppState>();
+    let running: Vec<Plugin> = {
+        let store = state.plugins.lock().unwrap();
+        store.list().iter().filter_map(|p| store.active(&p.manifest.id)).filter(|p| !p.manifest.permissions.transcript.is_empty()).collect()
+    };
+    if running.is_empty() {
+        tailer.clear();
+        return;
+    }
+    let sessions: Vec<(String, String)> =
+        state.agents.lock().unwrap().iter().filter_map(|a| Some((a.pane_id.clone(), a.session_id.clone()?))).collect();
+    let events: Vec<plugins::TranscriptEvent> = tailer.poll(&sessions).into_iter().filter_map(|line| plugins::transcript_event(&running, line)).collect();
+    if !events.is_empty() {
+        let _ = app.emit_to("main", "plugin-transcript", &events);
+    }
 }
 
 #[tauri::command]

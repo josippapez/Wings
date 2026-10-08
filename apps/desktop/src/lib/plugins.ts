@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-import { api, type McpCall, type PluginView } from "@/lib/api";
+import { api, type McpCall, type PluginTranscriptEvent, type PluginView } from "@/lib/api";
 
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
@@ -179,6 +179,7 @@ export class PluginHost {
   /** MCP tool calls a plugin is running, by the token it answers with. */
   private tools = new Map<string, { pluginId: string; callId: number }>();
   private unlistenTools = api.onMcpCall((call) => this.runTool(call));
+  private unlistenTranscript = api.onPluginTranscript((events) => this.publishTranscript(events));
 
   constructor(private callbacks: Callbacks) {
     window.addEventListener("message", this.onMessage);
@@ -273,6 +274,13 @@ export class PluginHost {
     for (const [win, plugin] of this.frames) if (plugin.ready) this.post(win, { event: "panes", data: panes });
   }
 
+  /** Each entry goes to the pages of the plugins Rust found may read its type, if they're running. */
+  private publishTranscript(events: PluginTranscriptEvent[]) {
+    for (const { plugins, ...data } of events) {
+      for (const [win, plugin] of this.frames) if (plugin.ready && plugins.includes(plugin.id)) this.post(win, { event: "transcript", data });
+    }
+  }
+
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
   sendAction(pluginId: string, paneId: string, actionId: string): Promise<void> {
     const entry = [...this.frames].find(([, p]) => p.id === pluginId && p.kind === "main");
@@ -309,6 +317,7 @@ export class PluginHost {
   dispose() {
     window.removeEventListener("message", this.onMessage);
     void this.unlistenTools.then((off) => off());
+    void this.unlistenTranscript.then((off) => off());
     for (const { frame } of this.frames.values()) frame.remove();
     this.frames.clear();
   }

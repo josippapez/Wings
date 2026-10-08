@@ -418,6 +418,32 @@ pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
     url.starts_with("https://") && plugin.manifest.permissions.open_url.iter().any(|prefix| url.starts_with(prefix))
 }
 
+/// A transcript entry Claude just wrote, for `wings.onTranscript`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptEvent {
+    pub session_id: String,
+    pub pane_id: String,
+    pub entry: Value,
+    /// The running plugins whose `permissions.transcript` has the entry's type. Only they get it.
+    pub plugins: Vec<String>,
+}
+
+/// The event for a line a transcript appended, if it's a JSON entry of a type one of `running` may read.
+pub fn transcript_event(running: &[Plugin], line: crate::tail::Line) -> Option<TranscriptEvent> {
+    let text = std::str::from_utf8(&line.bytes).ok()?;
+    // Most lines are large tool output of a type no plugin reads, so look before parsing.
+    let types = || running.iter().flat_map(|p| &p.manifest.permissions.transcript);
+    if !types().any(|t| text.contains(&format!("\"type\":\"{t}\""))) {
+        return None;
+    }
+    let entry: Value = serde_json::from_str(text).ok()?;
+    let kind = entry.get("type")?.as_str()?;
+    let plugins: Vec<String> =
+        running.iter().filter(|p| p.manifest.permissions.transcript.iter().any(|t| t == kind)).map(|p| p.manifest.id.clone()).collect();
+    (!plugins.is_empty()).then_some(TranscriptEvent { session_id: line.session_id, pane_id: line.pane_id, entry, plugins })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +661,33 @@ mod tests {
         assert!(transcript_entries(&p, &claude, id, &["user".into()]).is_err());
         assert!(transcript_entries(&p, &claude, "../../x", &["pr-link".into()]).is_err());
         let _ = fs::remove_dir_all(&claude);
+    }
+
+    #[test]
+    fn transcript_events_go_only_to_plugins_that_read_the_type() {
+        let reader = |id: &str, types: &[&str]| {
+            let mut p = plugin(Path::new("/tmp"), &[], types);
+            p.manifest.id = id.into();
+            p
+        };
+        let running = [reader("timeline", &["user", "assistant"]), reader("cost", &["assistant", "cost-state"]), reader("pr", &["pr-link"])];
+        let event = |text: &str| {
+            let line = crate::tail::Line { pane_id: "p1".into(), session_id: "s1".into(), bytes: text.as_bytes().to_vec() };
+            transcript_event(&running, line)
+        };
+        let e = event(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#).unwrap();
+        assert_eq!((e.plugins.as_slice(), e.pane_id.as_str(), e.session_id.as_str()), (["timeline".to_string(), "cost".to_string()].as_slice(), "p1", "s1"));
+        assert_eq!(e.entry["message"]["content"][0]["text"], "hi");
+        assert_eq!(event(r#"{"type":"cost-state","costUSD":1.5}"#).unwrap().plugins, ["cost"]);
+        assert_eq!(event(r#"{"type":"pr-link","prNumber":7}"#).unwrap().plugins, ["pr"]);
+        // A type nobody reads, even when a nested block names a type someone does, and lines that aren't entries.
+        assert!(event(r#"{"type":"attachment","content":[{"type":"user"}]}"#).is_none());
+        for line in [r#"{"type":"user""#, "not json", r#"["type","user"]"#, r#"{"kind":"user","x":{"type":"user"}}"#, r#"{"type":7}"#] {
+            assert!(event(line).is_none(), "{line}");
+        }
+        let line = |bytes: &[u8]| crate::tail::Line { pane_id: "p1".into(), session_id: "s1".into(), bytes: bytes.to_vec() };
+        assert!(transcript_event(&running, line(b"{\"type\":\"user\",\"x\":\"\xff\"}")).is_none());
+        assert!(transcript_event(&[], line(b"{\"type\":\"user\"}")).is_none());
     }
 
     #[test]

@@ -14,6 +14,14 @@ interface WingsPane {
   session: { sessionId: string; name: string | null; state: string } | null;
 }
 
+interface WingsTranscriptEvent {
+  sessionId: string;
+  /** The pane the session runs in. */
+  paneId: string;
+  /** The entry as Claude Code wrote it. Its `type` is one of `permissions.transcript`. */
+  entry: { type: string } & Record<string, unknown>;
+}
+
 interface WingsBadge {
   label: string;
   tone: Tone;
@@ -64,6 +72,12 @@ interface Wings {
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /** Claude Code transcript entries of types in `permissions.transcript`, oldest first. */
   transcript(sessionId: string, types: string[]): Promise<Record<string, unknown>[]>;
+  /**
+   * Each transcript entry Claude Code writes while it runs in a pane, for the types in `permissions.transcript`.
+   * Only entries written after the plugin started, or after the session started in the pane; `transcript` reads
+   * earlier ones. Entries over 256 KB are skipped.
+   */
+  onTranscript(listener: (event: WingsTranscriptEvent) => void): void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
   /** Opens an https URL that starts with a prefix in `permissions.openUrl`. */
