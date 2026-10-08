@@ -159,9 +159,13 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
             true,
         ),
         "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--show-token"], false),
-        "az" => (&[], &["--http-method", "--in-file"], true),
+        "az" => (&[], &["--http-method", "--in-file", "--out-file"], true),
         _ => return false,
     };
+    // az replaces any argument that starts with `@` with that file's contents (knack's parser).
+    if program == "az" && arg.starts_with('@') {
+        return true;
+    }
     let name = arg.split('=').next().unwrap_or(arg);
     if let Some(option) = name.strip_prefix("--") {
         return !option.is_empty() && long.iter().any(|flag| if abbrev { flag.starts_with(name) } else { *flag == name });
@@ -328,6 +332,9 @@ mod tests {
             ("gh", "-iXDELETE"),
             ("glab", "-pfquery=mutation"),
             ("az", "--http-meth=POST"),
+            ("az", "--out-file=/tmp/x"),
+            ("az", "--out-f"),
+            ("az", "@/etc/passwd"),
             ("gh", "--method=POST"),
             ("gh", "-fquery=mutation"),
             ("glab", "--show-token"),
