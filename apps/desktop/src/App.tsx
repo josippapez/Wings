@@ -5,6 +5,7 @@ import { MotionConfig } from "motion/react";
 import { DiffViewer } from "@/components/diff-viewer";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginManager } from "@/components/plugin-manager";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
@@ -560,9 +561,12 @@ export default function App() {
                 />
               ))}
               {!activeSpace && (
-                <div className="flex h-full items-center justify-center p-8 text-center text-[13px] text-muted-foreground">
-                  Add a project with the + next to Projects to open a terminal in it.
-                </div>
+                <Empty className="h-full">
+                  <EmptyHeader>
+                    <EmptyTitle>No project open</EmptyTitle>
+                    <EmptyDescription>Add a project with the + next to Projects to open a terminal in it.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
             </main>
             <RightSidebar

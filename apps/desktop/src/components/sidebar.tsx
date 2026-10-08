@@ -4,6 +4,9 @@ import { useState } from "react";
 import { FolderIcon, FolderOpenIcon, PlusIcon, RefreshCwIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { buttonVariants } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { Item } from "@/components/ui/item";
 import { GitCounts } from "@/components/git-counts";
 import { PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
@@ -83,18 +86,22 @@ export function Sidebar(props: {
           <LayoutGroup id="projects">
             <nav aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
               {spaces.length === 0 && (
-                <div className="flex flex-col items-start gap-2.5 px-2 py-3">
-                  <p className="text-[13px] text-muted-foreground">Add a project folder to open a terminal in it.</p>
-                  <motion.button
-                    type="button"
-                    whileTap={{ scale: 0.96 }}
-                    onClick={() => void chooseFolder()}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-full bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors duration-150 outline-none hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <FolderOpenIcon className="size-3.5" aria-hidden />
-                    Add project
-                  </motion.button>
-                </div>
+                <Empty className="items-start p-2 text-left">
+                  <EmptyHeader className="items-start text-left">
+                    <EmptyDescription className="text-[13px]">Add a project folder to open a terminal in it.</EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent className="items-start">
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => void chooseFolder()}
+                      className={cn(buttonVariants({ size: "sm" }), "rounded-full px-3 text-[12px]")}
+                    >
+                      <FolderOpenIcon aria-hidden />
+                      Add project
+                    </motion.button>
+                  </EmptyContent>
+                </Empty>
               )}
               {spaces.map((space) => {
                 const active = space.id === props.activeSpaceId;
@@ -111,16 +118,13 @@ export function Sidebar(props: {
                         className="absolute inset-0 rounded-lg bg-sidebar-accent shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]"
                       />
                     )}
-                    <motion.button
-                      type="button"
-                      whileTap={{ scale: 0.985 }}
+                    <Item
+                      size="xs"
+                      render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
                       onClick={() => props.onSelectSpace(space.id)}
                       aria-current={active ? "page" : undefined}
                       title={space.path}
-                      className={cn(
-                        "relative flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-8 pl-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-                        !active && "hover:bg-hover",
-                      )}
+                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left", !active && "hover:bg-hover")}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center">
                         {state ? <StatusDot state={state} /> : <FolderIcon className="size-4 text-muted-foreground" />}
@@ -145,7 +149,7 @@ export function Sidebar(props: {
                           </span>
                         )}
                       </span>
-                    </motion.button>
+                    </Item>
                     <span className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
                       {spaceAgents.length > 0 && (
                         <span className="px-1 text-[11px] text-muted-foreground tabular-nums group-hover/row:hidden">
@@ -190,12 +194,12 @@ export function Sidebar(props: {
                     exit={{ opacity: 0, y: -6 }}
                     transition={spring}
                   >
-                    <motion.button
-                      type="button"
-                      whileTap={{ scale: 0.985 }}
+                    <Item
+                      size="xs"
+                      render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
                       onClick={() => props.onSelectAgent(agent)}
                       className={cn(
-                        "flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2 pl-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+                        "flex-nowrap gap-2.5 px-2 py-1.5 text-left",
                         agent.paneId === props.focusedPaneId ? "bg-sidebar-accent" : "hover:bg-hover",
                         agent.state === "blocked" && "bg-blocked/10 hover:bg-blocked/15",
                       )}
@@ -210,7 +214,7 @@ export function Sidebar(props: {
                         </span>
                       </span>
                       {agent.state === "done" && <span className="size-1.5 shrink-0 rounded-full bg-done" aria-hidden />}
-                    </motion.button>
+                    </Item>
                   </motion.li>
                 ))}
               </AnimatePresence>

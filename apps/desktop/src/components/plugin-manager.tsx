@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "motion/react";
-import { CircleAlertIcon, CircleArrowUpIcon, EllipsisIcon, FileArchiveIcon, LoaderCircleIcon, PuzzleIcon, TrashIcon } from "lucide-react";
+import { CircleAlertIcon, CircleArrowUpIcon, EllipsisIcon, FileArchiveIcon, PuzzleIcon, TrashIcon } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { api, type PluginView } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -34,8 +37,10 @@ function Adds({ plugin }: { plugin: PluginView }) {
   return (
     <ul className="mt-1.5 flex flex-wrap gap-1" aria-label="What it adds">
       {chips.map((c) => (
-        <li key={c.key} title={c.title} className="rounded-full bg-white/[0.06] px-2 py-px text-[11px] text-muted-foreground">
-          {c.label}
+        <li key={c.key}>
+          <Badge variant="secondary" title={c.title} className="h-auto px-2 py-px text-[11px] font-normal text-muted-foreground">
+            {c.label}
+          </Badge>
         </li>
       ))}
     </ul>
@@ -101,7 +106,7 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
             Cancel
           </Button>
           <Button onClick={props.onApprove} disabled={props.busy}>
-            {props.busy && <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden />}
+            {props.busy && <Spinner />}
             Turn on
           </Button>
         </DialogFooter>
@@ -230,13 +235,13 @@ export function PluginManager(props: {
                 className="h-8 text-[13px]"
               />
               <Button type="submit" size="sm" disabled={!link.trim() || installing !== null} className="h-8">
-                {installing === "link" && <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden />}
+                {installing === "link" && <Spinner />}
                 Install
               </Button>
             </form>
             <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
               <Button variant="outline" size="sm" onClick={() => void chooseFile()} disabled={installing !== null} className="h-7">
-                {installing === "file" ? <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden /> : <FileArchiveIcon aria-hidden />}
+                {installing === "file" ? <Spinner /> : <FileArchiveIcon aria-hidden />}
                 Choose a file
               </Button>
               <span>or drop a .wings-plugin file on the window</span>
@@ -260,9 +265,16 @@ export function PluginManager(props: {
           <ScrollArea className="min-h-0 flex-1">
             <ul className="flex flex-col gap-1 p-3">
               {props.plugins.length === 0 && (
-                <li className="flex flex-col items-center gap-2 px-6 py-12 text-center text-[13px] text-muted-foreground">
-                  <PuzzleIcon className="size-6" aria-hidden />
-                  No plugins yet. Paste a GitHub link or drop a .wings-plugin file to add one.
+                <li>
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <PuzzleIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>No plugins yet</EmptyTitle>
+                      <EmptyDescription>Paste a GitHub link or drop a .wings-plugin file to add one.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
                 </li>
               )}
               {props.plugins.map((p) => {
@@ -284,13 +296,9 @@ export function PluginManager(props: {
                         <Adds plugin={p} />
                         <p className="mt-1 text-[11px] text-muted-foreground">{sourceLabel(p)}</p>
                         {!p.approved && (
-                          <button
-                            type="button"
-                            onClick={() => setApproving(p)}
-                            className="mt-1.5 rounded text-[12px] font-medium text-working outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                          >
+                          <Button variant="link" size="xs" onClick={() => setApproving(p)} className="mt-1 h-auto px-0 text-[12px] text-working">
                             Review access to turn it on
-                          </button>
+                          </Button>
                         )}
                         {update && (
                           <Button
@@ -317,7 +325,7 @@ export function PluginManager(props: {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        {pending && <LoaderCircleIcon className="size-3.5 text-muted-foreground motion-safe:animate-spin" aria-label="Working" />}
+                        {pending && <Spinner className="size-3.5 text-muted-foreground" aria-label="Working" />}
                         <Switch
                           checked={p.enabled && p.approved}
                           onCheckedChange={(on) => toggle(p, on)}
@@ -327,15 +335,9 @@ export function PluginManager(props: {
                         {!p.dev && (
                           <DropdownMenu>
                             <DropdownMenuTrigger
-                              render={
-                                <button
-                                  type="button"
-                                  aria-label={`More for ${p.name}`}
-                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                />
-                              }
+                              render={<Button variant="ghost" size="icon-sm" aria-label={`More for ${p.name}`} className="text-muted-foreground" />}
                             >
-                              <EllipsisIcon className="size-4" aria-hidden />
+                              <EllipsisIcon aria-hidden />
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               {p.source?.kind === "github" && (

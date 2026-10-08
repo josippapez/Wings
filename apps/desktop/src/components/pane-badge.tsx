@@ -6,11 +6,13 @@ import {
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
-  LoaderCircleIcon,
 } from "lucide-react";
 
 import { GitCounts } from "@/components/git-counts";
+import { badgeVariants } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Spinner } from "@/components/ui/spinner";
 import type { Badge, BadgeIcon, Tone } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 
@@ -59,14 +61,15 @@ export function PaneBadge({ badge, onAction }: { badge: Badge; onAction: (action
             whileTap={{ scale: 0.94 }}
             transition={{ type: "spring", stiffness: 500, damping: 32 }}
             className={cn(
-              "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium ring-1 transition-[filter,background-color] duration-150 outline-none ring-inset hover:brightness-125 focus-visible:ring-2 focus-visible:ring-ring aria-expanded:brightness-125",
+              badgeVariants(),
+              "h-6 cursor-pointer gap-1.5 px-2.5 text-[12px] ring-1 ring-inset hover:brightness-125 aria-expanded:brightness-125 [&>svg]:size-3.5!",
               tone.pill,
             )}
           />
         }
       >
         {badge.loading ? (
-          <LoaderCircleIcon className="size-3.5 motion-safe:animate-spin" aria-label="Updating" />
+          <Spinner aria-label="Updating" />
         ) : (
           Icon && <Icon className="size-3.5" aria-hidden />
         )}
@@ -121,12 +124,12 @@ export function PaneBadge({ badge, onAction }: { badge: Badge; onAction: (action
                 aria-busy={pending === action.id}
                 onClick={() => void run(action.id)}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-[background-color,opacity] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default",
-                  action.primary ? "bg-primary text-primary-foreground hover:bg-primary/85" : "bg-white/[0.06] hover:bg-white/[0.12]",
+                  buttonVariants({ variant: action.primary ? "default" : "secondary", size: "sm" }),
+                  "rounded-full px-3 text-[12px] disabled:cursor-default disabled:opacity-100",
                   pending !== null && pending !== action.id && "opacity-50",
                 )}
               >
-                {pending === action.id && <LoaderCircleIcon className="size-3.5 motion-safe:animate-spin" aria-hidden />}
+                {pending === action.id && <Spinner className="size-3.5" />}
                 {action.label}
               </motion.button>
             ))}

@@ -5,6 +5,7 @@ import { Columns2Icon, Maximize2Icon, Minimize2Icon, Rows2Icon, XIcon } from "lu
 import { IconButton } from "@/components/icon-button";
 import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import type { LayoutNode } from "@/lib/layout";
@@ -152,7 +153,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
               <Popover>
                 <PopoverTrigger
                   aria-label={`${hidden.length} more`}
-                  className="inline-flex h-6 shrink-0 items-center rounded-full bg-white/[0.06] px-2 text-[12px] font-medium text-muted-foreground ring-1 ring-white/10 ring-inset transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  render={<Button variant="secondary" size="xs" className="h-6 shrink-0 rounded-full px-2 text-[12px] text-muted-foreground hover:text-foreground" />}
                 >
                   +{hidden.length}
                 </PopoverTrigger>

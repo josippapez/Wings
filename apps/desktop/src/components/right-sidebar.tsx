@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { CalendarIcon, ChartColumnIcon, ClockIcon, GlobeIcon, ListIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
@@ -55,7 +56,7 @@ export function RightSidebar(props: {
           {props.mounted.length > 1 ? (
             // Several plugins' pages are open: one tab each, scrolling sideways if they don't fit. Only the
             // tab strip comes from Tabs; the pages stay mounted below so hidden ones keep running.
-            <Tabs value={props.open?.id ?? null} onValueChange={(id) => props.onSelect(String(id))} className="min-w-0 flex-1 gap-0">
+            <Tabs value={props.open?.id ?? null} onValueChange={(id) => props.onSelect(String(id))} className="min-w-0 flex-1 gap-0 data-horizontal:flex-row">
               <TabsList aria-label="Plugin sidebars" className="h-7 w-full justify-start overflow-x-auto bg-transparent p-0 [scrollbar-width:none]">
                 {props.mounted.map((entry) => {
                   const sidebar = sidebarOf(entry);
@@ -66,14 +67,15 @@ export function RightSidebar(props: {
                         <Icon className="size-3.5" aria-hidden />
                         {sidebar?.title}
                       </TabsTrigger>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
                         aria-label={`Close ${sidebar?.title}`}
                         onClick={() => props.onCloseTab(entry.id)}
-                        className="absolute right-1 flex size-4 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+                        className="absolute right-0.5 size-5 text-muted-foreground opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"
                       >
-                        <XIcon className="size-3" aria-hidden />
-                      </button>
+                        <XIcon aria-hidden />
+                      </Button>
                     </div>
                   );
                 })}
