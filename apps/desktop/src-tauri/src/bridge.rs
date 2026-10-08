@@ -20,8 +20,9 @@ use serde_json::{json, Value};
 /// Answered when Claude asks for one we know, else our newest. Claude Code accepts these on both of its
 /// MCP runtimes; on the 2026-07-28 revision `list_changed` would need a held-open stream instead.
 const PROTOCOLS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
-const INSTRUCTIONS: &str = "Tools from the plugins turned on in Wings, the terminal app this session may run in. \
-Each tool is named <plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
+const INSTRUCTIONS: &str = "Tools from Wings, the terminal app this session may run in. search_history and read_session \
+find and read past Claude Code sessions on this computer. Tools from the plugins turned on in Wings are named \
+<plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
 
 struct Bridge {
     stdout: Mutex<std::io::Stdout>,
@@ -140,7 +141,7 @@ fn handle(bridge: &Bridge, message: Value) {
                     let error = reply.get("error").and_then(Value::as_str).unwrap_or("Wings couldn't run the tool");
                     json!({ "content": [{ "type": "text", "text": error }], "isError": true })
                 }),
-                None => json!({ "content": [{ "type": "text", "text": "Wings isn't running. Open Wings to use its plugin tools." }], "isError": true }),
+                None => json!({ "content": [{ "type": "text", "text": "Wings isn't running. Open Wings to use its tools." }], "isError": true }),
             })
         }
         _ => Err(json!({ "code": -32601, "message": format!("Method not found: {method}") })),

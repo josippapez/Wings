@@ -19,6 +19,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
+import { shellQuote } from "@/lib/utils";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession } from "@/lib/terminal";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
@@ -72,6 +73,7 @@ function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
 /** Session ids get typed into a shell, so only accept the UUID shape Claude Code uses. */
 const isSessionId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
 const resumeCommand = (sessionId: string) => `claude --resume ${sessionId}\r`;
+const forkCommand = (sessionId: string) => `claude --resume ${sessionId} --fork-session\r`;
 
 export default function App() {
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -533,6 +535,16 @@ export default function App() {
     selectSpace(space.id);
   }
 
+  /** Opens a past session where it started, in the project that holds its folder. A new project is added. */
+  async function launchSession(session: { id: string; cwd: string }, fork: boolean) {
+    if (!isSessionId(session.id)) return;
+    const holders = spaces.filter((s) => session.cwd === s.path || session.cwd.startsWith(`${s.path}/`));
+    const space = holders.sort((a, b) => b.path.length - a.path.length)[0] ?? (await api.spacesAdd(session.cwd));
+    setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
+    const cd = session.cwd === space.path ? "" : `cd ${shellQuote(session.cwd)} && `;
+    openTab(space.id, cd + (fork ? forkCommand(session.id) : resumeCommand(session.id)), fork ? null : session.id);
+  }
+
   async function removeSpace(spaceId: string) {
     tabsRef.current.filter((t) => t.spaceId === spaceId).forEach((t) => closeTab(t.id));
     await api.spacesRemove(spaceId);
@@ -707,6 +719,10 @@ export default function App() {
           onResume={(id) => {
             setHistoryOpen(false);
             if (activeSpace && isSessionId(id)) openTab(activeSpace.id, resumeCommand(id), id);
+          }}
+          onLaunch={(session, fork) => {
+            setHistoryOpen(false);
+            void launchSession(session, fork).catch((e) => console.error(e));
           }}
         />
       </TooltipProvider>

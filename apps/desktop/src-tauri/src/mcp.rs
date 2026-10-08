@@ -1,7 +1,7 @@
 //! The app side of the Wings MCP server. Claude Code starts `wings --mcp` (bridge.rs), which connects here
 //! over a socket only this user can open. Here it lists the tools of plugins that are on and runs them in
-//! the plugin's own code, so plugin tools come and go without touching Claude Code's settings. The `wings plugin`
-//! CLI uses the same socket (control.rs).
+//! the plugin's own code, so plugin tools come and go without touching Claude Code's settings. Wings' own
+//! tools (history.rs) run here directly. The `wings plugin` CLI uses the same socket (control.rs).
 
 use std::{
     collections::HashMap,
@@ -97,11 +97,11 @@ fn serve(app: &AppHandle, stream: UnixStream) {
     }
 }
 
-/// The tools of every plugin that's on and approved, as MCP tool definitions.
+/// Wings' own tools, then the tools of every plugin that's on and approved, as MCP tool definitions.
 fn tools(app: &AppHandle) -> Vec<Value> {
     let state = app.state::<AppState>();
     let store = state.plugins.lock().unwrap();
-    store
+    let plugin_tools = store
         .list()
         .into_iter()
         .filter(|p| p.enabled && p.approved)
@@ -110,12 +110,25 @@ fn tools(app: &AppHandle) -> Vec<Value> {
             p.manifest.contributes.mcp_tools.into_iter().map(move |t| {
                 json!({ "name": format!("{id}{SEPARATOR}{}", t.name), "description": t.description, "inputSchema": t.input_schema })
             })
-        })
-        .collect()
+        });
+    crate::history::mcp_tools().into_iter().chain(plugin_tools).collect()
+}
+
+/// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.
+fn builtin(app: &AppHandle, name: &str, arguments: &Value) -> Option<ToolResult> {
+    let state = app.state::<AppState>();
+    let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)?;
+    Some(match result {
+        Ok(text) => ToolResult { text, is_error: false },
+        Err(text) => ToolResult { text, is_error: true },
+    })
 }
 
 /// Asks the plugin, through the webview, to run one of its tools, and waits for its answer.
 fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Result<ToolResult, String> {
+    if let Some(result) = builtin(app, name, &arguments) {
+        return Ok(result);
+    }
     let (plugin_id, tool) = name.split_once(SEPARATOR).ok_or_else(|| format!("unknown tool {name}"))?;
     let state = app.state::<AppState>();
     let plugin = state.plugins.lock().unwrap().active(plugin_id).ok_or_else(|| format!("{plugin_id} is turned off in Wings"))?;
