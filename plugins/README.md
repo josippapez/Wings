@@ -45,7 +45,7 @@ Restart Wings after adding or changing a plugin.
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
 
-A command runs as you, with that CLI's own sign-in, so `gh api` can read anything your GitHub account can. Wings always refuses flags that would run other commands, write or read files outside the repo, change data on the server, or print a token: `git -c`, `--upload-pack`, `--output`, `--no-index`, `gh`/`glab` `-X`, `--method`, `-f`, `-F`, `--input`, `--show-token`, and `az` `--http-method`, `--in-file`, `--out-file` and any argument starting with `@`, which az reads as a file.
+A command runs as you, with that CLI's own sign-in, so `gh api` can read anything your GitHub account can. Only declare commands you need, because that list is what the user approves. On top of it, Wings refuses known flags that run other commands, touch files outside the repo, change data on the server or print a token: `git -c`, `--upload-pack`, `--output`, `--no-index`, `gh`/`glab` `-X`, `--method`, `-f`, `-F`, `--input`, `--show-token`, and for `az` `--method`, `--http-method`, the file flags (`--in-file`, `--out-file`, `--output-file`, `--file`, `--destination`) and `@path` values, which az reads as files. That list can't cover every subcommand of every CLI, so treat an `exec` entry as trusting the plugin with that command.
 
 Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bridge, so each plugin needs its own webview there first.
 

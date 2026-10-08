@@ -159,16 +159,18 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
             true,
         ),
         "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--show-token"], false),
-        "az" => (&[], &["--http-method", "--in-file", "--out-file"], true),
+        "az" => (&['m'], &["--http-method", "--method", "--in-file", "--out-file", "--output-file", "--file", "--destination"], true),
         _ => return false,
     };
-    // az replaces any argument that starts with `@` with that file's contents (knack's parser).
-    if program == "az" && arg.starts_with('@') {
+    // az replaces `@path`, and the value in `key=@path` or `--flag=@path`, with that file's contents.
+    if program == "az" && (arg.starts_with('@') || arg.split_once('=').is_some_and(|(_, value)| value.starts_with('@'))) {
         return true;
     }
     let name = arg.split('=').next().unwrap_or(arg);
     if let Some(option) = name.strip_prefix("--") {
-        return !option.is_empty() && long.iter().any(|flag| if abbrev { flag.starts_with(name) } else { *flag == name });
+        // An exact option name wins over abbreviations, so az's own `--output` isn't `--output-file`.
+        let exact = program == "az" && name == "--output";
+        return !option.is_empty() && !exact && long.iter().any(|flag| if abbrev { flag.starts_with(name) } else { *flag == name });
     }
     // Short flags group and carry their value attached, like `-iXDELETE` or `-ccore.fsmonitor=...`.
     name.strip_prefix('-').is_some_and(|group| group.chars().any(|c| short.contains(&c)))
@@ -335,6 +337,10 @@ mod tests {
             ("az", "--out-file=/tmp/x"),
             ("az", "--out-f"),
             ("az", "@/etc/passwd"),
+            ("az", "--body=@/etc/passwd"),
+            ("az", "project=@/etc/passwd"),
+            ("az", "--output-file=/tmp/x"),
+            ("az", "-mPOST"),
             ("gh", "--method=POST"),
             ("gh", "-fquery=mutation"),
             ("glab", "--show-token"),
@@ -354,6 +360,7 @@ mod tests {
             ("glab", "--paginate"),
             ("glab", "--raw"),
             ("az", "-o"),
+            ("az", "--output"),
         ] {
             assert!(!is_unsafe_flag(program, arg), "{program} {arg}");
         }
