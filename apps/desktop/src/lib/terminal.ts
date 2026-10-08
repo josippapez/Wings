@@ -120,7 +120,13 @@ export class TerminalSession {
   private webgl: WebglAddon | null = null;
   private visible = false;
   private started = false;
-  private resizeObserver = new ResizeObserver(() => this.refit());
+  // A sidebar slide or a drag changes the size every frame. Each refit reflows the scrollback and resizes the
+  // PTY, which makes the shell or Claude redraw, so refit once the size has held still.
+  private settle: ReturnType<typeof setTimeout> | undefined;
+  private resizeObserver = new ResizeObserver(() => {
+    clearTimeout(this.settle);
+    this.settle = setTimeout(() => this.refit(), 80);
+  });
 
   constructor(
     readonly spaceId: string,
@@ -193,6 +199,7 @@ export class TerminalSession {
   }
 
   dispose() {
+    clearTimeout(this.settle);
     this.resizeObserver.disconnect();
     if (this.paneId) void api.paneClose(this.paneId);
     this.term.dispose();
