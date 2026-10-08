@@ -101,6 +101,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |
 | `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
+| `wings.storage.get(key)`, `.set(key, value)`, `.delete(key)`, `.keys()` | The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are JSON (what `JSON.stringify` keeps), and `get` resolves `null` for a key that isn't set. Keys are 1 to 128 letters, digits and `- _ . : /`. Everything together is limited to 1 MB, and a `set` that would go over is refused. See [Storage](#storage) |
 | `wings.setSidebarLabel(sidebarId, label, { rows })` | Up to 16 characters next to the sidebar's title bar button, like a running timer; `null` clears it. Wings shows it as a green pill. `rows` are up to 6 `{ label, value }` shown when you point at it |
 | `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars. Use it so a sidebar refreshes when a tool call changed something |
 
@@ -120,3 +121,9 @@ Wings drops a pane's badges when the pane closes. When several plugins add to th
 Plugin tools reach Claude through one MCP server, `wings`, which you add once from the Plugins sheet with Connect. It runs `wings --mcp` at user scope, so every Claude Code session gets the tools of the plugins that are on, and the list updates as you turn plugins on and off. The tools only work while Wings is open.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.
+
+## Storage
+
+`wings.storage` needs no permission: it's the plugin's own data, and no other plugin can read it. Wings keeps it in one file per plugin, `<app data>/plugin-storage/<id>.<scope>.json` (on macOS `~/Library/Application Support/dev.wings.app/plugin-storage/`). Each change writes a new file and renames it into place, so a crash never leaves half a file. The main script and the sidebar pages share it, and writes they make at the same time all land.
+
+It follows the same rule as secrets. An update from the same GitHub repo keeps it. Removing the plugin deletes it, and so does installing a plugin with the same id from a file or another repo, which gets a new `<scope>`, so a different package can't read what the old one stored. Keep tokens in `wings.secrets`, not here.

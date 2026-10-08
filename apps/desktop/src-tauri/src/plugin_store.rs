@@ -235,6 +235,15 @@ impl Store {
         Ok(scope)
     }
 
+    /// The scope its storage lives under (see `plugin_storage`), the same one its secrets use, so it's
+    /// dropped in the same places. Only writes `plugins.json` when the entry is new.
+    pub fn storage_scope(&mut self, id: &str) -> Result<String, String> {
+        match self.entries.get(id) {
+            Some(entry) => Ok(entry.scope.clone()),
+            None => Ok(self.secret_scope(id)?.scope),
+        }
+    }
+
     /// Records that the plugin stored (or deleted) a keychain secret with this name.
     pub fn note_secret(&mut self, id: &str, name: &str, stored: bool) -> Result<(), String> {
         let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
@@ -495,6 +504,40 @@ mod tests {
         assert!(fresh.scope != first && fresh.names.is_empty());
         s.note_secret("demo", "token", true).unwrap();
         assert_eq!(s.remove("demo").unwrap().unwrap().names, ["token"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The same steps as `install` and `remove_plugin` in lib.rs.
+    #[test]
+    fn storage_stays_with_the_same_repo_and_goes_with_a_newcomer_or_a_remove() {
+        let (mut s, dir) = store();
+        let storage = crate::plugin_storage::Storage::new(dir.join("plugin-storage"));
+        let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        let repo = || Source::Github { repo: "owner/demo".into() };
+        let value = serde_json::json!({ "tasks": ["private"] });
+        let install = |s: &mut Store, source| {
+            if let Some(old) = s.install(&pkg(), source, None).unwrap().1 {
+                storage.remove("demo", &old.scope).unwrap();
+            }
+        };
+
+        install(&mut s, repo());
+        let first = s.storage_scope("demo").unwrap();
+        assert_eq!(first, s.secret_scope("demo").unwrap().scope);
+        storage.set("demo", &first, "history", value.clone()).unwrap();
+        install(&mut s, repo());
+        assert_eq!(storage.get("demo", &s.storage_scope("demo").unwrap(), "history").unwrap(), Some(value.clone()));
+
+        // A file with the same id starts empty, and the old data is gone from disk.
+        install(&mut s, Source::File);
+        let fresh = s.storage_scope("demo").unwrap();
+        assert!(fresh != first && storage.keys("demo", &fresh).unwrap().is_empty());
+        assert!(!dir.join(format!("plugin-storage/demo.{first}.json")).exists());
+
+        storage.set("demo", &fresh, "history", value).unwrap();
+        let old = s.remove("demo").unwrap().unwrap();
+        storage.remove("demo", &old.scope).unwrap();
+        assert_eq!(fs::read_dir(dir.join("plugin-storage")).unwrap().count(), 0);
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -85,6 +85,19 @@ interface Wings {
     delete(name: string): Promise<void>;
     has(name: string): Promise<boolean>;
   };
+  /**
+   * The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are
+   * JSON. Keys are 1 to 128 letters, digits and `- _ . : /`, and it holds 1 MB in all. Only this plugin sees it.
+   */
+  storage: {
+    /** The value, or `null` when the key isn't set. */
+    get(key: string): Promise<unknown>;
+    /** Refused if it would take the plugin's storage over 1 MB. */
+    set(key: string, value: unknown): Promise<void>;
+    delete(key: string): Promise<void>;
+    /** Every key, sorted. */
+    keys(): Promise<string[]>;
+  };
   /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
   setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[] }): Promise<void>;
   /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars. */

@@ -104,6 +104,19 @@
       has: (name) => call("secretHas", { name }),
     }),
     /**
+     * The plugin's own key-value storage for settings and state, since `localStorage` throws in plugin frames.
+     * Values are JSON. Keys are 1 to 128 letters, digits and `- _ . : /`, and everything together is limited to
+     * 1 MB. Only this plugin's pages see it, and it goes when the plugin is removed.
+     */
+    storage: Object.freeze({
+      /** Resolves the value, or `null` when the key isn't set. */
+      get: (key) => call("storageGet", { key }),
+      set: (key, value) => call("storageSet", { key, value }),
+      delete: (key) => call("storageDelete", { key }),
+      /** Resolves every key, sorted. */
+      keys: () => call("storageKeys", {}),
+    }),
+    /**
      * Short text next to a sidebar's title bar button, like a running timer. `null` clears it. `rows`, up to 6
      * `{ label, value }`, show when you point at the button.
      */

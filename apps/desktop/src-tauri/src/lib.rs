@@ -11,6 +11,7 @@ mod control;
 #[cfg(unix)]
 mod mcp;
 mod plugin_store;
+mod plugin_storage;
 mod plugins;
 mod secrets;
 mod pty;
@@ -52,6 +53,7 @@ struct AppState {
     #[cfg(unix)]
     mcp: mcp::Mcp,
     plugins: Mutex<Store>,
+    storage: plugin_storage::Storage,
     next_pane: AtomicU64,
 }
 
@@ -205,6 +207,7 @@ fn remove_plugin(app: &AppHandle, id: &str) -> Res<()> {
     close_panels(app, id);
     if let Some(old) = app.state::<AppState>().plugins.lock().unwrap().remove(id)? {
         delete_secrets(id, &old);
+        delete_storage(app, id, &old);
     }
     tools_changed(app);
     Ok(())
@@ -215,6 +218,7 @@ fn install(app: &AppHandle, bytes: &[u8], source: Source, expected_id: Option<&s
     let (view, dropped) = app.state::<AppState>().plugins.lock().unwrap().install(bytes, source, expected_id)?;
     if let Some(old) = dropped {
         delete_secrets(&view.manifest.id, &old);
+        delete_storage(app, &view.manifest.id, &old);
     }
     tools_changed(app);
     Ok(view)
@@ -234,6 +238,13 @@ fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
         if let Err(e) = secrets::delete(plugin_id, &old.scope, name) {
             eprintln!("[plugins] couldn't delete {plugin_id} secret {name}: {e}");
         }
+    }
+}
+
+/// A failure only leaves an orphan file: the scope is gone, so nothing reads it again.
+fn delete_storage(app: &AppHandle, plugin_id: &str, old: &plugin_store::SecretScope) {
+    if let Err(e) = app.state::<AppState>().storage.remove(plugin_id, &old.scope) {
+        eprintln!("[plugins] couldn't delete {plugin_id} storage: {e}");
     }
 }
 
@@ -415,6 +426,38 @@ fn plugin_secret_delete(state: State<AppState>, plugin_id: String, name: String)
 fn plugin_secret_has(state: State<AppState>, plugin_id: String, name: String) -> Res<bool> {
     plugin(&state, &plugin_id)?;
     Ok(stored_secret(&state, &plugin_id, &name)?.is_some())
+}
+
+/// The plugin's storage scope, looked up in the same lock as the check that it's on, so a plugin removed
+/// in between can't be given a new one.
+fn storage_scope(state: &AppState, plugin_id: &str) -> Res<String> {
+    let mut plugins = state.plugins.lock().unwrap();
+    plugins.active(plugin_id).ok_or_else(|| format!("{plugin_id} is turned off or not installed"))?;
+    plugins.storage_scope(plugin_id)
+}
+
+#[tauri::command(async)]
+fn plugin_storage_get(state: State<AppState>, plugin_id: String, key: String) -> Res<Option<serde_json::Value>> {
+    let scope = storage_scope(&state, &plugin_id)?;
+    state.storage.get(&plugin_id, &scope, &key)
+}
+
+#[tauri::command(async)]
+fn plugin_storage_set(state: State<AppState>, plugin_id: String, key: String, value: serde_json::Value) -> Res<()> {
+    let scope = storage_scope(&state, &plugin_id)?;
+    state.storage.set(&plugin_id, &scope, &key, value)
+}
+
+#[tauri::command(async)]
+fn plugin_storage_delete(state: State<AppState>, plugin_id: String, key: String) -> Res<()> {
+    let scope = storage_scope(&state, &plugin_id)?;
+    state.storage.delete(&plugin_id, &scope, &key)
+}
+
+#[tauri::command(async)]
+fn plugin_storage_keys(state: State<AppState>, plugin_id: String) -> Res<Vec<String>> {
+    let scope = storage_scope(&state, &plugin_id)?;
+    state.storage.keys(&plugin_id, &scope)
 }
 
 #[derive(serde::Deserialize)]
@@ -768,6 +811,7 @@ pub fn run() {
             let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
             app.manage(AppState {
                 plugins,
+                storage: plugin_storage::Storage::new(data.join("plugin-storage")),
                 claude_dir,
                 spaces: Mutex::new(store),
                 panes: Mutex::new(HashMap::new()),
@@ -820,6 +864,10 @@ pub fn run() {
             plugin_secret_set,
             plugin_secret_delete,
             plugin_secret_has,
+            plugin_storage_get,
+            plugin_storage_set,
+            plugin_storage_delete,
+            plugin_storage_keys,
             plugin_fetch,
             mcp_tool_result,
             mcp_status,
