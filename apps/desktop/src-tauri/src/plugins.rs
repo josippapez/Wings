@@ -340,21 +340,45 @@ pub(crate) fn search_path() -> &'static str {
         #[cfg(unix)]
         {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let marker = "__WINGS_PATH__";
-            let output = Command::new(shell)
-                .args(["-l", "-i", "-c", &format!("printf '{marker}%s{marker}' \"$PATH\"")])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output();
-            if let Ok(out) = output {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Some(path) = text.split(marker).nth(1).filter(|p| !p.is_empty()) {
-                    return format!("{path}:{inherited}");
-                }
+            if let Some(path) = login_shell_path(&shell, Duration::from_secs(5)) {
+                return format!("{path}:{inherited}");
             }
         }
         inherited
     })
+}
+
+/// The PATH a login shell sets up, or `None` when that takes longer than `timeout`. A profile that runs
+/// something long would otherwise hold up every program lookup. A job the profile starts in the background
+/// can keep the output open after the shell exits, so it's read until the closing marker, not to the end.
+#[cfg(unix)]
+fn login_shell_path(shell: &str, timeout: Duration) -> Option<String> {
+    const MARKER: &str = "__WINGS_PATH__";
+    let mut child = Command::new(shell)
+        .args(["-l", "-i", "-c", &format!("printf '{MARKER}%s{MARKER}' \"$PATH\"")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut text, mut chunk) = (Vec::new(), [0u8; 4096]);
+        while let Ok(n @ 1..) = stdout.read(&mut chunk) {
+            text.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&text);
+            let mut parts = text.split(MARKER);
+            if let (Some(_), Some(path), Some(_)) = (parts.next(), parts.next(), parts.next()) {
+                let _ = tx.send(path.to_string());
+                return;
+            }
+        }
+    });
+    let path = rx.recv_timeout(timeout).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    path.filter(|p| !p.is_empty())
 }
 
 pub fn find_program(program: &str) -> Option<PathBuf> {
@@ -554,6 +578,34 @@ pub fn transcript_event(running: &[Plugin], line: crate::tail::Line) -> Option<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_shell(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("wings-shell-{name}-{}", std::process::id()));
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn login_shell_path_gives_up_on_a_slow_profile() {
+        let quick = fake_shell("quick", "printf '__WINGS_PATH__/fake/bin__WINGS_PATH__'");
+        assert_eq!(login_shell_path(quick.to_str().unwrap(), Duration::from_secs(5)).as_deref(), Some("/fake/bin"));
+        // A job left running in the background keeps the output open after the shell is done.
+        let background = fake_shell("background", "sleep 30 &\nprintf '__WINGS_PATH__/fake/bin__WINGS_PATH__'");
+        let start = Instant::now();
+        assert_eq!(login_shell_path(background.to_str().unwrap(), Duration::from_secs(5)).as_deref(), Some("/fake/bin"));
+        assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
+        let hung = fake_shell("hung", "sleep 30");
+        let start = Instant::now();
+        assert_eq!(login_shell_path(hung.to_str().unwrap(), Duration::from_millis(300)), None);
+        assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
+        for path in [quick, background, hung] {
+            let _ = fs::remove_file(path);
+        }
+    }
 
     fn plugin(dir: &Path, exec: &[&str], transcript: &[&str]) -> Plugin {
         Plugin {
