@@ -4,7 +4,7 @@
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use serde_json::{json, Value};
@@ -118,8 +118,50 @@ fn source(p: &Value) -> String {
     }
 }
 
+// ---------- putting `wings` on PATH ----------
+
+const MARKER: &str = "# The wings command, added by Wings.";
+
+/// ~/.local/bin needs no admin rights, and many setups already have it on PATH (Claude Code's installer adds it).
+pub fn command_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".local/bin/wings"))
+}
+
+/// A script that runs this copy of Wings. With no arguments it opens the app, rather than starting a second one.
+pub fn command_script(exe: &Path) -> String {
+    let quote = |p: &Path| format!("'{}'", p.to_string_lossy().replace('\'', r"'\''"));
+    let bundle = exe.ancestors().nth(3).filter(|b| b.extension().is_some_and(|e| e == "app"));
+    let open = bundle.map(|b| format!("[ $# -eq 0 ] && exec open {}\n", quote(b))).unwrap_or_default();
+    format!("#!/bin/sh\n{MARKER} With no arguments it opens the app.\n{open}exec {} \"$@\"\n", quote(exe))
+}
+
+/// Writes the command, unless something that isn't from Wings is already there.
+pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = command_path().ok_or("Couldn't find your home folder")?;
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if !existing.contains(MARKER) {
+            return Err(format!("{} already exists and isn't from Wings. Remove it, then try again.", path.display()));
+        }
+    }
+    let dir = path.parent().ok_or("Couldn't find the folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, command_script(exe)).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_opens_the_app_with_no_arguments() {
+        let script = super::command_script(std::path::Path::new("/Applications/Wing's.app/Contents/MacOS/wings"));
+        assert!(script.contains(r"exec open '/Applications/Wing'\''s.app'"), "{script}");
+        assert!(script.ends_with("exec '/Applications/Wing'\\''s.app/Contents/MacOS/wings' \"$@\"\n"), "{script}");
+        let plain = super::command_script(std::path::Path::new("/opt/wings/wings"));
+        assert!(!plain.contains("exec open"), "{plain}");
+    }
+
     #[test]
     fn identifier_matches_the_tauri_config() {
         let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();

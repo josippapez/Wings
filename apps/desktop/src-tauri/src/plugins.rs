@@ -325,7 +325,7 @@ pub fn exec(
 }
 
 /// GUI apps don't get the shell's PATH on macOS and Linux, so ask the login shell once.
-fn search_path() -> &'static str {
+pub(crate) fn search_path() -> &'static str {
     static PATH: OnceLock<String> = OnceLock::new();
     PATH.get_or_init(|| {
         let inherited = std::env::var("PATH").unwrap_or_default();

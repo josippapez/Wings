@@ -45,6 +45,9 @@
     "allow-plugin-fetch",
     "allow-mcp-tool-result",
     "allow-mcp-status",
-    "allow-mcp-connect"
+    "allow-mcp-connect",
+    "allow-cli-status",
+    "allow-cli-install",
+    "allow-cli-dismiss"
   ]
 }

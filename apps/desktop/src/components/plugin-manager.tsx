@@ -13,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { TerminalCommandRow } from "@/components/terminal-command";
 import { api, type McpStatus, type PluginView } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -327,6 +328,7 @@ export function PluginManager(props: {
           </div>
 
           <ClaudeConnect open={props.open} />
+          <TerminalCommandRow open={props.open} />
 
           <ScrollArea className="min-h-0 flex-1">
             <ul className="flex flex-col gap-1 p-3">

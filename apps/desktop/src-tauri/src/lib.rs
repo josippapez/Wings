@@ -282,6 +282,56 @@ struct McpStatus {
     connected: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliStatus {
+    /// Release builds on macOS and Linux. A dev build would point the command at its own binary.
+    available: bool,
+    /// The command is there and runs this copy of Wings.
+    installed: bool,
+    /// Its folder is on the login shell's PATH.
+    on_path: bool,
+    /// You answered the prompt on first start.
+    asked: bool,
+}
+
+const CLI_ASKED: &str = "cli-prompted";
+
+/// Whether the `wings` command is set up, for the first-start prompt and the Plugins sheet.
+#[tauri::command(async)]
+fn cli_status(app: AppHandle) -> CliStatus {
+    let asked = app.path().app_data_dir().is_ok_and(|d| d.join(CLI_ASKED).exists());
+    #[cfg(unix)]
+    {
+        let path = cli::command_path();
+        let installed = path.as_ref().zip(std::env::current_exe().ok()).is_some_and(|(path, exe)| {
+            std::fs::read_to_string(path).is_ok_and(|s| s == cli::command_script(&exe))
+        });
+        let dir = path.as_ref().and_then(|p| p.parent()).map(|d| d.to_string_lossy().into_owned());
+        let on_path = dir.is_some_and(|dir| plugins::search_path().split(':').any(|p| p.trim_end_matches('/') == dir));
+        CliStatus { available: !cfg!(debug_assertions), installed, on_path, asked }
+    }
+    #[cfg(not(unix))]
+    CliStatus { available: false, installed: false, on_path: false, asked }
+}
+
+/// Adds the `wings` command, from the first-start prompt or the Plugins sheet.
+#[tauri::command(async)]
+fn cli_install(app: AppHandle) -> Res<CliStatus> {
+    cli_dismiss(app.clone())?;
+    #[cfg(unix)]
+    cli::install_command(&std::env::current_exe().map_err(err)?)?;
+    Ok(cli_status(app))
+}
+
+/// "Not now" on the first-start prompt. The Plugins sheet still offers the command.
+#[tauri::command(async)]
+fn cli_dismiss(app: AppHandle) -> Res<()> {
+    let dir = app.path().app_data_dir().map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    std::fs::write(dir.join(CLI_ASKED), "").map_err(err)
+}
+
 /// Whether Claude Code has the Wings MCP server. Reading Claude's own list keeps Wings from guessing.
 #[tauri::command(async)]
 fn mcp_status() -> McpStatus {
@@ -774,6 +824,9 @@ pub fn run() {
             mcp_tool_result,
             mcp_status,
             mcp_connect,
+            cli_status,
+            cli_install,
+            cli_dismiss,
             plugin_exec,
             plugin_transcript,
             plugin_open_url,

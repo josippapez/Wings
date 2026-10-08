@@ -12,6 +12,7 @@ import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp } from "@/components/status-dot";
+import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -689,6 +690,7 @@ export default function App() {
             pluginHost.current?.sync(list, restart);
           }}
         />
+        <TerminalCommandPrompt />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

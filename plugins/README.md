@@ -18,12 +18,7 @@ wings plugin list            # --json for scripts
 wings plugin enable cyclops  # also update, disable, remove
 ```
 
-A plugin installed this way still waits for you to approve its access in Wings, which opens the approval. `wings` is the app's own binary, `/Applications/Wings.app/Contents/MacOS/wings` on macOS. To put it on your PATH without starting a second copy of the app, use a small script that opens the app when it gets no arguments:
-
-```sh
-printf '#!/bin/sh\n[ $# -eq 0 ] && exec open -a Wings\nexec /Applications/Wings.app/Contents/MacOS/wings "$@"\n' > ~/.local/bin/wings
-chmod +x ~/.local/bin/wings
-```
+A plugin installed this way still waits for you to approve its access in Wings, which opens the approval. On first start Wings offers to add the `wings` command to `~/.local/bin`, and the Plugins sheet offers it later. With no arguments the command opens Wings rather than starting a second copy.
 
 Plugins start and stop as you turn them on and off, with no restart. Installed plugins live in `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`). Dev builds also load this repo's `plugins/` folder at startup, always on.
 
