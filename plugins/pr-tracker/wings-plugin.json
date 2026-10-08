@@ -1,0 +1,24 @@
+{
+  "id": "pr-tracker",
+  "name": "PR tracker",
+  "version": "0.3.0",
+  "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks, the diff and review comments.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": [
+      "gh",
+      "glab",
+      "az",
+      "git"
+    ],
+    "transcript": [
+      "pr-link"
+    ],
+    "openUrl": [
+      "https://github.com/",
+      "https://gitlab.com/",
+      "https://dev.azure.com/"
+    ]
+  }
+}

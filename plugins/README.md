@@ -1,0 +1,64 @@
+# Wings plugins
+
+A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. Wings loads it into a sandboxed frame, and the plugin talks to Wings only through the `wings` object. Anything that touches your machine is checked in Rust against the permissions in the manifest.
+
+`pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
+
+## Where plugins live
+
+- `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`)
+- `plugins/` in this repo, in dev builds only
+
+Restart Wings after adding or changing a plugin.
+
+## Manifest
+
+```json
+{
+  "id": "pr-tracker",
+  "name": "PR tracker",
+  "version": "0.1.0",
+  "description": "Shows the pull request for each pane's branch.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": ["gh", "glab", "az", "git"],
+    "transcript": ["pr-link"],
+    "openUrl": ["https://github.com/", "https://gitlab.com/", "https://dev.azure.com/"]
+  }
+}
+```
+
+| Permission | Allows |
+|---|---|
+| `exec` | Running these programs by name, with no shell and no stdin, 30 s timeout by default |
+| `transcript` | Reading these Claude Code transcript entry types |
+| `openUrl` | Opening https URLs that start with these prefixes |
+
+`id` is lowercase letters, digits and dashes. `api` must be `1`.
+
+## API
+
+| Call | Does |
+|---|---|
+| `wings.onPanes(fn)` | Called with every terminal pane on each change: `{ paneId, cwd, command, project, session }[]`. `cwd` follows `cd`. `session` is `{ sessionId, name, state }` while Claude runs in the pane, else `null` |
+| `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
+| `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |
+| `wings.transcript(sessionId, types)` | Resolves the matching transcript entries, oldest first |
+| `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
+| `wings.openUrl(url)` | Opens the URL in the browser |
+| `wings.openDiff({ title, subtitle, patch?, comments? })` | Opens the diff viewer and resolves `{ id }`. Without `patch` it opens in a loading state |
+| `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
+
+A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
+
+- `tone` is one of `neutral`, `info`, `success`, `warning`, `danger`, `merged`.
+- `icon` is one of `pr-open`, `pr-merged`, `pr-closed`, `pr-draft`.
+- `counts` are `{ icon, value }` chips after the label, where `icon` is `changed`, `push` or `pull`. Leave out zeros.
+- `rows` are `{ label, value, tone? }`, shown in the card when you click the badge.
+- `actions` are `{ id, label, primary? }` buttons in that card. A click calls `onAction`.
+- `loading: true` shows a spinner in the pill while the plugin refreshes.
+
+A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url }`, where `side` is `additions` or `deletions`. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
+
+Wings drops a pane's badges when the pane closes.
