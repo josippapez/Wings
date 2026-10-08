@@ -48,6 +48,8 @@ export type McpStatus = { claude: boolean; connected: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
 export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
+/** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
+export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
 export type PluginView = {
   id: string;
@@ -124,6 +126,9 @@ export const api = {
   mcpToolResult: (callId: number, text: string, isError: boolean) => invoke<void>("mcp_tool_result", { callId, text, isError }),
   /** Claude called a plugin tool. `paneId` is the pane that Claude runs in, if it's a Wings pane. */
   onMcpCall: (cb: (call: McpCall) => void): Promise<UnlistenFn> => listen<McpCall>("mcp-call", (e) => cb(e.payload)),
+  /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
+  onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
+    listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),
   /** `right` and `bottom` are the button's edges in the window, so the panel opens just under it. */
   pluginPanelToggle: (pluginId: string, panelId: string, right: number, bottom: number) =>
     invoke<void>("plugin_panel_toggle", { pluginId, panelId, right, bottom }),
