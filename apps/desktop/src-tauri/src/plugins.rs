@@ -188,7 +188,8 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
             true,
         ),
         "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--show-token"], false),
-        "az" => (&['m'], &["--http-method", "--method", "--in-file", "--out-file", "--output-file", "--file", "--destination"], true),
+        // Short forms too: -f --file, -d --destination, -s --source, -m --method.
+        "az" => (&['m', 'f', 'd', 's'], &["--http-method", "--method", "--in-file", "--out-file", "--output-file", "--file", "--destination", "--source"], true),
         _ => return false,
     };
     // az replaces `@path`, and the value in `key=@path` or `--flag=@path`, with that file's contents.
@@ -371,6 +372,9 @@ mod tests {
             ("az", "project=@/etc/passwd"),
             ("az", "--output-file=/tmp/x"),
             ("az", "-mPOST"),
+            ("az", "-f/etc/passwd"),
+            ("az", "-d"),
+            ("az", "--source"),
             ("gh", "--method=POST"),
             ("gh", "-fquery=mutation"),
             ("glab", "--show-token"),
@@ -391,6 +395,7 @@ mod tests {
             ("glab", "--raw"),
             ("az", "-o"),
             ("az", "--output"),
+            ("az", "--source-branch"),
         ] {
             assert!(!is_unsafe_flag(program, arg), "{program} {arg}");
         }
