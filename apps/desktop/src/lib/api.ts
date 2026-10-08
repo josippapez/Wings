@@ -21,7 +21,15 @@ export type GitStatus = { branch: string | null; ahead: number; behind: number; 
 /** What a pane runs right now and where: the shell's cwd follows `cd`. */
 export type PaneInfo = { command: string; cwd: string | null };
 
-export type PluginPermissions = { exec: string[]; transcript: string[]; openUrl: string[]; fetch: string[] };
+export type PluginPermissions = {
+  exec: string[];
+  transcript: string[];
+  openUrl: string[];
+  fetch: string[];
+  /** Commands it may start in a new pane; `[]` is plain shells only, `null` no panes and no focusing them. */
+  panes: string[] | null;
+  notify: boolean;
+};
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
 /** A web page a plugin shows in a popover from a title bar button. */
 export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
@@ -114,7 +122,9 @@ export const api = {
     rows: number,
     initialInput: string | null,
     onOutput: Channel<ArrayBuffer>,
-  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput }),
+    /** A folder inside the project to start in, instead of its root. */
+    cwd: string | null = null,
+  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd }),
   paneWrite: (id: string, data: string) => invoke<void>("pane_write", { id, data }),
   paneResize: (id: string, cols: number, rows: number) => invoke<void>("pane_resize", { id, cols, rows }),
   paneClose: (id: string) => invoke<void>("pane_close", { id }),

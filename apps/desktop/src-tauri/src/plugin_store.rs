@@ -511,6 +511,24 @@ mod tests {
     }
 
     #[test]
+    fn asking_for_panes_or_notifications_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into() };
+        let with = |permissions: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "permissions": permissions });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
+        };
+        s.install(&with(serde_json::json!({})), repo(), None).unwrap();
+        // Plain shells only (`[]`) is still more than no panes at all.
+        for permissions in [serde_json::json!({ "panes": [] }), serde_json::json!({ "panes": ["lazygit"] }), serde_json::json!({ "panes": ["lazygit"], "notify": true })] {
+            s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+            let next = s.install(&with(permissions.clone()), repo(), Some("demo")).unwrap().0;
+            assert!(!next.approved && s.active("demo").is_none(), "{permissions}");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn panels_need_an_https_url_and_a_known_icon() {
         let (mut s, dir) = store();
         let with_panel = |icon: &str, url: &str| {

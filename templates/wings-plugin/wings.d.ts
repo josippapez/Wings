@@ -68,6 +68,17 @@ interface Wings {
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
   /** Opens an https URL that starts with a prefix in `permissions.openUrl`. */
   openUrl(url: string): Promise<void>;
+  /**
+   * Needs `permissions.panes`. Opens a terminal in a new tab, or a split beside the focused pane, and resolves
+   * once the pane is in `onPanes`. `command`, like `"npm run dev"`, is typed into its shell and must start with
+   * an entry of `permissions.panes`. `cwd` must be inside one of your projects; without it the pane opens at the
+   * root of the project on screen.
+   */
+  openPane(options?: { command?: string; cwd?: string; placement?: "tab" | "right" | "down" }): Promise<{ paneId: string }>;
+  /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
+  focusPane(paneId: string): Promise<void>;
+  /** Needs `permissions.notify`. A desktop notification, up to 3 a minute. The title is cut at 64 characters, the body at 256. */
+  notify(notification: { title: string; body?: string }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
   openDiff(diff: { title: string; subtitle?: string; patch?: string; comments?: WingsComment[] }): Promise<{ id: string }>;
   updateDiff(id: string, update: { patch: string; comments?: WingsComment[] } | { error: string }): Promise<void>;

@@ -70,6 +70,8 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | `transcript` | Reading these Claude Code transcript entry types |
 | `openUrl` | Opening https URLs that start with these prefixes |
 | `fetch` | Calling https URLs that start with these prefixes through `wings.fetch`, like an API's base URL ending in `/` |
+| `panes` | Opening terminals with `wings.openPane` and moving focus with `wings.focusPane`. Each entry is a command it may start in the new pane, matched like `exec`, so `npm run dev` allows `npm run dev --port=3000`. `[]` allows plain shells only. Leave it out and the plugin can do neither |
+| `notify` | `true` to show desktop notifications with `wings.notify` |
 
 `contributes` lists what the plugin adds, which the manager shows next to it:
 
@@ -84,6 +86,8 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 
 A command runs as you, with that CLI's own sign-in, so `gh api` can read anything your GitHub account can. Only declare commands you need, because that list is what the user approves. On top of it, Wings refuses known flags that run other commands, touch files outside the repo, change data on the server or print a token: `git -c`, `--upload-pack`, `--output`, `--no-index`, `gh`/`glab` `-X`, `--method`, `-f`, `-F`, `--input`, `--show-token`, and for `az` `--method`, `--http-method`, the file flags (`--in-file`, `--out-file`, `--output-file`, `--file`, `--destination`, `--source` and their short forms) and `@path` values, which az reads as files. That list can't cover every subcommand of every CLI, so treat an `exec` entry as trusting the plugin with that command.
 
+A `panes` command is typed into the new pane's shell, the way Wings resumes a session, so you're back at a prompt when it exits. It runs as you in a terminal you can see, the same trust as `exec`, and the same flags are refused. Since a shell reads it, every word of an entry and of a command may only use letters, digits and `-_./:=@%+,`: no spaces inside a word, quotes, `$`, globs or operators. Words past the declared entry come from the plugin and are single-quoted. A `cwd` has to be a folder inside one of your Wings projects once `..` and symlinks are resolved, so neither can lead out of it.
+
 Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bridge, so each plugin needs its own webview there first.
 
 ## API
@@ -97,6 +101,9 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.transcript(sessionId, types)` | Resolves the matching transcript entries, oldest first |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
 | `wings.openUrl(url)` | Opens the URL in the browser |
+| `wings.openPane({ command?, cwd?, placement? })` | Opens a terminal and resolves `{ paneId }` once it's in `onPanes`. `placement` is `tab` (the default), or `right` or `down` for a split beside the focused pane, which has to be in the project on screen. Without `cwd` it opens at the root of the project on screen. The new pane gets the keyboard |
+| `wings.focusPane(paneId)` | Switches to an open pane's project and tab and moves the keyboard to it |
+| `wings.notify({ title, body? })` | A desktop notification, with your plugin's name before the title. The title is cut at 64 characters and the body at 256. Up to 3 a minute per plugin; more are refused with how long to wait. Clicking it does nothing |
 | `wings.openDiff({ title, subtitle, patch?, comments? })` | Opens the diff viewer and resolves `{ id }`. Without `patch` it opens in a loading state |
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |

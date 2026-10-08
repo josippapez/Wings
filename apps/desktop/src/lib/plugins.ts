@@ -63,6 +63,12 @@ export type PluginPane = {
   session: { sessionId: string; name: string | null; state: string } | null;
 };
 
+/** A new tab, or a split to the right of or below the focused pane. */
+export type PanePlacement = "tab" | "right" | "down";
+const placements: unknown[] = ["tab", "right", "down"] satisfies PanePlacement[];
+/** Where Rust approved a plugin's pane: its project, a folder inside it, and the line to type into its shell. */
+export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement };
+
 
 type Callbacks = {
   setBadge: (pluginId: string, paneId: string, badge: Badge | null) => void;
@@ -72,6 +78,12 @@ type Callbacks = {
   clearPlugin: (pluginId: string) => void;
   /** Short text next to a sidebar's title bar button, like a running timer; null clears it. */
   setSidebarLabel: (pluginId: string, sidebarId: string, label: SidebarLabel | null) => void;
+  /** The project on screen, where a pane without a `cwd` opens. */
+  currentProject: () => string | null;
+  /** Opens a pane Rust approved; resolves its Rust pane id once its shell runs. */
+  openPane: (plan: PanePlan) => Promise<string>;
+  /** Shows a pane and moves the keyboard to it. */
+  focusPane: (paneId: string) => void;
 };
 
 type Running = {
@@ -179,6 +191,8 @@ export class PluginHost {
   /** MCP tool calls a plugin is running, by the token it answers with. */
   private tools = new Map<string, { pluginId: string; callId: number }>();
   private unlistenTools = api.onMcpCall((call) => this.runTool(call));
+  /** `openPane` calls waiting for their new pane to reach plugins, by Rust pane id. */
+  private paneWaiters = new Map<string, () => void>();
 
   constructor(private callbacks: Callbacks) {
     window.addEventListener("message", this.onMessage);
@@ -271,6 +285,22 @@ export class PluginHost {
   publishPanes(panes: PluginPane[]) {
     this.panes = panes;
     for (const [win, plugin] of this.frames) if (plugin.ready) this.post(win, { event: "panes", data: panes });
+    for (const [paneId, done] of this.paneWaiters) if (panes.some((p) => p.paneId === paneId)) done();
+  }
+
+  /** Resolves once plugins can see the pane in `onPanes`, so a call on it right after `openPane` works. */
+  private listed(paneId: string) {
+    return new Promise<void>((resolve) => {
+      if (this.panes.some((p) => p.paneId === paneId)) return resolve();
+      const done = () => {
+        clearTimeout(timer);
+        this.paneWaiters.delete(paneId);
+        resolve();
+      };
+      // A pane closed before it was listed never will be, so don't wait on it for good.
+      const timer = setTimeout(done, 5_000);
+      this.paneWaiters.set(paneId, done);
+    });
   }
 
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
@@ -365,6 +395,36 @@ export class PluginHost {
         });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
+      case "openPane": {
+        const placement = p.placement ?? "tab";
+        if (!placements.includes(placement)) throw new Error('openPane placement is "tab", "right" or "down"');
+        const text = (key: string) => {
+          const value = p[key];
+          if (value == null) return null;
+          if (typeof value !== "string") throw new Error(`openPane ${key} must be a string`);
+          return value;
+        };
+        // Rust checks the command and folder; the pane is then opened here, where tabs and splits live.
+        const plan = await invoke<Omit<PanePlan, "placement">>("plugin_open_pane", {
+          pluginId,
+          request: { command: text("command"), cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
+        });
+        const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement });
+        await this.listed(paneId);
+        return { paneId };
+      }
+      case "focusPane": {
+        const paneId = String(p.paneId);
+        await invoke("plugin_focus_pane", { pluginId, paneId });
+        this.callbacks.focusPane(paneId);
+        return null;
+      }
+      case "notify":
+        return invoke("plugin_notify", {
+          pluginId,
+          title: typeof p.title === "string" ? p.title : "",
+          body: typeof p.body === "string" ? p.body : "",
+        });
       case "fetch": {
         const headers = p.headers && typeof p.headers === "object" ? (p.headers as Record<string, unknown>) : {};
         return invoke("plugin_fetch", {

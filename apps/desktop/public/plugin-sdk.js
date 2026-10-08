@@ -92,6 +92,17 @@
     /** Opens an https URL matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**
+     * Opens a terminal in a new tab, or in a split beside the focused pane with `placement` "right" or "down".
+     * Resolves `{ paneId }` once the pane is in `onPanes`. `command` is typed into its shell and must be covered
+     * by `permissions.panes`. `cwd` must be inside one of your projects; without it the pane opens at the root
+     * of the project on screen.
+     */
+    openPane: ({ command = null, cwd = null, placement = "tab" } = {}) => call("openPane", { command, cwd, placement }),
+    /** Shows an open pane and moves the keyboard to it. Needs `permissions.panes`. */
+    focusPane: (paneId) => call("focusPane", { paneId }),
+    /** A desktop notification, with `permissions.notify`. Up to 3 a minute; there's no click action. */
+    notify: ({ title, body = "" } = {}) => call("notify", { title, body }),
+    /**
      * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings
      * sends as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status;
      * redirects aren't followed.

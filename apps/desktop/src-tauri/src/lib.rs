@@ -53,6 +53,8 @@ struct AppState {
     mcp: mcp::Mcp,
     plugins: Mutex<Store>,
     next_pane: AtomicU64,
+    /// Recent plugin notifications, for their rate limit.
+    notified: Mutex<plugins::NotifyLog>,
 }
 
 type Res<T> = Result<T, String>;
@@ -83,6 +85,7 @@ fn sessions_list(state: State<AppState>, space_id: String) -> Res<Vec<SessionSum
 }
 
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "Tauri passes the app and state as arguments too")]
 fn pane_create(
     app: AppHandle,
     state: State<AppState>,
@@ -91,8 +94,14 @@ fn pane_create(
     rows: u16,
     initial_input: Option<String>,
     on_output: Channel<InvokeResponseBody>,
+    cwd: Option<String>,
 ) -> Res<String> {
-    let cwd = PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path);
+    let root = PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path);
+    // A plugin's pane can start in a subfolder, but never outside the project it belongs to.
+    let cwd = match cwd {
+        Some(dir) => plugins::pane_cwd(std::path::Path::new(&dir), &[root], Some(0))?.1,
+        None => root,
+    };
     let id = format!("p{}", state.next_pane.fetch_add(1, Ordering::Relaxed));
     if cfg!(debug_assertions) {
         eprintln!("[pane] create {id} in {space_id}");
@@ -571,6 +580,64 @@ fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, ur
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenPaneRequest {
+    command: Option<String>,
+    cwd: Option<String>,
+    /// The project on screen, where a pane without a `cwd` opens.
+    space_id: Option<String>,
+}
+
+/// Where the UI should open a plugin's pane, and what to type into its shell.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PanePlan {
+    space_id: String,
+    cwd: Option<String>,
+    input: Option<String>,
+}
+
+/// Checks a plugin's `openPane` against its manifest and your projects. The UI then opens the pane, and
+/// `pane_create` checks its folder again.
+#[tauri::command]
+fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPaneRequest) -> Res<PanePlan> {
+    let plugin = plugin(&state, &plugin_id)?;
+    let input = plugins::pane_input(&plugin, request.command.as_deref())?;
+    let spaces = state.spaces.lock().unwrap().spaces.clone();
+    let current = request.space_id.and_then(|id| spaces.iter().position(|s| s.id == id));
+    let (project, cwd) = match request.cwd {
+        Some(cwd) => {
+            let roots: Vec<PathBuf> = spaces.iter().map(|s| PathBuf::from(&s.path)).collect();
+            let (project, dir) = plugins::pane_cwd(std::path::Path::new(&cwd), &roots, current)?;
+            (project, Some(dir.to_string_lossy().into_owned()))
+        }
+        None => (current.ok_or("No project is open in Wings")?, None),
+    };
+    // Typed like a resumed session, so the shell is still there when the command exits.
+    Ok(PanePlan { space_id: spaces[project].id.clone(), cwd, input: input.map(|line| line + "\r") })
+}
+
+/// A plugin may move focus to a pane that's open, if it may use panes at all.
+#[tauri::command]
+fn plugin_focus_pane(state: State<AppState>, plugin_id: String, pane_id: String) -> Res<()> {
+    if !plugins::may_use_panes(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not focus panes"));
+    }
+    pane(&state, &pane_id).map(|_| ())
+}
+
+/// A desktop notification from a plugin, up to `NOTIFY_LIMIT` a minute. Desktop notifications only show a
+/// title and body, so there's no click action.
+#[tauri::command]
+fn plugin_notify(app: AppHandle, state: State<AppState>, plugin_id: String, title: String, body: String) -> Res<()> {
+    let (title, body) = plugins::notification(&plugin(&state, &plugin_id)?, &title, &body)?;
+    state.notified.lock().unwrap().allow(&plugin_id, std::time::Instant::now()).map_err(|wait| {
+        format!("{plugin_id} already showed {} notifications this minute. Try again in {} s.", plugins::NOTIFY_LIMIT, wait.as_secs() + 1)
+    })?;
+    app.notification().builder().title(title).body(body).show().map_err(err)
+}
+
 /// Serves plugin files at `wings-plugin://localhost/<id>/<run>/<path>`. `run` only keeps WebKit's cache apart.
 fn serve_plugin_file(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let respond = |status: u16, kind: &str, body: Vec<u8>| {
@@ -778,6 +845,7 @@ pub fn run() {
                 #[cfg(unix)]
                 mcp: mcp::Mcp::default(),
                 next_pane: AtomicU64::new(1),
+                notified: Mutex::default(),
             });
             #[cfg(unix)]
             mcp::start(app.handle().clone(), mcp::socket_path(&data));
@@ -830,6 +898,9 @@ pub fn run() {
             plugin_exec,
             plugin_transcript,
             plugin_open_url,
+            plugin_open_pane,
+            plugin_focus_pane,
+            plugin_notify,
             bench_mode,
             bench_report,
         ])

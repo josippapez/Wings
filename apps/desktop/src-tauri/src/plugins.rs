@@ -28,6 +28,11 @@ pub struct Permissions {
     pub open_url: Vec<String>,
     /// https URL prefixes the plugin may call with `wings.fetch`, like an API's base URL.
     pub fetch: Vec<String>,
+    /// Lets the plugin open terminals in your projects and move focus to a pane. Each entry is a command it
+    /// may start in a new pane, matched like `exec`; `[]` allows plain shells only. Absent, it can do neither.
+    pub panes: Option<Vec<String>>,
+    /// Lets the plugin show desktop notifications.
+    pub notify: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -170,6 +175,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
         return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
+    }
+    if let Some(entry) = manifest.permissions.panes.iter().flatten().find(|e| e.trim().is_empty() || !e.split_ascii_whitespace().all(plain_word)) {
+        return Err(format!("panes entry {entry:?} must be a program and its arguments, using only letters, digits and -_./:=@%+,"));
     }
     for panel in &manifest.contributes.panels {
         if !valid_id(&panel.id) || panel.title.is_empty() || panel.title.len() > 40 {
@@ -418,6 +426,105 @@ pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
     url.starts_with("https://") && plugin.manifest.permissions.open_url.iter().any(|prefix| url.starts_with(prefix))
 }
 
+/// A word of a pane command. Pane commands are typed into your shell, so words can't hold spaces, quotes,
+/// backslashes, `$`, globs or operators; single-quoted, such a word reads the same in sh, bash, zsh and fish.
+fn plain_word(word: &str) -> bool {
+    !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./:=@%+,".contains(&b))
+}
+
+/// Whether the plugin may open terminals and move focus between panes.
+pub fn may_use_panes(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.panes.is_some()
+}
+
+const PANE_COMMAND_MAX: usize = 1024;
+
+/// The line to type into a new pane's shell for `command`, or `None` for a plain shell. Like `exec`, an entry
+/// in `permissions.panes` is a program and the words the command must start with. Words past the entry
+/// come from the plugin, so they're single-quoted.
+pub fn pane_input(plugin: &Plugin, command: Option<&str>) -> Result<Option<String>, String> {
+    let id = &plugin.manifest.id;
+    let Some(declared) = &plugin.manifest.permissions.panes else {
+        return Err(format!("{id} may not open panes"));
+    };
+    let Some(command) = command else { return Ok(None) };
+    // Split on spaces only, so a tab or newline is refused rather than read as a word break.
+    let words: Vec<&str> = command.split(' ').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() || command.len() > PANE_COMMAND_MAX || !words.iter().all(|w| plain_word(w)) {
+        return Err(format!("A pane command is up to 1 KB of words using only letters, digits and -_./:=@%+, not {command:?}"));
+    }
+    let entry = declared
+        .iter()
+        .map(|e| e.split_ascii_whitespace().collect::<Vec<_>>())
+        .filter(|e| words.starts_with(e))
+        .max_by_key(Vec::len)
+        .ok_or_else(|| format!("{id} may not start {}", words.iter().take(3).copied().collect::<Vec<_>>().join(" ")))?;
+    let program = words[0];
+    if let Some(flag) = words[1..].iter().find(|w| is_unsafe_flag(program, w)) {
+        return Err(format!("{id} may not pass {flag} to {program}"));
+    }
+    let extra = words[entry.len()..].iter().map(|w| format!("'{w}'"));
+    Ok(Some(entry.iter().map(|w| w.to_string()).chain(extra).collect::<Vec<_>>().join(" ")))
+}
+
+/// The folder a plugin's pane may start in: inside one of your projects once `..` and symlinks are resolved,
+/// so neither can lead out of it. Returns which project it belongs to and the resolved folder. The project
+/// on screen (`current`) wins when it holds the folder, so a split stays in its tab's project; otherwise the
+/// deepest project that holds it.
+pub fn pane_cwd(cwd: &Path, projects: &[PathBuf], current: Option<usize>) -> Result<(usize, PathBuf), String> {
+    let dir = cwd.canonicalize().ok().filter(|d| d.is_dir()).ok_or_else(|| format!("{} is not a folder", cwd.display()))?;
+    let roots: Vec<Option<PathBuf>> = projects.iter().map(|p| p.canonicalize().ok()).collect();
+    let holds = |i: &usize| roots[*i].as_ref().is_some_and(|root| dir.starts_with(root));
+    let depth = |i: &usize| roots[*i].as_ref().map_or(0, |root| root.components().count());
+    let project = current.filter(holds).or_else(|| (0..roots.len()).filter(holds).max_by_key(depth));
+    project.map(|i| (i, dir)).ok_or_else(|| format!("{} isn't inside any of your Wings projects", cwd.display()))
+}
+
+/// Notifications a plugin may show in any minute: enough for a few things finishing together, too few to
+/// flood Notification Center.
+pub const NOTIFY_LIMIT: usize = 3;
+const NOTIFY_WINDOW: Duration = Duration::from_secs(60);
+const NOTIFY_TITLE_MAX: usize = 64;
+const NOTIFY_BODY_MAX: usize = 256;
+
+/// When each plugin showed its recent notifications, for the rate limit.
+#[derive(Default)]
+pub struct NotifyLog(HashMap<String, Vec<Instant>>);
+
+impl NotifyLog {
+    /// Counts a notification at `now` if the plugin is under the limit, else says how long until it can.
+    pub fn allow(&mut self, plugin_id: &str, now: Instant) -> Result<(), Duration> {
+        let sent = self.0.entry(plugin_id.to_string()).or_default();
+        sent.retain(|t| now.duration_since(*t) < NOTIFY_WINDOW);
+        if sent.len() >= NOTIFY_LIMIT {
+            return Err(NOTIFY_WINDOW - now.duration_since(sent[0]));
+        }
+        sent.push(now);
+        Ok(())
+    }
+}
+
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    text.chars().take(max - 1).chain(['…']).collect()
+}
+
+/// The title and body to show, cut to length. The plugin's name leads the title, so a plugin can't pass
+/// for Wings or Claude.
+pub fn notification(plugin: &Plugin, title: &str, body: &str) -> Result<(String, String), String> {
+    let id = &plugin.manifest.id;
+    if !plugin.manifest.permissions.notify {
+        return Err(format!("{id} may not show notifications"));
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("A notification needs a title".into());
+    }
+    Ok((format!("{}: {}", plugin.manifest.name, clip(title, NOTIFY_TITLE_MAX)), clip(body.trim(), NOTIFY_BODY_MAX)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +543,7 @@ mod tests {
                     transcript: transcript.iter().map(|s| s.to_string()).collect(),
                     open_url: vec!["https://github.com/".into()],
                     fetch: vec!["https://api.example.com/v1/".into()],
+                    ..Default::default()
                 },
                 contributes: Contributes::default(),
             },
@@ -643,5 +751,120 @@ mod tests {
         assert!(may_open_url(&p, "https://github.com/a/b/pull/1"));
         assert!(!may_open_url(&p, "https://evil.example/"));
         assert!(!may_open_url(&p, "file:///etc/passwd"));
+    }
+
+    fn with_panes(panes: Option<&[&str]>) -> Plugin {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.panes = panes.map(|list| list.iter().map(|s| s.to_string()).collect());
+        p
+    }
+
+    #[test]
+    fn pane_commands_must_be_declared() {
+        let p = with_panes(Some(&["lazygit", "npm run dev", "claude --resume", "git log"]));
+        let input = |command: Option<&str>| pane_input(&p, command);
+        assert_eq!(input(None).unwrap(), None);
+        assert_eq!(input(Some("lazygit")).unwrap().as_deref(), Some("lazygit"));
+        assert_eq!(input(Some("  npm   run dev ")).unwrap().as_deref(), Some("npm run dev"));
+        // Words the plugin adds past the declared entry are quoted.
+        assert_eq!(input(Some("npm run dev --port=3000")).unwrap().as_deref(), Some("npm run dev '--port=3000'"));
+        let id = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+        assert_eq!(input(Some(&format!("claude --resume {id}"))).unwrap(), Some(format!("claude --resume '{id}'")));
+
+        for undeclared in ["rm -rf /", "npm run build", "npm", "claude", "lazygitx", "/usr/bin/lazygit"] {
+            assert!(input(Some(undeclared)).unwrap_err().contains("may not start"), "{undeclared}");
+        }
+        // Nothing a shell would read as more than plain words: operators, quotes, expansions, globs, newlines.
+        for smuggled in [
+            "lazygit; rm -rf ~", "lazygit && curl x", "lazygit | sh", "lazygit $(id)", "lazygit `id`", "lazygit 'a'",
+            "lazygit a\\", "lazygit ~", "lazygit *", "lazygit >x", "lazygit\nrm", "lazygit\r", "npm run dev #", "",
+        ] {
+            assert!(input(Some(smuggled)).unwrap_err().contains("only letters"), "{smuggled:?}");
+        }
+        assert!(input(Some(&format!("lazygit {}", "a".repeat(1100)))).is_err());
+        // The same flags `exec` refuses.
+        assert!(input(Some("git log -ccore.pager=sh")).unwrap_err().contains("may not pass"));
+
+        // `[]` allows plain shells only; no `panes` allows nothing, not even focus.
+        let shells = with_panes(Some(&[]));
+        assert_eq!(pane_input(&shells, None).unwrap(), None);
+        assert!(pane_input(&shells, Some("lazygit")).unwrap_err().contains("may not start"));
+        assert!(may_use_panes(&shells));
+        let none = with_panes(None);
+        assert!(pane_input(&none, None).unwrap_err().contains("may not open panes"));
+        assert!(!may_use_panes(&none));
+    }
+
+    #[test]
+    fn pane_entries_are_checked_when_the_plugin_loads() {
+        let dir = std::env::temp_dir().join(format!("wings-panes-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |panes: &[&str]| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": { "panes": panes } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        assert_eq!(manifest(&["lazygit", "npm run dev"]).unwrap().manifest.permissions.panes.unwrap(), ["lazygit", "npm run dev"]);
+        for bad in ["npm run dev && curl x | sh", "", " ", "echo $HOME"] {
+            assert!(manifest(&[bad]).err().unwrap().contains("panes entry"), "{bad:?}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_cwd_must_be_inside_a_project() {
+        // Canonical, since macOS temp folders sit behind the /var symlink.
+        let root = std::env::temp_dir().join(format!("wings-cwd-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        for dir in ["app/src", "app/nested/deep", "app2", "outside"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        fs::write(root.join("app/file.txt"), "").unwrap();
+        std::os::unix::fs::symlink(root.join("outside"), root.join("app/link-out")).unwrap();
+        let projects = [root.join("app"), root.join("app/nested"), root.join("app2")];
+        let cwd = |dir: &str, current| pane_cwd(&root.join(dir), &projects, current);
+
+        assert_eq!(cwd("app", None).unwrap(), (0, root.join("app")));
+        assert_eq!(cwd("app/src", None).unwrap(), (0, root.join("app/src")));
+        // The deepest project holds it, unless the project on screen does.
+        assert_eq!(cwd("app/nested/deep", None).unwrap().0, 1);
+        assert_eq!(cwd("app/nested/deep", Some(0)).unwrap().0, 0);
+        assert_eq!(cwd("app/src", Some(2)).unwrap().0, 0);
+
+        for outside in ["outside", "app/../outside", "app/link-out", "app/src/../../outside", "."] {
+            assert!(cwd(outside, Some(0)).unwrap_err().contains("isn't inside"), "{outside}");
+        }
+        // `app2` only shares a prefix with `app`; with app2 gone it's in no project.
+        assert!(pane_cwd(&root.join("app2"), &projects[..2], None).unwrap_err().contains("isn't inside"));
+        assert!(pane_cwd(Path::new("/"), &projects, None).unwrap_err().contains("isn't inside"));
+        assert!(cwd("app/missing", None).unwrap_err().contains("is not a folder"));
+        assert!(cwd("app/file.txt", None).unwrap_err().contains("is not a folder"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn notifications_need_permission_are_cut_to_length_and_rate_limited() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        assert!(notification(&p, "Done", "").unwrap_err().contains("may not show notifications"));
+        p.manifest.permissions.notify = true;
+        assert_eq!(notification(&p, " Build passed ", "main is green").unwrap(), ("T: Build passed".into(), "main is green".into()));
+        assert!(notification(&p, "  ", "body").unwrap_err().contains("needs a title"));
+        let (title, body) = notification(&p, &"t".repeat(500), &"ü".repeat(5000)).unwrap();
+        assert_eq!((title.chars().count(), body.chars().count()), (3 + NOTIFY_TITLE_MAX, NOTIFY_BODY_MAX));
+        assert!(body.ends_with('…'));
+
+        let mut log = NotifyLog::default();
+        let start = Instant::now();
+        for i in 0..NOTIFY_LIMIT as u64 {
+            assert!(log.allow("a", start + Duration::from_secs(i)).is_ok());
+        }
+        assert_eq!(log.allow("a", start + Duration::from_secs(10)), Err(Duration::from_secs(50)));
+        // Each plugin has its own budget, and a refused call doesn't use any.
+        assert!(log.allow("b", start + Duration::from_secs(10)).is_ok());
+        assert!(log.allow("a", start + Duration::from_secs(59)).is_err());
+        assert!(log.allow("a", start + Duration::from_secs(60)).is_ok());
+        assert!(log.allow("a", start + Duration::from_secs(60)).is_err());
     }
 }

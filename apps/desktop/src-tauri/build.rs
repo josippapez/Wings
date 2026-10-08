@@ -39,6 +39,9 @@ const COMMANDS: &[&str] = &[
     "plugin_exec",
     "plugin_transcript",
     "plugin_open_url",
+    "plugin_open_pane",
+    "plugin_focus_pane",
+    "plugin_notify",
     "bench_mode",
     "bench_report",
 ];

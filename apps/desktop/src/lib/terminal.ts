@@ -127,10 +127,15 @@ export class TerminalSession {
     clearTimeout(this.settle);
     this.settle = setTimeout(() => this.refit(), 80);
   });
+  private resolveStarted!: (paneId: string | null) => void;
+  /** The Rust pane id once the shell has started, or null if it couldn't start. */
+  readonly whenStarted = new Promise<string | null>((resolve) => (this.resolveStarted = resolve));
 
   constructor(
     readonly spaceId: string,
     private handlers: { onFocus: () => void; onStarted: (paneId: string) => void },
+    /** A folder inside the project to start in, instead of its root. */
+    private cwd: string | null = null,
   ) {
     this.el.className = "h-full w-full";
     this.term.loadAddon(this.fit);
@@ -168,11 +173,15 @@ export class TerminalSession {
     this.resizeObserver.observe(this.el);
 
     const output = new Channel<ArrayBuffer>((buf) => this.term.write(new Uint8Array(buf)));
-    this.paneId = await api.paneCreate(this.spaceId, this.term.cols, this.term.rows, initialInput, output);
+    this.paneId = await api.paneCreate(this.spaceId, this.term.cols, this.term.rows, initialInput, output, this.cwd).catch((e) => {
+      this.resolveStarted(null);
+      throw e;
+    });
     const id = this.paneId;
     this.term.onData((data) => void api.paneWrite(id, data));
     this.term.onResize(({ cols, rows }) => void api.paneResize(id, cols, rows));
     this.handlers.onStarted(id);
+    this.resolveStarted(id);
   }
 
   setVisible(visible: boolean) {
