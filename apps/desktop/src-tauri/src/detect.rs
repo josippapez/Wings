@@ -99,8 +99,14 @@ impl Detector {
         let kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet);
         let targets = if full_scan { ProcessesToUpdate::All } else { ProcessesToUpdate::Some(&foreground) };
         self.system.refresh_processes_specifics(targets, true, kind);
+        let children = if full_scan { children_by_parent(self.system.processes()) } else { HashMap::new() };
+        let jobs: Vec<Pid> = if full_scan {
+            panes.iter().filter_map(|p| p.shell_pid).flat_map(|shell| descendants(&children, Pid::from_u32(shell))).collect()
+        } else {
+            foreground.clone()
+        };
+        reread_argv(&mut self.system, &jobs);
         let processes = self.system.processes();
-        let children = if full_scan { children_by_parent(processes) } else { HashMap::new() };
 
         // Per pane: the process it is running now, and the Claude process if that is one.
         let found: Vec<(Option<Pid>, Option<Pid>)> = panes
@@ -176,6 +182,25 @@ impl Detector {
     }
 }
 
+/// A process keeps its pid when it execs another program, and sysinfo keeps the argv and name it cached. One
+/// caught between a shell's fork and its exec of `claude` would read as the shell for good, so the processes
+/// that can be a pane's job get their argv read again on every scan.
+fn reread_argv(system: &mut System, pids: &[Pid]) {
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(pids), false, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+}
+
+fn descendants(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> Vec<Pid> {
+    let mut found = Vec::new();
+    let mut queue = std::collections::VecDeque::from([root]);
+    while let Some(pid) = queue.pop_front() {
+        for child in children.get(&pid).into_iter().flatten() {
+            found.push(*child);
+            queue.push_back(*child);
+        }
+    }
+    found
+}
+
 fn children_by_parent(processes: &HashMap<Pid, Process>) -> HashMap<Pid, Vec<Pid>> {
     let mut map: HashMap<Pid, Vec<Pid>> = HashMap::new();
     for (pid, process) in processes {
@@ -209,7 +234,12 @@ fn newest_child(children: &HashMap<Pid, Vec<Pid>>, shell: Pid) -> Pid {
 }
 
 fn name_of(processes: &HashMap<Pid, Process>, pid: Pid) -> String {
-    let name = processes.get(&pid).map(|p| p.name().to_string_lossy().into_owned()).unwrap_or_default();
+    let Some(process) = processes.get(&pid) else { return String::new() };
+    // From argv, which is re-read each scan; the cached name is still the old program's after an exec.
+    let name = match process.cmd().first() {
+        Some(argv0) => Path::new(argv0).file_name().unwrap_or(argv0).to_string_lossy().into_owned(),
+        None => process.name().to_string_lossy().into_owned(),
+    };
     // Login shells are named `-zsh`.
     name.trim_start_matches('-').to_string()
 }
@@ -256,6 +286,27 @@ fn strip_title_glyph(title: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::{fs, process::Command, time::Duration};
+
+    #[test]
+    fn sees_a_process_that_becomes_another_program() {
+        // `sh` waits, then execs `sleep`: the same pid, a new program.
+        let mut child = Command::new("/bin/sh").args(["-c", "sleep 0.4; exec /bin/sleep 5"]).spawn().unwrap();
+        let pid = Pid::from_u32(child.id());
+        let mut system = System::new();
+        let cached = ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet);
+        system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, cached);
+        let before = name_of(system.processes(), pid);
+        std::thread::sleep(Duration::from_millis(900));
+        system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, cached);
+        let stale = name_of(system.processes(), pid);
+        reread_argv(&mut system, &[pid]);
+        let after = name_of(system.processes(), pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(before, "sh");
+        assert_eq!(stale, "sh", "sysinfo keeps the argv it read before the exec");
+        assert_eq!(after, "sleep");
+    }
 
     #[test]
     fn maps_title_glyphs() {
