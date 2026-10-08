@@ -77,6 +77,9 @@ export const api = {
       shown: enabled ? { permissions: plugin.permissions, contributes: plugin.contributes } : null,
     }),
   pluginRemove: (id: string) => invoke<void>("plugin_remove", { id }),
+  /** The `wings plugin` CLI changed a plugin. `review` means it's waiting for your approval. */
+  onPluginsChanged: (cb: (change: { id: string; review: boolean }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; review: boolean }>("plugins-changed", (e) => cb(e.payload)),
   /** Whether Claude Code is installed, and has the Wings MCP server that serves plugin tools. */
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
   /** Registers the Wings MCP server with Claude Code, for every project. */

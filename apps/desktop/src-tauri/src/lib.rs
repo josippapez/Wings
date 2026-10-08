@@ -3,6 +3,10 @@ mod detect;
 mod menu;
 #[cfg(unix)]
 pub mod bridge;
+#[cfg(unix)]
+pub mod cli;
+#[cfg(unix)]
+mod control;
 // debt: the MCP socket is Unix-only, like plugins themselves; Windows needs a named pipe here.
 #[cfg(unix)]
 mod mcp;
@@ -157,18 +161,58 @@ fn plugins_list(state: State<AppState>) -> Vec<PluginView> {
 const PACKAGE_LIMIT: u64 = 50 * 1024 * 1024;
 
 #[tauri::command(async)]
-fn plugin_install_file(app: AppHandle, state: State<AppState>, path: String) -> Res<PluginView> {
-    let size = std::fs::metadata(&path).map_err(err)?.len();
+fn plugin_install_file(app: AppHandle, path: String) -> Res<PluginView> {
+    install_file(&app, &path)
+}
+
+// The Plugins sheet and the `wings plugin` CLI (control.rs) both change plugins through these.
+
+fn install_file(app: &AppHandle, path: &str) -> Res<PluginView> {
+    let size = std::fs::metadata(path).map_err(err)?.len();
     if size > PACKAGE_LIMIT {
         return Err("The package is larger than 50 MB".into());
     }
-    let bytes = std::fs::read(&path).map_err(err)?;
-    install(&app, &state, &bytes, Source::File, None)
+    let bytes = std::fs::read(path).map_err(err)?;
+    install(app, &bytes, Source::File, None)
+}
+
+fn install_github(app: &AppHandle, url: &str) -> Res<PluginView> {
+    let repo = plugin_store::parse_repo(url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
+    let bytes = plugin_store::download_github(&repo)?;
+    install(app, &bytes, Source::Github { repo }, None)
+}
+
+/// Reinstalls a GitHub plugin from its newest release or default branch.
+fn update_plugin(app: &AppHandle, id: &str) -> Res<PluginView> {
+    let Some(Source::Github { repo }) = app.state::<AppState>().plugins.lock().unwrap().source(id) else {
+        return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
+    };
+    let bytes = plugin_store::download_github(&repo)?;
+    install(app, &bytes, Source::Github { repo }, Some(id))
+}
+
+/// Turning a plugin on approves `shown`, the access and additions the UI showed, if they still match.
+fn set_enabled(app: &AppHandle, id: &str, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
+    let view = app.state::<AppState>().plugins.lock().unwrap().set_enabled(id, enabled, shown)?;
+    if !enabled {
+        close_panels(app, id);
+    }
+    tools_changed(app);
+    Ok(view)
+}
+
+fn remove_plugin(app: &AppHandle, id: &str) -> Res<()> {
+    close_panels(app, id);
+    if let Some(old) = app.state::<AppState>().plugins.lock().unwrap().remove(id)? {
+        delete_secrets(id, &old);
+    }
+    tools_changed(app);
+    Ok(())
 }
 
 /// Installs a package and deletes the secrets of a plugin it replaced from somewhere else.
-fn install(app: &AppHandle, state: &AppState, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
-    let (view, dropped) = state.plugins.lock().unwrap().install(bytes, source, expected_id)?;
+fn install(app: &AppHandle, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Res<PluginView> {
+    let (view, dropped) = app.state::<AppState>().plugins.lock().unwrap().install(bytes, source, expected_id)?;
     if let Some(old) = dropped {
         delete_secrets(&view.manifest.id, &old);
     }
@@ -194,20 +238,13 @@ fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
 }
 
 #[tauri::command(async)]
-fn plugin_install_github(app: AppHandle, state: State<AppState>, url: String) -> Res<PluginView> {
-    let repo = plugin_store::parse_repo(&url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
-    let bytes = plugin_store::download_github(&repo)?;
-    install(&app, &state, &bytes, Source::Github { repo }, None)
+fn plugin_install_github(app: AppHandle, url: String) -> Res<PluginView> {
+    install_github(&app, &url)
 }
 
-/// Reinstalls a GitHub plugin from its newest release or default branch.
 #[tauri::command(async)]
-fn plugin_update(app: AppHandle, state: State<AppState>, id: String) -> Res<PluginView> {
-    let Some(Source::Github { repo }) = state.plugins.lock().unwrap().source(&id) else {
-        return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
-    };
-    let bytes = plugin_store::download_github(&repo)?;
-    install(&app, &state, &bytes, Source::Github { repo }, Some(&id))
+fn plugin_update(app: AppHandle, id: String) -> Res<PluginView> {
+    update_plugin(&app, &id)
 }
 
 /// The newest release version on GitHub, if the plugin came from there and the repo has releases.
@@ -217,25 +254,14 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
     plugin_store::latest_version(&repo)
 }
 
-/// Turning a plugin on approves `shown`, the access and additions the UI showed, if they still match.
 #[tauri::command]
-fn plugin_set_enabled(app: AppHandle, state: State<AppState>, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
-    let view = state.plugins.lock().unwrap().set_enabled(&id, enabled, shown)?;
-    if !enabled {
-        close_panels(&app, &id);
-    }
-    tools_changed(&app);
-    Ok(view)
+fn plugin_set_enabled(app: AppHandle, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
+    set_enabled(&app, &id, enabled, shown)
 }
 
 #[tauri::command]
-fn plugin_remove(app: AppHandle, state: State<AppState>, id: String) -> Res<()> {
-    close_panels(&app, &id);
-    if let Some(old) = state.plugins.lock().unwrap().remove(&id)? {
-        delete_secrets(&id, &old);
-    }
-    tools_changed(&app);
-    Ok(())
+fn plugin_remove(app: AppHandle, id: String) -> Res<()> {
+    remove_plugin(&app, &id)
 }
 
 /// A plugin's answer to an MCP tool call the webview handed it.

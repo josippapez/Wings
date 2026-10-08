@@ -89,6 +89,8 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [droppedPlugin, setDroppedPlugin] = useState<string | null>(null);
+  // A plugin the CLI installed or tried to turn on, waiting for approval in the Plugins sheet.
+  const [reviewPlugin, setReviewPlugin] = useState<string | null>(null);
   /** The plugin sidebar on the right, as `pluginId:sidebarId`, and every one opened so far (kept running). */
   const [rightSidebar, setRightSidebar] = useState<string | null>(null);
   const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
@@ -467,7 +469,19 @@ export default function App() {
       setPlugins(list);
       host.sync(list);
     });
-    return () => host.dispose();
+    const unlisten = api.onPluginsChanged(async ({ id, review }) => {
+      const list = await api.pluginsList();
+      setPlugins(list);
+      host.sync(list, id);
+      if (review) {
+        setReviewPlugin(id);
+        setPluginsOpen(true);
+      }
+    });
+    return () => {
+      host.dispose();
+      void unlisten.then((off) => off());
+    };
   }, []);
 
   // Plugins see every pane (with its Claude session, if any); badges go away with their pane.
@@ -667,6 +681,8 @@ export default function App() {
           onOpenChange={setPluginsOpen}
           plugins={plugins}
           dropped={droppedPlugin}
+          review={reviewPlugin}
+          onReviewHandled={() => setReviewPlugin(null)}
           onDroppedHandled={() => setDroppedPlugin(null)}
           onChanged={(list, restart) => {
             setPlugins(list);

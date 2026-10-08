@@ -10,6 +10,21 @@ Open Plugins (the puzzle icon in the title bar) and paste a GitHub repo link, ch
 
 From a GitHub link, Wings installs the newest release's `.wings-plugin` file, or the repo itself if there are no releases, and offers updates when a new release is out. That works for public repos. Share a private plugin as a `.wings-plugin` file.
 
+From a terminal or a script, use the `wings plugin` command while Wings is open:
+
+```sh
+wings plugin install ~/Downloads/cyclops.wings-plugin   # or github.com/owner/name
+wings plugin list            # --json for scripts
+wings plugin enable cyclops  # also update, disable, remove
+```
+
+A plugin installed this way still waits for you to approve its access in Wings, which opens the approval. `wings` is the app's own binary, `/Applications/Wings.app/Contents/MacOS/wings` on macOS. To put it on your PATH without starting a second copy of the app, use a small script that opens the app when it gets no arguments:
+
+```sh
+printf '#!/bin/sh\n[ $# -eq 0 ] && exec open -a Wings\nexec /Applications/Wings.app/Contents/MacOS/wings "$@"\n' > ~/.local/bin/wings
+chmod +x ~/.local/bin/wings
+```
+
 Plugins start and stop as you turn them on and off, with no restart. Installed plugins live in `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`). Dev builds also load this repo's `plugins/` folder at startup, always on.
 
 ## Packaging

@@ -5411,6 +5411,7 @@ name = "wings"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "keyring",
  "portable-pty",
  "serde",

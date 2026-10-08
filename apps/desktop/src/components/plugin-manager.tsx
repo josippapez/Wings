@@ -175,6 +175,9 @@ export function PluginManager(props: {
   /** A dropped `.wings-plugin` file waiting to be installed. */
   dropped: string | null;
   onDroppedHandled: () => void;
+  /** A plugin id to open the approval for, from the CLI. */
+  review: string | null;
+  onReviewHandled: () => void;
   /** New list from Rust; `restart` names a plugin that was just reinstalled. */
   onChanged: (plugins: PluginView[], restart?: string) => void;
 }) {
@@ -231,6 +234,14 @@ export function PluginManager(props: {
     onDroppedHandled();
     void install("file", () => api.pluginInstallFile(dropped));
   }, [dropped]);
+
+  const { review, onReviewHandled } = props;
+  useEffect(() => {
+    const plugin = review && props.plugins.find((p) => p.id === review);
+    if (!plugin) return;
+    onReviewHandled();
+    setApproving(plugin);
+  }, [review, props.plugins]);
 
   // Look for newer releases of GitHub plugins each time the manager opens.
   const githubIds = props.plugins.filter((p) => p.source?.kind === "github").map((p) => p.id).join(",");

@@ -1,6 +1,7 @@
 //! The app side of the Wings MCP server. Claude Code starts `wings --mcp` (bridge.rs), which connects here
 //! over a socket only this user can open. Here it lists the tools of plugins that are on and runs them in
-//! the plugin's own code, so plugin tools come and go without touching Claude Code's settings.
+//! the plugin's own code, so plugin tools come and go without touching Claude Code's settings. The `wings plugin`
+//! CLI uses the same socket (control.rs).
 
 use std::{
     collections::HashMap,
@@ -82,7 +83,12 @@ fn serve(app: &AppHandle, stream: UnixStream) {
                 let result = call(app, name, arguments, ppid).unwrap_or_else(|text| ToolResult { text, is_error: true });
                 json!({ "id": id, "result": { "content": [{ "type": "text", "text": result.text }], "isError": result.is_error } })
             }
-            _ => json!({ "id": id, "error": "unknown op" }),
+            Some(op) => match crate::control::handle(app, op, &request) {
+                Some(Ok(result)) => json!({ "id": id, "result": result }),
+                Some(Err(error)) => json!({ "id": id, "error": error }),
+                None => json!({ "id": id, "error": "unknown op" }),
+            },
+            None => json!({ "id": id, "error": "unknown op" }),
         };
         let mut out = writer.lock().unwrap();
         if writeln!(out, "{reply}").is_err() {

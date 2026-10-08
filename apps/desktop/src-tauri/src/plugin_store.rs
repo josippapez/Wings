@@ -208,6 +208,13 @@ impl Store {
         Ok(self.view(id).expect("known plugin"))
     }
 
+    /// What the plugin was approved for, while that still matches what its manifest asks for.
+    pub fn current_grant(&self, id: &str) -> Result<Option<Grant>, String> {
+        let plugin = self.plugins.get(id).ok_or_else(|| format!("unknown plugin {id}"))?;
+        let grant = Grant::of(&plugin.manifest);
+        Ok(self.entries.get(id).and_then(|e| e.approved.clone()).filter(|approved| *approved == grant))
+    }
+
     /// Returns the plugin's secrets, for the caller to delete from the keychain.
     pub fn remove(&mut self, id: &str) -> Result<Option<SecretScope>, String> {
         if self.dev.contains(id) {
