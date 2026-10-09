@@ -1,8 +1,8 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.4.0",
-  "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks, the diff and review comments.",
+  "version": "0.5.0",
+  "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks and why they failed, the diff and review comments.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -44,6 +44,17 @@
     "ui": [
       "badges",
       "diff"
+    ],
+    "mcpTools": [
+      {
+        "name": "failing_checks",
+        "description": "Lists the failed CI checks of the pull request for this pane's branch (GitHub, GitLab or Azure DevOps): each failed check and step, with the end of its log around the error. Use it to fix a failing build without the user pasting the log.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
     ]
   }
 }

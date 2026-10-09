@@ -3,6 +3,7 @@
 // - GitHub: in a Claude pane, the PR Claude Code recorded in the transcript (`pr-link`); else the PR for the branch (`gh`).
 // - Azure DevOps: the PR for the branch (`az repos`), diff from local git, comments from threads.
 // - GitLab: the merge request for the branch, its pipeline, approvals and discussions, all through `glab api`.
+// When checks fail, the badge says which step failed and why, and Claude can read the logs with `failing_checks`.
 
 const LINK_POLL_MS = 15_000;
 const LOOKUP_TTL_MS = 60_000;
@@ -22,7 +23,8 @@ const sync = new Map();
 const lookups = new Map();
 /** PR url → normalized status, or { error } */
 const status = new Map();
-const inFlight = new Set();
+/** PR url → its running status refresh. */
+const inFlight = new Map();
 /** PRs refreshed because you clicked Refresh; background polls don't show a spinner. */
 const manual = new Set();
 /** PR url → { key, patch, comments }, fetched ahead so "View changes" opens instantly. */
@@ -134,8 +136,8 @@ async function findAzure(cwd, remote, branch) {
   return { provider: "azure", url: `${base}/pullrequest/${pr.pullRequestId}`, number: pr.pullRequestId, repo: `${remote.project}/${remote.repo}`, remote, cwd, raw: pr };
 }
 
-/** `glab api` against the remote's host. Returns parsed JSON or throws, noting a signed-out or missing `glab`. */
-async function glab(remote, endpoint, { paginate = false } = {}) {
+/** `glab api` against the remote's host. Returns parsed JSON (or the text, with `raw`) or throws, noting a signed-out or missing `glab`. */
+async function glab(remote, endpoint, { paginate = false, raw = false } = {}) {
   const key = `gitlab:${remote.host}`;
   let out;
   try {
@@ -144,7 +146,7 @@ async function glab(remote, endpoint, { paginate = false } = {}) {
     problems.set(key, { login: false, message: String(error.message ?? error) });
     throw error;
   }
-  if (out.code === 0) return JSON.parse(out.stdout);
+  if (out.code === 0) return raw ? out.stdout : JSON.parse(out.stdout);
   // A private project looks missing (404) to a signed-out user, so ask glab whether it's signed in.
   const signedOut =
     /\b401\b/.test(out.stderr) || (/\b404\b/.test(out.stderr) && (await wings.exec("glab", ["auth", "status", "--hostname", remote.host])).code !== 0);
@@ -208,25 +210,29 @@ function linkFor(url) {
   return [...links.values()].find((l) => l.url === url);
 }
 
-async function refreshStatus(url, { byUser = false } = {}) {
+function refreshStatus(url, { byUser = false } = {}) {
   const link = linkFor(url);
-  if (!link) return;
+  if (!link) return Promise.resolve();
   if (byUser) manual.add(url);
-  if (inFlight.has(url)) return;
-  inFlight.add(url);
+  if (inFlight.has(url)) return inFlight.get(url);
+  const run = (async () => {
+    try {
+      const load = { github: () => githubStatus(link), azure: () => azureChecks(link), gitlab: () => gitlabStatus(link) }[link.provider];
+      status.set(url, await load());
+    } catch (error) {
+      status.set(url, { error: String(error.message ?? error) });
+    } finally {
+      inFlight.delete(url);
+      manual.delete(url);
+      render();
+    }
+    const st = status.get(url);
+    if (st && !st.error && diffs.get(url)?.key !== st.key) void loadDiff(url).catch(() => {});
+    if (st?.failing?.length && failures.get(url)?.key !== failKey(st)) void loadFailures(url);
+  })();
+  inFlight.set(url, run);
   render();
-  try {
-    const load = { github: () => githubStatus(url), azure: () => azureChecks(link), gitlab: () => gitlabStatus(link) }[link.provider];
-    status.set(url, await load());
-  } catch (error) {
-    status.set(url, { error: String(error.message ?? error) });
-  } finally {
-    inFlight.delete(url);
-    manual.delete(url);
-    render();
-  }
-  const st = status.get(url);
-  if (st && !st.error && diffs.get(url)?.key !== st.key) void loadDiff(url).catch(() => {});
+  return run;
 }
 
 function counts(results) {
@@ -235,19 +241,26 @@ function counts(results) {
   return c;
 }
 
-async function githubStatus(url) {
-  const out = await wings.exec("gh", ["pr", "view", url, "--json", GH_FIELDS]);
+async function githubStatus(link) {
+  const out = await wings.exec("gh", ["pr", "view", link.url, "--json", GH_FIELDS]);
   checkGhLogin(out);
   if (out.code !== 0) throw new Error(out.stderr.trim() || "gh failed");
   const pr = JSON.parse(out.stdout);
-  const checks = counts(
-    (pr.statusCheckRollup ?? []).map((c) => {
-      const r = c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : "PENDING";
-      if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(r)) return "passed";
-      if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(r)) return "failed";
-      return "running";
-    }),
-  );
+  const results = (pr.statusCheckRollup ?? []).map((c) => {
+    const r = c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : "PENDING";
+    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(r)) return "passed";
+    if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(r)) return "failed";
+    return "running";
+  });
+  const checks = counts(results);
+  const failing = (pr.statusCheckRollup ?? [])
+    .filter((_, i) => results[i] === "failed")
+    .map((c) => {
+      const url = c.detailsUrl ?? c.targetUrl ?? null;
+      // A GitHub Actions job; other apps' checks only link to their own page.
+      const job = url?.match(/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+\/job\/(\d+)/)?.[1];
+      return { id: url ?? c.name ?? c.context, name: c.name ?? c.context, url, job, summary: c.description || null };
+    });
   let [label, tone, icon] = ["Open", "info", "pr-open"];
   if (pr.state === "MERGED") [label, tone, icon] = ["Merged", "merged", "pr-merged"];
   else if (pr.state === "CLOSED") [label, tone, icon] = ["Closed", "neutral", "pr-closed"];
@@ -262,7 +275,7 @@ async function githubStatus(url) {
   return {
     key: pr.updatedAt,
     title: pr.title,
-    label, tone, icon, checks, review,
+    label, tone, icon, checks, review, failing,
     changes: `+${pr.additions} −${pr.deletions} in ${pr.changedFiles} files`,
     branch: `${pr.headRefName} → ${pr.baseRefName}`,
     updated: pr.updatedAt,
@@ -310,13 +323,19 @@ const MIN_REVIEWERS_POLICY = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd";
 async function azureChecks(link) {
   const out = await wings.exec("az", ["repos", "pr", "policy", "list", "--id", String(link.number), "--organization", link.remote.org, "-o", "json"]);
   const records = out.code === 0 ? JSON.parse(out.stdout) : [];
-  const checks = counts(
-    (Array.isArray(records) ? records : (records.value ?? []))
-      .filter((r) => r.status !== "notApplicable" && r.configuration?.isEnabled !== false)
-      .filter((r) => r.configuration?.type?.id !== MIN_REVIEWERS_POLICY)
-      .map((r) => (r.status === "approved" ? "passed" : r.status === "rejected" || r.status === "broken" ? "failed" : "running")),
-  );
-  return azureStatus(link.raw, checks);
+  const policies = (Array.isArray(records) ? records : (records.value ?? []))
+    .filter((r) => r.status !== "notApplicable" && r.configuration?.isEnabled !== false)
+    .filter((r) => r.configuration?.type?.id !== MIN_REVIEWERS_POLICY);
+  const results = policies.map((r) => (r.status === "approved" ? "passed" : r.status === "rejected" || r.status === "broken" ? "failed" : "running"));
+  // A build policy's context names the build that failed; other policies, like comment requirements, have none.
+  const failing = policies
+    .filter((_, i) => results[i] === "failed")
+    .map((r) => {
+      const name = r.configuration?.settings?.displayName ?? r.context?.buildDefinitionName ?? r.configuration?.type?.displayName ?? "Policy";
+      const build = r.context?.buildId ?? null;
+      return { id: build ?? name, name, build };
+    });
+  return { ...azureStatus(link.raw, counts(results)), failing };
 }
 
 /** GitLab status from the MR, its approvals and its head pipeline's jobs. */
@@ -329,17 +348,18 @@ async function gitlabStatus(link) {
     pipeline ? glab(link.remote, `projects/${pipeline.project_id}/pipelines/${pipeline.id}/jobs?per_page=100`, { paginate: true }).catch(() => []) : [],
   ]);
   // Manual jobs haven't run and don't block, so they don't count. A failure that's allowed to fail passes.
-  const checks = counts(
-    jobs
-      .filter((j) => j.status !== "manual")
-      .map((j) =>
-        j.status === "success" || j.status === "skipped" || (j.status === "failed" && j.allow_failure)
-          ? "passed"
-          : j.status === "failed" || j.status === "canceled"
-            ? "failed"
-            : "running",
-      ),
+  const counted = jobs.filter((j) => j.status !== "manual");
+  const results = counted.map((j) =>
+    j.status === "success" || j.status === "skipped" || (j.status === "failed" && j.allow_failure)
+      ? "passed"
+      : j.status === "failed" || j.status === "canceled"
+        ? "failed"
+        : "running",
   );
+  const checks = counts(results);
+  const failing = counted
+    .filter((_, i) => results[i] === "failed")
+    .map((j) => ({ id: j.id, name: j.name, job: j.id, project: pipeline.project_id, url: j.web_url, summary: j.status === "canceled" ? "Canceled" : null }));
   const merge = mr.detailed_merge_status;
   let [label, tone, icon] = ["In review", "info", "pr-open"];
   if (mr.state === "merged") [label, tone, icon] = ["Merged", "merged", "pr-merged"];
@@ -358,12 +378,159 @@ async function gitlabStatus(link) {
     // A new push changes the head commit, which is what invalidates the cached diff.
     key: mr.sha,
     title: mr.title,
-    label, tone, icon, checks, review,
+    label, tone, icon, checks, review, failing,
     changes: mr.changes_count ? `${mr.changes_count} files` : null,
     branch: `${mr.source_branch} → ${mr.target_branch}`,
     updated: mr.updated_at,
   };
 }
+
+// ---------- failed checks ----------
+
+const LOG_LINES = 150;
+const LOG_CHARS = 8_000;
+const TOOL_CHARS = 30_000;
+/** PR url → { key, items, list }: details of the failed checks `key` names. `items` is the load, `list` its result. */
+const failures = new Map();
+
+const failKey = (st) => st.failing.map((f) => f.id).join(" ");
+
+// These lines say a step failed, not why.
+const GENERIC = /\b(exit|exited|exiting|completed|failed) with (exit )?code|^ERROR: Job failed/i;
+// A line the tool marked as an error beats one that only mentions errors, like a table header.
+const MARKED = /\[(error|fail|failed|fatal)\]|^\s*(error|fatal|failed)\b|\blevel=(error|fatal)\b|^\s*[✖✗×]/i;
+const ERRORISH = /error|fail|violation|vulnerab|\[warn\]|panic|exception/i;
+
+/** Log lines without colours, timestamps, GitLab section markers, progress redraws or the CI's `##[...]` markup. */
+function cleanLog(lines) {
+  return lines.map(
+    (l) =>
+      l
+        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+        .replace(/section_(?:start|end):\d+:[^\r\n]*\r?/g, "")
+        .split("\r")
+        .filter(Boolean)
+        .at(-1)
+        ?.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "")
+        .replace(/^##\[(error|warning)\]/, "$1: ")
+        .replace(/^##\[\w+\]/, "")
+        .trimEnd() ?? "",
+  );
+}
+
+/** The line that best says what went wrong: the CI's own error, else the last line that reads like one. */
+function summarize(lines, issues) {
+  const text = lines.filter((l) => l.trim() && !GENERIC.test(l.trim()));
+  return (
+    issues.find((m) => !GENERIC.test(m)) ??
+    text.findLast((l) => MARKED.test(l)) ??
+    text.findLast((l) => ERRORISH.test(l)) ??
+    text.at(-1) ??
+    "Failed"
+  ).trim();
+}
+
+/** The end of the log, where the error is. */
+function tail(lines) {
+  const text = lines.slice(-LOG_LINES).join("\n").trim();
+  return text.length > LOG_CHARS ? text.slice(-LOG_CHARS).replace(/^[^\n]*\n/, "") : text;
+}
+
+const detail = (check, step, lines, issues, url) => ({ check, step, summary: summarize(lines, issues), log: tail(lines), url });
+
+/** A failed GitHub Actions job: its failed step and the end of its log. Unlike `gh run view`, this works while the rest of the run is still going. */
+async function githubFailure(link, f) {
+  if (!f.job) return [{ check: f.name, summary: f.summary ?? "Failed", log: "", url: f.url }];
+  const [job, log] = await Promise.all([
+    wings.exec("gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}`]),
+    // The log keeps the CI's colours, which gh only prints with this flag.
+    wings.exec("gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}/logs`, "--allow-escape-sequences"]),
+  ]);
+  if (log.code !== 0) throw new Error(log.stderr.trim().split("\n").at(-1) || "gh api failed");
+  const step = job.code === 0 ? JSON.parse(job.stdout).steps?.find((s) => s.conclusion === "failure")?.name : null;
+  let lines = cleanLog(log.stdout.split("\n"));
+  // The runner's own cleanup follows the failed step and would push the error out of the tail.
+  const cleanup = lines.indexOf("Post job cleanup.");
+  if (cleanup >= 0) lines = lines.slice(0, cleanup);
+  return [detail(f.name, step ?? null, lines, [], f.url)];
+}
+
+/** A failed Azure DevOps policy: for a build, its failed tasks from the build timeline and each task's log. */
+async function azureFailure(link, f) {
+  if (!f.build) return [{ check: f.name, summary: "Not met", log: "", url: link.url }];
+  const { org, project: name } = link.remote;
+  const invoke = async (resource, params) => {
+    const out = await wings.exec("az", [
+      "devops", "invoke", "--area", "build", "--resource", resource,
+      "--route-parameters", `project=${name}`, `buildId=${f.build}`, ...params,
+      "--organization", org, "--api-version", "7.1", "-o", "json",
+    ]);
+    if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az failed");
+    return JSON.parse(out.stdout);
+  };
+  const url = `${org}/${encodeURIComponent(name)}/_build/results?buildId=${f.build}&view=logs`;
+  const { records = [] } = await invoke("timeline", []);
+  const tasks = records.filter((r) => r.type === "Task" && r.result === "failed");
+  if (!tasks.length) return [{ check: f.name, summary: "Failed", log: "", url }];
+  return Promise.all(
+    tasks.map(async (r) => {
+      const issues = (r.issues ?? []).filter((i) => i.type === "error").map((i) => i.message ?? "");
+      let lines = r.log ? cleanLog((await invoke("logs", [`logId=${r.log.id}`])).value ?? []) : [];
+      // A script task's log starts with the task's description and the script; its output follows this line.
+      const start = lines.findIndex((l) => l.includes("Starting Command Output"));
+      if (start >= 0) lines = lines.slice(start + 1);
+      return detail(f.name, r.name, lines, issues, url);
+    }),
+  );
+}
+
+/** A failed GitLab job: its trace. */
+async function gitlabFailure(link, f) {
+  if (f.summary) return [{ check: f.name, summary: f.summary, log: "", url: f.url }];
+  const trace = await glab(link.remote, `projects/${f.project}/jobs/${f.job}/trace`, { raw: true });
+  return [detail(f.name, null, cleanLog(trace.split("\n")), [], f.url)];
+}
+
+/** Details of the PR's failed checks, fetched once per set of failures rather than on every poll. */
+function loadFailures(url) {
+  const st = status.get(url);
+  const key = failKey(st);
+  const cached = failures.get(url);
+  if (cached?.key === key) return cached.items;
+  const link = linkFor(url);
+  const load = { github: githubFailure, azure: azureFailure, gitlab: gitlabFailure }[link.provider];
+  const items = Promise.all(
+    st.failing.map((f) =>
+      load(link, f).catch((error) => [{ check: f.name, summary: `${f.summary ?? "Failed"} (no log: ${String(error.message ?? error)})`, log: "", url: f.url }]),
+    ),
+  ).then((lists) => lists.flat());
+  const entry = { key, items, list: null };
+  failures.set(url, entry);
+  void items.then((list) => {
+    entry.list = list;
+    render();
+  });
+  return items;
+}
+
+wings.onTool("failing_checks", async (_input, { paneId }) => {
+  const link = paneId && links.get(paneId);
+  if (!link) return "Wings found no pull request for this pane's branch, so there are no checks to show.";
+  await refreshStatus(link.url);
+  const st = status.get(link.url);
+  if (!st) return "Wings found no pull request for this pane's branch, so there are no checks to show.";
+  if (st.error) throw new Error(st.error);
+  const head = `Pull request ${refOf(link)}: ${st.title}\n${link.url}`;
+  if (!st.failing.length) return `${head}\n\nNo checks have failed: ${st.checks.passed} passed, ${st.checks.running} running.`;
+  const list = await loadFailures(link.url);
+  let text = `${head}\n\n${list.length} failed:`;
+  for (const f of list) {
+    text += `\n\n## ${f.step ? `${f.check} › ${f.step}` : f.check}\n${f.summary}`;
+    if (f.url) text += `\n${f.url}`;
+    if (f.log) text += `\n\nEnd of the log:\n\`\`\`\n${f.log}\n\`\`\``;
+  }
+  return text.length > TOOL_CHARS ? `${text.slice(0, TOOL_CHARS)}\n…` : text;
+});
 
 // ---------- diff and comments ----------
 
@@ -558,6 +725,8 @@ function badgeFor(link, st, local) {
   const total = passed + failed + running;
   const { ahead, behind } = local ?? { ahead: 0, behind: 0 };
   const pending = syncText({ ahead, behind });
+  const fails = failed ? failures.get(link.url) : null;
+  const details = fails?.key === failKey(st) ? (fails.list ?? []) : [];
   return {
     label: `${ref} ${st.label}`,
     counts: [
@@ -576,6 +745,7 @@ function badgeFor(link, st, local) {
         value: total ? `${passed} passed, ${failed} failed, ${running} running` : "None",
         tone: failed ? "danger" : running ? "warning" : total ? "success" : undefined,
       },
+      ...details.slice(0, 3).map((f) => ({ label: "Failed", value: `${f.step ?? f.check}: ${f.summary}`, tone: "danger" })),
       ...(st.changes ? [{ label: "Changes", value: st.changes }] : []),
       { label: "Branch", value: st.branch },
       ...(pending ? [{ label: "Local", value: pending.replace("push", "push to the PR"), tone: "info" }] : []),
