@@ -1,4 +1,4 @@
-import { Fragment, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   CalendarIcon,
@@ -70,6 +70,19 @@ export function TitleBar(props: {
   const inline = props.pluginButtons.slice(0, INLINE_BUTTONS);
   const overflow = props.pluginButtons.slice(INLINE_BUTTONS);
   const more = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const tabCount = useRef(props.tabs.length);
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    // A new tab opens at the end, still scaling in, so its size isn't final yet: go to the end instead.
+    if (props.tabs.length > tabCount.current) {
+      el.scrollTo({ left: el.scrollWidth, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    } else {
+      el.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    tabCount.current = props.tabs.length;
+  }, [props.activeTabId, props.tabs.length]);
   return (
     <header
       data-tauri-drag-region="deep"
@@ -89,7 +102,14 @@ export function TitleBar(props: {
       <LayoutGroup id="tabs">
         {/* Base UI Tabs for the tab strip (arrow keys move between tabs); the sliding pill is ours. */}
         <Tabs value={props.activeTabId} onValueChange={(id) => props.onSelect(String(id))} className="min-w-0 flex-1 items-center gap-0 data-horizontal:flex-row">
-          <TabsList variant="line" aria-label="Terminals" className="h-auto min-w-0 justify-start gap-0.5 overflow-x-auto p-0">
+          {/* Scrolls sideways when tabs don't fit, without scrollbars: WebKit flashed them each time a tab
+              animated in. The active tab scrolls into view instead. */}
+          <TabsList
+            ref={list}
+            variant="line"
+            aria-label="Terminals"
+            className="h-auto min-w-0 justify-start gap-0.5 overflow-x-auto overflow-y-hidden p-0 [scrollbar-width:none]"
+          >
             <AnimatePresence initial={false} mode="popLayout">
               {props.tabs.map((tab, i) => {
                 const active = tab.id === props.activeTabId;

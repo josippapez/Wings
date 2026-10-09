@@ -47,6 +47,10 @@ const SIDES = { left: { min: 200, max: 420, initial: 248 }, right: { min: 250, m
 /** A saved width out of range, like a near-zero one WebKit can report while a panel collapses, falls back. */
 const fit = (side: keyof Widths, width: number) => (width >= SIDES[side].min && width <= SIDES[side].max ? width : SIDES[side].initial);
 
+/** The library gives each panel an inline `overflow: auto`, so content that briefly overflows while it animates,
+ * like a new tab's panes, flashed scrollbars. Panes and sidebars scroll inside themselves. */
+const PANEL_STYLE = { overflow: "hidden" } as const;
+
 /** Opens a side panel at its saved width, or closes it. */
 function place(panel: PanelImperativeHandle | null, open: boolean, width: number, force: boolean) {
   if (!panel) return;
@@ -660,7 +664,7 @@ export default function App() {
               maxSize={SIDES.left.max}
               defaultSize={SIDES.left.initial}
               groupResizeBehavior="preserve-pixel-size"
-              className="overflow-hidden"
+              style={PANEL_STYLE}
             >
               <Sidebar
                 open={sidebarOpen}
@@ -677,7 +681,7 @@ export default function App() {
               />
             </ResizablePanel>
             <SideHandle disabled={!sidebarOpen} />
-            <ResizablePanel id="main" minSize={320}>
+            <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
               <main className="relative h-full min-h-0 min-w-0">
                 {tabs.map((tab) => (
                   <PaneGrid
@@ -714,7 +718,7 @@ export default function App() {
               collapsedThreshold={10}
               defaultSize={0}
               groupResizeBehavior="preserve-pixel-size"
-              className="overflow-hidden"
+              style={PANEL_STYLE}
             >
               <RightSidebar
                 open={rightRef}
