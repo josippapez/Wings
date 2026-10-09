@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "history_search",
     "plugin_exec",
     "plugin_transcript",
+    "plugin_statusline",
     "plugin_open_url",
     "plugin_open_pane",
     "plugin_focus_pane",

@@ -36,6 +36,7 @@
     "allow-plugin-panel-toggle",
     "allow-plugin-exec",
     "allow-plugin-transcript",
+    "allow-plugin-statusline",
     "allow-plugin-open-url",
     "allow-plugin-open-pane",
     "allow-plugin-focus-pane",
