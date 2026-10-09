@@ -183,6 +183,13 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
         return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
     }
+    let flags_ok = |e: &str| {
+        let (_, flags) = exec_entry(e);
+        e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && !f.is_empty() && f.iter().all(|w| w.starts_with('-')))
+    };
+    if let Some(entry) = manifest.permissions.exec.iter().find(|e| !flags_ok(e)) {
+        return Err(format!("exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state]"));
+    }
     if let Some(entry) = manifest.permissions.post.iter().find(|e| post_entry(e).is_none()) {
         return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));
     }
@@ -256,11 +263,24 @@ fn read_pipe(pipe: impl Read + Send + 'static, on_line: Option<OnLine>) -> JoinH
     })
 }
 
-/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`.
+/// An exec entry split into its command and, from a trailing `[...]`, the only flags it allows.
+fn exec_entry(entry: &str) -> (&str, Option<Vec<&str>>) {
+    match entry.split_once('[') {
+        Some((command, flags)) => (command, Some(flags.trim_end_matches(']').split_whitespace().collect())),
+        None => (entry, None),
+    }
+}
+
+/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`, and
+/// `az boards work-item update [--id --state]` allows that command with no flags but those two.
 fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
     plugin.manifest.permissions.exec.iter().any(|entry| {
-        let mut words = entry.split_whitespace();
-        words.next() == Some(program) && words.enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word))
+        let (command, flags) = exec_entry(entry);
+        let mut words = command.split_whitespace();
+        words.next() == Some(program)
+            && words.enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word))
+            // Exact names only: az would take `--stat` for `--state`, so an abbreviation counts as another flag.
+            && flags.is_none_or(|flags| args.iter().filter(|a| a.starts_with('-')).all(|a| flags.contains(&a.split('=').next().unwrap_or(a))))
     })
 }
 
@@ -961,6 +981,28 @@ mod tests {
         assert!(!may_exec(&p, "az", &["boards".into(), "work-item".into(), "delete".into(), "--id".into(), "1".into()]));
         assert!(!may_exec(&p, "az", &["rest".into()]));
         assert!(p.manifest.permissions.post.is_empty());
+        // Only the flags its entry lists: state, not the title, fields or anything else.
+        assert!(may_exec(&p, "az", &update(&["--state=Done"])));
+        for extra in [&["--title", "x"][..], &["--fields", "System.Title=x"], &["--assigned-to", "x"], &["--stat", "Done"], &["--discussion", "x"]] {
+            assert!(!may_exec(&p, "az", &update(extra)), "{extra:?}");
+        }
+    }
+
+    #[test]
+    fn exec_flag_lists_are_checked_on_load() {
+        let dir = std::env::temp_dir().join(format!("wings-flags-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |entry: &str| {
+            fs::write(dir.join("wings-plugin.json"), serde_json::json!({ "id": "t", "name": "T", "version": "0", "api": 1, "main": "main.js", "permissions": { "exec": [entry] } }).to_string()).unwrap();
+            load(&dir)
+        };
+        assert!(manifest("az boards work-item update [--id --state]").is_ok());
+        assert!(manifest("git branch --show-current").is_ok());
+        for bad in ["az x [--id", "az x [id]", "az x []", "az x [--id] y", "az x [--a] [--b]"] {
+            assert!(manifest(bad).is_err(), "{bad}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn post_request(program: &str, url: &str, host: Option<&str>) -> PostRequest {

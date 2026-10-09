@@ -10,7 +10,7 @@
       "git remote get-url",
       "git branch --show-current",
       "az boards work-item show",
-      "az boards work-item update",
+      "az boards work-item update [--id --state --organization -o]",
       "az devops invoke",
       "az login"
     ],
