@@ -1,0 +1,26 @@
+{
+  "id": "work-item",
+  "name": "Work item",
+  "version": "0.1.0",
+  "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": [
+      "git remote get-url",
+      "git branch --show-current",
+      "az boards work-item show",
+      "az boards work-item update",
+      "az devops invoke",
+      "az login"
+    ],
+    "openUrl": [
+      "https://dev.azure.com/"
+    ]
+  },
+  "contributes": {
+    "ui": [
+      "badges"
+    ]
+  }
+}

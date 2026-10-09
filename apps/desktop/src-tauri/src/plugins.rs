@@ -928,6 +928,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn work_item_calls_pass_its_own_manifest() {
+        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
+        let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
+        let p = Plugin { manifest, dir: dir.to_path_buf() };
+        let org = "https://dev.azure.com/o";
+        let calls: &[(&str, &[&str])] = &[
+            ("git", &["remote", "get-url", "origin"]),
+            ("git", &["branch", "--show-current"]),
+            ("az", &["boards", "work-item", "show", "--id", "123456", "--organization", org, "-o", "json"]),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "wit", "--resource", "workItemTypeStates", "--route-parameters",
+                    "project=My Project", "type=Tech Story", "--api-version", "7.1", "--organization", org, "-o", "json",
+                ],
+            ),
+            ("az", &["boards", "work-item", "update", "--id", "123456", "--state", "Ready for Peer Review/QA", "--organization", org, "-o", "json"]),
+            ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+        ];
+        for (program, args) in calls {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+        }
+        // The update entry can't read a file into a field or the state, and can't reach other commands.
+        let update = |extra: &[&str]| -> Vec<String> { ["boards", "work-item", "update", "--id", "1"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        for extra in [&["--state", "@/etc/passwd"][..], &["--fields", "System.Title=@/etc/passwd"], &["--description=@notes.md"], &["-f", "x=1"], &["-d", "x"]] {
+            assert!(update(extra).iter().any(|a| is_unsafe_flag("az", a)), "{extra:?}");
+        }
+        assert!(!may_exec(&p, "az", &["boards".into(), "work-item".into(), "delete".into(), "--id".into(), "1".into()]));
+        assert!(!may_exec(&p, "az", &["rest".into()]));
+        assert!(p.manifest.permissions.post.is_empty());
+    }
+
     fn post_request(program: &str, url: &str, host: Option<&str>) -> PostRequest {
         let fields = serde_json::json!({ "body": "Thanks, fixed" }).as_object().unwrap().clone();
         PostRequest { program: program.into(), url: url.into(), host: host.map(String::from), fields }
