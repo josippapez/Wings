@@ -233,8 +233,17 @@ export function TitleBar(props: {
                   onClick={() => props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect())}
                 >
                   <Icon aria-hidden />
-                  <span className="flex-1">{button.title}</span>
-                  {button.label && <span className="text-done tabular-nums">{button.label}</span>}
+                  <span className="flex-1 whitespace-nowrap">{button.title}</span>
+                  {button.label && (
+                    <span
+                      className={cn(
+                        "ml-3 max-w-56 truncate whitespace-nowrap tabular-nums",
+                        button.tone === "warning" ? "text-working" : button.tone === "danger" ? "text-blocked" : "text-done",
+                      )}
+                    >
+                      {button.label}
+                    </span>
+                  )}
                 </DropdownMenuItem>
               );
             })}
