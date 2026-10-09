@@ -211,7 +211,7 @@ export function TitleBar(props: {
               />
             )}
             <Icon />
-            {button.label && <span className="text-[12px] font-medium tabular-nums">{button.label}</span>}
+            {button.label && <span className="max-w-72 truncate text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>
         );
       })}
