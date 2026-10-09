@@ -20,11 +20,16 @@ async function install(update: Update) {
   }
 }
 
-async function checkForUpdate() {
+/** `manual` is the menu's Check for Updates: it also says when you're up to date or the check failed. */
+export async function checkForUpdate({ manual = false } = {}) {
   if (installing) return;
+  if (manual) toast.loading("Checking for updates", { id: TOAST_ID, duration: Infinity });
   try {
     const update = await check();
-    if (!update) return;
+    if (!update) {
+      if (manual) toast.success("Wings is up to date", { id: TOAST_ID, duration: 4000 });
+      return;
+    }
     toast(`Wings ${update.version} is available`, {
       id: TOAST_ID,
       duration: Infinity,
@@ -34,6 +39,7 @@ async function checkForUpdate() {
   } catch (err) {
     // Offline and rate-limited checks are routine; the next one tries again.
     console.warn("update check failed", err);
+    if (manual) toast.error("Couldn't check for updates", { id: TOAST_ID, description: String(err), duration: 8000 });
   }
 }
 

@@ -24,7 +24,7 @@ import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
 import { resumeCommand, shellQuote } from "@/lib/resume";
-import { startUpdateChecks } from "@/lib/updater";
+import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
 /** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch; `args` its flags. */
@@ -549,6 +549,7 @@ export default function App() {
   // The menu owns ⌘W (so it never closes the window); it forwards it here.
   useEffect(() => {
     const unlisten = api.onMenu((id) => {
+      if (id === "check-updates") return void checkForUpdate({ manual: true });
       if (id !== "close-pane") return;
       const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
       if (tab) closePane(tab.focusedPane);

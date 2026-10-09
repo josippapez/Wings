@@ -14,6 +14,7 @@ const CLOSE_PANE: &str = "Ctrl+Shift+W";
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let close_pane = MenuItemBuilder::with_id("close-pane", "Close Pane").accelerator(CLOSE_PANE).build(app)?;
+    let check_updates = MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
     let mut file = SubmenuBuilder::new(app, "File").item(&close_pane);
     #[cfg(target_os = "macos")]
     {
@@ -23,7 +24,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        file = file.separator().quit();
+        file = file.separator().item(&check_updates).separator().quit();
     }
     let edit = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -41,6 +42,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     {
         let app_menu = SubmenuBuilder::new(app, "Wings")
             .about(None)
+            .item(&check_updates)
             .separator()
             .services()
             .separator()
@@ -61,8 +63,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id().as_ref() {
-        "close-pane" => {
-            let _ = app.emit("menu", "close-pane");
+        id @ ("close-pane" | "check-updates") => {
+            let _ = app.emit("menu", id);
         }
         "close-window" => {
             if let Some(window) = app.get_webview_window("main") {
