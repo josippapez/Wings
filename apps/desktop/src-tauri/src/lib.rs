@@ -1078,6 +1078,11 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     window.set_always_on_top(true)?;
                     window.set_size(tauri::LogicalSize::new(1440.0, 900.0))?;
+                    // `WINGS_BENCH_DPR=2` opens it on a Retina screen, `1` on a standard one.
+                    let dpr = std::env::var("WINGS_BENCH_DPR").ok().and_then(|v| v.parse::<f64>().ok());
+                    if let Some(screen) = dpr.and_then(|dpr| window.available_monitors().ok()?.into_iter().find(|m| m.scale_factor() == dpr)) {
+                        window.set_position(*screen.position())?;
+                    }
                 }
             } else {
                 // Not while benchmarking: the MCP socket would replace the one of the Wings you're using.

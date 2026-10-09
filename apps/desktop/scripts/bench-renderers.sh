@@ -3,7 +3,7 @@
 # replayed into 1, 4 and 12 panes (and 12 with 4 shown) with xterm.js DOM, xterm.js WebGL, and the Rust-parsed canvas
 # prototype (one canvas per pane, and one shared). Each run opens a Wings window, which takes focus, and quits itself;
 # about 3 to 4 minutes in all. Writes one JSON report per run to the folder given (default bench-results) and prints
-# a table.
+# a table. WINGS_BENCH_DPR=2 (or 1) puts the window on a screen with that scale factor.
 #
 # Build first: pnpm tauri build --no-bundle --features bench-canvas
 set -eu
