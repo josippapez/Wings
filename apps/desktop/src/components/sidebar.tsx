@@ -3,6 +3,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { useState } from "react";
 import {
+  CircleDashedIcon,
   CopyIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -54,6 +55,9 @@ export function Sidebar(props: {
   focusedPaneId: string | null;
   onSelectSpace: (id: string) => void;
   onSelectAgent: (agent: Agent) => void;
+  /** Claude sessions in tabs Wings restored but you haven't opened yet: they start when you go to them. */
+  restored: { key: string; spaceId: string; title: string | null }[];
+  onSelectRestored: (key: string) => void;
   onNewTab: (spaceId: string) => void;
   onForkAgent: (agent: Agent) => void;
   onCloseAgent: (agent: Agent) => void;
@@ -219,12 +223,12 @@ export function Sidebar(props: {
         <section aria-labelledby="agents-heading" className="mx-2 flex shrink-0 flex-col border-t border-hairline pt-2">
           <h2 id="agents-heading" className="flex items-center justify-between px-2 pb-1 text-[12px] font-medium text-muted-foreground">
             Agents
-            {agents.length > 0 && <span className="tabular-nums">{agents.length}</span>}
+            {agents.length + props.restored.length > 0 && <span className="tabular-nums">{agents.length + props.restored.length}</span>}
           </h2>
           {/* Grows with the list up to five agents, then scrolls. */}
           <ScrollArea className="max-h-[249px] min-h-0">
             <ul className="flex flex-col gap-px">
-              {sortedAgents.length === 0 && (
+              {sortedAgents.length === 0 && props.restored.length === 0 && (
                 <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
                   Run <code className="rounded bg-hover px-1 py-px text-[12px]">claude</code> in any terminal and it shows up here.
                 </li>
@@ -283,6 +287,24 @@ export function Sidebar(props: {
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>
+                  </motion.li>
+                ))}
+                {props.restored.map((r) => (
+                  <motion.li key={r.key} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={spring}>
+                    <Item
+                      size="xs"
+                      render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
+                      onClick={() => props.onSelectRestored(r.key)}
+                      className="flex-nowrap gap-2.5 px-2 py-1.5 text-left hover:bg-hover"
+                    >
+                      <span className="flex size-4 shrink-0 items-center justify-center">
+                        <CircleDashedIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-muted-foreground">{r.title ?? "Claude"}</span>
+                        <span className="block truncate text-[11px] leading-4 text-muted-foreground">{spaceName(r.spaceId)}, starts when you open it</span>
+                      </span>
+                    </Item>
                   </motion.li>
                 ))}
               </AnimatePresence>

@@ -181,6 +181,23 @@ export default function App() {
   const activeSpaceIdRef = useRef(activeSpaceId);
   activeSpaceIdRef.current = activeSpaceId;
   const focusedPaneId = activeTab ? (panes[activeTab.focusedPane]?.paneId ?? null) : null;
+  // Restored Claude sessions whose tab hasn't been opened yet, so the Agents list still shows them.
+  const [sessionTitles, setSessionTitles] = useState<Record<string, string | null>>({});
+  const restored = useMemo(
+    () =>
+      Object.entries(panes).flatMap(([key, meta]) =>
+        meta.sessionId && !meta.paneId ? [{ key, spaceId: meta.spaceId, title: sessionTitles[meta.sessionId] ?? null }] : [],
+      ),
+    [panes, sessionTitles],
+  );
+  const restoredSpaces = [...new Set(restored.map((r) => r.spaceId))].join(" ");
+  useEffect(() => {
+    for (const spaceId of restoredSpaces.split(" ").filter(Boolean)) {
+      void api.sessionsList(spaceId).then((list) =>
+        setSessionTitles((t) => ({ ...t, ...Object.fromEntries(list.map((s) => [s.id, s.title ?? s.firstPrompt])) })),
+      );
+    }
+  }, [restoredSpaces]);
   const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
   const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.sessionId ? [a.sessionId] : []))), [agents]);
 
@@ -676,8 +693,12 @@ export default function App() {
 
   function selectAgent(agent: Agent) {
     const key = Object.keys(panes).find((k) => panes[k].paneId === agent.paneId);
-    const tab = key && tabs.find((t) => paneIds(t.layout).includes(key));
-    if (!key || !tab) return;
+    if (key) selectPaneKey(key);
+  }
+
+  function selectPaneKey(key: string) {
+    const tab = tabs.find((t) => paneIds(t.layout).includes(key));
+    if (!tab) return;
     setActiveSpaceId(tab.spaceId);
     setActiveTabBySpace((m) => ({ ...m, [tab.spaceId]: tab.id }));
     updateTab(tab.id, () => ({ focusedPane: key }));
@@ -765,6 +786,8 @@ export default function App() {
                 focusedPaneId={focusedPaneId}
                 onSelectSpace={selectSpace}
                 onSelectAgent={selectAgent}
+                restored={restored}
+                onSelectRestored={selectPaneKey}
                 onNewTab={(id) => openTab(id)}
                 onForkAgent={forkAgent}
                 onCloseAgent={closeAgent}
