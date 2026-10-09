@@ -1,10 +1,28 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { useState } from "react";
-import { FolderIcon, FolderOpenIcon, PlusIcon, RefreshCwIcon, XIcon } from "lucide-react";
+import {
+  CopyIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  GitForkIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SquareTerminalIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Item } from "@/components/ui/item";
 import { GitCounts } from "@/components/git-counts";
@@ -16,6 +34,10 @@ import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
 const agentOrder: Record<AgentState, number> = { blocked: 0, done: 1, working: 2, idle: 3 };
+
+const revealLabel = { macos: "Reveal in Finder", windows: "Show in Explorer" }[document.documentElement.dataset.platform ?? ""] ?? "Show in file manager";
+
+const copy = (text: string) => void navigator.clipboard.writeText(text).catch(() => {});
 
 function agentStatus(agent: Agent) {
   if (agent.state === "blocked" && agent.waitingFor) return `needs you: ${agent.waitingFor}`;
@@ -32,6 +54,9 @@ export function Sidebar(props: {
   focusedPaneId: string | null;
   onSelectSpace: (id: string) => void;
   onSelectAgent: (agent: Agent) => void;
+  onNewTab: (spaceId: string) => void;
+  onForkAgent: (agent: Agent) => void;
+  onCloseAgent: (agent: Agent) => void;
   onAddSpace: (path: string) => void;
   onRemoveSpace: (id: string) => void;
 }) {
@@ -104,7 +129,8 @@ export function Sidebar(props: {
                 const status = props.git[space.id];
                 const branch = status?.branch ?? space.branch;
                 return (
-                  <div key={space.id} className="group/row relative">
+                  <ContextMenu key={space.id}>
+                  <ContextMenuTrigger render={<div className="group/row relative" />}>
                     {active && (
                       <motion.span
                         layoutId="project-active"
@@ -159,7 +185,31 @@ export function Sidebar(props: {
                         <XIcon />
                       </IconButton>
                     </span>
-                  </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => props.onNewTab(space.id)}>
+                      <SquareTerminalIcon />
+                      New tab
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => void revealItemInDir(space.path)}>
+                      <FolderOpenIcon />
+                      {revealLabel}
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => copy(space.path)}>
+                      <CopyIcon />
+                      Copy path
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => void refreshGit()} disabled={refreshing}>
+                      <RefreshCwIcon />
+                      Refresh git status
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem variant="destructive" onClick={() => props.onRemoveSpace(space.id)}>
+                      <Trash2Icon />
+                      Remove from sidebar
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </nav>
@@ -188,6 +238,8 @@ export function Sidebar(props: {
                     exit={{ opacity: 0, y: -6 }}
                     transition={spring}
                   >
+                    <ContextMenu>
+                      <ContextMenuTrigger render={<div />}>
                     <Item
                       size="xs"
                       render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
@@ -209,6 +261,27 @@ export function Sidebar(props: {
                       </span>
                       {agent.state === "done" && <span className="size-1.5 shrink-0 rounded-full bg-done" aria-hidden />}
                     </Item>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem onClick={() => props.onSelectAgent(agent)}>
+                          <SquareTerminalIcon />
+                          Go to pane
+                        </ContextMenuItem>
+                        <ContextMenuItem disabled={!agent.sessionId} onClick={() => props.onForkAgent(agent)}>
+                          <GitForkIcon />
+                          Fork in new tab
+                        </ContextMenuItem>
+                        <ContextMenuItem disabled={!agent.sessionId} onClick={() => agent.sessionId && copy(agent.sessionId)}>
+                          <CopyIcon />
+                          Copy session id
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => props.onCloseAgent(agent)}>
+                          <XIcon />
+                          Close pane
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   </motion.li>
                 ))}
               </AnimatePresence>

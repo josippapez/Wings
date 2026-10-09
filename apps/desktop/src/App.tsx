@@ -611,6 +611,15 @@ export default function App() {
     updateTab(tab.id, () => ({ focusedPane: key }));
   }
 
+  function forkAgent(agent: Agent) {
+    if (agent.sessionId && isSessionId(agent.sessionId)) openTab(agent.spaceId, forkCommand(agent.sessionId));
+  }
+
+  function closeAgent(agent: Agent) {
+    const key = Object.keys(panes).find((k) => panes[k].paneId === agent.paneId);
+    if (key) closePane(key);
+  }
+
   const tabViews: TabView[] = spaceTabs.map((t) => ({
     id: t.id,
     label: labels[t.focusedPane],
@@ -684,6 +693,9 @@ export default function App() {
                 focusedPaneId={focusedPaneId}
                 onSelectSpace={selectSpace}
                 onSelectAgent={selectAgent}
+                onNewTab={(id) => openTab(id)}
+                onForkAgent={forkAgent}
+                onCloseAgent={closeAgent}
                 onAddSpace={(path) => void addSpace(path)}
                 onRemoveSpace={(id) => void removeSpace(id)}
               />

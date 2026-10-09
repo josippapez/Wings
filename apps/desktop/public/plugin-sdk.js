@@ -17,6 +17,13 @@
       parent.postMessage({ wings: 1, nonce, id, method, params }, "*");
     });
 
+  // The webview's own menu offers only "Reload", which would reload this frame. Keep it for fields and a selection (Copy).
+  addEventListener("contextmenu", (e) => {
+    if (e.target instanceof Element && e.target.closest("input, textarea, [contenteditable]")) return;
+    if (getSelection()?.toString()) return;
+    e.preventDefault();
+  });
+
   addEventListener("message", (event) => {
     if (event.source !== parent || event.data?.wings !== 1) return;
     const message = event.data;
