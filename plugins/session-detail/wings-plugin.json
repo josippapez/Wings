@@ -1,8 +1,8 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.3.1",
-  "description": "Shows what each Claude session is doing: its model, context size, the tool it's running, and recent tool calls and edited files.",
+  "version": "0.3.2",
+  "description": "Shows what each Claude session is doing: its model and context size, and recent tool calls and edited files.",
   "api": 1,
   "main": "main.js",
   "permissions": {

@@ -596,7 +596,9 @@ export default function App() {
     const out: Record<string, { pluginId: string; badge: Badge }[]> = {};
     for (const [key, meta] of Object.entries(panes)) {
       const byPlugin = meta.paneId ? badges[meta.paneId] : undefined;
-      if (byPlugin) out[key] = Object.entries(byPlugin).map(([pluginId, badge]) => ({ pluginId, badge }));
+      if (byPlugin) out[key] = Object.entries(byPlugin)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) // Stable by plugin id, whatever order they last set theirs in.
+          .map(([pluginId, badge]) => ({ pluginId, badge }));
     }
     return out;
   }, [panes, badges]);
