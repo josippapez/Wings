@@ -34,6 +34,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 keyring = "4.2.0"
 # Already built for Tauri; the CLI finds the app data folder the same way.
 dirs = "7.0.0"
+notify = "8"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

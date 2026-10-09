@@ -2,6 +2,7 @@ mod claude;
 #[cfg(unix)]
 mod claude_settings;
 mod detect;
+mod gitwatch;
 mod history;
 mod menu;
 #[cfg(unix)]
@@ -84,12 +85,15 @@ fn spaces_list(state: State<AppState>) -> Vec<SpaceView> {
 
 #[tauri::command(async)]
 fn spaces_add(state: State<AppState>, path: String) -> SpaceView {
-    spaces::view(&state.spaces.lock().unwrap().add(&path))
+    let view = spaces::view(&state.spaces.lock().unwrap().add(&path));
+    gitwatch::resync();
+    view
 }
 
 #[tauri::command]
 fn spaces_remove(state: State<AppState>, id: String) {
     state.spaces.lock().unwrap().remove(&id);
+    gitwatch::resync();
 }
 
 #[tauri::command(async)]
@@ -958,6 +962,27 @@ fn git_sweep(app: &AppHandle) -> HashMap<String, GitStatus> {
     status
 }
 
+/// Checks only the given projects, for when their repo just changed. Sends "git-status" when that changes the result.
+fn git_refresh_spaces(app: &AppHandle, ids: &[String]) {
+    let state = app.state::<AppState>();
+    let Some(git) = plugins::find_program("git") else { return };
+    let spaces: Vec<_> = state.spaces.lock().unwrap().spaces.iter().filter(|s| ids.contains(&s.id)).cloned().collect();
+    let fresh: Vec<_> = spaces.iter().map(|s| (s.id.clone(), spaces::git_status(&git, std::path::Path::new(&s.path)))).collect();
+    let mut current = state.git.lock().unwrap();
+    let before = current.clone();
+    for (id, status) in fresh {
+        match status {
+            Some(status) => current.insert(id, status),
+            None => current.remove(&id),
+        };
+    }
+    if *current != before {
+        let all = current.clone();
+        drop(current);
+        let _ = app.emit("git-status", &all);
+    }
+}
+
 /// A sweep of 11 repos costs ~200 ms CPU, so it runs once a minute while Wings is focused, and right
 /// away when it gets focus.
 fn start_git_status(app: AppHandle) {
@@ -1024,6 +1049,7 @@ pub fn run() {
             } else {
                 start_detection(app.handle().clone());
                 start_git_status(app.handle().clone());
+                gitwatch::start(app.handle().clone());
             }
             Ok(())
         })
