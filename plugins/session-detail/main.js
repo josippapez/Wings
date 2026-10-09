@@ -220,12 +220,12 @@ const running = (s) => [...s.tools.values()].filter((t) => !t.done);
 
 function badge(s) {
   const now = s.state === "working" ? running(s).at(-1) : null;
-  const label = now ? now.name : [modelName(s.model), s.context != null ? tokens(s.context) : null].filter(Boolean).join(" · ") || "Claude";
+  // Always the model, never the running tool: a label that changes with every tool call jumps around the header.
+  const label = [modelName(s.model), s.context != null ? tokens(s.context) : null].filter(Boolean).join(" · ") || "Claude";
   const status = { working: "Working", blocked: "Waiting for you", done: "Finished", idle: "Idle" }[s.state] ?? s.state;
   return {
     label,
     tone: s.state === "blocked" ? "warning" : "neutral",
-    loading: Boolean(now),
     title: "Claude session",
     subtitle: s.name ?? undefined,
     rows: [
