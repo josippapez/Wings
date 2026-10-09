@@ -4,7 +4,7 @@
   const space = { id: "s1", name: "wings", path: "/tmp/wings", branch: "main" };
   const answers = {
     spaces_list: () => [space], agents_list: () => [], pane_info: () => ({}), git_status: () => ({}),
-    plugins_list: () => [], sessions_list: () => [], pane_create: () => "p" + (++window.__panes), bench_mode: () => false,
+    plugins_list: () => [], sessions_list: () => [], pane_create: () => "p" + (++window.__panes), panes_list: () => [], bench_mode: () => false,
     workspace_load: () => sessionStorage.getItem("ws"), workspace_save: (a) => void sessionStorage.setItem("ws", a.json),
     "plugin:event|listen": () => 1,
     spaces_add: ({ path }) => ({ id: path, name: path.split("/").at(-1), path, branch: null }),

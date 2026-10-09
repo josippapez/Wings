@@ -19,7 +19,7 @@ import { TitleBar, type PluginButton, type TabView } from "@/components/title-ba
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, type Agent, type AgentState, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
+import { api, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
@@ -43,7 +43,31 @@ type SavedWorkspace = {
   sessions: Record<string, string | null>;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
+  /** The Rust pane behind each pane, by the same keys. Still running only after a webview reload. */
+  paneIds?: Record<string, string>;
 };
+
+function parseSaved(json: string | null): SavedWorkspace | null {
+  try {
+    const saved = json ? JSON.parse(json) : null;
+    return saved?.version === 1 ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Saved panes whose Rust pane still runs in the same project, as saved key to pane id. Only after a webview reload. */
+function stillRunning(saved: SavedWorkspace | null, live: LivePane[], spaces: Space[]) {
+  const running = new Map<string, string>();
+  for (const tab of saved?.tabs ?? []) {
+    if (!spaces.some((s) => s.id === tab.spaceId)) continue;
+    for (const key of paneIds(tab.layout)) {
+      const id = saved?.paneIds?.[key];
+      if (id && live.some((p) => p.id === id && p.spaceId === tab.spaceId)) running.set(key, id);
+    }
+  }
+  return running;
+}
 
 type Widths = { left: number; right: number };
 
@@ -197,7 +221,14 @@ export default function App() {
 
   /** Creates the terminal for a new pane; it starts its shell once its card mounts. */
   const createPane = useCallback(
-    (spaceId: string, initialInput: string | null, sessionId: string | null = null, cwd: string | null = null, args: string[] = []) => {
+    (
+      spaceId: string,
+      initialInput: string | null,
+      sessionId: string | null = null,
+      cwd: string | null = null,
+      args: string[] = [],
+      attachTo: string | null = null,
+    ) => {
       const key = crypto.randomUUID();
       terminals.set(
         key,
@@ -208,6 +239,7 @@ export default function App() {
             onStarted: (paneId) => setPanes((p) => ({ ...p, [key]: { ...p[key], paneId } })),
           },
           cwd,
+          attachTo,
         ),
       );
       setPanes((p) => ({ ...p, [key]: { spaceId, paneId: null, sessionId, live: false, args } }));
@@ -303,16 +335,13 @@ export default function App() {
     [focusPane, splitPane, closePane, updateTab, activeTabId],
   );
 
-  /** Rebuilds saved tabs and splits with fresh shells; Claude panes resume their session. */
+  /**
+   * Rebuilds saved tabs and splits. After a webview reload, panes in `running` show their still-running shell again;
+   * the others get a fresh shell, and Claude panes resume their session.
+   */
   const restore = useCallback(
-    (list: Space[], json: string | null) => {
-      let saved: SavedWorkspace;
-      try {
-        saved = json ? JSON.parse(json) : null;
-      } catch {
-        return false;
-      }
-      if (saved?.version !== 1) return false;
+    (list: Space[], saved: SavedWorkspace | null, running: Map<string, string>) => {
+      if (!saved) return false;
       // Before any terminal exists: a later font change resizes every pane right after its first draw,
       // which leaves Claude Code's screen garbled until it repaints.
       if (saved.fontSize) {
@@ -329,7 +358,8 @@ export default function App() {
             const session = saved.sessions[old];
             const resume = session && isSessionId(session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
-            keys[old] = createPane(t.spaceId, resume && resumeCommand(resume, args), resume, null, args);
+            // The resume command runs only if the pane can't attach: Claude still runs in an attached one.
+            keys[old] = createPane(t.spaceId, resume && resumeCommand(resume, args), resume, null, args, running.get(old) ?? null);
             return keys[old];
           });
           const focusedPane = keys[t.focusedPane] ?? paneIds(layout)[0];
@@ -350,10 +380,13 @@ export default function App() {
   // Initial load and live events from the Rust core.
   useEffect(() => {
     void (async () => {
-      await api.panesReset();
-      const [list, saved] = await Promise.all([api.spacesList(), api.workspaceLoad()]);
+      const [list, json, live] = await Promise.all([api.spacesList(), api.workspaceLoad(), api.panesList()]);
+      const saved = parseSaved(json);
+      const running = stillRunning(saved, live, list);
+      // Before any pane starts, so only panes from before a reload that nothing shows again are killed.
+      await api.panesReset([...running.values()]);
       setSpaces(list);
-      if (!restore(list, saved) && list[0]) selectSpace(list[0].id);
+      if (!restore(list, saved, running) && list[0]) selectSpace(list[0].id);
       setReady(true);
     })();
     void api.agentsList().then(setAgents);
@@ -389,12 +422,37 @@ export default function App() {
     });
   }, [agentsByPane]);
 
+  /** The workspace while its save waits out the debounce. */
+  const unsaved = useRef<string | null>(null);
+  /** Reloads only the UI. Saves first, or a pane opened just before would be closed instead of shown again. */
+  const reloadUi = useCallback(() => {
+    void Promise.resolve(unsaved.current && api.workspaceSave(unsaved.current)).finally(() => location.reload());
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
-    const sessions = Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
+    const sessions =Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
     const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
-    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys, tabs, sessions, sessionArgs };
-    const timer = setTimeout(() => void api.workspaceSave(JSON.stringify(saved)), 400);
+    const livePanes = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[key, meta.paneId]] : [])));
+    const saved: SavedWorkspace = {
+      version: 1,
+      activeSpaceId,
+      activeTabBySpace,
+      sidebarOpen,
+      widths,
+      fontSize,
+      terminalKeys,
+      tabs,
+      sessions,
+      sessionArgs,
+      paneIds: livePanes,
+    };
+    const json = JSON.stringify(saved);
+    unsaved.current = json;
+    const timer = setTimeout(() => {
+      unsaved.current = null;
+      void api.workspaceSave(json);
+    }, 400);
     return () => clearTimeout(timer);
   }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys]);
 
@@ -439,6 +497,8 @@ export default function App() {
           return setFontSize((f) => Math.max(9, f - 1));
         case "fontReset":
           return setFontSize(DEFAULT_FONT_SIZE);
+        case "reload":
+          return reloadUi();
       }
       if (!activeSpaceId) return;
       if (action.kind === "newTab") return openTab(activeSpaceId);
@@ -458,7 +518,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeSpaceId, activeTab, spaceTabs, openTab, splitPane, focusPane]);
+  }, [activeSpaceId, activeTab, spaceTabs, openTab, splitPane, focusPane, reloadUi]);
 
   // The menu owns ⌘W (so it never closes the window); it forwards it here.
   useEffect(() => {

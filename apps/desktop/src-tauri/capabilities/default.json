@@ -19,6 +19,8 @@
     "allow-pane-resize",
     "allow-pane-close",
     "allow-panes-reset",
+    "allow-panes-list",
+    "allow-pane-attach",
     "allow-pane-focus",
     "allow-agents-list",
     "allow-pane-info",
