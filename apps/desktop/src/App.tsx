@@ -1,6 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { MotionConfig } from "motion/react";
 
 import { DiffViewer } from "@/components/diff-viewer";
@@ -11,13 +12,14 @@ import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
-import { rollUp } from "@/components/status-dot";
+import { rollUp, StatusDot } from "@/components/status-dot";
 import { SettingsSheet } from "@/components/settings-sheet";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
+import { api, type Agent, type AgentState, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
@@ -470,6 +472,35 @@ export default function App() {
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
 
+  // Wings sends a system notification only while it's in the background (`notify_transitions` in lib.rs).
+  // In front, it's a toast instead, unless you're already looking at that pane.
+  const agentStates = useRef(new Map<string, AgentState>());
+  const selectAgentRef = useRef(selectAgent);
+  selectAgentRef.current = selectAgent;
+  useEffect(() => {
+    const before = agentStates.current;
+    agentStates.current = new Map(agents.map((a) => [a.paneId, a.state]));
+    for (const paneId of before.keys()) if (!agentStates.current.has(paneId)) toast.dismiss(`agent-${paneId}`);
+    for (const agent of agents) {
+      const was = before.get(agent.paneId);
+      if (was === undefined || was === agent.state) continue;
+      const id = `agent-${agent.paneId}`;
+      if (was === "blocked") toast.dismiss(id);
+      if (!document.hasFocus() || agent.paneId === focusedPaneId) continue;
+      if (agent.state !== "blocked" && agent.state !== "done") continue;
+      const name = agent.name ?? "Claude";
+      const project = spaces.find((s) => s.id === agent.spaceId)?.name ?? "";
+      toast(agent.state === "blocked" ? `${name} needs you` : `${name} finished`, {
+        id,
+        icon: <StatusDot state={agent.state} />,
+        description: agent.state === "blocked" ? `${project}: ${agent.waitingFor ?? "waiting for input"}` : project,
+        // Waiting on you stays up until you answer.
+        duration: agent.state === "blocked" ? Infinity : 6000,
+        action: { label: "Go to pane", onClick: () => selectAgentRef.current(agent) },
+      });
+    }
+  }, [agents]);
+
   useEffect(() => {
     const host = new PluginHost({
       setBadge: (pluginId, paneId, badge) =>
@@ -770,6 +801,7 @@ export default function App() {
           }}
         />
         <TerminalCommandPrompt />
+        <Toaster position="bottom-right" />
         <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} />
         <HistorySheet
           space={activeSpace}
