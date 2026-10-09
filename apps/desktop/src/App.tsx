@@ -24,6 +24,7 @@ import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
 import { resumeCommand, shellQuote } from "@/lib/resume";
+import { startUpdateChecks } from "@/lib/updater";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
 /** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch; `args` its flags. */
@@ -529,6 +530,8 @@ export default function App() {
       void unlisten.then((u) => u());
     };
   }, []);
+
+  useEffect(() => startUpdateChecks(), []);
 
   useEffect(() => {
     const host = new PluginHost({
