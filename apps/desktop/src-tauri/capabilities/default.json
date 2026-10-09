@@ -55,6 +55,7 @@
     "allow-mcp-connect",
     "allow-cli-status",
     "allow-cli-install",
-    "allow-cli-dismiss"
+    "allow-cli-dismiss",
+    "allow-history-search"
   ]
 }

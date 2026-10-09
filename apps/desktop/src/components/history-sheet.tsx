@@ -83,6 +83,7 @@ export function HistorySheet(props: {
   const [limit, setLimit] = useState(PAGE);
   const [results, setResults] = useState<HistoryResults | null>(null);
   const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const latest = useRef(0);
   const space = props.space;
@@ -100,13 +101,14 @@ export function HistorySheet(props: {
     if (!props.open) return;
     const request = ++latest.current;
     setSearching(true);
+    setError(null);
     // Typing waits for a pause, so a search runs once per burst of keys, not per key.
     const timer = setTimeout(
       () =>
         void api
           .historySearch(query, { project, branch, sinceMs: SINCE[since].ms() }, limit)
           .then((r) => request === latest.current && setResults(r))
-          .catch((e) => console.error(e))
+          .catch((e) => request === latest.current && setError(String(e instanceof Error ? e.message : e)))
           .finally(() => request === latest.current && setSearching(false)),
       query ? 150 : 0,
     );
@@ -231,7 +233,17 @@ export function HistorySheet(props: {
           </div>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
-          {!sessions ? (
+          {error ? (
+            <Empty className="py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <SearchXIcon aria-hidden />
+                </EmptyMedia>
+                <EmptyTitle>Couldn't read past sessions</EmptyTitle>
+                <EmptyDescription>{error}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : !sessions ? (
             <div className="flex flex-col gap-1 p-2" aria-busy="true" aria-label="Reading transcripts">
               {Array.from({ length: 6 }, (_, i) => (
                 <div key={i} className="flex flex-col gap-1.5 p-2.5">

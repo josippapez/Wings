@@ -989,3 +989,21 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    /// A command that isn't in build.rs and the capabilities is refused for the window at run time, while the
+    /// browser stub and the MCP path don't notice. It left Past sessions loading forever once.
+    #[test]
+    fn every_command_is_allowed_for_the_window() {
+        let lib = include_str!("lib.rs");
+        let start = lib.find("generate_handler![").unwrap();
+        let end = start + lib[start..].find(']').unwrap();
+        let build = include_str!("../build.rs");
+        let caps = include_str!("../capabilities/default.json");
+        for command in lib[start + 18..end].split(',').map(|c| c.trim().rsplit("::").next().unwrap()).filter(|c| !c.is_empty()) {
+            assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from build.rs");
+            assert!(caps.contains(&format!("\"allow-{}\"", command.replace('_', "-"))), "{command} is missing from capabilities/default.json");
+        }
+    }
+}
