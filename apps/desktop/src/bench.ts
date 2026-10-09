@@ -1,12 +1,18 @@
 /**
  * Terminal rendering benchmark, run inside the real webview with `WINGS_BENCH=1`.
  * Synthetic load, no PTY: it measures xterm.js + the webview, which is what limits busy panes.
+ * `WINGS_BENCH=replay` runs the renderer comparison in `bench-replay.ts` instead, and `WINGS_BENCH=empty` measures
+ * the Wings UI with no terminals.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+
+import { api } from "@/lib/api";
+
+import { cpuPercent, runReplay, sample, type Renderer as ReplayRenderer } from "./bench-replay";
 
 type Renderer = "webgl" | "dom";
 const SECONDS = 5;
@@ -136,7 +142,7 @@ async function bulk(term: Terminal) {
   return { mbPerSec: Math.round((sent / secs / 1e6) * 10) / 10 };
 }
 
-export async function runBench() {
+async function synthetic() {
   const root = document.getElementById("root")!;
   const report: Record<string, unknown> = { userAgent: navigator.userAgent, seconds: SECONDS };
   for (const renderer of ["webgl", "dom"] as Renderer[]) {
@@ -152,5 +158,42 @@ export async function runBench() {
     one.dispose();
     report[renderer] = { fourPanesRedraw: redraw, typingWhileThreeRedraw: typing, singlePaneCat: cat };
   }
+  return report;
+}
+
+/**
+ * The real UI with no projects and so no terminals: what WebKit itself spends drawing Wings. The calls that would
+ * read your projects, workspace and plugins answer as on a first launch. (Tauri makes `__TAURI_INTERNALS__.invoke`
+ * read-only, so this replaces them in `api` instead.)
+ */
+async function emptyUi(renderApp: () => void) {
+  Object.assign(api, {
+    spacesList: async () => [],
+    workspaceLoad: async () => null,
+    workspaceSave: async () => {},
+    pluginsList: async () => [],
+    panesList: async () => [],
+    agentsList: async () => [],
+  });
+  const blank = await sample(true);
+  renderApp();
+  await sleep(4000);
+  const idle0 = await sample(false);
+  const t = performance.now();
+  const stop = frameClock();
+  await sleep(3000);
+  const frames = stats(stop());
+  const idle1 = await sample(true);
+  const sidebarOpen = { memory: idle1, idleCpuPercent: cpuPercent(idle0, idle1, performance.now() - t), frameMs: frames };
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", metaKey: true, bubbles: true }));
+  await sleep(3000);
+  const sidebarClosed = { memory: await sample(true) };
+  return { webview: navigator.userAgent.includes("Chrome") ? "Chromium" : "WKWebView", userAgent: navigator.userAgent, devicePixelRatio, window: [innerWidth, innerHeight], blankPage: blank, sidebarOpen, sidebarClosed };
+}
+
+export async function runBench(renderApp: () => void) {
+  const config = await invoke<{ suite: string; renderer: ReplayRenderer; native?: boolean }>("bench_config");
+  const report =
+    config.suite === "replay" ? await runReplay(config.renderer, config.native !== false) : config.suite === "empty" ? await emptyUi(renderApp) : await synthetic();
   await invoke("bench_report", { report: JSON.stringify(report, null, 2) });
 }

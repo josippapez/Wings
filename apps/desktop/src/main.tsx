@@ -14,10 +14,12 @@ document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
 });
 
+// No StrictMode: its double-mount in dev would spawn every terminal's shell twice.
+const renderApp = () => ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
+
 if (await invoke<boolean>("bench_mode")) {
   const { runBench } = await import("./bench");
-  await runBench();
+  await runBench(renderApp);
 } else {
-  // No StrictMode: its double-mount in dev would spawn every terminal's shell twice.
-  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
+  renderApp();
 }
