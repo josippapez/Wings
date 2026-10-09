@@ -32,12 +32,26 @@ export type Sample = { wings: ProcessSample; webContent: ProcessSample | null; g
 /** Where Claude streams its answer in the recording; panes start 400 ms apart so they don't draw in lockstep. */
 const PACED_FROM_MS = 40_000;
 const PACED_MS = 5_000;
-const CONFIGS = [
+const CONFIGS: { panes: number; visible: number; scrollback?: number; only?: Renderer[] }[] = [
   { panes: 1, visible: 1 },
   { panes: 4, visible: 4 },
   { panes: 12, visible: 4 },
   { panes: 12, visible: 12 },
+  // A long session: the scrollback is full and the glyph atlas has seen many colors.
+  { panes: 4, visible: 4, scrollback: 10_000, only: ["webgl"] },
 ];
+
+/** `count` lines of colored build and log output, each line in another of the 256 colors. */
+function scrollbackLines(count: number) {
+  const words = "compiling wings v0.1.0 src/lib.rs:42 warning unused variable PASS FAIL 12.4ms ✓ ✗ → node_modules".split(" ");
+  let s = "";
+  for (let i = 0; i < count; i++) {
+    s += `\x1b[38;5;${i % 256}m${String(i).padStart(5)} `;
+    for (let w = 0; w < 9; w++) s += (w === 3 ? "\x1b[1m" : "") + words[(i * 7 + w * 3) % words.length] + "\x1b[22m ";
+    s += "\x1b[0m\r\n";
+  }
+  return new TextEncoder().encode(s);
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round = (n: number, digits = 1) => Math.round(n * 10 ** digits) / 10 ** digits;
@@ -295,9 +309,15 @@ export async function runReplay(renderer: Renderer, native: boolean) {
     recording: rec,
     runs: [] as unknown[],
   };
-  for (const { panes: count, visible: visibleCount } of CONFIGS) {
+  for (const { panes: count, visible: visibleCount, scrollback, only } of CONFIGS) {
+    if (only && !only.includes(renderer)) continue;
     const { panes, fontSize } = layout(root, count, visibleCount, renderer, rec);
     const visible = panes.map((_, i) => i < visibleCount);
+    if (scrollback) {
+      const lines = scrollbackLines(scrollback);
+      panes.forEach((p) => p.write(lines));
+      await Promise.all(panes.map((p) => p.flushed()));
+    }
     await sleep(500);
 
     const s0 = native ? await sample(false) : null;
@@ -322,6 +342,7 @@ export async function runReplay(renderer: Renderer, native: boolean) {
       {
         panes: count,
         visible: visibleCount,
+        scrollback: scrollback ?? 0,
         fontSize,
         paced: { ...paced, frameMs: pacedFrames, cpuPercent: pacedCpu },
         memory: s1,

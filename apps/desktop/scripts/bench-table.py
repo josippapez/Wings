@@ -29,9 +29,9 @@ for path in sys.argv[1:]:
         dcpu = run["drain"].get("cpuPercent") or {}
         rows.append(
             [
-                r["webview"],
+                f"{r['webview']}, {r['devicePixelRatio']}",
                 r["renderer"],
-                f"{run['panes']}/{run['visible']}",
+                f"{run['panes']}/{run['visible']}" + (f" +{run['scrollback']} lines" if run.get("scrollback") else ""),
                 fmt(mem(wc, "footprintMb"), " MB"),
                 fmt(mem(wc, "ownedGraphicsMb"), " MB") + (f" (+{fmt(wc['ownedGraphicsSwappedMb'])} swapped, {wc['ownedGraphicsRegions']} regions)" if wc and wc.get("ownedGraphicsMb") is not None else ""),
                 fmt(mem(gpu, "footprintMb"), " MB"),
@@ -46,7 +46,7 @@ for path in sys.argv[1:]:
         )
 
 head = [
-    "webview", "renderer", "panes/shown", "WebContent footprint", "owned unmapped (graphics)", "GPU proc footprint",
+    "webview, DPR", "renderer", "panes/shown", "WebContent footprint", "owned unmapped (graphics)", "GPU proc footprint",
     "Wings footprint", "replay CPU % WebContent / Wings / GPU", "replay frame ms p50 / p95 / max", "drain time",
     "drain frame ms p95 / max", "drain CPU % WebContent / Wings", "channel MB/s replay / drain",
 ]
