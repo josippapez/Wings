@@ -216,12 +216,13 @@ export function Sidebar(props: {
           </LayoutGroup>
         </ScrollArea>
 
-        <section aria-labelledby="agents-heading" className="mx-2 flex max-h-[46%] flex-col border-t border-hairline pt-2">
+        <section aria-labelledby="agents-heading" className="mx-2 flex shrink-0 flex-col border-t border-hairline pt-2">
           <h2 id="agents-heading" className="flex items-center justify-between px-2 pb-1 text-[12px] font-medium text-muted-foreground">
             Agents
             {agents.length > 0 && <span className="tabular-nums">{agents.length}</span>}
           </h2>
-          <ScrollArea className="min-h-0">
+          {/* Grows with the list up to five agents, then scrolls. */}
+          <ScrollArea className="max-h-[249px] min-h-0">
             <ul className="flex flex-col gap-px">
               {sortedAgents.length === 0 && (
                 <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
