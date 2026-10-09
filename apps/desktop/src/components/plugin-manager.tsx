@@ -84,7 +84,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
           {g.items.length > 0 && (
             <ul className="flex flex-wrap gap-1.5">
               {g.items.map((item) => (
-                <li key={item} className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[12px]">
+                <li key={item} className="max-w-full rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[12px] break-all">
                   {item}
                 </li>
               ))}
