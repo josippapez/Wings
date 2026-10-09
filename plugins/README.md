@@ -94,7 +94,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 
 | Call | Does |
 |---|---|
-| `wings.onPanes(fn)` | Called with every terminal pane on each change: `{ paneId, cwd, command, project, session }[]`. `cwd` follows `cd`. `session` is `{ sessionId, name, state }` while Claude runs in the pane, else `null` |
+| `wings.onPanes(fn)` | Called with every terminal pane on each change: `{ paneId, cwd, command, project, session }[]`. `cwd` follows `cd`. `session` is `{ sessionId, name, state, startedAt }` while Claude runs in the pane, else `null`. `startedAt` is when that `claude` started, in ms, since a resumed session's transcript also holds what came before |
 | `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId })` gets Claude's arguments and the Wings pane Claude runs in (or `null`), and returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls |
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |

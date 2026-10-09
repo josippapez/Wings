@@ -15,6 +15,8 @@ export type Agent = {
   waitingFor: string | null;
   /** The flags `claude` was started with, minus the ones that choose the session and any prompt. */
   args: string[];
+  /** When this `claude` process started, in ms since 1970. */
+  startedAt: number;
 };
 
 /** Commits to push and pull (as of the last fetch) and changed files, per project. */

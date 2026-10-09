@@ -10,8 +10,8 @@ interface WingsPane {
   /** What runs in the pane right now, like `zsh` or `claude`. */
   command: string;
   project: string;
-  /** Set while Claude Code runs in the pane. */
-  session: { sessionId: string; name: string | null; state: string } | null;
+  /** Set while Claude Code runs in the pane. `startedAt` is when that `claude` started, in ms; a resumed session's transcript also has what came before. */
+  session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
 }
 
 interface WingsTranscriptEvent {

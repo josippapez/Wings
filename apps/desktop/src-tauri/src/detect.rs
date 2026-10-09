@@ -36,6 +36,9 @@ pub struct Agent {
     pub waiting_for: Option<String>,
     /// The flags `claude` was started with, to type again when Wings resumes the session.
     pub args: Vec<String>,
+    /// When this `claude` process started, in ms since 1970. A resumed session's transcript also holds
+    /// what came before it, and this tells the two apart.
+    pub started_at: u64,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -118,9 +121,9 @@ impl Detector {
             })
             .collect();
         // Read from the argv the scan above loaded to recognise `claude`.
-        let launch: Vec<Vec<String>> = found
+        let launch: Vec<(Vec<String>, u64)> = found
             .iter()
-            .map(|(_, claude)| claude.and_then(|pid| processes.get(&pid)).map(|p| launch_args(p.cmd())).unwrap_or_default())
+            .map(|(_, claude)| claude.and_then(|pid| processes.get(&pid)).map(|p| (launch_args(p.cmd()), p.start_time() * 1000)).unwrap_or_default())
             .collect();
         // The working directory changes with every `cd`, so it is re-read each scan, for these processes only.
         let current: Vec<Pid> = found.iter().filter_map(|(pid, _)| *pid).collect();
@@ -136,7 +139,7 @@ impl Detector {
 
         let mut agents = Vec::new();
         let mut pane_infos = HashMap::new();
-        for (((pane, (_, claude)), info), args) in panes.iter().zip(found).zip(infos).zip(launch) {
+        for (((pane, (_, claude)), info), (args, started_at)) in panes.iter().zip(found).zip(infos).zip(launch) {
             pane_infos.insert(pane.pane_id.clone(), info);
             let Some(pid) = claude else {
                 self.last.remove(&pane.pane_id);
@@ -164,6 +167,7 @@ impl Detector {
                 state,
                 waiting_for: if state == AgentState::Blocked { file.waiting_for } else { None },
                 args,
+                started_at,
             });
         }
         Scan { agents, panes: pane_infos }

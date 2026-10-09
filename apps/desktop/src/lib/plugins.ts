@@ -60,7 +60,7 @@ export type PluginPane = {
   cwd: string;
   command: string;
   project: string;
-  session: { sessionId: string; name: string | null; state: string } | null;
+  session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
 };
 
 /** A new tab, or a split to the right of or below the focused pane. */

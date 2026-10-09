@@ -538,7 +538,7 @@ export default function App() {
           cwd: info?.cwd ?? space?.path ?? "",
           command: info?.command ?? "",
           project: space?.name ?? "",
-          session: agent?.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state } : null,
+          session: agent?.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
         },
       ];
     });
