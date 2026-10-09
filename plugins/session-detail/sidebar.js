@@ -11,6 +11,8 @@ let sessions = null;
 let picked = /** @type {string | null} */ (null);
 /** Activity rows you opened, by key, and the detail the main script sent for each. */
 const opened = new Set();
+/** Show only your messages, highlighted commands and failures. */
+let highlightsOnly = false;
 const details = new Map();
 
 /** @param {string} sessionId @param {string} key */
@@ -98,13 +100,16 @@ function render() {
       h("ul", { class: "list" }, ...s.files.map(([/** @type {string} */ path, /** @type {number} */ n]) => h("li", { class: "row", title: path }, h("span", { class: "grow ellipsis" }, basename(path)), h("span", { class: "muted" }, n > 1 ? `${n} edits` : "1 edit")))),
     );
   }
-  parts.push(h("h2", {}, "Recent activity"));
+  const shown = highlightsOnly ? s.items.filter((/** @type {any} */ i) => i.kind === "prompt" || i.tags || i.error) : s.items;
+  const filter = (/** @type {boolean} */ on, /** @type {string} */ label) =>
+    h("button", { class: `chip${highlightsOnly === on ? " on" : ""}`, "aria-pressed": String(highlightsOnly === on), onclick: () => ((highlightsOnly = on), render()) }, label);
+  parts.push(h("div", { class: "row heading" }, h("h2", { class: "grow" }, "Recent activity"), h("div", { class: "row filters", role: "group", "aria-label": "Show" }, filter(false, "All"), filter(true, "Highlights"))));
   parts.push(
-    s.items.length
+    shown.length
       ? h(
           "ol",
           { class: "list timeline" },
-          ...s.items.map((/** @type {any} */ item) => {
+          ...shown.map((/** @type {any} */ item) => {
             const open = opened.has(item.key);
             const button = (/** @type {string} */ cls, /** @type {(Node | string)[]} */ ...children) =>
               h("button", { class: `toggle ${cls}`, id: `item-${item.key}`, "aria-expanded": String(open), onclick: () => toggle(s.id, item.key) }, ...children);
@@ -116,15 +121,17 @@ function render() {
                   button(
                     "row",
                     item.done ? h("span", { class: item.error ? "dot err" : "dot", "aria-hidden": true }) : h("span", { class: "spinner", "aria-hidden": true }),
-                    h("strong", {}, item.name),
-                    h("span", { class: "grow muted ellipsis" }, item.summary),
+                    ...(item.tags ?? []).map((/** @type {any} */ t) => h("span", { class: `tag ${t.kind}` }, t.label)),
+                    item.tags ? null : h("strong", {}, item.name),
+                    h("span", { class: item.tags ? "grow ellipsis" : "grow muted ellipsis" }, item.summary),
+                    item.outcome ? h("span", { class: item.outcome.endsWith("failed") ? "tag danger" : "tag ok" }, item.outcome) : null,
                     h("span", { class: "muted" }, item.error ? "failed" : took(item.ms)),
                   ),
                   open ? card(item) : null,
                 );
           }),
         )
-      : h("p", { class: "muted" }, "Nothing yet."),
+      : h("p", { class: "muted" }, highlightsOnly ? "No highlights in this run yet." : "Nothing yet."),
   );
   app.replaceChildren(...parts);
   if (focused) document.getElementById(focused)?.focus();

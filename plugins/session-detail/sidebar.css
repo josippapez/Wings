@@ -182,3 +182,57 @@ h2 {
   margin: -4px 2px 0;
   font-size: 12px;
 }
+
+/* Labels for notable commands: commits, pushes, tests and the ones easy to regret. */
+.tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: var(--wings-hover);
+}
+.tag.commit,
+.tag.merge,
+.tag.branch,
+.tag.pr {
+  color: #c9b2f7;
+  background: rgb(179 146 240 / 0.16);
+}
+.tag.push {
+  color: var(--wings-info);
+  background: rgb(156 192 255 / 0.14);
+}
+.tag.test,
+.tag.build,
+.tag.install {
+  color: var(--wings-fg);
+}
+.tag.ok {
+  color: var(--wings-success);
+  background: rgb(125 211 167 / 0.14);
+}
+.tag.danger {
+  color: var(--wings-danger);
+  background: rgb(242 120 106 / 0.14);
+}
+.heading h2 {
+  margin-top: 6px;
+}
+.filters {
+  gap: 2px;
+}
+.chip {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 11px;
+  color: var(--wings-muted);
+}
+.chip.on {
+  background: var(--wings-pressed);
+  color: var(--wings-fg);
+}
