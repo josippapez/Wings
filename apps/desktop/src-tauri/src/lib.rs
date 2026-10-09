@@ -17,6 +17,7 @@ mod plugins;
 mod secrets;
 mod pty;
 mod spaces;
+mod statusline;
 mod tail;
 
 use std::{
@@ -60,6 +61,8 @@ struct AppState {
     next_pane: AtomicU64,
     /// Recent plugin notifications, for their rate limit.
     notified: Mutex<plugins::NotifyLog>,
+    /// What Claude Code last told `wings statusline`.
+    statusline: Mutex<statusline::Statusline>,
 }
 
 type Res<T> = Result<T, String>;
@@ -619,6 +622,15 @@ fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: Stri
     plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types, last)
 }
 
+/// Your usage limits and each session's context and cache, as Claude Code last told `wings statusline`.
+#[tauri::command]
+fn plugin_statusline(state: State<AppState>, plugin_id: String) -> Res<serde_json::Value> {
+    if !plugins::may_read_statusline(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read the status line"));
+    }
+    Ok(state.statusline.lock().unwrap().view())
+}
+
 #[tauri::command]
 fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, url: String) -> Res<()> {
     let plugin = plugin(&state, &plugin_id)?;
@@ -923,6 +935,7 @@ pub fn run() {
                 mcp: mcp::Mcp::default(),
                 next_pane: AtomicU64::new(1),
                 notified: Mutex::default(),
+                statusline: Mutex::default(),
             });
             #[cfg(unix)]
             mcp::start(app.handle().clone(), mcp::socket_path(&data));
@@ -979,6 +992,7 @@ pub fn run() {
             cli_dismiss,
             plugin_exec,
             plugin_transcript,
+            plugin_statusline,
             plugin_open_url,
             plugin_open_pane,
             plugin_focus_pane,

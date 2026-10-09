@@ -1,0 +1,128 @@
+/* Layout only: colours, buttons and inputs come from Wings' plugin-ui.css. */
+#app {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+select {
+  width: 100%;
+}
+h2 {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--wings-muted);
+}
+.muted {
+  color: var(--wings-muted);
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+.gauge {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+.gauge .value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.gauge .note {
+  grid-column: 1 / -1;
+  color: var(--wings-muted);
+}
+.bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--wings-hairline-strong);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--wings-info);
+}
+.bar.warn > span {
+  background: var(--wings-warning);
+}
+.bar.danger > span {
+  background: var(--wings-danger);
+}
+.hint code {
+  font-family: var(--wings-mono);
+  font-size: 11px;
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.list li:hover {
+  background: var(--wings-hover);
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wings-success);
+}
+.dot.failed {
+  background: var(--wings-danger);
+}
+.dot.connecting,
+.dot.sign-in {
+  background: var(--wings-muted);
+}
+.tag {
+  flex: none;
+  color: var(--wings-muted);
+}
+.tag.warn {
+  color: var(--wings-warning);
+}
+.tag.danger {
+  color: var(--wings-danger);
+}
+details summary {
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--wings-muted);
+}
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 4px;
+  text-align: center;
+}

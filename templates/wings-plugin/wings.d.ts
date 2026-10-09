@@ -50,6 +50,34 @@ interface WingsComment {
   url: string;
 }
 
+/** A usage limit window. `resetsAt` is in Unix epoch seconds. */
+interface WingsLimitWindow {
+  usedPercentage: number;
+  resetsAt: number | null;
+}
+
+/** What Claude Code last told `wings statusline`. `at` is when Wings got it, in ms. */
+interface WingsStatusline {
+  /** Your account's 5-hour and weekly limits, from the newest session that reported them. `null` until one has. */
+  rateLimits: { fiveHour: WingsLimitWindow | null; sevenDay: WingsLimitWindow | null; at: number } | null;
+  /** By session id. Token counts are from the session's last API response. */
+  sessions: Record<
+    string,
+    {
+      /** Like `Opus 5.5 (1M context)`. */
+      model: string | null;
+      contextWindowSize: number | null;
+      usedPercentage: number | null;
+      totalInputTokens: number | null;
+      totalOutputTokens: number | null;
+      currentUsage: { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number } | null;
+      /** `expiresAt` is in Unix epoch seconds. */
+      promptCache: { warm: boolean; ttl: "5m" | "1h" | null; expiresAt: number | null } | null;
+      at: number;
+    }
+  >;
+}
+
 interface WingsExecOptions {
   cwd?: string;
   /** 30 s by default, 5 min at most. */
@@ -70,6 +98,11 @@ interface Wings {
   onTool(name: string, handler: (input: Record<string, unknown>, context: { paneId: string | null }) => unknown): void;
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
+  /**
+   * Needs `permissions.statusline`. What Claude Code last told its status line, once `wings statusline` is your
+   * `statusLine` command: usage limits and each session's context and cache, as Claude Code reports them.
+   */
+  statusline(): Promise<WingsStatusline>;
   /** Claude Code transcript entries of types in `permissions.transcript`, oldest first. */
   transcript(sessionId: string, types: string[], options?: { last?: number }): Promise<Record<string, unknown>[]>;
   /**

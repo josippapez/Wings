@@ -101,6 +101,12 @@
      * started in the pane; `transcript` reads earlier ones. Entries over 256 KB are skipped.
      */
     onTranscript: (listener) => void listeners.transcript.push(listener),
+    /**
+     * What Claude Code last told its status line, with `permissions.statusline`, once `wings statusline` is your
+     * `statusLine` command. Resolves `{ rateLimits, sessions }`: the 5-hour and weekly limits, or `null` until a
+     * session reports them, and each session's context window, token counts and prompt cache by session id.
+     */
+    statusline: () => call("statusline", {}),
     /** Shows a badge in a pane's header, or removes it with `null`. */
     setBadge: (paneId, badge) => call("setBadge", { paneId, badge }),
     /** Opens an https URL matching `permissions.openUrl` in the browser. */

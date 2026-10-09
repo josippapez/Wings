@@ -1,0 +1,35 @@
+{
+  "id": "hud",
+  "name": "HUD",
+  "version": "0.1.0",
+  "description": "Your Claude usage limits and memory in the title bar, and each session's context, MCP servers and skills on its pane, so you can turn off a terminal status line like claude-hud.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": [
+      "vm_stat",
+      "sysctl -n hw.memsize"
+    ],
+    "transcript": [
+      "assistant",
+      "user",
+      "attachment:model",
+      "attachment:deferred_tools_delta",
+      "attachment:invoked_skills"
+    ],
+    "statusline": true
+  },
+  "contributes": {
+    "ui": [
+      "badges"
+    ],
+    "sidebars": [
+      {
+        "id": "hud",
+        "title": "HUD",
+        "icon": "chart",
+        "page": "sidebar.html"
+      }
+    ]
+  }
+}

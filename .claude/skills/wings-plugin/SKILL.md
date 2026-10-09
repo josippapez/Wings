@@ -16,6 +16,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 | Permission checks, `exec`, transcript reads | `apps/desktop/src-tauri/src/plugins.rs` |
 | Tauri commands `plugin_exec`, `plugin_transcript`, `plugin_open_url` | `apps/desktop/src-tauri/src/lib.rs` |
 | Live transcript entries for `onTranscript`, read each detection tick | `apps/desktop/src-tauri/src/tail.rs`, `tail_transcripts` in `lib.rs` |
+| Claude Code's status line data for `wings.statusline()`, sent by `wings statusline` | `apps/desktop/src-tauri/src/statusline.rs`, `statusline` in `cli.rs` and `control.rs` |
 | Badge pill and card | `apps/desktop/src/components/pane-badge.tsx` |
 | Diff viewer | `apps/desktop/src/components/diff-viewer.tsx` |
 

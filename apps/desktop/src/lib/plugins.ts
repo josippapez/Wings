@@ -403,6 +403,8 @@ export class PluginHost {
           types: Array.isArray(p.types) ? p.types.map(String) : [],
           last: typeof p.last === "number" && p.last >= 1 ? Math.floor(p.last) : null,
         });
+      case "statusline":
+        return invoke("plugin_statusline", { pluginId });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
       case "openPane": {

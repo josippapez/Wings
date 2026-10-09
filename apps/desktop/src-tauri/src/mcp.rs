@@ -71,7 +71,10 @@ pub fn start(app: AppHandle, path: PathBuf) {
 fn serve(app: &AppHandle, stream: UnixStream) {
     let Ok(writer) = stream.try_clone() else { return };
     if let Ok(events) = stream.try_clone() {
-        app.state::<AppState>().mcp.clients.lock().unwrap().push(events);
+        let state = app.state::<AppState>();
+        let mut clients = state.mcp.clients.lock().unwrap();
+        drop_closed(&mut clients);
+        clients.push(events);
     }
     let writer = Mutex::new(writer);
     for line in BufReader::new(stream).lines() {
@@ -99,6 +102,13 @@ fn serve(app: &AppHandle, stream: UnixStream) {
             break;
         }
     }
+}
+
+/// Lets go of connections that hung up. `wings statusline` connects for every Claude reply and leaves right away,
+/// so without this each one would keep a socket open until plugins next change. Bridges and the CLI skip the
+/// empty line.
+fn drop_closed(clients: &mut Vec<UnixStream>) {
+    clients.retain_mut(|client| writeln!(client).is_ok());
 }
 
 /// Wings' own tools, then the tools of every plugin that's on and approved, as MCP tool definitions.
@@ -180,4 +190,23 @@ fn pane_of(app: &AppHandle, pid: u32) -> Option<String> {
         current = system.process(current)?.parent()?;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connections_that_hung_up_are_let_go() {
+        let (open, open_peer) = UnixStream::pair().unwrap();
+        let (closed, closed_peer) = UnixStream::pair().unwrap();
+        drop(closed_peer);
+        let mut clients = vec![open, closed];
+        drop_closed(&mut clients);
+        assert_eq!(clients.len(), 1);
+        // The one still open got only an empty line, which a bridge reads as nothing.
+        let mut line = String::new();
+        BufReader::new(open_peer).read_line(&mut line).unwrap();
+        assert_eq!(line, "\n");
+    }
 }

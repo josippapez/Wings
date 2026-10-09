@@ -58,7 +58,7 @@ function sourceLabel(p: PluginView) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, transcript, openUrl, fetch, panes, notify } = plugin.permissions;
+  const { exec, transcript, openUrl, fetch, panes, notify, statusline } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
@@ -71,6 +71,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Start these commands in a new terminal, as you", items: panes ?? [] },
     { title: "Show desktop notifications, up to 3 a minute", items: [], on: notify },
     { title: "Read these parts of your Claude Code sessions", items: transcript },
+    { title: "Read your Claude usage limits and each session's context and cache, from Claude Code's status line", items: [], on: statusline },
     { title: "Open links that start with", items: openUrl },
   ].filter((g) => g.items.length > 0 || g.on);
   if (groups.length === 0) return <p className="text-[13px] text-muted-foreground">It doesn't ask for any access beyond showing things in Wings.</p>;
