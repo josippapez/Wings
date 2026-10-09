@@ -832,7 +832,12 @@ fn notify_transitions(app: &AppHandle, before: &[Agent], after: &[Agent]) {
             AgentState::Done => (format!("{name} finished"), project.into_owned()),
             _ => continue,
         };
-        let _ = app.notification().builder().title(title).body(body).show();
+        let mut notification = app.notification().builder().title(title).body(body);
+        // macOS plays no sound unless the notification names one.
+        if cfg!(target_os = "macos") {
+            notification = notification.sound("NSUserNotificationDefaultSoundName");
+        }
+        let _ = notification.show();
     }
 }
 
