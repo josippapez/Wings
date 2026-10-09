@@ -50,7 +50,9 @@ setInterval(() => [...new Set([...links.values()].map((l) => l.url))].forEach((u
 
 async function git(cwd, args) {
   const out = await wings.exec("git", args, { cwd });
-  if (out.code !== 0) throw new Error(out.stderr.trim() || `git ${args[0]} failed`);
+  // ssh prints warnings, like OpenSSH's post-quantum notice, as "** " lines before the real error.
+  const error = out.stderr.split("\n").filter((l) => !l.startsWith("** ")).join("\n").trim();
+  if (out.code !== 0) throw new Error(error || `git ${args[0]} failed`);
   return out.stdout.trim();
 }
 
@@ -294,6 +296,9 @@ function azureStatus(pr, checks) {
     updated: pr.closedDate ?? pr.creationDate,
     base: short(pr.targetRefName),
     head: short(pr.sourceRefName),
+    // A completed PR's branch is often deleted, but its commits can still be fetched by id.
+    baseCommit: pr.lastMergeTargetCommit?.commitId ?? null,
+    headCommit: pr.lastMergeSourceCommit?.commitId ?? null,
   };
 }
 
@@ -404,10 +409,12 @@ async function githubDiff(link) {
 }
 
 async function azureDiff(link) {
-  const { base, head } = status.get(link.url);
-  // Fetch only the two branches, then diff from their merge base, like the PR page does.
-  await git(link.cwd, ["fetch", "--quiet", "origin", base, head]);
-  const patch = await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", `origin/${base}...origin/${head}`]);
+  const { base, head, baseCommit, headCommit } = status.get(link.url);
+  // Fetch only the PR's two commits, then diff from their merge base, like the PR page does.
+  const [from, to] = baseCommit && headCommit ? [baseCommit, headCommit] : [base, head];
+  await git(link.cwd, ["fetch", "--quiet", "origin", from, to]);
+  const range = baseCommit && headCommit ? `${from}...${to}` : `origin/${base}...origin/${head}`;
+  const patch = await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", range]);
   const threads = await wings.exec("az", [
     "devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
     "--route-parameters", `project=${link.remote.project}`, `repositoryId=${link.remote.repo}`, `pullRequestId=${link.number}`,
