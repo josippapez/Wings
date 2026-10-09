@@ -16,6 +16,8 @@ mod mcp;
 mod plugin_store;
 mod plugin_storage;
 mod plugins;
+#[cfg(target_os = "macos")]
+mod privacy;
 mod secrets;
 mod pty;
 mod spaces;
@@ -418,6 +420,26 @@ fn connect_claude(app: &AppHandle) -> Res<()> {
         }
         claude_settings::add(&claude_settings::settings_path(), &exe)?;
         Ok(())
+    }
+}
+
+/// Opens Privacy & Security > Files & Folders, where you let Wings read another app's data.
+#[tauri::command(async)]
+fn privacy_open_settings() -> Res<()> {
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("/usr/bin/open").arg(privacy::SETTINGS_URL).status().map_err(err)?;
+    Ok(())
+}
+
+/// Whether Wings can read a folder macOS kept from it before, once you've changed the setting.
+#[tauri::command(async)]
+fn privacy_check(folder: String) -> bool {
+    #[cfg(target_os = "macos")]
+    return privacy::readable(std::path::Path::new(&folder));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = folder;
+        true
     }
 }
 
@@ -992,6 +1014,8 @@ pub fn run() {
             #[cfg(unix)]
             mcp::start(app.handle().clone(), mcp::socket_path(&data));
             connect_claude_on_start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            privacy::watch(app.handle().clone());
             if bench_mode() {
                 // Keep the window on screen without taking focus, so rendering is not throttled.
                 if let Some(window) = app.get_webview_window("main") {
@@ -1041,6 +1065,8 @@ pub fn run() {
             mcp_status,
             mcp_connect,
             mcp_disconnect,
+            privacy_open_settings,
+            privacy_check,
             cli_status,
             cli_install,
             cli_dismiss,
@@ -1054,8 +1080,16 @@ pub fn run() {
             bench_mode,
             bench_report,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Exit = event {
+                privacy::stop();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = event;
+        });
 }
 
 #[cfg(test)]

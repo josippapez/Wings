@@ -502,6 +502,34 @@ export default function App() {
     }
   }, [agents]);
 
+  // macOS never asks before keeping another app's data, like Chrome's, from a program in a pane, so Wings asks.
+  useEffect(() => {
+    const waiting = new Map<string, string>();
+    const recheck = () => {
+      for (const [folder, name] of waiting) {
+        void api.privacyCheck(folder).then((ok) => {
+          if (!ok || !waiting.delete(folder)) return;
+          toast.dismiss(`privacy-${folder}`);
+          toast.success(`Wings can read ${name}'s data now`);
+        });
+      }
+    };
+    window.addEventListener("focus", recheck);
+    const unlisten = api.onPrivacyBlocked(({ folder, name, program }) => {
+      waiting.set(folder, name);
+      toast(`macOS kept ${name}'s data from ${program}`, {
+        id: `privacy-${folder}`,
+        description: `Turn on ${name} for Wings in Privacy & Security, Files & Folders. macOS doesn't ask for this one.`,
+        duration: Infinity,
+        action: { label: "Open Settings", onClick: () => void api.privacyOpenSettings() },
+      });
+    });
+    return () => {
+      window.removeEventListener("focus", recheck);
+      void unlisten.then((u) => u());
+    };
+  }, []);
+
   useEffect(() => {
     const host = new PluginHost({
       setBadge: (pluginId, paneId, badge) =>

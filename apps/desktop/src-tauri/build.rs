@@ -38,6 +38,8 @@ const COMMANDS: &[&str] = &[
     "mcp_status",
     "mcp_connect",
     "mcp_disconnect",
+    "privacy_open_settings",
+    "privacy_check",
     "cli_status",
     "cli_install",
     "cli_dismiss",

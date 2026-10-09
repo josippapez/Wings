@@ -48,6 +48,8 @@ export type PluginContributes = {
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
 };
+/** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
+export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
@@ -123,6 +125,10 @@ export const api = {
   /** Registers the Wings MCP server with Claude Code, for every project. */
   mcpConnect: () => invoke<void>("mcp_connect"),
   mcpDisconnect: () => invoke<void>("mcp_disconnect"),
+  privacyOpenSettings: () => invoke<void>("privacy_open_settings"),
+  privacyCheck: (folder: string) => invoke<boolean>("privacy_check", { folder }),
+  onPrivacyBlocked: (cb: (blocked: PrivacyBlocked) => void): Promise<UnlistenFn> =>
+    listen<PrivacyBlocked>("privacy-blocked", (e) => cb(e.payload)),
   cliStatus: () => invoke<CliStatus>("cli_status"),
   /** Adds the `wings` command to ~/.local/bin. */
   cliInstall: () => invoke<CliStatus>("cli_install"),
