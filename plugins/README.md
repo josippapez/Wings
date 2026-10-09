@@ -67,11 +67,12 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | Permission | Allows |
 |---|---|
 | `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments |
-| `transcript` | Reading these Claude Code transcript entry types |
+| `transcript` | Reading these Claude Code transcript entry types. `attachment:<kind>`, like `attachment:model`, allows one kind of attachment entry: attachments include whole files and hook output, so ask for the kinds you need rather than `attachment` |
 | `openUrl` | Opening https URLs that start with these prefixes |
 | `fetch` | Calling https URLs that start with these prefixes through `wings.fetch`, like an API's base URL ending in `/` |
 | `panes` | Opening terminals with `wings.openPane` and moving focus with `wings.focusPane`. Each entry is a command it may start in the new pane, matched like `exec`, so `npm run dev` allows `npm run dev --port=3000`. `[]` allows plain shells only. Leave it out and the plugin can do neither |
 | `notify` | `true` to show desktop notifications with `wings.notify` |
+| `statusline` | `true` to read what Claude Code tells its status line with `wings.statusline`: your usage limits and each session's context and cache. See [Status line](#status-line) |
 
 `contributes` lists what the plugin adds, which the manager shows next to it:
 
@@ -99,6 +100,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |
 | `wings.transcript(sessionId, types, { last? })` | Resolves the matching transcript entries, oldest first. `last` keeps only the newest that many (up to 1000), which is much faster on a long session |
+| `wings.statusline()` | Resolves `{ rateLimits, sessions }`, what Claude Code last told `wings statusline`. `rateLimits` is `{ fiveHour, sevenDay, at }`, each window `{ usedPercentage, resetsAt }` with `resetsAt` in epoch seconds, or `null` until a session has reported them (only Pro and Max plans get them). `sessions` has, by session id, `{ model, contextWindowSize, usedPercentage, totalInputTokens, totalOutputTokens, currentUsage, promptCache, at }`, Claude Code's own numbers from the last response. `at` is when Wings got it, in ms |
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
 | `wings.openUrl(url)` | Opens the URL in the browser |
@@ -129,6 +131,16 @@ Wings drops a pane's badges when the pane closes. When several plugins add to th
 Plugin tools reach Claude through one MCP server, `wings`, which you add once from the Plugins sheet with Connect. It runs `wings --mcp` at user scope, so every Claude Code session gets the tools of the plugins that are on, and the list updates as you turn plugins on and off. The tools only work while Wings is open.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.
+
+## Status line
+
+Claude Code sends its status line command a JSON status after each reply: the 5-hour and weekly usage limits, the context window and how much of it is used, and the prompt cache. It's the documented way to get the usage limits, with no sign-in token involved. Make `wings statusline` that command and Wings keeps the newest status for plugins with `permissions.statusline`:
+
+```json
+{ "statusLine": { "type": "command", "command": "wings statusline" } }
+```
+
+in `~/.claude/settings.json`. It replaces any status line you have, and prints nothing, which leaves Claude Code's status line blank. While Wings is closed it does nothing. Wings keeps only the fields listed under `wings.statusline()`. In a dev build, use the path to `src-tauri/target/debug/wings` instead.
 
 ## Storage
 

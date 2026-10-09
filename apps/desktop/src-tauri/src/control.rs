@@ -1,5 +1,6 @@
 //! Requests from the `wings plugin` CLI (cli.rs), over the same socket as the MCP bridge. They change plugins
 //! through the same code as the Plugins sheet, and a plugin still only turns on once you approve it in Wings.
+//! `wings statusline` sends Claude Code's status line data here too.
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -54,6 +55,12 @@ pub fn handle(app: &AppHandle, op: &str, request: &Value) -> Option<Res<Value>> 
                 changed(&id, false);
                 Value::Null
             })
+        }
+        // From `wings statusline`, each time Claude Code updates its status line.
+        "statusline" => {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            app.state::<AppState>().statusline.lock().unwrap().record(request.get("status").unwrap_or(&Value::Null), now);
+            Ok(Value::Null)
         }
         _ => return None,
     })

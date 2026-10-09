@@ -33,6 +33,8 @@ export type PluginPermissions = {
   /** Commands it may start in a new pane; `[]` is plain shells only, `null` no panes and no focusing them. */
   panes: string[] | null;
   notify: boolean;
+  /** Reads what Claude Code told `wings statusline`: usage limits and each session's context and cache. */
+  statusline: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
 /** A web page a plugin shows in a popover from a title bar button. */

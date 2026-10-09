@@ -22,7 +22,8 @@ pub struct Permissions {
     /// Commands the plugin may run: a program and the subcommand its arguments must start with, e.g.
     /// `gh pr view`. A bare program name allows any arguments.
     pub exec: Vec<String>,
-    /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`.
+    /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`, or `attachment:<kind>` for one
+    /// kind of attachment, e.g. `attachment:model`.
     pub transcript: Vec<String>,
     /// URL prefixes the plugin may open in the browser.
     pub open_url: Vec<String>,
@@ -33,6 +34,9 @@ pub struct Permissions {
     pub panes: Option<Vec<String>>,
     /// Lets the plugin show desktop notifications.
     pub notify: bool,
+    /// Lets the plugin read what Claude Code last told `wings statusline`: usage limits and each session's
+    /// context window and prompt cache.
+    pub statusline: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -391,6 +395,21 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Whether a transcript entry is of a `permissions.transcript` type. `attachment:<kind>` is one kind of
+/// attachment: attachments include whole files and hook output, so most plugins want only one kind.
+fn is_type(allowed: &str, entry: &Value) -> bool {
+    let kind = entry.get("type").and_then(Value::as_str);
+    match allowed.strip_prefix("attachment:") {
+        Some(sub) => kind == Some("attachment") && entry.pointer("/attachment/type").and_then(Value::as_str) == Some(sub),
+        None => kind == Some(allowed),
+    }
+}
+
+/// Text every line of that type holds, so the others are skipped before they're parsed.
+fn type_marker(allowed: &str) -> String {
+    format!("\"type\":\"{}\"", allowed.strip_prefix("attachment:").unwrap_or(allowed))
+}
+
 /// Entries of the allowed types from a Claude Code session transcript, oldest first.
 /// The most entries `last` can ask for.
 pub const TRANSCRIPT_LAST_MAX: usize = 1000;
@@ -413,12 +432,10 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
         .find(|p| p.is_file())
         .ok_or("no transcript for that session")?;
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let patterns: Vec<String> = types.iter().map(|t| format!("\"type\":\"{t}\"")).collect();
+    let patterns: Vec<String> = types.iter().map(|t| type_marker(t)).collect();
     let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
     // A nested object can say `"type":"user"` too, so the entry's own type is checked once it's parsed.
-    let entry = |l: &str| {
-        serde_json::from_str::<Value>(l).ok().filter(|v| v.get("type").and_then(Value::as_str).is_some_and(|t| types.iter().any(|x| x == t)))
-    };
+    let entry = |l: &str| serde_json::from_str::<Value>(l).ok().filter(|v| types.iter().any(|t| is_type(t, v)));
     Ok(match last {
         Some(n) => {
             let mut newest: Vec<Value> = text.lines().rev().filter(mentions).filter_map(entry).take(n.min(TRANSCRIPT_LAST_MAX)).collect();
@@ -467,6 +484,11 @@ pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
 /// backslashes, `$`, globs or operators; single-quoted, such a word reads the same in sh, bash, zsh and fish.
 fn plain_word(word: &str) -> bool {
     !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_./:=@%+,".contains(&b))
+}
+
+/// Whether the plugin may read what Claude Code told `wings statusline`.
+pub fn may_read_statusline(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.statusline
 }
 
 /// Whether the plugin may open terminals and move focus between panes.
@@ -578,13 +600,12 @@ pub fn transcript_event(running: &[Plugin], line: crate::tail::Line) -> Option<T
     let text = std::str::from_utf8(&line.bytes).ok()?;
     // Most lines are large tool output of a type no plugin reads, so look before parsing.
     let types = || running.iter().flat_map(|p| &p.manifest.permissions.transcript);
-    if !types().any(|t| text.contains(&format!("\"type\":\"{t}\""))) {
+    if !types().any(|t| text.contains(&type_marker(t))) {
         return None;
     }
     let entry: Value = serde_json::from_str(text).ok()?;
-    let kind = entry.get("type")?.as_str()?;
     let plugins: Vec<String> =
-        running.iter().filter(|p| p.manifest.permissions.transcript.iter().any(|t| t == kind)).map(|p| p.manifest.id.clone()).collect();
+        running.iter().filter(|p| p.manifest.permissions.transcript.iter().any(|t| is_type(t, &entry))).map(|p| p.manifest.id.clone()).collect();
     (!plugins.is_empty()).then_some(TranscriptEvent { session_id: line.session_id, pane_id: line.pane_id, entry, plugins })
 }
 
@@ -883,6 +904,59 @@ mod tests {
         let line = |bytes: &[u8]| crate::tail::Line { pane_id: "p1".into(), session_id: "s1".into(), bytes: bytes.to_vec() };
         assert!(transcript_event(&running, line(b"{\"type\":\"user\",\"x\":\"\xff\"}")).is_none());
         assert!(transcript_event(&[], line(b"{\"type\":\"user\"}")).is_none());
+    }
+
+    #[test]
+    fn attachment_kinds_narrow_what_a_plugin_reads() {
+        let claude = std::env::temp_dir().join(format!("wings-tr-att-{}", std::process::id()));
+        let id = "5c21b0c5-8113-4f55-9493-fa156c3fa369";
+        fs::create_dir_all(claude.join("projects/-x")).unwrap();
+        let lines = [
+            r#"{"type":"attachment","attachment":{"type":"model","identity":{"modelId":"claude-opus-5-5[1m]"}}}"#,
+            r#"{"type":"attachment","attachment":{"type":"file","content":"secret source"}}"#,
+            // Says `"type":"model"` inside, but isn't a model attachment.
+            r#"{"type":"user","message":{"content":[{"type":"model"}]}}"#,
+            r#"{"type":"attachment","attachment":{"type":"deferred_tools_delta","failedMcpServers":[]}}"#,
+        ];
+        fs::write(claude.join(format!("projects/-x/{id}.jsonl")), lines.join("\n")).unwrap();
+        let p = plugin(&claude, &[], &["attachment:model", "attachment:deferred_tools_delta"]);
+        let kinds = |entries: Vec<Value>| entries.iter().map(|e| e["attachment"]["type"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let both = ["attachment:model".into(), "attachment:deferred_tools_delta".into()];
+        assert_eq!(kinds(transcript_entries(&p, &claude, id, &both, None).unwrap()), ["model", "deferred_tools_delta"]);
+        assert_eq!(kinds(transcript_entries(&p, &claude, id, &["attachment:model".into()], Some(5)).unwrap()), ["model"]);
+        // One kind doesn't allow every attachment, or another kind.
+        assert!(transcript_entries(&p, &claude, id, &["attachment".into()], None).is_err());
+        assert!(transcript_entries(&p, &claude, id, &["attachment:file".into()], None).is_err());
+        // A plain `attachment` permission still reads them all.
+        let all = plugin(&claude, &[], &["attachment"]);
+        assert_eq!(transcript_entries(&all, &claude, id, &["attachment".into()], None).unwrap().len(), 3);
+        let _ = fs::remove_dir_all(&claude);
+
+        let mut narrow = plugin(Path::new("/tmp"), &[], &["attachment:model"]);
+        narrow.manifest.id = "narrow".into();
+        let mut wide = plugin(Path::new("/tmp"), &[], &["attachment"]);
+        wide.manifest.id = "wide".into();
+        let running = [narrow, wide];
+        let event = |text: &str| transcript_event(&running, crate::tail::Line { pane_id: "p1".into(), session_id: "s1".into(), bytes: text.as_bytes().to_vec() });
+        assert_eq!(event(lines[0]).unwrap().plugins, ["narrow", "wide"]);
+        assert_eq!(event(lines[1]).unwrap().plugins, ["wide"]);
+        assert!(event(lines[2]).is_none());
+    }
+
+    #[test]
+    fn statusline_needs_its_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-statusline-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_read_statusline(&manifest(serde_json::json!({}))));
+        assert!(!may_read_statusline(&manifest(serde_json::json!({ "transcript": ["assistant"] }))));
+        assert!(may_read_statusline(&manifest(serde_json::json!({ "statusline": true }))));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! `wings plugin ...`: install and manage plugins from a terminal or a script. It talks to the running Wings
-//! over its socket, so the app's list, the Plugins sheet and Claude's tools stay in step.
+//! over its socket, so the app's list, the Plugins sheet and Claude's tools stay in step. `wings statusline`
+//! passes Claude Code's status line data on the same way.
 
 use std::{
     io::{BufRead, BufReader, Write},
@@ -74,10 +75,13 @@ fn fail(message: &str) -> i32 {
     1
 }
 
+fn socket() -> Result<PathBuf, String> {
+    Ok(dirs::data_dir().ok_or("Couldn't find the app data folder")?.join(IDENTIFIER).join("mcp.sock"))
+}
+
 /// One request to the running app.
 fn ask(op: &str, mut request: Value) -> Result<Value, String> {
-    let socket = dirs::data_dir().ok_or("Couldn't find the app data folder")?.join(IDENTIFIER).join("mcp.sock");
-    let stream = UnixStream::connect(&socket).map_err(|_| "Wings isn't running. Open Wings and try again.".to_string())?;
+    let stream = UnixStream::connect(socket()?).map_err(|_| "Wings isn't running. Open Wings and try again.".to_string())?;
     request["op"] = json!(op);
     request["id"] = json!(1);
     writeln!(&stream, "{request}").map_err(|e| e.to_string())?;
@@ -93,6 +97,29 @@ fn ask(op: &str, mut request: Value) -> Result<Value, String> {
         return Ok(message.get("result").cloned().unwrap_or(Value::Null));
     }
     Err("Wings closed the connection".into())
+}
+
+/// Claude Code's status JSON is a few KB.
+const STATUS_LIMIT: u64 = 256 * 1024;
+
+/// `wings statusline`, for Claude Code's `statusLine` setting. Passes the status JSON Claude Code writes to stdin
+/// on to the running Wings, for plugins to show, and prints nothing, which leaves Claude Code's status line blank.
+/// Without Wings open it does nothing.
+pub fn statusline() -> i32 {
+    use std::io::{IsTerminal, Read};
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        eprintln!("wings statusline is Claude Code's statusLine command: it reads the status Claude Code sends it.");
+        return 2;
+    }
+    // The first JSON value, without waiting for the input to end, in case Claude Code keeps it open.
+    let Some(Ok(status)) = serde_json::Deserializer::from_reader(stdin.lock().take(STATUS_LIMIT)).into_iter::<Value>().next() else { return 0 };
+    if let Ok(stream) = socket().and_then(|s| UnixStream::connect(s).map_err(|e| e.to_string())) {
+        // Claude Code waits for this command, so a stuck Wings mustn't hold it up.
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(1)));
+        let _ = writeln!(&stream, "{}", json!({ "op": "statusline", "id": 1, "status": status }));
+    }
+    0
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
