@@ -473,7 +473,7 @@ export class PluginHost {
       case "setSidebarLabel": {
         const sidebarId = String(p.sidebarId);
         if (!plugin.sidebars.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar ${sidebarId}`);
-        const text = p.label === null ? undefined : str(p.label, 16);
+        const text = p.label === null ? undefined : str(p.label, 40);
         const rows = (Array.isArray(p.rows) ? p.rows : []).slice(0, 6).flatMap((r) => {
           const label = str(r?.label, 40);
           const value = str(r?.value, 120);
