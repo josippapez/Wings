@@ -170,6 +170,13 @@ export default function App() {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  // The tab shown before this one keeps its terminals' WebGL renderers: rebuilding one takes about 10 ms a pane and
+  // releasing one about 4, so switching back and forth took 8 ms instead of 40. Older tabs release theirs, since each
+  // kept renderer holds GPU memory and WebKit allows 16 WebGL contexts per page.
+  const recentTabs = useRef<string[]>([]);
+  if (activeTabId && recentTabs.current[0] !== activeTabId) {
+    recentTabs.current = [activeTabId, ...recentTabs.current.filter((id) => id !== activeTabId)].slice(0, 2);
+  }
   const activeSpaceIdRef = useRef(activeSpaceId);
   activeSpaceIdRef.current = activeSpaceId;
   const focusedPaneId = activeTab ? (panes[activeTab.focusedPane]?.paneId ?? null) : null;
@@ -770,6 +777,7 @@ export default function App() {
                     key={tab.id}
                     layout={tab.layout}
                     visible={tab.id === activeTabId}
+                    keepRenderer={recentTabs.current.includes(tab.id)}
                     focusedPane={tab.focusedPane}
                     zoomedPane={tab.zoomedPane}
                     labels={labels}
