@@ -1,5 +1,6 @@
 // Follows each Claude session in a pane: a badge with its model and context, and a sidebar with recent activity.
-// It reads the newest transcript entries once per session, then only what Claude appends.
+// It reads the newest transcript entries once per run of `claude`, then only what Claude appends. A resumed
+// session's transcript also holds earlier runs, which only count for the model and context.
 
 const BACKLOG = 300;
 const KEEP = 150;
@@ -47,10 +48,13 @@ function ingest(s, entry) {
   if (entry.isSidechain) return;
   const at = Date.parse(entry.timestamp) || Date.now();
   const message = entry.message ?? {};
+  // A couple of seconds of slack, since the process start time is only to the second.
+  const earlierRun = s.startedAt && at < s.startedAt - 2000;
   if (entry.type === "assistant") {
     if (message.model && message.model !== "<synthetic>") s.model = message.model;
     const u = message.usage;
     if (u) s.context = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    if (earlierRun) return;
     for (const block of Array.isArray(message.content) ? message.content : []) {
       if (block?.type !== "tool_use") continue;
       const item = { kind: "tool", id: block.id, name: toolName(String(block.name)), summary: summary(block.name, block.input), at, ms: null, error: false, done: false };
@@ -59,7 +63,7 @@ function ingest(s, entry) {
       const path = EDITS.has(block.name) ? (block.input?.file_path ?? block.input?.notebook_path) : null;
       if (path) s.files.set(path, (s.files.get(path) ?? 0) + 1);
     }
-  } else if (entry.type === "user" && !entry.isMeta) {
+  } else if (entry.type === "user" && !entry.isMeta && !earlierRun) {
     const content = message.content;
     if (typeof content === "string") {
       if (typed(content)) {
@@ -150,23 +154,24 @@ function flush() {
 }
 
 wings.onPanes(async (list) => {
+  const open = new Set(list.map((p) => p.paneId));
   const next = new Map(list.filter((p) => p.session).map((p) => [p.paneId, p]));
-  // A pane that stopped running Claude loses its badge.
+  // A pane that stopped running this session loses its badge. Wings drops the badges of closed panes itself.
   for (const [paneId, s] of panes) {
     if (next.get(paneId)?.session.sessionId !== s.id) {
       s.paneId = null;
-      if (!next.has(paneId)) continue;
-      void wings.setBadge(paneId, null).catch(() => {});
+      if (open.has(paneId)) void wings.setBadge(paneId, null).catch(() => {});
     }
   }
   const current = new Map();
   for (const [paneId, pane] of next) {
     const s = session(pane.session.sessionId);
-    const isNew = !s.loaded;
+    // A new `claude` process, even for the same session after a resume, starts the activity afresh.
+    const isNew = !s.loaded || s.startedAt !== pane.session.startedAt;
     Object.assign(s, { paneId, project: pane.project, name: pane.session.name, state: pane.session.state });
     current.set(paneId, s);
     if (isNew) {
-      s.loaded = true;
+      Object.assign(s, { loaded: true, startedAt: pane.session.startedAt, items: [], tools: new Map(), files: new Map(), lastPrompt: null });
       try {
         for (const entry of await wings.transcript(s.id, ["assistant", "user"], { last: BACKLOG })) ingest(s, entry);
       } catch (error) {
