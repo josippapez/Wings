@@ -1,3 +1,4 @@
+mod bench;
 mod claude;
 #[cfg(unix)]
 mod claude_settings;
@@ -1032,11 +1033,15 @@ fn start_git_status(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // A benchmark run would save its window size over yours.
+    if !bench_mode() {
+        builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .menu(menu::build)
@@ -1067,17 +1072,20 @@ pub fn run() {
                 notified: Mutex::default(),
                 statusline: Mutex::default(),
             });
-            #[cfg(unix)]
-            mcp::start(app.handle().clone(), mcp::socket_path(&data));
-            connect_claude_on_start(app.handle().clone());
-            #[cfg(target_os = "macos")]
-            privacy::watch(app.handle().clone());
             if bench_mode() {
-                // Keep the window on screen without taking focus, so rendering is not throttled.
+                // Keep the window on screen without taking focus, so rendering is not throttled. A fixed size makes
+                // runs comparable.
                 if let Some(window) = app.get_webview_window("main") {
                     window.set_always_on_top(true)?;
+                    window.set_size(tauri::LogicalSize::new(1440.0, 900.0))?;
                 }
             } else {
+                // Not while benchmarking: the MCP socket would replace the one of the Wings you're using.
+                #[cfg(unix)]
+                mcp::start(app.handle().clone(), mcp::socket_path(&data));
+                connect_claude_on_start(app.handle().clone());
+                #[cfg(target_os = "macos")]
+                privacy::watch(app.handle().clone());
                 start_detection(app.handle().clone());
                 start_git_status(app.handle().clone());
                 gitwatch::start(app.handle().clone());
@@ -1138,6 +1146,10 @@ pub fn run() {
             plugin_notify,
             bench_mode,
             bench_report,
+            bench::bench_config,
+            bench::bench_recording,
+            bench::bench_replay,
+            bench::bench_sample,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

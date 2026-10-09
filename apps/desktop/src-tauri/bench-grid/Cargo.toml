@@ -1,0 +1,9 @@
+[package]
+name = "wings-bench-grid"
+version = "0.1.0"
+edition = "2021"
+description = "Benchmark-only prototype: parses PTY output with alacritty_terminal and encodes changed rows for a canvas renderer"
+publish = false
+
+[dependencies]
+alacritty_terminal = "0.26.0"

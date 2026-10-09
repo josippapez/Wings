@@ -55,6 +55,10 @@ const COMMANDS: &[&str] = &[
     "plugin_notify",
     "bench_mode",
     "bench_report",
+    "bench_config",
+    "bench_recording",
+    "bench_replay",
+    "bench_sample",
 ];
 
 fn main() {

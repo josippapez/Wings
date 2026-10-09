@@ -28,6 +28,7 @@ State a number for the change, not "feels faster".
 
   Count the expensive calls during the gesture, for example `window.__calls.filter(c => c.cmd === "pane_resize").length` while a sidebar opens. It should be 1, not one per frame. Sample sizes with `requestAnimationFrame` to check an animation runs and how long it takes. `agent-browser mouse down`, `move` and `up` drive a drag.
 - **Terminal rendering.** `WINGS_BENCH=1` runs `apps/desktop/src/bench.ts` inside the real webview and prints a report.
+- **Renderer comparison and memory.** `apps/desktop/scripts/bench-renderers.sh` replays a recorded Claude Code session into many panes per renderer and reports footprints, graphics memory, CPU and frame times (see `apps/desktop/README.md`). In Chromium, load `bench-stub.js` after `tauri-stub.js` and open `/?renderer=dom|webgl|canvas|canvas-shared`.
 - **Plugin exec calls.** The dev log prints `[plugin] <id> <program> took N ms` for every call.
 
 The stub runs in Chromium. CSS transitions and WebGL behave differently in WKWebView, so check what the user will see in the built app too. Don't click through the GUI while the user is using their Mac. Capture the window instead.
