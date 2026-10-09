@@ -29,15 +29,16 @@ function toggle(sessionId, key) {
 function card(item) {
   const d = details.get(item.key);
   if (!d) return h("div", { class: "card muted" }, "Loading…");
-  if (d.kind === "prompt") return h("div", { class: "card" }, h("pre", {}, d.text));
+  const pre = (/** @type {string} */ part, /** @type {string} */ text, cls = "") => h("pre", { id: `pre-${item.key}-${part}`, class: cls }, text);
+  if (d.kind === "prompt") return h("div", { class: "card" }, pre("text", d.text));
   const at = new Date(d.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return h(
     "div",
     { class: "card" },
     h("p", { class: "muted" }, `Started ${at}`, d.done ? ` · ${d.error ? "failed after" : "took"} ${took(d.ms)}` : " · still running"),
-    ...d.input.flatMap(([/** @type {string} */ key, /** @type {string} */ value]) => [h("div", { class: "label" }, key), h("pre", {}, value)]),
+    ...d.input.flatMap(([/** @type {string} */ key, /** @type {string} */ value]) => [h("div", { class: "label" }, key), pre(key, value)]),
     d.result != null ? h("div", { class: "label" }, d.error ? "Error" : "Result") : null,
-    d.result != null ? h("pre", { class: d.error ? "warn" : "" }, d.result || "(no output)") : null,
+    d.result != null ? pre("result", d.result || "(no output)", d.error ? "warn" : "") : null,
   );
 }
 
@@ -61,8 +62,9 @@ const status = { working: "Working", blocked: "Waiting for you", done: "Finished
 const basename = (/** @type {string} */ path) => path.split("/").filter(Boolean).at(-1) ?? path;
 
 function render() {
-  // Rendering replaces the page, so keep focus on the row you toggled.
+  // Rendering replaces the page, so keep focus on the row you toggled and where each open card was scrolled to.
   const focused = document.activeElement?.id;
+  const scrolled = [...app.querySelectorAll("pre[id]")].map((el) => /** @type {const} */ ([el.id, el.scrollTop]));
   if (sessions === null) return app.replaceChildren(h("p", { class: "muted" }, "Loading…"));
   if (sessions.length === 0) {
     return app.replaceChildren(h("div", { class: "empty" }, h("p", {}, "No Claude session in your panes."), h("p", { class: "muted" }, "Run claude in a pane and its activity shows here.")));
@@ -134,7 +136,11 @@ function render() {
       : h("p", { class: "muted" }, highlightsOnly ? "No highlights in this run yet." : "Nothing yet."),
   );
   app.replaceChildren(...parts);
-  if (focused) document.getElementById(focused)?.focus();
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  for (const [id, top] of scrolled) {
+    const el = document.getElementById(id);
+    if (el) el.scrollTop = top;
+  }
 }
 
 wings.onBroadcast((message) => {
