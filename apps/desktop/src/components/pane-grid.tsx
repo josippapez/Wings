@@ -24,6 +24,8 @@ export type PaneActions = {
 type GridProps = {
   layout: LayoutNode;
   visible: boolean;
+  /** Hidden but recently shown: its terminals keep their WebGL renderers. */
+  keepRenderer: boolean;
   focusedPane: string;
   zoomedPane: string | null;
   labels: Record<string, PaneLabelInfo>;
@@ -33,7 +35,10 @@ type GridProps = {
   actions: PaneActions;
 };
 
-/** One tab's panes. Every tab stays mounted (hidden when inactive) so terminals never lose their DOM. */
+/**
+ * One tab's panes. Every tab stays mounted (hidden when inactive) so terminals never lose their DOM; a restored
+ * tab's shells start the first time it's shown.
+ */
 export function PaneGrid(props: GridProps) {
   const root = props.zoomedPane ? ({ kind: "pane", id: props.zoomedPane } as const) : props.layout;
   return (
@@ -116,8 +121,8 @@ function PaneCard(props: GridProps & { paneKey: string }) {
   }, [paneKey, props.initialInputs]);
 
   useEffect(() => {
-    terminals.get(paneKey)?.setVisible(props.visible);
-  }, [paneKey, props.visible]);
+    terminals.get(paneKey)?.setVisible(props.visible, props.keepRenderer);
+  }, [paneKey, props.visible, props.keepRenderer]);
 
   useEffect(() => {
     if (props.visible && focused) terminals.get(paneKey)?.focus();

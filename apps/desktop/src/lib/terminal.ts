@@ -144,6 +144,7 @@ export class TerminalSession {
   private webgl: WebglAddon | null = null;
   private visible = false;
   private started = false;
+  private initialInput: string | null = null;
   // A sidebar slide or a drag changes the size every frame. Each refit reflows the scrollback and resizes the
   // PTY, which makes the shell or Claude redraw, so refit once the size has held still.
   private settle: ReturnType<typeof setTimeout> | undefined;
@@ -182,20 +183,16 @@ export class TerminalSession {
     this.el.addEventListener("focusin", handlers.onFocus);
   }
 
-  /** Puts the terminal in `host`. The first call also opens xterm and spawns the PTY; later calls just move it. */
+  /** Puts the terminal in `host`. xterm opens and the PTY spawns the first time it's shown (see `setVisible`). */
   attach(host: HTMLElement, initialInput: string | null) {
-    if (this.started) {
-      if (this.el.parentElement !== host) {
-        host.appendChild(this.el);
-        // A moved canvas keeps its pixels from before the move; repaint at the new size.
-        this.refit();
-        this.term.refresh(0, this.term.rows - 1);
-      }
-      return;
-    }
+    this.initialInput = initialInput;
+    if (this.el.parentElement === host) return;
     host.appendChild(this.el);
-    this.started = true;
-    void this.start(initialInput);
+    if (this.started) {
+      // A moved canvas keeps its pixels from before the move; repaint at the new size.
+      this.refit();
+      this.term.refresh(0, this.term.rows - 1);
+    }
   }
 
   private async start(initialInput: string | null) {
@@ -217,16 +214,26 @@ export class TerminalSession {
     this.resolveStarted(id);
   }
 
-  setVisible(visible: boolean) {
-    if (visible === this.visible) return;
-    this.visible = visible;
-    if (visible) {
-      this.enableWebgl();
-      this.refit();
-    } else {
-      // WebKit allows 16 WebGL contexts per page and silently drops the oldest, so only visible panes hold one.
-      this.webgl?.dispose();
-      this.webgl = null;
+  /**
+   * A restored tab's shells start the first time it's shown, so tabs nobody opens cost no PTY or terminal.
+   * `keepRenderer` lets a hidden pane keep its WebGL renderer, for the tab shown just before.
+   */
+  setVisible(visible: boolean, keepRenderer = false) {
+    if (visible && !this.started) {
+      this.started = true;
+      void this.start(this.initialInput);
+      return;
+    }
+    if (visible !== this.visible) {
+      this.visible = visible;
+      if (visible) {
+        this.enableWebgl();
+        this.refit();
+      }
+    }
+    // WebKit allows 16 WebGL contexts per page and silently drops the oldest, so hidden panes give theirs up.
+    if (!visible && !keepRenderer) {
+      this.disableWebgl();
     }
   }
 
@@ -243,6 +250,7 @@ export class TerminalSession {
   dispose() {
     clearTimeout(this.settle);
     this.resizeObserver.disconnect();
+    this.disableWebgl();
     if (this.paneId) void api.paneClose(this.paneId);
     this.term.dispose();
     this.el.remove();
@@ -250,6 +258,18 @@ export class TerminalSession {
 
   private refit() {
     if (this.visible && this.el.isConnected && this.el.clientWidth > 0) this.fit.fit();
+  }
+
+  private disableWebgl() {
+    if (!this.webgl) return;
+    const canvases = [...this.el.querySelectorAll("canvas")];
+    this.webgl.dispose();
+    this.webgl = null;
+    // The addon only removes its canvas, so the context and its GPU memory stay until the canvas is garbage
+    // collected. Lose it now. The addon's 2D link layer canvas returns null here.
+    for (const canvas of canvases) {
+      if (!canvas.isConnected) canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
   }
 
   private enableWebgl() {
