@@ -40,7 +40,7 @@ const theme = {
 export const isMac = /Mac/.test(navigator.userAgent);
 
 export type Action =
-  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" }
+  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" }
   | { kind: "tab"; index: number }
   | { kind: "focus"; dir: "left" | "right" | "up" | "down" };
 
@@ -57,7 +57,7 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
     return { kind: "focus", dir: e.code.slice(5).toLowerCase() as "left" | "right" | "up" | "down" };
   }
   const typed = e.key.length === 1 && /[\x21-\x7e]/.test(e.key) ? e.key.toLowerCase() : null;
-  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
+  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
   const key = typed ?? fromCode[e.code] ?? (/^Digit\d$/.test(e.code) ? e.code.slice(5) : null);
   const extra = isMac ? e.shiftKey : e.altKey;
   switch (key) {
@@ -76,6 +76,9 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
       return { kind: "fontDown" };
     case "0":
       return { kind: "fontReset" };
+    case "r":
+      // Reloads only the UI; the terminals keep running and come back. For trying UI changes in dev.
+      return import.meta.env.DEV && !extra ? { kind: "reload" } : null;
   }
   if (key && /^[1-9]$/.test(key)) return { kind: "tab", index: Number(key) - 1 };
   return null;
@@ -161,6 +164,8 @@ export class TerminalSession {
     private handlers: { onFocus: () => void; onStarted: (paneId: string) => void },
     /** A folder inside the project to start in, instead of its root. */
     private cwd: string | null = null,
+    /** A Rust pane still running from before a webview reload, to show again instead of starting a shell. */
+    private attachTo: string | null = null,
   ) {
     this.el.className = "h-full w-full";
     this.term.loadAddon(this.fit);
@@ -202,16 +207,34 @@ export class TerminalSession {
     this.fit.fit();
     this.resizeObserver.observe(this.el);
 
-    const output = new Channel<ArrayBuffer>((buf) => this.term.write(new Uint8Array(buf)));
-    this.paneId = await api.paneCreate(this.spaceId, this.term.cols, this.term.rows, initialInput, output, this.cwd).catch((e) => {
-      this.resolveStarted(null);
-      throw e;
-    });
+    // A failed attach ends its channel, so the shell started instead gets a new one.
+    const output = () => new Channel<ArrayBuffer>((buf) => this.term.write(new Uint8Array(buf)));
+    const attachTo = this.attachTo;
+    const attached = attachTo !== null && (await api.paneAttach(attachTo, output()).then(() => true, () => false));
+    // The pane exited during the reload: start over, as after a restart (a Claude pane resumes its session).
+    this.paneId = attached
+      ? attachTo
+      : await api.paneCreate(this.spaceId, this.term.cols, this.term.rows, initialInput, output(), this.cwd).catch((e) => {
+          this.resolveStarted(null);
+          throw e;
+        });
     const id = this.paneId;
+    if (attached) this.repaint(id);
     this.term.onData((data) => void api.paneWrite(id, data));
     this.term.onResize(({ cols, rows }) => void api.paneResize(id, cols, rows));
     this.handlers.onStarted(id);
     this.resolveStarted(id);
+  }
+
+  /**
+   * Makes the program in a reattached pane draw its screen again at this terminal's size. Resizing to the size the
+   * PTY already has signals nothing, and Node (Claude Code) redraws only when the size it reads has changed, so step
+   * a row off and back, far enough apart that it reads both.
+   */
+  private repaint(id: string) {
+    const { cols, rows } = this.term;
+    void api.paneResize(id, cols, rows > 1 ? rows - 1 : rows + 1);
+    setTimeout(() => void api.paneResize(id, this.term.cols, this.term.rows), 100);
   }
 
   /**

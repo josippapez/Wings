@@ -163,12 +163,41 @@ fn pane_close(state: State<AppState>, id: String) {
     }
 }
 
-/// Called when the UI loads. Panes from a previous load (a webview reload) have no terminal left, so kill them.
+/// A running pane, for a UI that loads again (a webview reload) to find its terminals.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PaneView {
+    id: String,
+    space_id: String,
+    cwd: PathBuf,
+}
+
 #[tauri::command]
-fn panes_reset(state: State<AppState>) {
-    for (_, pane) in state.panes.lock().unwrap().drain() {
-        pane.kill();
+fn panes_list(state: State<AppState>) -> Vec<PaneView> {
+    let panes = state.panes.lock().unwrap();
+    panes.values().map(|p| PaneView { id: p.id.clone(), space_id: p.space_id.clone(), cwd: p.cwd.clone() }).collect()
+}
+
+/// Streams a running pane to a UI that loaded since, after the output it missed.
+#[tauri::command]
+fn pane_attach(state: State<AppState>, id: String, on_output: Channel<InvokeResponseBody>) -> Res<()> {
+    if cfg!(debug_assertions) {
+        eprintln!("[pane] attach {id}");
     }
+    pane(&state, &id)?.attach(on_output).map_err(err)
+}
+
+/// Called when the UI loads. Panes from a previous load (a webview reload) that it doesn't attach to again have no
+/// terminal left, so kill them.
+#[tauri::command]
+fn panes_reset(state: State<AppState>, keep: Vec<String>) {
+    state.panes.lock().unwrap().retain(|id, pane| {
+        let kept = keep.contains(id);
+        if !kept {
+            pane.kill();
+        }
+        kept
+    });
 }
 
 #[tauri::command]
@@ -1066,6 +1095,8 @@ pub fn run() {
             pane_resize,
             pane_close,
             panes_reset,
+            panes_list,
+            pane_attach,
             pane_focus,
             agents_list,
             pane_info,

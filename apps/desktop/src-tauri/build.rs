@@ -11,6 +11,8 @@ const COMMANDS: &[&str] = &[
     "pane_resize",
     "pane_close",
     "panes_reset",
+    "panes_list",
+    "pane_attach",
     "pane_focus",
     "agents_list",
     "pane_info",

@@ -25,6 +25,9 @@ export type GitStatus = { branch: string | null; ahead: number; behind: number; 
 /** What a pane runs right now and where: the shell's cwd follows `cd`. */
 export type PaneInfo = { command: string; cwd: string | null };
 
+/** A pane still running in the Rust core, which a reloaded UI can attach to again. */
+export type LivePane = { id: string; spaceId: string; cwd: string };
+
 export type PluginPermissions = {
   exec: string[];
   transcript: string[];
@@ -169,7 +172,11 @@ export const api = {
   paneWrite: (id: string, data: string) => invoke<void>("pane_write", { id, data }),
   paneResize: (id: string, cols: number, rows: number) => invoke<void>("pane_resize", { id, cols, rows }),
   paneClose: (id: string) => invoke<void>("pane_close", { id }),
-  panesReset: () => invoke<void>("panes_reset"),
+  panesList: () => invoke<LivePane[]>("panes_list"),
+  /** Streams a running pane to `onOutput`, starting with the output it kept. */
+  paneAttach: (id: string, onOutput: Channel<ArrayBuffer>) => invoke<void>("pane_attach", { id, onOutput }),
+  /** Kills every pane but `keep`, the ones this UI attaches to again. */
+  panesReset: (keep: string[]) => invoke<void>("panes_reset", { keep }),
   workspaceLoad: () => invoke<string | null>("workspace_load"),
   workspaceSave: (json: string) => invoke<void>("workspace_save", { json }),
   paneFocus: (id: string | null) => invoke<void>("pane_focus", { id }),
