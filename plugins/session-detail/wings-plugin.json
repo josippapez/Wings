@@ -1,14 +1,15 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Shows what each Claude session is doing: its model, context size, the tool it's running, and recent tool calls and edited files.",
   "api": 1,
   "main": "main.js",
   "permissions": {
     "transcript": [
       "assistant",
-      "user"
+      "user",
+      "attachment"
     ]
   },
   "contributes": {

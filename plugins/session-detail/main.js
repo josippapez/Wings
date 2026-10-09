@@ -2,7 +2,8 @@
 // It reads the newest transcript entries once per run of `claude`, then only what Claude appends. A resumed
 // session's transcript also holds earlier runs, which only count for the model and context.
 
-const BACKLOG = 300;
+// Many entries are small attachments, so this reaches back a bit further than the number suggests.
+const BACKLOG = 500;
 const KEEP = 150;
 const EDITS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -14,11 +15,23 @@ let panes = new Map();
 function session(id) {
   let s = sessions.get(id);
   if (!s) {
-    s = { id, paneId: null, project: "", name: null, state: "idle", model: null, context: null, items: [], tools: new Map(), files: new Map(), lastPrompt: null, updated: 0 };
+    s = { id, paneId: null, project: "", name: null, state: "idle", model: null, context: null, items: [], tools: new Map(), files: new Map(), lastPrompt: null, updated: 0, tokens: emptyTokens(), partial: false };
     sessions.set(id, s);
   }
   return s;
 }
+
+const emptyTokens = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+let nextKey = 1;
+
+/** The fields of a tool call's input, each cut short, for the detail card. */
+function inputFields(input = {}) {
+  return Object.entries(input ?? {}).slice(0, 12).map(([key, value]) => [key, clip(typeof value === "string" ? value : JSON.stringify(value), 2000)]);
+}
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+/** Text from a tool result or a prompt, which is a string or a list of content blocks. */
+const textOf = (content) =>
+  typeof content === "string" ? content : Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text).join("\n") : "";
 
 const basename = (path) => String(path ?? "").split("/").filter(Boolean).at(-1) ?? "";
 const oneLine = (text, max = 90) => {
@@ -44,6 +57,11 @@ const toolName = (name) => (name.startsWith("mcp__") ? name.slice(5).split("__")
 /** Claude's own prompt wrappers, interrupt markers and the like aren't things you typed. */
 const typed = (text) => text && !text.startsWith("<") && !text.startsWith("[Request interrupted");
 
+function prompt(s, text, at) {
+  s.lastPrompt = oneLine(text, 200);
+  s.items.push({ kind: "prompt", key: `prompt-${nextKey++}`, summary: oneLine(text, 140), text: clip(text, 4000), at });
+}
+
 function ingest(s, entry) {
   if (entry.isSidechain) return;
   const at = Date.parse(entry.timestamp) || Date.now();
@@ -55,21 +73,31 @@ function ingest(s, entry) {
     const u = message.usage;
     if (u) s.context = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     if (earlierRun) return;
+    if (u) {
+      s.tokens.input += u.input_tokens ?? 0;
+      s.tokens.output += u.output_tokens ?? 0;
+      s.tokens.cacheRead += u.cache_read_input_tokens ?? 0;
+      s.tokens.cacheWrite += u.cache_creation_input_tokens ?? 0;
+    }
     for (const block of Array.isArray(message.content) ? message.content : []) {
       if (block?.type !== "tool_use") continue;
-      const item = { kind: "tool", id: block.id, name: toolName(String(block.name)), summary: summary(block.name, block.input), at, ms: null, error: false, done: false };
+      const item = { kind: "tool", key: block.id, id: block.id, name: toolName(String(block.name)), summary: summary(block.name, block.input), input: inputFields(block.input), result: null, at, ms: null, error: false, done: false };
       s.tools.set(block.id, item);
       s.items.push(item);
       const path = EDITS.has(block.name) ? (block.input?.file_path ?? block.input?.notebook_path) : null;
       if (path) s.files.set(path, (s.files.get(path) ?? 0) + 1);
     }
+  } else if (entry.type === "attachment" && !earlierRun) {
+    // A message you send while Claude is working arrives as a queued command, not a user entry.
+    const a = entry.attachment;
+    if (a?.type === "queued_command" && a.humanTurn === true) {
+      const text = textOf(a.prompt);
+      if (typed(text)) prompt(s, text, at);
+    }
   } else if (entry.type === "user" && !entry.isMeta && !earlierRun) {
     const content = message.content;
     if (typeof content === "string") {
-      if (typed(content)) {
-        s.lastPrompt = oneLine(content, 200);
-        s.items.push({ kind: "prompt", summary: oneLine(content, 140), at });
-      }
+      if (typed(content)) prompt(s, content, at);
       return;
     }
     for (const block of Array.isArray(content) ? content : []) {
@@ -79,6 +107,7 @@ function ingest(s, entry) {
       item.done = true;
       item.error = block.is_error === true;
       item.ms = Math.max(0, at - item.at);
+      item.result = clip(textOf(block.content), 1500);
       s.tools.delete(block.tool_use_id);
     }
   }
@@ -91,6 +120,10 @@ const modelName = (model) => {
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : (model ?? "");
 };
 const tokens = (n) => (n == null ? "—" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+const tokenLine = (s) => {
+  const t = s.tokens;
+  return `${tokens(t.input + t.output + t.cacheRead + t.cacheWrite)}${s.partial ? "+" : ""} (in ${tokens(t.input)}, out ${tokens(t.output)}, cache ${tokens(t.cacheRead + t.cacheWrite)})`;
+};
 const running = (s) => [...s.tools.values()].filter((t) => !t.done);
 
 function badge(s) {
@@ -108,6 +141,7 @@ function badge(s) {
       { label: "Model", value: modelName(s.model) || "—" },
       { label: "Context", value: s.context != null ? `${tokens(s.context)} tokens` : "—" },
       { label: "Files edited", value: String(s.files.size) },
+      { label: "Tokens", value: tokenLine(s) },
       ...(s.lastPrompt ? [{ label: "Last prompt", value: s.lastPrompt }] : []),
     ],
   };
@@ -125,8 +159,9 @@ function snapshot() {
       state: s.state,
       model: modelName(s.model),
       context: s.context,
+      tokens: tokenLine(s),
       running: running(s).map(({ name, summary, at }) => ({ name, summary, at })),
-      items: s.items.slice(-n).reverse().map(({ kind, name, summary, at, ms, error, done }) => ({ kind, name, summary, at, ms, error, done })),
+      items: s.items.slice(-n).reverse().map(({ kind, key, name, summary, at, ms, error, done }) => ({ kind, key, name, summary, at, ms, error, done })),
       files: [...s.files].sort((a, b) => b[1] - a[1]).slice(0, 30),
     }));
   for (const n of [80, 40, 15, 0]) {
@@ -171,9 +206,12 @@ wings.onPanes(async (list) => {
     Object.assign(s, { paneId, project: pane.project, name: pane.session.name, state: pane.session.state });
     current.set(paneId, s);
     if (isNew) {
-      Object.assign(s, { loaded: true, startedAt: pane.session.startedAt, items: [], tools: new Map(), files: new Map(), lastPrompt: null });
+      Object.assign(s, { loaded: true, startedAt: pane.session.startedAt, items: [], tools: new Map(), files: new Map(), lastPrompt: null, tokens: emptyTokens(), partial: false });
       try {
-        for (const entry of await wings.transcript(s.id, ["assistant", "user"], { last: BACKLOG })) ingest(s, entry);
+        const backlog = await wings.transcript(s.id, ["assistant", "user", "attachment"], { last: BACKLOG });
+        // A full backlog that starts after this run began missed some of it, so its token total is a floor.
+        s.partial = backlog.length >= BACKLOG && (Date.parse(backlog[0]?.timestamp) || 0) > (s.startedAt ?? 0);
+        for (const entry of backlog) ingest(s, entry);
       } catch (error) {
         console.error(error);
       }
@@ -191,7 +229,13 @@ wings.onTranscript(({ sessionId, entry }) => {
   changed(s);
 });
 
-// A sidebar that just opened asks for the current state.
+// A sidebar that just opened asks for the current state, and one that opens a row asks for its detail.
 wings.onBroadcast((message) => {
   if (message?.type === "hello") void wings.broadcast({ type: "sessions", sessions: snapshot() });
+  if (message?.type === "detail") {
+    const item = sessions.get(message.sessionId)?.items.find((i) => i.key === message.key);
+    if (!item) return;
+    const { kind, name, at, ms, error, done, input, result, text } = item;
+    void wings.broadcast({ type: "detail", sessionId: message.sessionId, key: message.key, detail: { kind, name, at, ms, error, done, input, result, text } });
+  }
 });

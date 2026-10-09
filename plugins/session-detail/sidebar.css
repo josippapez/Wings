@@ -72,9 +72,6 @@ h2 {
   white-space: nowrap;
 }
 .prompt {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
   border-left: 2px solid var(--wings-info);
   border-radius: 0 6px 6px 0;
   margin: 4px 0;
@@ -121,4 +118,67 @@ h2 {
   gap: 4px;
   padding: 24px 4px;
   text-align: center;
+}
+
+/* Each activity row is a button that opens its card. */
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-weight: inherit;
+  text-align: left;
+  justify-content: flex-start;
+}
+.toggle:active {
+  transform: none;
+}
+.toggle:hover {
+  background: var(--wings-hover);
+}
+.list li {
+  padding: 0;
+}
+.list li:hover {
+  background: none;
+}
+.prompt .toggle {
+  align-items: baseline;
+}
+.clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card {
+  margin: 2px 6px 8px 20px;
+  padding: 8px 10px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: 8px;
+  background: var(--wings-surface);
+  font-size: 12px;
+}
+.card .label {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--wings-muted);
+}
+.card pre {
+  margin: 2px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px/1.45 var(--wings-mono);
+}
+.tokens {
+  margin: -4px 2px 0;
+  font-size: 12px;
 }
