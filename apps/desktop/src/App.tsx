@@ -912,7 +912,14 @@ export default function App() {
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
-        <DiffViewer diff={diff} onClose={() => setDiff(null)} />
+        <DiffViewer
+          diff={diff}
+          onClose={() => setDiff(null)}
+          onReply={async (view, replyTo, body) => {
+            if (!pluginHost.current) throw new Error("Plugins aren't running");
+            await pluginHost.current.sendReply(view.pluginId, view.id, replyTo, body);
+          }}
+        />
         <PluginManager
           open={pluginsOpen}
           onOpenChange={setPluginsOpen}

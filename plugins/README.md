@@ -67,6 +67,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | Permission | Allows |
 |---|---|
 | `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments |
+| `post` | POSTing to these API paths through a signed-in CLI with `wings.post`. Each entry is `gh`, `glab` or `az` and a path where `*` stands for one segment, like `gh repos/*/*/pulls/*/comments/*/replies`. `az` paths are full `https://` URLs. `exec` itself refuses every flag that writes, like `-X` or `--method` |
 | `transcript` | Reading these Claude Code transcript entry types. `attachment:<kind>`, like `attachment:model`, allows one kind of attachment entry: attachments include whole files and hook output, so ask for the kinds you need rather than `attachment` |
 | `openUrl` | Opening https URLs that start with these prefixes |
 | `fetch` | Calling https URLs that start with these prefixes through `wings.fetch`, like an API's base URL ending in `/` |
@@ -109,6 +110,8 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.notify({ title, body? })` | A desktop notification, with your plugin's name before the title. The title is cut at 64 characters and the body at 256. Up to 3 a minute per plugin; more are refused with how long to wait. Clicking it does nothing |
 | `wings.openDiff({ title, subtitle, patch?, comments? })` | Opens the diff viewer and resolves `{ id }`. Without `patch` it opens in a loading state |
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
+| `wings.onReply(handler)` | A reply typed in the diff viewer under a comment with `canReply`: `handler({ diffId, replyTo, body })`, where `replyTo` is the thread's first comment. Post it, then add it with `updateDiff`. The reply box waits for the returned promise, and a thrown error shows under it with the text kept |
+| `wings.post(program, url, fields, { host })` | POSTs `fields` (string or whole-number values, up to 64 KB) as JSON to a `permissions.post` path, as you: `gh api`, `glab api` against `host`, or `az rest` for Azure DevOps. Wings builds the command itself. Resolves `{ code, stdout, stderr }` |
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |
 | `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
 | `wings.storage.get(key)`, `.set(key, value)`, `.delete(key)`, `.keys()` | The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are JSON (what `JSON.stringify` keeps), and `get` resolves `null` for a key that isn't set. Keys are 1 to 128 letters, digits and `- _ . : /`. Everything together is limited to 1 MB, and a `set` that would go over is refused. See [Storage](#storage) |
@@ -124,7 +127,7 @@ A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, a
 - `actions` are `{ id, label, primary? }` buttons in that card. A click calls `onAction`.
 - `loading: true` shows a spinner in the pill while the plugin refreshes.
 
-A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url }`, where `side` is `additions` or `deletions`. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
+A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url, canReply }`, where `side` is `additions` or `deletions`, and `canReply` on a thread's first comment shows a reply box under it. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
 
 Wings drops a pane's badges when the pane closes. When several plugins add to the same place, the extra pane badges fold into a "+N" button and title bar buttons past the first three into a menu.
 

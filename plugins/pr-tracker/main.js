@@ -28,6 +28,8 @@ const manual = new Set();
 /** PR url → { key, patch, comments }, fetched ahead so "View changes" opens instantly. */
 const diffs = new Map();
 const diffLoads = new Map();
+/** Open diff viewer id → PR url, so a reply typed in it reaches the right PR. */
+const viewers = new Map();
 /** "github", an Azure org or `gitlab:<host>` → { login, message }, when its CLI can't be used there. */
 const problems = new Map();
 /** Provider whose sign-in is running → { code, url } once the CLI prints them. */
@@ -396,19 +398,22 @@ async function githubDiff(link) {
     ...pr.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
     ...pr.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url: link.url })),
   ].map((c, i) => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
+  return { patch: diff.stdout, comments: [...general, ...list.map(githubComment)] };
+}
+
+/** A line comment from the REST API. GitHub threads only line comments, so only those take replies. */
+function githubComment(c) {
   return {
-    patch: diff.stdout,
-    comments: [...general, ...list.map((c) => ({
-      id: c.id,
-      replyTo: c.in_reply_to_id ?? null,
-      path: c.path,
-      line: c.line ?? null,
-      side: c.side === "LEFT" ? "deletions" : "additions",
-      author: c.user?.login ?? "unknown",
-      body: c.body ?? "",
-      createdAt: c.created_at,
-      url: c.html_url,
-    }))],
+    id: c.id,
+    replyTo: c.in_reply_to_id ?? null,
+    path: c.path,
+    line: c.line ?? null,
+    side: c.side === "LEFT" ? "deletions" : "additions",
+    author: c.user?.login ?? "unknown",
+    body: c.body ?? "",
+    createdAt: c.created_at,
+    url: c.html_url,
+    canReply: !c.in_reply_to_id,
   };
 }
 
@@ -446,6 +451,7 @@ async function azureDiff(link) {
         body: c.content ?? "",
         createdAt: c.publishedDate,
         url: link.url,
+        canReply: i === 0,
       }),
     );
   }
@@ -474,11 +480,51 @@ async function gitlabDiff(link) {
         body: n.body ?? "",
         createdAt: n.created_at,
         url: link.url,
+        canReply: i === 0,
+        discussion: d.id,
       });
     });
   }
   return { patch: diff.stdout, comments };
 }
+
+// ---------- replies ----------
+
+/** The CLI's error, or the response it printed. */
+async function post(program, url, fields, options) {
+  const out = await wings.post(program, url, fields, options);
+  if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || `${program} failed`);
+  return JSON.parse(out.stdout);
+}
+
+async function githubReply(link, root, body) {
+  return githubComment(await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body }));
+}
+
+/** Azure comment ids are `thread * 10000 + comment`, as `azureDiff` builds them. */
+async function azureReply(link, root, body) {
+  const { org, project: name, repo } = link.remote;
+  const thread = Math.floor(root.id / 10_000);
+  const url = `${org}/${encodeURIComponent(name)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullRequests/${link.number}/threads/${thread}/comments?api-version=7.1`;
+  const c = await post("az", url, { content: body, parentCommentId: root.id % 10_000, commentType: 1 });
+  return { ...root, id: thread * 10_000 + c.id, replyTo: root.id, author: c.author?.displayName ?? "you", body: c.content ?? body, createdAt: c.publishedDate, canReply: false };
+}
+
+async function gitlabReply(link, root, body) {
+  const n = await post("glab", `${project(link.remote)}/merge_requests/${link.number}/discussions/${root.discussion}/notes`, { body }, { host: link.remote.host });
+  return { ...root, id: n.id, replyTo: root.id, author: n.author?.name ?? n.author?.username ?? "you", body: n.body ?? body, createdAt: n.created_at, canReply: false };
+}
+
+wings.onReply(async ({ diffId, replyTo, body }) => {
+  const url = viewers.get(diffId);
+  const link = url && linkFor(url);
+  const cached = url && diffs.get(url);
+  const root = cached?.comments.find((c) => c.id === replyTo);
+  if (!link || !root?.canReply) throw new Error("This pull request isn't open in a pane any more. Reopen it from the badge.");
+  const reply = await { github: githubReply, azure: azureReply, gitlab: gitlabReply }[link.provider](link, root, body);
+  cached.comments = [...cached.comments, reply];
+  await wings.updateDiff(diffId, { comments: cached.comments });
+});
 
 // ---------- badge ----------
 
@@ -642,10 +688,12 @@ wings.onAction(async ({ paneId, actionId }) => {
     const subtitle = `${link.repo} ${refOf(link)}`;
     const cached = diffs.get(link.url);
     if (cached && cached.key === st?.key) {
-      return void (await wings.openDiff({ title, subtitle, patch: cached.patch, comments: cached.comments }));
+      const { id } = await wings.openDiff({ title, subtitle, patch: cached.patch, comments: cached.comments });
+      return void viewers.set(id, link.url);
     }
     // Not prefetched yet: open the viewer right away in its loading state, then fill it in.
     const { id } = await wings.openDiff({ title, subtitle });
+    viewers.set(id, link.url);
     try {
       const { patch, comments } = await loadDiff(link.url);
       await wings.updateDiff(id, { patch, comments });

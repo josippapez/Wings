@@ -7,6 +7,7 @@
   let nextId = 1;
   const pending = new Map();
   const listeners = { panes: [], action: [], broadcast: [] };
+  let replyHandler = null;
   listeners.transcript = [];
   const tools = new Map();
 
@@ -37,6 +38,7 @@
     }
     if (message.event === "action") return void runAction(message.data);
     if (message.event === "tool") return void runTool(message.data);
+    if (message.event === "reply") return void runReply(message.data);
     for (const listener of listeners[message.event] ?? []) {
       try {
         listener(message.data);
@@ -56,6 +58,18 @@
         error = String(e?.message ?? e);
         console.error(e);
       }
+    }
+    call("actionDone", { token, error });
+  }
+
+  // The viewer keeps the reply box busy until this settles, and shows the error if it throws.
+  async function runReply({ token, ...data }) {
+    let error = null;
+    try {
+      if (!replyHandler) throw new Error("This plugin doesn't take replies");
+      await replyHandler(data);
+    } catch (e) {
+      error = String(e?.message ?? e);
     }
     call("actionDone", { token, error });
   }
@@ -161,6 +175,18 @@
      * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`.
      */
     openDiff: (diff) => call("openDiff", diff),
+    /**
+     * A reply typed under a comment with `canReply` in the diff viewer: `{ diffId, replyTo, body }`, where
+     * `replyTo` is the thread's first comment. Post it, then add it with `updateDiff`. A thrown error shows
+     * under the reply box and keeps the text.
+     */
+    onReply: (handler) => void (replyHandler = handler),
+    /**
+     * POSTs `fields` as JSON to an API path in `permissions.post`, through that CLI's own sign-in: `gh api`,
+     * `glab api` (pass the GitLab `host`) or `az rest` for Azure DevOps. Field values are strings or whole
+     * numbers. Resolves `{ code, stdout, stderr }`.
+     */
+    post: (program, url, fields, { host } = {}) => call("post", { program, url, fields, host }),
     /** Updates a viewer opened with `openDiff`; ignored once the user has closed it. */
     updateDiff: (id, update) => call("updateDiff", { id, ...update }),
   });

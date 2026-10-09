@@ -41,6 +41,8 @@ export type DiffComment = {
   body: string;
   createdAt: string;
   url: string;
+  /** On the first comment of a thread: the viewer offers a reply box, and sends replies to the plugin's `onReply`. */
+  canReply: boolean;
 };
 
 /** What the diff viewer shows. No `patch` and no `error` means it is still loading. */
@@ -158,6 +160,7 @@ function cleanComments(raw: unknown): DiffComment[] | undefined {
         body: str(c.body, 20_000) ?? "",
         createdAt: str(c.createdAt, 40) ?? "",
         url: str(c.url, 500)?.startsWith("https://") ? str(c.url, 500)! : "",
+        canReply: c.canReply === true,
       },
     ];
   });
@@ -313,6 +316,15 @@ export class PluginHost {
 
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
   sendAction(pluginId: string, paneId: string, actionId: string): Promise<void> {
+    return this.ask(pluginId, "action", { paneId, actionId });
+  }
+
+  /** Hands a reply typed in the diff viewer to the plugin; resolves once it's posted, or fails with the plugin's error. */
+  sendReply(pluginId: string, diffId: string, replyTo: number, body: string): Promise<void> {
+    return this.ask(pluginId, "reply", { diffId, replyTo, body });
+  }
+
+  private ask(pluginId: string, event: string, data: object): Promise<void> {
     const entry = [...this.frames].find(([, p]) => p.id === pluginId && p.kind === "main");
     if (!entry) return Promise.reject(new Error(`plugin ${pluginId} is not running`));
     const token = crypto.randomUUID();
@@ -324,7 +336,7 @@ export class PluginHost {
         done: () => (clearTimeout(timer), done()),
         fail: (e) => (clearTimeout(timer), fail(e)),
       });
-      this.post(entry[0], { event: "action", data: { paneId, actionId, token } });
+      this.post(entry[0], { event, data: { ...data, token } });
     });
   }
 
@@ -407,6 +419,16 @@ export class PluginHost {
         return invoke("plugin_statusline", { pluginId });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
+      case "post":
+        return invoke("plugin_post", {
+          pluginId,
+          request: {
+            program: String(p.program),
+            url: String(p.url),
+            host: typeof p.host === "string" ? p.host : null,
+            fields: p.fields && typeof p.fields === "object" && !Array.isArray(p.fields) ? p.fields : {},
+          },
+        });
       case "openPane": {
         const placement = p.placement ?? "tab";
         if (!placements.includes(placement)) throw new Error('openPane placement is "tab", "right" or "down"');

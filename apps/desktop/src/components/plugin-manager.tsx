@@ -58,7 +58,7 @@ function sourceLabel(p: PluginView) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, transcript, openUrl, fetch, panes, notify, statusline } = plugin.permissions;
+  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
@@ -67,6 +67,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
     { title: "Run these commands as you, with your own sign-ins", items: exec },
+    { title: "Post to these addresses as you, like replying to a review comment", items: post },
     { title: "Open terminals in your projects and move your typing to any pane", items: [], on: panes !== null },
     { title: "Start these commands in a new terminal, as you", items: panes ?? [] },
     { title: "Show desktop notifications, up to 3 a minute", items: [], on: notify },

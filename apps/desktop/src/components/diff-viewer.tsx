@@ -11,6 +11,7 @@ import {
   ListIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  ReplyIcon,
   Rows3Icon,
   SearchIcon,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import { Item } from "@/components/ui/item";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { DiffComment, DiffView } from "@/lib/plugins";
@@ -143,7 +145,81 @@ function CommentBody({ comment, onOpen }: { comment: DiffComment; onOpen: (url: 
   );
 }
 
-function CommentThread({ thread, className, onOpen }: { thread: Thread; className?: string; onOpen: (url: string) => void }) {
+/** Sends with ⌘↩ or the button. A failed send keeps the text and shows the plugin's error. */
+function ReplyBox({ onSend }: { onSend: (body: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!open) {
+    return (
+      <Button variant="ghost" size="xs" onClick={() => setOpen(true)} className="mt-2.5 -ml-2 text-muted-foreground">
+        <ReplyIcon aria-hidden />
+        Reply
+      </Button>
+    );
+  }
+  const send = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSend(text.trim());
+      setText("");
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <Textarea
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void send();
+          }
+        }}
+        readOnly={busy}
+        placeholder="Write a reply"
+        aria-label="Reply"
+        aria-invalid={error ? true : undefined}
+        className="min-h-16 text-[13px]"
+      />
+      {error && (
+        <p role="alert" className="text-[12px] text-blocked">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-1.5">
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => (setOpen(false), setError(null))}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={busy || !text.trim()} onClick={() => void send()}>
+          {busy && <Spinner className="size-3.5" />}
+          Reply
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function CommentThread({
+  thread,
+  className,
+  onOpen,
+  onReply,
+}: {
+  thread: Thread;
+  className?: string;
+  onOpen: (url: string) => void;
+  onReply?: (replyTo: number, body: string) => Promise<void>;
+}) {
   return (
     <div
       className={cn(
@@ -160,6 +236,7 @@ function CommentThread({ thread, className, onOpen }: { thread: Thread; classNam
           ))}
         </div>
       )}
+      {onReply && thread.root.canReply && <ReplyBox onSend={(body) => onReply(thread.root.id, body)} />}
     </div>
   );
 }
@@ -183,7 +260,15 @@ function LoadingDiff() {
 }
 
 /** Full-window diff: file list on the left, the selected file with its review comments on the right. */
-export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: () => void }) {
+export function DiffViewer({
+  diff,
+  onClose,
+  onReply,
+}: {
+  diff: DiffView | null;
+  onClose: () => void;
+  onReply: (diff: DiffView, replyTo: number, body: string) => Promise<void>;
+}) {
   const files = useMemo(() => (diff?.patch ? entries(diff.patch) : []), [diff?.patch]);
   const threads = useMemo(() => threadsByPath(diff?.comments), [diff?.comments]);
   /** A file index, or null for the discussion. */
@@ -209,6 +294,7 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
   const openComment = (url: string) => {
     if (diff) void invoke("plugin_open_url", { pluginId: diff.pluginId, url }).catch((e) => console.error(e));
   };
+  const reply = diff ? (replyTo: number, body: string) => onReply(diff, replyTo, body) : undefined;
 
   const toggleFolder = (path: string) =>
     setCollapsed((all) => {
@@ -421,7 +507,7 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
                 {selected === null ? (
                   <div className="flex flex-col gap-3 p-5">
                     {discussion.map((thread) => (
-                      <CommentThread key={thread.root.id} thread={thread} className="w-full" onOpen={openComment} />
+                      <CommentThread key={thread.root.id} thread={thread} className="w-full" onOpen={openComment} onReply={reply} />
                     ))}
                   </div>
                 ) : current ? (
@@ -429,7 +515,7 @@ export function DiffViewer({ diff, onClose }: { diff: DiffView | null; onClose: 
                     key={`${current.file.name}-${split}`}
                     fileDiff={current.file}
                     lineAnnotations={annotations}
-                    renderAnnotation={(a) => <CommentThread thread={a.metadata} onOpen={openComment} />}
+                    renderAnnotation={(a) => <CommentThread thread={a.metadata} onOpen={openComment} onReply={reply} />}
                     options={{ theme: "pierre-dark", themeType: "dark", diffStyle: split ? "split" : "unified", stickyHeader: true }}
                   />
                 ) : (

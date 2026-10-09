@@ -39,6 +39,7 @@
     "allow-plugin-remove",
     "allow-plugin-panel-toggle",
     "allow-plugin-exec",
+    "allow-plugin-post",
     "allow-plugin-transcript",
     "allow-plugin-statusline",
     "allow-plugin-open-url",

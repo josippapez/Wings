@@ -47,6 +47,7 @@ const COMMANDS: &[&str] = &[
     "cli_dismiss",
     "history_search",
     "plugin_exec",
+    "plugin_post",
     "plugin_transcript",
     "plugin_statusline",
     "plugin_open_url",

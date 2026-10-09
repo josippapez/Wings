@@ -33,6 +33,8 @@ export type PluginPermissions = {
   transcript: string[];
   openUrl: string[];
   fetch: string[];
+  /** API paths it may POST to through gh, glab or az; `*` stands for one path segment. */
+  post: string[];
   /** Commands it may start in a new pane; `[]` is plain shells only, `null` no panes and no focusing them. */
   panes: string[] | null;
   notify: boolean;

@@ -743,6 +743,11 @@ fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, ur
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
 
+#[tauri::command(async)]
+fn plugin_post(state: State<AppState>, plugin_id: String, request: plugins::PostRequest) -> Res<ExecResult> {
+    plugins::post(&plugin(&state, &plugin_id)?, &request)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenPaneRequest {
@@ -1143,6 +1148,7 @@ pub fn run() {
             cli_install,
             cli_dismiss,
             plugin_exec,
+            plugin_post,
             plugin_transcript,
             plugin_statusline,
             plugin_open_url,

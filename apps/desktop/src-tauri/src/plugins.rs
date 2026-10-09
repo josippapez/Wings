@@ -29,6 +29,9 @@ pub struct Permissions {
     pub open_url: Vec<String>,
     /// https URL prefixes the plugin may call with `wings.fetch`, like an API's base URL.
     pub fetch: Vec<String>,
+    /// API paths the plugin may POST to through a signed-in CLI, as `<gh|glab|az> <pattern>`. `*` stands for
+    /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag.
+    pub post: Vec<String>,
     /// Lets the plugin open terminals in your projects and move focus to a pane. Each entry is a command it
     /// may start in a new pane, matched like `exec`; `[]` allows plain shells only. Absent, it can do neither.
     pub panes: Option<Vec<String>>,
@@ -180,6 +183,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
         return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
     }
+    if let Some(entry) = manifest.permissions.post.iter().find(|e| post_entry(e).is_none()) {
+        return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));
+    }
     if let Some(entry) = manifest.permissions.panes.iter().flatten().find(|e| e.trim().is_empty() || !e.split_ascii_whitespace().all(plain_word)) {
         return Err(format!("panes entry {entry:?} must be a program and its arguments, using only letters, digits and -_./:=@%+,"));
     }
@@ -306,6 +312,11 @@ pub fn exec(
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
+    run(program, args, cwd, timeout, on_line)
+}
+
+/// Runs a program once its arguments have been checked.
+fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>) -> Result<ExecResult, String> {
     let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
     let mut cmd = Command::new(path);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -474,6 +485,118 @@ pub fn fetch_url(plugin: &Plugin, url: &str) -> Option<String> {
 /// different site or path behind the same server (`Host`, `X-Forwarded-*`, `X-HTTP-Host-Override`).
 pub fn fetch_header_ok(name: &str) -> bool {
     ["accept", "accept-language", "content-type", "if-none-match", "if-modified-since", "cache-control"].contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// `permissions.post` entry → (program, pattern), if it's well formed.
+fn post_entry(entry: &str) -> Option<(&str, &str)> {
+    let (program, pattern) = entry.split_once(' ')?;
+    // `?` and `=` for a fixed query like `?api-version=7.1`. A `*` only matches a whole plain segment.
+    let chars_ok = !pattern.is_empty() && pattern.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%?=".contains(&b));
+    let shape_ok = match program {
+        "gh" | "glab" => !pattern.starts_with('/') && !pattern.contains(':'),
+        "az" => pattern.strip_prefix("https://").is_some_and(|rest| rest.split('/').next().is_some_and(|host| !host.is_empty() && !host.contains('*'))),
+        _ => false,
+    };
+    (chars_ok && shape_ok).then_some((program, pattern))
+}
+
+/// A URL segment matched by `*`. Percent escapes stay, since GitLab project paths (`g%2Fp`) and Azure project
+/// names (`My%20Project`) need them, but no decoding of it may step out of its place (`%2e%2e`, `%252e`, `%5c`).
+fn post_segment_ok(segment: &str) -> bool {
+    if segment.is_empty() || !segment.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~%".contains(&b)) {
+        return false;
+    }
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = segment.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok());
+            let Some(byte) = hex else { return false };
+            decoded.push(byte);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let decoded = String::from_utf8_lossy(&decoded);
+    !decoded.contains(['%', '\\', '?', '#']) && !decoded.split('/').any(|part| part == "." || part == "..")
+}
+
+/// Whether a `permissions.post` entry covers a POST by `program` to `url`.
+fn may_post(plugin: &Plugin, program: &str, url: &str) -> bool {
+    let parts: Vec<&str> = url.split('/').collect();
+    plugin.manifest.permissions.post.iter().filter_map(|e| post_entry(e)).any(|(p, pattern)| {
+        let want: Vec<&str> = pattern.split('/').collect();
+        p == program && want.len() == parts.len() && want.iter().zip(&parts).all(|(w, part)| if *w == "*" { post_segment_ok(part) } else { w == part })
+    })
+}
+
+/// A POST a plugin asks for: its fields become the JSON body. `host` is the GitLab server for `glab`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostRequest {
+    pub program: String,
+    pub url: String,
+    #[serde(default)]
+    pub host: Option<String>,
+    pub fields: serde_json::Map<String, Value>,
+}
+
+/// The resource `az rest` gets a token for when it calls Azure DevOps.
+const AZURE_DEVOPS_RESOURCE: &str = "499b84ac-1321-427f-aa17-267ca6975798";
+const POST_BODY_LIMIT: usize = 64 * 1024;
+
+fn hostname_ok(host: &str) -> bool {
+    !host.is_empty() && host.len() <= 253 && !host.starts_with(['-', '.']) && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+}
+
+/// The CLI arguments for a POST the manifest allows. Wings builds them itself, so the plugin never picks a flag.
+fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, String> {
+    let PostRequest { program, url, host, fields } = request;
+    let id = &plugin.manifest.id;
+    if !may_post(plugin, program, url) {
+        return Err(format!("{id} may not post to {program} {url}"));
+    }
+    let key_ok = |k: &str| !k.is_empty() && k.len() <= 40 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    if fields.is_empty() || fields.len() > 10 {
+        return Err("a post needs 1 to 10 fields".into());
+    }
+    if let Some((key, _)) = fields.iter().find(|(k, v)| !key_ok(k) || !(v.is_string() || v.is_i64())) {
+        return Err(format!("post field {key:?} must be a name of letters, digits and _ with a string or whole number value"));
+    }
+    let body = Value::Object(fields.clone()).to_string();
+    if body.len() > POST_BODY_LIMIT {
+        return Err("a post is limited to 64 KB".into());
+    }
+    let mut args: Vec<String> = vec!["api".into()];
+    match program.as_str() {
+        "gh" | "glab" => {
+            if program == "glab" {
+                let host = host.as_deref().filter(|h| hostname_ok(h)).ok_or("a glab post needs the GitLab host name")?;
+                args.extend(["--hostname".into(), host.into()]);
+            }
+            args.extend(["--method".into(), "POST".into(), url.clone()]);
+            // `-f` sends the text as it is: only `-F` reads `@file` or fills in placeholders, and a number can't start with either.
+            for (key, value) in fields {
+                match value.as_str() {
+                    Some(text) => args.extend(["-f".into(), format!("{key}={text}")]),
+                    None => args.extend(["-F".into(), format!("{key}={value}")]),
+                }
+            }
+        }
+        // A JSON object starts with `{`, so az never reads it as `@file`.
+        "az" => args = ["rest", "--method", "post", "--resource", AZURE_DEVOPS_RESOURCE, "--url", url, "--body", &body, "-o", "json"].map(String::from).to_vec(),
+        _ => unreachable!("may_post only matches gh, glab and az"),
+    }
+    Ok(args)
+}
+
+/// Sends a POST the manifest allows, like a reply to a review comment, as you through the CLI's own sign-in.
+pub fn post(plugin: &Plugin, request: &PostRequest) -> Result<ExecResult, String> {
+    let args = post_args(plugin, request)?;
+    run(&request.program, &args, None, EXEC_TIMEOUT, None)
 }
 
 pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
@@ -795,6 +918,73 @@ mod tests {
             assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
+        let posts = [
+            ("gh", "repos/o/r/pulls/1/comments/2/replies", None),
+            ("glab", "projects/g%2Fp/merge_requests/1/discussions/ab12/notes", Some("gitlab.com")),
+            ("az", "https://dev.azure.com/o/My%20Project/_apis/git/repositories/Repo.Name/pullRequests/1/threads/44590/comments?api-version=7.1", None),
+        ];
+        for (program, url, host) in posts {
+            assert!(post_args(&p, &post_request(program, url, host)).is_ok(), "{program} {url} not declared");
+        }
+    }
+
+    fn post_request(program: &str, url: &str, host: Option<&str>) -> PostRequest {
+        let fields = serde_json::json!({ "body": "Thanks, fixed" }).as_object().unwrap().clone();
+        PostRequest { program: program.into(), url: url.into(), host: host.map(String::from), fields }
+    }
+
+    #[test]
+    fn post_only_reaches_declared_paths() {
+        let mut p = plugin(Path::new("/tmp"), &["gh api"], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/comments/*/replies".into(), "glab projects/*/merge_requests/*/discussions/*/notes".into()];
+        assert!(may_post(&p, "gh", "repos/o/r/pulls/1/comments/2/replies"));
+        for url in [
+            "repos/o/r/pulls/1/comments/2/replies/x",
+            "repos/o/r/pulls/1/comments/replies",
+            "repos/o/r/pulls/1/comments/../replies",
+            "repos/o/r/pulls/1/comments/%2e%2e/replies",
+            "repos/o/r/pulls/1/comments/%252e/replies",
+            "repos/o/r/pulls/1/comments/%5c/replies",
+            "repos/o/r/pulls/1/comments/2?x=1/replies",
+            "repos/o/r/pulls/1/comments/a%2F..%2Fb/replies",
+        ] {
+            assert!(!may_post(&p, "gh", url), "{url}");
+        }
+        assert!(!may_post(&p, "glab", "repos/o/r/pulls/1/comments/2/replies"));
+        assert!(may_post(&p, "glab", "projects/g%2Fp/merge_requests/1/discussions/ab12/notes"));
+        // An exec permission for `gh api` still can't write.
+        assert!(is_unsafe_flag("gh", "--method"));
+    }
+
+    #[test]
+    fn post_builds_the_command_itself() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/comments/*/replies".into(), "glab projects/*/notes".into(), "az https://dev.azure.com/*/threads".into()];
+        let args = post_args(&p, &post_request("gh", "repos/o/r/pulls/1/comments/2/replies", None)).unwrap();
+        assert_eq!(args, ["api", "--method", "POST", "repos/o/r/pulls/1/comments/2/replies", "-f", "body=Thanks, fixed"]);
+        let mut at_file = post_request("gh", "repos/o/r/pulls/1/comments/2/replies", None);
+        at_file.fields.insert("body".into(), "@/etc/passwd".into());
+        assert_eq!(post_args(&p, &at_file).unwrap()[5], "body=@/etc/passwd", "sent as text with -f");
+        assert!(post_args(&p, &post_request("glab", "projects/1/notes", None)).is_err(), "glab needs a host");
+        assert!(post_args(&p, &post_request("glab", "projects/1/notes", Some("-x"))).is_err());
+        let az = post_args(&p, &post_request("az", "https://dev.azure.com/o/threads", None)).unwrap();
+        assert_eq!(az[..7], ["rest", "--method", "post", "--resource", AZURE_DEVOPS_RESOURCE, "--url", "https://dev.azure.com/o/threads"]);
+        assert_eq!(az[8], r#"{"body":"Thanks, fixed"}"#);
+        let mut bad = post_request("gh", "repos/o/r/pulls/1/comments/2/replies", None);
+        bad.fields.insert("--x".into(), "1".into());
+        assert!(post_args(&p, &bad).is_err());
+        bad.fields = serde_json::Map::new();
+        assert!(post_args(&p, &bad).is_err());
+    }
+
+    #[test]
+    fn post_entries_are_checked_on_load() {
+        for entry in ["gh repos/*/replies", "glab projects/*/notes", "az https://dev.azure.com/*/comments"] {
+            assert!(post_entry(entry).is_some(), "{entry}");
+        }
+        for entry in ["curl https://x/", "gh /repos/x", "gh https://api.github.com/x", "az dev.azure.com/x", "az https://*/x", "gh repos/x y", "gh "] {
+            assert!(post_entry(entry).is_none(), "{entry}");
+        }
     }
 
     #[test]
