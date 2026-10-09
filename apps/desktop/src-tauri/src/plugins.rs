@@ -890,8 +890,8 @@ mod tests {
     #[test]
     fn pr_tracker_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"));
-        let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
-        let p = Plugin { manifest, dir: dir.to_path_buf() };
+        let p = load(dir).unwrap();
+        assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "failing_checks"));
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
             ("git", &["branch", "--show-current"]),
@@ -902,14 +902,19 @@ mod tests {
             ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "comments,reviews"]),
             ("gh", &["pr", "diff", "https://github.com/o/r/pull/1"]),
             ("gh", &["api", "repos/o/r/pulls/1/comments", "--paginate", "--slurp"]),
+            ("gh", &["api", "repos/o/r/actions/jobs/123"]),
+            ("gh", &["api", "repos/o/r/actions/jobs/123/logs", "--allow-escape-sequences"]),
             ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
             ("glab", &["api", "--hostname", "gitlab.com", "--paginate", "projects/g%2Fp/merge_requests/1/discussions?per_page=100"]),
+            ("glab", &["api", "--hostname", "gitlab.com", "projects/1/jobs/123/trace"]),
             ("glab", &["mr", "diff", "1", "--raw", "--repo", "https://gitlab.com/g/p"]),
             ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
             ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
             ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--source-branch", "x", "-o", "json"]),
             ("az", &["repos", "pr", "policy", "list", "--id", "1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads", "--api-version", "7.1"]),
+            ("az", &["devops", "invoke", "--area", "build", "--resource", "timeline", "--route-parameters", "project=My Project", "buildId=123", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
+            ("az", &["devops", "invoke", "--area", "build", "--resource", "logs", "--route-parameters", "project=My Project", "buildId=123", "logId=4", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
         ];
         for (program, args) in calls {
