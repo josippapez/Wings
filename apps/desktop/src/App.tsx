@@ -12,6 +12,7 @@ import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp } from "@/components/status-dot";
+import { SettingsSheet } from "@/components/settings-sheet";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -19,7 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type GitStatus, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
-import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession } from "@/lib/terminal";
+import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
 import { resumeCommand, shellQuote } from "@/lib/resume";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
@@ -34,6 +35,8 @@ type SavedWorkspace = {
   /** Sidebar widths in pixels, as last dragged. */
   widths?: Widths;
   fontSize: number;
+  /** The terminal's keyboard settings. */
+  terminalKeys?: TerminalKeys;
   tabs: Tab[];
   sessions: Record<string, string | null>;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
@@ -147,6 +150,8 @@ export default function App() {
   }, []);
   const [ready, setReady] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /** Plugin badges by Rust pane id, then plugin id. */
   const [badges, setBadges] = useState<Record<string, Record<string, Badge>>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
@@ -311,6 +316,7 @@ export default function App() {
         setTerminalFontSize(saved.fontSize);
         setFontSize(saved.fontSize);
       }
+      if (saved.terminalKeys) setTerminalKeysState({ ...DEFAULT_TERMINAL_KEYS, ...saved.terminalKeys });
       const known = new Set(list.map((s) => s.id));
       const restored = saved.tabs
         .filter((t) => known.has(t.spaceId))
@@ -384,10 +390,10 @@ export default function App() {
     if (!ready) return;
     const sessions = Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
     const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
-    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, tabs, sessions, sessionArgs };
+    const saved: SavedWorkspace = { version: 1, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys, tabs, sessions, sessionArgs };
     const timer = setTimeout(() => void api.workspaceSave(JSON.stringify(saved)), 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize]);
+  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -462,6 +468,7 @@ export default function App() {
   }, [closePane]);
 
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
+  useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
 
   useEffect(() => {
     const host = new PluginHost({
@@ -627,6 +634,7 @@ export default function App() {
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
             onPlugins={() => setPluginsOpen(true)}
+            onSettings={() => setSettingsOpen(true)}
             pluginButtons={pluginButtons}
             onPluginButton={(button, rect) => {
               if (button.kind === "panel") {
@@ -750,6 +758,7 @@ export default function App() {
           }}
         />
         <TerminalCommandPrompt />
+        <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

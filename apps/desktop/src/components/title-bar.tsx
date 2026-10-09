@@ -12,6 +12,7 @@ import {
   PlusIcon,
   PuzzleIcon,
   XIcon,
+  SettingsIcon,
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
@@ -63,6 +64,7 @@ export function TitleBar(props: {
   onNew: () => void;
   onHistory: () => void;
   onPlugins: () => void;
+  onSettings: () => void;
   /** Sidebar and panel buttons from plugins that are on. The first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
   onPluginButton: (button: PluginButton, rect: DOMRect) => void;
@@ -229,6 +231,9 @@ export function TitleBar(props: {
       )}
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <RotateCcwClockIcon />
+      </IconButton>
+      <IconButton label="Settings" onClick={props.onSettings}>
+        <SettingsIcon />
       </IconButton>
       <IconButton label="Plugins" onClick={props.onPlugins}>
         <PuzzleIcon />

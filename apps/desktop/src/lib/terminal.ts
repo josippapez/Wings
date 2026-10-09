@@ -100,6 +100,30 @@ export function setTerminalFontSize(size: number) {
   for (const session of terminals.values()) session.setFontSize(size);
 }
 
+export type OptionAsMeta = "off" | "left" | "right" | "both";
+/** How keys reach the shell, as in a native terminal's keyboard settings. */
+export type TerminalKeys = { optionAsMeta: OptionAsMeta; shiftReturnSendsMetaReturn: boolean };
+// Left Option as Meta keeps the right one for characters like ~ on non-US layouts.
+export const DEFAULT_TERMINAL_KEYS: TerminalKeys = { optionAsMeta: "left", shiftReturnSendsMetaReturn: true };
+let keys = DEFAULT_TERMINAL_KEYS;
+
+export function setTerminalKeys(next: TerminalKeys) {
+  keys = next;
+}
+
+/** The Option keys held down. xterm.js treats Option as Meta or not, never one side only, so it's switched per key. */
+const heldOption = new Set<string>();
+
+function optionIsMeta(e: KeyboardEvent) {
+  if (e.code === "AltLeft" || e.code === "AltRight") {
+    if (e.type === "keyup") heldOption.delete(e.code);
+    else heldOption.add(e.code);
+  }
+  if (!e.altKey) heldOption.clear();
+  const side = keys.optionAsMeta;
+  return side === "both" || (side === "left" && heldOption.has("AltLeft")) || (side === "right" && heldOption.has("AltRight"));
+}
+
 /** Live terminals by pane key. Kept outside React state: they own PTYs and DOM nodes. */
 export const terminals = new Map<string, TerminalSession>();
 
@@ -112,7 +136,7 @@ export class TerminalSession {
     lineHeight: 1.2,
     scrollback: 10_000,
     cursorBlink: true,
-    macOptionIsMeta: true,
+    macOptionIsMeta: false,
     theme,
   });
   paneId: string | null = null;
@@ -145,7 +169,16 @@ export class TerminalSession {
         if (event.metaKey || event.ctrlKey) void openUrl(uri);
       }),
     );
-    this.term.attachCustomKeyEventHandler((e) => shortcutFor(e) === null);
+    this.term.attachCustomKeyEventHandler((e) => {
+      const meta = optionIsMeta(e);
+      if (this.term.options.macOptionIsMeta !== meta) this.term.options.macOptionIsMeta = meta;
+      // Meta Return is a new line in Claude Code, where a plain Return would send the prompt.
+      if (keys.shiftReturnSendsMetaReturn && e.key === "Enter" && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+        if (e.type === "keydown") this.term.input("\x1b\r");
+        return false;
+      }
+      return shortcutFor(e) === null;
+    });
     this.el.addEventListener("focusin", handlers.onFocus);
   }
 
