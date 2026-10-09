@@ -134,13 +134,9 @@ Plugin tools reach Claude through one MCP server, `wings`, which you add once fr
 
 ## Status line
 
-Claude Code sends its status line command a JSON status after each reply: the 5-hour and weekly usage limits, the context window and how much of it is used, and the prompt cache. It's the documented way to get the usage limits, with no sign-in token involved. Make `wings statusline` that command and Wings keeps the newest status for plugins with `permissions.statusline`:
+Claude Code sends its status line command a JSON status after each reply: the 5-hour and weekly usage limits, the context window and how much of it is used, and the prompt cache. It's the documented way to get the usage limits, with no sign-in token involved. Wings keeps the newest status for plugins with `permissions.statusline`, and only the fields listed under `wings.statusline()`.
 
-```json
-{ "statusLine": { "type": "command", "command": "wings statusline" } }
-```
-
-in `~/.claude/settings.json`. It replaces any status line you have, and prints nothing, which leaves Claude Code's status line blank. While Wings is closed it does nothing. Wings keeps only the fields listed under `wings.statusline()`. In a dev build, use the path to `src-tauri/target/debug/wings` instead.
+When Wings starts, it adds itself to Claude Code: its MCP server, and `wings statusline --pass` in front of the `statusLine` command in `~/.claude/settings.json`. Your own status line stays in that command and runs after Wings on the same input, so it still shows, and the rest of the file is left as it was. Disconnect in Plugins puts your status line back and stops Wings adding itself again. Dev builds don't connect on their own, since they'd point Claude Code at their own binary.
 
 ## Storage
 

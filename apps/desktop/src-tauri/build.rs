@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "mcp_tool_result",
     "mcp_status",
     "mcp_connect",
+    "mcp_disconnect",
     "cli_status",
     "cli_install",
     "cli_dismiss",

@@ -228,7 +228,7 @@ function titleLabel() {
   const rows = [
     ...(o.fiveHour ? [{ label: "5-hour limit", value: `${o.fiveHour.percent}% used${o.fiveHour.resets ? `, resets in ${o.fiveHour.resets}` : ""}` }] : []),
     ...(o.sevenDay ? [{ label: "Weekly limit", value: `${o.sevenDay.percent}% used${o.sevenDay.resets ? `, resets in ${o.sevenDay.resets}` : ""}` }] : []),
-    ...(!o.statusline ? [{ label: "Usage limits", value: "Set wings statusline as Claude Code's status line" }] : []),
+    ...(!o.statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
     ...(o.memory ? [{ label: "Memory", value: `${gb(o.memory.used)} of ${gb(o.memory.total)} (${o.memory.percent}%)` }] : []),
   ];
   const label = parts.length ? parts.join(" · ") : o.memory ? `RAM ${o.memory.percent}%` : null;

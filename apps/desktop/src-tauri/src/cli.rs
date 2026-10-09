@@ -103,17 +103,25 @@ fn ask(op: &str, mut request: Value) -> Result<Value, String> {
 const STATUS_LIMIT: u64 = 256 * 1024;
 
 /// `wings statusline`, for Claude Code's `statusLine` setting. Passes the status JSON Claude Code writes to stdin
-/// on to the running Wings, for plugins to show, and prints nothing, which leaves Claude Code's status line blank.
-/// Without Wings open it does nothing.
-pub fn statusline() -> i32 {
+/// on to the running Wings, for plugins to show. With `--pass` it also prints that input for the status line
+/// you had before Wings, which runs after it; without, it prints nothing. Without Wings open it only does that.
+pub fn statusline(pass: bool) -> i32 {
     use std::io::{IsTerminal, Read};
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         eprintln!("wings statusline is Claude Code's statusLine command: it reads the status Claude Code sends it.");
         return 2;
     }
-    // The first JSON value, without waiting for the input to end, in case Claude Code keeps it open.
-    let Some(Ok(status)) = serde_json::Deserializer::from_reader(stdin.lock().take(STATUS_LIMIT)).into_iter::<Value>().next() else { return 0 };
+    let mut input = Vec::new();
+    if stdin.lock().take(STATUS_LIMIT).read_to_end(&mut input).is_err() {
+        return 0;
+    }
+    if pass {
+        // Your status line first, so Wings never holds it up.
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&input).and_then(|()| out.flush());
+    }
+    let Ok(status) = serde_json::from_slice::<Value>(&input) else { return 0 };
     if let Ok(stream) = socket().and_then(|s| UnixStream::connect(s).map_err(|e| e.to_string())) {
         // Claude Code waits for this command, so a stuck Wings mustn't hold it up.
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(1)));

@@ -122,28 +122,29 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
   );
 }
 
-/** Connects Claude Code to Wings once, so its sessions get the tools of the plugins that are on. */
+/** Wings adds itself to Claude Code when it starts: plugin tools for its sessions, and its status line for plugins. */
 function ClaudeConnect({ open }: { open: boolean }) {
   const [status, setStatus] = useState<McpStatus | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] = useState<"connect" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) void api.mcpStatus().then(setStatus, () => {});
   }, [open]);
 
-  async function connect() {
-    setConnecting(true);
+  async function run(action: "connect" | "disconnect") {
+    setConnecting(action);
     setError(null);
     try {
-      await api.mcpConnect();
+      await (action === "connect" ? api.mcpConnect() : api.mcpDisconnect());
       setStatus(await api.mcpStatus());
     } catch (e) {
       setError(message(e));
     } finally {
-      setConnecting(false);
+      setConnecting(null);
     }
   }
+  const connected = status?.connected && status.statusline;
 
   if (!status) return null;
   return (
@@ -152,20 +153,26 @@ function ClaudeConnect({ open }: { open: boolean }) {
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1.5 text-[13px] font-medium">
             Claude Code
-            {status.connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
+            {connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
           </p>
           <p className="text-[12px] leading-snug text-muted-foreground">
             {!status.claude
               ? "Install Claude Code to give it plugin tools."
-              : status.connected
-                ? "Its sessions get the tools of the plugins you turn on."
-                : "Connect it once so its sessions can use plugin tools."}
+              : connected
+                ? "Its sessions get plugin tools, and plugins get its usage numbers. Your own status line still shows."
+                : "Connect it so its sessions get plugin tools and plugins get its usage numbers. Your own status line keeps showing."}
           </p>
         </div>
         {status.claude && (
-          <Button variant={status.connected ? "ghost" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting} onClick={() => void connect()}>
-            {connecting && <Spinner />}
-            {status.connected ? "Reconnect" : "Connect"}
+          <Button variant={connected ? "ghost" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
+            {connecting === "connect" && <Spinner />}
+            {connected ? "Reconnect" : "Connect"}
+          </Button>
+        )}
+        {(status.connected || status.statusline) && (
+          <Button variant="ghost" size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("disconnect")}>
+            {connecting === "disconnect" && <Spinner />}
+            Disconnect
           </Button>
         )}
       </div>

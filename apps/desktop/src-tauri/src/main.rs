@@ -10,7 +10,7 @@ fn main() {
         match args.first().map(String::as_str) {
             Some("--mcp") => std::process::exit(wings_lib::bridge::run(args.get(1).cloned())),
             Some("plugin") => std::process::exit(wings_lib::cli::run(&args[1..])),
-            Some("statusline") => std::process::exit(wings_lib::cli::statusline()),
+            Some("statusline") => std::process::exit(wings_lib::cli::statusline(args.get(1).is_some_and(|a| a == "--pass"))),
             _ => {}
         }
     }

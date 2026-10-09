@@ -48,7 +48,7 @@ export type PluginContributes = {
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
 };
-export type McpStatus = { claude: boolean; connected: boolean };
+export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
 export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
@@ -122,6 +122,7 @@ export const api = {
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
   /** Registers the Wings MCP server with Claude Code, for every project. */
   mcpConnect: () => invoke<void>("mcp_connect"),
+  mcpDisconnect: () => invoke<void>("mcp_disconnect"),
   cliStatus: () => invoke<CliStatus>("cli_status"),
   /** Adds the `wings` command to ~/.local/bin. */
   cliInstall: () => invoke<CliStatus>("cli_install"),

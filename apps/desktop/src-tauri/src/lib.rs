@@ -1,4 +1,6 @@
 mod claude;
+#[cfg(unix)]
+mod claude_settings;
 mod detect;
 mod history;
 mod menu;
@@ -308,7 +310,12 @@ struct McpStatus {
     claude: bool,
     /// The Wings MCP server is registered with it.
     connected: bool,
+    /// Claude Code's status line goes through Wings, in front of yours.
+    statusline: bool,
 }
+
+/// You disconnected Claude Code in the Plugins sheet, so Wings doesn't connect it again when it starts.
+const CLAUDE_DISCONNECTED: &str = "claude-disconnected";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -360,22 +367,33 @@ fn cli_dismiss(app: AppHandle) -> Res<()> {
     std::fs::write(dir.join(CLI_ASKED), "").map_err(err)
 }
 
-/// Whether Claude Code has the Wings MCP server. Reading Claude's own list keeps Wings from guessing.
+/// Whether Claude Code has the Wings MCP server and status line. Reading Claude's own list keeps Wings from guessing.
 #[tauri::command(async)]
 fn mcp_status() -> McpStatus {
-    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false } };
-    let connected = std::process::Command::new(claude)
-        .args(["mcp", "get", "wings"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .is_ok_and(|out| out.status.success());
-    McpStatus { claude: true, connected }
+    #[cfg(unix)]
+    let statusline = claude_settings::connected(&claude_settings::settings_path());
+    #[cfg(not(unix))]
+    let statusline = false;
+    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false, statusline } };
+    let connected = claude_mcp(&claude, &["get", "wings"]).is_ok_and(|out| out.status.success());
+    McpStatus { claude: true, connected, statusline }
 }
 
-/// Registers `wings --mcp` with Claude Code once, at user scope, so every session gets the plugin tools.
-/// It's removed first so a moved app is repointed rather than left dangling.
+fn claude_mcp(claude: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+    std::process::Command::new(claude).arg("mcp").args(args).stdin(std::process::Stdio::null()).output()
+}
+
 #[tauri::command(async)]
 fn mcp_connect(app: AppHandle) -> Res<()> {
+    connect_claude(&app)?;
+    let _ = std::fs::remove_file(app.path().app_data_dir().map_err(err)?.join(CLAUDE_DISCONNECTED));
+    Ok(())
+}
+
+/// Registers `wings --mcp` with Claude Code at user scope, so every session gets the plugin tools, and puts
+/// `wings statusline` in front of your status line. The server is removed first so a moved app is repointed
+/// rather than left dangling.
+fn connect_claude(app: &AppHandle) -> Res<()> {
     #[cfg(not(unix))]
     {
         let _ = app;
@@ -386,27 +404,56 @@ fn mcp_connect(app: AppHandle) -> Res<()> {
         let claude = plugins::find_program("claude").ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
         let exe = std::env::current_exe().map_err(err)?;
         let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
-        let run = |args: &[&std::ffi::OsStr]| std::process::Command::new(&claude).args(args).stdin(std::process::Stdio::null()).output();
-        let _ = run(&["mcp".as_ref(), "remove".as_ref(), "--scope".as_ref(), "user".as_ref(), "wings".as_ref()]);
-        let out = run(&[
-            "mcp".as_ref(),
-            "add".as_ref(),
-            "--scope".as_ref(),
-            "user".as_ref(),
-            "--transport".as_ref(),
-            "stdio".as_ref(),
-            "wings".as_ref(),
-            "--".as_ref(),
-            exe.as_os_str(),
-            "--mcp".as_ref(),
-            socket.as_os_str(),
-        ])
-        .map_err(err)?;
+        let _ = claude_mcp(&claude, &["remove", "--scope", "user", "wings"]);
+        let out = std::process::Command::new(&claude)
+            .args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"])
+            .arg(&exe)
+            .arg("--mcp")
+            .arg(&socket)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(err)?;
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
         }
+        claude_settings::add(&claude_settings::settings_path(), &exe)?;
         Ok(())
     }
+}
+
+/// Takes Wings back out of Claude Code: the MCP server goes, and your own status line is put back as it was.
+#[tauri::command(async)]
+fn mcp_disconnect(app: AppHandle) -> Res<()> {
+    #[cfg(unix)]
+    {
+        if let Some(claude) = plugins::find_program("claude") {
+            claude_mcp(&claude, &["remove", "--scope", "user", "wings"]).map_err(err)?;
+        }
+        claude_settings::remove(&claude_settings::settings_path())?;
+    }
+    let dir = app.path().app_data_dir().map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    std::fs::write(dir.join(CLAUDE_DISCONNECTED), "").map_err(err)
+}
+
+/// Wings adds itself to Claude Code when it starts, unless you disconnected it. Only release builds: a dev build
+/// would point Claude Code at its own binary.
+fn connect_claude_on_start(app: AppHandle) {
+    #[cfg(unix)]
+    thread::spawn(move || {
+        if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(CLAUDE_DISCONNECTED).exists()) {
+            return;
+        }
+        let (Some(claude), Ok(exe)) = (plugins::find_program("claude"), std::env::current_exe()) else { return };
+        let registered = claude_mcp(&claude, &["get", "wings"])
+            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
+        let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app) };
+        if let Err(e) = result {
+            eprintln!("[claude] couldn't connect Claude Code: {e}");
+        }
+    });
+    #[cfg(not(unix))]
+    let _ = app;
 }
 
 /// Stores a secret, like an API token, in the keychain under the plugin's name. Plugins can't read it
@@ -939,6 +986,7 @@ pub fn run() {
             });
             #[cfg(unix)]
             mcp::start(app.handle().clone(), mcp::socket_path(&data));
+            connect_claude_on_start(app.handle().clone());
             if bench_mode() {
                 // Keep the window on screen without taking focus, so rendering is not throttled.
                 if let Some(window) = app.get_webview_window("main") {
@@ -987,6 +1035,7 @@ pub fn run() {
             mcp_tool_result,
             mcp_status,
             mcp_connect,
+            mcp_disconnect,
             cli_status,
             cli_install,
             cli_dismiss,

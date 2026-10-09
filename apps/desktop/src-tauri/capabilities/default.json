@@ -54,6 +54,7 @@
     "allow-mcp-tool-result",
     "allow-mcp-status",
     "allow-mcp-connect",
+    "allow-mcp-disconnect",
     "allow-cli-status",
     "allow-cli-install",
     "allow-cli-dismiss",

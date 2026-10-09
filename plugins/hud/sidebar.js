@@ -72,9 +72,7 @@ function render() {
       h(
         "p",
         { class: "hint muted" },
-        "Claude Code sends your 5-hour and weekly limits to its status line command. To see them here, set ",
-        h("code", {}, '"statusLine": { "type": "command", "command": "wings statusline" }'),
-        " in ~/.claude/settings.json.",
+        "Your 5-hour and weekly limits show after Claude Code's next reply, on Pro and Max plans. If they don't, connect Claude Code in Plugins.",
       ),
     );
   }
