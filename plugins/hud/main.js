@@ -163,19 +163,21 @@ const clock = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digi
 const gb = (bytes) => `${(bytes / 2 ** 30).toFixed(bytes >= 10 * 2 ** 30 ? 0 : 1)} GB`;
 const names = (all, max = 4) => (all.length > max ? `${all.slice(0, max).join(", ")}, +${all.length - max} more` : all.join(", "));
 
-/** `2h 54m`, `2d 11h`, `5m`. */
-function until(epochSeconds, now = Date.now()) {
+/** `2h 54m`, `2d 11h`, `5m`; `compact` drops the spaces and a zero remainder for the title bar: `2h54m`, `2d11h`, `3d`. */
+function until(epochSeconds, now = Date.now(), compact = false) {
   let minutes = Math.max(0, Math.round((epochSeconds * 1000 - now) / MINUTE));
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   minutes %= 60;
-  return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  const gap = compact ? "" : " ";
+  if (days) return hours || !compact ? `${days}d${gap}${hours}h` : `${days}d`;
+  return hours ? `${hours}h${gap}${minutes}m` : `${minutes}m`;
 }
 
 /** A limit window, unless it has already reset: Claude Code reports the new one with the next reply. */
 function limit(w, now = Date.now()) {
   if (!w || (w.resetsAt && w.resetsAt * 1000 <= now)) return null;
-  return { percent: Math.round(w.usedPercentage), resets: w.resetsAt ? until(w.resetsAt, now) : null, resetsAt: w.resetsAt };
+  return { percent: Math.round(w.usedPercentage), resets: w.resetsAt ? until(w.resetsAt, now) : null, left: w.resetsAt ? until(w.resetsAt, now, true) : null, resetsAt: w.resetsAt };
 }
 
 function cacheText(cache, now = Date.now()) {
@@ -227,7 +229,9 @@ function overview(now = Date.now()) {
 
 function titleLabel() {
   const o = overview();
-  const parts = [o.fiveHour && `5h ${o.fiveHour.percent}%`, o.sevenDay && `wk ${o.sevenDay.percent}%`].filter(Boolean);
+  // `5h 3% (2h14m) · wk 83% (3d5h)`: usage, then the time until that limit resets. The once-a-minute refresh keeps it current.
+  const pill = (name, l) => l && `${name} ${l.percent}%${l.left ? ` (${l.left})` : ""}`;
+  const parts = [pill("5h", o.fiveHour), pill("wk", o.sevenDay)].filter(Boolean);
   const rows = [
     ...(o.fiveHour ? [{ label: "5-hour limit", value: `${o.fiveHour.percent}% used${o.fiveHour.resets ? `, resets in ${o.fiveHour.resets}` : ""}` }] : []),
     ...(o.sevenDay ? [{ label: "Weekly limit", value: `${o.sevenDay.percent}% used${o.sevenDay.resets ? `, resets in ${o.sevenDay.resets}` : ""}` }] : []),

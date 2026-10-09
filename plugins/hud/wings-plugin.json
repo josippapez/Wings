@@ -1,7 +1,7 @@
 {
   "id": "hud",
   "name": "HUD",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Your Claude usage limits and memory in the title bar, and each session's context, MCP servers and skills on its pane, so you can turn off a terminal status line like claude-hud.",
   "api": 1,
   "main": "main.js",
