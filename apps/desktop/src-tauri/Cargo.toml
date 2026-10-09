@@ -36,6 +36,11 @@ keyring = "4.2.0"
 dirs = "7.0.0"
 
 
+# Self-update: desktop only (the plugins have no mobile support).
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 # Thin LTO: most of the speed of full LTO, with a much faster final link.
