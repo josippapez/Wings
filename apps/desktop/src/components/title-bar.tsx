@@ -44,6 +44,8 @@ export type PluginButton = {
   label?: string;
   /** Shown when you point at the button. */
   rows?: { label: string; value: string }[];
+  /** Colours the label amber or red when the plugin says it needs attention. */
+  tone?: "warning" | "danger";
   /** Its sidebar is open. */
   active?: boolean;
 };
@@ -192,12 +194,22 @@ export function TitleBar(props: {
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
             className={cn(
               // A label means something is live, like a running timer, so it shows as a green pill like a pane badge.
-              button.label && "h-6 w-auto gap-1.5 rounded-full bg-done/12 px-2.5 text-done ring-1 ring-done/25 ring-inset hover:bg-done/20 hover:text-done",
+              button.label && "h-6 w-auto gap-1.5 rounded-full px-2.5 ring-1 ring-inset",
+              button.label && !button.tone && "bg-done/12 text-done ring-done/25 hover:bg-done/20 hover:text-done",
+              button.label && button.tone === "warning" && "bg-working/12 text-working ring-working/25 hover:bg-working/20 hover:text-working",
+              button.label && button.tone === "danger" && "bg-blocked/12 text-blocked ring-blocked/30 hover:bg-blocked/20 hover:text-blocked",
               button.active && !button.label && "bg-white/[0.08] text-foreground",
-              button.active && button.label && "bg-done/20",
+              button.active && button.label && !button.tone && "bg-done/20",
+              button.active && button.tone === "warning" && "bg-working/20",
+              button.active && button.tone === "danger" && "bg-blocked/20",
             )}
           >
-            {button.label && <span className="size-1.5 shrink-0 rounded-full bg-done motion-safe:animate-pulse" aria-hidden />}
+            {button.label && (
+              <span
+                className={cn("size-1.5 shrink-0 rounded-full motion-safe:animate-pulse", button.tone === "warning" ? "bg-working" : button.tone === "danger" ? "bg-blocked" : "bg-done")}
+                aria-hidden
+              />
+            )}
             <Icon />
             {button.label && <span className="text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>

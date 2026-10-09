@@ -181,7 +181,7 @@ const pluginUrl = (id: string, run: string, file: string) =>
 const newRun = () => crypto.randomUUID().slice(0, 8);
 
 /** A sidebar button's live text, and the rows shown when you point at it. */
-export type SidebarLabel = { text: string; rows: { label: string; value: string }[] };
+export type SidebarLabel = { text: string; rows: { label: string; value: string }[]; tone?: "warning" | "danger" };
 
 export class PluginHost {
   private frames = new Map<Window, Running>();
@@ -479,7 +479,8 @@ export class PluginHost {
           const value = str(r?.value, 120);
           return label && value ? [{ label, value }] : [];
         });
-        this.callbacks.setSidebarLabel(pluginId, sidebarId, text ? { text, rows } : null);
+        const tone = p.tone === "warning" || p.tone === "danger" ? p.tone : undefined;
+        this.callbacks.setSidebarLabel(pluginId, sidebarId, text ? { text, rows, tone } : null);
         return null;
       }
       case "broadcast": {

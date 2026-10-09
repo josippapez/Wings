@@ -15,6 +15,9 @@ const RESULTS = 100;
 /** Context and limit colours, as claude-hud has them. */
 const CONTEXT_WARN = 70;
 const CONTEXT_CRITICAL = 85;
+/** Usage percentages where the title bar pill turns amber then red and Wings notifies once, as the sidebar gauges do. */
+const LIMIT_WARN = 75;
+const LIMIT_CRITICAL = 90;
 const MINUTE = 60_000;
 /** Tools a claude.ai connector offers until you sign in to it. */
 const SIGN_IN_TOOLS = new Set(["authenticate", "complete_authentication"]);
@@ -232,7 +235,10 @@ function titleLabel() {
     ...(o.memory ? [{ label: "Memory", value: `${gb(o.memory.used)} of ${gb(o.memory.total)} (${o.memory.percent}%)` }] : []),
   ];
   const label = parts.length ? parts.join(" · ") : o.memory ? `RAM ${o.memory.percent}%` : null;
-  return { label, rows };
+  const highest = Math.max(o.fiveHour?.percent ?? 0, o.sevenDay?.percent ?? 0);
+  /** @type {"warning" | "danger" | undefined} */
+  const tone = highest >= LIMIT_CRITICAL ? "danger" : highest >= LIMIT_WARN ? "warning" : undefined;
+  return { label, rows, tone };
 }
 
 /** What the sidebar shows, kept well under the 64 KB a broadcast may carry. */
@@ -268,14 +274,31 @@ function flush() {
     if (s?.paneId) void wings.setBadge(s.paneId, badge(s)).catch(() => {});
   }
   pending = new Set();
-  const { label, rows } = titleLabel();
-  void wings.setSidebarLabel("hud", label, { rows }).catch(() => {});
+  const { label, rows, tone } = titleLabel();
+  void wings.setSidebarLabel("hud", label, { rows, tone }).catch(() => {});
   void wings.broadcast({ type: "hud", ...snapshot() }).catch(() => {});
 }
 /** Every badge, for numbers that changed for all of them, like the status line's. */
 function changedAll() {
   for (const s of panes.values()) pending.add(s.id);
   changed(null);
+}
+
+/** The highest level each limit window has alerted at, so a refresh doesn't repeat it. A new resetsAt is a new window. */
+const alerted = { fiveHour: { resetsAt: null, level: 0 }, sevenDay: { resetsAt: null, level: 0 } };
+
+function alertLimits() {
+  const o = overview();
+  for (const [key, name] of /** @type {const} */ ([["fiveHour", "5-hour"], ["sevenDay", "weekly"]])) {
+    const l = o[key];
+    if (!l) continue;
+    const seen = alerted[key];
+    if (seen.resetsAt !== (l.resetsAt ?? null)) Object.assign(seen, { resetsAt: l.resetsAt ?? null, level: 0 });
+    const level = l.percent >= LIMIT_CRITICAL ? LIMIT_CRITICAL : l.percent >= LIMIT_WARN ? LIMIT_WARN : 0;
+    if (level <= seen.level) continue;
+    seen.level = level;
+    void wings.notify({ title: `${l.percent}% of your ${name} Claude limit used`, body: l.resets ? `Resets in ${l.resets}` : undefined }).catch(() => {});
+  }
 }
 
 async function refreshStatus() {
@@ -285,6 +308,7 @@ async function refreshStatus() {
     reported = null;
     console.error(error);
   }
+  alertLimits();
   changedAll();
 }
 

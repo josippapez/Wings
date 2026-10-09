@@ -151,7 +151,7 @@
      * Short text next to a sidebar's title bar button, like a running timer. `null` clears it. `rows`, up to 6
      * `{ label, value }`, show when you point at the button.
      */
-    setSidebarLabel: (sidebarId, label, { rows } = {}) => call("setSidebarLabel", { sidebarId, label, rows }),
+    setSidebarLabel: (sidebarId, label, { rows, tone } = {}) => call("setSidebarLabel", { sidebarId, label, rows, tone }),
     /** Sends a JSON value to the plugin's other pages (its main script and open sidebars), up to 64 KB. */
     broadcast: (message) => call("broadcast", { message }),
     /** Gets what the plugin's other pages send with `broadcast`. */

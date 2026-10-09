@@ -157,7 +157,7 @@ interface Wings {
     keys(): Promise<string[]>;
   };
   /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
-  setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[] }): Promise<void>;
+  setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[]; tone?: "warning" | "danger" }): Promise<void>;
   /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars. */
   broadcast(message: unknown): Promise<void>;
   /** Gets what the plugin's other pages send with `broadcast`. */

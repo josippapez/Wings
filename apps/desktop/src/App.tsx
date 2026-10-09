@@ -134,6 +134,7 @@ export default function App() {
       icon: s.icon,
       label: sidebarLabels[`${p.id}:${s.id}`]?.text,
       rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
+      tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
       active: rightSidebar === `${p.id}:${s.id}`,
     })),
     ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
