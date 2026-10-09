@@ -302,12 +302,16 @@ function azureStatus(pr, checks) {
   };
 }
 
+// Azure shows this policy as the reviewer requirement, not as a check, and it stays queued until someone votes.
+const MIN_REVIEWERS_POLICY = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd";
+
 async function azureChecks(link) {
   const out = await wings.exec("az", ["repos", "pr", "policy", "list", "--id", String(link.number), "--organization", link.remote.org, "-o", "json"]);
   const records = out.code === 0 ? JSON.parse(out.stdout) : [];
   const checks = counts(
     (Array.isArray(records) ? records : (records.value ?? []))
       .filter((r) => r.status !== "notApplicable" && r.configuration?.isEnabled !== false)
+      .filter((r) => r.configuration?.type?.id !== MIN_REVIEWERS_POLICY)
       .map((r) => (r.status === "approved" ? "passed" : r.status === "rejected" || r.status === "broken" ? "failed" : "running")),
   );
   return azureStatus(link.raw, checks);
