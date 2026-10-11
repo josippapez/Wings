@@ -125,22 +125,98 @@ fn tools(app: &AppHandle) -> Vec<Value> {
                 json!({ "name": format!("{id}{SEPARATOR}{}", t.name), "description": t.description, "inputSchema": t.input_schema })
             })
         });
-    crate::history::mcp_tools().into_iter().chain(plugin_tools).collect()
+    crate::history::mcp_tools().into_iter().chain(crate::mcp_panes::tools()).chain(plugin_tools).collect()
 }
 
 /// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.
-fn builtin(app: &AppHandle, name: &str, arguments: &Value) -> Option<ToolResult> {
+fn builtin(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<ToolResult> {
     let state = app.state::<AppState>();
-    let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)?;
+    let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)
+        .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, &|| ppid.and_then(|pid| pane_of(app, pid))))?;
     Some(match result {
         Ok(text) => ToolResult { text, is_error: false },
         Err(text) => ToolResult { text, is_error: true },
     })
 }
 
+/// Sends the webview `event` with a call id added to `payload`, and waits for it to answer through `mcp_tool_result`.
+fn ask_webview(app: &AppHandle, event: &str, mut payload: Value) -> Result<ToolResult, String> {
+    let state = app.state::<AppState>();
+    let call_id = state.mcp.next.fetch_add(1, Ordering::Relaxed);
+    payload["callId"] = json!(call_id);
+    let (done, answer) = mpsc::channel();
+    state.mcp.pending.lock().unwrap().insert(call_id, done);
+    if let Err(e) = app.emit_to("main", event, payload) {
+        state.mcp.pending.lock().unwrap().remove(&call_id);
+        return Err(e.to_string());
+    }
+    let result = answer.recv_timeout(CALL_TIMEOUT).map_err(|_| "Wings didn't answer in time".to_string());
+    state.mcp.pending.lock().unwrap().remove(&call_id);
+    result
+}
+
+/// The running app for the pane tools (mcp_panes.rs).
+struct WingsHost<'a>(&'a AppHandle);
+
+impl crate::mcp_panes::Host for WingsHost<'_> {
+    fn panes(&self) -> Vec<crate::mcp_panes::PaneRow> {
+        let state = self.0.state::<AppState>();
+        // Never both locks at once; other code takes them in either order.
+        let panes: Vec<_> = state.panes.lock().unwrap().values().cloned().collect();
+        let info = state.pane_info.lock().unwrap();
+        let mut rows: Vec<_> = panes
+            .iter()
+            .map(|p| {
+                let live = info.get(&p.id);
+                crate::mcp_panes::PaneRow {
+                    id: p.id.clone(),
+                    space_id: p.space_id.clone(),
+                    cwd: live.and_then(|i| i.cwd.clone()).map_or_else(|| p.cwd.clone(), PathBuf::from),
+                    command: live.map(|i| i.command.clone()),
+                    title: p.title(),
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| a.id.len().cmp(&b.id.len()).then_with(|| a.id.cmp(&b.id)));
+        rows
+    }
+
+    fn agents(&self) -> Vec<crate::detect::Agent> {
+        self.0.state::<AppState>().agents.lock().unwrap().clone()
+    }
+
+    fn spaces(&self) -> Vec<crate::spaces::Space> {
+        self.0.state::<AppState>().spaces.lock().unwrap().spaces.clone()
+    }
+
+    fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
+        let pane = self.0.state::<AppState>().panes.lock().unwrap().get(pane_id).cloned()?;
+        Some(pane.recent_output())
+    }
+
+    fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<String, String> {
+        let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input });
+        let answer = ask_webview(self.0, "mcp-open-pane", payload)?;
+        if answer.is_error {
+            Err(answer.text)
+        } else {
+            Ok(answer.text)
+        }
+    }
+
+    fn notify(&self, title: String, body: String) -> Result<(), String> {
+        use tauri_plugin_notification::NotificationExt;
+        // One allowance for every Claude session together, the same size as a plugin's.
+        self.0.state::<AppState>().notified.lock().unwrap().allow("claude", std::time::Instant::now()).map_err(|wait| {
+            format!("Already showed {} notifications this minute. Try again in {} s.", crate::plugins::NOTIFY_LIMIT, wait.as_secs() + 1)
+        })?;
+        self.0.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+    }
+}
+
 /// Asks the plugin, through the webview, to run one of its tools, and waits for its answer.
 fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Result<ToolResult, String> {
-    if let Some(result) = builtin(app, name, &arguments) {
+    if let Some(result) = builtin(app, name, &arguments, ppid) {
         return Ok(result);
     }
     let (plugin_id, tool) = name.split_once(SEPARATOR).ok_or_else(|| format!("unknown tool {name}"))?;
@@ -149,18 +225,9 @@ fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Res
     if !plugin.manifest.contributes.mcp_tools.iter().any(|t| t.name == tool) {
         return Err(format!("{plugin_id} has no tool {tool}"));
     }
-    let call_id = state.mcp.next.fetch_add(1, Ordering::Relaxed);
-    let (done, answer) = mpsc::channel();
-    state.mcp.pending.lock().unwrap().insert(call_id, done);
     let pane_id = ppid.and_then(|pid| pane_of(app, pid));
-    let payload = json!({ "callId": call_id, "pluginId": plugin_id, "tool": tool, "arguments": arguments, "paneId": pane_id });
-    if let Err(e) = app.emit_to("main", "mcp-call", payload) {
-        state.mcp.pending.lock().unwrap().remove(&call_id);
-        return Err(e.to_string());
-    }
-    let result = answer.recv_timeout(CALL_TIMEOUT).map_err(|_| format!("{plugin_id} didn't answer in time"));
-    state.mcp.pending.lock().unwrap().remove(&call_id);
-    result
+    ask_webview(app, "mcp-call", json!({ "pluginId": plugin_id, "tool": tool, "arguments": arguments, "paneId": pane_id }))
+        .map_err(|_| format!("{plugin_id} didn't answer in time"))
 }
 
 /// The webview hands back a plugin's answer.

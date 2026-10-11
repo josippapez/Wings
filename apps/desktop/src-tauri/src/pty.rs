@@ -146,6 +146,11 @@ impl Pane {
     pub fn title(&self) -> String {
         self.title.lock().unwrap().clone()
     }
+
+    /// The raw output kept for this pane (up to `REPLAY_BYTES`), oldest first, for `read_pane`.
+    pub fn recent_output(&self) -> Vec<u8> {
+        self.output.lock().unwrap().ring.contents()
+    }
 }
 
 /// Output kept per pane for a UI that loads again (a webview reload). xterm keeps 10,000 lines of scrollback, about

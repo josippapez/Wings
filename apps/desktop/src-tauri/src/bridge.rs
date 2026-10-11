@@ -21,7 +21,8 @@ use serde_json::{json, Value};
 /// MCP runtimes; on the 2026-07-28 revision `list_changed` would need a held-open stream instead.
 const PROTOCOLS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const INSTRUCTIONS: &str = "Tools from Wings, the terminal app this session may run in. search_history and read_session \
-find and read past Claude Code sessions on this computer. Tools from the plugins turned on in Wings are named \
+find and read past Claude Code sessions on this computer. list_sessions, read_pane, open_pane and notify see and use \
+Wings' open terminal panes. Tools from the plugins turned on in Wings are named \
 <plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
 
 struct Bridge {
