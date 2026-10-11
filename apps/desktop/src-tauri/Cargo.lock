@@ -5881,6 +5881,7 @@ dependencies = [
  "dirs",
  "keyring",
  "notify",
+ "notify-rust",
  "portable-pty",
  "serde",
  "serde_json",

@@ -893,13 +893,78 @@ fn notify_transitions(app: &AppHandle, before: &[Agent], after: &[Agent]) {
             AgentState::Done => (format!("{name} finished"), project.into_owned()),
             _ => continue,
         };
-        let mut notification = app.notification().builder().title(title).body(body);
-        // macOS plays no sound unless the notification names one.
-        if cfg!(target_os = "macos") {
-            notification = notification.sound("NSUserNotificationDefaultSoundName");
-        }
-        let _ = notification.show();
+        send_notification(app, &agent.pane_id, title, body);
     }
+}
+
+/// How many notifications wait for a click at once on macOS. Each waits on its own thread until it's clicked,
+/// dismissed or cleared from Notification Center, which can be never, so past this a notification is sent
+/// without waiting and a click on it only brings Wings forward.
+#[cfg(target_os = "macos")]
+const MAX_CLICK_WAITS: usize = 8;
+
+/// Counts the threads waiting for a notification click, so there are never more than a given number.
+struct ClickWaits(std::sync::atomic::AtomicUsize);
+
+/// One of the waits, given back on drop.
+struct ClickWait<'a>(&'a ClickWaits);
+
+impl ClickWaits {
+    fn take(&self, max: usize) -> Option<ClickWait<'_>> {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        self.0.try_update(AcqRel, Acquire, |n| (n < max).then_some(n + 1)).ok().map(|_| ClickWait(self))
+    }
+}
+
+impl Drop for ClickWait<'_> {
+    fn drop(&mut self) {
+        self.0 .0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+#[cfg(target_os = "macos")]
+static CLICK_WAITS: ClickWaits = ClickWaits(std::sync::atomic::AtomicUsize::new(0));
+
+/// Brings Wings to the front and tells the UI to go to a pane.
+#[cfg(target_os = "macos")]
+fn focus_pane(app: &AppHandle, pane_id: &str) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("focus-pane", pane_id);
+}
+
+/// Shows a system notification for a pane. On macOS, clicking it focuses that pane: `mac-notification-sys`
+/// reports a click only to a send that waits, so that one waits on its own thread. Elsewhere the plugin shows
+/// it and a click does what the OS does for it.
+fn send_notification(app: &AppHandle, pane_id: &str, title: String, body: String) {
+    #[cfg(target_os = "macos")]
+    if let Some(wait) = CLICK_WAITS.take(MAX_CLICK_WAITS) {
+        let (app, pane_id) = (app.clone(), pane_id.to_string());
+        let identifier = if tauri::is_dev() { "com.apple.Terminal".to_string() } else { app.config().identifier.clone() };
+        thread::spawn(move || {
+            let _wait = wait;
+            let _ = notify_rust::set_application(&identifier);
+            let shown = notify_rust::Notification::new()
+                .summary(&title)
+                .body(&body)
+                // macOS plays no sound unless the notification names one.
+                .sound_name("NSUserNotificationDefaultSoundName")
+                .show();
+            if let Ok(handle) = shown {
+                let _ = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
+                    if matches!(response, notify_rust::NotificationResponse::Default) {
+                        focus_pane(&app, &pane_id);
+                    }
+                });
+            }
+        });
+        return;
+    }
+    let _ = pane_id;
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// Polls panes for Claude processes and emits `agents` whenever the list changes.
@@ -1176,6 +1241,17 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// Notifications that are never clicked or cleared keep their waiting thread, so the count has a ceiling
+    /// and a finished wait gives its place back.
+    #[test]
+    fn click_waits_stop_at_the_limit_and_are_given_back() {
+        let waits = super::ClickWaits(std::sync::atomic::AtomicUsize::new(0));
+        let held: Vec<_> = (0..3).map(|_| waits.take(3).expect("under the limit")).collect();
+        assert!(waits.take(3).is_none());
+        drop(held);
+        assert!(waits.take(3).is_some());
+    }
+
     /// A command that isn't in build.rs and the capabilities is refused for the window at run time, while the
     /// browser stub and the MCP path don't notice. It left Past sessions loading forever once.
     #[test]

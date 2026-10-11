@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CircleDashedIcon,
   CopyIcon,
@@ -29,8 +29,12 @@ import { Item } from "@/components/ui/item";
 import { GitCounts } from "@/components/git-counts";
 import { PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
+import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { elapsed } from "@/lib/agents";
 import type { Agent, AgentState, GitStatus, Space } from "@/lib/api";
+import { shortcutLabel } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
@@ -43,6 +47,17 @@ const copy = (text: string) => void navigator.clipboard.writeText(text).catch(()
 function agentStatus(agent: Agent) {
   if (agent.state === "blocked" && agent.waitingFor) return `needs you: ${agent.waitingFor}`;
   return stateLabel[agent.state].toLowerCase();
+}
+
+/** " 42s" or " 7m": how long the agent has been working. Ticks every second for the first minute, then every 15 s. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now);
+  const fast = now - since < 60_000;
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), fast ? 1000 : 15_000);
+    return () => clearInterval(id);
+  }, [fast]);
+  return <span className="tabular-nums"> {elapsed(now - since)}</span>;
 }
 
 export function Sidebar(props: {
@@ -222,7 +237,15 @@ export function Sidebar(props: {
 
         <section aria-labelledby="agents-heading" className="mx-2 flex shrink-0 flex-col border-t border-hairline pt-2">
           <h2 id="agents-heading" className="flex items-center justify-between px-2 pb-1 text-[12px] font-medium text-muted-foreground">
-            Agents
+            <Tooltip>
+              <TooltipTrigger render={<span tabIndex={0} className="cursor-default rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />}>
+                Agents
+              </TooltipTrigger>
+              <TooltipContent side="right" className="gap-2">
+                Next agent that needs you
+                <Kbd>{shortcutLabel.nextAgent}</Kbd>
+              </TooltipContent>
+            </Tooltip>
             {agents.length + props.restored.length > 0 && <span className="tabular-nums">{agents.length + props.restored.length}</span>}
           </h2>
           {/* Grows with the list up to five agents, then scrolls. */}
@@ -262,6 +285,7 @@ export function Sidebar(props: {
                         <span className="block truncate text-[13px] font-medium">{agent.name ?? "Claude"}</span>
                         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                           {spaceName(agent.spaceId)}, {agentStatus(agent)}
+                          {agent.state === "working" && agent.stateSince && <Elapsed since={agent.stateSince} />}
                         </span>
                       </span>
                       {agent.state === "done" && <span className="size-1.5 shrink-0 rounded-full bg-done" aria-hidden />}

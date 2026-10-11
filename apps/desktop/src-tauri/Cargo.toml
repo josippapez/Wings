@@ -42,6 +42,10 @@ notify = "8"
 wings-bench-grid = { path = "bench-grid", optional = true }
 
 
+# Clicking a system notification focuses its pane: the plugin's builder can't wait for the click, notify-rust can.
+[target.'cfg(target_os = "macos")'.dependencies]
+notify-rust = "4.18"
+
 # Self-update: desktop only (the plugins have no mobile support).
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"

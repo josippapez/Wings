@@ -31,6 +31,7 @@ macOS uses ⌘; Windows and Linux use Ctrl+Shift (plain Ctrl stays with the shel
 | ⌘W / ⇧⌘W | Close pane / close window |
 | ⌘+ / ⌘− / ⌘0 | Font size up / down / reset (works on any keyboard layout) |
 | ⌘B | Toggle sidebar |
+| ⌘J / ⇧⌘J | Next / previous agent that needs you (blocked first, then finished), wrapping around |
 | ⌘-click | Open a link |
 
 Tabs, splits and font size are saved and come back on the next launch; panes that were running Claude run `claude --resume <session>` again.
