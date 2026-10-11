@@ -143,10 +143,10 @@ Wings adds tools of its own to that server, with or without plugins:
 | `search_history`, `read_session` | Find and read past Claude Code sessions. |
 | `list_sessions` | The open panes: id, project, folder, program and, for Claude, its state (working, blocked, done or idle), what it waits for, session id and name. |
 | `read_pane(pane_id, lines?)` | The last up to 200 lines (32 KB) of a pane's output as plain text. Marked as data, since a pane can print anything. |
-| `open_pane(cwd?, command?, run?)` | A new tab in a project (`cwd` has to be inside one you added). The command is typed but not run unless `run` is true. It can't hold a newline or other control character. |
+| `open_pane(cwd?, command?)` | A new tab in a project (`cwd` has to be inside one you added). The command is typed but never run: you read it and press Enter. It can't hold a newline or other control character. |
 | `notify(title, body?)` | A desktop notification titled "Claude: …", up to 3 a minute across all sessions. |
 
-Mind what these allow. Every Claude Code session you start on this computer can call them, so one session can read what another shows, which can include secrets and prompts. `open_pane` with `run` starts a command with your shell's permissions, outside Claude Code's own permission checks for Bash, though in a tab you can see; Claude Code still asks before a call to an MCP tool unless you allowed it. The socket is readable by your user only (`0600`) and there is no network access.
+Mind what these allow. Every Claude Code session you start on this computer can call them, so one session can read what another shows, which can include secrets and prompts. `open_pane` only types a command, so nothing runs outside Claude Code's own permission checks for Bash; Claude Code still asks before a call to an MCP tool unless you allowed it. The socket is readable by your user only (`0600`) and there is no network access.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.
 

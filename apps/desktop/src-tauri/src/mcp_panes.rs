@@ -35,7 +35,7 @@ pub struct PaneRow {
 pub struct OpenPlan {
     pub space_id: String,
     pub cwd: Option<String>,
-    /// Raw text for the new shell, with the Enter key on the end only when the command should run.
+    /// Text typed into the new shell. Never with Enter: the user reads it and runs it themselves.
     pub input: Option<String>,
 }
 
@@ -75,13 +75,12 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "open_pane",
-            "description": "Open a new tab in one of the user's Wings projects, and optionally type a command in it. The command is typed but not run unless run is true, so the user can read it first. Even then it runs in a tab the user sees, with their shell and permissions, so only use run for a command you would run yourself. Returns the new pane's id.",
+            "description": "Open a new tab in one of the user's Wings projects, and optionally type a command in it. The command is typed but never run: the user reads it and presses Enter. Returns the new pane's id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "cwd": { "type": "string", "description": "Absolute path of the folder to start in. It has to be inside a project in Wings. Leave out for the root of your own project." },
-                    "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." },
-                    "run": { "type": "boolean", "default": false, "description": "Press Enter after the command." }
+                    "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." }
                 }
             }
         }),
@@ -114,12 +113,11 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
             None => Err("read_pane needs a pane_id, from list_sessions".into()),
         },
         "open_pane" => {
-            let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
             let caller_pane = caller().and_then(|id| host.panes().into_iter().find(|p| p.id == id));
-            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command"), run).and_then(|plan| {
+            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command")).and_then(|plan| {
                 let typed = plan.input.is_some();
                 let pane_id = host.open(plan)?;
-                Ok(json!({ "paneId": pane_id, "commandRun": typed && run, "commandTyped": typed && !run }).to_string())
+                Ok(json!({ "paneId": pane_id, "commandTyped": typed }).to_string())
             })
         }
         "notify" => match text("title").map(str::trim).filter(|t| !t.is_empty()) {
@@ -236,17 +234,17 @@ fn tail(text: &str, lines: usize, max_bytes: usize) -> (String, bool) {
 }
 
 /// Which project, folder and keystrokes a new tab gets, or why not. The folder has to be inside a project the user
-/// added: a tool call never adds a project of its own. A command with a control character is refused, since a
-/// newline in it would press Enter whatever `run` says, and an escape could drive the shell's line editor.
-fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, command: Option<&str>, run: bool) -> Result<OpenPlan, String> {
+/// added: a tool call never adds a project of its own. The command is only typed, so it can't run outside Claude
+/// Code's own approval of shell commands. A control character is refused: a newline would press Enter, and an escape
+/// could drive the shell's line editor.
+fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, command: Option<&str>) -> Result<OpenPlan, String> {
     let input = match command {
-        None if run => return Err("run needs a command".into()),
         None => None,
         Some(c) if c.trim().is_empty() => return Err("command is empty".into()),
         Some(c) if c.len() > COMMAND_MAX || c.chars().any(char::is_control) => {
             return Err(format!("A command is one line of up to {COMMAND_MAX} bytes, with no control characters"))
         }
-        Some(c) => Some(if run { format!("{c}\r") } else { c.to_string() }),
+        Some(c) => Some(c.to_string()),
     };
     let roots: Vec<PathBuf> = spaces.iter().map(|s| PathBuf::from(&s.path)).collect();
     let current = caller.and_then(|p| spaces.iter().position(|s| s.id == p.space_id));
@@ -406,11 +404,12 @@ mod tests {
         };
         // From a pane, with no folder: that pane's project, command typed but not run.
         let reply: Value = serde_json::from_str(&run(&host, "open_pane", json!({ "command": "npm test" }), Some("p1")).unwrap()).unwrap();
-        assert_eq!(reply, json!({ "paneId": "p9", "commandRun": false, "commandTyped": true }));
+        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true }));
+        // A `run` flag from an older client is ignored: nothing presses Enter.
         run(&host, "open_pane", json!({ "cwd": sub.to_str().unwrap(), "command": "ls", "run": true }), Some("p1")).unwrap();
         let opened = host.opened.borrow();
         assert_eq!(opened[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("npm test".into()) });
-        assert_eq!(opened[1].input.as_deref(), Some("ls\r"));
+        assert_eq!(opened[1].input.as_deref(), Some("ls"));
         assert_eq!(opened[1].cwd.as_deref(), Some(sub.canonicalize().unwrap().to_str().unwrap()));
         drop(opened);
         for (args, caller, needle) in [
@@ -419,7 +418,6 @@ mod tests {
             (json!({ "command": "ls\nrm -rf ~" }), Some("p1"), "control characters"),
             (json!({ "command": "ls\u{1b}[200~" }), Some("p1"), "control characters"),
             (json!({ "command": "  " }), Some("p1"), "empty"),
-            (json!({ "run": true }), Some("p1"), "needs a command"),
         ] {
             assert!(run(&host, "open_pane", args.clone(), caller).unwrap_err().contains(needle), "{args}");
         }
