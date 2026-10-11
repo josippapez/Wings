@@ -318,6 +318,7 @@ mod tests {
             waiting_for: Some("approval to run rm".into()),
             args: vec![],
             started_at: 0,
+            state_since: None,
         }
     }
 
