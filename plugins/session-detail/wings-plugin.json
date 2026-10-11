@@ -1,11 +1,15 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.3.2",
-  "description": "Shows what each Claude session is doing: its model and context size, and recent tool calls and edited files.",
+  "version": "0.4.0",
+  "description": "Shows what each Claude session is doing: its model and context size, and recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
   "main": "main.js",
   "permissions": {
+    "exec": [
+      "git diff [-- --no-color --no-ext-diff]",
+      "git ls-files [-- --error-unmatch]"
+    ],
     "transcript": [
       "assistant",
       "user",
@@ -14,7 +18,8 @@
   },
   "contributes": {
     "ui": [
-      "badges"
+      "badges",
+      "diff"
     ],
     "sidebars": [
       {

@@ -25,6 +25,9 @@ function toggle(sessionId, key) {
   render();
 }
 
+/** @param {string} sessionId @param {string | null} path */
+const openDiff = (sessionId, path) => void wings.broadcast({ type: "diff", sessionId, path });
+
 /** What a row opens to: the prompt in full, or a tool call's inputs, timing and the start of its result. @param {any} item */
 function card(item) {
   const d = details.get(item.key);
@@ -96,10 +99,34 @@ function render() {
       h("ul", { class: "list" }, ...s.running.map((/** @type {any} */ t) => h("li", { class: "row" }, h("span", { class: "spinner", "aria-hidden": true }), h("strong", {}, t.name), h("span", { class: "grow muted ellipsis" }, t.summary)))),
     );
   }
+  if (s.todos.length) {
+    const done = s.todos.filter((/** @type {any} */ t) => t.status === "completed").length;
+    parts.push(
+      h("h2", {}, `To do (${done}/${s.todos.length})`),
+      h(
+        "ul",
+        { class: "list todos" },
+        ...s.todos.map((/** @type {any} */ t) =>
+          h(
+            "li",
+            { class: `row todo ${t.status}` },
+            h("span", { class: `box ${t.status}`, role: "img", "aria-label": { completed: "Done", in_progress: "In progress", pending: "To do" }[/** @type {"completed" | "in_progress" | "pending"} */ (t.status)] }),
+            h("span", { class: "grow" }, t.status === "in_progress" && t.active ? t.active : t.text),
+          ),
+        ),
+      ),
+    );
+  }
   if (s.files.length) {
     parts.push(
-      h("h2", {}, `Files edited (${s.files.length})`),
-      h("ul", { class: "list" }, ...s.files.map(([/** @type {string} */ path, /** @type {number} */ n]) => h("li", { class: "row", title: path }, h("span", { class: "grow ellipsis" }, basename(path)), h("span", { class: "muted" }, n > 1 ? `${n} edits` : "1 edit")))),
+      h("div", { class: "row heading" }, h("h2", { class: "grow" }, `Files edited (${s.files.length})`), h("button", { class: "chip", title: "Everything changed in the working tree, against HEAD", onclick: () => openDiff(s.id, null) }, "View all changes")),
+      h(
+        "ul",
+        { class: "list" },
+        ...s.files.map(([/** @type {string} */ path, /** @type {number} */ n]) =>
+          h("li", {}, h("button", { class: "toggle row", title: `Diff of ${path}`, onclick: () => openDiff(s.id, path) }, h("span", { class: "grow ellipsis" }, basename(path)), h("span", { class: "muted" }, n > 1 ? `${n} edits` : "1 edit"))),
+        ),
+      ),
     );
   }
   const shown = highlightsOnly ? s.items.filter((/** @type {any} */ i) => i.kind === "prompt" || i.tags || i.error) : s.items;

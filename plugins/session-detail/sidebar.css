@@ -236,3 +236,32 @@ h2 {
   background: var(--wings-pressed);
   color: var(--wings-fg);
 }
+
+/* The to-do list: a box that fills in as a task moves from pending to done. */
+.todo {
+  align-items: flex-start;
+  padding: 3px 6px;
+}
+.todo.completed {
+  color: var(--wings-muted);
+  text-decoration: line-through;
+}
+.todo.in_progress {
+  font-weight: 500;
+}
+.box {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1.5px solid var(--wings-hairline-strong);
+  border-radius: 3px;
+}
+.box.in_progress {
+  border-color: var(--wings-info);
+  background: linear-gradient(90deg, var(--wings-info) 50%, transparent 50%);
+}
+.box.completed {
+  border-color: var(--wings-success);
+  background: var(--wings-success);
+}

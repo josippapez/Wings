@@ -15,7 +15,7 @@ let panes = new Map();
 function session(id) {
   let s = sessions.get(id);
   if (!s) {
-    s = { id, paneId: null, project: "", name: null, state: "idle", model: null, context: null, items: [], tools: new Map(), files: new Map(), lastPrompt: null, updated: 0, tokens: emptyTokens(), partial: false };
+    s = { id, paneId: null, project: "", name: null, state: "idle", model: null, context: null, items: [], tools: new Map(), files: new Map(), todos: [], tasks: new Map(), creating: new Map(), cwd: null, lastPrompt: null, updated: 0, tokens: emptyTokens(), partial: false };
     sessions.set(id, s);
   }
   return s;
@@ -151,8 +151,46 @@ function prompt(s, text, at) {
   s.items.push({ kind: "prompt", key: `prompt-${nextKey++}`, summary: oneLine(text, 140), text: clip(text, 4000), at });
 }
 
+const TODO_STATUS = new Set(["pending", "in_progress", "completed"]);
+const MAX_TODOS = 40;
+
+/** The checklist from `TodoWrite` (the whole list each time) and `TaskCreate`/`TaskUpdate` (one task at a time,
+ * numbered by the result of the create). It reads earlier runs too, since the list carries over a resume. */
+function trackTodos(s, entry) {
+  const content = entry.message?.content;
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (entry.type === "assistant" && block?.type === "tool_use") {
+      const input = block.input ?? {};
+      if (block.name === "TodoWrite" && Array.isArray(input.todos)) {
+        s.todos = input.todos.slice(0, MAX_TODOS).filter((t) => t && typeof t.content === "string").map((t) => ({ text: clip(t.content, 200), active: typeof t.activeForm === "string" ? clip(t.activeForm, 200) : null, status: TODO_STATUS.has(t.status) ? t.status : "pending" }));
+      } else if (block.name === "TaskCreate" && typeof input.subject === "string") {
+        s.creating.set(block.id, { text: clip(input.subject, 200), active: typeof input.activeForm === "string" ? clip(input.activeForm, 200) : null });
+      } else if (block.name === "TaskUpdate" && input.taskId != null) {
+        const id = String(input.taskId);
+        const task = s.tasks.get(id);
+        if (input.status === "deleted") s.tasks.delete(id);
+        else if (task) {
+          if (TODO_STATUS.has(input.status)) task.status = input.status;
+          if (typeof input.subject === "string") task.text = clip(input.subject, 200);
+          if (typeof input.activeForm === "string") task.active = clip(input.activeForm, 200);
+        }
+      }
+    } else if (entry.type === "user" && block?.type === "tool_result" && s.creating.has(block.tool_use_id)) {
+      const made = s.creating.get(block.tool_use_id);
+      s.creating.delete(block.tool_use_id);
+      const id = /^Task #(\d+) created/.exec(textOf(block.content))?.[1];
+      if (id && !block.is_error && s.tasks.size < MAX_TODOS) s.tasks.set(id, { ...made, status: "pending" });
+    }
+  }
+}
+
+/** Task tools win over `TodoWrite` while they have anything, since a session uses one or the other. */
+const checklist = (s) => (s.tasks.size ? [...s.tasks.values()] : s.todos);
+
 function ingest(s, entry) {
   if (entry.isSidechain) return;
+  trackTodos(s, entry);
   const at = Date.parse(entry.timestamp) || Date.now();
   const message = entry.message ?? {};
   // A couple of seconds of slack, since the process start time is only to the second.
@@ -254,6 +292,7 @@ function snapshot() {
       tokens: tokenLine(s),
       running: running(s).map(({ name, summary, at }) => ({ name, summary, at })),
       items: s.items.slice(-n).reverse().map(({ kind, key, name, summary, tags, outcome, at, ms, error, done }) => ({ kind, key, name, summary, tags, outcome, at, ms, error, done })),
+      todos: checklist(s).map((t) => ({ text: t.text, active: t.active, status: t.status })),
       files: [...s.files].sort((a, b) => b[1] - a[1]).slice(0, 30),
     }));
   for (const n of [80, 40, 15, 0]) {
@@ -295,10 +334,10 @@ wings.onPanes(async (list) => {
     const s = session(pane.session.sessionId);
     // A new `claude` process, even for the same session after a resume, starts the activity afresh.
     const isNew = !s.loaded || s.startedAt !== pane.session.startedAt;
-    Object.assign(s, { paneId, project: pane.project, name: pane.session.name, state: pane.session.state });
+    Object.assign(s, { paneId, cwd: pane.cwd, project: pane.project, name: pane.session.name, state: pane.session.state });
     current.set(paneId, s);
     if (isNew) {
-      Object.assign(s, { loaded: true, startedAt: pane.session.startedAt, items: [], tools: new Map(), files: new Map(), lastPrompt: null, tokens: emptyTokens(), partial: false });
+      Object.assign(s, { loaded: true, startedAt: pane.session.startedAt, items: [], tools: new Map(), files: new Map(), todos: [], tasks: new Map(), creating: new Map(), lastPrompt: null, tokens: emptyTokens(), partial: false });
       try {
         const backlog = await wings.transcript(s.id, ["assistant", "user", "attachment"], { last: BACKLOG });
         // A full backlog that starts after this run began missed some of it, so its token total is a floor.
@@ -321,9 +360,47 @@ wings.onTranscript(({ sessionId, entry }) => {
   changed(s);
 });
 
+// ---------- diffs: an edited file, or everything changed, against HEAD ----------
+
+/** The normalised absolute path when it's inside `cwd`, else null. Paths come from the transcript, so `..` can't lead out. */
+function inside(cwd, path) {
+  if (typeof cwd !== "string" || typeof path !== "string" || !cwd.startsWith("/") || !path.startsWith("/")) return null;
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  const root = cwd.replace(/\/+$/, "");
+  const full = `/${parts.join("/")}`;
+  return root && full.startsWith(`${root}/`) ? full : null;
+}
+
+/** Opens the viewer at once and fills it in when the command answers, so a click never waits on it. `path` null is the whole working tree. */
+async function openChanges(sessionId, path) {
+  const s = sessions.get(sessionId);
+  if (!s?.cwd) return;
+  const file = path == null ? null : s.files.has(path) ? inside(s.cwd, path) : null;
+  if (path != null && !file) return;
+  const title = file ? basename(file) : "All changes";
+  const { id } = await wings.openDiff({ title, subtitle: file ? "Working tree against HEAD" : `Working tree against HEAD · ${basename(s.cwd)}` });
+  try {
+    const args = file ? ["diff", "HEAD", "--no-color", "--no-ext-diff", "--", file] : ["diff", "HEAD", "--no-color", "--no-ext-diff"];
+    const r = await wings.exec("git", args, { cwd: s.cwd });
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "git diff failed");
+    if (r.stdout.trim()) return void (await wings.updateDiff(id, { patch: r.stdout }));
+    // Nothing against HEAD: a file that isn't tracked yet has no diff to show, since Wings doesn't allow `--no-index`.
+    const tracked = file ? (await wings.exec("git", ["ls-files", "--error-unmatch", "--", file], { cwd: s.cwd })).code === 0 : true;
+    await wings.updateDiff(id, { error: tracked ? "No changes against HEAD." : "This file isn't tracked yet, so there is no diff." });
+  } catch (error) {
+    await wings.updateDiff(id, { error: String(error.message ?? error) });
+  }
+}
+
 // A sidebar that just opened asks for the current state, and one that opens a row asks for its detail.
 wings.onBroadcast((message) => {
   if (message?.type === "hello") void wings.broadcast({ type: "sessions", sessions: snapshot() });
+  if (message?.type === "diff") void openChanges(message.sessionId, message.path ?? null).catch(console.error);
   if (message?.type === "detail") {
     const item = sessions.get(message.sessionId)?.items.find((i) => i.key === message.key);
     if (!item) return;
