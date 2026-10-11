@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { motion } from "motion/react";
 import { Columns2Icon, Maximize2Icon, Minimize2Icon, Rows2Icon, XIcon } from "lucide-react";
 
+import { FindBar } from "@/components/find-bar";
 import { IconButton } from "@/components/icon-button";
 import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
@@ -113,6 +114,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
   const focused = props.focusedPane === paneKey;
   const zoomed = props.zoomedPane === paneKey;
   const label = props.labels[paneKey];
+  const session = terminals.get(paneKey);
 
   // A split restructures the tree and remounts this card, so the terminal re-attaches to the new host here.
   useEffect(() => {
@@ -192,6 +194,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
         </div>
       </div>
       <div ref={host} className="min-h-0 flex-1 pr-1 pb-2 pl-3.5" />
+      {session && <FindBar session={session} />}
     </motion.section>
   );
 }

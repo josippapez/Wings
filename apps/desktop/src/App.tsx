@@ -559,6 +559,8 @@ export default function App() {
           return setFontSize(DEFAULT_FONT_SIZE);
         case "reload":
           return reloadUi();
+        case "find":
+          return activeTab ? terminals.get(activeTab.focusedPane)?.openFind() : undefined;
         case "nextAgent":
         case "previousAgent": {
           const next = nextNeedingYou(agents, focusedPaneId, action.kind === "previousAgent");

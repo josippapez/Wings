@@ -1,6 +1,9 @@
 import { Channel } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ClipboardAddon, type ClipboardSelectionType, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -41,7 +44,7 @@ const theme = {
 export const isMac = /Mac/.test(navigator.userAgent);
 
 export type Action =
-  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" | "nextAgent" | "previousAgent" }
+  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" | "nextAgent" | "previousAgent" | "find" }
   | { kind: "tab"; index: number }
   | { kind: "focus"; dir: "left" | "right" | "up" | "down" };
 
@@ -58,7 +61,7 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
     return { kind: "focus", dir: e.code.slice(5).toLowerCase() as "left" | "right" | "up" | "down" };
   }
   const typed = e.key.length === 1 && /[\x21-\x7e]/.test(e.key) ? e.key.toLowerCase() : null;
-  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyJ: "j", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
+  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyJ: "j", KeyF: "f", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
   const key = typed ?? fromCode[e.code] ?? (/^Digit\d$/.test(e.code) ? e.code.slice(5) : null);
   const extra = isMac ? e.shiftKey : e.altKey;
   switch (key) {
@@ -80,6 +83,8 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
     case "j":
       // The next agent that needs you; with ⇧ the one before.
       return { kind: extra ? "previousAgent" : "nextAgent" };
+    case "f":
+      return { kind: "find" };
     case "r":
       // Reloads only the UI; the terminals keep running and come back. For trying UI changes in dev.
       return import.meta.env.DEV && !extra ? { kind: "reload" } : null;
@@ -89,7 +94,7 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
 }
 
 export const shortcutLabel = isMac
-  ? { newTab: "⌘T", splitRight: "⌘D", splitDown: "⇧⌘D", toggleSidebar: "⌘B", closePane: "⌘W", nextAgent: "⌘J" }
+  ? { newTab: "⌘T", splitRight: "⌘D", splitDown: "⇧⌘D", toggleSidebar: "⌘B", closePane: "⌘W", nextAgent: "⌘J", find: "⌘F" }
   : {
       newTab: "Ctrl+Shift+T",
       splitRight: "Ctrl+Shift+D",
@@ -97,6 +102,7 @@ export const shortcutLabel = isMac
       toggleSidebar: "Ctrl+Shift+B",
       closePane: "Ctrl+Shift+W",
       nextAgent: "Ctrl+Shift+J",
+      find: "Ctrl+Shift+F",
     };
 
 export const DEFAULT_FONT_SIZE = 13;
@@ -126,6 +132,8 @@ export type TerminalLook = {
   minimumContrastRatio: number;
   /** Draws images that programs print (SIXEL, iTerm2 inline images). */
   images: boolean;
+  /** Lets programs put text on the clipboard with OSC 52. Reading the clipboard that way is never allowed. */
+  clipboardWrite: boolean;
 };
 export const DEFAULT_TERMINAL_LOOK: TerminalLook = {
   fontFamily: "",
@@ -137,6 +145,7 @@ export const DEFAULT_TERMINAL_LOOK: TerminalLook = {
   copyOnSelect: false,
   minimumContrastRatio: 1,
   images: true,
+  clipboardWrite: true,
 };
 /**
  * Memory caps per terminal for inline images. The addon's own defaults (128 MB stored, 4096 x 4096 pixels per image)
@@ -149,6 +158,30 @@ const IMAGE_OPTIONS = {
   sixelSizeLimit: 8_000_000,
   iipSizeLimit: 8_000_000,
 };
+/**
+ * What OSC 52 may do. A write goes to the system clipboard while the setting is on. A read always answers with an
+ * empty clipboard: allowing it would let any program in a pane, including one on a remote machine, read what you
+ * copied.
+ */
+const clipboardProvider: IClipboardProvider = {
+  readText: () => "",
+  writeText: async (_selection: ClipboardSelectionType, text: string) => {
+    if (look.clipboardWrite) await navigator.clipboard.writeText(text).catch(() => {});
+  },
+};
+
+/** The match colours must be #RRGGBB, which the addon needs for its decorations. */
+const SEARCH_DECORATIONS = {
+  matchBackground: "#5b4b1f",
+  matchBorder: "#e9c46a",
+  matchOverviewRuler: "#e9c46a",
+  activeMatchBackground: "#e9a23b",
+  activeMatchBorder: "#ffd98a",
+  activeMatchColorOverviewRuler: "#ffd98a",
+};
+export type FindOptions = { caseSensitive: boolean; regex: boolean };
+export type FindResults = { index: number; count: number };
+
 let look = DEFAULT_TERMINAL_LOOK;
 let lookTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -211,12 +244,19 @@ export class TerminalSession {
     cursorInactiveStyle: look.cursorInactiveStyle,
     minimumContrastRatio: look.minimumContrastRatio,
     macOptionIsMeta: false,
+    // The Unicode and search addons use xterm's proposed API (unicode versions, decorations).
+    allowProposedApi: true,
     theme,
   });
   paneId: string | null = null;
   private fit = new FitAddon();
   private webgl: WebglAddon | null = null;
   private image: ImageAddon | null = null;
+  private search: SearchAddon | null = null;
+  private findListeners = new Set<() => void>();
+  private findOpenState = false;
+  private findTick = 0;
+  private findResults: FindResults = { index: -1, count: 0 };
   private visible = false;
   private started = false;
   private initialInput: string | null = null;
@@ -307,6 +347,18 @@ export class TerminalSession {
   private async start(initialInput: string | null) {
     this.term.open(this.el);
     this.visible = true;
+    // Before the first write: the width rules decide how every line of output is laid out.
+    const unicode = new Unicode11Addon();
+    const search = new SearchAddon();
+    this.term.loadAddon(unicode);
+    this.term.unicode.activeVersion = "11";
+    this.term.loadAddon(search);
+    this.term.loadAddon(new ClipboardAddon(undefined, clipboardProvider));
+    this.search = search;
+    search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      this.findResults = { index: resultIndex, count: resultCount };
+      this.notifyFind();
+    });
     this.setImages(look.images);
     this.enableWebgl();
     this.fit.fit();
@@ -369,6 +421,60 @@ export class TerminalSession {
     this.term.focus();
   }
 
+  // The find bar's state lives here, with the terminal, so a shortcut can open it without going through React state.
+  subscribeFind = (listener: () => void) => {
+    this.findListeners.add(listener);
+    return () => void this.findListeners.delete(listener);
+  };
+
+  private notifyFind() {
+    for (const listener of this.findListeners) listener();
+  }
+
+  readonly getFindOpen = () => this.findOpenState;
+  /** Counts ⌘F presses, so the bar refocuses its input when it's already open. */
+  readonly getFindTick = () => this.findTick;
+  readonly getFindResults = () => this.findResults;
+
+  openFind() {
+    if (!this.search) return;
+    this.findOpenState = true;
+    this.findTick++;
+    this.notifyFind();
+  }
+
+  closeFind() {
+    if (!this.findOpenState) return;
+    this.findOpenState = false;
+    this.search?.clearDecorations();
+    this.findResults = { index: -1, count: 0 };
+    this.notifyFind();
+    this.term.focus();
+  }
+
+  /** Moves to the next or previous match. An empty term, or a regex that doesn't parse, finds nothing. */
+  find(term: string, options: FindOptions, direction: "next" | "previous", incremental = false) {
+    const search = this.search;
+    if (!search) return false;
+    if (!term) {
+      search.clearDecorations();
+      this.findResults = { index: -1, count: 0 };
+      this.notifyFind();
+      return false;
+    }
+    const opts: ISearchOptions = { ...options, incremental, decorations: SEARCH_DECORATIONS };
+    try {
+      const found = direction === "next" ? search.findNext(term, opts) : search.findPrevious(term, opts);
+      if (!found) {
+        this.findResults = { index: -1, count: 0 };
+        this.notifyFind();
+      }
+      return found;
+    } catch {
+      return false;
+    }
+  }
+
   setFontSize(size: number) {
     if (this.term.options.fontSize === size) return;
     this.term.options.fontSize = size;
@@ -380,6 +486,9 @@ export class TerminalSession {
     this.resizeObserver.disconnect();
     this.disableWebgl();
     this.setImages(false);
+    this.search?.dispose();
+    this.search = null;
+    this.findListeners.clear();
     if (this.paneId) void api.paneClose(this.paneId);
     this.term.dispose();
     this.el.remove();

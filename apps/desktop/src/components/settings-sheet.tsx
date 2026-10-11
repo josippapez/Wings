@@ -138,6 +138,13 @@ export function SettingsSheet(props: {
           >
             <Switch id="terminal-images" checked={look.images} onCheckedChange={(images) => setLook({ images })} />
           </Row>
+          <Row
+            id="clipboard-write"
+            label="Let programs copy to the clipboard"
+            hint="Lets a program in a pane, such as tmux or a remote shell, put text on your clipboard (OSC 52). Programs can never read it."
+          >
+            <Switch id="clipboard-write" checked={look.clipboardWrite} onCheckedChange={(clipboardWrite) => setLook({ clipboardWrite })} />
+          </Row>
         </section>
         <section className="flex flex-col gap-4 border-t border-hairline px-5 py-4">
           <h3 className="text-[12px] font-medium text-muted-foreground">Keyboard</h3>
