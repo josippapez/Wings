@@ -766,6 +766,20 @@ mod tests {
     }
 
     #[test]
+    fn every_plugin_in_the_repo_loads() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../plugins");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let dir = entry.unwrap().path();
+            if dir.join("wings-plugin.json").exists() {
+                load(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    }
+
+    #[test]
     #[cfg(unix)]
     fn login_shell_path_gives_up_on_a_slow_profile() {
         let quick = fake_shell("quick", "printf '__WINGS_PATH__/fake/bin__WINGS_PATH__'");
