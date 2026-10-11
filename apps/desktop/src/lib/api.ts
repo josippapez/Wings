@@ -59,6 +59,8 @@ export type McpStatus = { claude: boolean; connected: boolean; statusline: boole
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
 export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
+/** Claude asked Wings (the `open_pane` tool) for a new tab. Answer with `mcpToolResult`: the pane id, or the error. */
+export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
 export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
@@ -142,6 +144,7 @@ export const api = {
   mcpToolResult: (callId: number, text: string, isError: boolean) => invoke<void>("mcp_tool_result", { callId, text, isError }),
   /** Claude called a plugin tool. `paneId` is the pane that Claude runs in, if it's a Wings pane. */
   onMcpCall: (cb: (call: McpCall) => void): Promise<UnlistenFn> => listen<McpCall>("mcp-call", (e) => cb(e.payload)),
+  onMcpOpenPane: (cb: (call: McpOpenPane) => void): Promise<UnlistenFn> => listen<McpOpenPane>("mcp-open-pane", (e) => cb(e.payload)),
   /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
   onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
     listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),

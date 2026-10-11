@@ -290,6 +290,21 @@ export default function App() {
     [createPane],
   );
 
+  // Claude's `open_pane` tool opens its tab here like any other, so the workspace and the pane list stay one thing.
+  useEffect(() => {
+    const off = api.onMcpOpenPane(async (call) => {
+      try {
+        const key = openTab(call.spaceId, call.input, null, call.cwd);
+        const paneId = await terminals.get(key)?.whenStarted;
+        if (!paneId) throw new Error("The pane didn't start");
+        void api.mcpToolResult(call.callId, paneId, false);
+      } catch (e) {
+        void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
+      }
+    });
+    return () => void off.then((unlisten) => unlisten());
+  }, [openTab]);
+
   const selectSpace = useCallback(
     (spaceId: string) => {
       setActiveSpaceId(spaceId);

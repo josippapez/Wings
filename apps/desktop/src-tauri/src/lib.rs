@@ -15,6 +15,8 @@ mod control;
 // debt: the MCP socket is Unix-only, like plugins themselves; Windows needs a named pipe here.
 #[cfg(unix)]
 mod mcp;
+#[cfg(unix)]
+mod mcp_panes;
 mod plugin_store;
 mod plugin_storage;
 mod plugins;
