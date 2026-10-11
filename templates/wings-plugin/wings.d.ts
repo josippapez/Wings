@@ -156,9 +156,17 @@ interface Wings {
     /** Every key, sorted. */
     keys(): Promise<string[]>;
   };
-  /** Short text next to a sidebar's title bar button, like a running timer. `null` clears it. */
+  /** Short text next to a sidebar's or view's title bar button, like a running timer. `null` clears it. */
   setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[]; tone?: "warning" | "danger" }): Promise<void>;
-  /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars. */
+  /**
+   * Opens one of `contributes.sidebars` or `contributes.views` by id: in the right sidebar, in a modal over Wings,
+   * or in a window of its own. `as` must be in the view's `opens`, and defaults to the first. A window that's
+   * already open comes to the front. The page gets the same `wings` object wherever it opens.
+   */
+  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" }): Promise<void>;
+  /** Closes a sidebar or view wherever it's open. */
+  closeView(id: string): Promise<void>;
+  /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars, modals and windows. */
   broadcast(message: unknown): Promise<void>;
   /** Gets what the plugin's other pages send with `broadcast`. */
   onBroadcast(listener: (message: unknown) => void): void;

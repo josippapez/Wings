@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
-import { CalendarIcon, ChartColumnIcon, ClockIcon, GlobeIcon, ListIcon, XIcon } from "lucide-react";
+import { AppWindowIcon, CalendarIcon, ChartColumnIcon, ClockIcon, GlobeIcon, ListIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { PluginView } from "@/lib/api";
+import { pagesOf, type PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 
@@ -13,14 +13,14 @@ import { cn } from "@/lib/utils";
 export type SidebarRef = { plugin: PluginView; sidebarId: string; id: string; key: string };
 
 const icons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
-const sidebarOf = (entry: SidebarRef) => entry.plugin.contributes.sidebars.find((s) => s.id === entry.sidebarId);
+const sidebarOf = (entry: SidebarRef) => pagesOf(entry.plugin).find((s) => s.id === entry.sidebarId);
 
 /** One plugin page, mounted into its own box once and kept running while hidden. */
 function Page({ entry, host, visible }: { entry: SidebarRef; host: PluginHost | null; visible: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   // Keyed on entry.key, which changes only when the plugin restarts, so a new plugins list doesn't reload it.
   useEffect(() => {
-    if (box.current && host) void host.mountSidebar(entry.plugin, entry.sidebarId, box.current).catch((e) => console.error(e));
+    if (box.current && host) void host.mountPage(entry.plugin, entry.sidebarId, box.current, "sidebar").catch((e) => console.error(e));
   }, [entry.key, host]);
   return <div ref={box} hidden={!visible} className="min-h-0 flex-1" />;
 }
@@ -37,8 +37,11 @@ export function RightSidebar(props: {
   /** Closes one plugin's page; the last one closes the sidebar. */
   onCloseTab: (id: string) => void;
   onClose: () => void;
+  /** Moves the open page to a window of its own. Offered for pages whose manifest allows it. */
+  onPopOut: (entry: SidebarRef) => void;
 }) {
-  const title = props.open ? sidebarOf(props.open)?.title : undefined;
+  const page = props.open ? sidebarOf(props.open) : undefined;
+  const title = page?.title;
   return (
     <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open} aria-label={title}>
       <div className="flex h-full min-w-[250px] flex-col pb-2 pl-1">
@@ -73,6 +76,11 @@ export function RightSidebar(props: {
             </Tabs>
           ) : (
             <h2 className="min-w-0 flex-1 truncate pl-2 text-[12px] font-medium text-muted-foreground">{title}</h2>
+          )}
+          {props.open && page?.opens.includes("window") && (
+            <IconButton label="Open in a window" side="left" onClick={() => props.open && props.onPopOut(props.open)} className="size-6 shrink-0 [&_svg]:size-3.5">
+              <AppWindowIcon />
+            </IconButton>
           )}
           <IconButton label="Close sidebar" side="left" onClick={props.onClose} className="size-6 shrink-0 [&_svg]:size-3.5">
             <XIcon />

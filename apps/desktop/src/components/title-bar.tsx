@@ -32,11 +32,11 @@ const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: 
 /** Plugin buttons that fit before the rest move into a menu. */
 const INLINE_BUTTONS = 3;
 
-/** A plugin's title bar button: it opens its sidebar or its web panel. */
+/** A plugin's title bar button: it opens one of its pages in the sidebar, a modal or a window, or its web panel. */
 export type PluginButton = {
   key: string;
   pluginId: string;
-  kind: "sidebar" | "panel";
+  kind: "sidebar" | "modal" | "window" | "panel";
   id: string;
   title: string;
   icon: string;
@@ -46,7 +46,7 @@ export type PluginButton = {
   rows?: { label: string; value: string }[];
   /** Colours the label amber or red when the plugin says it needs attention. */
   tone?: "warning" | "danger";
-  /** Its sidebar is open. */
+  /** Its sidebar or modal is open. */
   active?: boolean;
 };
 
@@ -190,7 +190,7 @@ export function TitleBar(props: {
                 </div>
               ) : undefined
             }
-            aria-pressed={button.kind === "sidebar" ? button.active : undefined}
+            aria-pressed={button.kind === "sidebar" || button.kind === "modal" ? button.active : undefined}
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
             className={cn(
               // A label means something is live, like a running timer, so it shows as a green pill like a pane badge.

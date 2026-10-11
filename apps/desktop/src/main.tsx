@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { isViewLabel } from "@/lib/plugin-views";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
@@ -17,7 +19,12 @@ document.addEventListener("contextmenu", (e) => {
 // No StrictMode: its double-mount in dev would spawn every terminal's shell twice.
 const renderApp = () => ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
 
-if (await invoke<boolean>("bench_mode")) {
+// A plugin view opened as a window loads this UI too. Its window may only relay events, so it skips everything else.
+const label = getCurrentWebviewWindow().label;
+if (isViewLabel(label)) {
+  const { renderViewWindow } = await import("./view-window");
+  renderViewWindow(label);
+} else if (await invoke<boolean>("bench_mode")) {
   const { runBench } = await import("./bench");
   await runBench(renderApp);
 } else {
