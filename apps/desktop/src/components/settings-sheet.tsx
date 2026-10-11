@@ -131,6 +131,13 @@ export function SettingsSheet(props: {
           <Row id="copy-on-select" label="Copy on select" hint="Copies the selection to the clipboard when you let go of the mouse.">
             <Switch id="copy-on-select" checked={look.copyOnSelect} onCheckedChange={(copyOnSelect) => setLook({ copyOnSelect })} />
           </Row>
+          <Row
+            id="terminal-images"
+            label="Show images in the terminal"
+            hint="Draws images that programs print, such as SIXEL and iTerm2 inline images. Each pane keeps up to 24 MB of them."
+          >
+            <Switch id="terminal-images" checked={look.images} onCheckedChange={(images) => setLook({ images })} />
+          </Row>
         </section>
         <section className="flex flex-col gap-4 border-t border-hairline px-5 py-4">
           <h3 className="text-[12px] font-medium text-muted-foreground">Keyboard</h3>

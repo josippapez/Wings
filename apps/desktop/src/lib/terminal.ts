@@ -2,6 +2,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { ImageAddon } from "@xterm/addon-image";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -119,6 +120,8 @@ export type TerminalLook = {
   scrollback: number;
   copyOnSelect: boolean;
   minimumContrastRatio: number;
+  /** Draws images that programs print (SIXEL, iTerm2 inline images). */
+  images: boolean;
 };
 export const DEFAULT_TERMINAL_LOOK: TerminalLook = {
   fontFamily: "",
@@ -129,6 +132,18 @@ export const DEFAULT_TERMINAL_LOOK: TerminalLook = {
   scrollback: 10_000,
   copyOnSelect: false,
   minimumContrastRatio: 1,
+  images: true,
+};
+/**
+ * Memory caps per terminal for inline images. The addon's own defaults (128 MB stored, 4096 x 4096 pixels per image)
+ * would let one pane cost more than its whole scrollback (about 49 MB). 24 MB holds about six 1024 x 1024 images and
+ * the oldest are dropped first; a single image is capped at 2048 x 2048 (16 MB decoded), and the raw sequence at 8 MB.
+ */
+const IMAGE_OPTIONS = {
+  storageLimit: 24,
+  pixelLimit: 2048 * 2048,
+  sixelSizeLimit: 8_000_000,
+  iipSizeLimit: 8_000_000,
 };
 let look = DEFAULT_TERMINAL_LOOK;
 let lookTimer: ReturnType<typeof setTimeout> | undefined;
@@ -197,6 +212,7 @@ export class TerminalSession {
   paneId: string | null = null;
   private fit = new FitAddon();
   private webgl: WebglAddon | null = null;
+  private image: ImageAddon | null = null;
   private visible = false;
   private started = false;
   private initialInput: string | null = null;
@@ -263,6 +279,7 @@ export class TerminalSession {
     if (o.cursorInactiveStyle !== next.cursorInactiveStyle) o.cursorInactiveStyle = next.cursorInactiveStyle;
     if (o.scrollback !== next.scrollback) o.scrollback = next.scrollback;
     if (o.minimumContrastRatio !== next.minimumContrastRatio) o.minimumContrastRatio = next.minimumContrastRatio;
+    if (this.started) this.setImages(next.images);
     if (!cell) return;
     const family = fontStack(next);
     if (o.fontFamily === family && o.lineHeight === next.lineHeight) return;
@@ -286,6 +303,7 @@ export class TerminalSession {
   private async start(initialInput: string | null) {
     this.term.open(this.el);
     this.visible = true;
+    this.setImages(look.images);
     this.enableWebgl();
     this.fit.fit();
     this.resizeObserver.observe(this.el);
@@ -357,6 +375,7 @@ export class TerminalSession {
     clearTimeout(this.settle);
     this.resizeObserver.disconnect();
     this.disableWebgl();
+    this.setImages(false);
     if (this.paneId) void api.paneClose(this.paneId);
     this.term.dispose();
     this.el.remove();
@@ -364,6 +383,18 @@ export class TerminalSession {
 
   private refit() {
     if (this.visible && this.el.isConnected && this.el.clientWidth > 0) this.fit.fit();
+  }
+
+  /** Loaded when the terminal starts, not at construction, so unopened tabs hold no image storage. */
+  private setImages(on: boolean) {
+    if (on === (this.image !== null)) return;
+    if (!on) {
+      this.image?.dispose();
+      this.image = null;
+      return;
+    }
+    this.image = new ImageAddon(IMAGE_OPTIONS);
+    this.term.loadAddon(this.image);
   }
 
   private disableWebgl() {
