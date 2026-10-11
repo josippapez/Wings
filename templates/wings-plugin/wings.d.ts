@@ -113,7 +113,12 @@ interface Wings {
   onTranscript(listener: (event: WingsTranscriptEvent) => void): void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
-  /** Opens an https URL that starts with a prefix in `permissions.openUrl`. */
+  /**
+   * Needs `permissions.ports`. The local TCP ports the programs in your panes listen on, that `localhost`
+   * reaches. About 20 ms a call, so poll slowly.
+   */
+  ports(): Promise<{ paneId: string; pid: number; name: string; port: number; startedAt: number }[]>;
+  /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], that starts with a prefix in `permissions.openUrl`. */
   openUrl(url: string): Promise<void>;
   /**
    * Needs `permissions.panes`. Opens a terminal in a new tab, or a split beside the focused pane, and resolves

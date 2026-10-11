@@ -25,7 +25,8 @@ pub struct Permissions {
     /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`, or `attachment:<kind>` for one
     /// kind of attachment, e.g. `attachment:model`.
     pub transcript: Vec<String>,
-    /// URL prefixes the plugin may open in the browser.
+    /// URL prefixes the plugin may open in the browser: https, or http to this computer (`localhost`,
+    /// `127.0.0.1` or `[::1]`).
     pub open_url: Vec<String>,
     /// https URL prefixes the plugin may call with `wings.fetch`, like an API's base URL.
     pub fetch: Vec<String>,
@@ -40,6 +41,8 @@ pub struct Permissions {
     /// Lets the plugin read what Claude Code last told `wings statusline`: usage limits and each session's
     /// context window and prompt cache.
     pub statusline: bool,
+    /// Lets the plugin see which local TCP ports the programs in each pane listen on, with `wings.ports`.
+    pub ports: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -668,7 +671,24 @@ pub fn post(plugin: &Plugin, request: &PostRequest) -> Result<ExecResult, String
 }
 
 pub fn may_open_url(plugin: &Plugin, url: &str) -> bool {
-    url.starts_with("https://") && plugin.manifest.permissions.open_url.iter().any(|prefix| url.starts_with(prefix))
+    (url.starts_with("https://") || is_loopback_http(url)) && plugin.manifest.permissions.open_url.iter().any(|prefix| url.starts_with(prefix))
+}
+
+/// An http URL that can only reach this computer: host `localhost`, `127.0.0.1` or `[::1]`, no credentials,
+/// and already in the normal form the browser would read, so no backslash or odd escape can move the host.
+fn is_loopback_http(url: &str) -> bool {
+    tauri::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "http"
+            && matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.as_str() == url
+    })
+}
+
+/// Whether the plugin may see which local ports the programs in each pane listen on.
+pub fn may_read_ports(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.ports
 }
 
 /// A word of a pane command. Pane commands are typed into your shell, so words can't hold spaces, quotes,
@@ -1299,6 +1319,50 @@ mod tests {
         assert!(may_open_url(&p, "https://github.com/a/b/pull/1"));
         assert!(!may_open_url(&p, "https://evil.example/"));
         assert!(!may_open_url(&p, "file:///etc/passwd"));
+    }
+
+    #[test]
+    fn open_url_allows_http_only_to_this_computer() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.open_url.push("http://localhost:".into());
+        p.manifest.permissions.open_url.push("http://127.0.0.1:".into());
+        assert!(may_open_url(&p, "http://localhost:5173/"));
+        assert!(may_open_url(&p, "http://localhost:8765/a/b?c=d"));
+        assert!(may_open_url(&p, "http://127.0.0.1:3000/"));
+        for url in [
+            "http://localhost.evil.com:80/",
+            "http://localhost:80@evil.com/",
+            "http://localhost:80\\@evil.com/",
+            "http://evil.com:80/",
+            "http://localhost@evil.com/",
+            "http://[::1]:5173/",
+            "https://localhost:5173/",
+            "http://LOCALHOST:5173/",
+        ] {
+            assert!(!may_open_url(&p, url), "{url}");
+        }
+        // Not declared: a plugin with only https prefixes can't open localhost.
+        assert!(!may_open_url(&plugin(Path::new("/tmp"), &[], &[]), "http://localhost:5173/"));
+        // A broad prefix still can't reach past this computer.
+        p.manifest.permissions.open_url.push("http://".into());
+        assert!(!may_open_url(&p, "http://example.com/"));
+        assert!(may_open_url(&p, "http://[::1]:5173/"));
+    }
+
+    #[test]
+    fn ports_need_their_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-ports-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_read_ports(&manifest(serde_json::json!({}))));
+        assert!(!may_read_ports(&manifest(serde_json::json!({ "exec": ["lsof"], "statusline": true }))));
+        assert!(may_read_ports(&manifest(serde_json::json!({ "ports": true }))));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn with_panes(panes: Option<&[&str]>) -> Plugin {

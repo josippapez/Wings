@@ -197,7 +197,7 @@ fn reread_argv(system: &mut System, pids: &[Pid]) {
     system.refresh_processes_specifics(ProcessesToUpdate::Some(pids), false, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
 }
 
-fn descendants(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> Vec<Pid> {
+pub(crate) fn descendants(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> Vec<Pid> {
     let mut found = Vec::new();
     let mut queue = std::collections::VecDeque::from([root]);
     while let Some(pid) = queue.pop_front() {
@@ -209,7 +209,7 @@ fn descendants(children: &HashMap<Pid, Vec<Pid>>, root: Pid) -> Vec<Pid> {
     found
 }
 
-fn children_by_parent(processes: &HashMap<Pid, Process>) -> HashMap<Pid, Vec<Pid>> {
+pub(crate) fn children_by_parent(processes: &HashMap<Pid, Process>) -> HashMap<Pid, Vec<Pid>> {
     let mut map: HashMap<Pid, Vec<Pid>> = HashMap::new();
     for (pid, process) in processes {
         if let Some(parent) = process.parent() {

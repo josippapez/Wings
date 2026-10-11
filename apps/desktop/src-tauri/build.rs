@@ -52,6 +52,7 @@ const COMMANDS: &[&str] = &[
     "plugin_post",
     "plugin_transcript",
     "plugin_statusline",
+    "plugin_ports",
     "plugin_open_url",
     "plugin_open_pane",
     "plugin_focus_pane",
