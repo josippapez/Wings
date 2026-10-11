@@ -7,8 +7,9 @@ Settings most native terminals have and Wings doesn't yet. They go in the Settin
 - Font size, with the zoom shortcuts.
 - Use Option as Meta: off, left, right or both. Default left.
 - Shift-Return sends Meta Return. Default on.
+- Font family (put in front of the default stack), line height (1.0 to 1.6), cursor style, blink and inactive style, scrollback (1k to 100k, with the memory cost and the history drop said next to it), copy on select (on mouse-up) and minimum contrast (off, 4.5, 7). Saved as `terminalLook`, applied by `setTerminalLook` in `apps/desktop/src/lib/terminal.ts`. Font weight and letter spacing are not exposed yet.
 
-## Next
+## Next (built, except font weight and letter spacing)
 
 Option names and line numbers are from xterm.js 6.0.0, `node_modules/@xterm/xterm/typings/xterm.d.ts`.
 

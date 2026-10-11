@@ -22,7 +22,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
-import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
+import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { resumeCommand, shellQuote } from "@/lib/resume";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
@@ -40,6 +40,8 @@ type SavedWorkspace = {
   fontSize: number;
   /** The terminal's keyboard settings. */
   terminalKeys?: TerminalKeys;
+  /** The terminal's font, cursor, scrollback, copy and contrast settings. */
+  terminalLook?: TerminalLook;
   tabs: Tab[];
   sessions: Record<string, string | null>;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
@@ -179,6 +181,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
+  const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Plugin badges by Rust pane id, then plugin id. */
   const [badges, setBadges] = useState<Record<string, Record<string, Badge>>>({});
@@ -375,6 +378,7 @@ export default function App() {
         setFontSize(saved.fontSize);
       }
       if (saved.terminalKeys) setTerminalKeysState({ ...DEFAULT_TERMINAL_KEYS, ...saved.terminalKeys });
+      if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       const known = new Set(list.map((s) => s.id));
       const restored = saved.tabs
         .filter((t) => known.has(t.spaceId))
@@ -468,6 +472,7 @@ export default function App() {
       widths,
       fontSize,
       terminalKeys,
+      terminalLook,
       tabs,
       sessions,
       sessionArgs,
@@ -480,7 +485,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys]);
+  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys, terminalLook]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -559,6 +564,7 @@ export default function App() {
 
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
+  useEffect(() => setTerminalLook(terminalLook), [terminalLook]);
 
   // Wings sends a system notification only while it's in the background (`notify_transitions` in lib.rs).
   // In front, it's a toast instead, unless you're already looking at that pane.
@@ -936,7 +942,7 @@ export default function App() {
         />
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
-        <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} />
+        <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

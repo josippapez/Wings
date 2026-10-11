@@ -103,6 +103,55 @@ export function setTerminalFontSize(size: number) {
   for (const session of terminals.values()) session.setFontSize(size);
 }
 
+const FONT_STACK = "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
+
+export type CursorStyle = "block" | "underline" | "bar";
+export type CursorInactiveStyle = "outline" | "block" | "bar" | "underline" | "none";
+/** How the terminal looks and selects, as in a native terminal's profile settings. */
+export type TerminalLook = {
+  /** Tried before the default mono stack. Empty means the default alone. */
+  fontFamily: string;
+  lineHeight: number;
+  cursorStyle: CursorStyle;
+  cursorBlink: boolean;
+  cursorInactiveStyle: CursorInactiveStyle;
+  /** Lines of history per pane. Each full line costs memory, about 49 MB per pane at 10,000 on a Retina display. */
+  scrollback: number;
+  copyOnSelect: boolean;
+  minimumContrastRatio: number;
+};
+export const DEFAULT_TERMINAL_LOOK: TerminalLook = {
+  fontFamily: "",
+  lineHeight: 1.2,
+  cursorStyle: "block",
+  cursorBlink: true,
+  cursorInactiveStyle: "outline",
+  scrollback: 10_000,
+  copyOnSelect: false,
+  minimumContrastRatio: 1,
+};
+let look = DEFAULT_TERMINAL_LOOK;
+let lookTimer: ReturnType<typeof setTimeout> | undefined;
+
+const fontStack = (l: TerminalLook) => (l.fontFamily.trim() ? `${l.fontFamily.trim()}, ${FONT_STACK}` : FONT_STACK);
+
+/**
+ * Applies the look to every terminal, open or future. A font family or line height changes the cell size, and each
+ * terminal then remeasures, refits and resizes its PTY, so those wait until typing or clicking has settled and reach
+ * all terminals in one pass. The rest apply at once.
+ */
+export function setTerminalLook(next: TerminalLook) {
+  const prev = look;
+  look = next;
+  const cellChanged = prev.fontFamily !== next.fontFamily || prev.lineHeight !== next.lineHeight;
+  for (const session of terminals.values()) session.applyLook(next, false);
+  if (!cellChanged) return;
+  clearTimeout(lookTimer);
+  lookTimer = setTimeout(() => {
+    for (const session of terminals.values()) session.applyLook(look, true);
+  }, 250);
+}
+
 export type OptionAsMeta = "off" | "left" | "right" | "both";
 /** How keys reach the shell, as in a native terminal's keyboard settings. */
 export type TerminalKeys = { optionAsMeta: OptionAsMeta; shiftReturnSendsMetaReturn: boolean };
@@ -134,11 +183,14 @@ export const terminals = new Map<string, TerminalSession>();
 export class TerminalSession {
   readonly el = document.createElement("div");
   readonly term = new Terminal({
-    fontFamily: "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+    fontFamily: fontStack(look),
     fontSize,
-    lineHeight: 1.2,
-    scrollback: 10_000,
-    cursorBlink: true,
+    lineHeight: look.lineHeight,
+    scrollback: look.scrollback,
+    cursorBlink: look.cursorBlink,
+    cursorStyle: look.cursorStyle,
+    cursorInactiveStyle: look.cursorInactiveStyle,
+    minimumContrastRatio: look.minimumContrastRatio,
     macOptionIsMeta: false,
     theme,
   });
@@ -186,6 +238,37 @@ export class TerminalSession {
       return shortcutFor(e) === null;
     });
     this.el.addEventListener("focusin", handlers.onFocus);
+    // Copy on select writes when the button is released, not on every selection change while dragging.
+    // The release can land outside the pane, so listen on the document once a press starts inside it.
+    this.el.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      document.addEventListener("mouseup", () => this.copySelection(), { once: true });
+    });
+  }
+
+  private copySelection() {
+    if (!look.copyOnSelect || !this.term.hasSelection()) return;
+    void navigator.clipboard.writeText(this.term.getSelection()).catch(() => {});
+  }
+
+  /**
+   * Sets the look on this terminal. Works before the terminal opens and while it's hidden. The cell size only
+   * changes the PTY while visible: a hidden terminal refits when it's shown (`setVisible`).
+   * `cell` is false for the immediate pass, true for the debounced one that carries the font and line height.
+   */
+  applyLook(next: TerminalLook, cell: boolean) {
+    const o = this.term.options;
+    if (o.cursorStyle !== next.cursorStyle) o.cursorStyle = next.cursorStyle;
+    if (o.cursorBlink !== next.cursorBlink) o.cursorBlink = next.cursorBlink;
+    if (o.cursorInactiveStyle !== next.cursorInactiveStyle) o.cursorInactiveStyle = next.cursorInactiveStyle;
+    if (o.scrollback !== next.scrollback) o.scrollback = next.scrollback;
+    if (o.minimumContrastRatio !== next.minimumContrastRatio) o.minimumContrastRatio = next.minimumContrastRatio;
+    if (!cell) return;
+    const family = fontStack(next);
+    if (o.fontFamily === family && o.lineHeight === next.lineHeight) return;
+    o.fontFamily = family;
+    o.lineHeight = next.lineHeight;
+    this.refit();
   }
 
   /** Puts the terminal in `host`. xterm opens and the PTY spawns the first time it's shown (see `setVisible`). */
