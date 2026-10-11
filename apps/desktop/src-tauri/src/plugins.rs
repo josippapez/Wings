@@ -54,6 +54,8 @@ pub struct Contributes {
     pub panels: Vec<Panel>,
     /// Its own pages shown in the right sidebar from a title bar button.
     pub sidebars: Vec<Sidebar>,
+    /// Its own pages that can open in the right sidebar, in a modal over Wings or in a window of their own.
+    pub views: Vec<View>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +66,31 @@ pub struct Sidebar {
     pub icon: String,
     /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
     pub page: String,
+}
+
+/// One of the plugin's own pages, like a sidebar that may also open as a modal or a window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct View {
+    pub id: String,
+    pub title: String,
+    /// One of `PANEL_ICONS`.
+    pub icon: String,
+    /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
+    pub page: String,
+    /// Where it may open, from `VIEW_PLACES`. Its title bar button opens it in the first.
+    #[serde(default = "sidebar_only")]
+    pub opens: Vec<String>,
+    /// The modal's size, and a window's size when it first opens, in CSS pixels.
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+pub const VIEW_PLACES: [&str; 3] = ["sidebar", "modal", "window"];
+
+fn sidebar_only() -> Vec<String> {
+    vec!["sidebar".into()]
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +206,27 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("sidebar icon {:?} must be one of {PANEL_ICONS:?}", sidebar.icon));
         }
         resolve(dir, &sidebar.page).ok_or_else(|| format!("sidebar page {:?} isn't in the plugin folder", sidebar.page))?;
+    }
+    if manifest.contributes.views.len() > 3 {
+        return Err("at most 3 views".into());
+    }
+    for view in &manifest.contributes.views {
+        if !valid_id(&view.id) || view.title.is_empty() || view.title.len() > 40 {
+            return Err(format!("view {:?} needs an id like a plugin id and a title up to 40 characters", view.id));
+        }
+        // Sidebars and views share title bar buttons, `setSidebarLabel` and `openView`, so they share ids too.
+        let uses = manifest.contributes.sidebars.iter().filter(|s| s.id == view.id).count() + manifest.contributes.views.iter().filter(|v| v.id == view.id).count();
+        if uses > 1 {
+            return Err(format!("view id {:?} is used twice", view.id));
+        }
+        if !PANEL_ICONS.contains(&view.icon.as_str()) {
+            return Err(format!("view icon {:?} must be one of {PANEL_ICONS:?}", view.icon));
+        }
+        let unique = view.opens.iter().enumerate().all(|(i, o)| !view.opens[..i].contains(o));
+        if view.opens.is_empty() || !unique || view.opens.iter().any(|o| !VIEW_PLACES.contains(&o.as_str())) {
+            return Err(format!("view {:?} opens must list some of {VIEW_PLACES:?}, each once", view.id));
+        }
+        resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
     }
     if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
         return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));

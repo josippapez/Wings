@@ -1,6 +1,9 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, type McpCall, type PluginTranscriptEvent, type PluginView } from "@/lib/api";
+import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ViewPlace } from "@/lib/api";
+import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
@@ -86,22 +89,42 @@ type Callbacks = {
   openPane: (plan: PanePlan) => Promise<string>;
   /** Shows a pane and moves the keyboard to it. */
   focusPane: (paneId: string) => void;
+  /** Shows a plugin page in the sidebar or the modal. The host opens windows itself. */
+  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal") => void;
+  /** Takes a plugin page out of the sidebar and the modal. */
+  hideView: (pluginId: string, viewId: string) => void;
 };
 
 type Running = {
   id: string;
   version: string;
+  plugin: PluginView;
   ui: string[];
-  sidebars: string[];
-  /** `main` runs the plugin's script; a sidebar frame shows one of its pages. */
-  kind: "main" | "sidebar";
+  /** Its sidebar and view ids. */
+  views: string[];
+  /** `main` runs the plugin's script; the others show one of its pages, `viewId`. */
+  kind: "main" | ViewPlace;
+  viewId?: string;
   ready: boolean;
-  frame: HTMLIFrameElement;
   /**
    * Given only to the frame's own document, and required on every message. A frame that navigates keeps its
    * window, so this is what stops a page it navigated to from speaking as the plugin.
    */
   nonce: string;
+  /** Sends to the frame: straight to it, or through its view window. */
+  post: (message: object) => void;
+  /** Removes the frame, or closes its window. */
+  remove: () => void;
+};
+
+/** Tauri events to and from the other windows, heard only when sent to this one. */
+export const tauriBus = (): Bus => {
+  const self = getCurrentWebviewWindow().label;
+  return {
+    emitTo: (label, event, payload) => emitTo(label, event, payload),
+    emit: (event, payload) => emit(event, payload),
+    listen: <T,>(event: string, handler: (payload: T) => void) => listen<T>(event, (e) => handler(e.payload), { target: self }),
+  };
 };
 
 /** The first thing in every plugin document: hands the SDK its nonce. */
@@ -187,7 +210,18 @@ const newRun = () => crypto.randomUUID().slice(0, 8);
 export type SidebarLabel = { text: string; rows: { label: string; value: string }[]; tone?: "warning" | "danger" };
 
 export class PluginHost {
-  private frames = new Map<Window, Running>();
+  /** Frames in this window by their window, and view windows by label. */
+  private frames = new Map<Window | string, Running>();
+  /** View windows asked for but not yet showing their page, by label. */
+  private opening = new Map<string, { plugin: PluginView; viewId: string }>();
+  private windows = new ViewWindowHost(tauriBus(), {
+    attach: (label) => this.attachWindow(label),
+    message: (label, data) => {
+      const running = this.frames.get(label);
+      if (running) void this.receive(running, data);
+    },
+    detach: (label) => this.stop(label),
+  });
   private panes: PluginPane[] = [];
   private actions = new Map<string, { pluginId: string; done: () => void; fail: (error: Error) => void }>();
   private nextDiff = 1;
@@ -208,10 +242,10 @@ export class PluginHost {
    */
   sync(plugins: PluginView[], restart?: string) {
     const wanted = new Map(plugins.filter((p) => p.enabled && p.approved).map((p) => [p.id, p]));
-    // Each frame on its own: a plugin has a main frame and maybe sidebar frames, all of which stay.
-    for (const [win, running] of this.frames) {
+    // Each frame on its own: a plugin has a main frame and maybe page frames and windows, all of which stay.
+    for (const [key, running] of this.frames) {
       const next = wanted.get(running.id);
-      if (!next || next.version !== running.version || running.id === restart) this.stop(win);
+      if (!next || next.version !== running.version || running.id === restart) this.stop(key);
     }
     const live = new Set([...this.frames.values()].filter((r) => r.kind === "main").map((r) => r.id));
     for (const plugin of wanted.values()) if (!live.has(plugin.id)) this.run(plugin);
@@ -229,54 +263,101 @@ export class PluginHost {
     this.track(frame, plugin, "main", nonce);
   }
 
-  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string) {
+  private entry(plugin: PluginView, kind: Running["kind"], nonce: string, viewId: string | undefined, port: Pick<Running, "post" | "remove">): Running {
+    return { id: plugin.id, version: plugin.version, plugin, ui: plugin.contributes.ui, views: pagesOf(plugin).map((v) => v.id), kind, viewId, ready: false, nonce, ...port };
+  }
+
+  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string, viewId?: string) {
     const win = frame.contentWindow;
     if (!win) return;
-    this.frames.set(win, {
-      id: plugin.id,
-      version: plugin.version,
-      ui: plugin.contributes.ui,
-      sidebars: plugin.contributes.sidebars.map((s) => s.id),
-      kind,
-      ready: false,
-      frame,
-      nonce,
-    });
+    const running = this.entry(plugin, kind, nonce, viewId, { post: (message) => this.post(win, message), remove: () => frame.remove() });
+    this.frames.set(win, running);
     // The plugin's own document loads once. A second load means it navigated away, so let it go.
     let loads = 0;
     frame.addEventListener("load", () => {
-      if (++loads > 1 && this.frames.get(win)?.frame === frame) this.stop(win);
+      if (++loads > 1 && this.frames.get(win) === running) this.stop(win);
     });
   }
 
-  /**
-   * Shows one of a plugin's sidebar pages inside `container`, sandboxed like the plugin itself, with the SDK
-   * and Wings' base styles loaded first. The frame lives until the plugin stops, so hiding the sidebar keeps
-   * its state.
-   */
-  async mountSidebar(plugin: PluginView, sidebarId: string, container: HTMLElement) {
-    const sidebar = plugin.contributes.sidebars.find((s) => s.id === sidebarId);
-    if (!sidebar) throw new Error(`${plugin.id} has no sidebar ${sidebarId}`);
+  /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
+  private async pageDocument(plugin: PluginView, viewId: string) {
+    const page = pagesOf(plugin).find((v) => v.id === viewId);
+    if (!page) throw new Error(`${plugin.id} has no view ${viewId}`);
     const run = newRun();
-    const html = await (await fetch(pluginUrl(plugin.id, run, sidebar.page))).text();
-    const base = pluginUrl(plugin.id, run, sidebar.page.includes("/") ? sidebar.page.slice(0, sidebar.page.lastIndexOf("/") + 1) : "");
+    const html = await (await fetch(pluginUrl(plugin.id, run, page.page))).text();
+    const base = pluginUrl(plugin.id, run, page.page.includes("/") ? page.page.slice(0, page.page.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
     const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
-    const frame = document.createElement("iframe");
-    frame.sandbox.add("allow-scripts", "allow-forms");
-    frame.title = sidebar.title;
-    frame.className = "size-full border-0 bg-transparent";
-    frame.srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
-    container.replaceChildren(frame);
-    this.track(frame, plugin, "sidebar", nonce);
+    const srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
+    return { page, srcdoc, nonce };
   }
 
-  private stop(win: Window) {
-    const running = this.frames.get(win);
+  /**
+   * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar frame lives
+   * until the plugin stops, so hiding the sidebar keeps its state. Resolves a function that removes the frame.
+   */
+  async mountPage(plugin: PluginView, viewId: string, container: HTMLElement, kind: "sidebar" | "modal") {
+    const { page, srcdoc, nonce } = await this.pageDocument(plugin, viewId);
+    const frame = document.createElement("iframe");
+    frame.sandbox.add("allow-scripts", "allow-forms");
+    frame.title = page.title;
+    frame.className = "size-full border-0 bg-transparent";
+    frame.srcdoc = srcdoc;
+    container.replaceChildren(frame);
+    this.track(frame, plugin, kind, nonce, viewId);
+    const win = frame.contentWindow;
+    return () => void (win && this.stop(win));
+  }
+
+  /** Opens a plugin page in a window of its own, or brings its window to the front. */
+  async openWindow(plugin: PluginView, viewId: string) {
+    const label = viewLabel(plugin.id, viewId);
+    // Before Rust opens it, so the window's hello can't arrive first.
+    this.opening.set(label, { plugin, viewId });
+    try {
+      await invoke("plugin_view_open", { pluginId: plugin.id, viewId });
+    } catch (error) {
+      this.opening.delete(label);
+      throw error;
+    }
+  }
+
+  /** A view window asked for its page. One nobody opened, like one left from before a reload, is closed. */
+  private async attachWindow(label: string) {
+    const known = this.frames.get(label);
+    const target = this.opening.get(label) ?? (known && known.viewId ? { plugin: known.plugin, viewId: known.viewId } : undefined);
+    this.opening.delete(label);
+    if (!target) {
+      const ids = parseViewLabel(label);
+      if (ids) void invoke("plugin_view_close", ids);
+      return null;
+    }
+    // A window that says hello again has a new document, so its old frame is gone.
+    if (known) this.frames.delete(label);
+    const { page, srcdoc, nonce } = await this.pageDocument(target.plugin, target.viewId);
+    const { id: pluginId } = target.plugin;
+    this.frames.set(
+      label,
+      this.entry(target.plugin, "window", nonce, target.viewId, {
+        post: (message) => this.windows.post(label, { wings: 1, ...message }),
+        remove: () => void invoke("plugin_view_close", { pluginId, viewId: target.viewId }),
+      }),
+    );
+    return { srcdoc, title: page.title };
+  }
+
+  /** Closes a page wherever it's open. */
+  private closeView(pluginId: string, viewId: string) {
+    this.callbacks.hideView(pluginId, viewId);
+    this.stop(viewLabel(pluginId, viewId));
+  }
+
+  private stop(key: Window | string) {
+    const running = this.frames.get(key);
     if (!running) return;
-    running.frame.remove();
-    this.frames.delete(win);
-    if (running.kind === "sidebar") return;
+    running.remove();
+    this.frames.delete(key);
+    if (running.kind !== "main") return;
     for (const [token, action] of this.actions) if (action.pluginId === running.id) this.settle(token, new Error("The plugin was turned off"));
     for (const [token, tool] of this.tools) {
       if (tool.pluginId !== running.id) continue;
@@ -288,7 +369,7 @@ export class PluginHost {
 
   publishPanes(panes: PluginPane[]) {
     this.panes = panes;
-    for (const [win, plugin] of this.frames) if (plugin.ready) this.post(win, { event: "panes", data: panes });
+    for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "panes", data: panes });
     for (const [paneId, done] of this.paneWaiters) if (panes.some((p) => p.paneId === paneId)) done();
   }
 
@@ -310,7 +391,7 @@ export class PluginHost {
   /** Each entry goes to the pages of the plugins Rust found may read its type, if they're running. */
   private publishTranscript(events: PluginTranscriptEvent[]) {
     for (const { plugins, ...data } of events) {
-      for (const [win, plugin] of this.frames) if (plugin.ready && plugins.includes(plugin.id)) this.post(win, { event: "transcript", data });
+      for (const plugin of this.frames.values()) if (plugin.ready && plugins.includes(plugin.id)) plugin.post({ event: "transcript", data });
     }
   }
 
@@ -336,7 +417,7 @@ export class PluginHost {
         done: () => (clearTimeout(timer), done()),
         fail: (e) => (clearTimeout(timer), fail(e)),
       });
-      this.post(entry[0], { event, data: { ...data, token } });
+      entry[1].post({ event, data: { ...data, token } });
     });
   }
 
@@ -346,7 +427,7 @@ export class PluginHost {
     if (!entry) return void api.mcpToolResult(call.callId, `${call.pluginId} is still starting in Wings. Try again in a moment.`, true);
     const token = crypto.randomUUID();
     this.tools.set(token, { pluginId: call.pluginId, callId: call.callId });
-    this.post(entry[0], { event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId } });
+    entry[1].post({ event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId } });
   }
 
   private settle(token: string, error: Error | null) {
@@ -360,8 +441,9 @@ export class PluginHost {
     window.removeEventListener("message", this.onMessage);
     void this.unlistenTools.then((off) => off());
     void this.unlistenTranscript.then((off) => off());
-    for (const { frame } of this.frames.values()) frame.remove();
+    for (const running of this.frames.values()) running.remove();
     this.frames.clear();
+    this.windows.dispose();
   }
 
   // Sandboxed frames have an opaque origin, which can't be named as a target.
@@ -369,20 +451,27 @@ export class PluginHost {
     win.postMessage({ wings: 1, ...message }, "*");
   }
 
-  private onMessage = async (event: MessageEvent) => {
+  private onMessage = (event: MessageEvent) => {
     const plugin = event.source ? this.frames.get(event.source as Window) : undefined;
-    const msg = event.data;
-    if (!plugin || msg?.wings !== 1 || typeof msg.id !== "number" || msg.nonce !== plugin.nonce) return;
-    const win = event.source as Window;
-    try {
-      const output = (line: string) => this.post(win, { output: { call: msg.id, line } });
-      const result = await this.handle(plugin, msg.method, msg.params ?? {}, output);
-      this.post(win, { id: msg.id, result });
-      if (msg.method === "ready") this.post(win, { event: "panes", data: this.panes });
-    } catch (error) {
-      this.post(win, { id: msg.id, error: String(error instanceof Error ? error.message : error) });
-    }
+    if (plugin) void this.receive(plugin, event.data);
   };
+
+  /** A message from a plugin frame in this window or in a view window. */
+  private async receive(plugin: Running, data: unknown) {
+    if (!data || typeof data !== "object") return;
+    const msg = data as Record<string, unknown>;
+    if (msg.wings !== 1 || typeof msg.id !== "number" || msg.nonce !== plugin.nonce) return;
+    const id = msg.id;
+    try {
+      const output = (line: string) => plugin.post({ output: { call: id, line } });
+      const params = msg.params && typeof msg.params === "object" ? (msg.params as Record<string, unknown>) : {};
+      const result = await this.handle(plugin, String(msg.method), params, output);
+      plugin.post({ id, result });
+      if (msg.method === "ready") plugin.post({ event: "panes", data: this.panes });
+    } catch (error) {
+      plugin.post({ id, error: String(error instanceof Error ? error.message : error) });
+    }
+  }
 
   private async handle(plugin: Running, method: string, p: Record<string, unknown>, output: (line: string) => void) {
     const pluginId = plugin.id;
@@ -494,7 +583,7 @@ export class PluginHost {
         return invoke("plugin_storage_keys", { pluginId });
       case "setSidebarLabel": {
         const sidebarId = String(p.sidebarId);
-        if (!plugin.sidebars.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar ${sidebarId}`);
+        if (!plugin.views.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar or view ${sidebarId}`);
         // A bound on untrusted data, not the display width: the title bar cuts it with an ellipsis.
         const text = p.label === null ? undefined : str(p.label, 80);
         const rows = (Array.isArray(p.rows) ? p.rows : []).slice(0, 6).flatMap((r) => {
@@ -507,12 +596,27 @@ export class PluginHost {
         return null;
       }
       case "broadcast": {
-        // Only the plugin's own pages hear it, so its main script and sidebars can keep each other current.
+        // Only the plugin's own pages hear it, wherever they're open, so its main script and pages can keep each other current.
         const text = JSON.stringify(p.message ?? null);
         if (text.length > 64_000) throw new Error("A broadcast is limited to 64 KB");
-        for (const [win, other] of this.frames) {
-          if (other.id === pluginId && other !== plugin && other.ready) this.post(win, { event: "broadcast", data: JSON.parse(text) });
+        for (const other of this.frames.values()) {
+          if (other.id === pluginId && other !== plugin && other.ready) other.post({ event: "broadcast", data: JSON.parse(text) });
         }
+        return null;
+      }
+      case "openView": {
+        const page = pagesOf(plugin.plugin).find((v) => v.id === p.id);
+        if (!page) throw new Error(`${pluginId} has no view ${String(p.id)}`);
+        const place = page.opens.find((o) => o === (p.as ?? page.opens[0]));
+        if (!place) throw new Error(`${page.id} opens as ${page.opens.join(" or ")}, not ${String(p.as)}`);
+        if (place === "window") await this.openWindow(plugin.plugin, page.id);
+        else this.callbacks.showView(pluginId, page.id, place);
+        return null;
+      }
+      case "closeView": {
+        const viewId = String(p.id);
+        if (!plugin.views.includes(viewId)) throw new Error(`${pluginId} has no view ${viewId}`);
+        this.closeView(pluginId, viewId);
         return null;
       }
       case "setBadge": {

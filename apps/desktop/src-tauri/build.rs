@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "plugin_set_enabled",
     "plugin_remove",
     "plugin_panel_toggle",
+    "plugin_view_open",
+    "plugin_view_close",
     "plugin_secret_set",
     "plugin_secret_delete",
     "plugin_secret_has",

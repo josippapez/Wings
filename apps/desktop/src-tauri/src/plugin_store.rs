@@ -586,6 +586,32 @@ mod tests {
     }
 
     #[test]
+    fn views_open_in_known_places_with_their_own_ids() {
+        let (mut s, dir) = store();
+        let with = |contributes: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "contributes": contributes });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", ""), ("page.html", "<p>board</p>")])
+        };
+        let view = |opens: serde_json::Value| serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html", "opens": opens }] });
+        let installed = s.install(&with(view(serde_json::json!(["modal", "window"]))), Source::File, None).unwrap().0;
+        assert_eq!(installed.manifest.contributes.views[0].opens, ["modal", "window"]);
+        // Without `opens` a view is a sidebar, like an entry in `sidebars`.
+        let plain = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html" }] });
+        assert_eq!(s.install(&with(plain), Source::File, None).unwrap().0.manifest.contributes.views[0].opens, ["sidebar"]);
+        for opens in [serde_json::json!([]), serde_json::json!(["popup"]), serde_json::json!(["modal", "modal"])] {
+            assert!(s.install(&with(view(opens.clone())), Source::File, None).unwrap_err().contains("opens"), "{opens}");
+        }
+        let clash = serde_json::json!({
+            "sidebars": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html" }],
+            "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html", "opens": ["window"] }],
+        });
+        assert!(s.install(&with(clash), Source::File, None).unwrap_err().contains("used twice"));
+        let outside = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "../page.html" }] });
+        assert!(s.install(&with(outside), Source::File, None).unwrap_err().contains("isn't in the plugin folder"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn unpacks_from_one_top_folder_and_refuses_escapes() {
         let (mut s, dir) = store();
         let github = package(&[("owner-demo-abc123/wings-plugin.json", &manifest("demo", &[])), ("owner-demo-abc123/main.js", "x")]);

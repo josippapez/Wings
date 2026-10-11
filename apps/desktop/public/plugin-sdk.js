@@ -162,11 +162,19 @@
       keys: () => call("storageKeys", {}),
     }),
     /**
-     * Short text next to a sidebar's title bar button, like a running timer. `null` clears it. `rows`, up to 6
+     * Short text next to a sidebar's or view's title bar button, like a running timer. `null` clears it. `rows`, up to 6
      * `{ label, value }`, show when you point at the button.
      */
     setSidebarLabel: (sidebarId, label, { rows, tone } = {}) => call("setSidebarLabel", { sidebarId, label, rows, tone }),
-    /** Sends a JSON value to the plugin's other pages (its main script and open sidebars), up to 64 KB. */
+    /**
+     * Opens one of the manifest's sidebars or views: in the sidebar, in a modal over Wings, or in a window of its
+     * own, with `as` one of the view's `opens` (the first by default). A window that's already open comes to the
+     * front. The page gets the same `wings` object wherever it opens.
+     */
+    openView: (id, { as } = {}) => call("openView", { id, as }),
+    /** Closes a sidebar or view wherever it's open. */
+    closeView: (id) => call("closeView", { id }),
+    /** Sends a JSON value to the plugin's other pages (its main script and open sidebars, modals and windows), up to 64 KB. */
     broadcast: (message) => call("broadcast", { message }),
     /** Gets what the plugin's other pages send with `broadcast`. */
     onBroadcast: (listener) => void listeners.broadcast.push(listener),

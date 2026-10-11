@@ -636,12 +636,64 @@ fn panel_label(plugin_id: &str, panel_id: &str) -> String {
     format!("panel-{plugin_id}-{panel_id}")
 }
 
+/// Plugin views opened as windows. `:` can't be in an id, so no two plugins' views share a label.
+fn view_label(plugin_id: &str, view_id: &str) -> String {
+    format!("{VIEW_WINDOW}{plugin_id}:{view_id}")
+}
+
+/// The label prefix of plugin view windows, which `capabilities/plugin-view.json` matches.
+const VIEW_WINDOW: &str = "view:";
+
+/// Closes a plugin's panels and view windows.
 fn close_panels(app: &AppHandle, plugin_id: &str) {
-    let prefix = panel_label(plugin_id, "");
+    let (panels, views) = (panel_label(plugin_id, ""), view_label(plugin_id, ""));
     for (label, window) in app.webview_windows() {
-        if label.starts_with(&prefix) {
+        if label.starts_with(&panels) || label.starts_with(&views) {
             let _ = window.close();
         }
+    }
+}
+
+/// Opens a plugin view in a window of its own, or brings it to the front. The window loads the Wings UI,
+/// which sees its label and shows only the plugin's sandboxed page. That page's calls are sent to the main
+/// window's plugin host, which checks them like any other, so this window's capability allows events only.
+/// The window plugin remembers its size and position by label.
+#[tauri::command]
+fn plugin_view_open(app: AppHandle, state: State<AppState>, plugin_id: String, view_id: String) -> Res<String> {
+    let plugin = plugin(&state, &plugin_id)?;
+    let view = plugin.manifest.contributes.views.iter().find(|v| v.id == view_id).ok_or("unknown view")?;
+    if !view.opens.iter().any(|o| o == "window") {
+        return Err(format!("{view_id} doesn't list \"window\" in opens"));
+    }
+    let label = view_label(&plugin_id, &view_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.unminimize();
+        window.show().map_err(err)?;
+        window.set_focus().map_err(err)?;
+        return Ok(label);
+    }
+    let (width, height) = (f64::from(view.width.unwrap_or(520).clamp(280, 1600)), f64::from(view.height.unwrap_or(640).clamp(200, 1200)));
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .title(&view.title)
+        .inner_size(width, height)
+        .min_inner_size(280.0, 200.0)
+        .center()
+        .build()
+        .map_err(err)?;
+    let (app, closed) = (app.clone(), label.clone());
+    window.on_window_event(move |event| {
+        if let WindowEvent::Destroyed = event {
+            let _ = app.emit_to("main", "plugin-view:closed", &closed);
+        }
+    });
+    Ok(label)
+}
+
+#[tauri::command]
+fn plugin_view_close(app: AppHandle, plugin_id: String, view_id: String) {
+    if let Some(window) = app.get_webview_window(&view_label(&plugin_id, &view_id)) {
+        let _ = window.close();
     }
 }
 
@@ -1052,6 +1104,16 @@ pub fn run() {
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .register_uri_scheme_protocol("wings-plugin", |ctx, request| serve_plugin_file(ctx.app_handle(), &request))
+        // A view window only relays to the main window's plugin host, so it goes when that does.
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
+                for (label, view) in window.app_handle().webview_windows() {
+                    if label.starts_with(VIEW_WINDOW) {
+                        let _ = view.close();
+                    }
+                }
+            }
+        })
         .setup(|app| {
             let claude_dir = claude::claude_dir();
             let file = app.path().app_data_dir()?.join("spaces.json");
@@ -1130,6 +1192,8 @@ pub fn run() {
             plugin_set_enabled,
             plugin_remove,
             plugin_panel_toggle,
+            plugin_view_open,
+            plugin_view_close,
             plugin_secret_set,
             plugin_secret_delete,
             plugin_secret_has,

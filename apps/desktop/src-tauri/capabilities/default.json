@@ -38,6 +38,8 @@
     "allow-plugin-set-enabled",
     "allow-plugin-remove",
     "allow-plugin-panel-toggle",
+    "allow-plugin-view-open",
+    "allow-plugin-view-close",
     "allow-plugin-exec",
     "allow-plugin-post",
     "allow-plugin-transcript",

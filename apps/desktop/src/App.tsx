@@ -7,6 +7,7 @@ import { MotionConfig } from "motion/react";
 import { DiffViewer } from "@/components/diff-viewer";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginManager } from "@/components/plugin-manager";
+import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
@@ -19,7 +20,7 @@ import { TitleBar, type PluginButton, type TabView } from "@/components/title-ba
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
+import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys } from "@/lib/terminal";
@@ -136,31 +137,43 @@ export default function App() {
   const [rightSidebar, setRightSidebar] = useState<string | null>(null);
   const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
   const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
+  /** The plugin page shown in a modal, as `pluginId:viewId`. */
+  const [modal, setModal] = useState<string | null>(null);
   /** Bumped when a plugin stops, so its sidebar pages mount fresh next time. */
   const [epochs, setEpochs] = useState<Record<string, number>>({});
 
   const activePlugins = useMemo(() => plugins.filter((p) => p.enabled && p.approved), [plugins]);
-  const sidebarRef = useCallback(
-    (key: string): SidebarRef | null => {
-      const [pluginId, sidebarId] = key.split(":");
+  /** A page of a plugin that's on, by `pluginId:viewId`, if its manifest lets it open in `place`. */
+  const pageRef = useCallback(
+    (key: string, place: "sidebar" | "modal") => {
+      const [pluginId, viewId] = key.split(":");
       const plugin = activePlugins.find((p) => p.id === pluginId);
-      if (!plugin?.contributes.sidebars.some((s) => s.id === sidebarId)) return null;
-      return { plugin, sidebarId, id: key, key: `${key}:${plugin.version}:${epochs[pluginId] ?? 0}` };
+      if (!plugin || !pagesOf(plugin).some((v) => v.id === viewId && v.opens.includes(place))) return null;
+      return { plugin, viewId, id: key, key: `${key}:${plugin.version}:${epochs[pluginId] ?? 0}` };
     },
     [activePlugins, epochs],
   );
+  const sidebarRef = useCallback(
+    (key: string): SidebarRef | null => {
+      const ref = pageRef(key, "sidebar");
+      return ref && { plugin: ref.plugin, sidebarId: ref.viewId, id: ref.id, key: ref.key };
+    },
+    [pageRef],
+  );
+  const modalRef: ModalRef | null = modal ? pageRef(modal, "modal") : null;
   const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
-    ...p.contributes.sidebars.map((s) => ({
+    // A sidebar or view button opens its page in the first place its manifest lists.
+    ...pagesOf(p).map((s) => ({
       key: `${p.id}:${s.id}`,
       pluginId: p.id,
-      kind: "sidebar" as const,
+      kind: s.opens[0],
       id: s.id,
       title: s.title,
       icon: s.icon,
       label: sidebarLabels[`${p.id}:${s.id}`]?.text,
       rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
       tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
-      active: rightSidebar === `${p.id}:${s.id}`,
+      active: (s.opens[0] === "sidebar" ? rightSidebar : modal) === `${p.id}:${s.id}`,
     })),
     ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
   ]);
@@ -635,6 +648,19 @@ export default function App() {
         setSidebarLabels((all) => Object.fromEntries(Object.entries(all).filter(([key]) => !key.startsWith(`${pluginId}:`))));
         // Its sidebar frames are gone too; a restart gets a new key so the page loads again.
         setEpochs((all) => ({ ...all, [pluginId]: (all[pluginId] ?? 0) + 1 }));
+        setModal((key) => (key?.startsWith(`${pluginId}:`) ? null : key));
+      },
+      showView: (pluginId, viewId, place) => {
+        const key = `${pluginId}:${viewId}`;
+        if (place === "modal") return setModal(key);
+        setRightSidebar(key);
+        setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
+      },
+      hideView: (pluginId, viewId) => {
+        const key = `${pluginId}:${viewId}`;
+        setModal((open) => (open === key ? null : open));
+        setRightSidebar((open) => (open === key ? null : open));
+        setOpenedSidebars((all) => all.filter((k) => k !== key));
       },
       setSidebarLabel: (pluginId, sidebarId, label) =>
         setSidebarLabels(({ [`${pluginId}:${sidebarId}`]: _old, ...rest }) => (label ? { ...rest, [`${pluginId}:${sidebarId}`]: label } : rest)),
@@ -805,6 +831,12 @@ export default function App() {
                 void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
                 return;
               }
+              if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
+              if (button.kind === "window") {
+                const plugin = activePlugins.find((p) => p.id === button.pluginId);
+                if (plugin) void pluginHost.current?.openWindow(plugin, button.id).catch((e) => toast.error(String(e)));
+                return;
+              }
               setRightSidebar((open) => (open === button.key ? null : button.key));
               setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
             }}
@@ -909,6 +941,12 @@ export default function App() {
                   if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
                 }}
                 onClose={() => setRightSidebar(null)}
+                onPopOut={(entry) => {
+                  void pluginHost.current?.openWindow(entry.plugin, entry.sidebarId).catch((e) => toast.error(String(e)));
+                  const rest = openedSidebars.filter((k) => k !== entry.id);
+                  setOpenedSidebars(rest);
+                  setRightSidebar(rest.at(-1) ?? null);
+                }}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -919,6 +957,15 @@ export default function App() {
           onReply={async (view, replyTo, body) => {
             if (!pluginHost.current) throw new Error("Plugins aren't running");
             await pluginHost.current.sendReply(view.pluginId, view.id, replyTo, body);
+          }}
+        />
+        <PluginModal
+          open={modalRef}
+          host={pluginHost.current}
+          onClose={() => setModal(null)}
+          onPopOut={(entry) => {
+            void pluginHost.current?.openWindow(entry.plugin, entry.viewId).catch((e) => toast.error(String(e)));
+            setModal(null);
           }}
         />
         <PluginManager

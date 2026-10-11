@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "plugin-view",
+  "description": "Plugin views opened as windows. They only relay their sandboxed page's calls to the main window as events, so they get no app commands",
+  "windows": [
+    "view:*"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit-to"
+  ]
+}

@@ -82,6 +82,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
 | `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
 | `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden |
+| `views` | Up to 3 `{ id, title, icon, page, opens?, width?, height? }`: pages like `sidebars` that can also open in a modal over Wings or in a window of their own. `opens` lists where, from `sidebar`, `modal` and `window`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
 | `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
@@ -115,8 +116,10 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |
 | `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
 | `wings.storage.get(key)`, `.set(key, value)`, `.delete(key)`, `.keys()` | The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are JSON (what `JSON.stringify` keeps), and `get` resolves `null` for a key that isn't set. Keys are 1 to 128 letters, digits and `- _ . : /`. Everything together is limited to 1 MB, and a `set` that would go over is refused. See [Storage](#storage) |
-| `wings.setSidebarLabel(sidebarId, label, { rows, tone })` | Up to 80 characters next to the sidebar's title bar button, like a running timer; `null` clears it. Wings shows it as a green pill, cut with an ellipsis when it doesn't fit, or an amber or red one when `tone` is `"warning"` or `"danger"`. `rows` are up to 6 `{ label, value }` shown when you point at it |
-| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars. Use it so a sidebar refreshes when a tool call changed something |
+| `wings.openView(id, { as? })` | Opens one of your `sidebars` or `views`: `as` is `sidebar`, `modal` or `window`, one of the view's `opens`, and the first by default. A window that's already open comes to the front. Only one modal shows at a time |
+| `wings.closeView(id)` | Closes a sidebar or view wherever it's open |
+| `wings.setSidebarLabel(sidebarId, label, { rows, tone })` | Takes a sidebar or view id. Up to 80 characters next to its title bar button, like a running timer; `null` clears it. Wings shows it as a green pill, cut with an ellipsis when it doesn't fit, or an amber or red one when `tone` is `"warning"` or `"danger"`. `rows` are up to 6 `{ label, value }` shown when you point at it |
+| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars, modals and windows. Use it so a page refreshes when a tool call changed something |
 
 A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
 
@@ -134,6 +137,25 @@ Wings drops a pane's badges when the pane closes. When several plugins add to th
 Plugin tools reach Claude through one MCP server, `wings`, which you add once from the Plugins sheet with Connect. It runs `wings --mcp` at user scope, so every Claude Code session gets the tools of the plugins that are on, and the list updates as you turn plugins on and off. The tools only work while Wings is open.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.
+
+## Views
+
+A view is one of your pages that can open somewhere other than the sidebar. This one opens in a modal from its title bar button, and can move to a window of its own:
+
+```json
+"contributes": {
+  "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "board.html", "opens": ["modal", "window"], "width": 720, "height": 520 }]
+}
+```
+
+Any of the plugin's pages can open it, and keep it current while it's open in any of those places:
+
+```js
+await wings.openView("board", { as: "window" });
+wings.broadcast({ refreshed: Date.now() }); // board.html hears it with wings.onBroadcast
+```
+
+A window shows the same sandboxed page as the sidebar would. Its calls go to Wings' main window and are checked there against your manifest, exactly like the sidebar's, so a window can't do more than the plugin could.
 
 ## Status line
 

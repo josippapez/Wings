@@ -46,13 +46,23 @@ export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
 export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
 /** One of the plugin's own pages, shown in the right sidebar from a title bar button. */
 export type PluginSidebar = { id: string; title: string; icon: string; page: string };
-/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels and sidebars. */
+export type ViewPlace = "sidebar" | "modal" | "window";
+/** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. */
+export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null };
+/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars and views. */
 export type PluginContributes = {
   ui: string[];
   mcpTools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
+  views: PluginPage[];
 };
+
+/** Every page of a plugin: its sidebars, which only open in the sidebar, then its views. Ids are unique across both. */
+export const pagesOf = (plugin: PluginView): PluginPage[] => [
+  ...plugin.contributes.sidebars.map((s) => ({ ...s, opens: ["sidebar"] satisfies ViewPlace[], width: null, height: null })),
+  ...plugin.contributes.views,
+];
 /** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
 export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean };
