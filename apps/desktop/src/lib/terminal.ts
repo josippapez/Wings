@@ -41,7 +41,7 @@ const theme = {
 export const isMac = /Mac/.test(navigator.userAgent);
 
 export type Action =
-  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" }
+  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" | "nextAgent" | "previousAgent" }
   | { kind: "tab"; index: number }
   | { kind: "focus"; dir: "left" | "right" | "up" | "down" };
 
@@ -58,7 +58,7 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
     return { kind: "focus", dir: e.code.slice(5).toLowerCase() as "left" | "right" | "up" | "down" };
   }
   const typed = e.key.length === 1 && /[\x21-\x7e]/.test(e.key) ? e.key.toLowerCase() : null;
-  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
+  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyJ: "j", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
   const key = typed ?? fromCode[e.code] ?? (/^Digit\d$/.test(e.code) ? e.code.slice(5) : null);
   const extra = isMac ? e.shiftKey : e.altKey;
   switch (key) {
@@ -77,6 +77,9 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
       return { kind: "fontDown" };
     case "0":
       return { kind: "fontReset" };
+    case "j":
+      // The next agent that needs you; with ⇧ the one before.
+      return { kind: extra ? "previousAgent" : "nextAgent" };
     case "r":
       // Reloads only the UI; the terminals keep running and come back. For trying UI changes in dev.
       return import.meta.env.DEV && !extra ? { kind: "reload" } : null;
@@ -86,13 +89,14 @@ export function shortcutFor(e: KeyboardEvent): Action | null {
 }
 
 export const shortcutLabel = isMac
-  ? { newTab: "⌘T", splitRight: "⌘D", splitDown: "⇧⌘D", toggleSidebar: "⌘B", closePane: "⌘W" }
+  ? { newTab: "⌘T", splitRight: "⌘D", splitDown: "⇧⌘D", toggleSidebar: "⌘B", closePane: "⌘W", nextAgent: "⌘J" }
   : {
       newTab: "Ctrl+Shift+T",
       splitRight: "Ctrl+Shift+D",
       splitDown: "Ctrl+Shift+Alt+D",
       toggleSidebar: "Ctrl+Shift+B",
       closePane: "Ctrl+Shift+W",
+      nextAgent: "Ctrl+Shift+J",
     };
 
 export const DEFAULT_FONT_SIZE = 13;

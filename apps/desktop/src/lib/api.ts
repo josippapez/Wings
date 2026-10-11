@@ -17,6 +17,8 @@ export type Agent = {
   args: string[];
   /** When this `claude` process started, in ms since 1970. */
   startedAt: number;
+  /** When `state` last changed, in ms since 1970; null when Claude Code doesn't say. */
+  stateSince: number | null;
 };
 
 /** Commits to push and pull (as of the last fetch) and changed files, per project. */
@@ -186,6 +188,8 @@ export const api = {
   workspaceSave: (json: string) => invoke<void>("workspace_save", { json }),
   paneFocus: (id: string | null) => invoke<void>("pane_focus", { id }),
   onAgents: (cb: (agents: Agent[]) => void): Promise<UnlistenFn> => listen<Agent[]>("agents", (e) => cb(e.payload)),
+  /** A system notification was clicked: go to that pane. */
+  onFocusPane: (cb: (paneId: string) => void): Promise<UnlistenFn> => listen<string>("focus-pane", (e) => cb(e.payload)),
   onMenu: (cb: (id: string) => void): Promise<UnlistenFn> => listen<string>("menu", (e) => cb(e.payload)),
   onPaneExited: (cb: (paneId: string) => void): Promise<UnlistenFn> =>
     listen<string>("pane-exited", (e) => cb(e.payload)),

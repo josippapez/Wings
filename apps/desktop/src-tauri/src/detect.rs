@@ -39,6 +39,8 @@ pub struct Agent {
     /// When this `claude` process started, in ms since 1970. A resumed session's transcript also holds
     /// what came before it, and this tells the two apart.
     pub started_at: u64,
+    /// When `state` last changed, in ms since 1970, from Claude Code's session file. For "working for 2m".
+    pub state_since: Option<u64>,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -49,6 +51,7 @@ pub struct SessionFile {
     pub status: Option<String>,
     pub waiting_for: Option<String>,
     pub name: Option<String>,
+    pub status_updated_at: Option<u64>,
 }
 
 pub struct Scan {
@@ -168,6 +171,7 @@ impl Detector {
                 waiting_for: if state == AgentState::Blocked { file.waiting_for } else { None },
                 args,
                 started_at,
+                state_since: file.status_updated_at,
             });
         }
         Scan { agents, panes: pane_infos }

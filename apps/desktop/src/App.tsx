@@ -22,6 +22,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
+import { nextNeedingYou } from "@/lib/agents";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { resumeCommand, shellQuote } from "@/lib/resume";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
@@ -545,6 +546,13 @@ export default function App() {
           return setFontSize(DEFAULT_FONT_SIZE);
         case "reload":
           return reloadUi();
+        case "nextAgent":
+        case "previousAgent": {
+          const next = nextNeedingYou(agents, focusedPaneId, action.kind === "previousAgent");
+          if (next) selectAgent(next);
+          else toast("No agent needs you", { id: "no-agent-needs-you", duration: 2000 });
+          return;
+        }
       }
       if (!activeSpaceId) return;
       if (action.kind === "newTab") return openTab(activeSpaceId);
@@ -564,7 +572,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeSpaceId, activeTab, spaceTabs, openTab, splitPane, focusPane, reloadUi]);
+  }, [activeSpaceId, activeTab, spaceTabs, openTab, splitPane, focusPane, reloadUi, agents, focusedPaneId]);
 
   // The menu owns ⌘W (so it never closes the window); it forwards it here.
   useEffect(() => {
@@ -586,6 +594,8 @@ export default function App() {
   const agentStates = useRef(new Map<string, AgentState>());
   const selectAgentRef = useRef(selectAgent);
   selectAgentRef.current = selectAgent;
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   useEffect(() => {
     const before = agentStates.current;
     agentStates.current = new Map(agents.map((a) => [a.paneId, a.state]));
@@ -609,6 +619,15 @@ export default function App() {
       });
     }
   }, [agents]);
+
+  // Clicking a system notification (`send_notification` in lib.rs) brings Wings forward and lands here.
+  useEffect(() => {
+    const unlisten = api.onFocusPane((paneId) => {
+      const agent = agentsRef.current.find((a) => a.paneId === paneId);
+      if (agent) selectAgentRef.current(agent);
+    });
+    return () => void unlisten.then((off) => off());
+  }, []);
 
   // macOS never asks before keeping another app's data, like Chrome's, from a program in a pane, so Wings asks.
   useEffect(() => {
