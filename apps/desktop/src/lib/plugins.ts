@@ -506,6 +506,8 @@ export class PluginHost {
         });
       case "statusline":
         return invoke("plugin_statusline", { pluginId });
+      case "ports":
+        return invoke("plugin_ports", { pluginId });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
       case "post":

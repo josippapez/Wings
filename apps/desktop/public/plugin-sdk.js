@@ -121,9 +121,14 @@
      * session reports them, and each session's context window, token counts and prompt cache by session id.
      */
     statusline: () => call("statusline", {}),
+    /**
+     * With `permissions.ports`: the local TCP ports the programs in your panes listen on, as
+     * `{ paneId, pid, name, port, startedAt }[]`. Only ports `localhost` reaches. Costs about 20 ms: poll slowly.
+     */
+    ports: () => call("ports", {}),
     /** Shows a badge in a pane's header, or removes it with `null`. */
     setBadge: (paneId, badge) => call("setBadge", { paneId, badge }),
-    /** Opens an https URL matching `permissions.openUrl` in the browser. */
+    /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**
      * Opens a terminal in a new tab, or in a split beside the focused pane with `placement` "right" or "down".

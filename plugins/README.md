@@ -2,6 +2,8 @@
 
 A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. Wings loads it into a sandboxed frame, and the plugin talks to Wings only through the `wings` object. Anything that touches your machine is checked in Rust against the permissions in the manifest.
 
+`dev-servers/` puts a `localhost:<port>` badge on a pane while a program in it listens on a local port, and opens it in the browser or in a Wings window (`views`).
+
 `pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
 
 ## Installing
@@ -69,10 +71,11 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 | `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments. An entry can end with the only flags it allows, like `az boards work-item update [--id --state]`, which refuses `--title` or any other flag |
 | `post` | POSTing to these API paths through a signed-in CLI with `wings.post`. Each entry is `gh`, `glab` or `az` and a path where `*` stands for one segment, like `gh repos/*/*/pulls/*/comments/*/replies`. `az` paths are full `https://` URLs. `exec` itself refuses every flag that writes, like `-X` or `--method` |
 | `transcript` | Reading these Claude Code transcript entry types. `attachment:<kind>`, like `attachment:model`, allows one kind of attachment entry: attachments include whole files and hook output, so ask for the kinds you need rather than `attachment` |
-| `openUrl` | Opening https URLs that start with these prefixes |
+| `openUrl` | Opening URLs that start with these prefixes: https, or http to this computer only (`localhost`, `127.0.0.1`, `[::1]`, without credentials), like `http://localhost:` |
 | `fetch` | Calling https URLs that start with these prefixes through `wings.fetch`, like an API's base URL ending in `/` |
 | `panes` | Opening terminals with `wings.openPane` and moving focus with `wings.focusPane`. Each entry is a command it may start in the new pane, matched like `exec`, so `npm run dev` allows `npm run dev --port=3000`. `[]` allows plain shells only. Leave it out and the plugin can do neither |
 | `notify` | `true` to show desktop notifications with `wings.notify` |
+| `ports` | `true` to see, with `wings.ports`, which local TCP ports the programs in your terminals listen on, with each program's name, pid and start time. Only ports that `localhost` reaches, in panes Wings started |
 | `statusline` | `true` to read what Claude Code tells its status line with `wings.statusline`: your usage limits and each session's context and cache. See [Status line](#status-line) |
 
 `contributes` lists what the plugin adds, which the manager shows next to it:
@@ -106,6 +109,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
 | `wings.openUrl(url)` | Opens the URL in the browser |
+| `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every few seconds at most |
 | `wings.openPane({ command?, cwd?, placement? })` | Opens a terminal and resolves `{ paneId }` once it's in `onPanes`. `placement` is `tab` (the default), or `right` or `down` for a split beside the focused pane, which has to be in the project on screen. Without `cwd` it opens at the root of the project on screen. The new pane gets the keyboard |
 | `wings.focusPane(paneId)` | Switches to an open pane's project and tab and moves the keyboard to it |
 | `wings.notify({ title, body? })` | A desktop notification, with your plugin's name before the title. The title is cut at 64 characters and the body at 256. Up to 3 a minute per plugin; more are refused with how long to wait. Clicking it does nothing |

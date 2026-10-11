@@ -42,6 +42,8 @@ export type PluginPermissions = {
   notify: boolean;
   /** Reads what Claude Code told `wings statusline`: usage limits and each session's context and cache. */
   statusline: boolean;
+  /** Sees which local ports the programs in each pane listen on. */
+  ports: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
 /** A web page a plugin shows in a popover from a title bar button. */

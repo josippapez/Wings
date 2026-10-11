@@ -20,6 +20,7 @@ mod mcp_panes;
 mod plugin_store;
 mod plugin_storage;
 mod plugins;
+mod ports;
 #[cfg(target_os = "macos")]
 mod privacy;
 mod secrets;
@@ -788,6 +789,21 @@ fn plugin_statusline(state: State<AppState>, plugin_id: String) -> Res<serde_jso
     Ok(state.statusline.lock().unwrap().view())
 }
 
+/// The local ports each pane's programs listen on, if the plugin may read them.
+#[tauri::command(async)]
+fn plugin_ports(state: State<AppState>, plugin_id: String) -> Res<Vec<ports::PanePort>> {
+    if !plugins::may_read_ports(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read listening ports"));
+    }
+    let panes: Vec<(String, Option<u32>)> = state.panes.lock().unwrap().values().map(|p| (p.id.clone(), p.shell_pid)).collect();
+    let start = std::time::Instant::now();
+    let found = ports::scan(&panes);
+    if cfg!(debug_assertions) {
+        eprintln!("[plugin] {plugin_id} ports took {} ms", start.elapsed().as_millis());
+    }
+    found
+}
+
 #[tauri::command]
 fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, url: String) -> Res<()> {
     let plugin = plugin(&state, &plugin_id)?;
@@ -1282,6 +1298,7 @@ pub fn run() {
             plugin_post,
             plugin_transcript,
             plugin_statusline,
+            plugin_ports,
             plugin_open_url,
             plugin_open_pane,
             plugin_focus_pane,

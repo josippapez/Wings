@@ -15,7 +15,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 | Host: runs frames, relays calls, cleans badges and comments | `apps/desktop/src/lib/plugins.ts` |
 | View windows: relay between a window's frame and the host, as events | `apps/desktop/src/lib/plugin-views.ts`, `src/view-window.tsx`, `plugin_view_open` in `lib.rs`, `capabilities/plugin-view.json` |
 | Permission checks, `exec`, transcript reads | `apps/desktop/src-tauri/src/plugins.rs` |
-| Tauri commands `plugin_exec`, `plugin_transcript`, `plugin_open_url` | `apps/desktop/src-tauri/src/lib.rs` |
+| Tauri commands `plugin_exec`, `plugin_transcript`, `plugin_open_url`, `plugin_ports` | `apps/desktop/src-tauri/src/lib.rs` |
 | Live transcript entries for `onTranscript`, read each detection tick | `apps/desktop/src-tauri/src/tail.rs`, `tail_transcripts` in `lib.rs` |
 | Claude Code's status line data for `wings.statusline()`, sent by `wings statusline` | `apps/desktop/src-tauri/src/statusline.rs`, `statusline` in `cli.rs` and `control.rs` |
 | Badge pill and card | `apps/desktop/src/components/pane-badge.tsx` |
