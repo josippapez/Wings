@@ -10,6 +10,14 @@
   let replyHandler = null;
   listeners.transcript = [];
   const tools = new Map();
+  // Each `on*` returns a function that removes the listener, for a page that subscribes in a React effect.
+  const subscribe = (list, listener) => {
+    list.push(listener);
+    return () => {
+      const at = list.indexOf(listener);
+      if (at >= 0) list.splice(at, 1);
+    };
+  };
 
   const call = (method, params, onOutput) =>
     new Promise((resolve, reject) => {
@@ -39,7 +47,7 @@
     if (message.event === "action") return void runAction(message.data);
     if (message.event === "tool") return void runTool(message.data);
     if (message.event === "reply") return void runReply(message.data);
-    for (const listener of listeners[message.event] ?? []) {
+    for (const listener of [...(listeners[message.event] ?? [])]) {
       try {
         listener(message.data);
       } catch (error) {
@@ -51,7 +59,7 @@
   // Wings shows a spinner on the clicked button until every action listener has settled.
   async function runAction({ token, ...data }) {
     let error = null;
-    for (const listener of listeners.action) {
+    for (const listener of [...listeners.action]) {
       try {
         await listener(data);
       } catch (e) {
@@ -92,9 +100,9 @@
 
   window.wings = Object.freeze({
     /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` is set while Claude runs, `focused` on the focused pane of the tab on screen. Called on every change. */
-    onPanes: (listener) => void listeners.panes.push(listener),
+    onPanes: (listener) => subscribe(listeners.panes, listener),
     /** A badge action was clicked: `{ paneId, actionId }`. */
-    onAction: (listener) => void listeners.action.push(listener),
+    onAction: (listener) => subscribe(listeners.action, listener),
     /**
      * Handles calls to one of the manifest's `contributes.mcpTools`, from the main script. `handler(input, { paneId })`
      * gets the arguments Claude sent and returns a string or a JSON value, or a promise of one. `paneId` is the
@@ -114,7 +122,7 @@
      * entry types in `permissions.transcript`. Only entries written after the plugin started, or after the session
      * started in the pane; `transcript` reads earlier ones. Entries over 256 KB are skipped.
      */
-    onTranscript: (listener) => void listeners.transcript.push(listener),
+    onTranscript: (listener) => subscribe(listeners.transcript, listener),
     /**
      * What Claude Code last told its status line, with `permissions.statusline`, once `wings statusline` is your
      * `statusLine` command. Resolves `{ rateLimits, sessions }`: the 5-hour and weekly limits, or `null` until a
@@ -189,7 +197,7 @@
     /** Sends a JSON value to the plugin's other pages (its main script and open sidebars, modals and windows), up to 64 KB. */
     broadcast: (message) => call("broadcast", { message }),
     /** Gets what the plugin's other pages send with `broadcast`. */
-    onBroadcast: (listener) => void listeners.broadcast.push(listener),
+    onBroadcast: (listener) => subscribe(listeners.broadcast, listener),
     /**
      * Opens the Wings diff viewer. Leave out `patch` to open it in a loading state, then fill it with
      * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`.
