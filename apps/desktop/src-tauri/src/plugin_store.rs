@@ -420,79 +420,60 @@ fn fetch_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, Str
     }
 }
 
-/// What to download for a plugin: an address and what to ask for, and for a folder in a repo, the tag it
-/// comes from (`None` for the default branch), whose manifest holds the version.
+/// What to download for a plugin: an address and what to ask for.
 #[derive(Debug)]
 struct Pick {
     url: String,
     accept: &'static str,
-    tag: Option<String>,
 }
 
 /// The newest release's `.wings-plugin` file, or its source zip, or the default branch when there's no release.
-/// A folder in a repo of several plugins comes from the release's `<id>.wings-plugin`, else the default branch.
+/// A folder in a repo of several plugins always comes from the default branch, so pushing a plugin's new
+/// version ships it without a release of the whole repo.
 fn pick(repo: &str, folder: Option<&str>, release: Option<Release>) -> Result<Pick, String> {
-    let branch = || Pick { url: format!("{API}repos/{repo}/zipball"), accept: JSON, tag: None };
-    let Some(release) = release else { return Ok(branch()) };
-    let asset = |a: Asset, tag| Pick { url: a.url, accept: "application/octet-stream", tag };
-    match folder {
-        Some(folder) => {
-            let name = format!("{}.wings-plugin", folder.rsplit('/').next().unwrap_or(folder));
-            Ok(release.assets.into_iter().find(|a| a.name == name).map_or_else(branch, |a| asset(a, Some(release.tag_name))))
-        }
-        None => {
-            let mut packages = release.assets.into_iter().filter(|a| a.name.ends_with(".wings-plugin"));
-            match (packages.next(), packages.next()) {
-                (Some(_), Some(_)) => Err(format!("{repo} has several plugins. Link the one you want, like github.com/{repo}/plugins/<id>")),
-                (Some(a), None) => Ok(asset(a, None)),
-                (None, _) => Ok(Pick { url: release.zipball_url, accept: JSON, tag: None }),
-            }
-        }
+    let branch = || Pick { url: format!("{API}repos/{repo}/zipball"), accept: JSON };
+    let (None, Some(release)) = (folder, release) else { return Ok(branch()) };
+    let mut packages = release.assets.into_iter().filter(|a| a.name.ends_with(".wings-plugin"));
+    match (packages.next(), packages.next()) {
+        (Some(_), Some(_)) => Err(format!("{repo} has several plugins. Link the one you want, like github.com/{repo}/plugins/<id>")),
+        (Some(a), None) => Ok(Pick { url: a.url, accept: "application/octet-stream" }),
+        (None, _) => Ok(Pick { url: release.zipball_url, accept: JSON }),
     }
 }
 
 pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, String> {
     let token = access();
-    let Pick { url, accept, .. } = pick(repo, folder, latest_release(repo, token.as_deref())?)?;
+    // A folder never uses the release, so it doesn't ask for it.
+    let release = if folder.is_some() { None } else { latest_release(repo, token.as_deref())? };
+    let Pick { url, accept } = pick(repo, folder, release)?;
     let mut response = get(&url, accept, token.as_deref()).map_err(|e| github_error(repo, e))?;
     response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())
 }
 
 /// The version an update would install, without a leading `v`. For a repo that's the newest release's tag.
-/// A folder in a repo of several plugins has its own version, in its manifest, which a release of the
-/// repo doesn't change.
+/// A folder in a repo of several plugins has its own version, in its manifest on the default branch. One
+/// that needs a newer Wings than this one isn't offered.
 pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>, String> {
     let token = access();
-    let release = latest_release(repo, token.as_deref())?;
-    let Some(folder) = folder else { return Ok(release.map(|r| r.tag_name.trim_start_matches('v').to_string())) };
-    let tag = pick(repo, Some(folder), release)?.tag;
-    let url = manifest_url(repo, folder, tag.as_deref());
-    // A tag's files never change, so its version is asked for once. The default branch's can.
-    static TAGGED: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
-    if tag.is_some() {
-        if let Some(version) = TAGGED.lock().unwrap().get_or_insert_default().get(&url) {
-            return Ok(version.clone());
-        }
-    }
-    let mut response = get(&url, "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
+    let Some(folder) = folder else {
+        return Ok(latest_release(repo, token.as_deref())?.map(|r| r.tag_name.trim_start_matches('v').to_string()));
+    };
+    let mut response = get(&manifest_url(repo, folder), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
     let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
-    let version = manifest_version(&text);
-    if tag.is_some() {
-        TAGGED.lock().unwrap().get_or_insert_default().insert(url, version.clone());
-    }
-    Ok(version)
+    Ok(manifest_version(&text))
 }
 
-fn manifest_url(repo: &str, folder: &str, tag: Option<&str>) -> String {
-    let url = format!("{API}repos/{repo}/contents/{folder}/wings-plugin.json");
-    match tag {
-        Some(tag) => format!("{url}?ref={tag}"),
-        None => url,
-    }
+fn manifest_url(repo: &str, folder: &str) -> String {
+    format!("{API}repos/{repo}/contents/{folder}/wings-plugin.json")
 }
 
 fn manifest_version(text: &str) -> Option<String> {
     let manifest: serde_json::Value = serde_json::from_str(text).ok()?;
+    if let Some(min) = manifest["minWingsVersion"].as_str() {
+        if !plugins::runs_on_this_wings(min).ok()? {
+            return None;
+        }
+    }
     Some(manifest["version"].as_str()?.trim_start_matches('v').to_string())
 }
 
@@ -795,24 +776,30 @@ mod tests {
     }
 
     #[test]
-    fn a_plugin_folder_takes_its_own_release_file_and_version() {
+    fn a_plugin_folder_comes_from_the_default_branch() {
         let app = || release("v0.1.7", &["Wings.app.tar.gz", "dev-servers.wings-plugin", "hud.wings-plugin"]);
-        let hud = pick("owner/repo", Some("plugins/hud"), Some(app())).unwrap();
-        assert_eq!((hud.url.as_str(), hud.accept, hud.tag.as_deref()), (format!("{API}repos/owner/repo/releases/assets/hud.wings-plugin").as_str(), "application/octet-stream", Some("v0.1.7")));
-        // The version to compare is the plugin's, from its manifest at that tag, not the app's tag.
-        assert_eq!(manifest_url("owner/repo", "plugins/hud", hud.tag.as_deref()), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json?ref=v0.1.7"));
-        assert_eq!(manifest_version(&manifest("hud", &[])).as_deref(), Some("1.0.0"));
-
-        // A release without the plugin's file, or no release at all: the default branch.
-        for release in [Some(release("v0.1.6", &["Wings.app.tar.gz"])), None] {
-            let picked = pick("owner/repo", Some("plugins/hud"), release).unwrap();
-            assert_eq!((picked.url, picked.tag), (format!("{API}repos/owner/repo/zipball"), None));
+        // Even when a release carries the plugin's file, so a pushed version ships without a release.
+        for release in [Some(app()), Some(release("v0.1.6", &["Wings.app.tar.gz"])), None] {
+            assert_eq!(pick("owner/repo", Some("plugins/hud"), release).unwrap().url, format!("{API}repos/owner/repo/zipball"));
         }
-        assert_eq!(manifest_url("owner/repo", "plugins/hud", None), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json"));
+        assert_eq!(manifest_url("owner/repo", "plugins/hud"), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json"));
+        assert_eq!(manifest_version(&manifest("hud", &[])).as_deref(), Some("1.0.0"));
 
         // A whole repo still takes its one package, and asks which one when there are several.
         assert!(pick("owner/repo", None, Some(release("v1", &["demo.wings-plugin"]))).unwrap().url.ends_with("/demo.wings-plugin"));
         assert!(pick("owner/repo", None, Some(app())).unwrap_err().contains("plugins/<id>"));
+    }
+
+    #[test]
+    fn an_update_that_needs_a_newer_wings_is_not_offered() {
+        let with_min = |min: &str| manifest("hud", &[]).replacen('{', &format!("{{ \"minWingsVersion\": \"{min}\","), 1);
+        assert_eq!(manifest_version(&with_min(env!("CARGO_PKG_VERSION"))).as_deref(), Some("1.0.0"));
+        assert_eq!(manifest_version(&with_min("999.0.0")), None);
+
+        // Installed anyway, from a file, it's refused.
+        let (mut s, _dir) = store();
+        let err = s.install(&package(&[("wings-plugin.json", &with_min("999.0.0")), ("main.js", "")]), Source::File, None).unwrap_err();
+        assert!(err.contains("needs Wings 999.0.0 or newer"), "{err}");
     }
 }
 

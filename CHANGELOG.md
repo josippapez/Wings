@@ -6,6 +6,7 @@ What changed in each Wings release, newest first.
 
 ## 0.1.12 · 2026-10-12
 
+- Plugins installed from a folder of a GitHub repo, like Wings' own, install and update from the default branch, so a plugin update no longer waits for a Wings release. A plugin can set `minWingsVersion`, and an older Wings won't install it.
 - PR tracker 0.6.1 shows an Azure PR's merge strategy policy in its own Merge row instead of counting it as a failed check.
 
 ## 0.1.11 · 2026-10-12

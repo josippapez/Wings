@@ -150,6 +150,9 @@ pub struct Manifest {
     #[serde(default)]
     pub description: String,
     pub api: u32,
+    /// The oldest Wings that can run it, for a plugin that uses something newer than its `api`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_wings_version: Option<String>,
     pub main: String,
     #[serde(default)]
     pub permissions: Permissions,
@@ -167,6 +170,16 @@ const API_VERSION: u32 = 1;
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn version_parts(version: &str) -> Option<Vec<u64>> {
+    version.trim().trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect()
+}
+
+/// Whether this Wings is at least `min`, a version like `0.1.12`.
+pub fn runs_on_this_wings(min: &str) -> Result<bool, String> {
+    let min = version_parts(min).ok_or_else(|| format!("minWingsVersion {min:?} isn't a version like 0.1.12"))?;
+    Ok(version_parts(env!("CARGO_PKG_VERSION")).expect("Wings' own version") >= min)
 }
 
 /// Loads every plugin folder under `roots`. Broken or incompatible plugins are skipped with a log line.
@@ -196,6 +209,11 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     if manifest.api != API_VERSION {
         return Err(format!("needs plugin API {}, this Wings has {API_VERSION}", manifest.api));
+    }
+    if let Some(min) = &manifest.min_wings_version {
+        if !runs_on_this_wings(min)? {
+            return Err(format!("needs Wings {min} or newer, this is {}", env!("CARGO_PKG_VERSION")));
+        }
     }
     resolve(dir, &manifest.main).ok_or("main is outside the plugin folder")?;
     if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
@@ -895,6 +913,7 @@ mod tests {
                 version: "0".into(),
                 description: String::new(),
                 api: 1,
+                min_wings_version: None,
                 main: "main.js".into(),
                 permissions: Permissions {
                     exec: exec.iter().map(|s| s.to_string()).collect(),
