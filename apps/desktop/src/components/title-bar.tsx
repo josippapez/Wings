@@ -17,7 +17,7 @@ import {
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGlyph } from "@/components/layout-glyph";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 
 const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
 
-/** Plugin buttons that fit before the rest move into a menu. */
+/** Plugin buttons that show before the rest move into a menu. Pinned ones always show, and take these places first. */
 const INLINE_BUTTONS = 3;
 
 /** A plugin's title bar button: it opens one of its pages in the sidebar, a modal or a window, or its web panel. */
@@ -126,13 +126,19 @@ export function TitleBar(props: {
   onNew: () => void;
   onHistory: () => void;
   onSettings: () => void;
-  /** Sidebar and panel buttons from plugins that are on. The first few show, the rest go in a menu. */
+  /** Sidebar and panel buttons from plugins that are on. Pinned ones and the first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
+  /** Keys of the buttons you pinned to the title bar, in the order you pinned them. */
+  pinned: string[];
+  onTogglePin: (key: string) => void;
   onPluginButton: (button: PluginButton, rect: DOMRect) => void;
   onMountPopover: MountPopover;
 }) {
-  const inline = props.pluginButtons.slice(0, INLINE_BUTTONS);
-  const overflow = props.pluginButtons.slice(INLINE_BUTTONS);
+  const pinned = props.pinned.flatMap((key) => props.pluginButtons.filter((b) => b.key === key));
+  const rest = props.pluginButtons.filter((b) => !props.pinned.includes(b.key));
+  const free = Math.max(0, INLINE_BUTTONS - pinned.length);
+  const inline = [...pinned, ...rest.slice(0, free)];
+  const overflow = rest.slice(free);
   const more = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const tabCount = useRef(props.tabs.length);
@@ -285,11 +291,11 @@ export function TitleBar(props: {
           icon
         );
       })}
-      {overflow.length > 0 && (
+      {(overflow.length > 0 || pinned.length > 0) && (
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button ref={more} variant="ghost" size="icon-sm" aria-label={`${overflow.length} more from plugins`} className="text-muted-foreground hover:text-foreground" />
+              <Button ref={more} variant="ghost" size="icon-sm" aria-label={overflow.length ? `${overflow.length} more from plugins` : "Plugin buttons"} className="text-muted-foreground hover:text-foreground" />
             }
           >
             <EllipsisIcon aria-hidden />
@@ -317,6 +323,15 @@ export function TitleBar(props: {
                 </DropdownMenuItem>
               );
             })}
+            {overflow.length > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Keep in title bar</DropdownMenuLabel>
+              {props.pluginButtons.map((button) => (
+                <DropdownMenuCheckboxItem key={button.key} checked={props.pinned.includes(button.key)} onCheckedChange={() => props.onTogglePin(button.key)}>
+                  {button.title}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       )}

@@ -43,6 +43,8 @@ type SavedWorkspace = {
   sidebarOpen: boolean;
   /** Sidebar widths in pixels, as last dragged. */
   widths?: Widths;
+  /** Plugin title bar buttons you pinned, by key. */
+  pinnedButtons?: string[];
   fontSize: number;
   /** The terminal's keyboard settings. */
   terminalKeys?: TerminalKeys;
@@ -129,6 +131,7 @@ export default function App() {
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTabBySpace, setActiveTabBySpace] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [pinnedButtons, setPinnedButtons] = useState<string[]>([]);
   const [widths, setWidths] = useState<Widths>({ left: SIDES.left.initial, right: SIDES.right.initial });
   const leftPanel = usePanelRef();
   const rightPanel = usePanelRef();
@@ -426,6 +429,7 @@ export default function App() {
       }
       if (saved.terminalKeys) setTerminalKeysState({ ...DEFAULT_TERMINAL_KEYS, ...saved.terminalKeys });
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
+      if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
       const known = new Set(list.map((s) => s.id));
       const restored = saved.tabs
         .filter((t) => known.has(t.spaceId))
@@ -517,6 +521,7 @@ export default function App() {
       activeTabBySpace,
       sidebarOpen,
       widths,
+      pinnedButtons,
       fontSize,
       terminalKeys,
       terminalLook,
@@ -532,7 +537,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, fontSize, terminalKeys, terminalLook]);
+  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, terminalLook]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -918,6 +923,8 @@ export default function App() {
             onHistory={() => setHistoryOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             pluginButtons={pluginButtons}
+            pinned={pinnedButtons}
+            onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
             onPluginButton={(button, rect) => {
               if (button.kind === "panel") {
                 void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
