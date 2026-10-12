@@ -4,6 +4,16 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- Pin plugin buttons to the title bar from the … menu, under Keep in title bar. Pinned buttons always show.
+- Plugin pages can stop listening: every `wings.on*` call returns a function that removes the listener.
+- The built-in plugins are TypeScript, with React sidebars, built with the new `wings-plugin-sdk` package. They behave as before, with these fixes:
+  - PR tracker 0.6.2: a missing gh, az or glab shows the Install badge wherever it's used, an expired gh token shows Sign in, and a closed pane's PR stops being checked.
+  - Session detail 0.4.1: busy sessions no longer empty the sidebar, an open row updates when its tool finishes, and rows of different sessions no longer share their open state.
+  - Changes 0.2.1: a search you left before it ran no longer loads in the background.
+  - Work item 0.2.1: an error shows on its own work item instead of on every pane in the org, and Open only shows once there's a link.
+  - Dev servers 0.2.1: only ports with a button can be opened.
+- Wings and `wings-plugin-sdk` are MIT-licensed.
+
 ## 0.1.13 · 2026-10-12
 
 - With the sidebar closed, point at the window's left edge to show it over the panes and switch projects or agents without opening it.
