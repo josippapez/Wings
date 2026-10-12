@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.13 · 2026-10-12
+
+- With the sidebar closed, point at the window's left edge to show it over the panes and switch projects or agents without opening it.
+
 ## 0.1.12 · 2026-10-12
 
 - Plugins installed from a folder of a GitHub repo, like Wings' own, install and update from the default branch, so a plugin update no longer waits for a Wings release. A plugin can set `minWingsVersion`, and an older Wings won't install it.
