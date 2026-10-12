@@ -13,3 +13,8 @@ export function resumeCommand(sessionId: string, args: readonly string[] = []) {
   const flags = args.some((a) => /[\x00-\x1f\x7f]/.test(a)) ? [] : args;
   return ["claude", "--resume", ...[sessionId, ...flags].map(shellQuote)].join(" ") + "\r";
 }
+
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh"]);
+
+/** True when a pane's foreground program (`PaneInfo.command`) is a shell, so a typed line reaches its prompt and not a program. */
+export const isShellCommand = (command: string | undefined) => SHELLS.has(command ?? "");

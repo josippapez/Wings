@@ -25,7 +25,8 @@ import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { nextNeedingYou } from "@/lib/agents";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { resumeCommand, shellQuote } from "@/lib/resume";
+import { isShellCommand, resumeCommand, shellQuote } from "@/lib/resume";
+import { UpdateDialog } from "@/components/update-dialog";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
 type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
@@ -811,6 +812,19 @@ export default function App() {
     openTab(space.id, cd + (fork ? forkCommand(session.id) : resumeCommand(session.id)), fork ? null : session.id);
   }
 
+  /** Runs `claude --resume` at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
+  function resumeHere(session: { id: string; cwd: string }) {
+    const key = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.focusedPane;
+    const paneId = key ? panesRef.current[key]?.paneId : null;
+    // The line is typed into a terminal, where a control character acts as a key press.
+    if (!key || !paneId || !isSessionId(session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
+    const cd = session.cwd === paneInfo[paneId]?.cwd ? "" : `cd ${shellQuote(session.cwd)} && `;
+    void api.paneWrite(paneId, cd + resumeCommand(session.id)).catch((e) => console.error(e));
+    setHistoryOpen(false);
+    // The sheet hands focus back to what opened it as it closes, so take it after that.
+    setTimeout(() => terminals.get(key)?.focus(), 0);
+  }
+
   async function removeSpace(spaceId: string) {
     tabsRef.current.filter((t) => t.spaceId === spaceId).forEach((t) => closeTab(t.id));
     await api.spacesRemove(spaceId);
@@ -1026,6 +1040,7 @@ export default function App() {
         />
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
+        <UpdateDialog />
         <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
         <HistorySheet
           space={activeSpace}
@@ -1036,6 +1051,8 @@ export default function App() {
             setHistoryOpen(false);
             if (activeSpace && isSessionId(id)) openTab(activeSpace.id, resumeCommand(id), id);
           }}
+          pane={focusedPaneId ? { idle: isShellCommand(paneInfo[focusedPaneId]?.command) } : null}
+          onResumeHere={resumeHere}
           onLaunch={(session, fork) => {
             setHistoryOpen(false);
             void launchSession(session, fork).catch((e) => console.error(e));

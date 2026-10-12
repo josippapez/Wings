@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, ChevronDownIcon, CopyIcon, EllipsisIcon, GitBranchIcon, GitForkIcon, SearchIcon, SearchXIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CopyIcon, EllipsisIcon, GitBranchIcon, GitForkIcon, SearchIcon, SearchXIcon, SquareTerminalIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type HistoryHit, type HistoryResults, type HistorySnippet, type Space } from "@/lib/api";
 import { shellQuote } from "@/lib/resume";
@@ -75,6 +76,10 @@ export function HistorySheet(props: {
   onResume: (sessionId: string) => void;
   /** Resumes or forks a session that started in `cwd`, which can be another project or a folder inside this one. */
   onLaunch: (session: { id: string; cwd: string }, fork: boolean) => void;
+  /** The focused pane of the open tab, and whether it sits at a shell prompt. Null with no tab open. */
+  pane: { idle: boolean } | null;
+  /** Types the resume command into that pane, after a `cd` if it isn't in the session's folder. */
+  onResumeHere: (session: { id: string; cwd: string }) => void;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("project");
@@ -129,6 +134,11 @@ export function HistorySheet(props: {
     if (!cwd) return;
     if (!fork && cwd === space?.path) props.onResume(hit.id);
     else props.onLaunch({ id: hit.id, cwd }, fork);
+  };
+
+  const resumeHere = (hit: HistoryHit) => {
+    const cwd = hit.cwd ?? (scope === "project" ? space?.path : null);
+    if (cwd) props.onResumeHere({ id: hit.id, cwd });
   };
 
   const where = (hit: HistoryHit) => {
@@ -313,6 +323,26 @@ export function HistorySheet(props: {
                           <EllipsisIcon aria-hidden />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-auto">
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <DropdownMenuItem
+                                  disabled={!launchable || !props.pane?.idle}
+                                  onClick={() => resumeHere(s)}
+                                  // So the tooltip can still say why it's off.
+                                  className="data-disabled:pointer-events-auto"
+                                />
+                              }
+                            >
+                              <SquareTerminalIcon aria-hidden />
+                              Resume in this tab
+                            </TooltipTrigger>
+                            {launchable && !props.pane?.idle && (
+                              <TooltipContent side="left">
+                                {props.pane ? "The focused pane is running a program" : "No tab is open"}
+                              </TooltipContent>
+                            )}
+                          </Tooltip>
                           <DropdownMenuItem disabled={!launchable} onClick={() => resume(s, true)}>
                             <GitForkIcon aria-hidden />
                             Fork into a new session

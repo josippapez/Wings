@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
-import { resumeCommand, shellQuote } from "./resume.ts";
+import { isShellCommand, resumeCommand, shellQuote } from "./resume.ts";
 
 const id = "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d";
 
@@ -31,6 +31,11 @@ test("the shell reads back exactly the arguments", () => {
     const out = execFileSync(shell, ["-c", `for a in ${line}; do printf '%s\\0' "$a"; done`]).toString();
     assert.deepEqual(out.split("\0").slice(0, -1), ["--resume", id, ...args], shell);
   }
+});
+
+test("a pane is at a prompt only when a shell is its foreground program", () => {
+  for (const command of ["zsh", "bash", "fish"]) assert.equal(isShellCommand(command), true, command);
+  for (const command of ["claude", "vim", "node", "", undefined]) assert.equal(isShellCommand(command), false, String(command));
 });
 
 test("flags holding control characters are not typed", () => {

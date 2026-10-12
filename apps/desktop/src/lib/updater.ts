@@ -7,8 +7,17 @@ const TOAST_ID = "update";
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
 let installing = false;
+let showDetails: ((update: Update) => void) | null = null;
 
-async function install(update: Update) {
+/** The update dialog registers here to be opened by the toast's What's new and by a manual check. Returns an unregister function. */
+export function onShowUpdate(fn: (update: Update) => void): () => void {
+  showDetails = fn;
+  return () => {
+    if (showDetails === fn) showDetails = null;
+  };
+}
+
+export async function installUpdate(update: Update) {
   installing = true;
   toast.loading(`Installing Wings ${update.version}`, { id: TOAST_ID, duration: Infinity });
   try {
@@ -30,11 +39,18 @@ export async function checkForUpdate({ manual = false } = {}) {
       if (manual) toast.success("Wings is up to date", { id: TOAST_ID, duration: 4000 });
       return;
     }
+    // The menu asked, so skip the toast and show what's in it.
+    if (manual && showDetails) {
+      toast.dismiss(TOAST_ID);
+      showDetails(update);
+      return;
+    }
     toast(`Wings ${update.version} is available`, {
       id: TOAST_ID,
       duration: Infinity,
       description: update.body?.split("\n")[0],
-      action: { label: "Install and restart", onClick: () => void install(update) },
+      action: { label: "Install and restart", onClick: () => void installUpdate(update) },
+      cancel: { label: "What's new", onClick: () => showDetails?.(update) },
     });
   } catch (err) {
     // Offline and rate-limited checks are routine; the next one tries again.
