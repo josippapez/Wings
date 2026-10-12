@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.8 · 2026-10-12
+
+- Plugins live in Settings, with a list, each plugin's details and its README.
+- Wings checks for plugin updates in the background, and Check for updates runs it now. Each plugin with an update gets an Update button.
 - See what's new before you update: the update toast and Check for Updates show the release notes.
 - Resume a past session in the current tab, from its menu in Past sessions.
 - Wings' own plugins install and update from a GitHub link, like `github.com/josippapez/Wings/plugins/hud`.
