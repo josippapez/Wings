@@ -4,6 +4,16 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.18 · 2026-10-12
+
+- Command palette on ⌘K (Ctrl+Shift+K elsewhere): search commands, projects, tabs, agents (needing you first), recent sessions and plugin buttons. Tab, Pane and View menus in the menu bar with their shortcuts, ⌘]/⌘[ for next/previous tab, and a global shortcut (default ⌃⌥J, changeable or off in Settings, Keyboard) that brings Wings forward and goes to the agent that needs you. All of them share one list of commands.
+- Rename and reorder: double-click a tab or pane title (or right-click, Rename) to name it; Enter saves, Esc cancels, empty goes back to automatic. Tabs that would read the same get the shortest folder tail that tells them apart, else a number. Drag tabs to reorder them, drag projects in the sidebar to reorder them, and drag a pane by its header onto a tab (or +) to move it there, or use the right-click menus (Move left/right, Move up/down, Move to tab). Move Tab Left/Right are in the Tab menu and palette. Names and order are saved with your tabs.
+- Review a diff and send it back to the agent: hover a line number in the diff viewer and click the + (drag for several lines) to comment. Your comments list in a side panel; Send to agent pastes them as one message (file:line, the quoted code, your comment) into the agent in that repo, or the pane you pick, without pressing Enter. Send and submit presses Enter too. Plugins can pass `cwd` to `openDiff` so the right agent is preselected: Changes 0.2.4 and Session detail 0.4.3 do.
+- Notification bell in the title bar: the last 100 times an agent needed you or finished, and plugin notifications, newest first with a Go to pane button and an unread count. A dismissed toast is no longer gone for good.
+- New Worktrees plugin: a sidebar listing each open project's git worktrees with merged, upstream gone, uncommitted, locked and missing-folder flags. Removing one, or all merged and clean ones, asks first and never forces; Prune clears the records of folders that are gone.
+- New agent in a worktree: right-click a project, New agent in worktree, pick a branch name, the branch to start from and Claude Code, opencode or a shell. Wings runs `git worktree add --no-track -b` into `<project>-worktrees/<branch>` beside the repo (never inside it), lists it under its project and starts the agent in a new tab there. It refuses an existing folder or branch and shows git's error.
+- Open in editor: a project's context menu opens its folder in VS Code, Cursor or Zed (their command-line tools) or another editor app in /Applications (Xcode, Android Studio, Sublime Text, JetBrains and more). Choose the default in Settings, Editor.
+
 ## 0.1.17 · 2026-10-12
 
 - Less graphics memory for terminals: about 100 MB less from the scrollbars, and the tab you just left keeps its fast renderer for 30 seconds instead of for good. Measured in a WebKit test with 5 panes at Retina size: from about 300 MB of graphics to about 120 MB.

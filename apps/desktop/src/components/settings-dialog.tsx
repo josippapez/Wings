@@ -4,14 +4,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useEffect, useRef } from "react";
-import { KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CodeIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
+import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import type { PluginView } from "@/lib/api";
 import { pluginSettingsSection } from "@/lib/plugin-pages";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
-import type { CursorInactiveStyle, CursorStyle, OptionAsMeta, TerminalKeys, TerminalLook } from "@/lib/terminal";
+import { acceleratorFromEvent, DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
+import { isMac, type CursorInactiveStyle, type CursorStyle, type OptionAsMeta, type TerminalKeys, type TerminalLook } from "@/lib/terminal";
 
 const optionChoices: { value: OptionAsMeta; label: string }[] = [
   { value: "off", label: "Off" },
@@ -59,6 +61,36 @@ function Row(props: { id: string; label: string; hint?: string; children: React.
   );
 }
 
+/** Shows a shortcut; click it, then press a new one. Escape cancels, and Backspace puts the default back. */
+function HotkeyRecorder(props: { value: string; disabled: boolean; onChange: (accelerator: string) => void }) {
+  const [recording, setRecording] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={props.disabled}
+      aria-label="Global shortcut. Press to change it"
+      onClick={() => setRecording(true)}
+      onBlur={() => setRecording(false)}
+      onKeyDown={(e) => {
+        if (!recording) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "Escape") return setRecording(false);
+        if (e.key === "Backspace") props.onChange(DEFAULT_GLOBAL_HOTKEY.accelerator);
+        else {
+          const accelerator = acceleratorFromEvent(e);
+          if (!accelerator) return;
+          props.onChange(accelerator);
+        }
+        setRecording(false);
+      }}
+      className="h-8 min-w-24 rounded-md border border-hairline bg-white/[0.04] px-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+    >
+      {recording ? "Press a shortcut…" : hotkeyLabel(props.value, isMac)}
+    </button>
+  );
+}
+
 /** Rows grouped on one card, as in System Settings. */
 function Group(props: { children: React.ReactNode }) {
   return <div className="divide-y divide-hairline rounded-xl border border-hairline bg-white/[0.03]">{props.children}</div>;
@@ -86,10 +118,29 @@ const sections = [
   { id: "cursor", label: "Cursor", icon: TextCursorIcon },
   { id: "history", label: "History and selection", icon: ScrollTextIcon },
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
+  { id: "editor", label: "Editor", icon: CodeIcon },
   { id: "plugins", label: "Plugins", icon: PuzzleIcon },
 ] as const;
 
 const sectionTrigger = "h-8 flex-none justify-start gap-2 rounded-md px-2 text-[13px] data-active:bg-white/[0.07] dark:group-data-[variant=line]/tabs-list:data-active:bg-white/[0.07] after:hidden";
+
+/** Which editor "Open in editor" uses. */
+function EditorSettings() {
+  const editors = useEditors();
+  const [chosen, choose] = useDefaultEditorId();
+  const current = defaultEditor(editors, chosen);
+  return (
+    <Group>
+      <Row
+        id="default-editor"
+        label="Open projects in"
+        hint={current ? "The first item of a project's Open in menu. The others are one click further." : "No editor found. Install VS Code, Cursor or Zed, or an editor app in /Applications."}
+      >
+        {current && <Choice id="default-editor" items={editors.map((e) => ({ value: e.id, label: e.name }))} value={current.id} onChange={choose} />}
+      </Row>
+    </Group>
+  );
+}
 
 /** One of Wings' own sections, or a plugin's settings page as `plugin:<id>`. */
 export type SettingsSection = (typeof sections)[number]["id"] | ReturnType<typeof pluginSettingsSection>;
@@ -143,6 +194,8 @@ export function SettingsDialog(props: {
   host: PluginHost | null;
   keys: TerminalKeys;
   onKeysChange: (keys: TerminalKeys) => void;
+  hotkey: GlobalHotkey;
+  onHotkeyChange: (hotkey: GlobalHotkey) => void;
   look: TerminalLook;
   onLookChange: (look: TerminalLook) => void;
 }) {
@@ -275,7 +328,17 @@ export function SettingsDialog(props: {
                     onCheckedChange={(on) => props.onKeysChange({ ...keys, shiftReturnSendsMetaReturn: on })}
                   />
                 </Row>
+                <Row id="global-hotkey" label="Bring Wings forward from any app" hint="Shows Wings and goes to the agent that needs you, or stays where you were if none does.">
+                  <div className="flex items-center gap-3">
+                    <HotkeyRecorder value={props.hotkey.accelerator} disabled={!props.hotkey.enabled} onChange={(accelerator) => props.onHotkeyChange({ ...props.hotkey, accelerator })} />
+                    <Switch id="global-hotkey" checked={props.hotkey.enabled} onCheckedChange={(enabled) => props.onHotkeyChange({ ...props.hotkey, enabled })} />
+                  </div>
+                </Row>
               </Group>
+            </TabsContent>
+            <TabsContent value="editor" className="flex flex-col gap-3 p-6">
+              <h3 className="text-[15px] font-semibold">Editor</h3>
+              <EditorSettings />
             </TabsContent>
             <TabsContent value="plugins" className="min-h-0 flex-1">
               <PluginsSection {...props.pluginsProps} />

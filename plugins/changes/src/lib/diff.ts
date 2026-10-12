@@ -64,7 +64,7 @@ export const against = (mode: Mode, label: string) => (mode === "branch" ? `Sinc
 /** Opens the viewer at once in its loading state and fills it when git answers. */
 export async function openChanges(root: string, mode: Mode, path: string | null) {
   const title = path ?? (mode === "branch" ? "Changes on this branch" : "Uncommitted changes");
-  const { id } = await wings.openDiff({ title, subtitle: `${basename(root)} · ${mode === "branch" ? "This branch" : "Working tree against HEAD"}` });
+  const { id } = await wings.openDiff({ title, cwd: root, subtitle: `${basename(root)} · ${mode === "branch" ? "This branch" : "Working tree against HEAD"}` });
   try {
     const c = await changes(root, mode);
     if (c.files.length === 0) return void (await wings.updateDiff(id, { error: mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes." }));

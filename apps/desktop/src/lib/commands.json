@@ -1,0 +1,39 @@
+{
+  "_": "The commands every surface shares: the shortcuts (lib/commands.ts), the command palette, and the Tab, Pane and View menus (src-tauri/src/menu.rs reads this file). key is the character typed; also lists others that count; extra is Shift on macOS and Alt elsewhere, where Ctrl+Shift is already the modifier (absent: either); alt always needs Alt (arrows); native means the menu owns the key, so the window doesn't match it; plain means ⌘ or plain Ctrl, as in CmdOrCtrl; menu names the menu bar menu; hotkey.default is the global shortcut that brings Wings forward; gap puts a separator above the item.",
+  "commands": [
+    { "id": "new-tab", "title": "New Tab", "group": "Tab", "menu": "Tab", "key": "t" },
+    { "id": "close-tab", "title": "Close Tab", "group": "Tab", "menu": "Tab" },
+    { "id": "next-tab", "title": "Next Tab", "group": "Tab", "menu": "Tab", "gap": true, "key": "]", "also": ["}"] },
+    { "id": "previous-tab", "title": "Previous Tab", "group": "Tab", "menu": "Tab", "key": "[", "also": ["{"] },
+    { "id": "move-tab-left", "title": "Move Tab Left", "group": "Tab", "menu": "Tab", "gap": true },
+    { "id": "move-tab-right", "title": "Move Tab Right", "group": "Tab", "menu": "Tab" },
+
+    { "id": "split-right", "title": "Split Right", "group": "Pane", "menu": "Pane", "key": "d", "extra": false },
+    { "id": "split-down", "title": "Split Down", "group": "Pane", "menu": "Pane", "key": "d", "extra": true },
+    { "id": "close-pane", "title": "Close Pane", "group": "Pane", "key": "w", "native": true },
+    { "id": "zoom-pane", "title": "Zoom Pane", "group": "Pane", "menu": "Pane" },
+    { "id": "focus-left", "title": "Focus Pane Left", "group": "Pane", "menu": "Pane", "gap": true, "key": "ArrowLeft", "alt": true },
+    { "id": "focus-right", "title": "Focus Pane Right", "group": "Pane", "menu": "Pane", "key": "ArrowRight", "alt": true },
+    { "id": "focus-up", "title": "Focus Pane Above", "group": "Pane", "menu": "Pane", "key": "ArrowUp", "alt": true },
+    { "id": "focus-down", "title": "Focus Pane Below", "group": "Pane", "menu": "Pane", "key": "ArrowDown", "alt": true },
+
+    { "id": "toggle-sidebar", "title": "Toggle Sidebar", "group": "View", "menu": "View", "key": "b", "also": ["\\"] },
+    { "id": "next-agent", "title": "Next Agent Needing You", "group": "View", "menu": "View", "key": "j", "extra": false },
+    { "id": "previous-agent", "title": "Previous Agent Needing You", "group": "View", "menu": "View", "key": "j", "extra": true },
+    { "id": "find", "title": "Find in Pane", "group": "View", "menu": "View", "key": "f" },
+    { "id": "palette", "title": "Command Palette", "group": "View", "menu": "View", "key": "k" },
+    { "id": "history", "title": "Past Sessions", "group": "View", "menu": "View" },
+    { "id": "font-up", "title": "Increase Font Size", "group": "View", "menu": "View", "gap": true, "key": "+", "also": ["="] },
+    { "id": "font-down", "title": "Decrease Font Size", "group": "View", "menu": "View", "key": "-", "also": ["_"] },
+    { "id": "font-reset", "title": "Reset Font Size", "group": "View", "menu": "View", "key": "0" },
+
+    { "id": "notifications", "title": "Show Notifications", "group": "View" },
+    { "id": "send-review", "title": "Send Review to Agent", "group": "View" },
+    { "id": "worktree-agent", "title": "New Agent in Worktree", "group": "Tab" },
+    { "id": "open-in-editor", "title": "Open Project in Editor", "group": "App" },
+    { "id": "settings", "title": "Settings", "group": "App", "key": ",", "native": true, "plain": true },
+    { "id": "reload", "title": "Reload Interface", "group": "App", "key": "r", "extra": false, "devOnly": true }
+  ],
+  "hotkey": { "default": "Ctrl+Alt+KeyJ" },
+  "tabs": { "title": "Go to Tab", "group": "Tab", "keys": "1-9" }
+}

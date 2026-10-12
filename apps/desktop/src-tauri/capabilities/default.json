@@ -17,6 +17,10 @@
     "allow-spaces-list",
     "allow-spaces-add",
     "allow-spaces-remove",
+    "allow-worktree-info",
+    "allow-worktree-create",
+    "allow-editors-list",
+    "allow-editor-open",
     "allow-sessions-list",
     "allow-pane-create",
     "allow-pane-write",
@@ -77,6 +81,7 @@
     "allow-cli-status",
     "allow-cli-install",
     "allow-cli-dismiss",
-    "allow-history-search"
+    "allow-history-search",
+    "allow-hotkey-set"
   ]
 }

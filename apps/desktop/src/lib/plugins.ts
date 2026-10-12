@@ -57,6 +57,8 @@ export type DiffView = {
   pluginId: string;
   title: string;
   subtitle?: string;
+  /** The repo or folder the diff is of; the review's Send to agent offers the agent working there first. */
+  cwd?: string;
   patch?: string;
   comments?: DiffComment[];
   error?: string;
@@ -100,6 +102,8 @@ type Callbacks = {
   hideView: (pluginId: string, viewId: string) => void;
   /** Opens Wings Settings at the plugin's own settings page. */
   openSettings: (pluginId: string) => void;
+  /** A plugin's notification went out; the notification list keeps it. */
+  notified: (pluginName: string, title: string, body: string) => void;
 };
 
 type Running = {
@@ -580,12 +584,14 @@ export class PluginHost {
         const tool = await invoke<ToolStatus>("plugin_tool", { pluginId, program: String(p.program) });
         return requestToolInstall({ pluginId, pluginName: plugin.plugin.name, tool });
       }
-      case "notify":
-        return invoke("plugin_notify", {
-          pluginId,
-          title: typeof p.title === "string" ? p.title : "",
-          body: typeof p.body === "string" ? p.body : "",
-        });
+      case "notify": {
+        const title = typeof p.title === "string" ? p.title : "";
+        const body = typeof p.body === "string" ? p.body : "";
+        // Rust checks the permission first, so only a notification Wings allowed reaches the list.
+        const sent = await invoke("plugin_notify", { pluginId, title, body });
+        this.callbacks.notified(plugin.plugin.name, title.slice(0, 200), body.slice(0, 300));
+        return sent;
+      }
       case "fetch": {
         const headers = p.headers && typeof p.headers === "object" ? (p.headers as Record<string, unknown>) : {};
         return invoke("plugin_fetch", {
@@ -690,7 +696,7 @@ export class PluginHost {
         const title = str(p.title, 200);
         if (!title) throw new Error("openDiff needs a title");
         const id = `${pluginId}:${this.nextDiff++}`;
-        this.callbacks.openDiff({ id, pluginId, title, subtitle: str(p.subtitle, 200), ...cleanDiffUpdate(p) });
+        this.callbacks.openDiff({ id, pluginId, title, subtitle: str(p.subtitle, 200), cwd: str(p.cwd, 1000), ...cleanDiffUpdate(p) });
         return { id };
       }
       case "updateDiff":

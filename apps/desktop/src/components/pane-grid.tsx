@@ -1,16 +1,19 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Columns2Icon, Maximize2Icon, Minimize2Icon, Rows2Icon, XIcon } from "lucide-react";
+import { Columns2Icon, Maximize2Icon, Minimize2Icon, PencilIcon, Rows2Icon, SquarePlusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 
 import { FindBar } from "@/components/find-bar";
 import { IconButton } from "@/components/icon-button";
+import { InlineName } from "@/components/inline-name";
 import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
-import type { LayoutNode } from "@/lib/layout";
+import { paneNames, type LayoutNode } from "@/lib/layout";
 import type { Badge } from "@/lib/plugins";
+import { trackDrag } from "@/lib/pointer-drag";
 import { shortcutLabel, terminals } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
@@ -20,9 +23,16 @@ export type PaneActions = {
   close: (paneKey: string) => void;
   toggleZoom: (paneKey: string) => void;
   resize: (splitId: string, ratio: number) => void;
+  /** An empty name goes back to the automatic one. */
+  rename: (paneKey: string, name: string) => void;
+  /** Moves the pane into another tab of the same project, or into a new one. */
+  moveTo: (paneKey: string, tabId: string | "new") => void;
 };
 
 type GridProps = {
+  tabId: string;
+  /** The project's other terminal tabs, for "Move to tab". */
+  moveTargets: { id: string; title: string }[];
   layout: LayoutNode;
   visible: boolean;
   /** Hidden but recently shown: its terminals keep their WebGL renderers. */
@@ -115,6 +125,49 @@ function PaneCard(props: GridProps & { paneKey: string }) {
   const zoomed = props.zoomedPane === paneKey;
   const label = props.labels[paneKey];
   const session = terminals.get(paneKey);
+  const [editing, setEditing] = useState(false);
+  /** A rename chosen in the context menu starts once the menu has closed, so closing doesn't take the focus back. */
+  const renameAfterMenu = useRef(false);
+  const named = paneKey in paneNames(props.layout);
+  const others = props.moveTargets.filter((t) => t.id !== props.tabId);
+
+  /**
+   * Drag the pane by its header onto another tab, or onto + for a new one. The ghost and the drop highlight are set
+   * straight on the DOM: a drag changes no React state, and nothing here resizes the pane area until the drop.
+   */
+  function dragPane(e: React.PointerEvent) {
+    if (editing || (e.target as HTMLElement).closest("button,input,a,[role=separator]")) return;
+    let ghost: HTMLElement | null = null;
+    let over: HTMLElement | null = null;
+    const target = (x: number, y: number) => {
+      const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-pane-drop],[data-pane-drop-new]") ?? null;
+      return el && el.dataset.tabId === props.tabId ? null : el;
+    };
+    trackDrag(e, {
+      onStart: () => {
+        ghost = document.createElement("div");
+        ghost.textContent = label?.title ?? "Pane";
+        ghost.className = "pointer-events-none fixed top-0 left-0 z-[100] max-w-56 truncate rounded-lg border border-hairline-strong bg-popover px-2.5 py-1 text-[12px] font-medium text-popover-foreground shadow-lg";
+        document.body.append(ghost);
+        document.body.style.cursor = "grabbing";
+      },
+      onMove: ({ x, y }) => {
+        if (ghost) ghost.style.transform = `translate(${x + 12}px, ${y + 12}px)`;
+        const next = target(x, y);
+        if (next === over) return;
+        over?.removeAttribute("data-drop-over");
+        next?.setAttribute("data-drop-over", "");
+        over = next;
+      },
+      onEnd: ({ x, y }, cancelled) => {
+        const drop = cancelled ? null : target(x, y);
+        over?.removeAttribute("data-drop-over");
+        ghost?.remove();
+        document.body.style.cursor = "";
+        if (drop) actions.moveTo(paneKey, drop.dataset.tabId ?? "new");
+      },
+    });
+  }
 
   // A split restructures the tree and remounts this card, so the terminal re-attaches to the new host here.
   useEffect(() => {
@@ -145,11 +198,33 @@ function PaneCard(props: GridProps & { paneKey: string }) {
           : "border-hairline",
       )}
     >
-      <div className="flex h-7.5 shrink-0 items-center gap-2 pr-1 pl-3.5">
+      <ContextMenu
+        onOpenChangeComplete={(open) => {
+          if (open || !renameAfterMenu.current) return;
+          renameAfterMenu.current = false;
+          setEditing(true);
+        }}
+      >
+      <ContextMenuTrigger
+        render={<div onPointerDown={(e) => dragPane(e)} />}
+        className="flex h-7.5 shrink-0 cursor-grab items-center gap-2 pr-1 pl-3.5 active:cursor-grabbing"
+      >
         <PaneIcon agent={label?.agent} />
-        <span className={cn("max-w-[50%] truncate text-[13px] font-semibold", !focused && "text-muted-foreground")}>
-          {label?.title}
-        </span>
+        {editing ? (
+          <InlineName
+            initial={label?.title ?? ""}
+            label="Pane name"
+            className="h-6 w-40 text-[13px] font-semibold"
+            onDone={(name) => {
+              setEditing(false);
+              if (name !== null) actions.rename(paneKey, name);
+            }}
+          />
+        ) : (
+          <span onDoubleClick={() => setEditing(true)} className={cn("max-w-[50%] truncate text-[13px] font-semibold", !focused && "text-muted-foreground")}>
+            {label?.title}
+          </span>
+        )}
         {label?.detail && <span className="min-w-0 truncate text-[12px] text-muted-foreground">{label.detail}</span>}
         <div className="flex min-w-0 flex-1 pl-2">
           <OverflowRow
@@ -192,7 +267,39 @@ function PaneCard(props: GridProps & { paneKey: string }) {
             <XIcon />
           </IconButton>
         </div>
-      </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent side="bottom">
+        <ContextMenuItem onClick={() => (renameAfterMenu.current = true)}>
+          <PencilIcon />
+          Rename
+        </ContextMenuItem>
+        {named && (
+          <ContextMenuItem onClick={() => actions.rename(paneKey, "")}>
+            <SquareTerminalIcon />
+            Use automatic name
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <SquareTerminalIcon />
+            Move to tab
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {others.map((t) => (
+              <ContextMenuItem key={t.id} onClick={() => actions.moveTo(paneKey, t.id)}>
+                <span className="max-w-56 truncate">{t.title}</span>
+              </ContextMenuItem>
+            ))}
+            {others.length > 0 && <ContextMenuSeparator />}
+            <ContextMenuItem onClick={() => actions.moveTo(paneKey, "new")}>
+              <SquarePlusIcon />
+              New tab
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      </ContextMenuContent>
+      </ContextMenu>
       <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
       {session && <FindBar session={session} />}
     </motion.section>

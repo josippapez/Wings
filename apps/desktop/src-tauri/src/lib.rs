@@ -3,8 +3,10 @@ mod claude;
 #[cfg(unix)]
 mod claude_settings;
 mod detect;
+mod editors;
 mod gitwatch;
 mod history;
+mod hotkey;
 mod menu;
 mod opencode;
 #[cfg(unix)]
@@ -30,6 +32,7 @@ mod spaces;
 mod statusline;
 mod tail;
 mod tools;
+mod worktree;
 
 use std::{
     collections::HashMap,
@@ -94,6 +97,34 @@ fn spaces_add(state: State<AppState>, path: String) -> SpaceView {
     let view = spaces::view(&state.spaces.lock().unwrap().add(&path));
     gitwatch::resync();
     view
+}
+
+#[tauri::command(async)]
+fn worktree_info(state: State<AppState>, space_id: String) -> Res<worktree::WorktreeInfo> {
+    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
+    worktree::info(std::path::Path::new(&path))
+}
+
+/// Makes a git worktree for a new branch and adds it to the sidebar under its project.
+#[tauri::command(async)]
+fn worktree_create(state: State<AppState>, space_id: String, branch: String, base: String) -> Res<SpaceView> {
+    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
+    let folder = worktree::create(std::path::Path::new(&path), &branch, &base)?;
+    let view = spaces::view(&state.spaces.lock().unwrap().add_worktree(&folder.to_string_lossy(), &space_id));
+    gitwatch::resync();
+    Ok(view)
+}
+
+#[tauri::command(async)]
+fn editors_list() -> Vec<editors::EditorView> {
+    editors::list()
+}
+
+/// Opens one of your projects in an editor. Takes a project, not a path, so the page can't open other folders.
+#[tauri::command(async)]
+fn editor_open(state: State<AppState>, editor_id: String, space_id: String) -> Res<()> {
+    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
+    editors::open(&editor_id, std::path::Path::new(&path))
 }
 
 #[tauri::command]
@@ -1235,6 +1266,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // No shortcut until the window turns the setting on (`hotkey::hotkey_set`).
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .menu(menu::build)
         .on_menu_event(menu::handle)
         .register_uri_scheme_protocol("wings-plugin", |ctx, request| serve_plugin_file(ctx.app_handle(), &request))
@@ -1308,8 +1341,13 @@ pub fn run() {
             spaces_list,
             spaces_add,
             spaces_remove,
+            worktree_info,
+            worktree_create,
+            editors_list,
+            editor_open,
             sessions_list,
             history::history_search,
+            hotkey::hotkey_set,
             pane_create,
             pane_write,
             pane_resize,

@@ -24,7 +24,7 @@ export async function openChanges(sessionId: string, path: string | null) {
   const file = path == null ? null : s.files.has(path) ? inside(s.cwd, path) : null;
   if (path != null && !file) return;
   const title = file ? basename(file) : "All changes";
-  const { id } = await wings.openDiff({ title, subtitle: file ? "Working tree against HEAD" : `Working tree against HEAD · ${basename(s.cwd)}` });
+  const { id } = await wings.openDiff({ title, cwd: s.cwd, subtitle: file ? "Working tree against HEAD" : `Working tree against HEAD · ${basename(s.cwd)}` });
   try {
     const args = file ? ["diff", "HEAD", "--no-color", "--no-ext-diff", "--", file] : ["diff", "HEAD", "--no-color", "--no-ext-diff"];
     const r = await wings.exec("git", args, { cwd: s.cwd });

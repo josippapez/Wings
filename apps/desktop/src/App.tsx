@@ -1,10 +1,14 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import { MotionConfig } from "motion/react";
 
+import { CommandPalette } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
+import { NotificationBell } from "@/components/notification-bell";
+import { notificationsReducer } from "@/lib/notifications";
+import { reviewTargets, sendToPane } from "@/lib/review";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -30,14 +34,25 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
-import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
+import { findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setRatio, split, type LayoutNode } from "@/lib/layout";
+import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
+import { tabTitles } from "@/lib/tab-names";
+import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
-import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
+import { createCommands, shortcutText } from "@/lib/commands";
+import { defaultEditor, openInEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
+import { DEFAULT_GLOBAL_HOTKEY, type GlobalHotkey } from "@/lib/hotkey";
+import type { PaletteItem } from "@/lib/palette";
+import { openNotifications, openReviewSend } from "@/lib/ui-events";
+import { stateLabel } from "@/components/status-dot";
+import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { isShellCommand, resumeCommand, shellQuote } from "@/lib/resume";
 import { UpdateDialog } from "@/components/update-dialog";
+import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
-type PaneTab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
+/** `name` is what you called the tab; absent means its automatic title. */
+type PaneTab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null; name?: string };
 /** A tab of terminal panes, or a plugin view open as a tab. */
 type Tab = PaneTab | ViewTab;
 /** The terminal tab holding a pane. */
@@ -49,6 +64,8 @@ type SavedWorkspace = {
   version: 1;
   activeSpaceId: string | null;
   activeTabBySpace: Record<string, string>;
+  /** Project ids in the order you dragged them into. Absent in older files. */
+  spaceOrder?: string[];
   sidebarOpen: boolean;
   /** Sidebar widths in pixels, as last dragged. */
   widths?: Widths;
@@ -57,6 +74,8 @@ type SavedWorkspace = {
   fontSize: number;
   /** The terminal's keyboard settings. */
   terminalKeys?: TerminalKeys;
+  /** The shortcut that brings Wings forward from any app. */
+  globalHotkey?: GlobalHotkey;
   /** The terminal's font, cursor, scrollback, copy and contrast settings. */
   terminalLook?: TerminalLook;
   tabs: PaneTab[];
@@ -204,6 +223,8 @@ export default function App() {
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
+  const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("text");
   const [settingsPlugin, setSettingsPlugin] = useState<string | null>(null);
@@ -282,15 +303,18 @@ export default function App() {
   const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
   const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.kind === "claude" && a.sessionId ? [a.sessionId] : []))), [agents]);
 
+  /** The names you gave panes, kept in their tabs' layouts. */
+  const names = useMemo(() => Object.assign({}, ...tabs.map((t) => (isViewTab(t) ? {} : paneNames(t.layout)))) as Record<string, string>, [tabs]);
   const labels = useMemo(() => {
     const out: Record<string, PaneLabelInfo> = {};
     for (const [key, meta] of Object.entries(panes)) {
       const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
       const info = meta.paneId ? paneInfo[meta.paneId] : undefined;
-      out[key] = paneLabel(agent, info, spaces.find((s) => s.id === meta.spaceId));
+      const label = paneLabel(agent, info, spaces.find((s) => s.id === meta.spaceId));
+      out[key] = names[key] ? { ...label, title: names[key] } : label;
     }
     return out;
-  }, [panes, agentsByPane, paneInfo, spaces]);
+  }, [panes, agentsByPane, paneInfo, spaces, names]);
 
   const updateTab = useCallback((tabId: string, patch: (t: PaneTab) => Partial<PaneTab>) => {
     setTabs((ts) => ts.map((t) => (t.id === tabId && !isViewTab(t) ? { ...t, ...patch(t) } : t)));
@@ -433,6 +457,48 @@ export default function App() {
     [createPane, updateTab],
   );
 
+  /** Names a tab; an empty name goes back to the automatic one. */
+  const renameTab = useCallback((tabId: string, name: string) => {
+    setTabs((ts) =>
+      ts.map((t) => {
+        if (t.id !== tabId || isViewTab(t)) return t;
+        const { name: _old, ...rest } = t;
+        return name.trim() ? { ...rest, name: name.trim() } : rest;
+      }),
+    );
+    // Back to the terminal you were typing in.
+    requestAnimationFrame(() => {
+      const tab = tabsRef.current.find((t) => t.id === tabId);
+      if (tab && !isViewTab(tab)) terminals.get(tab.focusedPane)?.focus();
+    });
+  }, []);
+
+  /** Moves a tab to a place among its project's tabs. */
+  const moveTabTo = useCallback((tabId: string, index: number) => setTabs((ts) => moveTab(ts, tabId, index)), []);
+
+  /** Moves a pane into another tab of its project, or into a new one; the terminal keeps running, only its card moves. */
+  const movePane = useCallback((key: string, target: string | "new") => {
+    const from = tabOfPane(tabsRef.current, key);
+    const leaf = from && findPane(from.layout, key);
+    if (!from || !leaf || target === from.id) return;
+    const to = target === "new" ? null : tabsRef.current.find((t): t is PaneTab => t.id === target && !isViewTab(t) && t.spaceId === from.spaceId);
+    if (target !== "new" && !to) return;
+    const rest = remove(from.layout, key);
+    const newId = crypto.randomUUID();
+    setTabs((ts) => {
+      const moved = ts.flatMap((t): Tab[] => {
+        if (t.id === from.id) return rest ? [{ ...(t as PaneTab), layout: rest, focusedPane: (t as PaneTab).focusedPane === key ? paneIds(rest)[0] : (t as PaneTab).focusedPane, zoomedPane: (t as PaneTab).zoomedPane === key ? null : (t as PaneTab).zoomedPane }] : [];
+        if (to && t.id === to.id) {
+          const dest = t as PaneTab;
+          return [{ ...dest, layout: insertPane(dest.layout, dest.focusedPane, "row", leaf), focusedPane: key, zoomedPane: null }];
+        }
+        return [t];
+      });
+      return to ? moved : [...moved, { id: newId, spaceId: from.spaceId, layout: leaf, focusedPane: key, zoomedPane: null }];
+    });
+    setActiveTabBySpace((m) => ({ ...m, [from.spaceId]: to?.id ?? newId }));
+  }, []);
+
   const actions: PaneActions = useMemo(
     () => ({
       focus: focusPane,
@@ -442,12 +508,17 @@ export default function App() {
         const tab = tabOfPane(tabsRef.current, key);
         if (tab) updateTab(tab.id, (t) => ({ zoomedPane: t.zoomedPane === key ? null : key, focusedPane: key }));
       },
+      rename: (key, name) => {
+        const tab = tabOfPane(tabsRef.current, key);
+        if (tab) updateTab(tab.id, (t) => ({ layout: renamePane(t.layout, key, name) }));
+      },
+      moveTo: movePane,
       resize: (splitId, ratio) => {
         const tab = tabsRef.current.find((t) => t.id === activeTabId);
         if (tab) updateTab(tab.id, (t) => ({ layout: setRatio(t.layout, splitId, ratio) }));
       },
     }),
-    [focusPane, splitPane, closePane, updateTab, activeTabId],
+    [focusPane, splitPane, closePane, updateTab, movePane, activeTabId],
   );
 
   /**
@@ -464,6 +535,7 @@ export default function App() {
         setFontSize(saved.fontSize);
       }
       if (saved.terminalKeys) setTerminalKeysState({ ...DEFAULT_TERMINAL_KEYS, ...saved.terminalKeys });
+      if (saved.globalHotkey) setGlobalHotkey({ ...DEFAULT_GLOBAL_HOTKEY, ...saved.globalHotkey });
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
       const known = new Set(list.map((s) => s.id));
@@ -503,7 +575,7 @@ export default function App() {
       const running = stillRunning(saved, live, list);
       // Before any pane starts, so only panes from before a reload that nothing shows again are killed.
       await api.panesReset([...running.values()]);
-      setSpaces(list);
+      setSpaces(sortByOrder(list, saved?.spaceOrder));
       if (!restore(list, saved, running) && list[0]) selectSpace(list[0].id);
       setReady(true);
     })();
@@ -557,11 +629,13 @@ export default function App() {
       version: 1,
       activeSpaceId,
       activeTabBySpace,
+      spaceOrder: spaces.map((s) => s.id),
       sidebarOpen,
       widths,
       pinnedButtons,
       fontSize,
       terminalKeys,
+      globalHotkey,
       terminalLook,
       tabs: paneTabs,
       viewTabs,
@@ -576,7 +650,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, terminalLook]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -605,64 +679,61 @@ export default function App() {
     };
   }, [focusedPaneId]);
 
+  // Every shortcut, menu item and palette entry runs through here. A menu item with an accelerator can reach the
+  // window as a key press as well as a menu event, so the same command twice within a few ms runs once.
+  const commandsRef = useRef<ReturnType<typeof createCommands>>([]);
+  const lastRun = useRef(new Map<string, number>());
+  const runCommand = useCallback((id: string) => {
+    const now = performance.now();
+    if (now - (lastRun.current.get(id) ?? -Infinity) < 25) return;
+    lastRun.current.set(id, now);
+    if (id.startsWith("tab:")) {
+      const spaceId = activeSpaceIdRef.current;
+      const tab = tabsRef.current.filter((t) => t.spaceId === spaceId)[Number(id.slice(4))];
+      if (spaceId && tab) setActiveTabBySpace((m) => ({ ...m, [spaceId]: tab.id }));
+      return;
+    }
+    const command = commandsRef.current.find((c) => c.id === id);
+    if (command?.enabled) command.run();
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const action = shortcutFor(e);
-      if (!action) return;
+      const id = shortcutFor(e);
+      if (!id) return;
       e.preventDefault();
-      switch (action.kind) {
-        case "toggleSidebar":
-          return setSidebarOpen((o) => !o);
-        case "fontUp":
-          return setFontSize((f) => Math.min(24, f + 1));
-        case "fontDown":
-          return setFontSize((f) => Math.max(9, f - 1));
-        case "fontReset":
-          return setFontSize(DEFAULT_FONT_SIZE);
-        case "reload":
-          return reloadUi();
-        case "find":
-          return activeTab ? terminals.get(activeTab.focusedPane)?.openFind() : undefined;
-        case "nextAgent":
-        case "previousAgent": {
-          const next = nextNeedingYou(agents, focusedPaneId, action.kind === "previousAgent");
-          if (next) selectAgent(next);
-          else toast("No agent needs you", { id: "no-agent-needs-you", duration: 2000 });
-          return;
-        }
-      }
-      if (!activeSpaceId) return;
-      if (action.kind === "newTab") return openTab(activeSpaceId);
-      if (action.kind === "tab") {
-        const tab = spaceTabs[action.index];
-        if (tab) setActiveTabBySpace((m) => ({ ...m, [activeSpaceId]: tab.id }));
-        return;
-      }
-      if (!activeTab) return;
-      if (action.kind === "splitRight" || action.kind === "splitDown") {
-        return splitPane(activeTab.focusedPane, action.kind === "splitRight" ? "row" : "column");
-      }
-      if (action.kind === "focus") {
-        const next = neighborPane(activeTab.focusedPane, action.dir);
-        if (next) focusPane(next);
-      }
+      runCommand(id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeSpaceId, activeTab, spaceTabs, openTab, splitPane, focusPane, reloadUi, agents, focusedPaneId]);
+  }, [runCommand]);
 
-  // The menu owns ⌘W (so it never closes the window); it forwards it here.
+  // The menu owns ⌘W (so it never closes the window), and its Tab, Pane and View items are the commands of
+  // `commands.json`; it forwards them here.
   useEffect(() => {
     const unlisten = api.onMenu((id) => {
       if (id === "check-updates") return void checkForUpdate({ manual: true });
-      if (id === "settings") return setSettingsOpen(true);
-      if (id !== "close-pane") return;
-      const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-      if (tab && isViewTab(tab)) closeTab(tab.id);
-      else if (tab) closePane(tab.focusedPane);
+      runCommand(id.startsWith("cmd:") ? id.slice(4) : id);
     });
     return () => void unlisten.then((off) => off());
-  }, [closePane, closeTab]);
+  }, [runCommand]);
+
+  // The global shortcut is held only while it is on. Changing it releases the old one first.
+  useEffect(() => {
+    if (!ready) return;
+    api.hotkeySet(globalHotkey.enabled ? globalHotkey.accelerator : null).catch((e) => {
+      toast.error("Couldn't use that global shortcut", { id: "global-hotkey", description: String(e) });
+    });
+  }, [ready, globalHotkey]);
+
+  // Pressed from another app, Wings is already in front: go to the agent that needs you, or stay where you were.
+  useEffect(() => {
+    const unlisten = api.onGlobalHotkey(() => {
+      const next = nextNeedingYou(agentsRef.current, null);
+      if (next) selectAgentRef.current(next);
+    });
+    return () => void unlisten.then((off) => off());
+  }, []);
 
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
@@ -671,6 +742,7 @@ export default function App() {
   // Wings sends a system notification only while it's in the background (`notify_transitions` in lib.rs).
   // In front, it's a toast instead, unless you're already looking at that pane.
   const agentStates = useRef(new Map<string, AgentState>());
+  const [notifications, notify] = useReducer(notificationsReducer, []);
   const selectAgentRef = useRef(selectAgent);
   selectAgentRef.current = selectAgent;
   const agentsRef = useRef(agents);
@@ -684,17 +756,32 @@ export default function App() {
       if (was === undefined || was === agent.state) continue;
       const id = `agent-${agent.paneId}`;
       if (was === "blocked") toast.dismiss(id);
-      if (!document.hasFocus() || agent.paneId === focusedPaneId) continue;
       if (agent.state !== "blocked" && agent.state !== "done") continue;
       const name = agent.name ?? agentLabel(agent.kind);
       const project = spaces.find((s) => s.id === agent.spaceId)?.name ?? "";
-      toast(agent.state === "blocked" ? `${name} needs you` : `${name} finished`, {
+      const title = agent.state === "blocked" ? `${name} needs you` : `${name} finished`;
+      const eventId = `${agent.paneId}:${Date.now()}`;
+      // Looking at the pane with Wings in front counts as seen.
+      const seen = document.hasFocus() && agent.paneId === focusedPaneId;
+      notify({
+        type: "add",
+        event: { id: eventId, at: Date.now(), kind: agent.state, title, project, detail: agent.state === "blocked" ? (agent.waitingFor ?? "waiting for input") : "", paneId: agent.paneId, read: seen },
+      });
+      if (!document.hasFocus() || seen) continue;
+      toast(title, {
         id,
+        onDismiss: () => notify({ type: "read", id: eventId }),
         icon: <StatusDot state={agent.state} />,
         description: agent.state === "blocked" ? `${project}: ${agent.waitingFor ?? "waiting for input"}` : project,
         // Waiting on you stays up until you answer.
         duration: agent.state === "blocked" ? Infinity : 6000,
-        action: { label: "Go to pane", onClick: () => selectAgentRef.current(agent) },
+        action: {
+          label: "Go to pane",
+          onClick: () => {
+            notify({ type: "read", id: eventId });
+            selectAgentRef.current(agent);
+          },
+        },
       });
     }
   }, [agents]);
@@ -762,6 +849,8 @@ export default function App() {
         setRightSidebar(key);
         setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
       },
+      notified: (pluginName, title, body) =>
+        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false } }),
       openSettings: (pluginId) => {
         setSettingsSection(pluginSettingsSection(pluginId));
         setSettingsOpen(true);
@@ -928,6 +1017,8 @@ export default function App() {
     if (key) closePane(key);
   }
 
+  /** Each tab's title: your name, or the automatic one with what tells it from a tab that would read the same. */
+  const shown = tabTitles(spaceTabs.flatMap((t) => (isViewTab(t) ? [] : [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }])));
   const tabViews: TabView[] = spaceTabs.map((t) => {
     if (isViewTab(t)) {
       const plugin = activePlugins.find((p) => p.id === t.view.pluginId);
@@ -937,6 +1028,8 @@ export default function App() {
     return {
       id: t.id,
       label: labels[t.focusedPane],
+      title: shown[t.id],
+      named: !!t.name,
       layout: t.layout,
       focusedPane: t.focusedPane,
       state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
@@ -959,8 +1052,160 @@ export default function App() {
     onCloseAgent: closeAgent,
     onAddSpace: (path) => void addSpace(path),
     onRemoveSpace: (id) => void removeSpace(id),
+    onMoveSpace: (id, index) =>
+      setSpaces((list) => {
+        // `index` counts the projects listed at the top level; take the place of the one there now.
+        const slot = nestWorktrees(list).filter((r) => !r.child)[index]?.space.id;
+        return reorder(list, list.findIndex((s) => s.id === id), list.findIndex((s) => s.id === slot));
+      }),
   };
 
+  const editors = useEditors();
+  const [editorId] = useDefaultEditorId();
+  const editor = defaultEditor(editors, editorId);
+  const closeFocused = () => {
+    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+    if (tab && isViewTab(tab)) closeTab(tab.id);
+    else if (tab) closePane(tab.focusedPane);
+  };
+  const focusToward = (dir: "left" | "right" | "up" | "down") => {
+    const next = activeTab && neighborPane(activeTab.focusedPane, dir);
+    if (next) focusPane(next);
+  };
+  const moveActiveTab = (by: -1 | 1) => {
+    const at = spaceTabs.findIndex((t) => t.id === activeTabId);
+    if (at >= 0) moveTabTo(activeTabId!, at + by);
+  };
+  const stepTab = (by: -1 | 1) => {
+    const at = spaceTabs.findIndex((t) => t.id === activeTabId);
+    const tab = spaceTabs[(at + by + spaceTabs.length) % spaceTabs.length];
+    if (activeSpaceId && tab) setActiveTabBySpace((m) => ({ ...m, [activeSpaceId]: tab.id }));
+  };
+  const jumpToAgent = (back: boolean) => {
+    const next = nextNeedingYou(agents, focusedPaneId, back);
+    if (next) selectAgent(next);
+    else toast("No agent needs you", { id: "no-agent-needs-you", duration: 2000 });
+  };
+  const commands = createCommands({
+    project: activeSpaceId !== null,
+    terminalTab: activeTab !== null,
+    tabs: spaceTabs.length,
+    dev: import.meta.env.DEV,
+    run: {
+      "new-tab": () => activeSpaceId && openTab(activeSpaceId),
+      "close-tab": () => activeTabId && closeTab(activeTabId),
+      "next-tab": () => stepTab(1),
+      "previous-tab": () => stepTab(-1),
+      "move-tab-left": () => moveActiveTab(-1),
+      "move-tab-right": () => moveActiveTab(1),
+      "split-right": () => activeTab && splitPane(activeTab.focusedPane, "row"),
+      "split-down": () => activeTab && splitPane(activeTab.focusedPane, "column"),
+      "close-pane": closeFocused,
+      "zoom-pane": () => activeTab && actions.toggleZoom(activeTab.focusedPane),
+      "focus-left": () => focusToward("left"),
+      "focus-right": () => focusToward("right"),
+      "focus-up": () => focusToward("up"),
+      "focus-down": () => focusToward("down"),
+      "toggle-sidebar": () => setSidebarOpen((o) => !o),
+      "next-agent": () => jumpToAgent(false),
+      "previous-agent": () => jumpToAgent(true),
+      find: () => activeTab && terminals.get(activeTab.focusedPane)?.openFind(),
+      palette: () => setPaletteOpen((o) => !o),
+      history: () => setHistoryOpen(true),
+      "font-up": () => setFontSize((f) => Math.min(24, f + 1)),
+      "font-down": () => setFontSize((f) => Math.max(9, f - 1)),
+      "font-reset": () => setFontSize(DEFAULT_FONT_SIZE),
+      notifications: openNotifications,
+      "send-review": openReviewSend,
+      "worktree-agent": () => activeSpaceId && requestWorktreeAgent(activeSpaceId),
+      ...(editor && { "open-in-editor": () => activeSpaceId && openInEditor(editor, activeSpaceId) }),
+      settings: () => setSettingsOpen(true),
+      reload: reloadUi,
+    },
+  });
+  commandsRef.current = commands;
+
+  /** What the palette searches besides past sessions. Built only while it is open. */
+  const paletteItems = (): PaletteItem[] => {
+    const projectName = (id: string) => spaces.find((s) => s.id === id)?.name ?? "";
+    const opens = new Set(["history", "settings", "notifications", "send-review", "worktree-agent"]);
+    const items: PaletteItem[] = commands
+      .filter((c) => c.enabled && c.id !== "palette")
+      .map((c) => ({ id: `command:${c.id}`, kind: "command", title: c.title, subtitle: undefined, keywords: c.group, shortcut: shortcutText(c, isMac) || undefined, opensUi: opens.has(c.id), run: c.run }));
+    for (const s of spaces) {
+      items.push({ id: `project:${s.id}`, kind: "project", title: s.name, subtitle: s.path.replace(/^\/Users\/[^/]+/, "~"), keywords: s.path, run: () => selectSpace(s.id) });
+      items.push({ id: `worktree:${s.id}`, kind: "project", title: `New agent in worktree: ${s.name}`, keywords: "branch", opensUi: true, run: () => requestWorktreeAgent(s.id) });
+    }
+    for (const t of tabs) {
+      const title = isViewTab(t) ? (() => { const v = tabViews.find((x) => x.id === t.id); return v && "view" in v ? v.view.title : t.view.viewId; })() : (t.name ?? labels[t.focusedPane]?.title ?? "Terminal");
+      items.push({
+        id: `tab:${t.id}`,
+        kind: "tab",
+        title,
+        subtitle: projectName(t.spaceId),
+        run: () => {
+          setActiveSpaceId(t.spaceId);
+          setActiveTabBySpace((m) => ({ ...m, [t.spaceId]: t.id }));
+        },
+      });
+    }
+    for (const a of agents) {
+      items.push({
+        id: `agent:${a.paneId}`,
+        kind: "agent",
+        title: a.name ?? agentLabel(a.kind),
+        subtitle: `${projectName(a.spaceId)} · ${a.state === "blocked" ? (a.waitingFor ?? stateLabel.blocked) : stateLabel[a.state]}`,
+        state: a.state,
+        run: () => selectAgent(a),
+      });
+    }
+    for (const b of pluginButtons) {
+      items.push({
+        id: `plugin:${b.key}`,
+        kind: "plugin",
+        title: b.title,
+        subtitle: b.pluginId,
+        opensUi: true,
+        run: () => pressPluginButton(b, new DOMRect(window.innerWidth - 16, 44, 0, 0)),
+      });
+    }
+    return items;
+  };
+  /** The sessions the palette lists: the latest, or those matching what is typed. */
+  const paletteSessions = useCallback(
+    async (query: string): Promise<PaletteItem[]> => {
+      const found = await api.historySearch(query, {}, 8);
+      return found.sessions.flatMap((h) =>
+        h.cwd
+          ? [{ id: `session:${h.id}`, kind: "session" as const, title: h.title ?? h.firstPrompt ?? "Untitled session", subtitle: [h.cwd.split("/").pop(), h.gitBranch, h.lastActive].filter(Boolean).join(" · "), keywords: h.cwd, run: () => void launchSessionRef.current({ id: h.id, cwd: h.cwd! }, false).catch((e) => console.error(e)) }]
+          : [],
+      );
+    },
+    [],
+  );
+  const launchSessionRef = useRef(launchSession);
+  launchSessionRef.current = launchSession;
+  const focusTerminal = useCallback(() => {
+    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+    if (tab && !isViewTab(tab)) terminals.get(tab.focusedPane)?.focus();
+  }, []);
+
+  /** What a plugin button on the title bar does; `rect` is the button, which a panel opens under. */
+  const pressPluginButton = (button: PluginButton, rect: { right: number; bottom: number }) => {
+    if (button.kind === "panel") {
+      void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
+      return;
+    }
+    if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
+    if (button.kind === "tab") return void (activeSpace && showViewTab(activeSpace.id, button.pluginId, button.id));
+    if (button.kind === "window") {
+      const plugin = activePlugins.find((p) => p.id === button.pluginId);
+      if (plugin) void pluginHost.current?.openWindow(plugin, button.id).catch((e) => toast.error(String(e)));
+      return;
+    }
+    setRightSidebar((open) => (open === button.key ? null : button.key));
+    setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
+  };
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delay={500}>
@@ -973,27 +1218,27 @@ export default function App() {
             onToggleSidebar={() => setSidebarOpen((o) => !o)}
             onSelect={(id) => activeSpace && setActiveTabBySpace((m) => ({ ...m, [activeSpace.id]: id }))}
             onClose={closeTab}
+            onRename={renameTab}
+            onMove={moveTabTo}
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
             onSettings={() => setSettingsOpen(true)}
+            bell={
+              <NotificationBell
+                events={notifications}
+                onOpen={() => notify({ type: "readAll" })}
+                onClear={() => notify({ type: "clear" })}
+                onGoToPane={(paneId) => {
+                  const agent = agentsRef.current.find((a) => a.paneId === paneId);
+                  if (agent) selectAgent(agent);
+                  else toast("That pane has closed", { duration: 2000 });
+                }}
+              />
+            }
             pluginButtons={pluginButtons}
             pinned={pinnedButtons}
             onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
-            onPluginButton={(button, rect) => {
-              if (button.kind === "panel") {
-                void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
-                return;
-              }
-              if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
-              if (button.kind === "tab") return void (activeSpace && showViewTab(activeSpace.id, button.pluginId, button.id));
-              if (button.kind === "window") {
-                const plugin = activePlugins.find((p) => p.id === button.pluginId);
-                if (plugin) void pluginHost.current?.openWindow(plugin, button.id).catch((e) => toast.error(String(e)));
-                return;
-              }
-              setRightSidebar((open) => (open === button.key ? null : button.key));
-              setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
-            }}
+            onPluginButton={pressPluginButton}
             onMountPopover={async (button, container) => {
               const plugin = activePlugins.find((p) => p.id === button.pluginId);
               if (!plugin || !pluginHost.current) throw new Error(`${button.pluginId} isn't running`);
@@ -1050,6 +1295,8 @@ export default function App() {
                   ) : (
                   <PaneGrid
                     key={tab.id}
+                    tabId={tab.id}
+                    moveTargets={tabViews.flatMap((v) => ("label" in v ? [{ id: v.id, title: v.title }] : []))}
                     layout={tab.layout}
                     visible={tab.id === activeTabId}
                     keepRenderer={recentTabs.current.includes(tab.id)}
@@ -1117,6 +1364,10 @@ export default function App() {
         <DiffViewer
           diff={diff}
           onClose={() => setDiff(null)}
+          reviewTargets={(cwd) =>
+            reviewTargets({ agents: agentsRef.current, paneInfo, spaces, paneIds: Object.values(panesRef.current).flatMap((m) => (m.paneId ? [m.paneId] : [])), agentName: (a) => a.name ?? agentLabel(a.kind) }, cwd)
+          }
+          onSendReview={(paneId, text, submit) => sendToPane(api.paneWrite, paneId, text, submit)}
           onReply={async (view, replyTo, body) => {
             if (!pluginHost.current) throw new Error("Plugins aren't running");
             await pluginHost.current.sendReply(view.pluginId, view.id, replyTo, body);
@@ -1131,9 +1382,17 @@ export default function App() {
             setModal(null);
           }}
         />
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} items={paletteOpen ? paletteItems() : []} loadSessions={paletteSessions} focusTerminal={focusTerminal} />
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
         <UpdateDialog />
+        <WorktreeAgentDialog
+          spaces={spaces}
+          onCreated={(space, input) => {
+            setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
+            openTab(space.id, input);
+          }}
+        />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
@@ -1157,7 +1416,7 @@ export default function App() {
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}

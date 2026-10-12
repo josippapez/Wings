@@ -12,6 +12,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { api } from "@/lib/api";
+import { commandForKey, shortcutOf } from "@/lib/commands";
 import { editKey } from "@/lib/edit-keys";
 import { canUnloadHistory, HISTORY_SEAM, TERMINAL_UNLOAD_MS } from "@/lib/idle-unload";
 
@@ -46,67 +47,19 @@ const theme = {
 
 export const isMac = /Mac/.test(navigator.userAgent);
 
-export type Action =
-  | { kind: "newTab" | "splitRight" | "splitDown" | "toggleSidebar" | "fontUp" | "fontDown" | "fontReset" | "reload" | "nextAgent" | "previousAgent" | "find" }
-  | { kind: "tab"; index: number }
-  | { kind: "focus"; dir: "left" | "right" | "up" | "down" };
+/** The command a key press is (see `commandForKey`), or null if it isn't an app shortcut. */
+export const shortcutFor = (e: KeyboardEvent) => commandForKey(e, isMac, import.meta.env.DEV);
 
-/**
- * App shortcuts: ⌘ on macOS, Ctrl+Shift elsewhere (plain Ctrl belongs to the shell).
- * Matches the character typed, like macOS menus do, so it works on any keyboard layout
- * (on Croatian-PC, − and + aren't where they are on a US keyboard). Physical keys are only
- * the fallback for layouts that don't type Latin characters.
- */
-export function shortcutFor(e: KeyboardEvent): Action | null {
-  const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && e.shiftKey && !e.metaKey;
-  if (!mod) return null;
-  if (e.altKey && e.code.startsWith("Arrow")) {
-    return { kind: "focus", dir: e.code.slice(5).toLowerCase() as "left" | "right" | "up" | "down" };
-  }
-  const typed = e.key.length === 1 && /[\x21-\x7e]/.test(e.key) ? e.key.toLowerCase() : null;
-  const fromCode: Record<string, string> = { KeyT: "t", KeyD: "d", KeyB: "b", KeyJ: "j", KeyF: "f", KeyR: "r", Backslash: "\\", NumpadAdd: "+", NumpadSubtract: "-", Numpad0: "0" };
-  const key = typed ?? fromCode[e.code] ?? (/^Digit\d$/.test(e.code) ? e.code.slice(5) : null);
-  const extra = isMac ? e.shiftKey : e.altKey;
-  switch (key) {
-    case "t":
-      return { kind: "newTab" };
-    case "d":
-      return { kind: extra ? "splitDown" : "splitRight" };
-    case "b":
-    case "\\":
-      return { kind: "toggleSidebar" };
-    case "+":
-    case "=":
-      return { kind: "fontUp" };
-    case "-":
-    case "_":
-      return { kind: "fontDown" };
-    case "0":
-      return { kind: "fontReset" };
-    case "j":
-      // The next agent that needs you; with ⇧ the one before.
-      return { kind: extra ? "previousAgent" : "nextAgent" };
-    case "f":
-      return { kind: "find" };
-    case "r":
-      // Reloads only the UI; the terminals keep running and come back. For trying UI changes in dev.
-      return import.meta.env.DEV && !extra ? { kind: "reload" } : null;
-  }
-  if (key && /^[1-9]$/.test(key)) return { kind: "tab", index: Number(key) - 1 };
-  return null;
-}
-
-export const shortcutLabel = isMac
-  ? { newTab: "⌘T", splitRight: "⌘D", splitDown: "⇧⌘D", toggleSidebar: "⌘B", closePane: "⌘W", nextAgent: "⌘J", find: "⌘F" }
-  : {
-      newTab: "Ctrl+Shift+T",
-      splitRight: "Ctrl+Shift+D",
-      splitDown: "Ctrl+Shift+Alt+D",
-      toggleSidebar: "Ctrl+Shift+B",
-      closePane: "Ctrl+Shift+W",
-      nextAgent: "Ctrl+Shift+J",
-      find: "Ctrl+Shift+F",
-    };
+/** Shortcut labels for the buttons that show one. */
+export const shortcutLabel = {
+  newTab: shortcutOf("new-tab", isMac),
+  splitRight: shortcutOf("split-right", isMac),
+  splitDown: shortcutOf("split-down", isMac),
+  toggleSidebar: shortcutOf("toggle-sidebar", isMac),
+  closePane: shortcutOf("close-pane", isMac),
+  nextAgent: shortcutOf("next-agent", isMac),
+  find: shortcutOf("find", isMac),
+};
 
 export const DEFAULT_FONT_SIZE = 13;
 let fontSize = DEFAULT_FONT_SIZE;

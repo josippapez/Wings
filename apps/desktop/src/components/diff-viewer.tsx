@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
@@ -28,11 +29,17 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
 import type { DiffComment, DiffView } from "@/lib/plugins";
+import { quoteLines, type ReviewComment, type ReviewTarget } from "@/lib/review";
 import { cn } from "@/lib/utils";
 
 type Entry = { file: FileDiffMetadata; added: number; removed: number };
 type Thread = { root: DiffComment; replies: DiffComment[] };
+/** What sits under a line: a plugin's comment thread, a comment of yours that isn't sent yet, or the box you're typing one in. */
+type Note = { kind: "thread"; thread: Thread } | { kind: "review"; comment: ReviewComment } | { kind: "draft"; range: SelectedLineRange };
+
+const rangeLabel = (r: SelectedLineRange) => (r.start === r.end ? `line ${r.start}` : `lines ${Math.min(r.start, r.end)} to ${Math.max(r.start, r.end)}`);
 
 const changeMark: Record<FileDiffMetadata["type"], { letter: string; className: string }> = {
   new: { letter: "A", className: "text-done" },
@@ -264,10 +271,16 @@ export function DiffViewer({
   diff,
   onClose,
   onReply,
+  reviewTargets,
+  onSendReview,
 }: {
   diff: DiffView | null;
   onClose: () => void;
   onReply: (diff: DiffView, replyTo: number, body: string) => Promise<void>;
+  /** The panes your review can go to, asked when you choose one. `cwd` is the repo the diff is of, when the plugin says. */
+  reviewTargets: (cwd: string | undefined) => { targets: ReviewTarget[]; preferred: string | null };
+  /** Pastes the review into the pane; presses Enter after when `submit`. */
+  onSendReview: (paneId: string, text: string, submit: boolean) => Promise<void>;
 }) {
   const files = useMemo(() => (diff?.patch ? entries(diff.patch) : []), [diff?.patch]);
   const threads = useMemo(() => threadsByPath(diff?.comments), [diff?.comments]);
@@ -277,6 +290,10 @@ export function DiffViewer({
   const [query, setQuery] = useState("");
   const [tree, setTree] = useState(savedTree);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** Your unsent comments, kept for the diff they were written on. */
+  const [review, setReview] = useState<{ id: string | null; items: ReviewComment[] }>({ id: null, items: [] });
+  const [draft, setDraft] = useState<{ path: string; range: SelectedLineRange } | null>(null);
+  const reviewItems = review.id === diff?.id ? review.items : [];
   const loading = !!diff && diff.patch === undefined && !diff.error;
   const shown = useMemo(() => files.filter((e) => e.file.name.toLowerCase().includes(query.trim().toLowerCase())), [files, query]);
   const rows = useMemo(() => (tree ? treeRows(buildTree(shown), collapsed) : []), [tree, shown, collapsed]);
@@ -287,9 +304,28 @@ export function DiffViewer({
   const totals = files.reduce((t, e) => ({ added: t.added + e.added, removed: t.removed + e.removed }), { added: 0, removed: 0 });
   const commentCount = diff?.comments?.length ?? 0;
   const outdated = diff?.comments?.filter((c) => c.line === null && c.replyTo === null).length ?? 0;
-  const annotations: DiffLineAnnotation<Thread>[] = (current ? (threads.get(current.file.name) ?? []) : [])
-    .filter((t) => t.root.line !== null)
-    .map((t) => ({ side: t.root.side, lineNumber: t.root.line!, metadata: t }));
+  const annotations: DiffLineAnnotation<Note>[] = current
+    ? [
+        ...(threads.get(current.file.name) ?? [])
+          .filter((t) => t.root.line !== null)
+          .map((t): DiffLineAnnotation<Note> => ({ side: t.root.side, lineNumber: t.root.line!, metadata: { kind: "thread", thread: t } })),
+        ...reviewItems
+          .filter((c) => c.path === current.file.name)
+          .map((c): DiffLineAnnotation<Note> => ({ side: c.side, lineNumber: Math.max(c.start, c.end), metadata: { kind: "review", comment: c } })),
+        ...(draft && draft.path === current.file.name
+          ? [{ side: draft.range.endSide ?? draft.range.side ?? "additions", lineNumber: Math.max(draft.range.start, draft.range.end), metadata: { kind: "draft", range: draft.range } } satisfies DiffLineAnnotation<Note>]
+          : []),
+      ]
+    : [];
+
+  const addReview = (path: string, range: SelectedLineRange, body: string) => {
+    const side = range.side ?? "additions";
+    const file = files.find((e) => e.file.name === path)?.file;
+    const comment: ReviewComment = { id: crypto.randomUUID(), path, side, start: range.start, end: range.end, quote: file ? quoteLines(file, side, range.start, range.end) : [], body };
+    setReview({ id: diff?.id ?? null, items: [...reviewItems, comment] });
+    setDraft(null);
+  };
+  const removeReview = (id: string) => setReview({ id: diff?.id ?? null, items: reviewItems.filter((c) => c.id !== id) });
 
   const openComment = (url: string) => {
     if (diff) void invoke("plugin_open_url", { pluginId: diff.pluginId, url }).catch((e) => console.error(e));
@@ -353,6 +389,8 @@ export function DiffViewer({
       onOpenChange={(open) => {
         if (open) return;
         onClose();
+        setDraft(null);
+        setReview({ id: null, items: [] });
         setSelected(0);
         setQuery("");
         setCollapsed(new Set());
@@ -511,12 +549,28 @@ export function DiffViewer({
                     ))}
                   </div>
                 ) : current ? (
-                  <FileDiff<Thread>
+                  <FileDiff<Note>
                     key={`${current.file.name}-${split}`}
                     fileDiff={current.file}
                     lineAnnotations={annotations}
-                    renderAnnotation={(a) => <CommentThread thread={a.metadata} onOpen={openComment} onReply={reply} />}
-                    options={{ theme: "pierre-dark", themeType: "dark", diffStyle: split ? "split" : "unified", stickyHeader: true }}
+                    renderAnnotation={(a) =>
+                      a.metadata.kind === "thread" ? (
+                        <CommentThread thread={a.metadata.thread} onOpen={openComment} onReply={reply} />
+                      ) : a.metadata.kind === "review" ? (
+                        <ReviewNote comment={a.metadata.comment} onRemove={() => removeReview(a.metadata.kind === "review" ? a.metadata.comment.id : "")} />
+                      ) : (
+                        <ReviewDraft range={rangeLabel(a.metadata.range)} onAdd={(body) => addReview(current.file.name, a.metadata.kind === "draft" ? a.metadata.range : { start: 0, end: 0 }, body)} onCancel={() => setDraft(null)} />
+                      )
+                    }
+                    options={{
+                      theme: "pierre-dark",
+                      themeType: "dark",
+                      diffStyle: split ? "split" : "unified",
+                      stickyHeader: true,
+                      // The + that shows beside a line number: click it for one line, drag it for several.
+                      enableGutterUtility: true,
+                      onGutterUtilityClick: (range) => setDraft({ path: current.file.name, range }),
+                    }}
                   />
                 ) : (
                   <Empty>
@@ -527,6 +581,22 @@ export function DiffViewer({
                   </Empty>
                 )}
               </section>
+              {reviewItems.length > 0 && (
+                <ReviewPanel
+                  comments={reviewItems}
+                  title={diff?.title ?? ""}
+                  targets={() => reviewTargets(diff?.cwd)}
+                  onRemove={removeReview}
+                  onJump={(c) => {
+                    const at = files.findIndex((e) => e.file.name === c.path);
+                    if (at !== -1) setSelected(at);
+                  }}
+                  onSend={async (paneId, text, submit) => {
+                    await onSendReview(paneId, text, submit);
+                    setReview({ id: diff?.id ?? null, items: [] });
+                  }}
+                />
+              )}
             </motion.div>
           )}
         </AnimatePresence>

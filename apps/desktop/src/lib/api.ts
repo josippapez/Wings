@@ -1,7 +1,19 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type Space = { id: string; name: string; path: string; branch: string | null };
+export type Space = {
+  id: string;
+  name: string;
+  path: string;
+  branch: string | null;
+  /** The project this is a git worktree of, when Wings made it for a new agent. */
+  parent?: string;
+};
+
+/** An editor found on this computer. */
+export type Editor = { id: string; name: string };
+/** What the new-agent-in-a-worktree dialog offers for a project. `defaultBranch` is a ref like `origin/main`. */
+export type WorktreeInfo = { defaultBranch: string | null; branches: string[] };
 
 export type AgentState = "working" | "blocked" | "done" | "idle";
 
@@ -186,10 +198,20 @@ export const api = {
     invoke<void>("plugin_panel_toggle", { pluginId, panelId, right, bottom }),
   spacesAdd: (path: string) => invoke<Space>("spaces_add", { path }),
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),
+  worktreeInfo: (spaceId: string) => invoke<WorktreeInfo>("worktree_info", { spaceId }),
+  /** `git worktree add -b <branch> <folder beside the repo> <base>`, added to the sidebar under the project. Rejects with git's message. */
+  worktreeCreate: (spaceId: string, branch: string, base: string) => invoke<Space>("worktree_create", { spaceId, branch, base }),
+  editorsList: () => invoke<Editor[]>("editors_list"),
+  /** Opens the project's folder in the editor. Rejects with the editor's message. */
+  editorOpen: (editorId: string, spaceId: string) => invoke<void>("editor_open", { editorId, spaceId }),
   sessionsList: (spaceId: string) => invoke<SessionSummary[]>("sessions_list", { spaceId }),
   /** Past Claude Code sessions, most recent first. Every word or "quoted phrase" in `query` has to match. */
   historySearch: (query: string, filter: HistoryFilter, limit: number) =>
     invoke<HistoryResults>("history_search", { query, filter, limit }),
+  /** Makes `accelerator` (like "Ctrl+Alt+KeyJ") the shortcut that works from any app, or none with null. Rejects if it can't be used. */
+  hotkeySet: (accelerator: string | null) => invoke<void>("hotkey_set", { accelerator }),
+  /** The global shortcut was pressed; Wings is already in front. */
+  onGlobalHotkey: (cb: () => void): Promise<UnlistenFn> => listen("global-hotkey", () => cb()),
   agentsList: () => invoke<Agent[]>("agents_list"),
   gitStatus: () => invoke<Record<string, GitStatus>>("git_status"),
   gitRefresh: () => invoke<Record<string, GitStatus>>("git_refresh"),

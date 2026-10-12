@@ -1,6 +1,9 @@
-import { Fragment, useEffect, useRef, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
   CalendarIcon,
   ChartColumnIcon,
   ClockIcon,
@@ -9,12 +12,15 @@ import {
   RotateCcwClockIcon,
   ListIcon,
   PanelLeftIcon,
+  PencilIcon,
   PlusIcon,
   XIcon,
   SettingsIcon,
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { InlineName } from "@/components/inline-name";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -25,6 +31,7 @@ import { StatusDot } from "@/components/status-dot";
 import type { AgentState, Space } from "@/lib/api";
 import type { LayoutNode } from "@/lib/layout";
 import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
+import { trackDrag } from "@/lib/pointer-drag";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
@@ -122,7 +129,7 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
  * the tab, or a plugin view open as a tab.
  */
 export type TabView =
-  | { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null }
+  | { id: string; label: PaneLabelInfo; /** What the tab shows: your name for it, or the automatic title made unique. */ title: string; named: boolean; layout: LayoutNode; focusedPane: string; state: AgentState | null }
   | { id: string; view: { title: string; icon: string } };
 
 const spring = { type: "spring", stiffness: 520, damping: 38, mass: 0.8 } as const;
@@ -135,9 +142,15 @@ export function TitleBar(props: {
   onToggleSidebar: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  /** An empty name goes back to the automatic one. */
+  onRename: (id: string, name: string) => void;
+  /** Moves a tab to a place among this project's tabs. */
+  onMove: (id: string, index: number) => void;
   onNew: () => void;
   onHistory: () => void;
   onSettings: () => void;
+  /** The notification bell, shown before Past sessions. */
+  bell?: ReactNode;
   /** Sidebar and panel buttons from plugins that are on. Pinned ones and the first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
   /** Keys of the buttons you pinned to the title bar, in the order you pinned them. */
@@ -153,6 +166,10 @@ export function TitleBar(props: {
   const overflow = rest.slice(free);
   const more = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  /** A rename chosen in the context menu starts once the menu has closed, so closing doesn't take the focus back. */
+  const renameAfterMenu = useRef<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
   const tabCount = useRef(props.tabs.length);
   useEffect(() => {
     const el = list.current;
@@ -165,6 +182,53 @@ export function TitleBar(props: {
     }
     tabCount.current = props.tabs.length;
   }, [props.activeTabId, props.tabs.length]);
+
+  /** Dragging a tab sideways: it follows the pointer, and the others make room as it passes them. */
+  function dragTab(e: React.PointerEvent, id: string) {
+    const inner = e.currentTarget.closest<HTMLElement>("[data-tab-inner]");
+    const outer = inner?.parentElement;
+    if (!inner || !outer) return;
+    const from = props.tabs.findIndex((t) => t.id === id);
+    let at = from;
+    let startLeft = 0;
+    const place = (dx: number) => {
+      inner.style.transform = `translateX(${dx - (outer.getBoundingClientRect().left - startLeft)}px)`;
+    };
+    trackDrag(e, {
+      onStart: () => {
+        flushSync(() => setDragId(id));
+        startLeft = outer.getBoundingClientRect().left;
+        inner.style.zIndex = "10";
+        document.body.style.cursor = "grabbing";
+      },
+      onMove: ({ dx }) => {
+        place(dx);
+        const box = inner.getBoundingClientRect();
+        const centre = box.left + box.width / 2;
+        const others = [...(list.current?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [])].filter((el) => el !== outer);
+        const next = others.filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.left + r.width / 2 < centre;
+        }).length;
+        if (next === at) return;
+        at = next;
+        // Committed now, so the slot is where it will stay before the offset is worked out again.
+        flushSync(() => props.onMove(id, next));
+        place(dx);
+      },
+      onEnd: (_, cancelled) => {
+        if (cancelled && at !== from) flushSync(() => props.onMove(id, from));
+        document.body.style.cursor = "";
+        inner.style.transition = "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)";
+        inner.style.transform = "translateX(0)";
+        setTimeout(() => {
+          inner.style.transition = inner.style.transform = inner.style.zIndex = "";
+          setDragId(null);
+        }, 170);
+      },
+    });
+  }
+
   return (
     <header
       data-tauri-drag-region="deep"
@@ -199,61 +263,119 @@ export function TitleBar(props: {
             <AnimatePresence initial={false} mode="popLayout">
               {props.tabs.map((tab, i) => {
                 const active = tab.id === props.activeTabId;
-                const title = "view" in tab ? tab.view.title : tab.label.title;
+                const title = "view" in tab ? tab.view.title : tab.title;
                 const ViewIcon = "view" in tab ? (panelIcons[tab.view.icon] ?? GlobeIcon) : null;
                 return (
                   <motion.div
                     key={tab.id}
-                    layout="position"
+                    data-tab-id={tab.id}
+                    // A pane dropped on a terminal tab moves into it.
+                    data-pane-drop={"view" in tab ? undefined : ""}
+                    layout={dragId === tab.id ? false : "position"}
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
                     transition={spring}
-                    className="group/tab relative flex shrink-0"
+                    className="group/tab relative flex shrink-0 rounded-[10px] data-drop-over:bg-white/[0.1] data-drop-over:ring-1 data-drop-over:ring-ring"
                   >
-                    {active && (
-                      <motion.span
-                        layoutId="active-tab"
-                        transition={spring}
-                        className="absolute inset-0 rounded-[10px] border border-hairline-strong bg-white/[0.07] shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_1px_3px_rgb(0_0_0/0.25)]"
-                      />
-                    )}
-                    <TabsTrigger
-                      value={tab.id}
-                      render={<motion.button type="button" whileTap={{ scale: 0.97 }} transition={spring} />}
-                      onAuxClick={(e) => e.button === 1 && props.onClose(tab.id)}
-                      title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}`}
-                      className={cn(
-                        "relative h-8 max-w-60 flex-none justify-start gap-2 rounded-[10px] border-0 pr-8 pl-3 text-[13px] font-normal after:hidden",
-                        active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
-                      )}
+                    <ContextMenu
+                      onOpenChangeComplete={(open) => {
+                        if (open || renameAfterMenu.current !== tab.id) return;
+                        renameAfterMenu.current = null;
+                        setEditing(tab.id);
+                      }}
                     >
-                      {"view" in tab ? (
-                        ViewIcon && <ViewIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                      ) : tab.state && !tab.label.agent ? (
-                        <StatusDot state={tab.state} />
-                      ) : (
-                        <PaneIcon agent={tab.label.agent} />
-                      )}
-                      <span className="truncate font-medium">{title}</span>
-                      {"label" in tab && tab.label.detail && (
-                        <span className="hidden truncate text-muted-foreground xl:inline">{tab.label.detail}</span>
-                      )}
-                      {"layout" in tab && <LayoutGlyph layout={tab.layout} focused={tab.focusedPane} />}
-                    </TabsTrigger>
-                    <IconButton
-                      label="Close tab"
-                      onClick={() => props.onClose(tab.id)}
-                      className="absolute top-1.5 right-1.5 size-5 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5"
-                    >
-                      <XIcon />
-                    </IconButton>
+                      <ContextMenuTrigger render={<div data-tab-inner className="relative flex" />}>
+                        {active && (
+                          <motion.span
+                            // Plain while its tab is dragged, so it can't slide against the tab it belongs to.
+                            layoutId={dragId === tab.id ? undefined : "active-tab"}
+                            transition={spring}
+                            className="absolute inset-0 rounded-[10px] border border-hairline-strong bg-white/[0.07] shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_1px_3px_rgb(0_0_0/0.25)]"
+                          />
+                        )}
+                        {editing === tab.id && "label" in tab ? (
+                          <span className="relative flex h-8 items-center gap-2 pr-3 pl-3">
+                            <PaneIcon agent={tab.label.agent} />
+                            <InlineName
+                              initial={tab.title}
+                              label="Tab name"
+                              className="h-6 w-40 text-[13px] font-medium"
+                              onDone={(name) => {
+                                setEditing(null);
+                                if (name !== null) props.onRename(tab.id, name);
+                              }}
+                            />
+                          </span>
+                        ) : (
+                          <TabsTrigger
+                            value={tab.id}
+                            render={<motion.button type="button" whileTap={{ scale: 0.97 }} transition={spring} />}
+                            onAuxClick={(e) => e.button === 1 && props.onClose(tab.id)}
+                            onPointerDown={(e) => dragTab(e, tab.id)}
+                            onDoubleClick={() => "label" in tab && setEditing(tab.id)}
+                            title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}`}
+                            className={cn(
+                              "relative h-8 max-w-60 flex-none justify-start gap-2 rounded-[10px] border-0 pr-8 pl-3 text-[13px] font-normal after:hidden",
+                              active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
+                            )}
+                          >
+                            {"view" in tab ? (
+                              ViewIcon && <ViewIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                            ) : tab.state && !tab.label.agent ? (
+                              <StatusDot state={tab.state} />
+                            ) : (
+                              <PaneIcon agent={tab.label.agent} />
+                            )}
+                            <span className="truncate font-medium">{title}</span>
+                            {"label" in tab && tab.label.detail && !tab.named && (
+                              <span className="hidden truncate text-muted-foreground xl:inline">{tab.label.detail}</span>
+                            )}
+                            {"layout" in tab && <LayoutGlyph layout={tab.layout} focused={tab.focusedPane} />}
+                          </TabsTrigger>
+                        )}
+                        <IconButton
+                          label="Close tab"
+                          onClick={() => props.onClose(tab.id)}
+                          className="absolute top-1.5 right-1.5 size-5 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5"
+                        >
+                          <XIcon />
+                        </IconButton>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent side="bottom">
+                        {"label" in tab && (
+                          <ContextMenuItem onClick={() => (renameAfterMenu.current = tab.id)}>
+                            <PencilIcon />
+                            Rename
+                          </ContextMenuItem>
+                        )}
+                        {"label" in tab && tab.named && (
+                          <ContextMenuItem onClick={() => props.onRename(tab.id, "")}>
+                            <RotateCcwClockIcon />
+                            Use automatic name
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuItem disabled={i === 0} onClick={() => props.onMove(tab.id, i - 1)}>
+                          <ArrowLeftIcon />
+                          Move left
+                        </ContextMenuItem>
+                        <ContextMenuItem disabled={i === props.tabs.length - 1} onClick={() => props.onMove(tab.id, i + 1)}>
+                          <ArrowRightIcon />
+                          Move right
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => props.onClose(tab.id)}>
+                          <XIcon />
+                          Close tab
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   </motion.div>
                 );
               })}
             </AnimatePresence>
           </TabsList>
-          <IconButton label="New tab" shortcut={shortcutLabel.newTab} onClick={props.onNew} className="ml-1">
+          <IconButton label="New tab" shortcut={shortcutLabel.newTab} onClick={props.onNew} data-pane-drop-new="" className="ml-1 data-drop-over:bg-white/20 data-drop-over:text-foreground">
             <PlusIcon />
           </IconButton>
         </Tabs>
@@ -359,6 +481,7 @@ export function TitleBar(props: {
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      {props.bell}
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <RotateCcwClockIcon />
       </IconButton>

@@ -14,6 +14,9 @@ pub struct Space {
     pub id: String,
     pub name: String,
     pub path: String,
+    /// The project this folder is a git worktree of, when Wings made it for a new agent. Shown under that project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +49,17 @@ impl SpaceStore {
         space
     }
 
+    /// Adds a worktree Wings made, shown under `parent`.
+    pub fn add_worktree(&mut self, path: &str, parent: &str) -> Space {
+        if let Some(existing) = self.spaces.iter().find(|s| s.path == path) {
+            return existing.clone();
+        }
+        let space = Space { parent: Some(parent.to_string()), ..new_space(path) };
+        self.spaces.push(space.clone());
+        self.save();
+        space
+    }
+
     pub fn remove(&mut self, id: &str) {
         self.spaces.retain(|s| s.id != id);
         self.save();
@@ -68,7 +82,7 @@ impl SpaceStore {
 fn new_space(path: &str) -> Space {
     let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     // The path is unique per space, so it doubles as a stable id.
-    Space { id: path.to_string(), name, path: path.to_string() }
+    Space { id: path.to_string(), name, path: path.to_string(), parent: None }
 }
 
 pub fn view(space: &Space) -> SpaceView {

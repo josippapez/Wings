@@ -1,12 +1,17 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   CircleDashedIcon,
   CopyIcon,
   FolderIcon,
   FolderOpenIcon,
+  GitBranchIcon,
+  GitBranchPlusIcon,
   GitForkIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -26,6 +31,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Item } from "@/components/ui/item";
+import { OpenInEditorItems } from "@/components/editor-menu";
 import { GitCounts } from "@/components/git-counts";
 import { agentLabel, PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
@@ -34,7 +40,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { elapsed } from "@/lib/agents";
 import type { Agent, AgentState, GitStatus, Space } from "@/lib/api";
+import { trackDrag } from "@/lib/pointer-drag";
 import { shortcutLabel } from "@/lib/terminal";
+import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
 import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
@@ -80,11 +88,63 @@ export function Sidebar(props: {
   onCloseAgent: (agent: Agent) => void;
   onAddSpace: (path: string) => void;
   onRemoveSpace: (id: string) => void;
+  /** Moves a project to a place among the projects listed at the top level (worktrees follow their project). */
+  onMoveSpace: (id: string, index: number) => void;
 }) {
   const { spaces, agents } = props;
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? id;
   const sortedAgents = [...agents].sort((a, b) => agentOrder[a.state] - agentOrder[b.state]);
   const [refreshing, setRefreshing] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const list = useRef<HTMLElement>(null);
+  const rows = nestWorktrees(spaces);
+  const tops = rows.filter((r) => !r.child).map((r) => r.space.id);
+
+  /** Dragging a project up or down: it follows the pointer, and the others make room as it passes them. */
+  function dragSpace(e: React.PointerEvent, id: string) {
+    const inner = e.currentTarget.closest<HTMLElement>("[data-row-inner]");
+    const outer = inner?.parentElement;
+    if (!inner || !outer) return;
+    const from = tops.indexOf(id);
+    let at = from;
+    let startTop = 0;
+    const place = (dy: number) => {
+      inner.style.transform = `translateY(${dy - (outer.getBoundingClientRect().top - startTop)}px)`;
+    };
+    trackDrag(e, {
+      onStart: () => {
+        flushSync(() => setDragId(id));
+        startTop = outer.getBoundingClientRect().top;
+        inner.style.zIndex = "10";
+        document.body.style.cursor = "grabbing";
+      },
+      onMove: ({ dy }) => {
+        place(dy);
+        const box = inner.getBoundingClientRect();
+        const centre = box.top + box.height / 2;
+        const others = [...(list.current?.querySelectorAll<HTMLElement>("[data-row-top]") ?? [])].filter((el) => el !== outer);
+        const next = others.filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.top + r.height / 2 < centre;
+        }).length;
+        if (next === at) return;
+        at = next;
+        // Committed now, so the slot is where it will stay before the offset is worked out again.
+        flushSync(() => props.onMoveSpace(id, next));
+        place(dy);
+      },
+      onEnd: (_, cancelled) => {
+        if (cancelled && at !== from) flushSync(() => props.onMoveSpace(id, from));
+        document.body.style.cursor = "";
+        inner.style.transition = "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)";
+        inner.style.transform = "translateY(0)";
+        setTimeout(() => {
+          inner.style.transition = inner.style.transform = inner.style.zIndex = "";
+          setDragId(null);
+        }, 170);
+      },
+    });
+  }
 
   async function refreshGit() {
     setRefreshing(true);
@@ -124,7 +184,7 @@ export function Sidebar(props: {
 
         <ScrollArea className="min-h-0 flex-1">
           <LayoutGroup id={props.floating ? "projects-floating" : "projects"}>
-            <nav aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
+            <nav ref={list} aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
               {spaces.length === 0 && (
                 <Empty className="items-start p-2 text-left">
                   <EmptyHeader className="items-start text-left">
@@ -143,7 +203,8 @@ export function Sidebar(props: {
                   </EmptyContent>
                 </Empty>
               )}
-              {spaces.map((space) => {
+              {rows.map(({ space, child }) => {
+                const top = tops.indexOf(space.id);
                 const active = space.id === props.activeSpaceId;
                 const spaceAgents = agents.filter((a) => a.spaceId === space.id);
                 const state = rollUp(spaceAgents.map((a) => a.state));
@@ -151,10 +212,11 @@ export function Sidebar(props: {
                 const branch = status?.branch ?? space.branch;
                 return (
                   <ContextMenu key={space.id}>
-                  <ContextMenuTrigger render={<div className="group/row relative" />}>
+                  <ContextMenuTrigger render={<motion.div data-row-top={child ? undefined : ""} layout={dragId === space.id ? false : "position"} transition={spring} className="group/row relative" />}>
+                    <div data-row-inner className="relative">
                     {active && (
                       <motion.span
-                        layoutId="project-active"
+                        layoutId={dragId === space.id ? undefined : "project-active"}
                         transition={spring}
                         className="absolute inset-0 rounded-lg bg-sidebar-accent shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]"
                       />
@@ -163,12 +225,13 @@ export function Sidebar(props: {
                       size="xs"
                       render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
                       onClick={() => props.onSelectSpace(space.id)}
+                      onPointerDown={child ? undefined : (e) => dragSpace(e, space.id)}
                       aria-current={active ? "page" : undefined}
                       title={space.path}
-                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left", !active && "hover:bg-hover")}
+                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left", child && "pl-6", !active && "hover:bg-hover")}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center">
-                        {state ? <StatusDot state={state} /> : <FolderIcon className="size-4 text-muted-foreground" />}
+                        {state ? <StatusDot state={state} /> : child ? <GitBranchIcon className="size-4 text-muted-foreground" /> : <FolderIcon className="size-4 text-muted-foreground" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className={cn("block truncate text-[13px]", active ? "font-semibold" : "font-medium")}>
@@ -206,12 +269,18 @@ export function Sidebar(props: {
                         <XIcon />
                       </IconButton>
                     </span>
+                    </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => props.onNewTab(space.id)}>
                       <SquareTerminalIcon />
                       New tab
                     </ContextMenuItem>
+                    <ContextMenuItem onClick={() => requestWorktreeAgent(space.id)}>
+                      <GitBranchPlusIcon />
+                      New agent in worktree…
+                    </ContextMenuItem>
+                    <OpenInEditorItems spaceId={space.id} />
                     <ContextMenuItem onClick={() => void revealItemInDir(space.path)}>
                       <FolderOpenIcon />
                       {revealLabel}
@@ -224,6 +293,19 @@ export function Sidebar(props: {
                       <RefreshCwIcon />
                       Refresh git status
                     </ContextMenuItem>
+                    {!child && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem disabled={top === 0} onClick={() => props.onMoveSpace(space.id, top - 1)}>
+                          <ArrowUpIcon />
+                          Move up
+                        </ContextMenuItem>
+                        <ContextMenuItem disabled={top === tops.length - 1} onClick={() => props.onMoveSpace(space.id, top + 1)}>
+                          <ArrowDownIcon />
+                          Move down
+                        </ContextMenuItem>
+                      </>
+                    )}
                     <ContextMenuSeparator />
                     <ContextMenuItem variant="destructive" onClick={() => props.onRemoveSpace(space.id)}>
                       <Trash2Icon />
