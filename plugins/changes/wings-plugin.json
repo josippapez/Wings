@@ -1,0 +1,47 @@
+{
+  "id": "changes",
+  "name": "Changes",
+  "version": "0.1.0",
+  "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree, and their diffs, uncommitted or on the whole branch.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": [
+      "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
+      "git branch --show-current [--show-current]",
+      "git merge-base",
+      "git diff [--numstat --name-status -z -M --no-color --no-ext-diff --no-textconv --no-relative --]",
+      "git ls-files [--others --exclude-standard -z]",
+      "git grep [--untracked -I -z --count --no-color --no-line-number --no-column -e --]"
+    ]
+  },
+  "contributes": {
+    "ui": [
+      "badges",
+      "diff"
+    ],
+    "sidebars": [
+      {
+        "id": "changes",
+        "title": "Changes",
+        "icon": "list",
+        "page": "sidebar.html"
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "changed_files",
+        "description": "Lists the files changed in the git repo containing a folder, with each file's status (M modified, A added, D deleted, R renamed, ? untracked) and added and removed line counts. `against` is \"uncommitted\" (the working tree, staged and untracked included, against HEAD; the default) or \"branch\" (everything since this branch left the default branch). Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cwd": { "type": "string", "description": "An absolute path to a folder inside the repo." },
+            "against": { "type": "string", "enum": ["uncommitted", "branch"] }
+          },
+          "required": ["cwd"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

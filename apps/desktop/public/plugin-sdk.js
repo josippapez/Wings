@@ -91,7 +91,7 @@
   }
 
   window.wings = Object.freeze({
-    /** Every terminal pane `{ paneId, cwd, command, project, session }`; `session` is set while Claude runs. Called on every change. */
+    /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` is set while Claude runs, `focused` on the focused pane of the tab on screen. Called on every change. */
     onPanes: (listener) => void listeners.panes.push(listener),
     /** A badge action was clicked: `{ paneId, actionId }`. */
     onAction: (listener) => void listeners.action.push(listener),

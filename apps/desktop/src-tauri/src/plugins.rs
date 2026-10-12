@@ -1036,6 +1036,39 @@ mod tests {
     }
 
     #[test]
+    fn changes_calls_pass_its_own_manifest() {
+        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/changes"));
+        let p = load(dir).unwrap();
+        assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "changed_files"));
+        let color = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative"];
+        let diff = |extra: &[&str]| -> Vec<String> { ["diff", "abc123"].iter().chain(extra).chain(&color).map(|a| a.to_string()).collect() };
+        let grep = |extra: &[&str]| -> Vec<String> {
+            ["grep", "--untracked"].iter().chain(extra).chain(&["--no-color", "-e", "", "--", ":(literal)new file.txt"]).map(|a| a.to_string()).collect()
+        };
+        let calls: Vec<Vec<String>> = vec![
+            ["rev-parse", "--show-toplevel"].map(String::from).to_vec(),
+            ["rev-parse", "--abbrev-ref", "origin/HEAD"].map(String::from).to_vec(),
+            ["rev-parse", "--verify", "--quiet", "main^{commit}"].map(String::from).to_vec(),
+            ["branch", "--show-current"].map(String::from).to_vec(),
+            ["merge-base", "HEAD", "origin/main"].map(String::from).to_vec(),
+            ["ls-files", "--others", "--exclude-standard", "-z"].map(String::from).to_vec(),
+            diff(&["--numstat", "-z", "-M"]),
+            diff(&["--name-status", "-z", "-M"]),
+            diff(&["-M", "--", ":(literal)src/a.ts"]),
+            grep(&["-I", "-z", "--count"]),
+            grep(&["-I", "-z", "--no-line-number", "--no-column"]),
+        ];
+        for args in &calls {
+            assert!(may_exec(&p, "git", args), "git {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag("git", a)), "git {args:?} refused");
+        }
+        // Read-only: git grep can't open a pager, and branch can't delete or rename.
+        assert!(!may_exec(&p, "git", &["grep".into(), "-Ovi".into(), "x".into()]));
+        assert!(!may_exec(&p, "git", &["branch".into(), "--show-current".into(), "-D".into(), "x".into()]));
+        assert!(!may_exec(&p, "git", &["symbolic-ref".into(), "HEAD".into(), "refs/heads/x".into()]));
+    }
+
+    #[test]
     fn work_item_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
         let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();

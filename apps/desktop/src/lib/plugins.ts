@@ -66,6 +66,8 @@ export type PluginPane = {
   command: string;
   project: string;
   session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
+  /** The focused pane of the tab on screen. */
+  focused: boolean;
 };
 
 /** A new tab, or a split to the right of or below the focused pane. */

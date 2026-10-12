@@ -12,6 +12,8 @@ interface WingsPane {
   project: string;
   /** Set while Claude Code runs in the pane. `startedAt` is when that `claude` started, in ms; a resumed session's transcript also has what came before. */
   session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
+  /** The focused pane of the tab on screen. At most one pane has it, and none while no tab is open. */
+  focused: boolean;
 }
 
 interface WingsTranscriptEvent {

@@ -777,6 +777,7 @@ export default function App() {
           command: info?.command ?? "",
           project: space?.name ?? "",
           session: agent?.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
+          focused: meta.paneId === focusedPaneId,
         },
       ];
     });
@@ -786,7 +787,7 @@ export default function App() {
       const kept = Object.fromEntries(Object.entries(all).filter(([paneId]) => live.has(paneId)));
       return Object.keys(kept).length === Object.keys(all).length ? all : kept;
     });
-  }, [panes, agentsByPane, paneInfo, spaces]);
+  }, [panes, agentsByPane, paneInfo, spaces, focusedPaneId]);
 
   const paneBadges = useMemo(() => {
     const out: Record<string, { pluginId: string; badge: Badge }[]> = {};
