@@ -19,7 +19,7 @@
     }
   },
   "bin": {
-    "wings-plugin": "./bin.mjs"
+    "wings-plugin": "bin.mjs"
   },
   "files": [
     "wings.d.ts",
