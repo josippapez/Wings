@@ -4,6 +4,8 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.14 · 2026-10-12
+
 - Pin plugin buttons to the title bar from the … menu, under Keep in title bar. Pinned buttons always show.
 - Plugin pages can stop listening: every `wings.on*` call returns a function that removes the listener.
 - The built-in plugins are TypeScript, with React sidebars, built with the new `wings-plugin-sdk` package. They behave as before, with these fixes:
