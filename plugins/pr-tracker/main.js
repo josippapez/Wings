@@ -334,13 +334,24 @@ function azureStatus(pr, checks) {
 
 // Azure shows this policy as the reviewer requirement, not as a check, and it stays queued until someone votes.
 const MIN_REVIEWERS_POLICY = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd";
+// Azure reports this one rejected until you pick a merge type when completing, so it gets its own row instead of counting as a failed check.
+const MERGE_STRATEGY_POLICY = "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab";
+const MERGE_TYPES = { allowSquash: "Squash", allowNoFastForward: "Merge", allowRebase: "Rebase", allowRebaseMerge: "Semi-linear merge" };
+
+function mergeStrategy(records) {
+  const r = records.find((p) => p.configuration?.type?.id === MERGE_STRATEGY_POLICY && p.configuration?.isEnabled !== false);
+  if (!r) return null;
+  const types = Object.keys(MERGE_TYPES).filter((k) => r.configuration.settings?.[k]).map((k) => MERGE_TYPES[k]).join(" or ");
+  return r.status === "approved" ? types : `${types} only, pick it when completing`;
+}
 
 async function azureChecks(link) {
   const out = await wings.exec("az", ["repos", "pr", "policy", "list", "--id", String(link.number), "--organization", link.remote.org, "-o", "json"]);
-  const records = out.code === 0 ? JSON.parse(out.stdout) : [];
-  const policies = (Array.isArray(records) ? records : (records.value ?? []))
+  const parsed = out.code === 0 ? JSON.parse(out.stdout) : [];
+  const records = Array.isArray(parsed) ? parsed : (parsed.value ?? []);
+  const policies = records
     .filter((r) => r.status !== "notApplicable" && r.configuration?.isEnabled !== false)
-    .filter((r) => r.configuration?.type?.id !== MIN_REVIEWERS_POLICY);
+    .filter((r) => ![MIN_REVIEWERS_POLICY, MERGE_STRATEGY_POLICY].includes(r.configuration?.type?.id));
   const results = policies.map((r) => (r.status === "approved" ? "passed" : r.status === "rejected" || r.status === "broken" ? "failed" : "running"));
   // A build policy's context names the build that failed; other policies, like comment requirements, have none.
   const failing = policies
@@ -350,7 +361,7 @@ async function azureChecks(link) {
       const build = r.context?.buildId ?? null;
       return { id: build ?? name, name, build };
     });
-  return { ...azureStatus(link.raw, counts(results)), failing };
+  return { ...azureStatus(link.raw, counts(results)), failing, merge: mergeStrategy(records) };
 }
 
 /** GitLab status from the MR, its approvals and its head pipeline's jobs. */
@@ -768,6 +779,7 @@ function badgeFor(link, st, local) {
         tone: failed ? "danger" : running ? "warning" : total ? "success" : undefined,
       },
       ...details.slice(0, 3).map((f) => ({ label: "Failed", value: `${f.step ?? f.check}: ${f.summary}`, tone: "danger" })),
+      ...(st.merge ? [{ label: "Merge", value: st.merge }] : []),
       ...(st.changes ? [{ label: "Changes", value: st.changes }] : []),
       { label: "Branch", value: st.branch },
       ...(pending ? [{ label: "Local", value: pending.replace("push", "push to the PR"), tone: "info" }] : []),
