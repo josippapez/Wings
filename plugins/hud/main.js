@@ -28,6 +28,8 @@ const sessions = new Map();
 let panes = new Map();
 /** @type {WingsStatusline | null} */
 let reported = null;
+/** The last limits Claude Code reported, kept in storage so the title bar shows them before this run's first reply. @type {WingsStatusline["rateLimits"] | null} */
+let savedLimits = null;
 /** @type {{ used: number, total: number } | null} */
 let memory = null;
 /** @type {number | null} */
@@ -176,7 +178,9 @@ function until(epochSeconds, now = Date.now(), compact = false) {
 
 /** A limit window, unless it has already reset: Claude Code reports the new one with the next reply. */
 function limit(w, now = Date.now()) {
-  if (!w || (w.resetsAt && w.resetsAt * 1000 <= now)) return null;
+  if (!w) return null;
+  // Past its reset the window is empty until the next message starts a new one.
+  if (w.resetsAt && w.resetsAt * 1000 <= now) return { percent: 0, resets: null, left: null, resetsAt: null };
   return { percent: Math.round(w.usedPercentage), resets: w.resetsAt ? until(w.resetsAt, now) : null, left: w.resetsAt ? until(w.resetsAt, now, true) : null, resetsAt: w.resetsAt };
 }
 
@@ -217,7 +221,7 @@ function badge(s) {
 
 /** The account-wide part: usage limits and memory, for the title bar and the sidebar. */
 function overview(now = Date.now()) {
-  const limits = reported?.rateLimits;
+  const limits = reported?.rateLimits ?? savedLimits;
   return {
     fiveHour: limit(limits?.fiveHour, now),
     sevenDay: limit(limits?.sevenDay, now),
@@ -230,15 +234,16 @@ function overview(now = Date.now()) {
 function titleLabel() {
   const o = overview();
   // `5h 3% (2h14m) · wk 83% (3d5h)`: usage, then the time until that limit resets. The once-a-minute refresh keeps it current.
-  const pill = (name, l) => l && `${name} ${l.percent}%${l.left ? ` (${l.left})` : ""}`;
-  const parts = [pill("5h", o.fiveHour), pill("wk", o.sevenDay)].filter(Boolean);
+  // Always both, so the state shows at a glance: "–" until Claude Code has reported a limit.
+  const pill = (name, l) => (l ? `${name} ${l.percent}%${l.left ? ` (${l.left})` : ""}` : `${name} –`);
+  const parts = [pill("5h", o.fiveHour), pill("wk", o.sevenDay)];
   const rows = [
     ...(o.fiveHour ? [{ label: "5-hour limit", value: `${o.fiveHour.percent}% used${o.fiveHour.resets ? `, resets in ${o.fiveHour.resets}` : ""}` }] : []),
     ...(o.sevenDay ? [{ label: "Weekly limit", value: `${o.sevenDay.percent}% used${o.sevenDay.resets ? `, resets in ${o.sevenDay.resets}` : ""}` }] : []),
     ...(!o.statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
     ...(o.memory ? [{ label: "Memory", value: `${gb(o.memory.used)} of ${gb(o.memory.total)} (${o.memory.percent}%)` }] : []),
   ];
-  const label = parts.length ? parts.join(" · ") : o.memory ? `RAM ${o.memory.percent}%` : null;
+  const label = parts.join(" · ");
   const highest = Math.max(o.fiveHour?.percent ?? 0, o.sevenDay?.percent ?? 0);
   /** @type {"warning" | "danger" | undefined} */
   const tone = highest >= LIMIT_CRITICAL ? "danger" : highest >= LIMIT_WARN ? "warning" : undefined;
@@ -308,6 +313,11 @@ function alertLimits() {
 async function refreshStatus() {
   try {
     reported = await wings.statusline();
+    const limits = reported?.rateLimits;
+    if (limits && JSON.stringify(limits) !== JSON.stringify(savedLimits)) {
+      savedLimits = limits;
+      void wings.storage.set("limits", limits).catch(() => {});
+    }
   } catch (error) {
     reported = null;
     console.error(error);
@@ -390,6 +400,12 @@ wings.onBroadcast((message) => {
 });
 
 // Limits reset on their own and memory moves, so both are checked once a minute. Each check is a few ms.
-void refreshStatus();
+void wings.storage.get("limits").then(
+  (limits) => {
+    savedLimits ??= limits;
+    changedAll();
+  },
+  () => {},
+).finally(() => void refreshStatus());
 void refreshMemory();
 setInterval(() => void Promise.all([refreshStatus(), refreshMemory()]), MINUTE);
