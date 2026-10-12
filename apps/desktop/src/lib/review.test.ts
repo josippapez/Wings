@@ -64,20 +64,20 @@ const spaces = [{ id: "/r", name: "r", path: "/r", branch: null }, { id: "/o", n
 const base = { spaces, agentName: () => "Claude", paneInfo: { a: { command: "claude", cwd: "/r/sub" }, b: { command: "claude", cwd: "/o" } } };
 
 test("the only agent inside the diff's folder is preselected, and its siblings come after", () => {
-  const r = reviewTargets({ ...base, agents: [agent("b", "/o"), agent("a", "/r")], paneIds: ["a", "b", "t"] }, "/r");
+  const r = reviewTargets({ ...base, agents: [agent("b", "/o"), agent("a", "/r")] }, "/r");
   assert.equal(r.preferred, "a");
-  assert.deepEqual(r.targets.map((t) => [t.paneId, t.agent]), [["a", true], ["b", true], ["t", false]]);
+  assert.deepEqual(r.targets.map((t) => t.paneId), ["a", "b"]);
 });
 
 test("two agents in the folder, none, or no folder: nothing is preselected", () => {
-  const two = { ...base, agents: [agent("a", "/r"), agent("b", "/r")], paneInfo: { a: { command: "claude", cwd: "/r" }, b: { command: "claude", cwd: "/r/x" } }, paneIds: ["a", "b"] };
+  const two = { ...base, agents: [agent("a", "/r"), agent("b", "/r")], paneInfo: { a: { command: "claude", cwd: "/r" }, b: { command: "claude", cwd: "/r/x" } } };
   assert.equal(reviewTargets(two, "/r").preferred, null);
-  assert.equal(reviewTargets({ ...base, agents: [agent("b", "/o")], paneIds: ["b"] }, "/r").preferred, null);
-  assert.equal(reviewTargets({ ...base, agents: [agent("a", "/r")], paneIds: ["a"] }).preferred, null);
+  assert.equal(reviewTargets({ ...base, agents: [agent("b", "/o")] }, "/r").preferred, null);
+  assert.equal(reviewTargets({ ...base, agents: [agent("a", "/r")] }).preferred, null);
 });
 
-test("a plain terminal is listed but never preselected", () => {
-  const r = reviewTargets({ ...base, agents: [], paneIds: ["t"], paneInfo: { t: { command: "zsh", cwd: "/r" } } }, "/r");
+test("a plain terminal is never a target: the quoted code would run there on Enter", () => {
+  const r = reviewTargets({ ...base, agents: [], paneInfo: { t: { command: "zsh", cwd: "/r" } } }, "/r");
+  assert.deepEqual(r.targets, []);
   assert.equal(r.preferred, null);
-  assert.equal(r.targets[0].agent, false);
 });

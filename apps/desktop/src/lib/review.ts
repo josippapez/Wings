@@ -83,8 +83,11 @@ export async function sendToPane(
   await write(paneId, "\r");
 }
 
-/** A pane the review can go to. `agent` is false for a plain terminal, which the user has to pick on purpose. */
-export type ReviewTarget = { paneId: string; label: string; project: string; cwd: string | null; agent: boolean };
+/**
+ * A pane the review can go to: only agents. The quoted code comes from the diff, so a plain shell would run it
+ * once Enter is pressed.
+ */
+export type ReviewTarget = { paneId: string; label: string; project: string; cwd: string | null };
 
 const normal = (p: string) => p.replace(/\/+$/, "");
 /** `child` is `parent` or a folder inside it. */
@@ -95,29 +98,23 @@ export const isInside = (parent: string, child: string) => {
 };
 
 /**
- * Every pane as a target: agents first, those in `cwd` (the diff's repo) before the others, then the plain
- * terminals. `preferred` is the one to preselect: the only agent inside `cwd`, or none.
+ * Every agent as a target, those in `cwd` (the diff's repo) first. `preferred` is the one to preselect: the only
+ * agent inside `cwd`, or none.
  */
 export function reviewTargets(
   input: {
     agents: Agent[];
     paneInfo: Record<string, PaneInfo>;
     spaces: Space[];
-    /** Rust pane ids of every open terminal. */
-    paneIds: string[];
     agentName: (a: Agent) => string;
   },
   cwd?: string,
 ): { targets: ReviewTarget[]; preferred: string | null } {
   const project = (id: string) => input.spaces.find((s) => s.id === id)?.name ?? "";
   const folder = (paneId: string, spaceId: string) => input.paneInfo[paneId]?.cwd ?? input.spaces.find((s) => s.id === spaceId)?.path ?? null;
-  const agents = input.agents.map((a): ReviewTarget => ({ paneId: a.paneId, label: input.agentName(a), project: project(a.spaceId), cwd: folder(a.paneId, a.spaceId), agent: true }));
+  const agents = input.agents.map((a): ReviewTarget => ({ paneId: a.paneId, label: input.agentName(a), project: project(a.spaceId), cwd: folder(a.paneId, a.spaceId) }));
   const near = (t: ReviewTarget) => !!cwd && !!t.cwd && isInside(cwd, t.cwd);
   const ordered = [...agents.filter(near), ...agents.filter((t) => !near(t))];
-  const agentIds = new Set(input.agents.map((a) => a.paneId));
-  const others = input.paneIds
-    .filter((id) => !agentIds.has(id))
-    .map((id): ReviewTarget => ({ paneId: id, label: "Terminal", project: "", cwd: input.paneInfo[id]?.cwd ?? null, agent: false }));
   const close = agents.filter(near);
-  return { targets: [...ordered, ...others], preferred: close.length === 1 ? close[0].paneId : null };
+  return { targets: ordered, preferred: close.length === 1 ? close[0].paneId : null };
 }

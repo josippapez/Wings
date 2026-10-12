@@ -103,8 +103,7 @@ export function ReviewPanel({
   });
 
   const items = useMemo(() => found.targets.map((t) => ({ value: t.paneId, label: label(t) })), [found]);
-  const agents = found.targets.filter((t) => t.agent);
-  const terminals = found.targets.filter((t) => !t.agent);
+  const agents = found.targets;
 
   const send = async (submit: boolean) => {
     if (!paneId || busy) return;
@@ -161,16 +160,6 @@ export function ReviewPanel({
               <SelectGroup>
                 <SelectLabel>Agents</SelectLabel>
                 {agents.map((t) => (
-                  <SelectItem key={t.paneId} value={t.paneId}>
-                    {label(t)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            )}
-            {terminals.length > 0 && (
-              <SelectGroup>
-                <SelectLabel>Terminals without an agent</SelectLabel>
-                {terminals.map((t) => (
                   <SelectItem key={t.paneId} value={t.paneId}>
                     {label(t)}
                   </SelectItem>

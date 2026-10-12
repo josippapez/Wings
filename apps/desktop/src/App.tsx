@@ -1365,9 +1365,13 @@ export default function App() {
           diff={diff}
           onClose={() => setDiff(null)}
           reviewTargets={(cwd) =>
-            reviewTargets({ agents: agentsRef.current, paneInfo, spaces, paneIds: Object.values(panesRef.current).flatMap((m) => (m.paneId ? [m.paneId] : [])), agentName: (a) => a.name ?? agentLabel(a.kind) }, cwd)
+            reviewTargets({ agents: agentsRef.current, paneInfo, spaces, agentName: (a) => a.name ?? agentLabel(a.kind) }, cwd)
           }
-          onSendReview={(paneId, text, submit) => sendToPane(api.paneWrite, paneId, text, submit)}
+          onSendReview={async (paneId, text, submit) => {
+            // Only to a pane still running an agent: in a plain shell the quoted code would run on Enter.
+            if (!agentsRef.current.some((a) => a.paneId === paneId)) throw new Error("That agent isn't running any more.");
+            await sendToPane(api.paneWrite, paneId, text, submit);
+          }}
           onReply={async (view, replyTo, body) => {
             if (!pluginHost.current) throw new Error("Plugins aren't running");
             await pluginHost.current.sendReply(view.pluginId, view.id, replyTo, body);

@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.19 · 2026-10-12
+
+- Diff review comments only go to a pane running an agent. A plain terminal is no longer offered: the quoted code would have run there on Enter.
+
 ## 0.1.18 · 2026-10-12
 
 - Command palette on ⌘K (Ctrl+Shift+K elsewhere): search commands, projects, tabs, agents (needing you first), recent sessions and plugin buttons. Tab, Pane and View menus in the menu bar with their shortcuts, ⌘]/⌘[ for next/previous tab, and a global shortcut (default ⌃⌥J, changeable or off in Settings, Keyboard) that brings Wings forward and goes to the agent that needs you. All of them share one list of commands.
