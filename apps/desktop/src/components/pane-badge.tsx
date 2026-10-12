@@ -57,7 +57,7 @@ export function PaneBadge({ badge, onAction }: { badge: Badge; onAction: (action
         render={
           <motion.button
             type="button"
-            layout
+            // No `layout`: its transform layer left WKWebView showing only the icon in a split pane until hover.
             whileTap={{ scale: 0.94 }}
             transition={{ type: "spring", stiffness: 500, damping: 32 }}
             className={cn(

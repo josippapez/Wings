@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- See what's new before you update: the update toast and Check for Updates show the release notes.
+- Resume a past session in the current tab, from its menu in Past sessions.
+- Wings' own plugins install and update from a GitHub link, like `github.com/josippapez/Wings/plugins/hud`.
+- The usage badge always shows the 5-hour and weekly limits, also at 0% and before the first reply.
+- Plugin badges in a split pane show without hovering.
+
 ## 0.1.7 · 2026-10-12
 
 - Settings open in their own window (⌘,), with sections for text, cursor, history and keyboard.
