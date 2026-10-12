@@ -62,6 +62,8 @@ function Elapsed({ since }: { since: number }) {
 
 export function Sidebar(props: {
   open: boolean;
+  /** The copy shown over the panes while the sidebar is closed, with its own row highlight. */
+  floating?: boolean;
   spaces: Space[];
   git: Record<string, GitStatus>;
   onRefreshGit: () => Promise<unknown>;
@@ -121,7 +123,7 @@ export function Sidebar(props: {
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
-          <LayoutGroup id="projects">
+          <LayoutGroup id={props.floating ? "projects-floating" : "projects"}>
             <nav aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
               {spaces.length === 0 && (
                 <Empty className="items-start p-2 text-left">

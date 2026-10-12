@@ -1,6 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import { MotionConfig } from "motion/react";
 
@@ -12,6 +12,7 @@ import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
+import { SidebarPeek } from "@/components/sidebar-peek";
 import { rollUp, StatusDot } from "@/components/status-dot";
 import { SettingsDialog, type SettingsSection } from "@/components/settings-dialog";
 import { ToolInstallDialog } from "@/components/tool-install";
@@ -883,6 +884,24 @@ export default function App() {
     state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
   }));
 
+  const sidebarProps: Omit<ComponentProps<typeof Sidebar>, "open"> = {
+    spaces,
+    git,
+    onRefreshGit: () => api.gitRefresh().then(setGit),
+    agents,
+    activeSpaceId,
+    focusedPaneId,
+    onSelectSpace: selectSpace,
+    onSelectAgent: selectAgent,
+    restored,
+    onSelectRestored: selectPaneKey,
+    onNewTab: (id) => openTab(id),
+    onForkAgent: forkAgent,
+    onCloseAgent: closeAgent,
+    onAddSpace: (path) => void addSpace(path),
+    onRemoveSpace: (id) => void removeSpace(id),
+  };
+
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delay={500}>
@@ -948,24 +967,7 @@ export default function App() {
               groupResizeBehavior="preserve-pixel-size"
               style={PANEL_STYLE}
             >
-              <Sidebar
-                open={sidebarOpen}
-                spaces={spaces}
-                git={git}
-                onRefreshGit={() => api.gitRefresh().then(setGit)}
-                agents={agents}
-                activeSpaceId={activeSpaceId}
-                focusedPaneId={focusedPaneId}
-                onSelectSpace={selectSpace}
-                onSelectAgent={selectAgent}
-                restored={restored}
-                onSelectRestored={selectPaneKey}
-                onNewTab={(id) => openTab(id)}
-                onForkAgent={forkAgent}
-                onCloseAgent={closeAgent}
-                onAddSpace={(path) => void addSpace(path)}
-                onRemoveSpace={(id) => void removeSpace(id)}
-              />
+              <Sidebar open={sidebarOpen} {...sidebarProps} />
             </ResizablePanel>
             <SideHandle disabled={!sidebarOpen} />
             <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
@@ -985,6 +987,11 @@ export default function App() {
                     actions={actions}
                   />
                 ))}
+                {!sidebarOpen && (
+                  <SidebarPeek width={widths.left}>
+                    <Sidebar open floating {...sidebarProps} />
+                  </SidebarPeek>
+                )}
                 {!activeSpace && (
                   <Empty className="h-full">
                     <EmptyHeader>
