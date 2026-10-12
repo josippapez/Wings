@@ -5,10 +5,14 @@ export type Space = { id: string; name: string; path: string; branch: string | n
 
 export type AgentState = "working" | "blocked" | "done" | "idle";
 
+/** Which agent CLI runs in the pane. */
+export type AgentKind = "claude" | "opencode";
+
 export type Agent = {
   paneId: string;
   spaceId: string;
   pid: number;
+  kind: AgentKind;
   sessionId: string | null;
   name: string | null;
   state: AgentState;
@@ -52,16 +56,18 @@ export type PluginPanel = { id: string; title: string; icon: string; url: string
 export type PluginPopover = { page: string; width: number; height: number };
 /** One of the plugin's own pages, shown in the right sidebar from a title bar button. */
 export type PluginSidebar = { id: string; title: string; icon: string; page: string; popover?: PluginPopover };
-export type ViewPlace = "sidebar" | "modal" | "window";
+export type ViewPlace = "sidebar" | "modal" | "window" | "tab";
 /** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. */
 export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null };
-/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars and views. */
+/** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars, views and a settings page. */
 export type PluginContributes = {
   ui: string[];
   mcpTools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
   views: PluginPage[];
+  /** Its page in Wings Settings, under Plugin settings. Absent when it has none. */
+  settings?: { page: string };
 };
 
 /** Every page of a plugin: its sidebars, which only open in the sidebar, then its views. Ids are unique across both. */

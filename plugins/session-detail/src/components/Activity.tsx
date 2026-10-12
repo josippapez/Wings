@@ -1,45 +1,63 @@
+import type { ReactNode } from "react";
+import { Badge, Chips, Dot, Heading, List, ListButton, ListItem, Spinner, Text } from "wings-plugin-ui";
+
 import type { Detail, ItemView } from "../lib/types";
 import { Card } from "./Card";
 import { clock, took } from "./format";
 
+/** Badges Wings colours itself; git ones get the plugin's own colour from sidebar.css. */
+const tones: Record<string, "info" | "success" | "danger"> = { push: "info", ok: "success", danger: "danger" };
+
 /** One row of the timeline: a button that opens its card. */
 function Row({ item, open, detail, toggle }: { item: ItemView; open: boolean; detail: Detail | undefined; toggle: () => void }) {
-  const button = (cls: string, children: React.ReactNode) => (
-    <button className={`toggle ${cls}`} id={`item-${item.key}`} aria-expanded={open} onClick={toggle}>
+  const button = (align: "baseline" | undefined, children: ReactNode) => (
+    <ListButton align={align} id={`item-${item.key}`} aria-expanded={open} onClick={toggle}>
       {children}
-    </button>
+    </ListButton>
   );
   return item.kind === "prompt" ? (
-    <li className="prompt">
+    <ListItem className="prompt">
       {button(
-        "",
+        "baseline",
         <>
-          <span className="who">You</span>
-          <span className={open ? "grow" : "grow clamp"}>{item.summary}</span>
-          <time className="muted">{clock(item.at)}</time>
+          <Text tone="info" weight="strong">
+            You
+          </Text>
+          <Text grow clamp={!open}>
+            {item.summary}
+          </Text>
+          <Text as="time" tone="muted">
+            {clock(item.at)}
+          </Text>
         </>,
       )}
       {open ? <Card item={item} detail={detail} /> : null}
-    </li>
+    </ListItem>
   ) : (
-    <li className={item.error ? "error" : ""}>
+    <ListItem>
       {button(
-        "row",
+        undefined,
         <>
-          {item.done ? <span className={item.error ? "dot err" : "dot"} aria-hidden /> : <span className="spinner" aria-hidden />}
+          {item.done ? <Dot tone={item.error ? "danger" : undefined} /> : <Spinner />}
           {(item.tags ?? []).map((t, i) => (
-            <span key={i} className={`tag ${t.kind}`}>
+            <Badge variant="secondary" key={i} tone={tones[t.kind]} className={t.kind}>
               {t.label}
-            </span>
+            </Badge>
           ))}
-          {item.tags ? null : <strong>{item.name}</strong>}
-          <span className={item.tags ? "grow ellipsis" : "grow muted ellipsis"}>{item.summary}</span>
-          {item.outcome ? <span className={item.outcome.endsWith("failed") ? "tag danger" : "tag ok"}>{item.outcome}</span> : null}
-          <span className="muted">{item.error ? "failed" : took(item.ms)}</span>
+          {item.tags ? null : (
+            <Text as="strong" tone={item.error ? "danger" : undefined}>
+              {item.name}
+            </Text>
+          )}
+          <Text grow truncate tone={item.tags ? undefined : "muted"}>
+            {item.summary}
+          </Text>
+          {item.outcome ? <Badge variant="secondary" tone={item.outcome.endsWith("failed") ? "danger" : "success"}>{item.outcome}</Badge> : null}
+          <Text tone="muted">{item.error ? "failed" : took(item.ms)}</Text>
         </>,
       )}
       {open ? <Card item={item} detail={detail} /> : null}
-    </li>
+    </ListItem>
   );
 }
 
@@ -60,28 +78,30 @@ export function Activity({
   toggle: (key: string) => void;
 }) {
   const shown = highlightsOnly ? items.filter((i) => i.kind === "prompt" || i.tags || i.error) : items;
-  const filter = (on: boolean, label: string) => (
-    <button className={`chip${highlightsOnly === on ? " on" : ""}`} aria-pressed={highlightsOnly === on} onClick={() => setHighlightsOnly(on)}>
-      {label}
-    </button>
+  const filters = (
+    <Chips
+      label="Show"
+      options={[
+        { value: "all", label: "All" },
+        { value: "highlights", label: "Highlights" },
+      ]}
+      value={highlightsOnly ? "highlights" : "all"}
+      onChange={(v) => setHighlightsOnly(v === "highlights")}
+    />
   );
   return (
     <>
-      <div className="row heading">
-        <h2 className="grow">Recent activity</h2>
-        <div className="row filters" role="group" aria-label="Show">
-          {filter(false, "All")}
-          {filter(true, "Highlights")}
-        </div>
-      </div>
+      <Heading actions={filters}>Recent activity</Heading>
       {shown.length ? (
-        <ol className="list timeline">
+        <List ordered>
           {shown.map((item) => (
             <Row key={item.key} item={item} open={isOpen(item.key)} detail={detailOf(item.key)} toggle={() => toggle(item.key)} />
           ))}
-        </ol>
+        </List>
       ) : (
-        <p className="muted">{highlightsOnly ? "No highlights in this run yet." : "Nothing yet."}</p>
+        <Text as="p" tone="muted">
+          {highlightsOnly ? "No highlights in this run yet." : "Nothing yet."}
+        </Text>
       )}
     </>
   );

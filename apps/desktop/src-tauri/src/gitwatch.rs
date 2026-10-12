@@ -181,15 +181,57 @@ mod tests {
         assert!(ok, "git {args:?} failed");
     }
 
+    type Calls = Arc<Mutex<Vec<(Instant, Vec<String>)>>>;
+
+    /// How long a condition may take before a test fails. A loaded machine waits longer, a fast one doesn't.
+    const DEADLINE: Duration = Duration::from_secs(10);
+    /// Quiet time that proves no further refresh is coming: four `SETTLE` windows, so a second refresh for the
+    /// same write would land inside it.
+    const QUIET: Duration = Duration::from_millis(1000);
+
+    /// Polls `done` every 20 ms until it holds or `within` passes. Returns whether it held.
+    fn wait_for(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + within;
+        while !done() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
+    fn count(calls: &Calls) -> usize {
+        calls.lock().unwrap().len()
+    }
+
     /// Starts the watcher on one repo and returns the refresh calls it makes, with the time each arrived.
-    fn watch(repo: &Path) -> Arc<Mutex<Vec<(Instant, Vec<String>)>>> {
-        let calls = Arc::new(Mutex::new(Vec::new()));
+    /// The watcher starts on its own thread and only sees writes once it has installed its watches, so
+    /// `probe` (a write to the repo) is repeated until the watcher reports one. Those refreshes are cleared.
+    fn watch(repo: &Path, probe: impl Fn()) -> Calls {
+        let calls: Calls = Arc::new(Mutex::new(Vec::new()));
         let seen = calls.clone();
         let (tx, rx) = mpsc::channel();
         let list = vec![("a".to_string(), repo.to_path_buf())];
         thread::spawn(move || run(tx, rx, move || list.clone(), move |ids| seen.lock().unwrap().push((Instant::now(), ids))));
-        thread::sleep(Duration::from_millis(500));
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            probe();
+            if wait_for(Duration::from_secs(2), || count(&calls) > 0) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "watcher never reported a write in {}", repo.display());
+        }
+        thread::sleep(QUIET);
+        calls.lock().unwrap().clear();
         calls
+    }
+
+    /// Waits for at least `n` refreshes, then one more debounce window, and asserts there are exactly `n`.
+    fn expect_refreshes(calls: &Calls, n: usize, what: &str) {
+        assert!(wait_for(DEADLINE, || count(calls) >= n), "{what}: got {} refreshes, wanted {n}", count(calls));
+        thread::sleep(QUIET);
+        assert_eq!(count(calls), n, "{what}");
     }
 
     #[test]
@@ -199,30 +241,27 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        let calls = watch(&repo);
+        let calls = watch(&repo, || git(&repo, &["commit", "-q", "--allow-empty", "-m", "probe"]));
 
         let t = Instant::now();
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        thread::sleep(Duration::from_millis(900));
+        expect_refreshes(&calls, 1, "one debounced refresh for a commit");
         {
             let c = calls.lock().unwrap();
-            assert_eq!(c.len(), 1, "one debounced refresh for a commit, got {}", c.len());
             assert_eq!(c[0].1, vec!["a".to_string()]);
             eprintln!("commit -> refresh in {:?}", c[0].0 - t);
         }
 
         // A remote-tracking ref moving, which is what a fetch or pull does to the behind count.
         git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        thread::sleep(Duration::from_millis(900));
-        assert_eq!(calls.lock().unwrap().len(), 2, "ref move refreshes");
+        expect_refreshes(&calls, 2, "ref move refreshes");
 
         git(&repo, &["checkout", "-q", "-b", "other"]);
-        thread::sleep(Duration::from_millis(900));
-        assert_eq!(calls.lock().unwrap().len(), 3, "checkout refreshes");
+        expect_refreshes(&calls, 3, "checkout refreshes");
 
         // Nothing changes, nothing fires.
         thread::sleep(Duration::from_millis(1200));
-        assert_eq!(calls.lock().unwrap().len(), 3, "idle repo stays quiet");
+        assert_eq!(count(&calls), 3, "idle repo stays quiet");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -235,10 +274,9 @@ mod tests {
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
         git(&repo, &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()]);
-        let calls = watch(&wt);
+        let calls = watch(&wt, || git(&wt, &["commit", "-q", "--allow-empty", "-m", "probe"]));
         git(&wt, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        thread::sleep(Duration::from_millis(900));
-        assert!(!calls.lock().unwrap().is_empty(), "commit in a worktree refreshes");
+        assert!(wait_for(DEADLINE, || count(&calls) > 0), "commit in a worktree refreshes");
         let _ = fs::remove_dir_all(&root);
     }
 

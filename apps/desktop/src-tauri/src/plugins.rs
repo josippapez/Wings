@@ -57,8 +57,17 @@ pub struct Contributes {
     pub panels: Vec<Panel>,
     /// Its own pages shown in the right sidebar from a title bar button.
     pub sidebars: Vec<Sidebar>,
-    /// Its own pages that can open in the right sidebar, in a modal over Wings or in a window of their own.
+    /// Its own pages that can open in the right sidebar, in a modal over Wings, in a window of their own or as a tab.
     pub views: Vec<View>,
+    /// Its own page in Wings Settings, under Plugin settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<SettingsPage>,
+}
+
+/// A plugin's page in Wings Settings: an HTML file in the plugin, sandboxed like its sidebars.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsPage {
+    pub page: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,7 +94,7 @@ pub struct Popover {
 pub const POPOVER_WIDTH: (u32, u32) = (240, 480);
 pub const POPOVER_HEIGHT: (u32, u32) = (160, 640);
 
-/// One of the plugin's own pages, like a sidebar that may also open as a modal or a window.
+/// One of the plugin's own pages, like a sidebar that may also open as a modal, a window or a tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub id: String,
@@ -104,7 +113,7 @@ pub struct View {
     pub height: Option<u32>,
 }
 
-pub const VIEW_PLACES: [&str; 3] = ["sidebar", "modal", "window"];
+pub const VIEW_PLACES: [&str; 4] = ["sidebar", "modal", "window", "tab"];
 
 fn sidebar_only() -> Vec<String> {
     vec!["sidebar".into()]
@@ -215,6 +224,14 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("needs Wings {min} or newer, this is {}", env!("CARGO_PKG_VERSION")));
         }
     }
+    if !dir.join(manifest.main.trim_start_matches('/')).is_file() {
+        // A TypeScript plugin's repo holds its source, and its built files come in its release.
+        return Err(if dir.join("src").is_dir() {
+            format!("{} isn't built. Install the plugin from a release, or run `wings-plugin build` in its folder", manifest.main)
+        } else {
+            format!("{} is missing", manifest.main)
+        });
+    }
     resolve(dir, &manifest.main).ok_or("main is outside the plugin folder")?;
     if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
         return Err(format!("unknown ui {kind:?}, expected one of {UI_KINDS:?}"));
@@ -269,6 +286,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("view {:?} opens must list some of {VIEW_PLACES:?}, each once", view.id));
         }
         resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
+    }
+    if let Some(settings) = &manifest.contributes.settings {
+        resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
     }
     if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
         return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
@@ -870,6 +890,20 @@ mod tests {
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    #[test]
+    fn a_plugin_without_its_built_main_says_so() {
+        let dir = std::env::temp_dir().join(format!("wings-unbuilt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("wings-plugin.json"), r#"{ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js" }"#).unwrap();
+        assert!(load(&dir).err().unwrap().contains("main.js isn't built"));
+        fs::remove_dir_all(dir.join("src")).unwrap();
+        assert_eq!(load(&dir).err().unwrap(), "main.js is missing");
+        fs::write(dir.join("main.js"), "").unwrap();
+        assert!(load(&dir).is_ok());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1554,6 +1588,38 @@ mod tests {
         let plain = manifest(None).unwrap().manifest.contributes.sidebars[0].clone();
         assert_eq!(plain.popover, None);
         assert!(serde_json::to_value(&plain).unwrap().get("popover").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_page_is_checked_when_the_plugin_loads() {
+        let dir = std::env::temp_dir().join(format!("wings-settings-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "settings.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |settings: Option<Value>| {
+            let mut m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": {} });
+            if let Some(settings) = settings {
+                m["contributes"]["settings"] = settings;
+            }
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let ok = manifest(Some(serde_json::json!({ "page": "settings.html" }))).unwrap();
+        assert_eq!(ok.manifest.contributes.settings, Some(SettingsPage { page: "settings.html".into() }));
+        for (bad, error) in [
+            (serde_json::json!({ "page": "../settings.html" }), "isn't in the plugin folder"),
+            (serde_json::json!({ "page": "missing.html" }), "isn't in the plugin folder"),
+            (serde_json::json!({}), "missing field"),
+            (serde_json::json!([{ "page": "settings.html" }]), "invalid type"),
+        ] {
+            assert!(manifest(Some(bad.clone())).err().unwrap().contains(error), "{bad}");
+        }
+        // Without one, `contributes` serializes as before, so plugins approved earlier keep their grant.
+        let plain = manifest(None).unwrap().manifest.contributes;
+        assert_eq!(plain.settings, None);
+        assert!(serde_json::to_value(&plain).unwrap().get("settings").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

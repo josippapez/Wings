@@ -1,0 +1,15 @@
+{
+  // Only for `pnpm test`: checks types.test-d.tsx against ui.d.ts. The package has no TypeScript to build.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["types.test-d.tsx"]
+}

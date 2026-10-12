@@ -4,9 +4,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useEffect, useRef } from "react";
 import { KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import type { PluginView } from "@/lib/api";
+import { pluginSettingsSection } from "@/lib/plugin-pages";
+import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 import type { CursorInactiveStyle, CursorStyle, OptionAsMeta, TerminalKeys, TerminalLook } from "@/lib/terminal";
 
@@ -86,7 +89,32 @@ const sections = [
   { id: "plugins", label: "Plugins", icon: PuzzleIcon },
 ] as const;
 
-export type SettingsSection = (typeof sections)[number]["id"];
+const sectionTrigger = "h-8 flex-none justify-start gap-2 rounded-md px-2 text-[13px] data-active:bg-white/[0.07] dark:group-data-[variant=line]/tabs-list:data-active:bg-white/[0.07] after:hidden";
+
+/** One of Wings' own sections, or a plugin's settings page as `plugin:<id>`. */
+export type SettingsSection = (typeof sections)[number]["id"] | ReturnType<typeof pluginSettingsSection>;
+
+/** A plugin's settings page. `key` changes when the plugin restarts, so its page loads again. */
+export type PluginSettingsRef = { plugin: PluginView; key: string };
+
+/** A plugin's settings page, there while its section shows: leaving the section or closing Settings removes it. */
+function PluginSettingsPage({ entry, host }: { entry: PluginSettingsRef; host: PluginHost }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!box.current) return;
+    let remove: (() => void) | undefined;
+    let gone = false;
+    void host
+      .mountPage(entry.plugin, null, box.current, "settings")
+      .then((r) => (gone ? r() : (remove = r)))
+      .catch((e) => console.error(e));
+    return () => {
+      gone = true;
+      remove?.();
+    };
+  }, [entry.key, host]);
+  return <div ref={box} data-plugin-settings={entry.plugin.id} className="size-full" />;
+}
 
 /** What the Plugins section needs from App: the list, the selection and the install and update state. */
 export type PluginsProps = {
@@ -110,12 +138,15 @@ export function SettingsDialog(props: {
   section: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
   pluginsProps: PluginsProps;
+  /** Plugins that are on and have a settings page, listed under Plugin settings. */
+  pluginSettings: PluginSettingsRef[];
+  host: PluginHost | null;
   keys: TerminalKeys;
   onKeysChange: (keys: TerminalKeys) => void;
   look: TerminalLook;
   onLookChange: (look: TerminalLook) => void;
 }) {
-  const { keys, look } = props;
+  const { keys, look, host } = props;
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -135,10 +166,25 @@ export function SettingsDialog(props: {
                 <TabsTrigger
                   key={id}
                   value={id}
-                  className="h-8 flex-none justify-start gap-2 rounded-md px-2 text-[13px] data-active:bg-white/[0.07] dark:group-data-[variant=line]/tabs-list:data-active:bg-white/[0.07] after:hidden"
+                  className={sectionTrigger}
                 >
                   <Icon aria-hidden />
                   <span className="truncate">{label}</span>
+                </TabsTrigger>
+              ))}
+              {props.pluginSettings.length > 0 && (
+                <div role="presentation" className="px-2 pt-3 pb-1 text-[12px] font-medium text-muted-foreground">
+                  Plugin settings
+                </div>
+              )}
+              {props.pluginSettings.map(({ plugin }) => (
+                <TabsTrigger
+                  key={plugin.id}
+                  value={pluginSettingsSection(plugin.id)}
+                  className={sectionTrigger}
+                >
+                  <PuzzleIcon aria-hidden />
+                  <span className="truncate">{plugin.name}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -234,6 +280,12 @@ export function SettingsDialog(props: {
             <TabsContent value="plugins" className="min-h-0 flex-1">
               <PluginsSection {...props.pluginsProps} />
             </TabsContent>
+            {host &&
+              props.pluginSettings.map((entry) => (
+                <TabsContent key={entry.key} value={pluginSettingsSection(entry.plugin.id)} className="min-h-0 flex-1">
+                  <PluginSettingsPage entry={entry} host={host} />
+                </TabsContent>
+              ))}
           </div>
         </Tabs>
       </DialogContent>

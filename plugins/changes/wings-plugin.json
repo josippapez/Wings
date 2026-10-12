@@ -1,7 +1,8 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.2.1",
+  "version": "0.2.2",
+  "minWingsVersion": "0.1.15",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
   "main": "main.js",

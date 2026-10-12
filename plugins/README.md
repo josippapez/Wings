@@ -39,13 +39,14 @@ Plugins start and stop as you turn them on and off, with no restart. Installed p
 
 ## Packaging
 
-A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. From a git repo:
+A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. A plugin written in TypeScript makes one with `wings-plugin pack` from `wings-plugin-sdk`, which builds `src/` and packs the built files with the manifest, HTML and CSS. A plain JavaScript plugin can zip its git repo:
 
 ```sh
-git archive --format=zip --output my-plugin.wings-plugin HEAD
+npx wings-plugin pack                                          # TypeScript: writes <id>.wings-plugin
+git archive --format=zip --output my-plugin.wings-plugin HEAD  # plain JavaScript
 ```
 
-`templates/wings-plugin/` is a starter repo with SDK types and a workflow that attaches the package to a GitHub release when you push a version tag.
+`templates/wings-plugin/` is a starter repo with the SDK and a workflow that builds and attaches the package to a GitHub release when you push a version tag, so the repo holds only source. Wings installs a repo's release package. A TypeScript repo with no release yet can't be installed from its link, since its source has no built files.
 
 ## TypeScript and React
 
@@ -61,6 +62,8 @@ pnpm install
 pnpm build   # writes each plugin's built files
 pnpm check   # type-checks, and fails if a committed built file is out of date
 ```
+
+Pages use `wings-plugin-ui`: a page calls `showSidebar(<Page />)` (or `showView`, `showPopover`, `showTab`, `showSettings`) and builds from its components, and Wings' `plugin-ui.css` styles them, so the build writes the page's HTML and a Wings update restyles every plugin. A page can still bring its own components and CSS (`import "./sidebar.css"`). See its [README](../packages/plugin-ui/README.md) for the components, the `w-*` class contract and the `--wings-*` variables.
 
 ## Manifest
 
@@ -115,7 +118,8 @@ pnpm check   # type-checks, and fails if a committed built file is out of date
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
 | `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
 | `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden. A sidebar may add `popover: { page, width, height }`, a smaller page shown under its button when you point at it or focus it, 240 to 480 wide and 160 to 640 high; see [Popovers](#popovers) |
-| `views` | Up to 3 `{ id, title, icon, page, opens?, width?, height? }`: pages like `sidebars` that can also open in a modal over Wings or in a window of their own. `opens` lists where, from `sidebar`, `modal` and `window`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
+| `views` | Up to 3 `{ id, title, icon, page, opens?, width?, height? }`: pages like `sidebars` that can also open in a modal over Wings, in a window of their own or as a tab. `opens` lists where, from `sidebar`, `modal`, `window` and `tab`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
+| `settings` | `{ page }`: the plugin's own HTML page in Wings Settings, listed under Plugin settings by the plugin's name. It runs sandboxed like a sidebar, with the same `wings` object, fills the settings area and stops when you leave it or close Settings. Keep what it saves in `wings.storage`. See [Settings page](#settings-page) |
 | `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
 `id` is lowercase letters, digits and dashes. `api` must be `1`.
@@ -151,8 +155,9 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.fetch(url, { method, headers, body, bearer })` | An HTTP call made by Wings to a `permissions.fetch` URL. `bearer` names a secret sent as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status and doesn't follow redirects. The URL must already be in normal form, and its path may only use letters, digits and `-_.~/`. Headers are limited to `Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `If-None-Match` and `If-Modified-Since` |
 | `wings.secrets.set(name, value)`, `.delete(name)`, `.has(name)` | Secrets like API tokens, kept in the system keychain under the plugin's name. They can be sent by `fetch` but not read back, and go when the plugin is removed or replaced by one from elsewhere |
 | `wings.storage.get(key)`, `.set(key, value)`, `.delete(key)`, `.keys()` | The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are JSON (what `JSON.stringify` keeps), and `get` resolves `null` for a key that isn't set. Keys are 1 to 128 letters, digits and `- _ . : /`. Everything together is limited to 1 MB, and a `set` that would go over is refused. See [Storage](#storage) |
-| `wings.openView(id, { as? })` | Opens one of your `sidebars` or `views`: `as` is `sidebar`, `modal` or `window`, one of the view's `opens`, and the first by default. A window that's already open comes to the front. Only one modal shows at a time |
+| `wings.openView(id, { as? })` | Opens one of your `sidebars` or `views`: `as` is `sidebar`, `modal`, `window` or `tab`, one of the view's `opens`, and the first by default. A window that's already open comes to the front, and so does the view's tab in the project on screen. Only one modal shows at a time |
 | `wings.closeView(id)` | Closes a sidebar or view wherever it's open |
+| `wings.openSettings()` | Opens Wings Settings at the plugin's settings page. Refused for a plugin without `contributes.settings` |
 | `wings.setSidebarLabel(sidebarId, label, { rows, tone })` | Takes a sidebar or view id. Up to 80 characters next to its title bar button, like a running timer; `null` clears it. Wings shows it as a green pill, cut with an ellipsis when it doesn't fit, or an amber or red one when `tone` is `"warning"` or `"danger"`. `rows` are up to 6 `{ label, value }` shown when you point at it |
 | `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars, popovers, modals and windows. Use it so a page refreshes when a tool call changed something |
 
@@ -210,6 +215,10 @@ wings.broadcast({ refreshed: Date.now() }); // board.html hears it with wings.on
 
 A window shows the same sandboxed page as the sidebar would. Its calls go to Wings' main window and are checked there against your manifest, exactly like the sidebar's, so a window can't do more than the plugin could.
 
+With `tab` in `opens`, the view opens as a tab in the project on screen, next to its terminal tabs, and fills the pane area. Each project has at most one tab per view, and opening it again shows that tab. The page keeps running while another tab shows, and stops when you close the tab, with its close button, a middle click or ⌘W, or when the plugin calls `wings.closeView`. Wings saves the tab with the others and opens it again on the next start, unless the plugin is gone or the view no longer lists `tab`.
+
+Wings 0.1.14 and older refuse a plugin with `tab` in `opens`, so set `"minWingsVersion": "0.1.15"` to use it.
+
 ## Popovers
 
 A sidebar can have a quick look: a second page shown under its title bar button after you point at it for a moment, or when the button gets the keyboard. Clicking the button still opens the sidebar, and the popover doesn't show while that sidebar is open. It closes shortly after the pointer leaves both, or with Escape on the button.
@@ -221,6 +230,27 @@ A sidebar can have a quick look: a second page shown under its title bar button 
 ```
 
 The page gets the same `wings` object, storage and broadcasts as the sidebar. It loads the first time it shows and keeps running while closed, so it opens at once after that and its timers keep going. Send the user to the full view with `wings.openView("timer")`.
+
+## Settings page
+
+A plugin can have a page in Wings Settings instead of a settings form in its sidebar:
+
+```json
+"contributes": {
+  "settings": { "page": "settings.html" }
+}
+```
+
+Any of the plugin's pages, or its main script, can send the user there, and hear what changed with `wings.onBroadcast`:
+
+```js
+await wings.openSettings();
+// settings.html, after saving:
+await wings.storage.set("interval", 60);
+wings.broadcast({ settingsChanged: true });
+```
+
+Wings 0.1.14 and older ignore `contributes.settings` and have no `wings.openSettings`. Set `"minWingsVersion": "0.1.15"` when the plugin needs them, or check `typeof wings.openSettings === "function"` first.
 
 ## Status line
 

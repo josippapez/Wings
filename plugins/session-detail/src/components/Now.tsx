@@ -1,19 +1,23 @@
+import { Heading, List, ListItem, Spinner, Text } from "wings-plugin-ui";
+
 import type { SessionView } from "../lib/types";
 
 /** The tool calls still running. */
 export function Now({ running }: { running: SessionView["running"] }) {
   return (
     <>
-      <h2>Now</h2>
-      <ul className="list">
+      <Heading>Now</Heading>
+      <List compact>
         {running.map((t, i) => (
-          <li key={i} className="row">
-            <span className="spinner" aria-hidden />
-            <strong>{t.name}</strong>
-            <span className="grow muted ellipsis">{t.summary}</span>
-          </li>
+          <ListItem key={i}>
+            <Spinner />
+            <Text as="strong">{t.name}</Text>
+            <Text grow truncate tone="muted">
+              {t.summary}
+            </Text>
+          </ListItem>
         ))}
-      </ul>
+      </List>
     </>
   );
 }

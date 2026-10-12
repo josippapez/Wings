@@ -1,2 +1,0 @@
-// Built from src/ by wings-plugin build. Edit src/, not this file.
-"use strict";(()=>{wings.onPanes(async n=>{for(let e of n){let o=await wings.exec("git",["branch","--show-current"],{cwd:e.cwd}),c=o.code===0?o.stdout.trim():"";wings.setBadge(e.paneId,c?{label:c,tone:"info",title:e.project||"Git branch",rows:[{label:"Folder",value:e.cwd}],actions:[{id:"refresh",label:"Refresh"}]}:null)}});wings.onAction(async({actionId:n})=>{n==="refresh"&&console.log("Refresh clicked")});})();

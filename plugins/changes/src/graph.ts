@@ -1,23 +1,28 @@
 // The commit graph: every branch's commits with their lanes, like `git log --graph --all`. It runs git itself,
 // since the history is far larger than one broadcast, lays the lanes out once, and only draws the rows on screen.
 
+import { mountShell } from "wings-plugin-sdk/shell";
+
 import { h } from "./graph/dom";
 import { draw, graphWidth, ROW } from "./graph/draw";
 import { layout, parseLog, type Commit } from "./graph/layout";
 import { fill, makeRow } from "./graph/rows";
 import { LOG } from "./lib/log";
 import type { GraphRepoMessage } from "./lib/types";
+import "./graph.css";
 
 /** Rows drawn above and below the screen, so a fast scroll doesn't show gaps. */
 const OVERSCAN = 12;
 const LIMIT = 10_000;
 
-const head = document.getElementById("head")!;
-const scroller = document.getElementById("scroller")!;
-const spacer = document.getElementById("spacer")!;
-const view = document.getElementById("window")!;
-const canvas = document.getElementById("lanes") as HTMLCanvasElement;
-const list = document.getElementById("rows")!;
+// Wings gives the page its frame; the graph lays itself out edge to edge inside it.
+const head = h("header", { id: "head", class: "row", "aria-live": "polite" });
+const canvas = h("canvas", { id: "lanes", "aria-hidden": "true" }) as HTMLCanvasElement;
+const list = h("ul", { id: "rows", "aria-label": "Commits" });
+const view = h("div", { id: "window" }, canvas, list);
+const spacer = h("div", { id: "spacer" }, view);
+const scroller = h("div", { id: "scroller", tabindex: "-1" }, spacer);
+mountShell("view", { fill: true }).replaceChildren(head, scroller);
 const ctx = canvas.getContext("2d")!;
 
 let state: { root: string | null; name?: string; loading: boolean; error?: string; commits: Commit[]; lanes: number } = { root: null, loading: true, commits: [], lanes: 1 };

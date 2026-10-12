@@ -2,21 +2,23 @@
 // The plugin's main script keeps the state and broadcasts it here.
 
 import { useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { useBroadcast } from "wings-plugin-sdk/react";
+import { Empty, Loading, Select, showSidebar, useMainState } from "wings-plugin-ui";
 
 import { Activity } from "./components/Activity";
 import { Files } from "./components/Files";
 import { Now } from "./components/Now";
 import { Stats } from "./components/Stats";
 import { Todos } from "./components/Todos";
-import type { Detail, SessionView, ToMain, ToPage } from "./lib/types";
+import type { Detail, ToMain, ToPage } from "./lib/types";
+import "./sidebar.css";
 
 const send = (message: ToMain) => void wings.broadcast(message);
 /** Rows are by session and key, since a key only names a row within its session. */
 const rowId = (sessionId: string, key: string) => `${sessionId}\n${key}`;
 
 function Sidebar() {
-  const [sessions, setSessions] = useState<SessionView[] | null>(null);
+  const sessions = useMainState<Extract<ToPage, { type: "sessions" }>>("sessions")?.sessions ?? null;
   /** The session you picked; otherwise the one that changed last. */
   const [picked, setPicked] = useState<string | null>(null);
   /** Activity rows you opened, by row id, and the detail the main script sent for each. */
@@ -27,19 +29,13 @@ function Sidebar() {
   /** Rows whose detail was asked for again and hasn't come yet. */
   const asked = useRef(new Set<string>());
 
-  useEffect(() => {
-    const off = wings.onBroadcast((message) => {
-      const m = message as ToPage | null;
-      if (m?.type === "detail") {
-        const id = rowId(m.sessionId, m.key);
-        asked.current.delete(id);
-        setDetails((d) => new Map(d).set(id, m.detail));
-      }
-      else if (m?.type === "sessions") setSessions(m.sessions);
-    });
-    send({ type: "hello" });
-    return off;
-  }, []);
+  useBroadcast((message) => {
+    const m = message as ToPage | null;
+    if (m?.type !== "detail") return;
+    const id = rowId(m.sessionId, m.key);
+    asked.current.delete(id);
+    setDetails((d) => new Map(d).set(id, m.detail));
+  });
 
   // A row opened while its tool call ran asks again once the call is done, so it doesn't stay "still running".
   useEffect(() => {
@@ -67,27 +63,12 @@ function Sidebar() {
 
   const openDiff = (sessionId: string, path: string | null) => send({ type: "diff", sessionId, path });
 
-  if (sessions === null) return <p className="muted">Loading…</p>;
-  if (sessions.length === 0) {
-    return (
-      <div className="empty">
-        <p>No Claude session in your panes.</p>
-        <p className="muted">Run claude in a pane and its activity shows here.</p>
-      </div>
-    );
-  }
+  if (sessions === null) return <Loading />;
+  if (sessions.length === 0) return <Empty title="No Claude session in your panes." description="Run claude in a pane and its activity shows here." />;
   const s = sessions.find((x) => x.id === picked) ?? sessions[0];
   return (
     <>
-      {sessions.length > 1 && (
-        <select aria-label="Session" value={s.id} onChange={(e) => setPicked(e.target.value)}>
-          {sessions.map((x) => (
-            <option key={x.id} value={x.id}>
-              {`${x.project} · ${x.name ?? x.id.slice(0, 8)}`}
-            </option>
-          ))}
-        </select>
-      )}
+      {sessions.length > 1 && <Select label="Session" value={s.id} onChange={setPicked} options={sessions.map((x) => ({ value: x.id, label: `${x.project} · ${x.name ?? x.id.slice(0, 8)}` }))} />}
       <Stats s={s} />
       {s.state === "working" && s.running.length ? <Now running={s.running} /> : null}
       {s.todos.length ? <Todos todos={s.todos} /> : null}
@@ -97,4 +78,4 @@ function Sidebar() {
   );
 }
 
-createRoot(document.getElementById("app")!).render(<Sidebar />);
+showSidebar(<Sidebar />);

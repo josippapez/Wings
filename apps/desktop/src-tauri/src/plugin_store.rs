@@ -639,6 +639,21 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_settings_page_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let with = |contributes: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "contributes": contributes });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", ""), ("settings.html", "")])
+        };
+        s.install(&with(serde_json::json!({})), repo(), None).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let v2 = s.install(&with(serde_json::json!({ "settings": { "page": "settings.html" } })), repo(), Some("demo")).unwrap().0;
+        assert!(!v2.approved && s.active("demo").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn panels_need_an_https_url_and_a_known_icon() {
         let (mut s, dir) = store();
         let with_panel = |icon: &str, url: &str| {
@@ -662,10 +677,12 @@ mod tests {
         let view = |opens: serde_json::Value| serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html", "opens": opens }] });
         let installed = s.install(&with(view(serde_json::json!(["modal", "window"]))), Source::File, None).unwrap().0;
         assert_eq!(installed.manifest.contributes.views[0].opens, ["modal", "window"]);
+        let tab = s.install(&with(view(serde_json::json!(["tab", "sidebar"]))), Source::File, None).unwrap().0;
+        assert_eq!(tab.manifest.contributes.views[0].opens, ["tab", "sidebar"]);
         // Without `opens` a view is a sidebar, like an entry in `sidebars`.
         let plain = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html" }] });
         assert_eq!(s.install(&with(plain), Source::File, None).unwrap().0.manifest.contributes.views[0].opens, ["sidebar"]);
-        for opens in [serde_json::json!([]), serde_json::json!(["popup"]), serde_json::json!(["modal", "modal"])] {
+        for opens in [serde_json::json!([]), serde_json::json!(["popup"]), serde_json::json!(["modal", "modal"]), serde_json::json!(["tab", "tab"])] {
             assert!(s.install(&with(view(opens.clone())), Source::File, None).unwrap_err().contains("opens"), "{opens}");
         }
         let clash = serde_json::json!({

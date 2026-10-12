@@ -1,3 +1,5 @@
+import { Stats as Figures, Text } from "wings-plugin-ui";
+
 import { tokens } from "../lib/format";
 import type { SessionView } from "../lib/types";
 import { status } from "./format";
@@ -6,21 +8,14 @@ import { status } from "./format";
 export function Stats({ s }: { s: SessionView }) {
   return (
     <>
-      <dl className="stats">
-        <div>
-          <dt>Status</dt>
-          <dd className={s.state === "blocked" ? "warn" : ""}>{status[s.state] ?? s.state}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>{s.model || "—"}</dd>
-        </div>
-        <div>
-          <dt>Context</dt>
-          <dd>{tokens(s.context)}</dd>
-        </div>
-      </dl>
-      <p className="muted tokens">{`Tokens this run: ${s.tokens}`}</p>
+      <Figures
+        items={[
+          { label: "Status", value: status[s.state] ?? s.state, tone: s.state === "blocked" ? "warn" : undefined },
+          { label: "Model", value: s.model || "—" },
+          { label: "Context", value: tokens(s.context) },
+        ]}
+      />
+      <Text as="p" tone="muted" size="small" className="tokens">{`Tokens this run: ${s.tokens}`}</Text>
     </>
   );
 }

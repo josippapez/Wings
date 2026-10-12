@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 // wings-plugin build           builds the plugin in this folder
 // wings-plugin build --check   fails if a built file is older than its source
+// wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
+//                              writing built files into the folder
 import { relative } from "node:path";
-import { buildPlugin, entries } from "./build.mjs";
+import { buildPlugin, entries, pack } from "./build.mjs";
 
 const [command, ...flags] = process.argv.slice(2);
-if (command !== "build") {
-  console.error("Usage: wings-plugin build [--check]");
+if (command !== "build" && command !== "pack") {
+  console.error("Usage: wings-plugin build [--check] | wings-plugin pack");
   process.exit(2);
 }
 const dir = process.cwd();
 if (!entries(dir).length) {
-  console.error("No plugin to build here: wings-plugin build runs next to wings-plugin.json, with the code in src/.");
+  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/.`);
   process.exit(1);
+}
+if (command === "pack") {
+  console.log(relative(dir, await pack(dir)));
+  process.exit(0);
 }
 const check = flags.includes("--check");
 const { built, stale } = await buildPlugin(dir, { check });

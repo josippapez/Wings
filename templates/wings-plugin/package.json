@@ -2,11 +2,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "wings-plugin build",
-    "check": "tsc && wings-plugin build --check"
+    "pack": "wings-plugin pack",
+    "check": "tsc && wings-plugin pack"
   },
   "devDependencies": {
     "typescript": "~6.0.3",
-    "wings-plugin-sdk": "^0.1.0"
+    "wings-plugin-sdk": "^0.2.0"
   }
 }

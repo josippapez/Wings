@@ -15,13 +15,26 @@ export type SidebarRef = { plugin: PluginView; sidebarId: string; id: string; ke
 const icons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
 const sidebarOf = (entry: SidebarRef) => pagesOf(entry.plugin).find((s) => s.id === entry.sidebarId);
 
-/** One plugin page, mounted into its own box once and kept running while hidden. */
-function Page({ entry, host, visible }: { entry: SidebarRef; host: PluginHost | null; visible: boolean }) {
+/**
+ * One plugin page, mounted into its own box once and kept running while hidden, until `loaded` goes false (it was
+ * hidden long enough to unload) and its frame goes. It loads again, and asks its plugin for its state, when shown.
+ */
+function Page({ entry, host, visible, loaded }: { entry: SidebarRef; host: PluginHost | null; visible: boolean; loaded: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   // Keyed on entry.key, which changes only when the plugin restarts, so a new plugins list doesn't reload it.
   useEffect(() => {
-    if (box.current && host) void host.mountPage(entry.plugin, entry.sidebarId, box.current, "sidebar").catch((e) => console.error(e));
-  }, [entry.key, host]);
+    if (!box.current || !host || !loaded) return;
+    let remove: (() => void) | undefined;
+    let gone = false;
+    void host
+      .mountPage(entry.plugin, entry.sidebarId, box.current, "sidebar")
+      .then((r) => (gone ? r() : (remove = r)))
+      .catch((e) => console.error(e));
+    return () => {
+      gone = true;
+      remove?.();
+    };
+  }, [entry.key, host, loaded]);
   return <div ref={box} hidden={!visible} className="min-h-0 flex-1" />;
 }
 
@@ -32,6 +45,8 @@ function Page({ entry, host, visible }: { entry: SidebarRef; host: PluginHost | 
 export function RightSidebar(props: {
   open: SidebarRef | null;
   mounted: SidebarRef[];
+  /** Ids of the mounted pages that were hidden long enough to unload. */
+  unloaded: ReadonlySet<string>;
   host: PluginHost | null;
   onSelect: (id: string) => void;
   /** Closes one plugin's page; the last one closes the sidebar. */
@@ -88,7 +103,7 @@ export function RightSidebar(props: {
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-hairline bg-surface">
           {props.mounted.map((entry) => (
-            <Page key={entry.key} entry={entry} host={props.host} visible={entry.key === props.open?.key} />
+            <Page key={entry.key} entry={entry} host={props.host} visible={entry.key === props.open?.key} loaded={!props.unloaded.has(entry.id)} />
           ))}
         </div>
       </div>

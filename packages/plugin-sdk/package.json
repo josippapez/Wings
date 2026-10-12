@@ -1,7 +1,7 @@
 {
   "name": "wings-plugin-sdk",
-  "version": "0.1.0",
-  "description": "Types, React hooks and a build command for Wings plugins.",
+  "version": "0.6.0",
+  "description": "The wings API types, the page frame, React hooks and the build command for Wings plugins.",
   "license": "MIT",
   "type": "module",
   "types": "./wings.d.ts",
@@ -13,10 +13,17 @@
       "types": "./react.d.ts",
       "default": "./react.js"
     },
+    "./shell": {
+      "types": "./shell.d.ts",
+      "default": "./shell.js"
+    },
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
     }
+  },
+  "scripts": {
+    "test": "node --test"
   },
   "bin": {
     "wings-plugin": "bin.mjs"
@@ -25,6 +32,8 @@
     "wings.d.ts",
     "react.js",
     "react.d.ts",
+    "shell.js",
+    "shell.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",
@@ -37,14 +46,25 @@
     "directory": "packages/plugin-sdk"
   },
   "dependencies": {
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3"
   },
   "peerDependencies": {
-    "react": ">=18"
+    "react": ">=19",
+    "react-dom": ">=19"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
+    },
+    "react-dom": {
+      "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "~6.0.3"
   }
 }

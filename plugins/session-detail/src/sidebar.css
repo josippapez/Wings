@@ -1,0 +1,69 @@
+/* What's this plugin's own. Everything else comes from wings-plugin-ui and Wings' plugin-ui.css. */
+
+/* Your messages in the timeline. */
+.prompt {
+  margin: 4px 0;
+  border-left: 2px solid var(--wings-info);
+}
+
+/* The tokens line, tucked under the figures. */
+.tokens {
+  margin: -4px 2px 0;
+}
+
+/* Git commands get a colour of their own. */
+.w-badge:is(.commit, .merge, .branch, .pr) {
+  color: #c9b2f7;
+  background: rgb(179 146 240 / 0.16);
+}
+
+/* What a row opens to. */
+.detail {
+  margin: 2px 6px 8px 20px;
+  padding: 8px 10px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: 8px;
+  background: var(--wings-surface);
+  font-size: 12px;
+}
+.detail .label {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--wings-muted);
+}
+.detail pre {
+  margin: 2px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px/1.45 var(--wings-mono);
+}
+.detail pre.warn {
+  color: var(--wings-warning);
+}
+
+/* The to-do list: a box that fills in as a task moves from pending to done. */
+.todo.completed {
+  color: var(--wings-muted);
+  text-decoration: line-through;
+}
+.todo.in_progress {
+  font-weight: 500;
+}
+.box {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1.5px solid var(--wings-hairline-strong);
+  border-radius: 3px;
+}
+.box.in_progress {
+  border-color: var(--wings-info);
+  background: linear-gradient(90deg, var(--wings-info) 50%, transparent 50%);
+}
+.box.completed {
+  border-color: var(--wings-success);
+  background: var(--wings-success);
+}

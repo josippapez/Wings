@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { Badge, Button, Checkbox, Empty, List, ListButton, ListItem, Row, SearchField, Stack, Text } from "wings-plugin-ui";
 
 import type { CommitRow, Repo } from "../lib/types";
 
@@ -29,15 +30,16 @@ function ago(at: number) {
 }
 
 const REF_KIND = { H: "HEAD", b: "Branch", r: "Remote branch", t: "Tag", s: "Stash" };
-/** A small pill for a branch or tag. `value` is `kind:name`. */
+const REF_TONE = { H: "info", b: "success", t: "warn" } as const;
+/** A small tag for a branch or tag. `value` is `kind:name`. */
 function RefPill({ value }: { value: string }) {
   const kind = value[0];
   const name = value.slice(2);
   const what = REF_KIND[kind as keyof typeof REF_KIND] ?? "Ref";
   return (
-    <span className={`ref ref-${kind}`} title={kind === "H" && name !== "HEAD" ? `HEAD, on ${name}` : `${what} ${name}`}>
+    <Badge variant="outline" tone={REF_TONE[kind as keyof typeof REF_TONE]} className={kind === "H" ? "head" : undefined} title={kind === "H" && name !== "HEAD" ? `HEAD, on ${name}` : `${what} ${name}`}>
       {kind === "t" ? `◆ ${name}` : name}
-    </span>
+    </Badge>
   );
 }
 
@@ -45,21 +47,29 @@ function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => v
   const [hash, subject, author, at, refs] = row;
   const date = new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   return (
-    <li>
-      <button id={`c:${hash}`} className="commit" title={`${subject}\n${hash}\n${author}, ${date}`} onClick={() => onOpen(row)}>
-        <span className="row">
+    <ListItem>
+      <ListButton id={`c:${hash}`} className="commit" title={`${subject}\n${hash}\n${author}, ${date}`} onClick={() => onOpen(row)}>
+        <Row as="span">
           {refs.map((r, i) => (
             <RefPill key={i} value={r} />
           ))}
-          <span className="subject ellipsis">{subject}</span>
-        </span>
-        <span className="row muted meta">
-          <span className="hash">{hash.slice(0, 7)}</span>
-          <span className="grow ellipsis">{author}</span>
-          <span className="when">{ago(at)}</span>
-        </span>
-      </button>
-    </li>
+          <Text truncate className="subject">
+            {subject}
+          </Text>
+        </Row>
+        <Row as="span">
+          <Text tone="muted" size="tiny" mono>
+            {hash.slice(0, 7)}
+          </Text>
+          <Text tone="muted" size="tiny" grow truncate>
+            {author}
+          </Text>
+          <Text tone="muted" size="tiny">
+            {ago(at)}
+          </Text>
+        </Row>
+      </ListButton>
+    </ListItem>
   );
 }
 
@@ -93,46 +103,45 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
     // Only when it mounts: after that the box holds what you type.
   }, []);
   let body = null;
-  if (view?.error) body = <p className="warn">{view.error}</p>;
-  else if (view && view.rows.length === 0 && !view.loading) {
+  if (view?.error) {
     body = (
-      <div className="empty">
-        <p>{query ? "No commits match." : "No commits yet."}</p>
-        {query ? <p className="muted">{`Searched messages, authors and hashes for “${query}”.`}</p> : null}
-      </div>
+      <Text as="p" tone="warn">
+        {view.error}
+      </Text>
     );
+  } else if (view && view.rows.length === 0 && !view.loading) {
+    body = <Empty title={query ? "No commits match." : "No commits yet."} description={query ? `Searched messages, authors and hashes for “${query}”.` : undefined} />;
   } else if (view) {
     const k = keys(view.rows);
     body = (
       <>
-        <ul className="list commits">
+        <List>
           {view.rows.map((row, i) => (
             <Commit key={k[i]} row={row} onOpen={onOpen} />
           ))}
-        </ul>
+        </List>
         {view.more ? (
-          <button id="more" className="ghost" disabled={Boolean(view.loadingMore)} onClick={onMore}>
+          <Button id="more" variant="ghost" disabled={Boolean(view.loadingMore)} onClick={onMore}>
             {view.loadingMore ? "Loading…" : "Load more"}
-          </button>
+          </Button>
         ) : null}
       </>
     );
   }
   return (
     <>
-      <div className="row">
-        <div className="grow">
+      <Row>
+        <Stack grow>
           {/* Uncontrolled, so typing in it never loses the caret. Filled once when it mounts, without a value attribute. */}
-          <input id="search" type="search" placeholder="Message, author or hash" aria-label="Search commits" ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
-        </div>
-        <button onClick={onGraph} title="Every branch as a commit graph">
+          <SearchField id="search" placeholder="Message, author or hash" label="Search commits" ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
+        </Stack>
+        <Button variant="outline" onClick={onGraph} title="Every branch as a commit graph">
           Graph
-        </button>
-      </div>
-      <label className="row check muted">
-        <input type="checkbox" id="all" checked={all} onChange={(e) => onAll(e.currentTarget.checked)} />
-        All branches
-      </label>
+        </Button>
+      </Row>
+      <Checkbox id="all" checked={all} onChange={onAll}>
+        <Text tone="muted">All branches</Text>
+      </Checkbox>
       {body}
     </>
   );

@@ -261,7 +261,7 @@ fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, comm
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::AgentState;
+    use crate::detect::{AgentKind, AgentState};
     use std::{cell::RefCell, collections::HashMap};
 
     #[derive(Default)]
@@ -310,6 +310,7 @@ mod tests {
             pane_id: pane.into(),
             space_id: "s1".into(),
             pid: 1,
+            kind: AgentKind::Claude,
             session_id: Some("abc".into()),
             name: Some("refactor".into()),
             state,

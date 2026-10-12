@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ClipboardAddon, type ClipboardSelectionType, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ImageAddon } from "@xterm/addon-image";
@@ -11,6 +12,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { api } from "@/lib/api";
+import { editKey } from "@/lib/edit-keys";
+import { canUnloadHistory, HISTORY_SEAM, TERMINAL_UNLOAD_MS } from "@/lib/idle-unload";
 
 const theme = {
   // Opaque and equal to the pane card (--surface): xterm's WebGL renderer draws dim text on black boxes
@@ -259,6 +262,14 @@ export class TerminalSession {
   private findResults: FindResults = { index: -1, count: 0 };
   private visible = false;
   private started = false;
+  private disposed = false;
+  // A pane hidden for TERMINAL_UNLOAD_MS stores its scrollback as serialized bytes (about 16x smaller than the
+  // buffer, measured) and writes it back when shown. Output that arrives during the rewrite waits in `held`.
+  private unloadTimer: ReturnType<typeof setTimeout> | undefined;
+  private history: Uint8Array | null = null;
+  private serializer: SerializeAddon | null = null;
+  private restoring = false;
+  private held: Uint8Array[] = [];
   private initialInput: string | null = null;
   // A sidebar slide or a drag changes the size every frame. Each refit reflows the scrollback and resizes the
   // PTY, which makes the shell or Claude redraw, so refit once the size has held still.
@@ -290,6 +301,11 @@ export class TerminalSession {
     this.term.attachCustomKeyEventHandler((e) => {
       const meta = optionIsMeta(e);
       if (this.term.options.macOptionIsMeta !== meta) this.term.options.macOptionIsMeta = meta;
+      const edit = isMac ? editKey(e) : null;
+      if (edit) {
+        if (e.type === "keydown") this.term.input(edit);
+        return false;
+      }
       // Meta Return is a new line in Claude Code, where a plain Return would send the prompt.
       if (keys.shiftReturnSendsMetaReturn && e.key === "Enter" && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
         if (e.type === "keydown") this.term.input("\x1b\r");
@@ -365,7 +381,7 @@ export class TerminalSession {
     this.resizeObserver.observe(this.el);
 
     // A failed attach ends its channel, so the shell started instead gets a new one.
-    const output = () => new Channel<ArrayBuffer>((buf) => this.term.write(new Uint8Array(buf)));
+    const output = () => new Channel<ArrayBuffer>((buf) => this.receive(new Uint8Array(buf)));
     const attachTo = this.attachTo;
     const attached = attachTo !== null && (await api.paneAttach(attachTo, output()).then(() => true, () => false));
     // The pane exited during the reload: start over, as after a restart (a Claude pane resumes its session).
@@ -406,14 +422,69 @@ export class TerminalSession {
     }
     if (visible !== this.visible) {
       this.visible = visible;
+      clearTimeout(this.unloadTimer);
       if (visible) {
         this.enableWebgl();
-        this.refit();
+        // The scrollback goes back at the columns it was stored at, then the pane refits and reflows it.
+        if (this.history === null) this.refit();
+        else void this.restoreHistory().then(() => this.refit());
+      } else {
+        this.unloadTimer = setTimeout(() => this.unload(), TERMINAL_UNLOAD_MS);
       }
     }
     // WebKit allows 16 WebGL contexts per page and silently drops the oldest, so hidden panes give theirs up.
     if (!visible && !keepRenderer) {
       this.disableWebgl();
+    }
+  }
+
+  private receive(data: Uint8Array) {
+    if (this.restoring) this.held.push(data);
+    else this.term.write(data);
+  }
+
+  /** Hidden long enough: gives up the renderer, and keeps the scrollback as text instead of buffer lines. */
+  private unload() {
+    this.disableWebgl();
+    const normal = this.term.buffer.normal;
+    const state = {
+      started: this.started,
+      visible: this.visible,
+      restoring: this.restoring,
+      alternate: this.term.buffer.active.type === "alternate",
+      historyLines: normal.baseY,
+      unloaded: this.history !== null,
+    };
+    if (!canUnloadHistory(state)) return;
+    this.serializer ??= new SerializeAddon();
+    this.term.loadAddon(this.serializer);
+    // As bytes: the addon builds the string with `+=`, and a string kept like that stays a tree of millions of
+    // pieces (290 MB for 15 panes, measured), where a copy as bytes is flat.
+    this.history = new TextEncoder().encode(this.serializer.serialize({ range: { start: 0, end: normal.baseY - 1 }, excludeModes: true, excludeAltBuffer: true }));
+    // Drops the buffer's lines; setting it back keeps the option, and new lines only cost memory as they arrive.
+    const scrollback = this.term.options.scrollback;
+    this.term.options.scrollback = 0;
+    this.term.options.scrollback = scrollback;
+  }
+
+  /** Puts the stored scrollback back in front of what arrived while it was away. */
+  private async restoreHistory() {
+    const history = this.history;
+    if (history === null || !this.serializer) return;
+    this.history = null;
+    this.restoring = true;
+    try {
+      // Everything already written has to be in the buffer before it's serialized.
+      await new Promise<void>((done) => this.term.write("", done));
+      if (this.disposed) return;
+      const tail = this.serializer.serialize({ excludeAltBuffer: false });
+      this.term.reset();
+      this.term.write(history);
+      this.term.write(HISTORY_SEAM + tail);
+    } finally {
+      this.restoring = false;
+      const held = this.held.splice(0);
+      if (!this.disposed) for (const data of held) this.term.write(data);
     }
   }
 
@@ -482,6 +553,8 @@ export class TerminalSession {
   }
 
   dispose() {
+    this.disposed = true;
+    clearTimeout(this.unloadTimer);
     clearTimeout(this.settle);
     this.resizeObserver.disconnect();
     this.disableWebgl();

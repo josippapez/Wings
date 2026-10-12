@@ -204,12 +204,15 @@ interface Wings {
   setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[]; tone?: "warning" | "danger" }): Promise<void>;
   /**
    * Opens one of `contributes.sidebars` or `contributes.views` by id: in the right sidebar, in a modal over Wings,
-   * or in a window of its own. `as` must be in the view's `opens`, and defaults to the first. A window that's
-   * already open comes to the front. The page gets the same `wings` object wherever it opens.
+   * in a window of its own or as a tab in the project on screen (`tab` needs Wings 0.1.15). `as` must be in the
+   * view's `opens`, and defaults to the first. A window or tab that's already open comes to the front. The page
+   * gets the same `wings` object wherever it opens.
    */
-  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" }): Promise<void>;
+  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab" }): Promise<void>;
   /** Closes a sidebar or view wherever it's open. */
   closeView(id: string): Promise<void>;
+  /** Opens Wings Settings at the plugin's settings page, `contributes.settings`. Wings 0.1.15 and newer. */
+  openSettings(): Promise<void>;
   /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars, modals and windows. */
   broadcast(message: unknown): Promise<void>;
   /** Gets what the plugin's other pages send with `broadcast`. */
@@ -217,3 +220,6 @@ interface Wings {
 }
 
 declare const wings: Wings;
+
+/** A page's own CSS, `import "./sidebar.css"`: wings-plugin build bundles it into the page's `<name>.css`. */
+declare module "*.css";

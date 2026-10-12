@@ -26,6 +26,9 @@ importers:
       wings-plugin-sdk:
         specifier: link:../packages/plugin-sdk
         version: link:../packages/plugin-sdk
+      wings-plugin-ui:
+        specifier: link:../packages/plugin-ui
+        version: link:../packages/plugin-ui
 
 packages:
 

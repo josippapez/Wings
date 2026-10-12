@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { List, ListButton, ListItem, Text } from "wings-plugin-ui";
 
 import type { FileRow } from "../lib/types";
 
@@ -46,12 +47,14 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     const isOpen = !props.collapsed.has(f.path);
     const path = f.path;
     out.push(
-      <li key={`d:${path}`}>
-        <button id={`d:${path}`} className="row folder" style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
+      <ListItem key={`d:${path}`}>
+        <ListButton id={`d:${path}`} className="folder" style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
           <span className={`chevron${isOpen ? " open" : ""}`} aria-hidden="true" />
-          <span className="grow ellipsis">{label}</span>
-        </button>
-      </li>,
+          <Text grow truncate>
+            {label}
+          </Text>
+        </ListButton>
+      </ListItem>,
     );
     if (isOpen) out.push(...rows(f, depth + 1, props));
   }
@@ -59,17 +62,19 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     const name = path.split("/").at(-1) ?? path;
     const what = STATUS[status as keyof typeof STATUS] ?? status;
     out.push(
-      <li key={`f:${path}`}>
-        <button id={`f:${path}`} className="row file" style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
+      <ListItem key={`f:${path}`}>
+        <ListButton id={`f:${path}`} style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
           <span className={`status s-${status === "?" ? "new" : status}`} title={what} aria-label={what}>
             {status}
           </span>
-          <span className="grow ellipsis">{name}</span>
-          {added == null ? <span className="muted">{removed == null ? "binary" : "new"}</span> : null}
-          {added ? <span className="add">{`+${added}`}</span> : null}
-          {removed ? <span className="del">{`−${removed}`}</span> : null}
-        </button>
-      </li>,
+          <Text grow truncate>
+            {name}
+          </Text>
+          {added == null ? <Text tone="muted">{removed == null ? "binary" : "new"}</Text> : null}
+          {added ? <Text tone="success" size="tiny" numeric>{`+${added}`}</Text> : null}
+          {removed ? <Text tone="danger" size="tiny" numeric>{`−${removed}`}</Text> : null}
+        </ListButton>
+      </ListItem>,
     );
   }
   return out;
@@ -77,5 +82,5 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
 
 /** The changed files as a folder tree. */
 export function FileTree({ files, ...props }: Props & { files: FileRow[] }) {
-  return <ul className="list">{rows(tree(files), 0, props)}</ul>;
+  return <List className="tree">{rows(tree(files), 0, props)}</List>;
 }

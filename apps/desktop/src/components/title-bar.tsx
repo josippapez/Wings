@@ -24,6 +24,7 @@ import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import { StatusDot } from "@/components/status-dot";
 import type { AgentState, Space } from "@/lib/api";
 import type { LayoutNode } from "@/lib/layout";
+import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
@@ -32,11 +33,11 @@ const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: 
 /** Plugin buttons that show before the rest move into a menu. Pinned ones always show, and take these places first. */
 const INLINE_BUTTONS = 3;
 
-/** A plugin's title bar button: it opens one of its pages in the sidebar, a modal or a window, or its web panel. */
+/** A plugin's title bar button: it opens one of its pages in the sidebar, a modal, a window or a tab, or its web panel. */
 export type PluginButton = {
   key: string;
   pluginId: string;
-  kind: "sidebar" | "modal" | "window" | "panel";
+  kind: "sidebar" | "modal" | "window" | "tab" | "panel";
   id: string;
   title: string;
   icon: string;
@@ -46,7 +47,7 @@ export type PluginButton = {
   rows?: { label: string; value: string }[];
   /** Colours the label amber or red when the plugin says it needs attention. */
   tone?: "warning" | "danger";
-  /** Its sidebar or modal is open. */
+  /** Its sidebar or modal is open, or its tab is on screen. */
   active?: boolean;
   /** A sidebar's popover page, shown while you point at the button. `key` changes when the plugin restarts. */
   popover?: { width: number; height: number; key: string };
@@ -76,7 +77,8 @@ function PopoverPage({ button, mount }: { button: PluginButton; mount: MountPopo
 
 /**
  * A sidebar button with a popover page: pointing at it or focusing it shows the page under it, and clicking
- * still opens the sidebar. The page loads on first show and stays mounted, hidden, after that.
+ * still opens the sidebar. The page loads on first show and stays mounted, hidden, until it has been hidden for
+ * POPOVER_UNLOAD_MS; it loads again on the next show.
  */
 function WithPopover({ button, popover, mount, children }: { button: PluginButton; popover: NonNullable<PluginButton["popover"]>; mount: MountPopover; children: ReactElement }) {
   const [open, setOpen] = useState(false);
@@ -84,6 +86,11 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
   // Not over its own open sidebar, which shows the same and more. Closed rather than hidden, so it doesn't come
   // back when the sidebar closes with the pointer elsewhere.
   if (button.active && open) setOpen(false);
+  useEffect(() => {
+    if (open || !loaded) return;
+    const timer = setTimeout(() => setLoaded(false), POPOVER_UNLOAD_MS);
+    return () => clearTimeout(timer);
+  }, [open, loaded]);
   return (
     <HoverCard
       open={open}
@@ -110,8 +117,13 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
   );
 }
 
-/** `state` rolls up every pane's agent, so a blocked agent in a background split still shows on the tab. */
-export type TabView = { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null };
+/**
+ * A terminal tab, where `state` rolls up every pane's agent so a blocked agent in a background split still shows on
+ * the tab, or a plugin view open as a tab.
+ */
+export type TabView =
+  | { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null }
+  | { id: string; view: { title: string; icon: string } };
 
 const spring = { type: "spring", stiffness: 520, damping: 38, mass: 0.8 } as const;
 
@@ -183,6 +195,8 @@ export function TitleBar(props: {
             <AnimatePresence initial={false} mode="popLayout">
               {props.tabs.map((tab, i) => {
                 const active = tab.id === props.activeTabId;
+                const title = "view" in tab ? tab.view.title : tab.label.title;
+                const ViewIcon = "view" in tab ? (panelIcons[tab.view.icon] ?? GlobeIcon) : null;
                 return (
                   <motion.div
                     key={tab.id}
@@ -204,18 +218,24 @@ export function TitleBar(props: {
                       value={tab.id}
                       render={<motion.button type="button" whileTap={{ scale: 0.97 }} transition={spring} />}
                       onAuxClick={(e) => e.button === 1 && props.onClose(tab.id)}
-                      title={`${tab.label.title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}`}
+                      title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}`}
                       className={cn(
                         "relative h-8 max-w-60 flex-none justify-start gap-2 rounded-[10px] border-0 pr-8 pl-3 text-[13px] font-normal after:hidden",
                         active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
                       )}
                     >
-                      {tab.state && !tab.label.agent ? <StatusDot state={tab.state} /> : <PaneIcon agent={tab.label.agent} />}
-                      <span className="truncate font-medium">{tab.label.title}</span>
-                      {tab.label.detail && (
+                      {"view" in tab ? (
+                        ViewIcon && <ViewIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      ) : tab.state && !tab.label.agent ? (
+                        <StatusDot state={tab.state} />
+                      ) : (
+                        <PaneIcon agent={tab.label.agent} />
+                      )}
+                      <span className="truncate font-medium">{title}</span>
+                      {"label" in tab && tab.label.detail && (
                         <span className="hidden truncate text-muted-foreground xl:inline">{tab.label.detail}</span>
                       )}
-                      <LayoutGlyph layout={tab.layout} focused={tab.focusedPane} />
+                      {"layout" in tab && <LayoutGlyph layout={tab.layout} focused={tab.focusedPane} />}
                     </TabsTrigger>
                     <IconButton
                       label="Close tab"
@@ -258,7 +278,7 @@ export function TitleBar(props: {
                 </div>
               ) : undefined
             }
-            aria-pressed={button.kind === "sidebar" || button.kind === "modal" ? button.active : undefined}
+            aria-pressed={button.kind === "sidebar" || button.kind === "modal" || button.kind === "tab" ? button.active : undefined}
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
             className={cn(
               // A label means something is live, like a running timer, so it shows as a green pill like a pane badge.

@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 import { requestToolInstall } from "@/lib/tool-install";
+import pluginUiCss from "wings-plugin-ui/plugin-ui.css?raw";
 
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
@@ -92,10 +93,12 @@ type Callbacks = {
   openPane: (plan: PanePlan) => Promise<string>;
   /** Shows a pane and moves the keyboard to it. */
   focusPane: (paneId: string) => void;
-  /** Shows a plugin page in the sidebar or the modal. The host opens windows itself. */
-  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal") => void;
-  /** Takes a plugin page out of the sidebar and the modal. */
+  /** Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself. */
+  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab") => void;
+  /** Takes a plugin page out of the sidebar, the modal and its tabs. */
   hideView: (pluginId: string, viewId: string) => void;
+  /** Opens Wings Settings at the plugin's own settings page. */
+  openSettings: (pluginId: string) => void;
 };
 
 type Running = {
@@ -105,8 +108,8 @@ type Running = {
   ui: string[];
   /** Its sidebar and view ids. */
   views: string[];
-  /** `main` runs the plugin's script; the others show one of its pages, `viewId`, or a sidebar's popover page. */
-  kind: "main" | ViewPlace | "popover";
+  /** `main` runs the plugin's script; the others show one of its pages, `viewId`, a sidebar's popover page or its settings page. */
+  kind: "main" | ViewPlace | "popover" | "settings";
   viewId?: string;
   ready: boolean;
   /**
@@ -282,37 +285,46 @@ export class PluginHost {
     });
   }
 
-  /**
-   * A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. With
-   * `popover`, the file is the sidebar's popover page instead of the sidebar's own.
-   */
-  private async pageDocument(plugin: PluginView, viewId: string, popover = false) {
+  /** The file and title of a page: a sidebar or view by `viewId`, a sidebar's popover, or the plugin's settings page. */
+  private pageFile(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings") {
+    if (kind === "settings") {
+      const file = plugin.contributes.settings?.page;
+      if (!file) throw new Error(`${plugin.id} has no settings page`);
+      return { title: `${plugin.name} settings`, file };
+    }
     const page = pagesOf(plugin).find((v) => v.id === viewId);
     if (!page) throw new Error(`${plugin.id} has no view ${viewId}`);
-    const file = popover ? plugin.contributes.sidebars.find((s) => s.id === viewId)?.popover?.page : page.page;
+    const file = kind === "popover" ? plugin.contributes.sidebars.find((s) => s.id === viewId)?.popover?.page : page.page;
     if (!file) throw new Error(`${plugin.id} has no popover for ${viewId}`);
+    return { title: page.title, file };
+  }
+
+  /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
+  private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings" = "page") {
+    const { title, file } = this.pageFile(plugin, viewId, kind);
     const run = newRun();
     const html = await (await fetch(pluginUrl(plugin.id, run, file))).text();
     const base = pluginUrl(plugin.id, run, file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
-    const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
+    const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><style>${pluginUiCss}</style><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
-    return { page, srcdoc, nonce };
+    return { title, srcdoc, nonce };
   }
 
   /**
-   * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar frame lives
-   * until the plugin stops, so hiding the sidebar keeps its state. Resolves a function that removes the frame.
+   * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar or tab frame lives
+   * until the plugin stops or the tab closes, so hiding it keeps its state. `viewId` is null for the settings page.
+   * Resolves a function that removes the frame.
    */
-  async mountPage(plugin: PluginView, viewId: string, container: HTMLElement, kind: "sidebar" | "modal" | "popover") {
-    const { page, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover");
+  async mountPage(plugin: PluginView, viewId: string | null, container: HTMLElement, kind: "sidebar" | "modal" | "tab" | "popover" | "settings") {
+    const { title, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover" || kind === "settings" ? kind : "page");
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts", "allow-forms");
-    frame.title = page.title;
+    frame.title = title;
     frame.className = "size-full border-0 bg-transparent";
     frame.srcdoc = srcdoc;
     container.replaceChildren(frame);
-    this.track(frame, plugin, kind, nonce, viewId);
+    this.track(frame, plugin, kind, nonce, viewId ?? undefined);
     const win = frame.contentWindow;
     return () => void (win && this.stop(win));
   }
@@ -342,7 +354,7 @@ export class PluginHost {
     }
     // A window that says hello again has a new document, so its old frame is gone.
     if (known) this.frames.delete(label);
-    const { page, srcdoc, nonce } = await this.pageDocument(target.plugin, target.viewId);
+    const { title, srcdoc, nonce } = await this.pageDocument(target.plugin, target.viewId);
     const { id: pluginId } = target.plugin;
     this.frames.set(
       label,
@@ -351,7 +363,7 @@ export class PluginHost {
         remove: () => void invoke("plugin_view_close", { pluginId, viewId: target.viewId }),
       }),
     );
-    return { srcdoc, title: page.title };
+    return { srcdoc, title };
   }
 
   /** Closes a page wherever it's open. */
@@ -628,6 +640,17 @@ export class PluginHost {
         else this.callbacks.showView(pluginId, page.id, place);
         return null;
       }
+      case "openSettings":
+        if (!plugin.plugin.contributes.settings) throw new Error(`${pluginId} has no settings page. Add contributes.settings to its manifest`);
+        this.callbacks.openSettings(pluginId);
+        // A page in a view window asked, so Settings opens behind it: bring the main window forward. Only then, so a
+        // plugin's background script can't pull Wings in front of another app. `setFocus` skips a minimized window.
+        if (plugin.kind === "window") {
+          const main = getCurrentWebviewWindow();
+          await main.unminimize();
+          await main.setFocus();
+        }
+        return null;
       case "closeView": {
         const viewId = String(p.id);
         if (!plugin.views.includes(viewId)) throw new Error(`${pluginId} has no view ${viewId}`);

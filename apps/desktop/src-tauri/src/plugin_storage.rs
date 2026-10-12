@@ -160,9 +160,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A dir no other test shares. Nanos alone can repeat for tests started in the same clock tick, and one test's
+    /// cleanup then deletes another's files.
     fn storage() -> (Storage, PathBuf) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("wings-storage-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wings-storage-{}-{n}-{nanos}", std::process::id()));
         (Storage::new(dir.clone()), dir)
     }
 

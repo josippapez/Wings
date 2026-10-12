@@ -18,6 +18,10 @@ import { SettingsDialog, type SettingsSection } from "@/components/settings-dial
 import { ToolInstallDialog } from "@/components/tool-install";
 import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
+import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
+import { useIdleUnload } from "@/lib/use-idle-unload";
+import { isViewTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { PluginTab } from "@/components/plugin-tab";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -32,7 +36,11 @@ import { isShellCommand, resumeCommand, shellQuote } from "@/lib/resume";
 import { UpdateDialog } from "@/components/update-dialog";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
-type Tab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
+type PaneTab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null };
+/** A tab of terminal panes, or a plugin view open as a tab. */
+type Tab = PaneTab | ViewTab;
+/** The terminal tab holding a pane. */
+const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => !isViewTab(t) && paneIds(t.layout).includes(key));
 /** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch; `args` its flags. */
 type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; live: boolean; args: string[] };
 
@@ -50,7 +58,9 @@ type SavedWorkspace = {
   terminalKeys?: TerminalKeys;
   /** The terminal's font, cursor, scrollback, copy and contrast settings. */
   terminalLook?: TerminalLook;
-  tabs: Tab[];
+  tabs: PaneTab[];
+  /** Plugin views open as tabs, apart from `tabs` so an older Wings still loads those. Absent in older files. */
+  viewTabs?: SavedViewTab[];
   sessions: Record<string, string | null>;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
@@ -139,6 +149,8 @@ export default function App() {
   const placed = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginView[]>([]);
+  /** The first plugins list arrived, so a view tab whose plugin isn't in it is gone for good. */
+  const [pluginsLoaded, setPluginsLoaded] = useState(false);
   const [droppedPlugin, setDroppedPlugin] = useState<string | null>(null);
   // A plugin the CLI installed or tried to turn on, waiting for approval in Settings, Plugins.
   const [reviewPlugin, setReviewPlugin] = useState<string | null>(null);
@@ -175,23 +187,6 @@ export default function App() {
     const popover = plugin.contributes.sidebars.find((s) => s.id === sidebarId)?.popover;
     return popover && { width: popover.width, height: popover.height, key: `${plugin.id}:${sidebarId}:popover:${plugin.version}:${epochs[plugin.id] ?? 0}` };
   };
-  const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
-    // A sidebar or view button opens its page in the first place its manifest lists.
-    ...pagesOf(p).map((s) => ({
-      key: `${p.id}:${s.id}`,
-      pluginId: p.id,
-      kind: s.opens[0],
-      id: s.id,
-      title: s.title,
-      icon: s.icon,
-      label: sidebarLabels[`${p.id}:${s.id}`]?.text,
-      rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
-      tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
-      active: (s.opens[0] === "sidebar" ? rightSidebar : modal) === `${p.id}:${s.id}`,
-      popover: popoverOf(p, s.id),
-    })),
-    ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
-  ]);
 
   // Dropping a .wings-plugin file anywhere on the window opens the manager and installs it.
   useEffect(() => {
@@ -230,7 +225,27 @@ export default function App() {
   const activeSpace = spaces.find((s) => s.id === activeSpaceId) ?? null;
   const spaceTabs = tabs.filter((t) => t.spaceId === activeSpaceId);
   const activeTabId = activeSpaceId ? (activeTabBySpace[activeSpaceId] ?? spaceTabs[0]?.id ?? null) : null;
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const shownTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  /** The terminal tab on screen; null while a plugin view's tab shows. */
+  const activeTab = shownTab && !isViewTab(shownTab) ? shownTab : null;
+  const shownView = shownTab && isViewTab(shownTab) ? `${shownTab.view.pluginId}:${shownTab.view.viewId}` : null;
+  const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
+    // A sidebar or view button opens its page in the first place its manifest lists.
+    ...pagesOf(p).map((s) => ({
+      key: `${p.id}:${s.id}`,
+      pluginId: p.id,
+      kind: s.opens[0],
+      id: s.id,
+      title: s.title,
+      icon: s.icon,
+      label: sidebarLabels[`${p.id}:${s.id}`]?.text,
+      rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
+      tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
+      active: (s.opens[0] === "sidebar" ? rightSidebar : s.opens[0] === "tab" ? shownView : modal) === `${p.id}:${s.id}`,
+      popover: popoverOf(p, s.id),
+    })),
+    ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
+  ]);
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
   // The tab shown before this one keeps its terminals' WebGL renderers: rebuilding one takes about 10 ms a pane and
@@ -240,6 +255,9 @@ export default function App() {
   if (activeTabId && recentTabs.current[0] !== activeTabId) {
     recentTabs.current = [activeTabId, ...recentTabs.current.filter((id) => id !== activeTabId)].slice(0, 2);
   }
+  // Plugin pages not on screen for a while unload and load again when shown (a page asks its plugin for its state).
+  const unloadedSidebars = useIdleUnload(openedSidebars, rightSidebar, SIDEBAR_UNLOAD_MS);
+  const unloadedViewTabs = useIdleUnload(tabs.filter(isViewTab).map((t) => t.id), activeTabId, TAB_PAGE_UNLOAD_MS);
   const activeSpaceIdRef = useRef(activeSpaceId);
   activeSpaceIdRef.current = activeSpaceId;
   const focusedPaneId = activeTab ? (panes[activeTab.focusedPane]?.paneId ?? null) : null;
@@ -261,7 +279,7 @@ export default function App() {
     }
   }, [restoredSpaces]);
   const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
-  const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.sessionId ? [a.sessionId] : []))), [agents]);
+  const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.kind === "claude" && a.sessionId ? [a.sessionId] : []))), [agents]);
 
   const labels = useMemo(() => {
     const out: Record<string, PaneLabelInfo> = {};
@@ -273,12 +291,12 @@ export default function App() {
     return out;
   }, [panes, agentsByPane, paneInfo, spaces]);
 
-  const updateTab = useCallback((tabId: string, patch: (t: Tab) => Partial<Tab>) => {
-    setTabs((ts) => ts.map((t) => (t.id === tabId ? { ...t, ...patch(t) } : t)));
+  const updateTab = useCallback((tabId: string, patch: (t: PaneTab) => Partial<PaneTab>) => {
+    setTabs((ts) => ts.map((t) => (t.id === tabId && !isViewTab(t) ? { ...t, ...patch(t) } : t)));
   }, []);
 
   const focusPane = useCallback((key: string) => {
-    const tab = tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+    const tab = tabOfPane(tabsRef.current, key);
     if (tab && tab.focusedPane !== key) updateTab(tab.id, () => ({ focusedPane: key }));
   }, [updateTab]);
 
@@ -354,25 +372,42 @@ export default function App() {
     setPanes(({ [key]: _gone, ...rest }) => rest);
   };
 
-  const closeTab = useCallback((tabId: string) => {
-    const tab = tabsRef.current.find((t) => t.id === tabId);
-    if (!tab) return;
-    paneIds(tab.layout).forEach(disposePane);
-    const rest = tabsRef.current.filter((t) => t.id !== tabId);
+  /** Closes tabs; a project showing one of them shows its last other tab. */
+  const closeTabs = useCallback((tabIds: string[]) => {
+    const gone = tabsRef.current.filter((t) => tabIds.includes(t.id));
+    if (!gone.length) return;
+    for (const tab of gone) if (!isViewTab(tab)) paneIds(tab.layout).forEach(disposePane);
+    const rest = tabsRef.current.filter((t) => !tabIds.includes(t.id));
     setTabs(rest);
     setActiveTabBySpace((m) => {
-      if (m[tab.spaceId] !== tabId) return m;
-      const siblings = rest.filter((t) => t.spaceId === tab.spaceId);
       const next = { ...m };
-      if (siblings.length) next[tab.spaceId] = siblings[siblings.length - 1].id;
-      else delete next[tab.spaceId];
+      for (const tab of gone) {
+        if (next[tab.spaceId] !== tab.id) continue;
+        const siblings = rest.filter((t) => t.spaceId === tab.spaceId);
+        if (siblings.length) next[tab.spaceId] = siblings[siblings.length - 1].id;
+        else delete next[tab.spaceId];
+      }
       return next;
     });
   }, []);
+  const closeTab = useCallback((tabId: string) => closeTabs([tabId]), [closeTabs]);
+
+  /** Shows a plugin view's tab in a project, opening it if it isn't there yet. */
+  const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string) => {
+    const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID());
+    if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
+    setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
+    setActiveSpaceId(spaceId);
+  }, []);
+
+  // A view tab goes once its plugin is off or removed, or its view stops opening as a tab, as on restore.
+  useEffect(() => {
+    if (pluginsLoaded) closeTabs(staleViewTabs(tabs, plugins));
+  }, [pluginsLoaded, plugins, tabs, closeTabs]);
 
   const closePane = useCallback(
     (key: string) => {
-      const tab = tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+      const tab = tabOfPane(tabsRef.current, key);
       if (!tab) return;
       const layout = remove(tab.layout, key);
       if (!layout) return closeTab(tab.id);
@@ -388,7 +423,7 @@ export default function App() {
 
   const splitPane = useCallback(
     (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null) => {
-      const tab = tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+      const tab = tabOfPane(tabsRef.current, key);
       if (!tab) return;
       const next = createPane(tab.spaceId, initialInput, null, cwd);
       updateTab(tab.id, (t) => ({ layout: split(t.layout, key, dir, next), focusedPane: next, zoomedPane: null }));
@@ -403,7 +438,7 @@ export default function App() {
       split: splitPane,
       close: closePane,
       toggleZoom: (key) => {
-        const tab = tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+        const tab = tabOfPane(tabsRef.current, key);
         if (tab) updateTab(tab.id, (t) => ({ zoomedPane: t.zoomedPane === key ? null : key, focusedPane: key }));
       },
       resize: (splitId, ratio) => {
@@ -446,13 +481,14 @@ export default function App() {
           const focusedPane = keys[t.focusedPane] ?? paneIds(layout)[0];
           return { ...t, layout, focusedPane, zoomedPane: t.zoomedPane ? (keys[t.zoomedPane] ?? null) : null };
         });
-      if (!restored.length) return false;
-      const tabIds = new Set(restored.map((t) => t.id));
-      setTabs(restored);
+      const all = restoreTabs<PaneTab>(restored, saved.viewTabs?.filter((t) => known.has(t.spaceId)));
+      if (!all.length) return false;
+      const tabIds = new Set(all.map((t) => t.id));
+      setTabs(all);
       setActiveTabBySpace(Object.fromEntries(Object.entries(saved.activeTabBySpace).filter(([, id]) => tabIds.has(id))));
       setSidebarOpen(saved.sidebarOpen);
       if (saved.widths) setWidths({ left: fit("left", saved.widths.left), right: fit("right", saved.widths.right) });
-      setActiveSpaceId(saved.activeSpaceId && known.has(saved.activeSpaceId) ? saved.activeSpaceId : restored[0].spaceId);
+      setActiveSpaceId(saved.activeSpaceId && known.has(saved.activeSpaceId) ? saved.activeSpaceId : all[0].spaceId);
       return true;
     },
     [createPane],
@@ -492,8 +528,8 @@ export default function App() {
       for (const [key, meta] of Object.entries(prev)) {
         const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
         let patch: Partial<PaneMeta> | null = null;
-        if (agent?.sessionId && (agent.sessionId !== meta.sessionId || !meta.live)) patch = { sessionId: agent.sessionId, live: true, args: agent.args };
-        else if (!agent && meta.live) patch = { sessionId: null, live: false, args: [] };
+        if (agent?.kind === "claude" && agent.sessionId && (agent.sessionId !== meta.sessionId || !meta.live)) patch = { sessionId: agent.sessionId, live: true, args: agent.args };
+        else if (agent?.kind !== "claude" && meta.live) patch = { sessionId: null, live: false, args: [] };
         if (patch) {
           next ??= { ...prev };
           next[key] = { ...meta, ...patch };
@@ -515,6 +551,7 @@ export default function App() {
     const sessions =Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
     const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
     const livePanes = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[key, meta.paneId]] : [])));
+    const { tabs: paneTabs, viewTabs } = saveTabs<PaneTab>(tabs);
     const saved: SavedWorkspace = {
       version: 1,
       activeSpaceId,
@@ -525,7 +562,8 @@ export default function App() {
       fontSize,
       terminalKeys,
       terminalLook,
-      tabs,
+      tabs: paneTabs,
+      viewTabs,
       sessions,
       sessionArgs,
       paneIds: livePanes,
@@ -619,10 +657,11 @@ export default function App() {
       if (id === "settings") return setSettingsOpen(true);
       if (id !== "close-pane") return;
       const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-      if (tab) closePane(tab.focusedPane);
+      if (tab && isViewTab(tab)) closeTab(tab.id);
+      else if (tab) closePane(tab.focusedPane);
     });
     return () => void unlisten.then((off) => off());
-  }, [closePane]);
+  }, [closePane, closeTab]);
 
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
@@ -719,14 +758,24 @@ export default function App() {
       showView: (pluginId, viewId, place) => {
         const key = `${pluginId}:${viewId}`;
         if (place === "modal") return setModal(key);
+        if (place === "tab") {
+          const spaceId = activeSpaceIdRef.current;
+          if (!spaceId) throw new Error("A view opens as a tab in the project on screen, and no project is open");
+          return showViewTab(spaceId, pluginId, viewId);
+        }
         setRightSidebar(key);
         setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
+      },
+      openSettings: (pluginId) => {
+        setSettingsSection(pluginSettingsSection(pluginId));
+        setSettingsOpen(true);
       },
       hideView: (pluginId, viewId) => {
         const key = `${pluginId}:${viewId}`;
         setModal((open) => (open === key ? null : open));
         setRightSidebar((open) => (open === key ? null : open));
         setOpenedSidebars((all) => all.filter((k) => k !== key));
+        closeTabs(tabsRef.current.flatMap((t) => (isViewTab(t) && t.view.pluginId === pluginId && t.view.viewId === viewId ? [t.id] : [])));
       },
       setSidebarLabel: (pluginId, sidebarId, label) =>
         setSidebarLabels(({ [`${pluginId}:${sidebarId}`]: _old, ...rest }) => (label ? { ...rest, [`${pluginId}:${sidebarId}`]: label } : rest)),
@@ -738,7 +787,7 @@ export default function App() {
         if (placement === "tab") key = openTab(spaceId, input, null, cwd);
         else {
           const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-          if (!tab) throw new Error('There is no pane to split. Use placement "tab".');
+          if (!tab || isViewTab(tab)) throw new Error('There is no pane to split. Use placement "tab".');
           // A tab holds one project's panes.
           if (tab.spaceId !== spaceId) throw new Error("A split opens beside the focused pane, so its cwd must be in the project on screen");
           key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd);
@@ -749,7 +798,7 @@ export default function App() {
       },
       focusPane: (paneId) => {
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
-        const tab = key && tabsRef.current.find((t) => paneIds(t.layout).includes(key));
+        const tab = key && tabOfPane(tabsRef.current, key);
         if (!key || !tab) throw new Error(`no pane ${paneId}`);
         setActiveSpaceId(tab.spaceId);
         setActiveTabBySpace((m) => ({ ...m, [tab.spaceId]: tab.id }));
@@ -760,6 +809,7 @@ export default function App() {
     pluginHost.current = host;
     void api.pluginsList().then((list) => {
       setPlugins(list);
+      setPluginsLoaded(true);
       host.sync(list);
     });
     const unlisten = api.onPluginsChanged(async ({ id, review }) => {
@@ -790,7 +840,7 @@ export default function App() {
           cwd: info?.cwd ?? space?.path ?? "",
           command: info?.command ?? "",
           project: space?.name ?? "",
-          session: agent?.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
+          session: agent?.kind === "claude" && agent.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
           focused: meta.paneId === focusedPaneId,
         },
       ];
@@ -837,7 +887,8 @@ export default function App() {
 
   /** Runs `claude --resume` at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
   function resumeHere(session: { id: string; cwd: string }) {
-    const key = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.focusedPane;
+    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+    const key = tab && !isViewTab(tab) ? tab.focusedPane : undefined;
     const paneId = key ? panesRef.current[key]?.paneId : null;
     // The line is typed into a terminal, where a control character acts as a key press.
     if (!key || !paneId || !isSessionId(session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
@@ -849,7 +900,7 @@ export default function App() {
   }
 
   async function removeSpace(spaceId: string) {
-    tabsRef.current.filter((t) => t.spaceId === spaceId).forEach((t) => closeTab(t.id));
+    closeTabs(tabsRef.current.flatMap((t) => (t.spaceId === spaceId ? [t.id] : [])));
     await api.spacesRemove(spaceId);
     const rest = spaces.filter((s) => s.id !== spaceId);
     setSpaces(rest);
@@ -865,7 +916,7 @@ export default function App() {
   }
 
   function selectPaneKey(key: string) {
-    const tab = tabs.find((t) => paneIds(t.layout).includes(key));
+    const tab = tabOfPane(tabs, key);
     if (!tab) return;
     setActiveSpaceId(tab.spaceId);
     setActiveTabBySpace((m) => ({ ...m, [tab.spaceId]: tab.id }));
@@ -873,7 +924,7 @@ export default function App() {
   }
 
   function forkAgent(agent: Agent) {
-    if (agent.sessionId && isSessionId(agent.sessionId)) openTab(agent.spaceId, forkCommand(agent.sessionId));
+    if (agent.kind === "claude" && agent.sessionId && isSessionId(agent.sessionId)) openTab(agent.spaceId, forkCommand(agent.sessionId));
   }
 
   function closeAgent(agent: Agent) {
@@ -881,13 +932,20 @@ export default function App() {
     if (key) closePane(key);
   }
 
-  const tabViews: TabView[] = spaceTabs.map((t) => ({
-    id: t.id,
-    label: labels[t.focusedPane],
-    layout: t.layout,
-    focusedPane: t.focusedPane,
-    state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
-  }));
+  const tabViews: TabView[] = spaceTabs.map((t) => {
+    if (isViewTab(t)) {
+      const plugin = activePlugins.find((p) => p.id === t.view.pluginId);
+      const page = plugin && pagesOf(plugin).find((v) => v.id === t.view.viewId);
+      return { id: t.id, view: { title: page?.title ?? t.view.viewId, icon: page?.icon ?? "" } };
+    }
+    return {
+      id: t.id,
+      label: labels[t.focusedPane],
+      layout: t.layout,
+      focusedPane: t.focusedPane,
+      state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
+    };
+  });
 
   const sidebarProps: Omit<ComponentProps<typeof Sidebar>, "open"> = {
     spaces,
@@ -931,6 +989,7 @@ export default function App() {
                 return;
               }
               if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
+              if (button.kind === "tab") return void (activeSpace && showViewTab(activeSpace.id, button.pluginId, button.id));
               if (button.kind === "window") {
                 const plugin = activePlugins.find((p) => p.id === button.pluginId);
                 if (plugin) void pluginHost.current?.openWindow(plugin, button.id).catch((e) => toast.error(String(e)));
@@ -979,7 +1038,18 @@ export default function App() {
             <SideHandle disabled={!sidebarOpen} />
             <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
               <main className="relative h-full min-h-0 min-w-0">
-                {tabs.map((tab) => (
+                {tabs.map((tab) =>
+                  isViewTab(tab) ? (
+                    <PluginTab
+                      key={tab.id}
+                      plugin={activePlugins.find((p) => p.id === tab.view.pluginId)}
+                      viewId={tab.view.viewId}
+                      pageKey={`${tab.id}:${activePlugins.find((p) => p.id === tab.view.pluginId)?.version}:${epochs[tab.view.pluginId] ?? 0}`}
+                      visible={tab.id === activeTabId}
+                      loaded={!unloadedViewTabs.has(tab.id)}
+                      host={pluginHost.current}
+                    />
+                  ) : (
                   <PaneGrid
                     key={tab.id}
                     layout={tab.layout}
@@ -993,7 +1063,8 @@ export default function App() {
                     onBadgeAction={onBadgeAction}
                     actions={actions}
                   />
-                ))}
+                  ),
+                )}
                 {!sidebarOpen && (
                   <SidebarPeek width={widths.left}>
                     <Sidebar open floating {...sidebarProps} />
@@ -1025,6 +1096,7 @@ export default function App() {
               <RightSidebar
                 open={rightRef}
                 mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
+                unloaded={unloadedSidebars}
                 host={pluginHost.current}
                 onSelect={setRightSidebar}
                 onCloseTab={(id) => {
@@ -1066,8 +1138,10 @@ export default function App() {
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
-          section={settingsSection}
+          section={shownSection(settingsSection, plugins)}
           onSectionChange={setSettingsSection}
+          pluginSettings={settingsPlugins(plugins).map((plugin) => ({ plugin, key: `${plugin.id}:settings:${plugin.version}:${epochs[plugin.id] ?? 0}` }))}
+          host={pluginHost.current}
           pluginsProps={{
             plugins,
             selected: settingsPlugin,

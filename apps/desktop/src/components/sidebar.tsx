@@ -27,7 +27,7 @@ import {
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Item } from "@/components/ui/item";
 import { GitCounts } from "@/components/git-counts";
-import { PaneIcon } from "@/components/pane-label";
+import { agentLabel, PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -284,7 +284,7 @@ export function Sidebar(props: {
                         <PaneIcon agent={agent} />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium">{agent.name ?? "Claude"}</span>
+                        <span className="block truncate text-[13px] font-medium">{agent.name ?? agentLabel(agent.kind)}</span>
                         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                           {spaceName(agent.spaceId)}, {agentStatus(agent)}
                           {agent.state === "working" && agent.stateSince && <Elapsed since={agent.stateSince} />}
@@ -298,7 +298,7 @@ export function Sidebar(props: {
                           <SquareTerminalIcon />
                           Go to pane
                         </ContextMenuItem>
-                        <ContextMenuItem disabled={!agent.sessionId} onClick={() => props.onForkAgent(agent)}>
+                        <ContextMenuItem disabled={agent.kind !== "claude" || !agent.sessionId} onClick={() => props.onForkAgent(agent)}>
                           <GitForkIcon />
                           Fork in new tab
                         </ContextMenuItem>

@@ -7,19 +7,19 @@ A starting point for a Wings plugin that lives in its own repo. It shows each pa
 1. Copy this folder into a new repo and run `npm install`.
 2. In `wings-plugin.json`, set your own `id` (lowercase letters, digits and dashes), `name` and `description`.
 3. Replace `src/main.ts`. A sidebar or other page is `src/<page>.tsx`, which can use React. The `wings-plugin-sdk` README shows how.
-4. Run `npm run build` and commit the built `main.js` with your source. Wings runs the built files.
+4. Commit `src/`, `package.json` and `package-lock.json`. The built files stay out of git: the release workflow builds them.
 
 The full API is in the Wings repo, `plugins/README.md`.
 
 ## Try it in Wings
 
-Make a package and drop it on the Wings window, or pick it with Plugins, Choose a file:
+Package it and drop the file on the Wings window, or pick it with Plugins, Choose a file:
 
 ```sh
-git archive --format=zip --output hello-wings.wings-plugin HEAD
+npm run pack    # writes hello-wings.wings-plugin
 ```
 
-The package holds what's committed, so commit first. Wings asks you to approve the plugin's access before it runs.
+Wings asks you to approve the plugin's access before it runs.
 
 ## Publish it
 
@@ -29,4 +29,4 @@ Bump `version` in `wings-plugin.json`, commit, then tag and push:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The release workflow attaches `<id>.wings-plugin` to a GitHub release. Anyone can then install it by pasting the repo link into Plugins, and Wings offers the update when a new release comes out. The repo has to be public for that. For a private plugin, share the `.wings-plugin` file instead.
+The release workflow builds the plugin and attaches `<id>.wings-plugin` to a GitHub release. Anyone can then install it by pasting the repo link into Plugins, and Wings offers the update when a new release comes out. The repo has to be public for that. For a private plugin, share the `.wings-plugin` file instead.

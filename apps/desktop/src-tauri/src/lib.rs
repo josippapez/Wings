@@ -6,6 +6,7 @@ mod detect;
 mod gitwatch;
 mod history;
 mod menu;
+mod opencode;
 #[cfg(unix)]
 pub mod bridge;
 #[cfg(unix)]
@@ -49,7 +50,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use claude::SessionSummary;
-use detect::{Agent, AgentState, Detector, PaneInfo, PaneProbe};
+use detect::{Agent, AgentKind, AgentState, Detector, PaneInfo, PaneProbe};
 use pty::{Pane, SpawnRequest};
 use plugin_store::{Grant, PluginView, Source, Store};
 use plugins::{ExecResult, Plugin};
@@ -1001,7 +1002,8 @@ fn notify_transitions(app: &AppHandle, before: &[Agent], after: &[Agent]) {
         if was == Some(agent.state) {
             continue;
         }
-        let name = agent.name.as_deref().unwrap_or("Claude");
+        let kind_name = if agent.kind == AgentKind::Opencode { "opencode" } else { "Claude" };
+        let name = agent.name.as_deref().unwrap_or(kind_name);
         let project = std::path::Path::new(&agent.space_id).file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
         let (title, body) = match agent.state {
             AgentState::Blocked => (
@@ -1091,6 +1093,7 @@ fn start_detection(app: AppHandle) {
         let state = app.state::<AppState>();
         let mut detector = Detector::new(&state.claude_dir);
         let mut tailer = tail::Tailer::new(&state.claude_dir);
+        opencode::spawn(detector.opencode());
         loop {
             let probes: Vec<PaneProbe> = state
                 .panes
@@ -1146,7 +1149,7 @@ fn tail_transcripts(app: &AppHandle, tailer: &mut tail::Tailer) {
         return;
     }
     let sessions: Vec<(String, String)> =
-        state.agents.lock().unwrap().iter().filter_map(|a| Some((a.pane_id.clone(), a.session_id.clone()?))).collect();
+        state.agents.lock().unwrap().iter().filter(|a| a.kind == AgentKind::Claude).filter_map(|a| Some((a.pane_id.clone(), a.session_id.clone()?))).collect();
     let events: Vec<plugins::TranscriptEvent> = tailer.poll(&sessions).into_iter().filter_map(|line| plugins::transcript_event(&running, line)).collect();
     if !events.is_empty() {
         let _ = app.emit_to("main", "plugin-transcript", &events);

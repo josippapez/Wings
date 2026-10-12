@@ -1,4 +1,4 @@
-# Push a tag like v0.2.0 and this attaches a .wings-plugin file to a GitHub release.
+# Push a tag like v0.2.0 and this builds the plugin and attaches its .wings-plugin file to a GitHub release.
 # Wings installs and updates from that file when someone adds the repo by its link.
 name: Release
 
@@ -24,12 +24,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Check the built files match src/
-        run: npm install && npm run check
-      - name: Package and release
+      - name: Build and package
+        run: npm ci && npm run check
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           id=$(jq -r .id wings-plugin.json)
-          git archive --format=zip --output "$id.wings-plugin" HEAD
           gh release create "$GITHUB_REF_NAME" "$id.wings-plugin" --verify-tag --generate-notes

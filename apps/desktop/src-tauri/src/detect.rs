@@ -1,10 +1,11 @@
-//! Finds Claude Code running inside Wings panes and works out what it is doing.
-//! No Claude config changes: the process tree tells us a pane runs `claude`, Claude's own
+//! Finds Claude Code and opencode running inside Wings panes and works out what Claude is doing.
+//! No Claude config changes: the process tree tells us a pane runs `claude` or `opencode`, Claude's own
 //! `sessions/<pid>.json` gives the session id and status, and the OSC title is the fallback.
+//! opencode's state and session come from its background service, see `opencode.rs`.
 
 use std::{
     collections::HashMap,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 
@@ -13,6 +14,8 @@ use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, Updat
 
 mod launch_args;
 use launch_args::launch_args;
+
+use crate::opencode::{self, PaneRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,17 +27,26 @@ pub enum AgentState {
     Idle,
 }
 
+/// Which agent CLI a pane runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentKind {
+    Claude,
+    Opencode,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
     pub pane_id: String,
     pub space_id: String,
     pub pid: u32,
+    pub kind: AgentKind,
     pub session_id: Option<String>,
     pub name: Option<String>,
     pub state: AgentState,
     pub waiting_for: Option<String>,
-    /// The flags `claude` was started with, to type again when Wings resumes the session.
+    /// The flags `claude` was started with, to type again when Wings resumes the session. Empty for opencode.
     pub args: Vec<String>,
     /// When this `claude` process started, in ms since 1970. A resumed session's transcript also holds
     /// what came before it, and this tells the two apart.
@@ -85,6 +97,7 @@ pub struct Detector {
     unseen_done: HashMap<String, bool>,
     /// Dev builds log each state change, to debug detection against a live Claude.
     traced: HashMap<String, (AgentState, AgentState, bool)>,
+    opencode: std::sync::Arc<opencode::Shared>,
 }
 
 impl Detector {
@@ -95,7 +108,13 @@ impl Detector {
             last: HashMap::new(),
             unseen_done: HashMap::new(),
             traced: HashMap::new(),
+            opencode: Default::default(),
         }
+    }
+
+    /// What the opencode threads read the panes from and write the state to.
+    pub fn opencode(&self) -> std::sync::Arc<opencode::Shared> {
+        self.opencode.clone()
     }
 
     pub fn scan(&mut self, panes: &[PaneProbe], focused: Option<&str>) -> Scan {
@@ -114,19 +133,24 @@ impl Detector {
         reread_argv(&mut self.system, &jobs);
         let processes = self.system.processes();
 
-        // Per pane: the process it is running now, and the Claude process if that is one.
-        let found: Vec<(Option<Pid>, Option<Pid>)> = panes
+        // Per pane: the process it is running now, and the agent process if that is one.
+        type Found = (Option<Pid>, Option<(Pid, AgentKind)>);
+        let found: Vec<Found> = panes
             .iter()
             .map(|pane| match (pane.foreground_pid.map(Pid::from_u32), pane.shell_pid.map(Pid::from_u32)) {
-                (Some(fg), _) => (Some(fg), processes.get(&fg).filter(|p| is_claude(p)).map(|_| fg)),
-                (None, Some(shell)) => (Some(newest_child(&children, shell)), find_claude(processes, &children, shell)),
+                (Some(fg), _) => (Some(fg), processes.get(&fg).and_then(|p| is_agent(p.name(), p.cmd())).map(|kind| (fg, kind))),
+                (None, Some(shell)) => (Some(newest_child(&children, shell)), find_agent(processes, &children, shell)),
                 (None, None) => (None, None),
             })
             .collect();
-        // Read from the argv the scan above loaded to recognise `claude`.
+        // Read from the argv the scan above loaded to recognise the agent.
         let launch: Vec<(Vec<String>, u64)> = found
             .iter()
-            .map(|(_, claude)| claude.and_then(|pid| processes.get(&pid)).map(|p| (launch_args(p.cmd()), p.start_time() * 1000)).unwrap_or_default())
+            .map(|(_, agent)| match agent.and_then(|(pid, kind)| processes.get(&pid).map(|p| (p, kind))) {
+                Some((p, AgentKind::Claude)) => (launch_args(p.cmd()), p.start_time() * 1000),
+                Some((p, AgentKind::Opencode)) => (Vec::new(), p.start_time() * 1000),
+                None => Default::default(),
+            })
             .collect();
         // The working directory changes with every `cd`, so it is re-read each scan, for these processes only.
         let current: Vec<Pid> = found.iter().filter_map(|(pid, _)| *pid).collect();
@@ -142,31 +166,62 @@ impl Detector {
 
         let mut agents = Vec::new();
         let mut pane_infos = HashMap::new();
-        for (((pane, (_, claude)), info), (args, started_at)) in panes.iter().zip(found).zip(infos).zip(launch) {
+        let mut opencode_panes = Vec::new();
+        for (((pane, (_, agent)), info), (args, started_at)) in panes.iter().zip(found).zip(infos).zip(launch) {
+            let cwd = info.cwd.clone();
             pane_infos.insert(pane.pane_id.clone(), info);
-            let Some(pid) = claude else {
+            let Some((pid, kind)) = agent else {
                 self.last.remove(&pane.pane_id);
                 self.unseen_done.remove(&pane.pane_id);
                 continue;
             };
-            let file = read_session_file(&self.sessions_dir, pid.as_u32()).unwrap_or_default();
-            let raw = file
-                .status
-                .as_deref()
-                .and_then(state_from_status)
-                .or_else(|| state_from_title(&pane.title))
-                .unwrap_or(AgentState::Idle);
-            let is_focused = focused == Some(pane.pane_id.as_str());
-            let state = self.with_done(&pane.pane_id, raw, is_focused);
-            if cfg!(debug_assertions) && self.traced.insert(pane.pane_id.clone(), (raw, state, is_focused)) != Some((raw, state, is_focused)) {
-                eprintln!("[detect] {} raw={raw:?} shown={state:?} focused={is_focused} status={:?}", pane.pane_id, file.status);
-            }
+            let (file, state) = match kind {
+                AgentKind::Claude => {
+                    let file = read_session_file(&self.sessions_dir, pid.as_u32()).unwrap_or_default();
+                    let raw = file
+                        .status
+                        .as_deref()
+                        .and_then(state_from_status)
+                        .or_else(|| state_from_title(&pane.title))
+                        .unwrap_or(AgentState::Idle);
+                    let is_focused = focused == Some(pane.pane_id.as_str());
+                    let state = self.with_done(&pane.pane_id, raw, is_focused);
+                    if cfg!(debug_assertions) && self.traced.insert(pane.pane_id.clone(), (raw, state, is_focused)) != Some((raw, state, is_focused)) {
+                        eprintln!("[detect] {} raw={raw:?} shown={state:?} focused={is_focused} status={:?}", pane.pane_id, file.status);
+                    }
+                    (file, state)
+                }
+                AgentKind::Opencode => {
+                    opencode_panes.push(PaneRef { pane_id: pane.pane_id.clone(), pid: pid.as_u32(), cwd, title: pane.title.clone() });
+                    // Not the title: opencode's own title says nothing about what it is doing.
+                    let view = self.opencode.view(&pane.pane_id);
+                    // The service is gone for good: that is not a turn that finished.
+                    if view.is_none() && self.opencode.link() == opencode::Link::Gone {
+                        self.last.remove(&pane.pane_id);
+                    }
+                    let raw = match view.as_ref().map(|v| v.state) {
+                        Some(opencode::State::Working) => AgentState::Working,
+                        Some(opencode::State::Waiting) => AgentState::Blocked,
+                        _ => AgentState::Idle,
+                    };
+                    let state = self.with_done(&pane.pane_id, raw, focused == Some(pane.pane_id.as_str()));
+                    let file = view
+                        .map(|v| SessionFile { session_id: Some(v.session_id), name: v.title, status_updated_at: Some(v.since), ..Default::default() })
+                        .unwrap_or_default();
+                    (file, state)
+                }
+            };
+            let name = match kind {
+                AgentKind::Claude => file.name.or_else(|| strip_title_glyph(&pane.title)),
+                AgentKind::Opencode => file.name,
+            };
             agents.push(Agent {
                 pane_id: pane.pane_id.clone(),
                 space_id: pane.space_id.clone(),
                 pid: pid.as_u32(),
+                kind,
                 session_id: file.session_id,
-                name: file.name.or_else(|| strip_title_glyph(&pane.title)),
+                name,
                 state,
                 waiting_for: if state == AgentState::Blocked { file.waiting_for } else { None },
                 args,
@@ -174,6 +229,7 @@ impl Detector {
                 state_since: file.status_updated_at,
             });
         }
+        self.opencode.set_panes(opencode_panes);
         Scan { agents, panes: pane_infos }
     }
 
@@ -219,16 +275,18 @@ pub(crate) fn children_by_parent(processes: &HashMap<Pid, Process>) -> HashMap<P
     map
 }
 
-/// Breadth-first, so the shallowest `claude` wins over one that Claude itself started.
-fn find_claude(
+/// Breadth-first, so the shallowest agent wins over one that Claude itself started.
+fn find_agent(
     processes: &HashMap<Pid, Process>,
     children: &HashMap<Pid, Vec<Pid>>,
     root: Pid,
-) -> Option<Pid> {
+) -> Option<(Pid, AgentKind)> {
     let mut queue = std::collections::VecDeque::from([root]);
     while let Some(pid) = queue.pop_front() {
-        if pid != root && processes.get(&pid).is_some_and(is_claude) {
-            return Some(pid);
+        if pid != root {
+            if let Some(kind) = processes.get(&pid).and_then(|p| is_agent(p.name(), p.cmd())) {
+                return Some((pid, kind));
+            }
         }
         queue.extend(children.get(&pid).into_iter().flatten().copied());
     }
@@ -252,12 +310,17 @@ fn name_of(processes: &HashMap<Pid, Process>, pid: Pid) -> String {
     name.trim_start_matches('-').to_string()
 }
 
-fn is_claude(process: &Process) -> bool {
-    let argv0 = process.cmd().first().map(|a| Path::new(a).file_name().unwrap_or(a));
-    process.name() == "claude"
+/// What a process is, from its name and argv. opencode's Homebrew build is a native binary named `opencode`.
+fn is_agent(name: &OsStr, cmd: &[OsString]) -> Option<AgentKind> {
+    let argv0 = cmd.first().map(|a| Path::new(a).file_name().unwrap_or(a));
+    let claude = name == "claude"
         || argv0 == Some(OsStr::new("claude"))
         // npm installs run as `node …/@anthropic-ai/claude-code/cli.js`
-        || process.cmd().iter().any(|a| a.to_string_lossy().contains("@anthropic-ai/claude-code"))
+        || cmd.iter().any(|a| a.to_string_lossy().contains("@anthropic-ai/claude-code"));
+    if claude {
+        return Some(AgentKind::Claude);
+    }
+    (name == "opencode" || argv0 == Some(OsStr::new("opencode"))).then_some(AgentKind::Opencode)
 }
 
 fn read_session_file(dir: &Path, pid: u32) -> Option<SessionFile> {
@@ -293,18 +356,34 @@ fn strip_title_glyph(title: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, process::Command, time::Duration};
+    use std::{fs, process::Command, time::{Duration, Instant}};
+
+    /// Refreshes `pid` in `system` with `kind` until its name is `want`, or until 10 s pass. Returns the last name read.
+    fn name_when(system: &mut System, pid: Pid, kind: ProcessRefreshKind, want: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, kind);
+            let name = name_of(system.processes(), pid);
+            if name == want || Instant::now() >= deadline {
+                return name;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn sees_a_process_that_becomes_another_program() {
-        // `sh` waits, then execs `sleep`: the same pid, a new program.
-        let mut child = Command::new("/bin/sh").args(["-c", "sleep 0.4; exec /bin/sleep 5"]).spawn().unwrap();
+        // `sh` waits, then execs `sleep`: the same pid, a new program. The wait is long, so reading `sh` is not
+        // a race with the exec, and the reads below wait for each state instead of timing it.
+        let mut child = Command::new("/bin/sh").args(["-c", "sleep 2; exec /bin/sleep 5"]).spawn().unwrap();
         let pid = Pid::from_u32(child.id());
         let mut system = System::new();
         let cached = ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet);
-        system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, cached);
-        let before = name_of(system.processes(), pid);
-        std::thread::sleep(Duration::from_millis(900));
+        let before = name_when(&mut system, pid, cached, "sh");
+        // A fresh read showing `sleep` proves the exec happened; the cached view must still show `sh`.
+        let mut fresh = System::new();
+        let always = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
+        let after_exec = name_when(&mut fresh, pid, always, "sleep");
         system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, cached);
         let stale = name_of(system.processes(), pid);
         reread_argv(&mut system, &[pid]);
@@ -312,8 +391,25 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(before, "sh");
+        assert_eq!(after_exec, "sleep", "the process execs into sleep");
         assert_eq!(stale, "sh", "sysinfo keeps the argv it read before the exec");
         assert_eq!(after, "sleep");
+    }
+
+    #[test]
+    fn recognises_claude_and_opencode_by_name_or_argv0() {
+        let argv = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(is_agent(OsStr::new("claude"), &argv(&["claude"])), Some(AgentKind::Claude));
+        assert_eq!(is_agent(OsStr::new("node"), &argv(&["/opt/homebrew/bin/claude"])), Some(AgentKind::Claude));
+        assert_eq!(
+            is_agent(OsStr::new("node"), &argv(&["node", "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"])),
+            Some(AgentKind::Claude)
+        );
+        assert_eq!(is_agent(OsStr::new("opencode"), &argv(&["opencode"])), Some(AgentKind::Opencode));
+        assert_eq!(is_agent(OsStr::new("opencode"), &[]), Some(AgentKind::Opencode));
+        assert_eq!(is_agent(OsStr::new("opencode-x"), &argv(&["/opt/homebrew/bin/opencode", "--port", "4096"])), Some(AgentKind::Opencode));
+        assert_eq!(is_agent(OsStr::new("node"), &argv(&["node", "server.js"])), None);
+        assert_eq!(is_agent(OsStr::new("zsh"), &argv(&["-zsh"])), None);
     }
 
     #[test]
@@ -380,6 +476,58 @@ mod tests {
         assert_eq!(agents[0].name.as_deref(), Some("Fix bug"));
 
         shell.kill().unwrap();
+        let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// An opencode pane gets its session and state from `opencode.rs`, goes through "done" like Claude, and its
+    /// terminal title never decides the state.
+    #[cfg(unix)]
+    #[test]
+    fn opencode_agent_takes_state_and_session_from_the_service() {
+        let tmp = std::env::temp_dir().join(format!("wings-oc-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("opencode");
+        let _ = fs::remove_file(&fake);
+        std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+        let mut shell = Command::new("/bin/sh").arg("-c").arg(format!("'{}' 30; true", fake.display())).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let mut d = Detector::new(&tmp);
+        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: "✳ looks idle".into() };
+        let view = |state, since| opencode::PaneView { session_id: "ses_a".into(), title: Some("Fix it".into()), state, since };
+        let scan = |d: &mut Detector, focused| d.scan(std::slice::from_ref(&probe), focused).agents.remove(0);
+
+        let first = scan(&mut d, None);
+        assert_eq!((first.kind, first.state, first.session_id, first.name), (AgentKind::Opencode, AgentState::Idle, None, None));
+        d.opencode().seed("p1", view(opencode::State::Working, 1000));
+        let a = scan(&mut d, None);
+        assert_eq!((a.state, a.session_id.as_deref(), a.name.as_deref(), a.state_since), (AgentState::Working, Some("ses_a"), Some("Fix it"), Some(1000)));
+        d.opencode().seed("p1", view(opencode::State::Waiting, 2000));
+        assert_eq!(scan(&mut d, None).state, AgentState::Blocked);
+        d.opencode().seed("p1", view(opencode::State::Working, 3000));
+        scan(&mut d, None);
+        d.opencode().seed("p1", view(opencode::State::Idle, 4000));
+        assert_eq!(scan(&mut d, None).state, AgentState::Done, "finished while the pane was out of sight");
+        assert_eq!(scan(&mut d, Some("p1")).state, AgentState::Idle);
+
+        // The service restarts: the last known state stays, so no "done" until the snapshot says so.
+        d.opencode().seed("p1", view(opencode::State::Working, 5000));
+        scan(&mut d, None);
+        d.opencode().disconnected();
+        assert_eq!(scan(&mut d, None).state, AgentState::Working);
+        d.opencode().seed("p1", view(opencode::State::Idle, 6000));
+        assert_eq!(scan(&mut d, None).state, AgentState::Done, "it finished while the service was away");
+        assert_eq!(scan(&mut d, Some("p1")).state, AgentState::Idle);
+
+        // The service never comes back: idle, not done.
+        d.opencode().seed("p1", view(opencode::State::Working, 7000));
+        scan(&mut d, None);
+        d.opencode().gone();
+        assert_eq!(scan(&mut d, None).state, AgentState::Idle);
+
+        shell.kill().unwrap();
+        let _ = shell.wait();
         let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();
         let _ = fs::remove_dir_all(&tmp);
     }

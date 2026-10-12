@@ -29,11 +29,12 @@ const sidebarName = (s: PluginSidebar) => `${s.title} sidebar${s.popover ? " and
 
 /** What a plugin adds, as short chips: UI parts, MCP tools for Claude, and whether it runs commands. */
 function Adds({ plugin }: { plugin: PluginView }) {
-  const { ui, mcpTools, panels, sidebars, views } = plugin.contributes;
+  const { ui, mcpTools, panels, sidebars, views, settings } = plugin.contributes;
   const chips = [
     ...ui.map((kind) => ({ key: kind, label: uiNames[kind] ?? kind, title: undefined as string | undefined })),
     ...sidebars.map((s) => ({ key: `sidebar:${s.id}`, label: sidebarName(s), title: undefined })),
     ...views.map((v) => ({ key: `view:${v.id}`, label: viewName(v), title: undefined })),
+    ...(settings ? [{ key: "settings", label: "Settings page", title: undefined }] : []),
     ...panels.map((p) => ({ key: `panel:${p.id}`, label: `${p.title} panel`, title: p.url })),
     ...(plugin.permissions.fetch.length ? [{ key: "fetch", label: "Uses the web", title: plugin.permissions.fetch.join(", ") }] : []),
     ...(mcpTools.length
@@ -91,10 +92,10 @@ function Source({ plugin: p }: { plugin: PluginView }) {
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
   const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports } = plugin.permissions;
-  const { ui, mcpTools, panels, sidebars, views } = plugin.contributes;
+  const { ui, mcpTools, panels, sidebars, views, settings } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
-    { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map(sidebarName), ...views.map(viewName)] },
+    { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map(sidebarName), ...views.map(viewName), ...(settings ? ["Settings page"] : [])] },
     { title: "Call these web addresses, with tokens you give it", items: fetch },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },

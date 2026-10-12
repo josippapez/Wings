@@ -2,12 +2,13 @@
 // plugin's main script runs git and broadcasts the files and commits here; a click asks it to open the diff viewer.
 
 import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
-import { createRoot } from "react-dom/client";
+import { Button, Card, Chips, Empty, Loading, Row, showSidebar, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { FileTree } from "./components/FileTree";
 import { History, type HistoryView } from "./components/History";
 import { plural } from "./lib/format";
 import type { CommitRow, HistoryMessage, Mode, StateMessage, Tab } from "./lib/types";
+import "./sidebar.css";
 
 const POLL_MS = 15_000;
 /** How long the search waits after the last key before it asks git. */
@@ -114,21 +115,9 @@ function Sidebar() {
 
   const view = tab === "history" ? historyTab : state;
   const repo = view?.repo ?? (tab === "history" ? state?.repo : undefined);
-  if (!view && !repo) return <p className="muted">Loading…</p>;
-  if (!repo) {
-    return (
-      <div className="empty">
-        <p>No git repo in your panes.</p>
-        <p className="muted">Open a terminal in a repo and its changes show here.</p>
-      </div>
-    );
-  }
+  if (!view && !repo) return <Loading />;
+  if (!repo) return <Empty title="No git repo in your panes." description="Open a terminal in a repo and its changes show here." />;
   const mode = state?.mode ?? "uncommitted";
-  const chip = (on: boolean, label: string, onClick: () => void) => (
-    <button className={`chip${on ? " on" : ""}`} aria-pressed={on} onClick={onClick}>
-      {label}
-    </button>
-  );
 
   let body = null;
   if (tab === "history") {
@@ -148,34 +137,39 @@ function Sidebar() {
         onMore={() => loadHistory(historyTab?.rows.length ?? 0)}
       />
     );
-  } else if (state?.error) body = <p className="warn">{state.error}</p>;
+  } else if (state?.error) {
+    body = (
+      <Text as="p" tone="warn">
+        {state.error}
+      </Text>
+    );
+  }
   else if (state?.files) {
     const files = state.files;
     const total = state.total ?? files.length;
     if (total === 0) {
-      body = (
-        <div className="empty">
-          <p>{mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes."}</p>
-          <p className="muted">{state.against ?? ""}</p>
-        </div>
-      );
+      body = <Empty title={mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes."} description={state.against ?? ""} />;
     } else {
       body = (
         <>
-          <div className="row summary">
-            <div className="grow">
-              <div>
-                {plural(total, "file")}
-                {" "}
-                <span className="add">{`+${state.added}`}</span>
-                {" "}
-                <span className="del">{`−${state.removed}`}</span>
-                {state.partial ? <span className="muted">{" (some new files not counted)"}</span> : null}
-              </div>
-              <div className="muted ellipsis">{state.against ?? ""}</div>
-            </div>
-            <button onClick={() => openDiff(null)}>View all</button>
-          </div>
+          <Card compact>
+            <Row>
+              <Stack gap="none" grow>
+                <div>
+                  {plural(total, "file")}
+                  {" "}
+                  <Text tone="success" numeric>{`+${state.added}`}</Text>
+                  {" "}
+                  <Text tone="danger" numeric>{`−${state.removed}`}</Text>
+                  {state.partial ? <Text tone="muted">{" (some new files not counted)"}</Text> : null}
+                </div>
+                <Text as="div" tone="muted" truncate>
+                  {state.against ?? ""}
+                </Text>
+              </Stack>
+              <Button variant="outline" onClick={() => openDiff(null)}>View all</Button>
+            </Row>
+          </Card>
           <FileTree
             files={files}
             collapsed={ui.collapsed}
@@ -186,7 +180,7 @@ function Sidebar() {
             }}
             onOpen={openDiff}
           />
-          {files.length < total ? <p className="muted">{`Too large to list: showing ${files.length} of ${total} files.`}</p> : null}
+          {files.length < total ? <Text as="p" tone="muted">{`Too large to list: showing ${files.length} of ${total} files.`}</Text> : null}
         </>
       );
     }
@@ -194,24 +188,33 @@ function Sidebar() {
 
   return (
     <>
-      <div className="row">
-        <div className="grow">
-          <div className="repo ellipsis">{repo.name}</div>
-          <div className="muted ellipsis">{repo.branch ?? ""}</div>
-        </div>
-        {view?.loading ? <span className="spinner" aria-label="Refreshing" /> : null}
-        <button onClick={refresh} title="Refresh">
+      <Row>
+        <Stack gap="none" grow>
+          <Text as="div" weight="strong" truncate>
+            {repo.name}
+          </Text>
+          <Text as="div" tone="muted" truncate>
+            {repo.branch ?? ""}
+          </Text>
+        </Stack>
+        {view?.loading ? <Spinner label="Refreshing" /> : null}
+        <Button variant="outline" onClick={refresh} title="Refresh">
           Refresh
-        </button>
-      </div>
-      <div className="row filters" role="group" aria-label="Show">
-        {chip(tab === "changes" && mode === "uncommitted", "Uncommitted", () => setMode("uncommitted"))}
-        {chip(tab === "changes" && mode === "branch", "This branch", () => setMode("branch"))}
-        {chip(tab === "history", "History", showHistory)}
-      </div>
+        </Button>
+      </Row>
+      <Chips
+        label="Show"
+        options={[
+          { value: "uncommitted", label: "Uncommitted" },
+          { value: "branch", label: "This branch" },
+          { value: "history", label: "History" },
+        ]}
+        value={tab === "history" ? "history" : mode}
+        onChange={(v) => (v === "history" ? showHistory() : setMode(v))}
+      />
       {body}
     </>
   );
 }
 
-createRoot(document.getElementById("app")!).render(<Sidebar />);
+showSidebar(<Sidebar />);

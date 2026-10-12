@@ -1,0 +1,1292 @@
+/* Wings base styles for plugin pages, loaded before the page's own CSS. Use the variables to match Wings,
+   and the plain elements (button, input, select) already look native. */
+
+/* Everything here sits in cascade layers, below any CSS of a plugin's own: Tailwind, a stylesheet, a style attribute,
+   layered or not, wins over Wings' defaults without a fight over specificity. The order is declared here, first, with
+   Tailwind's layer names in it: wings-base (the plain elements) is under Tailwind's preflight, which resets them, and
+   wings-components (what wings-plugin-ui renders) is over it, so the SDK's components keep their look next to a
+   reset. Tailwind's components and utilities, and any unlayered CSS, are over both. */
+@layer wings-base, theme, base, wings-components, components, utilities;
+
+@layer wings-base {
+:root {
+  color-scheme: dark;
+  --wings-bg: transparent;
+  --wings-surface: rgb(255 255 255 / 0.04);
+  --wings-fg: #ece9e4;
+  --wings-muted: #9d978f;
+  --wings-hover: rgb(255 255 255 / 0.06);
+  --wings-pressed: rgb(255 255 255 / 0.1);
+  --wings-hairline: rgb(255 255 255 / 0.07);
+  --wings-hairline-strong: rgb(255 255 255 / 0.16);
+  --wings-input: rgb(255 255 255 / 0.06);
+  --wings-ring: rgb(255 255 255 / 0.32);
+  --wings-primary: #ece9e4;
+  --wings-primary-fg: #17151a;
+  --wings-info: #9cc0ff;
+  --wings-success: #7dd3a7;
+  --wings-warning: #e9b65f;
+  --wings-danger: #f2786a;
+  --wings-radius: 10px;
+  --wings-font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, sans-serif;
+  --wings-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--wings-bg);
+  color: var(--wings-fg);
+}
+/* The text size goes on body, not html: the root stays the browser's 16px, so a rem means what it does everywhere. */
+body {
+  font: 13px/1.45 var(--wings-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 8px;
+  background: var(--wings-input);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 150ms,
+    transform 100ms;
+}
+button:hover {
+  background: var(--wings-pressed);
+}
+button:active {
+  transform: scale(0.97);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+button.primary {
+  border-color: transparent;
+  background: var(--wings-primary);
+  color: var(--wings-primary-fg);
+}
+button.primary:hover {
+  background: color-mix(in srgb, var(--wings-primary) 85%, transparent);
+}
+button.danger {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--wings-danger) 85%, transparent);
+  color: #1b0f0d;
+}
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+button.ghost:hover {
+  background: var(--wings-hover);
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 8px;
+  background: var(--wings-input);
+  outline: none;
+}
+textarea {
+  height: auto;
+  padding: 8px 10px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--wings-muted);
+}
+
+:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: 1px;
+}
+
+.muted {
+  color: var(--wings-muted);
+}
+
+.card {
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+}
+
+/* The classes wings-plugin-ui renders, a public contract: the names and data attributes stay, and Wings may
+   restyle them. The interactive components are Base UI's, drawn as the app's own shadcn/ui ones. */
+
+@layer wings-components {
+
+/* Raised layers, like a list of suggestions or a menu, as Wings' own menus draw them, and the controls as the app's
+   own shadcn/ui ones do. */
+:root {
+  --wings-menu-bg: rgb(32 29 35);
+  --wings-menu-ring: rgb(236 233 228 / 0.1);
+  --wings-menu-active: rgb(255 255 255 / 0.08);
+  --wings-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --wings-border: rgb(255 255 255 / 0.08);
+  --wings-control-border: rgb(255 255 255 / 0.1);
+  --wings-control-bg: rgb(255 255 255 / 0.03);
+  --wings-control-bg-hover: rgb(255 255 255 / 0.05);
+  --wings-secondary: rgb(255 255 255 / 0.08);
+  --wings-ring-soft: rgb(255 255 255 / 0.16);
+  --wings-radius-sm: calc(var(--wings-radius) * 0.6);
+  --wings-radius-md: calc(var(--wings-radius) * 0.8);
+}
+
+/* The page's place: a sidebar, popover, view (modal, window or tab) or settings page. */
+.w-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.w-shell[data-place="popover"] {
+  gap: 12px;
+  padding: 12px 14px 14px;
+}
+.w-shell[data-place="settings"] {
+  gap: 12px;
+}
+/* A page that lays itself out edge to edge, like a canvas, fills the frame and scrolls on its own. */
+.w-shell[data-fill] {
+  height: 100vh;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Layout. */
+.w-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.w-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+:is(ul, ol):is(.w-row, .w-stack, .w-card) {
+  margin: 0;
+  list-style: none;
+}
+:is(ul, ol):is(.w-row, .w-stack) {
+  padding: 0;
+}
+:is(.w-row, .w-stack)[data-gap="none"] {
+  gap: 0;
+}
+:is(.w-row, .w-stack)[data-gap="xs"] {
+  gap: 2px;
+}
+:is(.w-row, .w-stack)[data-gap="s"] {
+  gap: 4px;
+}
+:is(.w-row, .w-stack)[data-gap="l"] {
+  gap: 12px;
+}
+.w-row[data-align="start"] {
+  align-items: flex-start;
+}
+.w-row[data-align="baseline"] {
+  align-items: baseline;
+}
+.w-row[data-justify="end"] {
+  justify-content: flex-end;
+}
+.w-row[data-justify="between"] {
+  justify-content: space-between;
+}
+.w-row[data-wrap] {
+  flex-wrap: wrap;
+}
+:is(.w-row, .w-stack, .w-text)[data-grow] {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Text. */
+.w-text[data-tone="muted"] {
+  color: var(--wings-muted);
+}
+.w-text[data-tone="info"] {
+  color: var(--wings-info);
+}
+.w-text[data-tone="success"] {
+  color: var(--wings-success);
+}
+.w-text[data-tone="warn"] {
+  color: var(--wings-warning);
+}
+.w-text[data-tone="danger"] {
+  color: var(--wings-danger);
+}
+.w-text[data-size="small"] {
+  font-size: 12px;
+}
+.w-text[data-size="tiny"] {
+  font-size: 11px;
+}
+.w-text[data-weight="medium"] {
+  font-weight: 500;
+}
+.w-text[data-weight="strong"] {
+  font-weight: 600;
+}
+.w-text[data-mono] {
+  font-family: var(--wings-mono);
+}
+.w-text[data-numeric] {
+  font-variant-numeric: tabular-nums;
+}
+.w-text[data-truncate] {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-text[data-clamp] {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+:is(.w-row, .w-list-item, .w-list-button) > .w-text[data-truncate] {
+  min-width: 0;
+}
+
+/* A page's or a card's title. */
+.w-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.w-title[data-size="large"] {
+  font-size: 15px;
+}
+/* A title cut to one line with an ellipsis, like Text truncate. */
+.w-title[data-truncate] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.w-row, .w-list-item, .w-list-button) > .w-title[data-truncate] {
+  min-width: 0;
+}
+
+/* A section heading, with its controls on the right. */
+.w-heading {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--wings-muted);
+}
+.w-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.w-heading-row > .w-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A card, and the quieter one for a summary line. */
+.w-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+.w-card[data-size="compact"] {
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* A labelled bar, and the bar on its own. --w-value is how full it is. */
+.w-gauge {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+.w-gauge-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.w-gauge-note {
+  grid-column: 1 / -1;
+  color: var(--wings-muted);
+}
+.w-meter {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--wings-hairline-strong);
+  overflow: hidden;
+}
+.w-meter-fill {
+  display: block;
+  width: var(--w-value, 0%);
+  height: 100%;
+  border-radius: 2px;
+  background: var(--wings-info);
+}
+.w-meter[data-tone="warn"] > .w-meter-fill {
+  background: var(--wings-warning);
+}
+.w-meter[data-tone="danger"] > .w-meter-fill {
+  background: var(--wings-danger);
+}
+
+/* A row of small figures, label over value. */
+.w-stats {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+.w-stat-label {
+  font-size: 11px;
+  color: var(--wings-muted);
+}
+.w-stat-value {
+  margin: 2px 0 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-stat-value[data-tone="warn"] {
+  color: var(--wings-warning);
+}
+.w-stat-value[data-tone="danger"] {
+  color: var(--wings-danger);
+}
+
+/* Label and value pairs, like a work item's fields. */
+.w-props {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+.w-prop {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 22px;
+}
+.w-prop-label {
+  color: var(--wings-muted);
+}
+.w-prop-value {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Lists: rows that light up under the pointer, or rows that are a button. */
+.w-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.w-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.w-list[data-density="compact"] > .w-list-item {
+  padding: 0 6px;
+}
+.w-list-item[data-align="start"] {
+  align-items: flex-start;
+}
+.w-list-item:hover {
+  background: var(--wings-hover);
+}
+.w-list-item:has(> .w-list-button) {
+  display: block;
+  padding: 0;
+}
+.w-list-item:has(> .w-list-button):hover {
+  background: none;
+}
+.w-list-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: inherit;
+  font-weight: inherit;
+  text-align: left;
+}
+.w-list-button[data-align="baseline"] {
+  align-items: baseline;
+}
+.w-list-button:hover {
+  background: var(--wings-hover);
+}
+.w-list-button:active {
+  transform: none;
+}
+
+/* Status: a dot, a spinner and a badge. */
+.w-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wings-success);
+}
+.w-dot[data-tone="muted"] {
+  background: var(--wings-muted);
+}
+.w-dot[data-tone="info"] {
+  background: var(--wings-info);
+}
+.w-dot[data-tone="warn"] {
+  background: var(--wings-warning);
+}
+.w-dot[data-tone="danger"] {
+  background: var(--wings-danger);
+}
+/* A colour from the plugin's data, like a work item type's, in --w-color. */
+.w-dot[data-color] {
+  background: var(--w-color);
+}
+/* Lucide's loader-circle, as the app's Spinner draws it: in the colour of the text around it. */
+.w-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-6.219-8.56'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-6.219-8.56'/%3E%3C/svg%3E") center / contain no-repeat;
+  animation: w-spin 1s linear infinite;
+}
+.w-spinner[data-size="large"] {
+  width: 24px;
+  height: 24px;
+}
+@keyframes w-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* A badge, as the app draws it. 'data-tone' is Wings' own: a colour that says something. */
+.w-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  height: 20px;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: calc(var(--wings-radius) * 2.6);
+  background: var(--wings-primary);
+  color: var(--wings-primary-fg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.33;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-badge[data-variant="secondary"] {
+  background: var(--wings-secondary);
+  color: var(--wings-fg);
+}
+.w-badge[data-variant="destructive"] {
+  background: color-mix(in srgb, var(--wings-danger) 20%, transparent);
+  color: var(--wings-danger);
+}
+.w-badge[data-variant="outline"] {
+  border-color: var(--wings-border);
+  background: transparent;
+  color: var(--wings-fg);
+}
+.w-badge[data-variant="ghost"] {
+  background: transparent;
+  color: var(--wings-fg);
+}
+.w-badge[data-variant="ghost"]:hover {
+  background: var(--wings-hover);
+  color: var(--wings-muted);
+}
+.w-badge[data-variant="link"] {
+  background: transparent;
+  color: var(--wings-primary);
+  text-underline-offset: 4px;
+}
+.w-badge[data-variant="link"]:hover {
+  text-decoration: underline;
+}
+.w-badge[data-tone="info"] {
+  --w-tone: var(--wings-info);
+}
+.w-badge[data-tone="success"] {
+  --w-tone: var(--wings-success);
+}
+.w-badge[data-tone="warn"] {
+  --w-tone: var(--wings-warning);
+}
+.w-badge[data-tone="danger"] {
+  --w-tone: var(--wings-danger);
+}
+.w-badge[data-tone]:not([data-variant="outline"]) {
+  background: color-mix(in srgb, var(--w-tone) 20%, transparent);
+  color: var(--w-tone);
+}
+.w-badge[data-tone][data-variant="outline"] {
+  border-color: color-mix(in srgb, var(--w-tone) 45%, transparent);
+  color: var(--w-tone);
+}
+
+/* Nothing to show yet, or nothing at all. */
+.w-loading {
+  color: var(--wings-muted);
+}
+.w-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px;
+  text-align: center;
+  text-wrap: balance;
+}
+.w-empty-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 384px;
+}
+.w-empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+.w-empty-description {
+  font-size: 14px;
+  line-height: 1.625;
+  color: var(--wings-muted);
+}
+
+/* Buttons, as the app's are: 'data-variant' is default, secondary, outline, ghost, destructive or link; 'data-size' is
+   default, xs, sm, lg, icon, icon-xs, icon-sm or icon-lg. */
+.w-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--wings-radius);
+  background: var(--wings-primary);
+  background-clip: padding-box;
+  color: var(--wings-primary-fg);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.43;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms,
+    color 150ms,
+    transform 100ms;
+}
+.w-button[data-variant="default"]:hover {
+  background: color-mix(in srgb, var(--wings-primary) 80%, transparent);
+}
+.w-button[data-variant="secondary"] {
+  background: var(--wings-secondary);
+  color: var(--wings-fg);
+}
+.w-button[data-variant="secondary"]:hover {
+  background: color-mix(in srgb, var(--wings-secondary), var(--wings-fg) 5%);
+}
+.w-button[data-variant="outline"] {
+  border-color: var(--wings-control-border);
+  background: var(--wings-control-bg);
+  color: var(--wings-fg);
+}
+.w-button[data-variant="outline"]:hover {
+  background: var(--wings-control-bg-hover);
+}
+.w-button[data-variant="outline"][aria-expanded="true"] {
+  background: var(--wings-hover);
+}
+.w-button[data-variant="ghost"] {
+  background: transparent;
+  color: var(--wings-fg);
+}
+.w-button[data-variant="ghost"]:hover {
+  background: color-mix(in srgb, var(--wings-hover) 50%, transparent);
+}
+.w-button[data-variant="ghost"][aria-expanded="true"] {
+  background: var(--wings-hover);
+}
+.w-button[data-variant="destructive"] {
+  background: color-mix(in srgb, var(--wings-danger) 20%, transparent);
+  color: var(--wings-danger);
+}
+.w-button[data-variant="destructive"]:hover {
+  background: color-mix(in srgb, var(--wings-danger) 30%, transparent);
+}
+.w-button[data-variant="link"] {
+  background: transparent;
+  color: var(--wings-primary);
+  text-underline-offset: 4px;
+}
+.w-button[data-variant="link"]:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.w-button[data-size="xs"] {
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--wings-radius-md);
+  font-size: 12px;
+}
+.w-button[data-size="sm"] {
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--wings-radius-md);
+  font-size: 12.8px;
+}
+.w-button[data-size="lg"] {
+  height: 36px;
+}
+.w-button[data-size="icon"],
+.w-button[data-size="icon-xs"],
+.w-button[data-size="icon-sm"],
+.w-button[data-size="icon-lg"] {
+  padding: 0;
+  width: 32px;
+}
+.w-button[data-size="icon-xs"] {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--wings-radius-md);
+}
+.w-button[data-size="icon-sm"] {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--wings-radius-md);
+}
+.w-button[data-size="icon-lg"] {
+  width: 36px;
+  height: 36px;
+}
+.w-button:active {
+  transform: none;
+}
+.w-button:active:not([aria-haspopup], [aria-disabled="true"]) {
+  transform: translateY(1px);
+}
+/* Busy: it keeps focus, unlike a disabled button, and looks like one. */
+.w-button[aria-disabled="true"],
+.w-button:disabled {
+  opacity: 0.5;
+}
+.w-button[aria-disabled="true"] {
+  cursor: default;
+}
+.w-button:disabled {
+  pointer-events: none;
+}
+.w-button[data-size="xs"] .w-spinner {
+  width: 12px;
+  height: 12px;
+}
+.w-button[data-size="sm"] .w-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+/* Chips, the app's small toggle: a quiet button, and a group of them that filters what shows. */
+.w-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.w-chip {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--wings-radius-md);
+  background: transparent;
+  color: var(--wings-fg);
+  font-size: 12.8px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+.w-chip:hover,
+.w-chip[aria-pressed="true"] {
+  background: var(--wings-hover);
+}
+.w-chip:active {
+  transform: none;
+}
+.w-chip:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Tabs over a panel. 'data-variant' is default, a pill in a tray, or line, an underline. */
+.w-tabs-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.w-tabs {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: fit-content;
+  height: 32px;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--wings-radius);
+  background: var(--wings-hover);
+  color: var(--wings-muted);
+}
+.w-tabs[data-variant="line"] {
+  gap: 4px;
+  border-radius: 0;
+  background: transparent;
+}
+.w-tab {
+  position: relative;
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: calc(100% - 1px);
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--wings-radius-md);
+  background: transparent;
+  color: var(--wings-muted);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms,
+    color 150ms;
+}
+.w-tab:hover {
+  background: transparent;
+  color: var(--wings-fg);
+}
+.w-tab:active {
+  transform: none;
+}
+.w-tab[data-active] {
+  border-color: var(--wings-control-border);
+  background: var(--wings-control-bg);
+  color: var(--wings-fg);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+.w-tabs[data-variant="line"] > .w-tab[data-active] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.w-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -5px;
+  left: 0;
+  height: 2px;
+  background: var(--wings-fg);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.w-tabs[data-variant="line"] > .w-tab[data-active]::after {
+  opacity: 1;
+}
+.w-tab-panel {
+  font-size: 14px;
+  outline: none;
+}
+
+/* Form fields, drawn as the app's: a 32px control with a faint fill, and a ring when focused. */
+.w-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.w-field-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.375;
+  user-select: none;
+}
+.w-field[data-layout="inline"] > .w-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.w-field-row > .w-field-label {
+  flex: none;
+}
+.w-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.w-field-group > legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+.w-field-hint {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--wings-muted);
+}
+.w-field-hint[data-tone="danger"] {
+  color: var(--wings-danger);
+}
+.w-input,
+.w-select {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--wings-control-border);
+  border-radius: var(--wings-radius);
+  background: var(--wings-control-bg);
+  color: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  outline: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+.w-input::placeholder {
+  color: var(--wings-muted);
+}
+.w-input:disabled {
+  background: var(--wings-control-bg-hover);
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.w-select {
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  text-align: left;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+}
+.w-select:hover {
+  background: var(--wings-control-bg-hover);
+}
+.w-select:active {
+  transform: none;
+}
+.w-select[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.w-select[data-placeholder] {
+  color: var(--wings-muted);
+}
+.w-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-select-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--wings-muted);
+  pointer-events: none;
+}
+.w-item-check {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  pointer-events: none;
+}
+.w-item-check > svg,
+.w-checkbox-indicator > svg {
+  width: 100%;
+  height: 100%;
+}
+.w-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.43;
+  cursor: pointer;
+}
+.w-checkbox {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--wings-control-border);
+  border-radius: 4px;
+  background: var(--wings-control-bg);
+  color: var(--wings-primary-fg);
+  outline: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+.w-checkbox:hover {
+  background: var(--wings-control-bg);
+}
+.w-checkbox:active {
+  transform: none;
+}
+.w-checkbox[data-checked],
+.w-checkbox[data-checked]:hover,
+.w-checkbox[data-indeterminate],
+.w-checkbox[data-indeterminate]:hover {
+  border-color: var(--wings-primary);
+  background: var(--wings-primary);
+}
+.w-checkbox[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.w-checkbox-indicator {
+  display: flex;
+  width: 14px;
+  height: 14px;
+}
+/* A control the page marked invalid, as the app marks one. */
+.w-input[aria-invalid="true"],
+.w-select[aria-invalid="true"],
+.w-checkbox[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--wings-danger) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wings-danger) 40%, transparent);
+}
+:is(.w-button, .w-chip, .w-tab, .w-input, .w-select, .w-checkbox):focus-visible {
+  border-color: var(--wings-ring);
+  box-shadow: 0 0 0 3px var(--wings-ring-soft);
+  outline: none;
+}
+.w-button[data-variant="destructive"]:focus-visible {
+  border-color: color-mix(in srgb, var(--wings-danger) 40%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wings-danger) 40%, transparent);
+}
+.w-tab:focus-visible {
+  outline: 1px solid var(--wings-ring);
+}
+
+/* A field with suggestions under it, a select and a menu: raised lists of options, which Base UI puts in the page's
+   body, positioned under what they belong to. */
+.w-combobox {
+  min-width: 0;
+}
+.w-menu-root {
+  display: inline-block;
+  min-width: 0;
+}
+.w-positioner {
+  z-index: 50;
+  outline: none;
+}
+.w-popup {
+  box-sizing: border-box;
+  max-height: var(--available-height);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--wings-radius);
+  background: var(--wings-menu-bg);
+  color: var(--wings-fg);
+  box-shadow:
+    0 0 0 1px var(--wings-menu-ring),
+    var(--wings-shadow);
+  outline: none;
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 100ms,
+    transform 100ms;
+}
+.w-popup[data-starting-style],
+.w-popup[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.95);
+}
+/* A list that stays shown while it filters has no exit to animate. */
+.w-select-popup,
+.w-combobox-popup {
+  transition: none;
+}
+.w-select-popup {
+  min-width: max(144px, var(--anchor-width));
+}
+.w-combobox-popup {
+  width: var(--anchor-width);
+  max-height: min(var(--available-height), 252px);
+}
+.w-menu-popup {
+  width: max-content;
+  min-width: max(128px, var(--anchor-width));
+  max-width: var(--available-width);
+}
+.w-select-item,
+.w-option,
+.w-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--wings-radius-md);
+  font-size: 14px;
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+.w-select-item {
+  padding-right: 32px;
+}
+.w-option {
+  align-items: baseline;
+  gap: 8px;
+}
+.w-select-item[data-highlighted],
+.w-option[data-highlighted],
+.w-menu-item[data-highlighted] {
+  background: var(--wings-menu-active);
+  color: #f4f1ec;
+}
+.w-select-item[data-disabled],
+.w-menu-item[data-disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.w-menu-item[data-variant="destructive"] {
+  color: var(--wings-danger);
+}
+.w-menu-item[data-variant="destructive"][data-highlighted] {
+  background: color-mix(in srgb, var(--wings-danger) 20%, transparent);
+  color: var(--wings-danger);
+}
+.w-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-option-detail {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--wings-muted);
+}
+.w-option-empty {
+  padding: 8px 6px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--wings-muted);
+}
+.w-option-empty:empty {
+  display: none;
+}
+
+/* More behind a line that opens it. */
+.w-disclosure-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: auto;
+  height: auto;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--wings-muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.w-disclosure-trigger:hover {
+  background: none;
+  color: var(--wings-fg);
+}
+.w-disclosure-trigger:active {
+  transform: none;
+}
+.w-disclosure-trigger::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+  transition: transform 150ms;
+}
+.w-disclosure-trigger[data-panel-open]::before {
+  transform: rotate(90deg);
+}
+.w-disclosure-trigger:focus-visible {
+  outline: 2px solid var(--wings-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .w-spinner {
+    animation: none;
+  }
+}
+}

@@ -9,6 +9,7 @@ const agent = (paneId: string, state: AgentState): Agent => ({
   paneId,
   spaceId: "/p",
   pid: 1,
+  kind: "claude",
   sessionId: null,
   name: null,
   state,
