@@ -4,6 +4,15 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.15 · 2026-10-12
+
+- Less memory: a terminal hidden for 10 minutes keeps its history in a compact copy and frees the rest, and restores it when you come back. Plugin pages you closed or haven't looked at for a while unload too, and reload when you open them.
+- opencode panes show whether the agent is working, waiting for you or idle, from opencode's own event stream.
+- ⌥← and ⌥→ move a word, ⌘← and ⌘→ go to the start and end of the line, and ⌘⌫ deletes to the start, as in Terminal.
+- Toasts have a close button, and Clear all when there are several.
+- Plugins can add their own page to Wings Settings, and open a view as a tab next to the terminals.
+- Plugin pages use the new `wings-plugin-ui` package, with the app's own components and styling. `wings-plugin-sdk` 0.6.0 keeps the types, the page frame and the build. Changes 0.2.2, HUD 0.3.3 and Session detail 0.4.2 move to it and need this Wings.
+
 ## 0.1.14 · 2026-10-12
 
 - Pin plugin buttons to the title bar from the … menu, under Keep in title bar. Pinned buttons always show.
