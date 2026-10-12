@@ -1164,6 +1164,59 @@ mod tests {
     }
 
     #[test]
+    fn worktrees_calls_pass_its_own_manifest() {
+        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/worktrees"));
+        let p = load(dir).unwrap();
+        assert!(p.manifest.permissions.panes.as_ref().is_some_and(|panes| panes.is_empty()), "plain shells only");
+        let calls: &[&[&str]] = &[
+            &["rev-parse", "--show-toplevel"],
+            &["rev-parse", "--abbrev-ref", "origin/HEAD"],
+            &["rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+            &["worktree", "list", "--porcelain"],
+            &["worktree", "remove", "--", "/Users/me/dev/app-feature"],
+            &["worktree", "prune", "--verbose"],
+            &["status", "--porcelain"],
+            &["log", "--max-count=1", "--format=%ct"],
+            &["branch", "--list", "--merged=origin/main", "--format=%(refname:short)"],
+            &["branch", "--list", "--format=%(refname:short)%09%(upstream:track)"],
+            &["branch", "-d", "feature/x"],
+        ];
+        for args in calls {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(may_exec(&p, "git", &args), "git {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag("git", a)), "git {args:?} refused");
+        }
+        // Nothing can force a removal, delete an unmerged branch, or change anything else.
+        for args in [
+            &["worktree", "remove", "--force", "/p"][..],
+            &["worktree", "remove", "-f", "/p"],
+            &["worktree", "remove", "-f", "-f", "/p"],
+            &["worktree", "remove", "-ff", "/p"],
+            &["worktree", "remove", "--forc", "/p"],
+            &["worktree", "remove", "/p", "--force"],
+            &["worktree", "prune", "--expire=now"],
+            &["worktree", "add", "/p"],
+            &["worktree", "move", "/a", "/b"],
+            &["worktree", "lock", "/p"],
+            &["branch", "-D", "x"],
+            &["branch", "-d", "-D", "x"],
+            &["branch", "-d", "--force", "x"],
+            &["branch", "-df", "x"],
+            &["branch", "--delete", "x"],
+            &["branch", "newbranch"],
+            &["branch", "--list", "-D", "x"],
+            &["branch", "--list", "--set-upstream-to=origin/x"],
+            &["status", "--porcelain", "--ignore-submodules"],
+            &["symbolic-ref", "HEAD", "refs/heads/x"],
+            &["config", "user.name", "x"],
+            &["reset", "--hard"],
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(!may_exec(&p, "git", &args), "git {args:?} allowed");
+        }
+    }
+
+    #[test]
     fn work_item_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
         let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();

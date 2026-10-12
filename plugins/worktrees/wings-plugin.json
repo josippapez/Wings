@@ -1,0 +1,32 @@
+{
+  "id": "worktrees",
+  "name": "Worktrees",
+  "version": "0.1.0",
+  "minWingsVersion": "0.1.17",
+  "description": "Lists the git worktrees of your open projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "exec": [
+      "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
+      "git worktree list [--porcelain]",
+      "git worktree remove [--]",
+      "git worktree prune [--verbose]",
+      "git status [--porcelain]",
+      "git log [--max-count --format]",
+      "git branch --list [--list --merged --format]",
+      "git branch -d [-d]"
+    ],
+    "panes": []
+  },
+  "contributes": {
+    "sidebars": [
+      {
+        "id": "worktrees",
+        "title": "Worktrees",
+        "icon": "list",
+        "page": "sidebar.html"
+      }
+    ]
+  }
+}

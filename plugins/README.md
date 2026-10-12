@@ -6,6 +6,8 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 `dev-servers/` puts a `localhost:<port>` badge on a pane while a program in it listens on a local port, and opens it in the browser or in a Wings window (`views`).
 
+`worktrees/` lists the git worktrees of your open projects in a sidebar, with what each one is (merged into the default branch, upstream gone, uncommitted changes, locked, folder missing, open in a pane). It removes the ones you pick, or all merged and clean ones, after you confirm, with `git worktree remove` and never `--force`, prunes records of worktrees whose folder is gone, and can delete the branch with `git branch -d`.
+
 `pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
 
 ## Installing
@@ -24,6 +26,7 @@ The plugins in this folder install the same way:
 | PR tracker | `github.com/josippapez/Wings/plugins/pr-tracker` |
 | Session detail | `github.com/josippapez/Wings/plugins/session-detail` |
 | Work item | `github.com/josippapez/Wings/plugins/work-item` |
+| Worktrees | `github.com/josippapez/Wings/plugins/worktrees` |
 
 From a terminal or a script, use the `wings plugin` command while Wings is open:
 

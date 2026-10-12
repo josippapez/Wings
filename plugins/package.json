@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "check": "tsc --noEmit && node build.mjs --check"
+    "check": "tsc --noEmit && node build.mjs --check",
+    "test": "node --test worktrees/src/lib/"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
