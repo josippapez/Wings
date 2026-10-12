@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wings-plugin build",
+    "check": "tsc && wings-plugin build --check"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "wings-plugin-sdk": "^0.1.0"
+  }
+}

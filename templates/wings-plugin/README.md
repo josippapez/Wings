@@ -4,9 +4,10 @@ A starting point for a Wings plugin that lives in its own repo. It shows each pa
 
 ## Start a plugin
 
-1. Copy this folder into a new repo.
+1. Copy this folder into a new repo and run `npm install`.
 2. In `wings-plugin.json`, set your own `id` (lowercase letters, digits and dashes), `name` and `description`.
-3. Replace `main.js`. `wings.d.ts` gives your editor types for the `wings` object.
+3. Replace `src/main.ts`. A sidebar or other page is `src/<page>.tsx`, which can use React. The `wings-plugin-sdk` README shows how.
+4. Run `npm run build` and commit the built `main.js` with your source. Wings runs the built files.
 
 The full API is in the Wings repo, `plugins/README.md`.
 

@@ -1,5 +1,6 @@
 // Types for the Wings plugin SDK, API 1. `window.wings` exists in every plugin; this file only helps your editor.
-// Add `// @ts-check` and `/// <reference path="./wings.d.ts" />` at the top of main.js to use it.
+// In TypeScript, add "wings-plugin-sdk" to `types` in tsconfig.json. In JavaScript, start a file with
+// `// @ts-check` and `/// <reference types="wings-plugin-sdk" />`.
 
 type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "merged";
 
@@ -50,6 +51,15 @@ interface WingsComment {
   body: string;
   createdAt: string;
   url: string;
+  /** On the first comment of a thread: the viewer offers a reply box, and sends replies to `onReply`. */
+  canReply?: boolean;
+}
+
+/** A reply typed in the diff viewer. `replyTo` is the id of the thread's first comment. */
+interface WingsReply {
+  diffId: string;
+  replyTo: number;
+  body: string;
 }
 
 /** A usage limit window. `resetsAt` is in Unix epoch seconds. */
@@ -89,10 +99,14 @@ interface WingsExecOptions {
 }
 
 interface Wings {
+  // Every `on*` call returns a function that removes the listener, for cleaning up in a React effect.
   /** Every terminal pane, on every change. */
-  onPanes(listener: (panes: WingsPane[]) => void): void;
-  /** A badge action was clicked. Return a promise: the button spins until it settles, and a thrown error shows in the card. */
-  onAction(listener: (action: { paneId: string; actionId: string }) => void | Promise<void>): void;
+  onPanes(listener: (panes: WingsPane[]) => void): () => void;
+  /**
+   * A badge action was clicked. Return a promise: the button spins until it settles (up to 5 min), and a thrown
+   * error shows in the card. What it resolves to is ignored.
+   */
+  onAction(listener: (action: { paneId: string; actionId: string }) => unknown): () => void;
   /**
    * Handles Claude's calls to a tool in `contributes.mcpTools`. Return a string or a JSON value; a thrown error
    * is sent back as a failed call. `paneId` is the Wings pane Claude runs in, or `null`. Register it in `main`.
@@ -112,7 +126,7 @@ interface Wings {
    * Only entries written after the plugin started, or after the session started in the pane; `transcript` reads
    * earlier ones. Entries over 256 KB are skipped.
    */
-  onTranscript(listener: (event: WingsTranscriptEvent) => void): void;
+  onTranscript(listener: (event: WingsTranscriptEvent) => void): () => void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
   /**
@@ -141,7 +155,24 @@ interface Wings {
   notify(notification: { title: string; body?: string }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
   openDiff(diff: { title: string; subtitle?: string; patch?: string; comments?: WingsComment[] }): Promise<{ id: string }>;
-  updateDiff(id: string, update: { patch: string; comments?: WingsComment[] } | { error: string }): Promise<void>;
+  /** Updates a viewer opened with `openDiff`; ignored once it's closed. `{ comments }` alone keeps the patch, like after a reply. */
+  updateDiff(id: string, update: { patch: string; comments?: WingsComment[] } | { comments: WingsComment[] } | { error: string }): Promise<void>;
+  /**
+   * Needs `"diff"` in `contributes.ui`. A reply typed under a comment with `canReply` in the diff viewer. Post it,
+   * then add it with `updateDiff`. The reply box waits for the returned promise, and a thrown error shows under it
+   * with the text kept. One handler: a second call replaces the first.
+   */
+  onReply(handler: (reply: WingsReply) => unknown): void;
+  /**
+   * POSTs `fields` (string or whole-number values, up to 64 KB) as JSON to a `permissions.post` path, as you:
+   * `gh api`, `glab api` against `host`, or `az rest` for Azure DevOps. Wings builds the command itself.
+   */
+  post(
+    program: "gh" | "glab" | "az",
+    url: string,
+    fields: Record<string, string | number>,
+    options?: { host?: string },
+  ): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**
    * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings sends
    * as `Authorization: Bearer <secret>`. Resolves for any status; redirects aren't followed.
@@ -182,7 +213,7 @@ interface Wings {
   /** Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and open sidebars, modals and windows. */
   broadcast(message: unknown): Promise<void>;
   /** Gets what the plugin's other pages send with `broadcast`. */
-  onBroadcast(listener: (message: unknown) => void): void;
+  onBroadcast(listener: (message: unknown) => void): () => void;
 }
 
 declare const wings: Wings;
