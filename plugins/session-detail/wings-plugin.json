@@ -1,7 +1,7 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Shows what each Claude session is doing: its model and context size, and recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
   "main": "main.js",

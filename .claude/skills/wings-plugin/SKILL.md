@@ -1,6 +1,6 @@
 ---
 name: wings-plugin
-description: Creates or changes a Wings plugin, a folder with `wings-plugin.json` and a `main.js` that runs sandboxed inside the Wings desktop app and draws badges, actions and diffs on terminal panes. Use when asked to build a plugin, add a badge, action or diff to one, or add a new capability to the plugin API.
+description: Creates or changes a Wings plugin, a folder with `wings-plugin.json` and TypeScript in `src/` that builds to a `main.js` and React pages, which run sandboxed inside the Wings desktop app and draw badges, actions and diffs on terminal panes. Use when asked to build a plugin, add a badge, action or diff to one, or add a new capability to the plugin API.
 ---
 
 # Wings plugins
@@ -25,9 +25,9 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 
 1. Create `plugins/<id>/wings-plugin.json`. The `id` is lowercase letters, digits and dashes, and `api` is `1`.
 2. Ask for the least you need. `exec` lists commands with their subcommand, like `gh pr view`, `transcript` lists Claude Code entry types, and `openUrl` lists https prefixes. Pass a folder with `{ cwd }`, not `git -C`, because the subcommand has to come first.
-3. Write `main.js` against `window.wings` only. The frame is hidden, so all UI goes through badges and the diff viewer.
+3. Write `src/main.ts` against `window.wings` only, and pages as `src/<page>.tsx` in React. The main frame is hidden, so its UI goes through badges, the diff viewer and the plugin's pages. Modules go in folders inside `src/`. Run `pnpm build` in `plugins/` and commit the built `.js` files with the source: Wings installs plugin folders from `main`, built files and all. See TypeScript and React in `plugins/README.md`.
 4. Declare what it adds in `contributes`: `ui` (`badges`, `diff`), `sidebars` (its own pages in the right sidebar, each with an optional `popover` page shown when you point at its button), `views` (pages that can also open in a modal or a window of their own, with `wings.openView`), `panels` (outside web pages in a popover) and any `mcpTools`. The host refuses UI calls the manifest didn't declare. Each MCP tool gets an `inputSchema` and a `wings.onTool(name, handler)` in `main`. Claude sees it as `<id>__<name>` once the user clicks Connect under Plugins, Claude Code. For an API, declare `permissions.fetch`, keep the token with `wings.secrets.set` and send it with `wings.fetch(url, { bearer })`, so plugin code never holds it after setup. `~/Desktop/wings-cyclops` is a worked sidebar plugin.
-5. Run `pnpm tauri dev` in `apps/desktop`. Debug builds load the repo's `plugins/` folder at startup, always on, so restart Wings after editing one. A plugin in its own repo starts from `templates/wings-plugin/` and installs through the Plugins manager as a `.wings-plugin` file or a GitHub link.
+5. Run `pnpm tauri dev` in `apps/desktop`. Debug builds load the repo's `plugins/` folder at startup, always on, so run `pnpm build` in `plugins/` and restart Wings after editing one. A plugin in its own repo starts from `templates/wings-plugin/` and installs through the Plugins manager as a `.wings-plugin` file or a GitHub link.
 
 ## Rules that keep plugins fast and safe
 
@@ -55,15 +55,15 @@ Then update `plugins/README.md`.
 ## Check it
 
 ```sh
-node --check plugins/<id>/main.js
+cd plugins && pnpm check
 cd apps/desktop && pnpm exec tsc --noEmit && pnpm build
 cd src-tauri && cargo clippy && cargo test
 ```
 
-To check a plugin's output against real data before trying it in the app, run its code in Node with a stub `wings` that calls the real CLIs:
+To check a plugin's output against real data before trying it in the app, run its built `main.js` in Node with a stub `wings` that calls the real CLIs. The bundle hides its functions, so drive it through the listeners it registers, or bundle a small entry that imports the module you want to call:
 
 ```js
-// harness.mjs: node harness.mjs plugins/<id>/main.js
+// harness.mjs: node harness.mjs plugins/<id>/main.js (or a bundle of an entry that sets globalThis.t)
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
@@ -72,11 +72,12 @@ const exec = (program, args, { cwd } = {}) =>
   new Promise((resolve) =>
     execFile(program, args, { cwd, maxBuffer: 64 << 20 }, (err, stdout, stderr) =>
       resolve({ code: err ? (err.code ?? 1) : 0, stdout, stderr })));
-const wings = { onPanes() {}, onAction() {}, exec, transcript: async () => [], setBadge: async () => {}, openUrl: async () => {} };
-const ctx = vm.createContext({ wings, console, setInterval: () => 0, URL, JSON, Promise, Date });
-// Expose the top-level functions you want to call.
-vm.runInContext(readFileSync(process.argv[2], "utf8") + "\n;globalThis.t = { githubDiff };", ctx);
-console.log(await ctx.t.githubDiff({ url: "https://github.com/o/r/pull/1", number: 1, repo: "o/r" }));
+let onPanes;
+const wings = { onPanes: (fn) => (onPanes = fn), onAction() {}, onBroadcast() {}, exec, transcript: async () => [], setBadge: async (paneId, badge) => console.log(paneId, badge), openUrl: async () => {} };
+const ctx = vm.createContext({ wings, console, setTimeout, clearTimeout, setInterval: () => 0, URL, JSON, Promise, Date });
+vm.runInContext(readFileSync(process.argv[2], "utf8"), ctx);
+// A pane in a real checkout; the badges it sets print as they come.
+await onPanes([{ paneId: "p1", cwd: process.cwd(), command: "zsh", project: "demo", session: null, focused: true }]);
 ```
 
 Wings is a GUI the user is often using. Don't click through it yourself. Ask them to check what the harness can't show.

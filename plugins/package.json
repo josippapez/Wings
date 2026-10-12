@@ -1,0 +1,17 @@
+{
+  "name": "wings-plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit && node build.mjs --check"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "~6.0.3",
+    "wings-plugin-sdk": "link:../packages/plugin-sdk"
+  }
+}

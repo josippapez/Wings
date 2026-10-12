@@ -47,6 +47,21 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 
 `templates/wings-plugin/` is a starter repo with SDK types and a workflow that attaches the package to a GitHub release when you push a version tag.
 
+## TypeScript and React
+
+Wings runs plain JavaScript: `main` and each page's `<script>`. To write a plugin in TypeScript, or a page in React, bundle it into those files before you package it and ship the built files. The `wings-plugin-sdk` npm package does that with `wings-plugin build`, and has the types and a React hook. `templates/wings-plugin/` is a plugin set up with it.
+
+Every `wings.on*` call returns a function that removes the listener, so a React effect can return it as its cleanup.
+
+The plugins in this folder do that. Their code is in `<id>/src/`, and every file at the top of `src/` builds to the file of the same name next to `wings-plugin.json`, so `src/main.ts` becomes `main.js` and `src/sidebar.tsx` becomes `sidebar.js`. Folders inside `src/` hold the modules. The built files are committed, because Wings installs a plugin folder straight from `main`.
+
+```sh
+cd plugins
+pnpm install
+pnpm build   # writes each plugin's built files
+pnpm check   # type-checks, and fails if a committed built file is out of date
+```
+
 ## Manifest
 
 ```json
@@ -168,7 +183,7 @@ Wings adds tools of its own to that server, with or without plugins:
 
 Mind what these allow. Every Claude Code session you start on this computer can call them, so one session can read what another shows, which can include secrets and prompts. `open_pane` only types a command, so nothing runs outside Claude Code's own permission checks for Bash; Claude Code still asks before a call to an MCP tool unless you allowed it. The socket is readable by your user only (`0600`) and there is no network access.
 
-`templates/wings-plugin/wings.d.ts` has types for all of this.
+The `wings-plugin-sdk` package has types for all of this.
 
 ## Required tools
 

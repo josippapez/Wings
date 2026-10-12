@@ -1,0 +1,196 @@
+/** GitHub: the PR from the transcript or `gh pr list`, its status and failed Actions jobs, the diff, comments and replies. */
+import { cleanLog, counts, detail } from "./checks";
+import { cli, post } from "./cli";
+import { problems } from "./state";
+import type { Comment, FailureDetail, Failing, GithubLink, Icon, Link, Result, Status } from "./types";
+
+const GH_FIELDS =
+  "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
+// No token prints `gh auth login` or GH_TOKEN; an expired token that gh can renew prints "Try authenticating with:
+// gh auth refresh -h <host>" (cli/cli internal/ghcmd/cmd.go). A missing scope also suggests `gh auth refresh`, but
+// not after "Try authenticating with:", so it doesn't count.
+const GH_LOGGED_OUT = /gh auth login|GH_TOKEN|Try authenticating with:\s+gh auth refresh\b/;
+
+/** The fields of `gh pr view --json` the tracker reads. */
+interface GhPr {
+  title: string;
+  state: string;
+  isDraft: boolean;
+  reviewDecision: string;
+  mergeable: string;
+  statusCheckRollup?: GhCheck[];
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  headRefName: string;
+  baseRefName: string;
+  updatedAt: string;
+}
+
+/** A CheckRun or a StatusContext in `statusCheckRollup`. */
+interface GhCheck {
+  __typename?: string;
+  state?: string;
+  status?: string;
+  conclusion?: string;
+  detailsUrl?: string;
+  targetUrl?: string;
+  name?: string;
+  context?: string;
+  description?: string;
+}
+
+/** A line comment from `gh api repos/.../pulls/N/comments`. */
+interface GhComment {
+  id: number;
+  in_reply_to_id?: number;
+  path: string;
+  line?: number | null;
+  side?: string;
+  user?: { login?: string };
+  body?: string;
+  created_at: string;
+  html_url: string;
+}
+
+interface GhDiscussion {
+  comments: { author?: { login?: string }; body: string; createdAt: string; url: string }[];
+  reviews: { author?: { login?: string }; body: string; submittedAt: string }[];
+}
+
+// ---------- finding the PR for a pane ----------
+
+export async function fromTranscript(sessionId: string): Promise<Link | null> {
+  try {
+    const last = (await wings.transcript(sessionId, ["pr-link"], { last: 1 })).at(-1) as { prUrl?: string; prNumber: number; prRepository: string } | undefined;
+    if (last?.prUrl) return { provider: "github", url: last.prUrl, number: last.prNumber, repo: last.prRepository };
+  } catch {
+    // A brand-new session may not have a transcript yet.
+  }
+  return null;
+}
+
+/** Remembers a logged-out `gh`, so the pane offers a sign-in button instead of an error. */
+function checkGhLogin(out: { code: number | null; stderr: string }) {
+  if (out.code !== 0 && GH_LOGGED_OUT.test(out.stderr)) {
+    problems.set("github", { login: true, message: "Sign in to GitHub to see this branch's pull request." });
+  } else if (out.code === 0) {
+    problems.delete("github");
+  }
+}
+
+export async function findGithub(cwd: string, _remote: unknown, branch: string): Promise<Link | null> {
+  const out = await cli("github", "gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { cwd });
+  checkGhLogin(out);
+  const pr = out.code === 0 ? (JSON.parse(out.stdout) as { url: string; number: number }[])[0] : null;
+  if (!pr) return null;
+  const repo = pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1] ?? "";
+  return { provider: "github", url: pr.url, number: pr.number, repo };
+}
+
+// ---------- status ----------
+
+export async function githubStatus(link: Pick<Link, "url">): Promise<Status> {
+  // A Claude pane can know its PR from the transcript without gh, so this can be the first gh call.
+  const out = await cli("github", "gh", ["pr", "view", link.url, "--json", GH_FIELDS]);
+  checkGhLogin(out);
+  if (out.code !== 0) throw new Error(out.stderr.trim() || "gh failed");
+  const pr = JSON.parse(out.stdout) as GhPr;
+  const results = (pr.statusCheckRollup ?? []).map((c): Result => {
+    const r = c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : "PENDING";
+    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(r!)) return "passed";
+    if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(r!)) return "failed";
+    return "running";
+  });
+  const checks = counts(results);
+  const failing = (pr.statusCheckRollup ?? [])
+    .filter((_, i) => results[i] === "failed")
+    .map((c): Failing => {
+      const url = c.detailsUrl ?? c.targetUrl ?? null;
+      // A GitHub Actions job; other apps' checks only link to their own page.
+      const job = url?.match(/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+\/job\/(\d+)/)?.[1];
+      return { id: (url ?? c.name ?? c.context)!, name: c.name ?? c.context, url, job, summary: c.description || null };
+    });
+  let [label, tone, icon]: [string, Tone, Icon] = ["Open", "info", "pr-open"];
+  if (pr.state === "MERGED") [label, tone, icon] = ["Merged", "merged", "pr-merged"];
+  else if (pr.state === "CLOSED") [label, tone, icon] = ["Closed", "neutral", "pr-closed"];
+  else if (pr.isDraft) [label, tone, icon] = ["Draft", "neutral", "pr-draft"];
+  else if (pr.mergeable === "CONFLICTING") [label, tone] = ["Conflicts", "danger"];
+  else if (checks.failed) [label, tone] = ["Checks failing", "danger"];
+  else if (pr.reviewDecision === "CHANGES_REQUESTED") [label, tone] = ["Changes requested", "danger"];
+  else if (checks.running) [label, tone] = ["Checks running", "warning"];
+  else if (pr.reviewDecision === "APPROVED") [label, tone] = ["Approved", "success"];
+  else if (pr.reviewDecision === "REVIEW_REQUIRED") [label, tone] = ["In review", "info"];
+  const review =
+    ({ APPROVED: "Approved", CHANGES_REQUESTED: "Changes requested", REVIEW_REQUIRED: "Waiting for review" } as Record<string, string | undefined>)[pr.reviewDecision] ??
+    "No review yet";
+  return {
+    key: pr.updatedAt,
+    title: pr.title,
+    label, tone, icon, checks, review, failing,
+    changes: `+${pr.additions} −${pr.deletions} in ${pr.changedFiles} files`,
+    branch: `${pr.headRefName} → ${pr.baseRefName}`,
+    updated: pr.updatedAt,
+  };
+}
+
+// ---------- failed checks ----------
+
+/** A failed GitHub Actions job: its failed step and the end of its log. Unlike `gh run view`, this works while the rest of the run is still going. */
+export async function githubFailure(link: GithubLink, f: Failing): Promise<FailureDetail[]> {
+  if (!f.job) return [{ check: f.name, summary: f.summary ?? "Failed", log: "", url: f.url }];
+  const [job, log] = await Promise.all([
+    cli("github", "gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}`]),
+    // The log keeps the CI's colours, which gh only prints with this flag.
+    cli("github", "gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}/logs`, "--allow-escape-sequences"]),
+  ]);
+  if (log.code !== 0) throw new Error(log.stderr.trim().split("\n").at(-1) || "gh api failed");
+  const step = job.code === 0 ? (JSON.parse(job.stdout) as { steps?: { name: string; conclusion: string }[] }).steps?.find((s) => s.conclusion === "failure")?.name : null;
+  let lines = cleanLog(log.stdout.split("\n"));
+  // The runner's own cleanup follows the failed step and would push the error out of the tail.
+  const cleanup = lines.indexOf("Post job cleanup.");
+  if (cleanup >= 0) lines = lines.slice(0, cleanup);
+  return [detail(f.name, step ?? null, lines, [], f.url)];
+}
+
+// ---------- diff and comments ----------
+
+export async function githubDiff(link: GithubLink) {
+  const [diff, comments, discussion] = await Promise.all([
+    cli("github", "gh", ["pr", "diff", link.url]),
+    cli("github", "gh", ["api", `repos/${link.repo}/pulls/${link.number}/comments`, "--paginate", "--slurp"]),
+    cli("github", "gh", ["pr", "view", link.url, "--json", "comments,reviews"]),
+  ]);
+  if (diff.code !== 0) throw new Error(diff.stderr.trim() || "gh pr diff failed");
+  const list = comments.code === 0 ? (JSON.parse(comments.stdout) as GhComment[][]).flat() : [];
+  const pr: GhDiscussion = discussion.code === 0 ? (JSON.parse(discussion.stdout) as GhDiscussion) : { comments: [], reviews: [] };
+  // Comments on the whole PR: conversation comments plus review summaries. Their ids are GraphQL strings,
+  // so they get negative numbers that can't clash with the line comments' ids.
+  const general = [
+    ...pr.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
+    ...pr.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url: link.url })),
+  ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
+  return { patch: diff.stdout, comments: [...general, ...list.map(githubComment)] };
+}
+
+/** A line comment from the REST API. GitHub threads only line comments, so only those take replies. */
+function githubComment(c: GhComment): Comment {
+  return {
+    id: c.id,
+    replyTo: c.in_reply_to_id ?? null,
+    path: c.path,
+    line: c.line ?? null,
+    side: c.side === "LEFT" ? "deletions" : "additions",
+    author: c.user?.login ?? "unknown",
+    body: c.body ?? "",
+    createdAt: c.created_at,
+    url: c.html_url,
+    canReply: !c.in_reply_to_id,
+  };
+}
+
+// ---------- replies ----------
+
+export async function githubReply(link: GithubLink, root: Comment, body: string) {
+  return githubComment((await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body })) as GhComment);
+}
