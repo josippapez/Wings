@@ -84,7 +84,7 @@ const address = (/** @type {number} */ port) => `http://localhost:${port}/`;
 
 /**
  * The badge for one pane: its lowest port as the label, `+N` for the others, a row for each program, and
- * buttons for the first port plus a browser button for the next two.
+ * a browser button for each of the first three.
  * @param {{ pid: number, name: string, port: number, startedAt: number }[]} list @param {number} now
  */
 function badgeFor(list, now) {
@@ -92,7 +92,6 @@ function badgeFor(list, now) {
   const extra = list.length - 1;
   const actions = [
     { id: `browser:${first.port}`, label: "Open in browser", primary: true },
-    { id: `wings:${first.port}`, label: "Open in Wings", primary: false },
   ];
   for (const p of list.slice(1, MAX_ACTION_PORTS)) actions.push({ id: `browser:${p.port}`, label: `Open :${p.port} in browser`, primary: false });
   return {
@@ -114,10 +113,5 @@ wings.onAction(async ({ paneId, actionId }) => {
   // A click can come from a badge a few seconds old: only open what was listening at the last look.
   if (!Number.isInteger(port) || !known.includes(port)) throw new Error("That port isn't open any more.");
   if (kind === "browser") return wings.openUrl(address(port));
-  if (kind === "wings") {
-    await wings.storage.set("preview", address(port));
-    wings.broadcast({ preview: address(port) });
-    return wings.openView("preview", { as: "window" });
-  }
   throw new Error("Unknown action");
 });

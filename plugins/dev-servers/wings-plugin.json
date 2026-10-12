@@ -1,8 +1,8 @@
 {
   "id": "dev-servers",
   "name": "Dev servers",
-  "version": "0.1.0",
-  "description": "Puts a localhost:port badge on a pane when a program in it starts listening on a local port, with buttons to open it in your browser or in a Wings window. The badge goes when the port closes.",
+  "version": "0.2.0",
+  "description": "Puts a localhost:port badge on a pane when a program in it starts listening on a local port, with a button to open it in your browser. The badge goes when the port closes.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -14,19 +14,6 @@
   "contributes": {
     "ui": [
       "badges"
-    ],
-    "views": [
-      {
-        "id": "preview",
-        "title": "Dev server",
-        "icon": "globe",
-        "page": "preview.html",
-        "opens": [
-          "window"
-        ],
-        "width": 1100,
-        "height": 760
-      }
     ]
   }
 }
