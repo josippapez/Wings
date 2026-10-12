@@ -18,8 +18,20 @@ const MAX_LIST_BYTES = 56_000;
 /** Git's empty tree, the base of a repo with no commits yet. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const COLOR = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative"];
+/** Commits the History tab loads at a time. */
+const PAGE = 50;
+/**
+ * `git log -z` fields, each ended by a NUL: hash, parents, author, author time, committer time, refs, subject.
+ * `--decorate=full` so a `log.decorate` setting can't change the ref names, and local, remote and tag refs tell apart.
+ */
+const LOG = ["-z", "--no-color", "--decorate=full", "--format=%H%x00%P%x00%an%x00%at%x00%ct%x00%D%x00%s"];
+const LOG_FIELDS = 7;
 
 /** @typedef {"uncommitted" | "branch"} Mode */
+/**
+ * @typedef {{ hash: string, parents: string[], author: string, at: number, ct: number, refs: string[], subject: string }} Commit
+ * `refs` are `kind:name`, where kind is `H` (HEAD, on that branch if it has a name), `b` local branch, `r` remote branch, `t` tag or `s` stash.
+ */
 /**
  * @typedef {{ path: string, oldPath?: string, status: string, added: number | null, removed: number | null, untracked?: boolean }} FileChange
  * `added` and `removed` are null for binary files, and `added` for untracked files git couldn't read as text.
@@ -37,8 +49,12 @@ const cache = new Map();
 const running = new Map();
 /** The default branch each repo's "This branch" compares against. */
 const defaults = new Map();
-/** What the sidebar shows: its mode, the repo it follows, and when it last asked. */
-let sidebar = { mode: /** @type {Mode} */ ("uncommitted"), root: /** @type {string | null} */ (null), seen: 0 };
+/** What the sidebar shows: its tab and mode, the repo it follows, and when it last asked. */
+let sidebar = { tab: /** @type {"changes" | "history"} */ ("changes"), mode: /** @type {Mode} */ ("uncommitted"), root: /** @type {string | null} */ (null), seen: 0 };
+/** The History tab's search and scope, and what its first page last showed, so a poll only sends a change. */
+const historyTab = { query: "", all: false, sig: "" };
+/** The repo the graph view shows. */
+let graphRoot = /** @type {string | null} */ (null);
 
 /** @param {string} cwd @param {string[]} args */
 async function git(cwd, args) {
@@ -287,6 +303,140 @@ async function openChanges(root, mode, path) {
   }
 }
 
+// ---------- commits ----------
+
+/** `%D` with `--decorate=full`, as short `kind:name` refs. `origin/HEAD` and the like are left out. @param {string} decoration */
+function parseRefs(decoration) {
+  const out = [];
+  for (let ref of decoration ? decoration.split(", ") : []) {
+    if (ref === "HEAD") {
+      out.push("H:HEAD");
+      continue;
+    }
+    const head = ref.startsWith("HEAD -> ");
+    if (head) ref = ref.slice(8);
+    if (ref.startsWith("tag: ")) ref = ref.slice(5);
+    if (ref.startsWith("refs/heads/")) out.push(`${head ? "H" : "b"}:${ref.slice(11)}`);
+    else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD")) out.push(`r:${ref.slice(13)}`);
+    else if (ref.startsWith("refs/tags/")) out.push(`t:${ref.slice(10)}`);
+    else if (ref === "refs/stash") out.push("s:stash");
+  }
+  return out;
+}
+
+/** @param {string} out `git log` output with `LOG`. @returns {Commit[]} */
+function parseLog(out) {
+  const f = out.split("\0");
+  const commits = [];
+  for (let i = 0; i + LOG_FIELDS <= f.length; i += LOG_FIELDS) {
+    const hash = f[i];
+    if (!hash) break;
+    commits.push({ hash, parents: f[i + 1] ? f[i + 1].split(" ") : [], author: f[i + 2], at: Number(f[i + 3]), ct: Number(f[i + 4]), refs: parseRefs(f[i + 5]), subject: f[i + 6] });
+  }
+  return commits;
+}
+
+/**
+ * One page of the current branch's commits, or every branch's, newest first. A search matches the message, the
+ * author or the start of a hash: git ANDs `--grep` with `--author`, so they're two lookups merged by date.
+ * @param {string} root @param {{ query: string, all: boolean, skip: number }} q
+ */
+async function historyPage(root, { query, all, skip }) {
+  const scope = all ? ["--all"] : [];
+  if (!query) {
+    const commits = parseLog(await git(root, ["log", ...LOG, `--max-count=${PAGE + 1}`, `--skip=${skip}`, ...scope]));
+    return { commits: commits.slice(0, PAGE), more: commits.length > PAGE };
+  }
+  const match = [...LOG, "--regexp-ignore-case", "--fixed-strings", `--max-count=${skip + PAGE + 1}`];
+  const hash = /^[0-9a-f]{4,40}$/i.test(query) ? await gitOk(root, ["rev-parse", "--verify", "--quiet", `${query}^{commit}`]) : null;
+  const [byMessage, byAuthor, byHash] = await Promise.all([
+    git(root, ["log", ...match, `--grep=${query}`, ...scope]),
+    git(root, ["log", ...match, `--author=${query}`, ...scope]),
+    hash ? git(root, ["log", ...LOG, "--max-count=1", hash, "--"]) : "",
+  ]);
+  const seen = new Set();
+  const merged = [...parseLog(byHash), ...[...parseLog(byMessage), ...parseLog(byAuthor)].sort((a, b) => b.ct - a.ct)].filter((c) => !seen.has(c.hash) && seen.add(c.hash));
+  return { commits: merged.slice(skip, skip + PAGE), more: merged.length > skip + PAGE };
+}
+
+/** Commits as `[hash, subject, author, at, refs]`, as many as fit in one broadcast. @param {Commit[]} commits */
+function compactCommits(commits) {
+  const out = [];
+  let bytes = 0;
+  for (const c of commits) {
+    const row = [c.hash, c.subject.slice(0, 200), c.author.slice(0, 80), c.at, c.refs.slice(0, 6).map((r) => r.slice(0, 60))];
+    bytes += JSON.stringify(row).length + 1;
+    if (bytes > MAX_LIST_BYTES) break;
+    out.push(row);
+  }
+  return out;
+}
+
+/** Sends the History tab a page of commits. A poll sends the first page only when it changed. @param {number} skip @param {{ poll?: boolean }} [options] */
+async function sendHistory(skip, { poll = false } = {}) {
+  const root = await sidebarRoot();
+  sidebar.root = root;
+  const { query, all } = historyTab;
+  const base = { type: "history", query, all, skip };
+  if (!root) return void (await wings.broadcast({ ...base, repo: null }));
+  const stale = () => sidebar.root !== root || historyTab.query !== query || historyTab.all !== all;
+  try {
+    const [branch, head] = await Promise.all([gitOk(root, ["branch", "--show-current"]), gitOk(root, ["rev-parse", "--verify", "--quiet", "HEAD"])]);
+    const repo = { root, name: basename(root), branch: branch || (head ? `detached at ${head.slice(0, 7)}` : "no commits") };
+    const page = head || all ? await historyPage(root, { query, all, skip }) : { commits: [], more: false };
+    if (stale()) return;
+    const rows = compactCommits(page.commits);
+    if (skip === 0) {
+      const sig = JSON.stringify([root, query, all, repo.branch, rows]);
+      if (poll && sig === historyTab.sig) return;
+      historyTab.sig = sig;
+    }
+    await wings.broadcast({ ...base, repo, rows, more: page.more || rows.length < page.commits.length });
+  } catch (error) {
+    if (stale()) return;
+    historyTab.sig = "";
+    await wings.broadcast({ ...base, repo: { root, name: basename(root) }, error: String(/** @type {Error} */ (error).message ?? error) });
+  }
+}
+
+/** `git show` for one commit; a merge against its first parent, so it shows what the merge brought in. */
+const SHOW = ["show", "--format=", "--diff-merges=first-parent", "-M", ...COLOR];
+
+/** Files and changed lines in `git show --numstat -z`. @param {string} numstat */
+function numstatSize(numstat) {
+  let files = 0;
+  let size = 0;
+  const s = numstat.split("\0");
+  for (let i = 0; i < s.length && s[i]; ) {
+    const [added, removed, ...rest] = s[i].split("\t");
+    // A rename has an empty path, then its old and new paths as their own fields.
+    i += rest.join("\t") ? 1 : 3;
+    files += 1;
+    size += (Number(added) || 0) + (Number(removed) || 0);
+  }
+  return { files, size };
+}
+
+/**
+ * Opens the viewer at once with what the page already showed, then fills it with the commit's patch.
+ * @param {string} root @param {{ hash: string, subject?: string, author?: string, at?: number }} commit
+ */
+async function openCommit(root, { hash, subject, author, at }) {
+  const short = hash.slice(0, 7);
+  const date = at ? new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const { id } = await wings.openDiff({ title: subject || short, subtitle: [short, author, date].filter(Boolean).join(" · ") });
+  try {
+    const { files, size } = numstatSize(await git(root, [...SHOW, "--numstat", "-z", hash, "--"]));
+    if (files === 0) return void (await wings.updateDiff(id, { error: "This commit changes no files." }));
+    if (files > MAX_PATCH_FILES || size > MAX_PATCH_LINES) throw new Error(`Too large to show: ${plural(files, "file")}, ${plural(size, "changed line")}.`);
+    const patch = await git(root, [...SHOW, "--patch", hash, "--"]);
+    if (patch.length > MAX_PATCH_BYTES) throw new Error(`Too large to show: ${Math.round(patch.length / 1024 / 1024)} MB of changes in ${plural(files, "file")}.`);
+    await wings.updateDiff(id, { patch });
+  } catch (error) {
+    await wings.updateDiff(id, { error: String(/** @type {Error} */ (error).message ?? error) });
+  }
+}
+
 // ---------- the sidebar ----------
 
 /** The focused pane's repo, else the one the sidebar showed, else the first pane in a repo. */
@@ -345,14 +495,37 @@ const sidebarOpen = () => Date.now() - sidebar.seen < POLL_MS * 2;
 wings.onBroadcast((message) => {
   if (!message || typeof message !== "object") return;
   const m = /** @type {Record<string, unknown>} */ (message);
-  if (m.type === "hello" || m.type === "refresh" || m.type === "mode") {
+  if (m.type === "hello" || m.type === "refresh" || m.type === "mode" || m.type === "history") {
     sidebar.seen = Date.now();
+    sidebar.tab = m.tab === "history" || m.type === "history" ? "history" : "changes";
     if (m.type === "mode" && (m.mode === "uncommitted" || m.mode === "branch")) sidebar.mode = m.mode;
     if (m.type === "refresh" && m.byUser) defaults.clear();
-    void sendSidebar({ fresh: m.type === "refresh" }).catch(console.error);
+    if (m.type === "history") {
+      historyTab.query = typeof m.query === "string" ? m.query.trim().slice(0, 200) : "";
+      historyTab.all = m.all === true;
+    }
+    if (sidebar.tab === "history") {
+      const skip = m.type === "history" && Number.isInteger(m.skip) ? Math.max(0, /** @type {number} */ (m.skip)) : 0;
+      void sendHistory(skip, { poll: m.type === "refresh" && !m.byUser }).catch(console.error);
+    } else void sendSidebar({ fresh: m.type === "refresh" }).catch(console.error);
   }
   if (m.type === "open" && typeof m.root === "string" && (m.mode === "uncommitted" || m.mode === "branch")) {
     void openChanges(m.root, m.mode, typeof m.path === "string" ? m.path : null).catch(console.error);
+  }
+  if (m.type === "commit" && typeof m.root === "string" && typeof m.hash === "string" && /^[0-9a-f]{40}$/.test(m.hash)) {
+    const { hash, subject, author, at } = m;
+    void openCommit(m.root, { hash, subject: typeof subject === "string" ? subject : "", author: typeof author === "string" ? author : "", at: typeof at === "number" ? at : 0 }).catch(console.error);
+  }
+  if (m.type === "graph") {
+    graphRoot = typeof m.root === "string" ? m.root : sidebar.root;
+    void wings.openView("graph").catch(console.error);
+    void wings.broadcast({ type: "graph-repo", root: graphRoot, name: graphRoot && basename(graphRoot) }).catch(() => {});
+  }
+  if (m.type === "graph-hello") {
+    void (async () => {
+      const root = graphRoot ?? (await sidebarRoot());
+      await wings.broadcast({ type: "graph-repo", root, name: root && basename(root) });
+    })().catch(console.error);
   }
 });
 
@@ -363,7 +536,7 @@ wings.onPanes((list) => {
   panes = list;
   if (list.some((p) => !before.has(`${p.paneId}\0${p.cwd}`)) || list.length !== before.size) void refreshBadges().catch(console.error);
   if (!sidebarOpen()) return;
-  void sidebarRoot().then((root) => (root === sidebar.root ? undefined : sendSidebar()));
+  void sidebarRoot().then((root) => (root === sidebar.root ? undefined : sidebar.tab === "history" ? sendHistory(0) : sendSidebar()));
 });
 
 setInterval(() => {
@@ -380,6 +553,24 @@ wings.onAction(async ({ paneId, actionId }) => {
   if (actionId === "branch") return openChanges(root, "branch", null);
   if (actionId === "refresh") return refreshBadges({ fresh: true });
   if (actionId === "sidebar") return wings.openView("changes");
+});
+
+/** Readable refs for Claude, like `git log --decorate` shows them. @param {string} ref */
+const refName = (ref) => ({ H: ref === "H:HEAD" ? "HEAD" : `HEAD -> ${ref.slice(2)}`, t: `tag: ${ref.slice(2)}` })[ref[0]] ?? ref.slice(2);
+
+wings.onTool("recent_commits", async (input) => {
+  const cwd = typeof input?.cwd === "string" ? input.cwd : null;
+  if (!cwd) throw new Error("cwd is required: a folder inside a git repo.");
+  const root = await rootOf(cwd);
+  if (!root) throw new Error(`${cwd} is not inside a git repo.`);
+  const limit = Math.min(200, Math.max(1, Math.floor(Number(input?.limit)) || 20));
+  if (!(await gitOk(root, ["rev-parse", "--verify", "--quiet", "HEAD"]))) return { repo: root, commits: [] };
+  const commits = parseLog(await git(root, ["log", ...LOG, `--max-count=${limit}`]));
+  return {
+    repo: root,
+    branch: (await gitOk(root, ["branch", "--show-current"])) || "detached HEAD",
+    commits: commits.map((c) => ({ hash: c.hash, subject: c.subject, author: c.author, date: new Date(c.at * 1000).toISOString(), refs: c.refs.map(refName), ...(c.parents.length > 1 ? { merge: true } : {}) })),
+  };
 });
 
 wings.onTool("changed_files", async (input) => {

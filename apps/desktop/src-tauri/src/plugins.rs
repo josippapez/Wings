@@ -1061,12 +1061,28 @@ mod tests {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/changes"));
         let p = load(dir).unwrap();
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "changed_files"));
+        assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "recent_commits"));
+        assert!(p.manifest.contributes.views.iter().any(|v| v.id == "graph" && v.opens == ["window", "modal"]));
         let color = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative"];
         let diff = |extra: &[&str]| -> Vec<String> { ["diff", "abc123"].iter().chain(extra).chain(&color).map(|a| a.to_string()).collect() };
         let grep = |extra: &[&str]| -> Vec<String> {
             ["grep", "--untracked"].iter().chain(extra).chain(&["--no-color", "-e", "", "--", ":(literal)new file.txt"]).map(|a| a.to_string()).collect()
         };
+        let log_format = ["-z", "--no-color", "--decorate=full", "--format=%H%x00%P%x00%an%x00%at%x00%ct%x00%D%x00%s"];
+        let log = |extra: &[&str]| -> Vec<String> { ["log"].iter().chain(&log_format).chain(extra).map(|a| a.to_string()).collect() };
+        let show = |extra: &[&str]| -> Vec<String> {
+            ["show", "--format=", "--diff-merges=first-parent", "-M"].iter().chain(&color).chain(extra).chain(&["abc123", "--"]).map(|a| a.to_string()).collect()
+        };
         let calls: Vec<Vec<String>> = vec![
+            log(&["--max-count=51", "--skip=50"]),
+            log(&["--max-count=51", "--skip=0", "--all"]),
+            log(&["--regexp-ignore-case", "--fixed-strings", "--max-count=101", "--grep=fix the -c flag", "--all"]),
+            log(&["--regexp-ignore-case", "--fixed-strings", "--max-count=101", "--author=someone"]),
+            log(&["--max-count=1", "abc123", "--"]),
+            ["log", "--all", "--topo-order"].iter().chain(&log_format).chain(&["--max-count=10000"]).map(|a| a.to_string()).collect(),
+            show(&["--numstat", "-z"]),
+            show(&["--patch"]),
+            ["rev-parse", "--verify", "--quiet", "abc123^{commit}"].map(String::from).to_vec(),
             ["rev-parse", "--show-toplevel"].map(String::from).to_vec(),
             ["rev-parse", "--abbrev-ref", "origin/HEAD"].map(String::from).to_vec(),
             ["rev-parse", "--verify", "--quiet", "main^{commit}"].map(String::from).to_vec(),
@@ -1087,6 +1103,11 @@ mod tests {
         assert!(!may_exec(&p, "git", &["grep".into(), "-Ovi".into(), "x".into()]));
         assert!(!may_exec(&p, "git", &["branch".into(), "--show-current".into(), "-D".into(), "x".into()]));
         assert!(!may_exec(&p, "git", &["symbolic-ref".into(), "HEAD".into(), "refs/heads/x".into()]));
+        // log and show can't write a file, run a diff or textconv driver, or take flags outside their lists.
+        for args in [["log", "--output=x"], ["log", "--ext-diff"], ["show", "--output=x"], ["show", "--textconv"], ["log", "--follow"], ["show", "--stat"]] {
+            let args: Vec<String> = args.map(String::from).to_vec();
+            assert!(!may_exec(&p, "git", &args), "git {args:?} allowed");
+        }
     }
 
     #[test]

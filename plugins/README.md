@@ -2,6 +2,8 @@
 
 A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. Wings loads it into a sandboxed frame, and the plugin talks to Wings only through the `wings` object. Anything that touches your machine is checked in Rust against the permissions in the manifest.
 
+`changes/` shows each pane's changed files as a badge and a sidebar tree, the repo's commit history, and a commit graph in a window of its own (`views`), all opening Wings' diff viewer.
+
 `dev-servers/` puts a `localhost:<port>` badge on a pane while a program in it listens on a local port, and opens it in the browser or in a Wings window (`views`).
 
 `pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.

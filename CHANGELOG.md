@@ -4,6 +4,8 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- Changes 0.2.0 adds commit history: a History tab in its sidebar with search and Load more, a commit graph window with every branch's lanes, and each commit's diff in the diff viewer.
+
 ## 0.1.10 · 2026-10-12
 
 - Plugins can show a small popover when you point at their title-bar button. Cyclops uses it for today's timers and entries.

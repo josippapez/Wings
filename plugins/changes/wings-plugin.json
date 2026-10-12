@@ -1,8 +1,8 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.1.0",
-  "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree, and their diffs, uncommitted or on the whole branch.",
+  "version": "0.2.0",
+  "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -12,7 +12,9 @@
       "git merge-base",
       "git diff [--numstat --name-status -z -M --no-color --no-ext-diff --no-textconv --no-relative --]",
       "git ls-files [--others --exclude-standard -z]",
-      "git grep [--untracked -I -z --count --no-color --no-line-number --no-column -e --]"
+      "git grep [--untracked -I -z --count --no-color --no-line-number --no-column -e --]",
+      "git log [-z --no-color --decorate --format --max-count --skip --all --topo-order --regexp-ignore-case --fixed-strings --grep --author --]",
+      "git show [--format --diff-merges -M --no-color --no-ext-diff --no-textconv --no-relative --numstat -z --patch --]"
     ]
   },
   "contributes": {
@@ -28,6 +30,17 @@
         "page": "sidebar.html"
       }
     ],
+    "views": [
+      {
+        "id": "graph",
+        "title": "Commit graph",
+        "icon": "chart",
+        "page": "graph.html",
+        "opens": ["window", "modal"],
+        "width": 1100,
+        "height": 760
+      }
+    ],
     "mcpTools": [
       {
         "name": "changed_files",
@@ -37,6 +50,19 @@
           "properties": {
             "cwd": { "type": "string", "description": "An absolute path to a folder inside the repo." },
             "against": { "type": "string", "enum": ["uncommitted", "branch"] }
+          },
+          "required": ["cwd"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "recent_commits",
+        "description": "Lists the newest commits on the current branch of the git repo containing a folder: hash, subject, author, ISO date, refs (branches and tags pointing at it) and whether it's a merge. `limit` is 1 to 200, 20 by default. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cwd": { "type": "string", "description": "An absolute path to a folder inside the repo." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
           },
           "required": ["cwd"],
           "additionalProperties": false
