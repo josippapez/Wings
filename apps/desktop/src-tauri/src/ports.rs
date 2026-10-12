@@ -30,8 +30,13 @@ pub fn scan(panes: &[(String, Option<u32>)]) -> Result<Vec<PanePort>, String> {
     for (pane_id, shell) in panes {
         let Some(shell) = shell else { continue };
         let shell = Pid::from_u32(*shell);
+        // A shell started inside another pane's tree is nearer to what it runs, so its pane wins those processes.
+        let outer = owner.get(&shell.as_u32()).copied();
         for pid in std::iter::once(shell).chain(crate::detect::descendants(&children, shell)) {
-            owner.entry(pid.as_u32()).or_insert(pane_id);
+            let current = owner.entry(pid.as_u32()).or_insert(pane_id);
+            if outer.is_some() && Some(*current) == outer {
+                *current = pane_id;
+            }
         }
     }
     if owner.is_empty() {
