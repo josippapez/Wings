@@ -4,6 +4,9 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.10 · 2026-10-12
+
+- Plugins can show a small popover when you point at their title-bar button. Cyclops uses it for today's timers and entries.
 - New Changes plugin: a badge with each pane's changed lines, and a sidebar with the changed files as a tree. Both open the diff viewer, for uncommitted changes or the whole branch.
 - When a plugin needs Azure CLI, GitHub CLI or GitLab CLI and it isn't installed, Wings offers to install it with Homebrew.
 - Plugin update checks use your `gh` sign-in when you have one, and ask GitHub less, so they no longer hit its rate limit.
