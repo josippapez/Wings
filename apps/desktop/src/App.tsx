@@ -166,6 +166,11 @@ export default function App() {
     [pageRef],
   );
   const modalRef: ModalRef | null = modal ? pageRef(modal, "modal") : null;
+  /** A sidebar's popover, keyed like its page so a restarted plugin loads it again. */
+  const popoverOf = (plugin: PluginView, sidebarId: string) => {
+    const popover = plugin.contributes.sidebars.find((s) => s.id === sidebarId)?.popover;
+    return popover && { width: popover.width, height: popover.height, key: `${plugin.id}:${sidebarId}:popover:${plugin.version}:${epochs[plugin.id] ?? 0}` };
+  };
   const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
     // A sidebar or view button opens its page in the first place its manifest lists.
     ...pagesOf(p).map((s) => ({
@@ -179,6 +184,7 @@ export default function App() {
       rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
       tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
       active: (s.opens[0] === "sidebar" ? rightSidebar : modal) === `${p.id}:${s.id}`,
+      popover: popoverOf(p, s.id),
     })),
     ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
   ]);
@@ -906,6 +912,11 @@ export default function App() {
               }
               setRightSidebar((open) => (open === button.key ? null : button.key));
               setOpenedSidebars((all) => (all.includes(button.key) ? all : [...all, button.key]));
+            }}
+            onMountPopover={async (button, container) => {
+              const plugin = activePlugins.find((p) => p.id === button.pluginId);
+              if (!plugin || !pluginHost.current) throw new Error(`${button.pluginId} isn't running`);
+              return pluginHost.current.mountPage(plugin, button.id, container, "popover");
             }}
           />
           <ResizablePanelGroup

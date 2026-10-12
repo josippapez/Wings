@@ -95,7 +95,7 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD
 |---|---|
 | `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
 | `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
-| `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden |
+| `sidebars` | Up to 3 `{ id, title, icon, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden. A sidebar may add `popover: { page, width, height }`, a smaller page shown under its button when you point at it or focus it, 240 to 480 wide and 160 to 640 high; see [Popovers](#popovers) |
 | `views` | Up to 3 `{ id, title, icon, page, opens?, width?, height? }`: pages like `sidebars` that can also open in a modal over Wings or in a window of their own. `opens` lists where, from `sidebar`, `modal` and `window`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
 | `panels` | Up to 3 `{ id, title, icon, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is `clock`, `globe`, `calendar`, `chart` or `list`, and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
@@ -135,7 +135,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.openView(id, { as? })` | Opens one of your `sidebars` or `views`: `as` is `sidebar`, `modal` or `window`, one of the view's `opens`, and the first by default. A window that's already open comes to the front. Only one modal shows at a time |
 | `wings.closeView(id)` | Closes a sidebar or view wherever it's open |
 | `wings.setSidebarLabel(sidebarId, label, { rows, tone })` | Takes a sidebar or view id. Up to 80 characters next to its title bar button, like a running timer; `null` clears it. Wings shows it as a green pill, cut with an ellipsis when it doesn't fit, or an amber or red one when `tone` is `"warning"` or `"danger"`. `rows` are up to 6 `{ label, value }` shown when you point at it |
-| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars, modals and windows. Use it so a page refreshes when a tool call changed something |
+| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars, popovers, modals and windows. Use it so a page refreshes when a tool call changed something |
 
 A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
 
@@ -190,6 +190,18 @@ wings.broadcast({ refreshed: Date.now() }); // board.html hears it with wings.on
 ```
 
 A window shows the same sandboxed page as the sidebar would. Its calls go to Wings' main window and are checked there against your manifest, exactly like the sidebar's, so a window can't do more than the plugin could.
+
+## Popovers
+
+A sidebar can have a quick look: a second page shown under its title bar button after you point at it for a moment, or when the button gets the keyboard. Clicking the button still opens the sidebar, and the popover doesn't show while that sidebar is open. It closes shortly after the pointer leaves both, or with Escape on the button.
+
+```json
+"contributes": {
+  "sidebars": [{ "id": "timer", "title": "Timer", "icon": "clock", "page": "sidebar.html", "popover": { "page": "popover.html", "width": 340, "height": 420 } }]
+}
+```
+
+The page gets the same `wings` object, storage and broadcasts as the sidebar. It loads the first time it shows and keeps running while closed, so it opens at once after that and its timers keep going. Send the user to the full view with `wings.openView("timer")`.
 
 ## Status line
 

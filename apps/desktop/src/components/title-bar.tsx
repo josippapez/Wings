@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactElement } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   CalendarIcon,
@@ -16,6 +16,7 @@ import {
 
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/ui/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGlyph } from "@/components/layout-glyph";
@@ -47,7 +48,67 @@ export type PluginButton = {
   tone?: "warning" | "danger";
   /** Its sidebar or modal is open. */
   active?: boolean;
+  /** A sidebar's popover page, shown while you point at the button. `key` changes when the plugin restarts. */
+  popover?: { width: number; height: number; key: string };
 };
+
+/** Mounts a sidebar button's popover page into `container`; resolves a function that removes it. */
+export type MountPopover = (button: PluginButton, container: HTMLElement) => Promise<() => void>;
+
+/** The plugin's popover page, loaded once and kept while the popover is closed, so it reopens at once. */
+function PopoverPage({ button, mount }: { button: PluginButton; mount: MountPopover }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Keyed on the page's key only: a new plugins list or callback mustn't reload it.
+  useEffect(() => {
+    if (!box.current) return;
+    let remove: (() => void) | undefined;
+    let gone = false;
+    void mount(button, box.current)
+      .then((r) => (gone ? r() : (remove = r)))
+      .catch((e) => console.error(e));
+    return () => {
+      gone = true;
+      remove?.();
+    };
+  }, [button.popover?.key]);
+  return <div ref={box} className="size-full" />;
+}
+
+/**
+ * A sidebar button with a popover page: pointing at it or focusing it shows the page under it, and clicking
+ * still opens the sidebar. The page loads on first show and stays mounted, hidden, after that.
+ */
+function WithPopover({ button, popover, mount, children }: { button: PluginButton; popover: NonNullable<PluginButton["popover"]>; mount: MountPopover; children: ReactElement }) {
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  // Not over its own open sidebar, which shows the same and more. Closed rather than hidden, so it doesn't come
+  // back when the sidebar closes with the pointer elsewhere.
+  if (button.active && open) setOpen(false);
+  return (
+    <HoverCard
+      open={open}
+      onOpenChange={(next) => {
+        if (next && button.active) return;
+        setOpen(next);
+        if (next) setLoaded(true);
+      }}
+    >
+      <HoverCardTrigger delay={300} closeDelay={200} render={children} />
+      {loaded && (
+        <HoverCardContent
+          keepMounted
+          align="end"
+          alignOffset={0}
+          sideOffset={6}
+          className="overflow-hidden p-0"
+          style={{ width: `min(${popover.width}px, calc(100vw - 1rem))`, height: `min(${popover.height}px, calc(100vh - 4rem))` }}
+        >
+          <PopoverPage button={button} mount={mount} />
+        </HoverCardContent>
+      )}
+    </HoverCard>
+  );
+}
 
 /** `state` rolls up every pane's agent, so a blocked agent in a background split still shows on the tab. */
 export type TabView = { id: string; label: PaneLabelInfo; layout: LayoutNode; focusedPane: string; state: AgentState | null };
@@ -68,6 +129,7 @@ export function TitleBar(props: {
   /** Sidebar and panel buttons from plugins that are on. The first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
   onPluginButton: (button: PluginButton, rect: DOMRect) => void;
+  onMountPopover: MountPopover;
 }) {
   const inline = props.pluginButtons.slice(0, INLINE_BUTTONS);
   const overflow = props.pluginButtons.slice(INLINE_BUTTONS);
@@ -169,9 +231,11 @@ export function TitleBar(props: {
 
       {inline.map((button) => {
         const Icon = panelIcons[button.icon] ?? GlobeIcon;
-        return (
+        const icon = (
           <IconButton
             key={button.key}
+            // The popover shows more than the tooltip would.
+            tooltipDisabled={button.popover !== undefined}
             label={button.label ? `${button.title}, ${button.label}` : button.title}
             tooltip={
               button.rows?.length ? (
@@ -211,6 +275,14 @@ export function TitleBar(props: {
             <Icon />
             {button.label && <span className="max-w-72 truncate text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>
+        );
+        return button.popover ? (
+          // Keyed on the page too, so a restarted plugin loads its popover again on the next show.
+          <WithPopover key={button.popover.key} button={button} popover={button.popover} mount={props.onMountPopover}>
+            {icon}
+          </WithPopover>
+        ) : (
+          icon
         );
       })}
       {overflow.length > 0 && (

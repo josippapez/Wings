@@ -69,7 +69,21 @@ pub struct Sidebar {
     pub icon: String,
     /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
     pub page: String,
+    /// A smaller page shown under the title bar button while you point at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popover: Option<Popover>,
 }
+
+/// A sidebar's hover page: another HTML file in the plugin, sized in CSS pixels within `POPOVER_WIDTH` and `POPOVER_HEIGHT`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Popover {
+    pub page: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub const POPOVER_WIDTH: (u32, u32) = (240, 480);
+pub const POPOVER_HEIGHT: (u32, u32) = (160, 640);
 
 /// One of the plugin's own pages, like a sidebar that may also open as a modal or a window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,6 +223,13 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("sidebar icon {:?} must be one of {PANEL_ICONS:?}", sidebar.icon));
         }
         resolve(dir, &sidebar.page).ok_or_else(|| format!("sidebar page {:?} isn't in the plugin folder", sidebar.page))?;
+        if let Some(popover) = &sidebar.popover {
+            let ((w0, w1), (h0, h1)) = (POPOVER_WIDTH, POPOVER_HEIGHT);
+            if !(w0..=w1).contains(&popover.width) || !(h0..=h1).contains(&popover.height) {
+                return Err(format!("sidebar {:?} popover must be {w0} to {w1} wide and {h0} to {h1} high", sidebar.id));
+            }
+            resolve(dir, &popover.page).ok_or_else(|| format!("popover page {:?} isn't in the plugin folder", popover.page))?;
+        }
     }
     if manifest.contributes.views.len() > 3 {
         return Err("at most 3 views".into());
@@ -1454,6 +1475,45 @@ mod tests {
         for bad in ["npm run dev && curl x | sh", "", " ", "echo $HOME"] {
             assert!(manifest(&[bad]).err().unwrap().contains("panes entry"), "{bad:?}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidebar_popovers_are_checked_when_the_plugin_loads() {
+        let dir = std::env::temp_dir().join(format!("wings-popover-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "sidebar.html", "popover.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |popover: Option<Value>| {
+            let mut sidebar = serde_json::json!({ "id": "s", "title": "S", "icon": "clock", "page": "sidebar.html" });
+            if let Some(popover) = popover {
+                sidebar["popover"] = popover;
+            }
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "sidebars": [sidebar] } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let ok = manifest(Some(serde_json::json!({ "page": "popover.html", "width": 340, "height": 420 }))).unwrap();
+        assert_eq!(ok.manifest.contributes.sidebars[0].popover, Some(Popover { page: "popover.html".into(), width: 340, height: 420 }));
+        for (width, height) in [(240, 160), (480, 640)] {
+            assert!(manifest(Some(serde_json::json!({ "page": "popover.html", "width": width, "height": height }))).is_ok(), "{width}x{height}");
+        }
+        for (bad, error) in [
+            (serde_json::json!({ "page": "popover.html", "width": 239, "height": 420 }), "popover must be"),
+            (serde_json::json!({ "page": "popover.html", "width": 481, "height": 420 }), "popover must be"),
+            (serde_json::json!({ "page": "popover.html", "width": 340, "height": 159 }), "popover must be"),
+            (serde_json::json!({ "page": "popover.html", "width": 340, "height": 641 }), "popover must be"),
+            (serde_json::json!({ "page": "../popover.html", "width": 340, "height": 420 }), "isn't in the plugin folder"),
+            (serde_json::json!({ "page": "missing.html", "width": 340, "height": 420 }), "isn't in the plugin folder"),
+            (serde_json::json!({ "page": "popover.html" }), "missing field"),
+        ] {
+            assert!(manifest(Some(bad.clone())).err().unwrap().contains(error), "{bad}");
+        }
+        // A sidebar without one serializes as before, so plugins approved earlier keep their grant.
+        let plain = manifest(None).unwrap().manifest.contributes.sidebars[0].clone();
+        assert_eq!(plain.popover, None);
+        assert!(serde_json::to_value(&plain).unwrap().get("popover").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

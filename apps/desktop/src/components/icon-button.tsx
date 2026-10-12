@@ -14,17 +14,20 @@ export function IconButton({
   children,
   side = "bottom",
   tooltip,
+  tooltipDisabled,
   ...props
 }: ComponentProps<typeof motion.button> & {
   label: string;
   shortcut?: string;
   /** Replaces the tooltip's text, for buttons with more to say than their name. */
   tooltip?: ReactNode;
+  /** No tooltip, for a button that shows something richer on hover. */
+  tooltipDisabled?: boolean;
   side?: "top" | "bottom" | "left" | "right";
   children: ReactNode;
 }) {
   return (
-    <Tooltip>
+    <Tooltip disabled={tooltipDisabled}>
       <TooltipTrigger
         render={
           // shadcn's ghost icon button look, on a motion button for the press.

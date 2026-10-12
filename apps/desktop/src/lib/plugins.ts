@@ -105,8 +105,8 @@ type Running = {
   ui: string[];
   /** Its sidebar and view ids. */
   views: string[];
-  /** `main` runs the plugin's script; the others show one of its pages, `viewId`. */
-  kind: "main" | ViewPlace;
+  /** `main` runs the plugin's script; the others show one of its pages, `viewId`, or a sidebar's popover page. */
+  kind: "main" | ViewPlace | "popover";
   viewId?: string;
   ready: boolean;
   /**
@@ -282,13 +282,18 @@ export class PluginHost {
     });
   }
 
-  /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
-  private async pageDocument(plugin: PluginView, viewId: string) {
+  /**
+   * A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. With
+   * `popover`, the file is the sidebar's popover page instead of the sidebar's own.
+   */
+  private async pageDocument(plugin: PluginView, viewId: string, popover = false) {
     const page = pagesOf(plugin).find((v) => v.id === viewId);
     if (!page) throw new Error(`${plugin.id} has no view ${viewId}`);
+    const file = popover ? plugin.contributes.sidebars.find((s) => s.id === viewId)?.popover?.page : page.page;
+    if (!file) throw new Error(`${plugin.id} has no popover for ${viewId}`);
     const run = newRun();
-    const html = await (await fetch(pluginUrl(plugin.id, run, page.page))).text();
-    const base = pluginUrl(plugin.id, run, page.page.includes("/") ? page.page.slice(0, page.page.lastIndexOf("/") + 1) : "");
+    const html = await (await fetch(pluginUrl(plugin.id, run, file))).text();
+    const base = pluginUrl(plugin.id, run, file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
     const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><link rel="stylesheet" href="${new URL("/plugin-ui.css", location.href).href}"><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
@@ -299,8 +304,8 @@ export class PluginHost {
    * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar frame lives
    * until the plugin stops, so hiding the sidebar keeps its state. Resolves a function that removes the frame.
    */
-  async mountPage(plugin: PluginView, viewId: string, container: HTMLElement, kind: "sidebar" | "modal") {
-    const { page, srcdoc, nonce } = await this.pageDocument(plugin, viewId);
+  async mountPage(plugin: PluginView, viewId: string, container: HTMLElement, kind: "sidebar" | "modal" | "popover") {
+    const { page, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover");
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts", "allow-forms");
     frame.title = page.title;

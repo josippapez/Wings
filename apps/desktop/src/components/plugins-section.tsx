@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { TerminalCommandRow } from "@/components/terminal-command";
 import { PluginNeeds } from "@/components/tool-install";
-import { api, type McpStatus, type PluginPage, type PluginView } from "@/lib/api";
+import { api, type McpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { cn } from "@/lib/utils";
 
@@ -24,13 +24,15 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const uiNames: Record<string, string> = { badges: "Pane badges", diff: "Diff viewer" };
 /** Like "Board modal or window". */
 const viewName = (v: PluginPage) => `${v.title} ${v.opens.join(" or ")}`;
+/** Like "Timer sidebar and popover". */
+const sidebarName = (s: PluginSidebar) => `${s.title} sidebar${s.popover ? " and popover" : ""}`;
 
 /** What a plugin adds, as short chips: UI parts, MCP tools for Claude, and whether it runs commands. */
 function Adds({ plugin }: { plugin: PluginView }) {
   const { ui, mcpTools, panels, sidebars, views } = plugin.contributes;
   const chips = [
     ...ui.map((kind) => ({ key: kind, label: uiNames[kind] ?? kind, title: undefined as string | undefined })),
-    ...sidebars.map((s) => ({ key: `sidebar:${s.id}`, label: `${s.title} sidebar`, title: undefined })),
+    ...sidebars.map((s) => ({ key: `sidebar:${s.id}`, label: sidebarName(s), title: undefined })),
     ...views.map((v) => ({ key: `view:${v.id}`, label: viewName(v), title: undefined })),
     ...panels.map((p) => ({ key: `panel:${p.id}`, label: `${p.title} panel`, title: p.url })),
     ...(plugin.permissions.fetch.length ? [{ key: "fetch", label: "Uses the web", title: plugin.permissions.fetch.join(", ") }] : []),
@@ -92,7 +94,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
   const { ui, mcpTools, panels, sidebars, views } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
-    { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map((s) => `${s.title} sidebar`), ...views.map(viewName)] },
+    { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map(sidebarName), ...views.map(viewName)] },
     { title: "Call these web addresses, with tokens you give it", items: fetch },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },

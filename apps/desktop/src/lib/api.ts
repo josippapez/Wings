@@ -48,8 +48,10 @@ export type PluginPermissions = {
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */
 export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
+/** A sidebar's smaller page, shown under its title bar button while you point at it. Sizes are in CSS pixels. */
+export type PluginPopover = { page: string; width: number; height: number };
 /** One of the plugin's own pages, shown in the right sidebar from a title bar button. */
-export type PluginSidebar = { id: string; title: string; icon: string; page: string };
+export type PluginSidebar = { id: string; title: string; icon: string; page: string; popover?: PluginPopover };
 export type ViewPlace = "sidebar" | "modal" | "window";
 /** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. */
 export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null };
