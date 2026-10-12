@@ -20,8 +20,13 @@ const MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub enum Source {
     /// Installed from a `.wings-plugin` file.
     File,
-    /// Installed from a public GitHub repo, `owner/name`.
-    Github { repo: String },
+    /// Installed from a GitHub repo, `owner/name`, or from `folder` in it, like `plugins/hud` in a repo that
+    /// holds several plugins.
+    Github {
+        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+    },
 }
 
 /// What the user agreed to: the access a plugin asks for and what it adds, like MCP tools.
@@ -160,7 +165,11 @@ impl Store {
         let staging = self.root.with_file_name(format!(".plugin-install-{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-        let checked = unpack(bytes, &staging).and_then(|()| plugins::load(&staging));
+        let folder = match &source {
+            Source::Github { folder, .. } => folder.as_deref(),
+            Source::File => None,
+        };
+        let checked = unpack(bytes, &staging, folder).and_then(|()| plugins::load(&staging));
         let id = match checked {
             Ok(plugin) if self.dev.contains(&plugin.manifest.id) => Err(format!("{} is loaded from the repo in this dev build", plugin.manifest.id)),
             Ok(plugin) if expected_id.is_some_and(|id| id != plugin.manifest.id) => {
@@ -262,16 +271,20 @@ impl Store {
 }
 
 /// Extracts the folder that holds `wings-plugin.json`. Refuses paths that leave the folder and oversized packages.
-fn unpack(bytes: &[u8], into: &Path) -> Result<(), String> {
+/// With `folder`, a repo's source zip gives only that folder (`<top>/<folder>/`). A release's
+/// `<id>.wings-plugin` has no such folder, so it's read like any package.
+fn unpack(bytes: &[u8], into: &Path, folder: Option<&str>) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("Not a .wings-plugin file: {e}"))?;
     if zip.len() > MAX_FILES {
         return Err(format!("The package has more than {MAX_FILES} files"));
     }
     let mut base: Option<PathBuf> = None;
-    for i in 0..zip.len() {
-        let file = zip.by_index(i).map_err(|e| e.to_string())?;
-        let Some(path) = file.enclosed_name() else { continue };
-        if path.file_name().is_some_and(|n| n == "wings-plugin.json") && path.components().count() <= 2 {
+    let manifests = (0..zip.len()).filter_map(|i| zip.by_index(i).ok()?.enclosed_name()).filter(|p| p.file_name().is_some_and(|n| n == "wings-plugin.json")).collect::<Vec<_>>();
+    if let Some(folder) = folder.map(Path::new) {
+        base = manifests.iter().filter_map(|p| p.parent()).find(|parent| *parent == folder || parent.components().skip(1).eq(folder.components())).map(Path::to_path_buf);
+    }
+    if base.is_none() {
+        for path in manifests.iter().filter(|p| p.components().count() <= 2) {
             let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
             if base.as_ref().is_none_or(|b| parent.components().count() < b.components().count()) {
                 base = Some(parent);
@@ -303,15 +316,21 @@ fn unpack(bytes: &[u8], into: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `owner/name` from a GitHub URL (https, ssh or `github.com/owner/name`) or from `owner/name` itself.
-pub fn parse_repo(input: &str) -> Option<String> {
+/// The repo from a GitHub URL (https, ssh or `github.com/owner/name`) or from `owner/name` itself. A link to a
+/// plugin folder, `github.com/owner/name/plugins/<id>` or `.../tree/<ref>/plugins/<id>`, also names that folder.
+pub fn parse_github(input: &str) -> Option<(String, Option<String>)> {
     let s = input.trim().trim_end_matches('/');
     let s = s.strip_prefix("git@github.com:").or_else(|| s.split_once("github.com/").map(|(_, rest)| rest)).unwrap_or(s);
     let mut parts = s.split('/');
     let owner = parts.next()?;
     let name = parts.next()?.trim_end_matches(".git");
     let ok = |p: &str| !matches!(p, "" | "." | "..") && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
-    (ok(owner) && ok(name) && parts.next().is_none_or(|p| p == "tree" || p == "releases")).then(|| format!("{owner}/{name}"))
+    let folder = match parts.collect::<Vec<_>>().as_slice() {
+        [] | ["tree"] | ["tree", _] | ["releases", ..] => None,
+        ["plugins", id] | ["tree", _, "plugins", id] if ok(id) => Some(format!("plugins/{id}")),
+        _ => return None,
+    };
+    (ok(owner) && ok(name)).then(|| (format!("{owner}/{name}"), folder))
 }
 
 #[derive(Deserialize)]
@@ -387,24 +406,68 @@ fn latest_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, St
     }
 }
 
+/// What to download for a plugin: an address and what to ask for, and for a folder in a repo, the tag it
+/// comes from (`None` for the default branch), whose manifest holds the version.
+#[derive(Debug)]
+struct Pick {
+    url: String,
+    accept: &'static str,
+    tag: Option<String>,
+}
+
 /// The newest release's `.wings-plugin` file, or its source zip, or the default branch when there's no release.
-pub fn download_github(repo: &str) -> Result<Vec<u8>, String> {
+/// A folder in a repo of several plugins comes from the release's `<id>.wings-plugin`, else the default branch.
+fn pick(repo: &str, folder: Option<&str>, release: Option<Release>) -> Result<Pick, String> {
+    let branch = || Pick { url: format!("{API}repos/{repo}/zipball"), accept: JSON, tag: None };
+    let Some(release) = release else { return Ok(branch()) };
+    let asset = |a: Asset, tag| Pick { url: a.url, accept: "application/octet-stream", tag };
+    match folder {
+        Some(folder) => {
+            let name = format!("{}.wings-plugin", folder.rsplit('/').next().unwrap_or(folder));
+            Ok(release.assets.into_iter().find(|a| a.name == name).map_or_else(branch, |a| asset(a, Some(release.tag_name))))
+        }
+        None => {
+            let mut packages = release.assets.into_iter().filter(|a| a.name.ends_with(".wings-plugin"));
+            match (packages.next(), packages.next()) {
+                (Some(_), Some(_)) => Err(format!("{repo} has several plugins. Link the one you want, like github.com/{repo}/plugins/<id>")),
+                (Some(a), None) => Ok(asset(a, None)),
+                (None, _) => Ok(Pick { url: release.zipball_url, accept: JSON, tag: None }),
+            }
+        }
+    }
+}
+
+pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, String> {
     let token = access(repo)?;
-    let (url, accept) = match latest_release(repo, token.as_deref())? {
-        Some(release) => match release.assets.into_iter().find(|a| a.name.ends_with(".wings-plugin")) {
-            Some(asset) => (asset.url, "application/octet-stream"),
-            None => (release.zipball_url, JSON),
-        },
-        None => (format!("{API}repos/{repo}/zipball"), JSON),
-    };
+    let Pick { url, accept, .. } = pick(repo, folder, latest_release(repo, token.as_deref())?)?;
     let mut response = get(&url, accept, token.as_deref()).map_err(|e| github_error(repo, e))?;
     response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())
 }
 
-/// The newest release's version, without a leading `v`, if the repo has releases.
-pub fn latest_version(repo: &str) -> Result<Option<String>, String> {
+/// The version an update would install, without a leading `v`. For a repo that's the newest release's tag.
+/// A folder in a repo of several plugins has its own version, in its manifest, which a release of the
+/// repo doesn't change.
+pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>, String> {
     let token = access(repo)?;
-    Ok(latest_release(repo, token.as_deref())?.map(|r| r.tag_name.trim_start_matches('v').to_string()))
+    let release = latest_release(repo, token.as_deref())?;
+    let Some(folder) = folder else { return Ok(release.map(|r| r.tag_name.trim_start_matches('v').to_string())) };
+    let tag = pick(repo, Some(folder), release)?.tag;
+    let mut response = get(&manifest_url(repo, folder, tag.as_deref()), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
+    let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
+    Ok(manifest_version(&text))
+}
+
+fn manifest_url(repo: &str, folder: &str, tag: Option<&str>) -> String {
+    let url = format!("{API}repos/{repo}/contents/{folder}/wings-plugin.json");
+    match tag {
+        Some(tag) => format!("{url}?ref={tag}"),
+        None => url,
+    }
+}
+
+fn manifest_version(text: &str) -> Option<String> {
+    let manifest: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(manifest["version"].as_str()?.trim_start_matches('v').to_string())
 }
 
 #[cfg(test)]
@@ -439,19 +502,16 @@ mod tests {
     }
 
     fn store() -> (Store, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), rand_suffix()));
+        // new_scope adds a counter: tests started in the same nanosecond would share a folder.
+        let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), new_scope()));
         fs::create_dir_all(&dir).unwrap();
         (Store::load(dir.join("plugins"), dir.join("plugins.json"), None), dir)
-    }
-
-    fn rand_suffix() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     }
 
     #[test]
     fn installs_off_and_needs_approval_again_when_permissions_grow() {
         let (mut s, dir) = store();
-        let repo = || Source::Github { repo: "owner/demo".into() };
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
         let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), None).unwrap().0;
         assert!(!v1.enabled && !v1.approved && s.active("demo").is_none());
         let stale = Grant::of(&s.plugins["demo"].manifest);
@@ -471,7 +531,7 @@ mod tests {
         let same = |s: &mut Store, source| s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), source, None).unwrap().0;
         assert!(!same(&mut s, Source::File).approved);
         s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
-        assert!(!same(&mut s, Source::Github { repo: "someone/else".into() }).approved);
+        assert!(!same(&mut s, Source::Github { repo: "someone/else".into(), folder: None }).approved);
 
         // An update that turns out to be another plugin is refused.
         let other = package(&[("wings-plugin.json", &manifest("other", &[])), ("main.js", "")]);
@@ -491,7 +551,7 @@ mod tests {
     fn secrets_stay_with_the_same_repo_and_go_with_a_newcomer() {
         let (mut s, dir) = store();
         let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
-        let repo = || Source::Github { repo: "owner/demo".into() };
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
         s.install(&pkg(), repo(), None).unwrap();
         s.note_secret("demo", "token", true).unwrap();
         let first = s.secret_scope("demo").unwrap().scope;
@@ -513,7 +573,7 @@ mod tests {
         let (mut s, dir) = store();
         let storage = crate::plugin_storage::Storage::new(dir.join("plugin-storage"));
         let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
-        let repo = || Source::Github { repo: "owner/demo".into() };
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
         let value = serde_json::json!({ "tasks": ["private"] });
         let install = |s: &mut Store, source| {
             if let Some(old) = s.install(&pkg(), source, None).unwrap().1 {
@@ -544,7 +604,7 @@ mod tests {
     #[test]
     fn adding_mcp_tools_needs_approval_again() {
         let (mut s, dir) = store();
-        let repo = || Source::Github { repo: "owner/demo".into() };
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
         s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &[])), ("main.js", "")]), repo(), None).unwrap();
         s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
         let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), repo(), Some("demo")).unwrap().0;
@@ -556,7 +616,7 @@ mod tests {
     #[test]
     fn asking_for_panes_or_notifications_needs_approval_again() {
         let (mut s, dir) = store();
-        let repo = || Source::Github { repo: "owner/demo".into() };
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
         let with = |permissions: serde_json::Value| {
             let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "permissions": permissions });
             package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
@@ -615,7 +675,7 @@ mod tests {
     fn unpacks_from_one_top_folder_and_refuses_escapes() {
         let (mut s, dir) = store();
         let github = package(&[("owner-demo-abc123/wings-plugin.json", &manifest("demo", &[])), ("owner-demo-abc123/main.js", "x")]);
-        s.install(&github, Source::Github { repo: "owner/demo".into() }, None).unwrap();
+        s.install(&github, Source::Github { repo: "owner/demo".into(), folder: None }, None).unwrap();
         assert_eq!(fs::read_to_string(dir.join("plugins/demo/main.js")).unwrap(), "x");
 
         let escape = package(&[("wings-plugin.json", &manifest("evil", &[])), ("main.js", ""), ("../../outside.txt", "x")]);
@@ -627,14 +687,107 @@ mod tests {
 
     #[test]
     fn parses_github_repo_urls() {
-        for input in ["owner/repo", "https://github.com/owner/repo", "https://github.com/owner/repo.git", "github.com/owner/repo/", "git@github.com:owner/repo.git", "https://github.com/owner/repo/tree/main"] {
-            assert_eq!(parse_repo(input).as_deref(), Some("owner/repo"), "{input}");
+        for input in ["owner/repo", "https://github.com/owner/repo", "https://github.com/owner/repo.git", "github.com/owner/repo/", "git@github.com:owner/repo.git", "https://github.com/owner/repo/tree/main", "github.com/owner/repo/releases/tag/v1"] {
+            assert_eq!(parse_github(input), Some(("owner/repo".into(), None)), "{input}");
         }
         for input in ["", "owner", "https://github.com/owner/repo/blob/x", "owner/re po", "../etc/passwd", "../etc"] {
-            assert_eq!(parse_repo(input), None, "{input}");
+            assert_eq!(parse_github(input), None, "{input}");
         }
     }
-}
 
+    #[test]
+    fn parses_links_to_a_plugin_folder() {
+        let hud = Some(("owner/repo".into(), Some("plugins/hud".into())));
+        for input in ["github.com/owner/repo/plugins/hud", "https://github.com/owner/repo/plugins/hud/", "https://github.com/owner/repo/tree/main/plugins/hud", "owner/repo/tree/v1.2.0/plugins/hud"] {
+            assert_eq!(parse_github(input), hud, "{input}");
+        }
+        for input in [
+            "github.com/owner/repo/plugins/..",
+            "github.com/owner/repo/plugins/.",
+            "github.com/owner/repo/plugins/../../etc",
+            "github.com/owner/repo/tree/main/plugins/..",
+            "github.com/owner/repo/plugins",
+            "github.com/owner/repo/plugins/hud/extra",
+            "github.com/owner/repo/tree/main/plugins/hud/extra",
+            "github.com/owner/repo/tree/main/other/hud",
+            "github.com/owner/repo/other/hud",
+            "github.com/owner/repo/plugins/h d",
+            "github.com/../repo/plugins/hud",
+        ] {
+            assert_eq!(parse_github(input), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn a_plugin_folder_comes_from_a_repo_zip_alone() {
+        let (mut s, dir) = store();
+        let hud = || Source::Github { repo: "owner/repo".into(), folder: Some("plugins/hud".into()) };
+        let repo_zip = package(&[
+            ("owner-repo-abc123/README.md", "repo"),
+            ("owner-repo-abc123/plugins/other/wings-plugin.json", &manifest("other", &[])),
+            ("owner-repo-abc123/plugins/other/main.js", "other"),
+            ("owner-repo-abc123/plugins/hud/wings-plugin.json", &manifest("hud", &[])),
+            ("owner-repo-abc123/plugins/hud/main.js", "hud"),
+            ("owner-repo-abc123/plugins/hud/lib/util.js", "util"),
+        ]);
+        assert_eq!(s.install(&repo_zip, hud(), None).unwrap().0.manifest.id, "hud");
+        assert_eq!(fs::read_to_string(dir.join("plugins/hud/lib/util.js")).unwrap(), "util");
+        assert!(!dir.join("plugins/hud/README.md").exists() && !dir.join("plugins/hud/plugins").exists() && s.view("other").is_none());
+
+        // The release's hud.wings-plugin has the manifest at its root.
+        let asset = package(&[("wings-plugin.json", &manifest("hud", &["git status"])), ("main.js", "v2")]);
+        s.install(&asset, hud(), Some("hud")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("plugins/hud/main.js")).unwrap(), "v2");
+
+        // A repo zip without the folder isn't installed as some other plugin.
+        let missing = package(&[("owner-repo-abc123/plugins/other/wings-plugin.json", &manifest("other", &[]))]);
+        assert!(s.install(&missing, hud(), None).unwrap_err().contains("No wings-plugin.json"));
+        let escape = package(&[("owner-repo-abc123/plugins/hud/wings-plugin.json", &manifest("hud", &[])), ("owner-repo-abc123/plugins/hud/../../../../outside.txt", "x")]);
+        assert!(s.install(&escape, hud(), None).unwrap_err().contains("Unsafe path"));
+        assert!(!dir.join("outside.txt").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_plugin_folder_is_saved_and_older_entries_still_load() {
+        let folder = Source::Github { repo: "owner/repo".into(), folder: Some("plugins/hud".into()) };
+        let json = serde_json::to_value(&folder).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "github", "repo": "owner/repo", "folder": "plugins/hud" }));
+        assert_eq!(serde_json::from_value::<Source>(json).unwrap(), folder);
+        // An entry saved before folders existed reads as the whole repo, and is written back the same way.
+        let old: Source = serde_json::from_str(r#"{ "kind": "github", "repo": "owner/demo" }"#).unwrap();
+        assert_eq!(old, Source::Github { repo: "owner/demo".into(), folder: None });
+        assert_eq!(serde_json::to_value(&old).unwrap(), serde_json::json!({ "kind": "github", "repo": "owner/demo" }));
+    }
+
+    fn release(tag: &str, assets: &[&str]) -> Release {
+        Release {
+            tag_name: tag.into(),
+            zipball_url: format!("{API}repos/owner/repo/zipball/{tag}"),
+            assets: assets.iter().map(|n| Asset { name: (*n).into(), url: format!("{API}repos/owner/repo/releases/assets/{n}") }).collect(),
+        }
+    }
+
+    #[test]
+    fn a_plugin_folder_takes_its_own_release_file_and_version() {
+        let app = || release("v0.1.7", &["Wings.app.tar.gz", "dev-servers.wings-plugin", "hud.wings-plugin"]);
+        let hud = pick("owner/repo", Some("plugins/hud"), Some(app())).unwrap();
+        assert_eq!((hud.url.as_str(), hud.accept, hud.tag.as_deref()), (format!("{API}repos/owner/repo/releases/assets/hud.wings-plugin").as_str(), "application/octet-stream", Some("v0.1.7")));
+        // The version to compare is the plugin's, from its manifest at that tag, not the app's tag.
+        assert_eq!(manifest_url("owner/repo", "plugins/hud", hud.tag.as_deref()), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json?ref=v0.1.7"));
+        assert_eq!(manifest_version(&manifest("hud", &[])).as_deref(), Some("1.0.0"));
+
+        // A release without the plugin's file, or no release at all: the default branch.
+        for release in [Some(release("v0.1.6", &["Wings.app.tar.gz"])), None] {
+            let picked = pick("owner/repo", Some("plugins/hud"), release).unwrap();
+            assert_eq!((picked.url, picked.tag), (format!("{API}repos/owner/repo/zipball"), None));
+        }
+        assert_eq!(manifest_url("owner/repo", "plugins/hud", None), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json"));
+
+        // A whole repo still takes its one package, and asks which one when there are several.
+        assert!(pick("owner/repo", None, Some(release("v1", &["demo.wings-plugin"]))).unwrap().url.ends_with("/demo.wings-plugin"));
+        assert!(pick("owner/repo", None, Some(app())).unwrap_err().contains("plugins/<id>"));
+    }
+}
 
 

@@ -55,7 +55,7 @@ function Adds({ plugin }: { plugin: PluginView }) {
 
 function sourceLabel(p: PluginView) {
   if (p.dev) return "From this repo (development build)";
-  if (p.source?.kind === "github") return `From GitHub, ${p.source.repo}`;
+  if (p.source?.kind === "github") return `From GitHub, ${p.source.repo}${p.source.folder ? `/${p.source.folder}` : ""}`;
   return "From a file";
 }
 

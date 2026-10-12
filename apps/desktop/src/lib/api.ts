@@ -45,7 +45,7 @@ export type PluginPermissions = {
   /** Sees which local ports the programs in each pane listen on. */
   ports: boolean;
 };
-export type PluginSource = { kind: "file" } | { kind: "github"; repo: string };
+export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */
 export type PluginPanel = { id: string; title: string; icon: string; url: string; width: number | null; height: number | null };
 /** One of the plugin's own pages, shown in the right sidebar from a title bar button. */

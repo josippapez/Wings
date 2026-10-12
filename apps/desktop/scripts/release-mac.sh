@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds a signed Wings update and writes latest.json for it. Publishing is left to you: this prints the
 # `gh release create` command. See docs/releasing.md.
-#   pnpm release:mac            release notes: "Wings X.Y.Z"
+#   pnpm release:mac            release notes: this version's section of CHANGELOG.md
 #   pnpm release:mac "notes"    release notes: your text
 set -e
 cd "$(dirname "$0")/.."
@@ -10,7 +10,7 @@ KEY="${WINGS_UPDATER_KEY:-$HOME/.tauri/wings-updater.key}"
 [ -f "$KEY" ] || { echo "No updater key at $KEY. Make one with: pnpm tauri signer generate -w $KEY" >&2; exit 1; }
 
 VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')
-NOTES="${1:-Wings $VERSION}"
+if [ -n "$1" ]; then NOTES="$1"; else NOTES=$(node scripts/release-notes.mjs "$VERSION"); fi
 case "$(uname -m)" in
   arm64) ARCH=aarch64 ;;
   *) ARCH=x86_64 ;;
@@ -45,7 +45,11 @@ const latest = {
 fs.writeFileSync(process.argv[1], JSON.stringify(latest, null, 2) + "\n");
 ' "$DIR/latest.json"
 
+# Each official plugin as <id>.wings-plugin, so github.com/josippapez/Wings/plugins/<id> installs from the release.
+PACKED=$(sh scripts/pack-plugins.sh "$DIR")
+PLUGINS=$(printf '%s\n' "$PACKED" | while read -r f; do printf ' "%s"' "$f"; done)
+
 echo
 echo "Built Wings $VERSION. Publish it with:"
 echo
-echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\" --repo $REPO --title \"Wings $VERSION\" --notes \"$NOTES\""
+echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --title \"Wings $VERSION\" --notes \"$NOTES\""

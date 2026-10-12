@@ -17,6 +17,7 @@ const USAGE: &str = "Usage: wings plugin <command>
 
   list [--json]           Installed plugins and whether they're on
   install <file | link>   Install a .wings-plugin file or a GitHub repo, like github.com/owner/name
+                          or a plugin folder in one, like github.com/owner/name/plugins/<id>
   update <id>             Reinstall a GitHub plugin from its newest release
   enable <id>             Turn a plugin on. New access still needs your approval in Wings
   disable <id>            Turn a plugin off
@@ -148,7 +149,10 @@ fn source(p: &Value) -> String {
         return "this repo".into();
     }
     match p["source"]["kind"].as_str() {
-        Some("github") => format!("github.com/{}", p["source"]["repo"].as_str().unwrap_or_default()),
+        Some("github") => {
+            let folder = p["source"]["folder"].as_str().map(|f| format!("/{f}")).unwrap_or_default();
+            format!("github.com/{}{folder}", p["source"]["repo"].as_str().unwrap_or_default())
+        }
         _ => "file".into(),
     }
 }

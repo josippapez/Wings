@@ -237,18 +237,18 @@ fn install_file(app: &AppHandle, path: &str) -> Res<PluginView> {
 }
 
 fn install_github(app: &AppHandle, url: &str) -> Res<PluginView> {
-    let repo = plugin_store::parse_repo(url).ok_or("That isn't a GitHub repo link, like github.com/owner/name")?;
-    let bytes = plugin_store::download_github(&repo)?;
-    install(app, &bytes, Source::Github { repo }, None)
+    let (repo, folder) = plugin_store::parse_github(url).ok_or("That isn't a GitHub repo link, like github.com/owner/name or github.com/owner/name/plugins/<id>")?;
+    let bytes = plugin_store::download_github(&repo, folder.as_deref())?;
+    install(app, &bytes, Source::Github { repo, folder }, None)
 }
 
 /// Reinstalls a GitHub plugin from its newest release or default branch.
 fn update_plugin(app: &AppHandle, id: &str) -> Res<PluginView> {
-    let Some(Source::Github { repo }) = app.state::<AppState>().plugins.lock().unwrap().source(id) else {
+    let Some(Source::Github { repo, folder }) = app.state::<AppState>().plugins.lock().unwrap().source(id) else {
         return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
     };
-    let bytes = plugin_store::download_github(&repo)?;
-    install(app, &bytes, Source::Github { repo }, Some(id))
+    let bytes = plugin_store::download_github(&repo, folder.as_deref())?;
+    install(app, &bytes, Source::Github { repo, folder }, Some(id))
 }
 
 /// Turning a plugin on approves `shown`, the access and additions the UI showed, if they still match.
@@ -316,11 +316,11 @@ fn plugin_update(app: AppHandle, id: String) -> Res<PluginView> {
     update_plugin(&app, &id)
 }
 
-/// The newest release version on GitHub, if the plugin came from there and the repo has releases.
+/// The version an update from GitHub would install, if the plugin came from there.
 #[tauri::command(async)]
 fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<String>> {
-    let Some(Source::Github { repo }) = state.plugins.lock().unwrap().source(&id) else { return Ok(None) };
-    plugin_store::latest_version(&repo)
+    let Some(Source::Github { repo, folder }) = state.plugins.lock().unwrap().source(&id) else { return Ok(None) };
+    plugin_store::latest_version(&repo, folder.as_deref())
 }
 
 #[tauri::command]
