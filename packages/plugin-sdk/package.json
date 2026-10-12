@@ -1,6 +1,6 @@
 {
   "name": "wings-plugin-sdk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "The wings API types, the page frame, React hooks and the build command for Wings plugins.",
   "license": "MIT",
   "type": "module",
@@ -16,6 +16,10 @@
     "./shell": {
       "types": "./shell.d.ts",
       "default": "./shell.js"
+    },
+    "./poll": {
+      "types": "./poll.d.ts",
+      "default": "./poll.js"
     },
     "./build": {
       "types": "./build.d.ts",
@@ -34,6 +38,8 @@
     "react.d.ts",
     "shell.js",
     "shell.d.ts",
+    "poll.js",
+    "poll.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",

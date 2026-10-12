@@ -5,6 +5,7 @@
 // - GitLab: the merge request for the branch, its pipeline, approvals and discussions, all through `glab api`.
 // When checks fail, the badge says which step failed and why, and Claude can read the logs with `failing_checks`.
 
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { azureReply } from "./lib/azure";
 import { githubReply } from "./lib/github";
 import { gitlabReply } from "./lib/gitlab";
@@ -31,8 +32,9 @@ wings.onPanes((list) => {
   }
   void refreshLinks();
 });
-setInterval(refreshLinks, LINK_POLL_MS);
-setInterval(() => [...new Set([...links.values()].map((l) => l.url))].forEach((url) => refreshStatus(url)), STATUS_POLL_MS);
+// Both polls pause while Wings is in the background, and run once when you come back.
+pollWhileFocused(refreshLinks, LINK_POLL_MS);
+pollWhileFocused(() => [...new Set([...links.values()].map((l) => l.url))].forEach((url) => refreshStatus(url)), STATUS_POLL_MS);
 
 wings.onTool("failing_checks", failingChecks);
 

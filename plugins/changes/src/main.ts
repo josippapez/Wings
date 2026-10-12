@@ -1,6 +1,7 @@
 // Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the files as a tree, and
 // the diff viewer for one file or all of them. Everything is local git, about 25 ms a call, cached per repo.
 
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { refreshBadges } from "./lib/badge";
 import { openChanges } from "./lib/diff";
 import { basename, defaults, rootOf, roots } from "./lib/git";
@@ -60,7 +61,8 @@ wings.onPanes((list) => {
   void sidebarRoot().then((root) => (root === sidebar.root ? undefined : sidebar.tab === "history" ? sendHistory(0) : sendSidebar())).catch(console.error);
 });
 
-setInterval(() => {
+// Paused while Wings is in the background, and runs once when you come back.
+pollWhileFocused(() => {
   // A repo becomes one after `git init`, and stops after it's removed.
   for (const [cwd, root] of roots) void root.then((r) => r === null && roots.delete(cwd));
   void refreshBadges().catch(console.error);

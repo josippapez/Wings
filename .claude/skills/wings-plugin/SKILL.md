@@ -35,7 +35,7 @@ The API reference is `plugins/README.md`: manifest, permissions, every `wings.*`
 - Work from `wings.onPanes`. Each pane has a live `cwd` and a `session` while Claude runs in it.
 - Follow a session with `wings.onTranscript` rather than polling `wings.transcript`, which rereads the whole file.
 - Cache network lookups per repo and branch, not per pane. Local `git` takes about 25 ms and a network CLI 0.7 to 2 s. The dev log prints `[plugin] <id> <program> took N ms` for every call.
-- Poll slowly: local checks every 15 s, network every 60 s. Offer a Refresh action instead of polling faster.
+- Poll slowly: local checks every 15 s, network every 60 s, and only while Wings is focused: use `pollWhileFocused(tick, ms)` from `wings-plugin-sdk/poll` (or `wings.onFocus`), which checks once when focus returns. Offer a Refresh action instead of polling faster. Plugins that use it need `"minWingsVersion": "0.1.17"`.
 - Every action handler returns a promise. The button shows a spinner until it settles.
 - Never make a click wait on the network. Open the viewer with `openDiff` and no `patch`, then fill it with `updateDiff`. Prefetch heavy data after the status loads.
 - `exec` has no shell and no stdin. Pass arguments as an array, use program names rather than paths, and never `sh -c`. That keeps it working on macOS, Windows and Linux.

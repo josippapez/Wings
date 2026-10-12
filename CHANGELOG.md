@@ -4,6 +4,13 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.17 · 2026-10-12
+
+- Less graphics memory for terminals: about 100 MB less from the scrollbars, and the tab you just left keeps its fast renderer for 30 seconds instead of for good. Measured in a WebKit test with 5 panes at Retina size: from about 300 MB of graphics to about 120 MB.
+- Plugins skip sending a badge or sidebar label that hasn't changed.
+- Plugins can tell when Wings is in the background with `wings.onFocus`. Changes 0.2.3, Work item 0.2.2, PR tracker 0.6.3, Dev servers 0.2.3 and HUD 0.3.4 stop their checks while you're in another app and check once when you're back. `wings-plugin-sdk` 0.7.0 adds `pollWhileFocused` for this.
+- Dev servers checks ports every 15 seconds instead of 5, looks again a few seconds after a pane changes, and its badge has Refresh.
+
 ## 0.1.16 · 2026-10-12
 
 - Fixes high CPU use: once a program in a pane was refused a protected folder, Wings kept checking that folder itself, and each check was refused and logged again, thousands of times a second.

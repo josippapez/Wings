@@ -2,6 +2,7 @@
 // plugin's main script runs git and broadcasts the files and commits here; a click asks it to open the diff viewer.
 
 import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { Button, Card, Chips, Empty, Loading, Row, showSidebar, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { FileTree } from "./components/FileTree";
@@ -68,10 +69,10 @@ function Sidebar() {
       if (ui.tab === "changes") render();
     });
     void wings.broadcast({ type: "hello" });
-    const poll = setInterval(() => void wings.broadcast({ type: "refresh", tab: ui.tab }), POLL_MS);
+    const stopPolling = pollWhileFocused(() => void wings.broadcast({ type: "refresh", tab: ui.tab }), POLL_MS);
     return () => {
       off();
-      clearInterval(poll);
+      stopPolling();
     };
   }, [ui]);
 

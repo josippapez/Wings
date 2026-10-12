@@ -29,6 +29,7 @@ export function badgeFor(list: Port[], now: number): WingsBadge {
     { id: `browser:${first.port}`, label: "Open in browser", primary: true },
   ];
   for (const p of list.slice(1, MAX_ACTION_PORTS)) actions.push({ id: `browser:${p.port}`, label: `Open :${p.port} in browser`, primary: false });
+  actions.push({ id: "refresh", label: "Refresh", primary: false });
   return {
     label: `localhost:${first.port}${extra > 0 ? ` +${extra}` : ""}`,
     tone: "neutral",

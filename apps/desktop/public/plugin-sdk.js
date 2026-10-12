@@ -9,6 +9,10 @@
   const listeners = { panes: [], action: [], broadcast: [] };
   let replyHandler = null;
   listeners.transcript = [];
+  listeners.focus = [];
+  // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
+  let focused = true;
+  let focusKnown = false;
   const tools = new Map();
   // Each `on*` returns a function that removes the listener, for a page that subscribes in a React effect.
   const subscribe = (list, listener) => {
@@ -25,6 +29,26 @@
       pending.set(id, { resolve, reject, onOutput });
       parent.postMessage({ wings: 1, nonce, id, method, params }, "*");
     });
+
+  // The last badge and sidebar label this frame sent, as JSON, so a repeat of what Wings already shows never crosses the bridge.
+  // Plugins resend on every poll. Wings clears a plugin's badges and labels only when its main frame stops (a new frame
+  // starts with an empty memory) and drops a badge when its pane leaves the list, which `forgetPanes` mirrors.
+  const sentBadges = new Map();
+  const sentLabels = new Map();
+  // Sends only when `value` differs from the last one sent under `key`. A call that fails is forgotten, so the next one retries.
+  const sendChanged = (sent, key, value, method, params) => {
+    const json = JSON.stringify(value);
+    if (sent.get(key) === json) return Promise.resolve(null);
+    sent.set(key, json);
+    return call(method, params).catch((error) => {
+      if (sent.get(key) === json) sent.delete(key);
+      throw error;
+    });
+  };
+  const forgetPanes = (panes) => {
+    const live = new Set(Array.isArray(panes) ? panes.map((p) => p?.paneId) : []);
+    for (const paneId of sentBadges.keys()) if (!live.has(paneId)) sentBadges.delete(paneId);
+  };
 
   // The webview's own menu offers only "Reload", which would reload this frame. Keep it for fields and a selection (Copy).
   addEventListener("contextmenu", (e) => {
@@ -43,6 +67,12 @@
       if (message.error) reject(new Error(message.error));
       else resolve(message.result);
       return;
+    }
+    if (message.event === "panes") forgetPanes(message.data);
+    if (message.event === "focus") {
+      if (message.data?.focused === focused && focusKnown) return;
+      focused = message.data?.focused === true;
+      focusKnown = true;
     }
     if (message.event === "action") return void runAction(message.data);
     if (message.event === "tool") return void runTool(message.data);
@@ -101,6 +131,21 @@
   window.wings = Object.freeze({
     /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` is set while Claude runs, `focused` on the focused pane of the tab on screen. Called on every change. */
     onPanes: (listener) => subscribe(listeners.panes, listener),
+    /**
+     * Whether the user is in Wings: `{ focused }`, true while any Wings window (the main one, or a view window) is in
+     * front. Called once with the current state, then on each change. Pause timers while it is false and check
+     * once when it turns true. Needs no permission.
+     */
+    onFocus: (listener) => {
+      const off = subscribe(listeners.focus, listener);
+      // Registered after Wings sent the state: tell this listener where things stand.
+      if (focusKnown) queueMicrotask(() => { try { listener({ focused }); } catch (error) { console.error(error); } });
+      return off;
+    },
+    /** True while any Wings window is in front. Changes are announced to `onFocus`. */
+    get focused() {
+      return focused;
+    },
     /** A badge action was clicked: `{ paneId, actionId }`. */
     onAction: (listener) => subscribe(listeners.action, listener),
     /**
@@ -134,8 +179,8 @@
      * `{ paneId, pid, name, port, startedAt }[]`. Only ports `localhost` reaches. Costs about 20 ms: poll slowly.
      */
     ports: () => call("ports", {}),
-    /** Shows a badge in a pane's header, or removes it with `null`. */
-    setBadge: (paneId, badge) => call("setBadge", { paneId, badge }),
+    /** Shows a badge in a pane's header, or removes it with `null`. Sending what this frame last sent for the pane does nothing. */
+    setBadge: (paneId, badge) => sendChanged(sentBadges, paneId, badge, "setBadge", { paneId, badge }),
     /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**
@@ -185,7 +230,8 @@
      * Short text next to a sidebar's or view's title bar button, like a running timer. `null` clears it. `rows`, up to 6
      * `{ label, value }`, show when you point at the button.
      */
-    setSidebarLabel: (sidebarId, label, { rows, tone } = {}) => call("setSidebarLabel", { sidebarId, label, rows, tone }),
+    setSidebarLabel: (sidebarId, label, { rows, tone } = {}) =>
+      sendChanged(sentLabels, sidebarId, [label, rows, tone], "setSidebarLabel", { sidebarId, label, rows, tone }),
     /**
      * Opens one of the manifest's sidebars or views: in the sidebar, in a modal over Wings, in a window of its own
      * or as a tab in the project on screen, with `as` one of the view's `opens` (the first by default). A window or

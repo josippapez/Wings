@@ -1,6 +1,7 @@
 // Work item: shows the Azure Boards work item named in each pane's branch, like `feature/1234-login`,
 // as a pane badge with its state, sprint and parent, and moves it to its next state.
 
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
@@ -51,8 +52,9 @@ wings.onPanes((list) => {
   panes = list;
   void refreshRefs();
 });
-setInterval(refreshRefs, BRANCH_POLL_MS);
-setInterval(() => [...new Set([...refs.values()].map((r) => r.key))].forEach((key) => refreshItem(key)), ITEM_POLL_MS);
+// Both polls pause while Wings is in the background, and run once when you come back.
+pollWhileFocused(refreshRefs, BRANCH_POLL_MS);
+pollWhileFocused(() => [...new Set([...refs.values()].map((r) => r.key))].forEach((key) => refreshItem(key)), ITEM_POLL_MS);
 
 // ---------- finding the work item for a pane ----------
 

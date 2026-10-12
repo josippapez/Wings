@@ -2,22 +2,29 @@
 // badge with buttons to open it in the browser. The badge goes when the port closes.
 // Wings finds the ports (`wings.ports`, one process-tree walk and one `lsof`, about 20 ms), so this only polls.
 
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { address, badgeFor, MAX_ACTION_PORTS, type Port } from "./lib/badge";
 
-const POLL_MS = 5_000;
+const POLL_MS = 15_000;
+/** A server started in a pane takes a few seconds to listen: look again this long after the pane changes. */
+const SETTLE_MS = 4_000;
 
 let panes: { paneId: string }[] = [];
 /** paneId → the ports its badge has buttons for now, and its serialized badge to skip identical updates. */
 const shown = new Map<string, { ports: number[]; signature: string }>();
 let checking = false;
 let lastCheck = 0;
+let settle: ReturnType<typeof setTimeout> | undefined;
 
 wings.onPanes((list) => {
   panes = list;
   // A new pane or a `cd` shouldn't wait for the next tick, but a burst of changes costs one lookup.
   if (Date.now() - lastCheck > 1_000) void refresh();
+  clearTimeout(settle);
+  settle = setTimeout(() => void refresh(), SETTLE_MS);
 });
-setInterval(() => {
+// Paused while Wings is in the background: lsof once every 15 s for a badge nobody is looking at.
+pollWhileFocused(() => {
   if (panes.length > 0) void refresh();
 }, POLL_MS);
 
@@ -60,6 +67,7 @@ function groupByPane(ports: Port[]) {
 }
 
 wings.onAction(async ({ paneId, actionId }) => {
+  if (actionId === "refresh") return refresh();
   const [kind, text] = actionId.split(":");
   const port = Number(text);
   const known = shown.get(paneId)?.ports ?? [];

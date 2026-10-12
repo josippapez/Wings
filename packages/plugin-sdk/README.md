@@ -55,6 +55,12 @@ to fill. Every `wings.on*` call returns a function that removes the listener, so
 `wings-plugin-sdk/react`, or your own `useEffect`, cleans up when a component goes. The API reference is
 [plugins/README.md](https://github.com/josippapez/Wings/blob/main/plugins/README.md) in the Wings repo.
 
+## Polling
+
+Wings is often in the background, and a timer that runs `git` or a network call then costs battery for nothing.
+`pollWhileFocused(tick, ms)` from `wings-plugin-sdk/poll` runs `tick` every `ms` only while a Wings window is in
+front, and once at once when you come back. It uses `wings.onFocus`.
+
 ## Pack
 
 A plugin in its own repo doesn't need to commit what it builds. `wings-plugin pack` builds it into a temporary

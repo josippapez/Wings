@@ -5,6 +5,7 @@
 // `wings statusline` is Claude Code's status line. Without it the context is worked out from the transcript the
 // same way Claude Code does. MCP servers come from the tool lists Claude Code records as it connects to them.
 
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { ingest, resetRun, session, sessions, type Entry, type Session } from "./lib/session";
 import { badge, LIMIT_CRITICAL, LIMIT_WARN, overview, snapshot, state, titleLabel } from "./lib/view";
 
@@ -161,4 +162,7 @@ void wings.storage
   )
   .finally(() => void refreshStatus());
 void refreshMemory();
-setInterval(() => void Promise.all([refreshStatus(), refreshMemory()]), MINUTE);
+// The status check also raises limit alerts, which matter most when you're in another app, so it keeps running.
+// Memory is only drawn for someone looking, and costs a `vm_stat` run, so it pauses while Wings is in the background.
+setInterval(() => void refreshStatus(), MINUTE);
+pollWhileFocused(() => void refreshMemory(), MINUTE);

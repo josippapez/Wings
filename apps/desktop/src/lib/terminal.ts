@@ -231,6 +231,12 @@ function optionIsMeta(e: KeyboardEvent) {
   return side === "both" || (side === "left" && heldOption.has("AltLeft")) || (side === "right" && heldOption.has("AltRight"));
 }
 
+/**
+ * How long the tab shown just before keeps its terminals' WebGL renderers once hidden. Making one again when it's
+ * shown costs about 50 ms (three frames) in WKWebView, measured.
+ */
+const RENDERER_KEEP_MS = 30_000;
+
 /** Live terminals by pane key. Kept outside React state: they own PTYs and DOM nodes. */
 export const terminals = new Map<string, TerminalSession>();
 
@@ -266,6 +272,7 @@ export class TerminalSession {
   // A pane hidden for TERMINAL_UNLOAD_MS stores its scrollback as serialized bytes (about 16x smaller than the
   // buffer, measured) and writes it back when shown. Output that arrives during the rewrite waits in `held`.
   private unloadTimer: ReturnType<typeof setTimeout> | undefined;
+  private releaseTimer: ReturnType<typeof setTimeout> | undefined;
   private history: Uint8Array | null = null;
   private serializer: SerializeAddon | null = null;
   private restoring = false;
@@ -362,6 +369,10 @@ export class TerminalSession {
 
   private async start(initialInput: string | null) {
     this.term.open(this.el);
+    // xterm's scrollbar sliders carry translate3d(0, 0, 0) only as a layer hint (they move by top and left). In WebKit
+    // that layer gets each pane card, and the hidden tabs stacked over it, composited with backing stores the size of
+    // the pane: about 100 MB of graphics memory for 5 panes on a Retina screen (measured). The slider repaints instead.
+    for (const slider of this.el.querySelectorAll<HTMLElement>(".xterm-scrollable-element .slider")) slider.style.transform = "";
     this.visible = true;
     // Before the first write: the width rules decide how every line of output is laid out.
     const unicode = new Unicode11Addon();
@@ -412,7 +423,7 @@ export class TerminalSession {
 
   /**
    * A restored tab's shells start the first time it's shown, so tabs nobody opens cost no PTY or terminal.
-   * `keepRenderer` lets a hidden pane keep its WebGL renderer, for the tab shown just before.
+   * `keepRenderer` lets a hidden pane keep its WebGL renderer for `RENDERER_KEEP_MS`, for the tab shown just before.
    */
   setVisible(visible: boolean, keepRenderer = false) {
     if (visible && !this.started) {
@@ -432,10 +443,13 @@ export class TerminalSession {
         this.unloadTimer = setTimeout(() => this.unload(), TERMINAL_UNLOAD_MS);
       }
     }
-    // WebKit allows 16 WebGL contexts per page and silently drops the oldest, so hidden panes give theirs up.
-    if (!visible && !keepRenderer) {
-      this.disableWebgl();
-    }
+    clearTimeout(this.releaseTimer);
+    if (visible) return;
+    // WebKit allows 16 WebGL contexts per page and silently drops the oldest, so hidden panes give theirs up. The tab
+    // shown just before keeps them for a while, so switching straight back stays quick, then gives them up too: a kept
+    // renderer and the layers it composites cost about 100 MB of graphics memory on a Retina screen (measured).
+    if (keepRenderer) this.releaseTimer = setTimeout(() => this.disableWebgl(), RENDERER_KEEP_MS);
+    else this.disableWebgl();
   }
 
   private receive(data: Uint8Array) {

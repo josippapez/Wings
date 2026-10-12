@@ -1240,6 +1240,12 @@ pub fn run() {
         .register_uri_scheme_protocol("wings-plugin", |ctx, request| serve_plugin_file(ctx.app_handle(), &request))
         // A view window only relays to the main window's plugin host, so it goes when that does.
         .on_window_event(|window, event| {
+            // Plugins pause their polling while no Wings window is in front. A view window or popover counts.
+            if matches!(event, WindowEvent::Focused(_)) {
+                let app = window.app_handle();
+                let any = app.webview_windows().values().any(|w| w.is_focused().unwrap_or(false));
+                let _ = app.emit_to("main", "wings-focus", any);
+            }
             if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
                 for (label, view) in window.app_handle().webview_windows() {
                     if label.starts_with(VIEW_WINDOW) {

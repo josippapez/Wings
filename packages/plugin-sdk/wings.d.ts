@@ -103,6 +103,14 @@ interface Wings {
   /** Every terminal pane, on every change. */
   onPanes(listener: (panes: WingsPane[]) => void): () => void;
   /**
+   * Whether the user is in Wings: true while any Wings window (the main one or a view window) is in front, false
+   * while another app is. Called once with the current state, then on each change. Needs no permission. Pause timers
+   * while it is false and check once when it turns true, or use `pollWhileFocused` from `wings-plugin-sdk/poll`.
+   */
+  onFocus(listener: (event: { focused: boolean }) => void): () => void;
+  /** The state `onFocus` last reported. True until Wings says otherwise, which it does as soon as the frame is ready. */
+  readonly focused: boolean;
+  /**
    * A badge action was clicked. Return a promise: the button spins until it settles (up to 5 min), and a thrown
    * error shows in the card. What it resolves to is ignored.
    */

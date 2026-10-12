@@ -3,6 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { FocusTracker } from "@/lib/plugin-focus";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 import { requestToolInstall } from "@/lib/tool-install";
 import pluginUiCss from "wings-plugin-ui/plugin-ui.css?raw";
@@ -237,6 +238,11 @@ export class PluginHost {
   /** `openPane` calls waiting for their new pane to reach plugins, by Rust pane id. */
   private paneWaiters = new Map<string, () => void>();
   private unlistenTranscript = api.onPluginTranscript((events) => this.publishTranscript(events));
+  /** Starts true: Wings opens in front, and the document is checked for focus. */
+  private focus = new FocusTracker(document.hasFocus(), (focused) => {
+    for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "focus", data: { focused } });
+  });
+  private unlistenFocus = api.onWingsFocus((focused) => this.focus.report(focused));
 
   constructor(private callbacks: Callbacks) {
     window.addEventListener("message", this.onMessage);
@@ -461,6 +467,8 @@ export class PluginHost {
     window.removeEventListener("message", this.onMessage);
     void this.unlistenTools.then((off) => off());
     void this.unlistenTranscript.then((off) => off());
+    void this.unlistenFocus.then((off) => off());
+    this.focus.dispose();
     for (const running of this.frames.values()) running.remove();
     this.frames.clear();
     this.windows.dispose();
@@ -487,7 +495,10 @@ export class PluginHost {
       const params = msg.params && typeof msg.params === "object" ? (msg.params as Record<string, unknown>) : {};
       const result = await this.handle(plugin, String(msg.method), params, output);
       plugin.post({ id, result });
-      if (msg.method === "ready") plugin.post({ event: "panes", data: this.panes });
+      if (msg.method === "ready") {
+        plugin.post({ event: "panes", data: this.panes });
+        plugin.post({ event: "focus", data: { focused: this.focus.focused } });
+      }
     } catch (error) {
       plugin.post({ id, error: String(error instanceof Error ? error.message : error) });
     }

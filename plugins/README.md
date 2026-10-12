@@ -135,6 +135,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | Call | Does |
 |---|---|
 | `wings.onPanes(fn)` | Called with every terminal pane on each change, including a change of focus: `{ paneId, cwd, command, project, session, focused }[]`. `cwd` follows `cd`. `focused` is true on the focused pane of the tab on screen. `session` is `{ sessionId, name, state, startedAt }` while Claude runs in the pane, else `null`. `startedAt` is when that `claude` started, in ms, since a resumed session's transcript also holds what came before |
+| `wings.onFocus(fn)` | Called with `{ focused }` once with the current state, then on every change: `focused` is true while any Wings window (the main one or a view window) is in front, false while you're in another app or Wings is minimized or hidden. A short move between two Wings windows doesn't count as a change. Needs no permission. `wings.focused` reads the last state (true until Wings sends it, which is right after the frame is ready). Needs Wings 0.1.17: set `"minWingsVersion": "0.1.17"`. See Pausing polls |
 | `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId })` gets Claude's arguments and the Wings pane Claude runs in (or `null`), and returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls |
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs |
@@ -143,7 +144,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
 | `wings.openUrl(url)` | Opens the URL in the browser |
-| `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every few seconds at most |
+| `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every 15 s at most, and only while focused |
 | `wings.openPane({ command?, cwd?, placement? })` | Opens a terminal and resolves `{ paneId }` once it's in `onPanes`. `placement` is `tab` (the default), or `right` or `down` for a split beside the focused pane, which has to be in the project on screen. Without `cwd` it opens at the root of the project on screen. The new pane gets the keyboard |
 | `wings.focusPane(paneId)` | Switches to an open pane's project and tab and moves the keyboard to it |
 | `wings.installTool(program)` | Asks Wings to install a CLI the plugin runs, after `exec` rejected with `<program> is not installed or not on PATH`. See [Required tools](#required-tools). Resolves `true` once the install started or it's already there, `false` if you cancelled |
@@ -189,6 +190,10 @@ Wings adds tools of its own to that server, with or without plugins:
 Mind what these allow. Every Claude Code session you start on this computer can call them, so one session can read what another shows, which can include secrets and prompts. `open_pane` only types a command, so nothing runs outside Claude Code's own permission checks for Bash; Claude Code still asks before a call to an MCP tool unless you allowed it. The socket is readable by your user only (`0600`) and there is no network access.
 
 The `wings-plugin-sdk` package has types for all of this.
+
+## Pausing polls
+
+Wings is in the background most of the day, and a timer that runs `git`, `gh` or `lsof` then spends the user's battery on a badge nobody sees. Stop timers while `wings.focused` is false and check once when it turns true. `pollWhileFocused(tick, ms)` from `wings-plugin-sdk/poll` does this: it runs `tick` every `ms` while Wings is in front, and once at once when you come back. Keep event-driven work (`onPanes`, `onTranscript`, actions, tools) running. `onFocus` also tells you when to call `wings.notify`: send it only when `wings.focused` is false, since a user who is looking doesn't need a notification.
 
 ## Required tools
 
