@@ -6,6 +6,8 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -333,14 +335,14 @@ pub fn parse_github(input: &str) -> Option<(String, Option<String>)> {
     (ok(owner) && ok(name)).then(|| (format!("{owner}/{name}"), folder))
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Release {
     tag_name: String,
     zipball_url: String,
     assets: Vec<Asset>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Asset {
     name: String,
     /// The API address. Asked for `application/octet-stream`, it redirects to the file, for private repos too.
@@ -364,17 +366,11 @@ fn get(url: &str, accept: &str, token: Option<&str>) -> Result<ureq::http::Respo
     }
 }
 
-/// Public repos need no sign-in. A private one answers 404 without one, so then your `gh` sign-in is used.
-fn access(repo: &str) -> Result<Option<String>, String> {
-    let url = format!("{API}repos/{repo}");
-    match get(&url, JSON, None) {
-        Ok(_) => return Ok(None),
-        Err(ureq::Error::StatusCode(404)) => {}
-        Err(e) => return Err(github_error(repo, e)),
-    }
-    let token = gh_token().ok_or_else(|| github_error(repo, ureq::Error::StatusCode(404)))?;
-    get(&url, JSON, Some(&token)).map_err(|e| github_error(repo, e))?;
-    Ok(Some(token))
+/// Your `gh` sign-in, read once, for every API call: signed in, GitHub allows 5,000 calls an hour instead of 60
+/// for the whole address, and private repos work too. Without one, public repos still do.
+fn access() -> Option<String> {
+    static TOKEN: OnceLock<Option<String>> = OnceLock::new();
+    TOKEN.get_or_init(gh_token).clone()
 }
 
 fn gh_token() -> Option<String> {
@@ -394,7 +390,25 @@ fn github_error(repo: &str, error: ureq::Error) -> String {
     }
 }
 
+/// How long a repo's latest release is reused, so checking several plugins from one repo asks GitHub once.
+const RELEASE_REUSE: Duration = Duration::from_secs(60);
+
+/// Each repo's latest release (`None`: it has none), and when it was asked for.
+type SeenReleases = HashMap<String, (Instant, Option<Release>)>;
+
 fn latest_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, String> {
+    static SEEN: Mutex<Option<SeenReleases>> = Mutex::new(None);
+    if let Some((at, release)) = SEEN.lock().unwrap().get_or_insert_default().get(repo) {
+        if at.elapsed() < RELEASE_REUSE {
+            return Ok(release.clone());
+        }
+    }
+    let release = fetch_release(repo, token)?;
+    SEEN.lock().unwrap().get_or_insert_default().insert(repo.to_string(), (Instant::now(), release.clone()));
+    Ok(release)
+}
+
+fn fetch_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, String> {
     match get(&format!("{API}repos/{repo}/releases/latest"), JSON, token) {
         Ok(mut response) => {
             let text = response.body_mut().read_to_string().map_err(|e| e.to_string())?;
@@ -438,7 +452,7 @@ fn pick(repo: &str, folder: Option<&str>, release: Option<Release>) -> Result<Pi
 }
 
 pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, String> {
-    let token = access(repo)?;
+    let token = access();
     let Pick { url, accept, .. } = pick(repo, folder, latest_release(repo, token.as_deref())?)?;
     let mut response = get(&url, accept, token.as_deref()).map_err(|e| github_error(repo, e))?;
     response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())
@@ -448,13 +462,25 @@ pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, Stri
 /// A folder in a repo of several plugins has its own version, in its manifest, which a release of the
 /// repo doesn't change.
 pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>, String> {
-    let token = access(repo)?;
+    let token = access();
     let release = latest_release(repo, token.as_deref())?;
     let Some(folder) = folder else { return Ok(release.map(|r| r.tag_name.trim_start_matches('v').to_string())) };
     let tag = pick(repo, Some(folder), release)?.tag;
-    let mut response = get(&manifest_url(repo, folder, tag.as_deref()), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
+    let url = manifest_url(repo, folder, tag.as_deref());
+    // A tag's files never change, so its version is asked for once. The default branch's can.
+    static TAGGED: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+    if tag.is_some() {
+        if let Some(version) = TAGGED.lock().unwrap().get_or_insert_default().get(&url) {
+            return Ok(version.clone());
+        }
+    }
+    let mut response = get(&url, "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
     let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
-    Ok(manifest_version(&text))
+    let version = manifest_version(&text);
+    if tag.is_some() {
+        TAGGED.lock().unwrap().get_or_insert_default().insert(url, version.clone());
+    }
+    Ok(version)
 }
 
 fn manifest_url(repo: &str, folder: &str, tag: Option<&str>) -> String {

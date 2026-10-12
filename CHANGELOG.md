@@ -4,6 +4,8 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- Plugin update checks use your `gh` sign-in when you have one, and ask GitHub less, so they no longer hit its rate limit.
+
 ## 0.1.9 · 2026-10-12
 
 - Dev servers 0.2.0 opens servers in your browser only.
