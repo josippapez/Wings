@@ -122,7 +122,7 @@ export function SettingsDialog(props: {
       <DialogContent className={cn(
           "flex gap-0 overflow-hidden p-0 transition-[width,height] duration-200 ease-out sm:max-w-none",
           // Plugins has a list and a details pane side by side, so it gets a bigger window.
-          props.section === "plugins" ? "h-[min(680px,calc(100%-4rem))] w-[min(980px,calc(100%-4rem))]" : "h-[min(560px,calc(100%-4rem))] w-[min(760px,calc(100%-4rem))]",
+          props.section === "plugins" ? "h-[min(760px,calc(100%-4rem))] w-[min(1100px,calc(100%-4rem))]" : "h-[min(600px,calc(100%-4rem))] w-[min(820px,calc(100%-4rem))]",
         )}>
         <Tabs value={props.section} onValueChange={(value) => props.onSectionChange(value as SettingsSection)} orientation="vertical" className="min-h-0 flex-1 gap-0">
           <nav className="flex w-52 shrink-0 flex-col gap-3 border-r border-hairline bg-black/15 p-3 pt-4">

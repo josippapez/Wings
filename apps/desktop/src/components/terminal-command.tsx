@@ -120,8 +120,8 @@ export function TerminalCommandRow({ open }: { open: boolean }) {
   if (!status?.available) return null;
   return (
     <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+        <div className="min-w-0 basis-full">
           <p className="flex items-center gap-1.5 text-[13px] font-medium">
             Terminal command
             {status.installed && <CircleCheckIcon className="size-3.5 text-done" aria-label="Added" />}

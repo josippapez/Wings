@@ -4,6 +4,9 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- The Plugins section has more room, and the Claude Code and terminal command cards no longer squeeze their text.
+- Settings is a little bigger.
+
 ## 0.1.8 · 2026-10-12
 
 - Plugins live in Settings, with a list, each plugin's details and its README.

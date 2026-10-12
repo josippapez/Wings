@@ -180,8 +180,8 @@ function ClaudeConnect({ open }: { open: boolean }) {
   if (!status) return null;
   return (
     <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+        <div className="min-w-0 basis-full">
           <p className="flex items-center gap-1.5 text-[13px] font-medium">
             Claude Code
             {connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
@@ -195,7 +195,7 @@ function ClaudeConnect({ open }: { open: boolean }) {
           </p>
         </div>
         {status.claude && (
-          <Button variant={connected ? "ghost" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
+          <Button variant={connected ? "outline" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
             {connecting === "connect" && <Spinner />}
             {connected ? "Reconnect" : "Connect"}
           </Button>
@@ -398,7 +398,7 @@ export function PluginsSection(props: {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex w-72 shrink-0 flex-col border-r border-hairline">
+        <div className="flex w-80 shrink-0 flex-col border-r border-hairline">
           <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-1">
             <p className="text-[12px] font-medium text-muted-foreground">Installed</p>
             <Button variant="ghost" size="xs" className="h-6 text-[12px]" disabled={props.checking || !hasGithub} onClick={props.onCheck}>
@@ -453,11 +453,11 @@ export function PluginsSection(props: {
                 );
               })}
             </ul>
-            <div className="mt-1 border-t border-hairline [&>div:last-child]:border-b-0 [&>div]:px-4">
-              <ClaudeConnect open />
-              <TerminalCommandRow open />
-            </div>
           </ScrollArea>
+          <div className="shrink-0 border-t border-hairline [&>div:last-child]:border-b-0 [&>div]:px-4">
+            <ClaudeConnect open />
+            <TerminalCommandRow open />
+          </div>
         </div>
 
         <ScrollArea className="min-h-0 min-w-0 flex-1">
@@ -546,7 +546,8 @@ export function PluginsSection(props: {
                 <Permissions plugin={current} />
               </section>
 
-              <section className="flex flex-col gap-1">
+              {/* Adds renders nothing for a plugin that adds nothing, and the heading goes with it. */}
+              <section className="hidden flex-col gap-1 has-[ul]:flex">
                 <h5 className="text-[13px] font-semibold">What it adds</h5>
                 <Adds plugin={current} />
               </section>
