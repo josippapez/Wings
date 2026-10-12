@@ -10,7 +10,7 @@ import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
-import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
+import { agentLabel, paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { SidebarPeek } from "@/components/sidebar-peek";
 import { rollUp, StatusDot } from "@/components/status-dot";
@@ -29,6 +29,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
+import { withBadge, withLabel } from "@/lib/badges";
 import { mapPanes, pane, paneIds, remove, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { nextNeedingYou } from "@/lib/agents";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
@@ -685,7 +686,7 @@ export default function App() {
       if (was === "blocked") toast.dismiss(id);
       if (!document.hasFocus() || agent.paneId === focusedPaneId) continue;
       if (agent.state !== "blocked" && agent.state !== "done") continue;
-      const name = agent.name ?? "Claude";
+      const name = agent.name ?? agentLabel(agent.kind);
       const project = spaces.find((s) => s.id === agent.spaceId)?.name ?? "";
       toast(agent.state === "blocked" ? `${name} needs you` : `${name} finished`, {
         id,
@@ -739,12 +740,7 @@ export default function App() {
 
   useEffect(() => {
     const host = new PluginHost({
-      setBadge: (pluginId, paneId, badge) =>
-        setBadges((all) => {
-          if (!badge && !all[paneId]?.[pluginId]) return all;
-          const { [pluginId]: _old, ...others } = all[paneId] ?? {};
-          return { ...all, [paneId]: badge ? { ...others, [pluginId]: badge } : others };
-        }),
+      setBadge: (pluginId, paneId, badge) => setBadges((all) => withBadge(all, paneId, pluginId, badge)),
       openDiff: setDiff,
       clearPlugin: (pluginId) => {
         setBadges((all) =>
@@ -778,7 +774,7 @@ export default function App() {
         closeTabs(tabsRef.current.flatMap((t) => (isViewTab(t) && t.view.pluginId === pluginId && t.view.viewId === viewId ? [t.id] : [])));
       },
       setSidebarLabel: (pluginId, sidebarId, label) =>
-        setSidebarLabels(({ [`${pluginId}:${sidebarId}`]: _old, ...rest }) => (label ? { ...rest, [`${pluginId}:${sidebarId}`]: label } : rest)),
+        setSidebarLabels((all) => withLabel(all, `${pluginId}:${sidebarId}`, label)),
       updateDiff: (pluginId, id, update) =>
         setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
       currentProject: () => activeSpaceIdRef.current,
@@ -1004,6 +1000,8 @@ export default function App() {
               return pluginHost.current.mountPage(plugin, button.id, container, "popover");
             }}
           />
+          {/* The peek sits on the row, not in the panes, so it starts at the window's edge, left of the closed sidebar's handle. */}
+          <div className="relative min-h-0 flex-1">
           <ResizablePanelGroup
             orientation="horizontal"
             elementRef={panelGroup}
@@ -1020,7 +1018,7 @@ export default function App() {
                 right: right >= SIDES.right.min ? Math.round(right) : w.right,
               }));
             }}
-            className="min-h-0 flex-1"
+            className="h-full"
           >
             <ResizablePanel
               id="left"
@@ -1064,11 +1062,6 @@ export default function App() {
                     actions={actions}
                   />
                   ),
-                )}
-                {!sidebarOpen && (
-                  <SidebarPeek width={widths.left}>
-                    <Sidebar open floating {...sidebarProps} />
-                  </SidebarPeek>
                 )}
                 {!activeSpace && (
                   <Empty className="h-full">
@@ -1114,6 +1107,12 @@ export default function App() {
               />
             </ResizablePanel>
           </ResizablePanelGroup>
+          {!sidebarOpen && (
+            <SidebarPeek width={widths.left}>
+              <Sidebar open floating {...sidebarProps} />
+            </SidebarPeek>
+          )}
+          </div>
         </div>
         <DiffViewer
           diff={diff}

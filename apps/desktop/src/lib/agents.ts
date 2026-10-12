@@ -21,3 +21,9 @@ export function elapsed(ms: number): string {
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+/** What a pane's icon shows: the agent's own mark while it is idle, its live state dot otherwise (the same for every agent kind). */
+export function paneGlyph(agent: Agent | undefined): "shell" | "claude" | "opencode" | "state" {
+  if (!agent) return "shell";
+  return agent.state === "idle" ? agent.kind : "state";
+}

@@ -4,6 +4,15 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.16 · 2026-10-12
+
+- Fixes high CPU use: once a program in a pane was refused a protected folder, Wings kept checking that folder itself, and each check was refused and logged again, thousands of times a second.
+- Plugins resending a badge or sidebar label they already showed no longer re-render the app.
+- Point at the window's very left edge to show the closed sidebar.
+- A mouse wheel scrolls the tab strip sideways.
+- opencode panes show opencode's logo and the same working, needs-you and done states as Claude.
+- Plugins has Update all next to Check for updates.
+
 ## 0.1.15 · 2026-10-12
 
 - Less memory: a terminal hidden for 10 minutes keeps its history in a compact copy and frees the rest, and restores it when you come back. Plugin pages you closed or haven't looked at for a while unload too, and reload when you open them.

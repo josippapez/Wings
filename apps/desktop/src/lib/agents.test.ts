@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Agent, AgentState } from "./api.ts";
-import { elapsed, nextNeedingYou } from "./agents.ts";
+import { elapsed, nextNeedingYou, paneGlyph } from "./agents.ts";
 
 const agent = (paneId: string, state: AgentState): Agent => ({
   paneId,
@@ -46,4 +46,12 @@ test("an agent that needs you alone is where you already are", () => {
 
 test("elapsed time reads as seconds, minutes, then hours", () => {
   assert.deepEqual([0, 42_000, 60_000, 7 * 60_000 + 5_000, 65 * 60_000, -5].map(elapsed), ["0s", "42s", "1m", "7m", "1h 5m", "0s"]);
+});
+
+test("an idle agent shows its own mark, any other state shows the state dot, for both kinds", () => {
+  assert.equal(paneGlyph(undefined), "shell");
+  for (const kind of ["claude", "opencode"] as const) {
+    assert.equal(paneGlyph({ ...agent("a", "idle"), kind }), kind);
+    for (const state of ["working", "blocked", "done"] as const) assert.equal(paneGlyph({ ...agent("a", state), kind }), "state", `${kind} ${state}`);
+  }
 });

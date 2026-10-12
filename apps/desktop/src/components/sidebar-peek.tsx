@@ -31,7 +31,7 @@ export function SidebarPeek({ width, children }: { width: number; children: Reac
 
   return (
     <>
-      <div aria-hidden className="absolute inset-y-0 left-0 z-30 w-1.5" onMouseEnter={() => later(true, 60)} onMouseLeave={() => !shown && clearTimeout(timer.current)} />
+      <div aria-hidden className="absolute inset-y-0 left-0 z-30 w-2" onMouseEnter={() => later(true, 60)} onMouseLeave={() => !shown && clearTimeout(timer.current)} />
       <AnimatePresence>
         {shown && (
           <motion.div

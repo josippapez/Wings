@@ -190,6 +190,10 @@ export function TitleBar(props: {
             ref={list}
             variant="line"
             aria-label="Terminals"
+            // A mouse wheel only scrolls up and down, and the strip only scrolls sideways.
+            onWheel={(e) => {
+              if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+            }}
             className="h-auto min-w-0 justify-start gap-0.5 overflow-x-auto overflow-y-hidden p-0 [scrollbar-width:none]"
           >
             <AnimatePresence initial={false} mode="popLayout">

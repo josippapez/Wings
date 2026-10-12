@@ -338,6 +338,20 @@ export function PluginsSection(props: {
       if (!next.approved) setApproving(next);
     });
 
+  const updatable = props.plugins.filter((p) => updateOf(p));
+  // One at a time, like pressing each Update. A plugin that now asks for more access is left off until you review it.
+  async function updateAll() {
+    let review: PluginView | null = null;
+    for (const p of updatable) {
+      await work(p.id, async () => {
+        const next = await api.pluginUpdate(p.id);
+        await refresh(p.id);
+        if (!next.approved) review ??= next;
+      });
+    }
+    if (review) setApproving(review);
+  }
+
   async function approve() {
     if (!approving) return;
     const shown = approving;
@@ -405,10 +419,18 @@ export function PluginsSection(props: {
         <div className="flex w-80 shrink-0 flex-col border-r border-hairline">
           <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-1">
             <p className="text-[12px] font-medium text-muted-foreground">Installed</p>
-            <Button variant="ghost" size="xs" className="h-6 text-[12px]" disabled={props.checking || !hasGithub} onClick={props.onCheck}>
-              {props.checking ? <Spinner /> : <RefreshCwIcon aria-hidden />}
-              Check for updates
-            </Button>
+            <div className="flex items-center gap-0.5">
+              <Button variant="ghost" size="xs" className="h-6 text-[12px]" disabled={props.checking || !hasGithub} onClick={props.onCheck}>
+                {props.checking ? <Spinner /> : <RefreshCwIcon aria-hidden />}
+                Check for updates
+              </Button>
+              {updatable.length > 0 && (
+                <Button variant="ghost" size="xs" className="h-6 text-[12px]" disabled={updatable.some((p) => busy.has(p.id))} onClick={() => void updateAll()}>
+                  {updatable.some((p) => busy.has(p.id)) ? <Spinner /> : <CircleArrowUpIcon aria-hidden />}
+                  Update all ({updatable.length})
+                </Button>
+              )}
+            </div>
           </div>
           <ScrollArea className="min-h-0 flex-1">
             <ul className="flex flex-col gap-0.5 px-2 pb-2" aria-label="Installed plugins">

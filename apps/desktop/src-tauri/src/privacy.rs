@@ -32,11 +32,13 @@ pub struct Blocked {
 }
 
 /// `System Policy: ls(49492) deny(1) file-read-data /Users/you/Library/Application Support/Firefox`
-fn parse(message: &str) -> Option<(String, PathBuf)> {
+fn parse(message: &str) -> Option<(String, u32, PathBuf)> {
     let rest = message.strip_prefix("System Policy: ")?;
-    let program = rest[..rest.find('(')?].to_string();
+    let open = rest.find('(')?;
+    let program = rest[..open].to_string();
+    let pid = rest[open + 1..open + rest[open..].find(')')?].parse().ok()?;
     let path = &rest[rest.find(" /")? + 1..];
-    Some((program, PathBuf::from(path)))
+    Some((program, pid, PathBuf::from(path)))
 }
 
 /// The folder under Application Support that Wings itself can't open, or `None` when Wings can read the path,
@@ -49,6 +51,16 @@ fn blocked_folder(support: &Path, path: &Path, readable: impl Fn(&Path) -> bool)
     }
     let second = first.join(parts.next()?);
     (!readable(&second)).then_some(second)
+}
+
+/// The program and the folder for a refusal Wings should ask about. Wings' own refusals don't count: checking a
+/// folder is itself refused and logged, so they would feed the watch, thousands a second.
+fn refused(message: &str, own_pid: u32, support: &Path, readable: impl Fn(&Path) -> bool) -> Option<(String, PathBuf)> {
+    let (program, pid, path) = parse(message)?;
+    if pid == own_pid {
+        return None;
+    }
+    Some((program, blocked_folder(support, &path, readable)?))
 }
 
 pub fn readable(folder: &Path) -> bool {
@@ -70,8 +82,8 @@ pub fn watch(app: AppHandle) {
         let mut seen = HashSet::new();
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-            let Some((program, path)) = event["eventMessage"].as_str().and_then(parse) else { continue };
-            let Some(folder) = blocked_folder(&support, &path, readable) else { continue };
+            let Some(message) = event["eventMessage"].as_str() else { continue };
+            let Some((program, folder)) = refused(message, std::process::id(), &support, readable) else { continue };
             if !seen.insert(folder.clone()) {
                 continue;
             }
@@ -96,8 +108,23 @@ mod tests {
     #[test]
     fn reads_the_program_and_path() {
         let line = "System Policy: ls(49492) deny(1) file-read-data /Users/a/Library/Application Support/Google/Chrome/Local State";
-        assert_eq!(parse(line), Some(("ls".into(), PathBuf::from("/Users/a/Library/Application Support/Google/Chrome/Local State"))));
+        assert_eq!(parse(line), Some(("ls".into(), 49492, PathBuf::from("/Users/a/Library/Application Support/Google/Chrome/Local State"))));
         assert_eq!(parse("3 duplicate reports for System Policy: ls(1) deny(1) file-read-data /x"), None);
+    }
+
+    #[test]
+    fn ignores_its_own_refusals_without_checking_again() {
+        let support = Path::new("/Users/a/Library/Application Support");
+        let checked = std::cell::Cell::new(0);
+        let readable = |_: &Path| {
+            checked.set(checked.get() + 1);
+            false
+        };
+        let own = "System Policy: wings(7) deny(1) file-read-data /Users/a/Library/Application Support/Firefox";
+        assert_eq!(refused(own, 7, support, readable), None);
+        assert_eq!(checked.get(), 0, "checking would be refused and logged again");
+        let other = "System Policy: ls(8) deny(1) file-read-data /Users/a/Library/Application Support/Firefox";
+        assert_eq!(refused(other, 7, support, readable), Some(("ls".into(), support.join("Firefox"))));
     }
 
     #[test]
