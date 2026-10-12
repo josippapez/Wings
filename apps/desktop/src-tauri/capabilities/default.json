@@ -35,6 +35,7 @@
     "allow-plugin-install-github",
     "allow-plugin-update",
     "allow-plugin-latest-version",
+    "allow-plugin-readme",
     "allow-plugin-set-enabled",
     "allow-plugin-remove",
     "allow-plugin-panel-toggle",

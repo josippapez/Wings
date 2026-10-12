@@ -10,7 +10,6 @@ import {
   ListIcon,
   PanelLeftIcon,
   PlusIcon,
-  PuzzleIcon,
   XIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -65,7 +64,6 @@ export function TitleBar(props: {
   onClose: (id: string) => void;
   onNew: () => void;
   onHistory: () => void;
-  onPlugins: () => void;
   onSettings: () => void;
   /** Sidebar and panel buttons from plugins that are on. The first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
@@ -255,9 +253,6 @@ export function TitleBar(props: {
       </IconButton>
       <IconButton label="Settings" onClick={props.onSettings}>
         <SettingsIcon />
-      </IconButton>
-      <IconButton label="Plugins" onClick={props.onPlugins}>
-        <PuzzleIcon />
       </IconButton>
     </header>
   );

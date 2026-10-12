@@ -6,7 +6,6 @@ import { MotionConfig } from "motion/react";
 
 import { DiffViewer } from "@/components/diff-viewer";
 import { HistorySheet } from "@/components/history-sheet";
-import { PluginManager } from "@/components/plugin-manager";
 import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
@@ -14,7 +13,8 @@ import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp, StatusDot } from "@/components/status-dot";
-import { SettingsDialog } from "@/components/settings-dialog";
+import { SettingsDialog, type SettingsSection } from "@/components/settings-dialog";
+import { usePluginUpdates } from "@/lib/plugin-updates";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -133,9 +133,8 @@ export default function App() {
   const placed = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginView[]>([]);
-  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [droppedPlugin, setDroppedPlugin] = useState<string | null>(null);
-  // A plugin the CLI installed or tried to turn on, waiting for approval in the Plugins sheet.
+  // A plugin the CLI installed or tried to turn on, waiting for approval in Settings, Plugins.
   const [reviewPlugin, setReviewPlugin] = useState<string | null>(null);
   /** The plugin sidebar on the right, as `pluginId:sidebarId`, and every one opened so far (kept running). */
   const [rightSidebar, setRightSidebar] = useState<string | null>(null);
@@ -188,7 +187,7 @@ export default function App() {
       if (event.payload.type !== "drop") return;
       const file = event.payload.paths.find((p) => p.endsWith(".wings-plugin"));
       if (!file) return;
-      setPluginsOpen(true);
+      openPlugins();
       setDroppedPlugin(file);
     });
     return () => void off.then((unlisten) => unlisten());
@@ -198,6 +197,15 @@ export default function App() {
   const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("text");
+  const [settingsPlugin, setSettingsPlugin] = useState<string | null>(null);
+  /** Opens Settings on Plugins, on that plugin when there is one. */
+  const openPlugins = useCallback((id?: string) => {
+    setSettingsSection("plugins");
+    if (id) setSettingsPlugin(id);
+    setSettingsOpen(true);
+  }, []);
+  const pluginUpdates = usePluginUpdates(plugins, openPlugins);
   /** Plugin badges by Rust pane id, then plugin id. */
   const [badges, setBadges] = useState<Record<string, Record<string, Badge>>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
@@ -746,7 +754,7 @@ export default function App() {
       host.sync(list, id);
       if (review) {
         setReviewPlugin(id);
-        setPluginsOpen(true);
+        openPlugins(id);
       }
     });
     return () => {
@@ -880,7 +888,6 @@ export default function App() {
             onClose={closeTab}
             onNew={() => activeSpace && openTab(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
-            onPlugins={() => setPluginsOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             pluginButtons={pluginButtons}
             onPluginButton={(button, rect) => {
@@ -1025,23 +1032,31 @@ export default function App() {
             setModal(null);
           }}
         />
-        <PluginManager
-          open={pluginsOpen}
-          onOpenChange={setPluginsOpen}
-          plugins={plugins}
-          dropped={droppedPlugin}
-          review={reviewPlugin}
-          onReviewHandled={() => setReviewPlugin(null)}
-          onDroppedHandled={() => setDroppedPlugin(null)}
-          onChanged={(list, restart) => {
-            setPlugins(list);
-            pluginHost.current?.sync(list, restart);
-          }}
-        />
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
         <UpdateDialog />
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          section={settingsSection}
+          onSectionChange={setSettingsSection}
+          pluginsProps={{
+            plugins,
+            selected: settingsPlugin,
+            onSelect: setSettingsPlugin,
+            dropped: droppedPlugin,
+            onDroppedHandled: () => setDroppedPlugin(null),
+            review: reviewPlugin,
+            onReviewHandled: () => setReviewPlugin(null),
+            onChanged: (list, restart) => {
+              setPlugins(list);
+              pluginHost.current?.sync(list, restart);
+            },
+            updates: pluginUpdates.updates,
+            checking: pluginUpdates.checking,
+            onCheck: () => void pluginUpdates.check(true),
+          }}
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

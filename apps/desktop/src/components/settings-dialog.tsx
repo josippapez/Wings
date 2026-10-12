@@ -4,7 +4,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { KeyboardIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { PluginsSection } from "@/components/plugins-section";
+import type { PluginView } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { CursorInactiveStyle, CursorStyle, OptionAsMeta, TerminalKeys, TerminalLook } from "@/lib/terminal";
 
 const optionChoices: { value: OptionAsMeta; label: string }[] = [
@@ -80,12 +83,33 @@ const sections = [
   { id: "cursor", label: "Cursor", icon: TextCursorIcon },
   { id: "history", label: "History and selection", icon: ScrollTextIcon },
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
+  { id: "plugins", label: "Plugins", icon: PuzzleIcon },
 ] as const;
+
+export type SettingsSection = (typeof sections)[number]["id"];
+
+/** What the Plugins section needs from App: the list, the selection and the install and update state. */
+export type PluginsProps = {
+  plugins: PluginView[];
+  selected: string | null;
+  onSelect: (id: string) => void;
+  dropped: string | null;
+  onDroppedHandled: () => void;
+  review: string | null;
+  onReviewHandled: () => void;
+  onChanged: (plugins: PluginView[], restart?: string) => void;
+  updates: Record<string, string>;
+  checking: boolean;
+  onCheck: () => void;
+};
 
 /** Wings settings, in a window-sized dialog with a section list on the left, like a native app's Settings. */
 export function SettingsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  section: SettingsSection;
+  onSectionChange: (section: SettingsSection) => void;
+  pluginsProps: PluginsProps;
   keys: TerminalKeys;
   onKeysChange: (keys: TerminalKeys) => void;
   look: TerminalLook;
@@ -95,8 +119,12 @@ export function SettingsDialog(props: {
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="flex h-[min(560px,calc(100%-4rem))] w-[min(760px,calc(100%-4rem))] gap-0 overflow-hidden p-0 sm:max-w-none">
-        <Tabs defaultValue="text" orientation="vertical" className="min-h-0 flex-1 gap-0">
+      <DialogContent className={cn(
+          "flex gap-0 overflow-hidden p-0 transition-[width,height] duration-200 ease-out sm:max-w-none",
+          // Plugins has a list and a details pane side by side, so it gets a bigger window.
+          props.section === "plugins" ? "h-[min(680px,calc(100%-4rem))] w-[min(980px,calc(100%-4rem))]" : "h-[min(560px,calc(100%-4rem))] w-[min(760px,calc(100%-4rem))]",
+        )}>
+        <Tabs value={props.section} onValueChange={(value) => props.onSectionChange(value as SettingsSection)} orientation="vertical" className="min-h-0 flex-1 gap-0">
           <nav className="flex w-52 shrink-0 flex-col gap-3 border-r border-hairline bg-black/15 p-3 pt-4">
             <div className="px-2">
               <DialogTitle>Settings</DialogTitle>
@@ -115,7 +143,7 @@ export function SettingsDialog(props: {
               ))}
             </TabsList>
           </nav>
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
             <TabsContent value="text" className="flex flex-col gap-3 p-6">
               <h3 className="text-[15px] font-semibold">Text</h3>
               <Group>
@@ -202,6 +230,9 @@ export function SettingsDialog(props: {
                   />
                 </Row>
               </Group>
+            </TabsContent>
+            <TabsContent value="plugins" className="min-h-0 flex-1">
+              <PluginsSection {...props.pluginsProps} />
             </TabsContent>
           </div>
         </Tabs>

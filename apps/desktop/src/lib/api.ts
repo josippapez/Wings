@@ -130,6 +130,8 @@ export const api = {
   pluginInstallGithub: (url: string) => invoke<PluginView>("plugin_install_github", { url }),
   pluginUpdate: (id: string) => invoke<PluginView>("plugin_update", { id }),
   pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
+  /** The plugin's README.md, if it has one. */
+  pluginReadme: (id: string) => invoke<string | null>("plugin_readme", { id }),
   /** Turning on approves exactly what `plugin` shows, and fails if the installed plugin changed since. */
   pluginSetEnabled: (plugin: PluginView, enabled: boolean) =>
     invoke<PluginView>("plugin_set_enabled", {

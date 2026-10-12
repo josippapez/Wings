@@ -323,6 +323,39 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
     plugin_store::latest_version(&repo, folder.as_deref())
 }
 
+/// The README.md of an installed plugin, for its page in Settings. Works whether or not the plugin is on.
+#[tauri::command(async)]
+fn plugin_readme(app: AppHandle, state: State<AppState>, id: String) -> Res<Option<String>> {
+    // Only ids of installed plugins get a path, so `id` can't point outside the plugins folder.
+    if state.plugins.lock().unwrap().view(&id).is_none() {
+        return Err(format!("{id} isn't installed"));
+    }
+    let installed = app.path().app_data_dir().map_err(err)?.join("plugins").join(&id);
+    let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")).join(&id));
+    Ok([Some(installed), dev].into_iter().flatten().find_map(|dir| read_readme(&dir)))
+}
+
+const README_MAX_BYTES: u64 = 256 * 1024;
+
+/// `README.md` (any case) from a plugin folder, if it's there, inside the folder and not over 256 KB.
+fn read_readme(dir: &std::path::Path) -> Option<String> {
+    let name = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| e.file_name().to_str().is_some_and(|n| n.eq_ignore_ascii_case("readme.md")))?
+        .file_name();
+    // A symlink out of the folder is refused.
+    let path = plugins::resolve(dir, name.to_str()?)?;
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > README_MAX_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, README_MAX_BYTES), &mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 #[tauri::command]
 fn plugin_set_enabled(app: AppHandle, id: String, enabled: bool, shown: Option<Grant>) -> Res<PluginView> {
     set_enabled(&app, &id, enabled, shown)
@@ -1272,6 +1305,7 @@ pub fn run() {
             plugin_install_github,
             plugin_update,
             plugin_latest_version,
+            plugin_readme,
             plugin_set_enabled,
             plugin_remove,
             plugin_panel_toggle,
@@ -1324,6 +1358,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn readme_is_found_in_any_case_and_capped_and_kept_inside_the_folder() {
+        let root = std::env::temp_dir().join(format!("wings-readme-test-{}", std::process::id()));
+        let dir = root.join("plugin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(super::read_readme(&dir), None);
+        std::fs::write(dir.join("ReadMe.MD"), "# Hi").unwrap();
+        assert_eq!(super::read_readme(&dir).as_deref(), Some("# Hi"));
+        std::fs::write(dir.join("ReadMe.MD"), vec![b'a'; super::README_MAX_BYTES as usize + 1]).unwrap();
+        assert_eq!(super::read_readme(&dir), None);
+        std::fs::remove_file(dir.join("ReadMe.MD")).unwrap();
+        std::fs::write(root.join("secret.md"), "outside").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("secret.md"), dir.join("README.md")).unwrap();
+            assert_eq!(super::read_readme(&dir), None);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Notifications that are never clicked or cleared keep their waiting thread, so the count has a ceiling
     /// and a finished wait gives its place back.
     #[test]
