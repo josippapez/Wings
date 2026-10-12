@@ -15,6 +15,7 @@ const CLOSE_PANE: &str = "Ctrl+Shift+W";
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let close_pane = MenuItemBuilder::with_id("close-pane", "Close Pane").accelerator(CLOSE_PANE).build(app)?;
     let check_updates = MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", "Settings…").accelerator("CmdOrCtrl+,").build(app)?;
     let mut file = SubmenuBuilder::new(app, "File").item(&close_pane);
     #[cfg(target_os = "macos")]
     {
@@ -24,7 +25,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        file = file.separator().item(&check_updates).separator().quit();
+        file = file.separator().item(&settings).item(&check_updates).separator().quit();
     }
     let edit = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -43,6 +44,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         let app_menu = SubmenuBuilder::new(app, "Wings")
             .about(None)
             .item(&check_updates)
+            .separator()
+            .item(&settings)
             .separator()
             .services()
             .separator()

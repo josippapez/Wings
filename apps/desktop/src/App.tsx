@@ -14,7 +14,7 @@ import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp, StatusDot } from "@/components/status-dot";
-import { SettingsSheet } from "@/components/settings-sheet";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -593,6 +593,7 @@ export default function App() {
   useEffect(() => {
     const unlisten = api.onMenu((id) => {
       if (id === "check-updates") return void checkForUpdate({ manual: true });
+      if (id === "settings") return setSettingsOpen(true);
       if (id !== "close-pane") return;
       const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
       if (tab) closePane(tab.focusedPane);
@@ -1025,7 +1026,7 @@ export default function App() {
         />
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
-        <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
+        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

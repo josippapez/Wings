@@ -145,7 +145,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
           : "border-hairline",
       )}
     >
-      <div className="flex h-9 shrink-0 items-center gap-2 pr-1.5 pl-3.5">
+      <div className="flex h-7.5 shrink-0 items-center gap-2 pr-1 pl-3.5">
         <PaneIcon agent={label?.agent} />
         <span className={cn("max-w-[50%] truncate text-[13px] font-semibold", !focused && "text-muted-foreground")}>
           {label?.title}
@@ -193,7 +193,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
           </IconButton>
         </div>
       </div>
-      <div ref={host} className="min-h-0 flex-1 pr-1 pb-2 pl-3.5" />
+      <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
       {session && <FindBar session={session} />}
     </motion.section>
   );
