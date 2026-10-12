@@ -58,6 +58,8 @@ const COMMANDS: &[&str] = &[
     "plugin_open_pane",
     "plugin_focus_pane",
     "plugin_notify",
+    "plugin_tools",
+    "plugin_tool",
     "bench_mode",
     "bench_report",
     "bench_config",

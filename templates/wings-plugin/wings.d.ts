@@ -131,6 +131,12 @@ interface Wings {
   openPane(options?: { command?: string; cwd?: string; placement?: "tab" | "right" | "down" }): Promise<{ paneId: string }>;
   /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
   focusPane(paneId: string): Promise<void>;
+  /**
+   * After `exec` rejected with "<program> is not installed or not on PATH": Wings asks you, installs it in a new tab
+   * and restarts the plugin once it's there. Only `az`, `gh` and `glab`, and only ones `permissions.exec` names.
+   * Resolves true once the install started (or it's already installed), false if you cancelled.
+   */
+  installTool(program: "az" | "gh" | "glab"): Promise<boolean>;
   /** Needs `permissions.notify`. A desktop notification, up to 3 a minute. The title is cut at 64 characters, the body at 256. */
   notify(notification: { title: string; body?: string }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */

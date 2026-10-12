@@ -67,6 +67,11 @@ export const pagesOf = (plugin: PluginView): PluginPage[] => [
   ...plugin.contributes.sidebars.map((s) => ({ ...s, opens: ["sidebar"] satisfies ViewPlace[], width: null, height: null })),
   ...plugin.contributes.views,
 ];
+/**
+ * A command-line tool a plugin runs, like the GitHub CLI. `command` is the Homebrew line Wings runs to install it:
+ * set only when it's missing, on macOS, with Homebrew there. `needsHomebrew` is missing on macOS without Homebrew.
+ */
+export type ToolStatus = { program: string; name: string; installed: boolean; command: string | null; needsHomebrew: boolean; docs: string };
 /** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
 export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean };
@@ -130,6 +135,8 @@ export const api = {
   pluginInstallGithub: (url: string) => invoke<PluginView>("plugin_install_github", { url }),
   pluginUpdate: (id: string) => invoke<PluginView>("plugin_update", { id }),
   pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
+  /** The command-line tools the plugin runs that Wings can install, and whether each is installed. */
+  pluginTools: (id: string) => invoke<ToolStatus[]>("plugin_tools", { id }),
   /** The plugin's README.md, if it has one. */
   pluginReadme: (id: string) => invoke<string | null>("plugin_readme", { id }),
   /** Turning on approves exactly what `plugin` shows, and fails if the installed plugin changed since. */

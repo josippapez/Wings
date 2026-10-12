@@ -20,7 +20,7 @@ const manual = new Set();
 const parents = new Map();
 /** `${org} ${project} ${type}` → Promise of the type's states, in workflow order. */
 const typeStates = new Map();
-/** Azure org → { login, message }, when `az` can't be used there. */
+/** Azure org → { login, missing, message }, when `az` can't be used there. `missing` is set when az isn't installed. */
 const problems = new Map();
 let signingIn = false;
 
@@ -83,7 +83,16 @@ async function refreshRefs() {
 // ---------- the work item ----------
 
 async function az(org, args) {
-  const out = await wings.exec("az", [...args, "--organization", org, "-o", "json"]);
+  let out;
+  try {
+    out = await wings.exec("az", [...args, "--organization", org, "-o", "json"]);
+  } catch (error) {
+    // How `wings.exec` fails for a program that isn't installed.
+    if (/is not installed or not on PATH/.test(String(error.message ?? error))) {
+      problems.set(org, { missing: true, message: "Work item needs the Azure CLI (az) to show this branch's work item." });
+    }
+    throw error;
+  }
   if (out.code === 0) {
     problems.delete(org);
     return JSON.parse(out.stdout);
@@ -224,6 +233,15 @@ function badgeFor(ref, item) {
 }
 
 function problemBadge(problem) {
+  if (problem.missing) {
+    return {
+      label: "Install Azure CLI",
+      tone: "warning",
+      title: "Azure DevOps",
+      subtitle: problem.message,
+      actions: [{ id: "install", label: "Install", primary: true }, { id: "retry", label: "Try again" }],
+    };
+  }
   if (!problem.login) {
     return {
       label: "Work item unavailable",
@@ -248,7 +266,7 @@ function render() {
     const ref = refs.get(pane.paneId);
     const item = ref && items.get(ref.key);
     const problem = ref && problems.get(ref.org);
-    if (problem?.login || (problem && !item?.title)) {
+    if (problem?.login || problem?.missing || (problem && !item?.title)) {
       void wings.setBadge(pane.paneId, problemBadge(problem));
     } else if (ref && !item?.missing) {
       const loading = manual.has(ref.key) || (inFlight.has(ref.key) && !item);
@@ -283,6 +301,8 @@ function retry() {
 wings.onAction(async ({ paneId, actionId }) => {
   if (actionId === "signin") return signIn();
   if (actionId === "retry") return retry();
+  // Wings asks you, installs it in a tab and starts this plugin again once it's there.
+  if (actionId === "install") return wings.installTool("az");
   const ref = refs.get(paneId);
   if (!ref) return;
   if (actionId === "refresh") return refreshItem(ref.key, { byUser: true });

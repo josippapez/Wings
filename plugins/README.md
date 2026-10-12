@@ -123,6 +123,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every few seconds at most |
 | `wings.openPane({ command?, cwd?, placement? })` | Opens a terminal and resolves `{ paneId }` once it's in `onPanes`. `placement` is `tab` (the default), or `right` or `down` for a split beside the focused pane, which has to be in the project on screen. Without `cwd` it opens at the root of the project on screen. The new pane gets the keyboard |
 | `wings.focusPane(paneId)` | Switches to an open pane's project and tab and moves the keyboard to it |
+| `wings.installTool(program)` | Asks Wings to install a CLI the plugin runs, after `exec` rejected with `<program> is not installed or not on PATH`. See [Required tools](#required-tools). Resolves `true` once the install started or it's already there, `false` if you cancelled |
 | `wings.notify({ title, body? })` | A desktop notification, with your plugin's name before the title. The title is cut at 64 characters and the body at 256. Up to 3 a minute per plugin; more are refused with how long to wait. Clicking it does nothing |
 | `wings.openDiff({ title, subtitle, patch?, comments? })` | Opens the diff viewer and resolves `{ id }`. Without `patch` it opens in a loading state |
 | `wings.updateDiff(id, { patch, comments } \| { error })` | Fills in or fails a viewer opened with `openDiff`; ignored once it's closed |
@@ -164,6 +165,12 @@ Wings adds tools of its own to that server, with or without plugins:
 Mind what these allow. Every Claude Code session you start on this computer can call them, so one session can read what another shows, which can include secrets and prompts. `open_pane` only types a command, so nothing runs outside Claude Code's own permission checks for Bash; Claude Code still asks before a call to an MCP tool unless you allowed it. The socket is readable by your user only (`0600`) and there is no network access.
 
 `templates/wings-plugin/wings.d.ts` has types for all of this.
+
+## Required tools
+
+A plugin needs the GitHub CLI (`gh`), the GitLab CLI (`glab`) or the Azure CLI (`az`) when its `exec` or `post` entries name it. Its page in Plugins lists them under Needs, each Installed or not. A missing one has a button: on a Mac with Homebrew, Wings asks, then opens a tab in the project on screen and runs the vendor's own Homebrew command there (`brew install gh`, `brew install glab`, `brew update && brew install azure-cli`), so you see its output and can answer it. Without Homebrew, or off macOS, it links to the vendor's install page and to brew.sh. When the command is done, Wings checks again, says so, and restarts the plugins that run it.
+
+`exec` rejects with `<program> is not installed or not on PATH` for a missing program. A plugin can then show a badge with an Install action that calls `wings.installTool(program)`, like `pr-tracker` and `work-item` do. The commands come from Wings' own table, so a plugin only names the program: one in its manifest and in that table, and Wings always asks first.
 
 ## Views
 

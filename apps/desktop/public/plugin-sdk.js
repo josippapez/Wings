@@ -139,6 +139,13 @@
     openPane: ({ command = null, cwd = null, placement = "tab" } = {}) => call("openPane", { command, cwd, placement }),
     /** Shows an open pane and moves the keyboard to it. Needs `permissions.panes`. */
     focusPane: (paneId) => call("focusPane", { paneId }),
+    /**
+     * Asks Wings to install a command-line tool the plugin runs, like "gh", when `exec` rejected with
+     * "<program> is not installed or not on PATH". Wings shows its own confirmation and installs it the vendor's
+     * way in a new tab, then restarts the plugin once it's there. Resolves true if you started the install (or
+     * it's already installed), false if you cancelled. Only az, gh and glab, and only ones in `permissions.exec`.
+     */
+    installTool: (program) => call("installTool", { program }),
     /** A desktop notification, with `permissions.notify`. Up to 3 a minute; there's no click action. */
     notify: ({ title, body = "" } = {}) => call("notify", { title, body }),
     /**

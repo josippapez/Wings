@@ -14,6 +14,8 @@ import { paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { rollUp, StatusDot } from "@/components/status-dot";
 import { SettingsDialog, type SettingsSection } from "@/components/settings-dialog";
+import { ToolInstallDialog } from "@/components/tool-install";
+import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
@@ -1058,6 +1060,18 @@ export default function App() {
             onCheck: () => void pluginUpdates.check(true),
           }}
           keys={terminalKeys} onKeysChange={setTerminalKeysState} look={terminalLook} onLookChange={setTerminalLookState} />
+        <ToolInstallDialog
+          project={activeSpace}
+          paneInfo={paneInfo}
+          openTab={(spaceId, input) => terminals.get(openTab(spaceId, input))?.whenStarted ?? Promise.resolve(null)}
+          onStarted={() => setSettingsOpen(false)}
+          onInstalled={(program) =>
+            void api.pluginsList().then((list) => {
+              setPlugins(list);
+              for (const id of pluginsUsing(list, program)) pluginHost.current?.sync(list, id);
+            })
+          }
+        />
         <HistorySheet
           space={activeSpace}
           open={historyOpen}

@@ -32,7 +32,7 @@ const diffs = new Map();
 const diffLoads = new Map();
 /** Open diff viewer id → PR url, so a reply typed in it reaches the right PR. */
 const viewers = new Map();
-/** "github", an Azure org or `gitlab:<host>` → { login, message }, when its CLI can't be used there. */
+/** "github", an Azure org or `gitlab:<host>` → { login, missing, message }, when its CLI can't be used there. `missing` names a CLI that isn't installed. */
 const problems = new Map();
 /** Provider whose sign-in is running → { code, url } once the CLI prints them. */
 const signingIn = new Map();
@@ -42,6 +42,20 @@ const PROVIDERS = {
   gitlab: { name: "GitLab", tone: "info" },
 };
 const GH_LOGGED_OUT = /gh auth login|GH_TOKEN/;
+/** How `wings.exec` fails for a program that isn't installed. */
+const NOT_INSTALLED = /is not installed or not on PATH/;
+const CLIS = { gh: "GitHub CLI", az: "Azure CLI", glab: "GitLab CLI" };
+
+/** Runs a provider's CLI, and remembers under `key` when it isn't installed, so the pane offers to install it. */
+async function cli(key, program, args, options) {
+  try {
+    return await wings.exec(program, args, options);
+  } catch (error) {
+    const message = String(error.message ?? error);
+    if (NOT_INSTALLED.test(message)) problems.set(key, { missing: program, message: `PR tracker needs the ${CLIS[program]} (${program}) to find this branch's pull request.` });
+    throw error;
+  }
+}
 
 wings.onPanes((list) => {
   panes = list;
@@ -108,7 +122,7 @@ function checkGhLogin(out) {
 }
 
 async function findGithub(cwd, _remote, branch) {
-  const out = await wings.exec("gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { cwd });
+  const out = await cli("github", "gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { cwd });
   checkGhLogin(out);
   const pr = out.code === 0 ? JSON.parse(out.stdout)[0] : null;
   if (!pr) return null;
@@ -117,7 +131,7 @@ async function findGithub(cwd, _remote, branch) {
 }
 
 async function findAzure(cwd, remote, branch) {
-  const out = await wings.exec("az", [
+  const out = await cli(remote.org, "az", [
     "repos", "pr", "list",
     "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
     "--source-branch", branch, "--status", "all", "--top", "5", "-o", "json",
@@ -141,9 +155,9 @@ async function glab(remote, endpoint, { paginate = false, raw = false } = {}) {
   const key = `gitlab:${remote.host}`;
   let out;
   try {
-    out = await wings.exec("glab", ["api", "--hostname", remote.host, ...(paginate ? ["--paginate"] : []), endpoint]);
+    out = await cli(key, "glab", ["api", "--hostname", remote.host, ...(paginate ? ["--paginate"] : []), endpoint]);
   } catch (error) {
-    problems.set(key, { login: false, message: String(error.message ?? error) });
+    if (!problems.get(key)?.missing) problems.set(key, { login: false, message: String(error.message ?? error) });
     throw error;
   }
   if (out.code === 0) return raw ? out.stdout : JSON.parse(out.stdout);
@@ -242,7 +256,8 @@ function counts(results) {
 }
 
 async function githubStatus(link) {
-  const out = await wings.exec("gh", ["pr", "view", link.url, "--json", GH_FIELDS]);
+  // A Claude pane can know its PR from the transcript without gh, so this can be the first gh call.
+  const out = await cli("github", "gh", ["pr", "view", link.url, "--json", GH_FIELDS]);
   checkGhLogin(out);
   if (out.code !== 0) throw new Error(out.stderr.trim() || "gh failed");
   const pr = JSON.parse(out.stdout);
@@ -766,6 +781,16 @@ const problemKey = (remote) => (remote?.kind === "github" ? "github" : remote?.k
 
 function problemBadge(provider, problem) {
   const { name, tone } = PROVIDERS[provider];
+  if (problem.missing) {
+    return {
+      label: `Install ${CLIS[problem.missing]}`,
+      tone,
+      icon: "pr-open",
+      title: name,
+      subtitle: problem.message,
+      actions: [{ id: "install", label: "Install", primary: true }, { id: "retry", label: "Try again" }],
+    };
+  }
   if (!problem.login) {
     return {
       label: "PRs unavailable",
@@ -797,7 +822,7 @@ function render() {
     const link = links.get(pane.paneId);
     const remote = remotes.get(pane.cwd);
     const problem = problems.get(problemKey(remote));
-    if (problem?.login || (problem && !link)) {
+    if (problem?.login || problem?.missing || (problem && !link)) {
       void wings.setBadge(pane.paneId, problemBadge(remote.kind, problem));
     } else if (link) {
       const loading = inFlight.has(link.url) && (!status.has(link.url) || manual.has(link.url));
@@ -855,6 +880,11 @@ wings.onAction(async ({ paneId, actionId }) => {
   const pane = panes.find((p) => p.paneId === paneId);
   if (actionId === "signin") return signIn(pane && remotes.get(pane.cwd));
   if (actionId === "retry") return retry();
+  // Wings asks you, installs it in a tab and starts this plugin again once it's there.
+  if (actionId === "install") {
+    const program = pane && problems.get(problemKey(remotes.get(pane.cwd)))?.missing;
+    return program && wings.installTool(program);
+  }
   const link = links.get(paneId);
   if (!link) return;
   if (actionId === "open") return wings.openUrl(link.url);

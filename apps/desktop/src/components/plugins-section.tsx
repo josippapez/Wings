@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { TerminalCommandRow } from "@/components/terminal-command";
+import { PluginNeeds } from "@/components/tool-install";
 import { api, type McpStatus, type PluginPage, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { cn } from "@/lib/utils";
@@ -545,6 +546,8 @@ export function PluginsSection(props: {
                 <h5 className="text-[13px] font-semibold">What it can access</h5>
                 <Permissions plugin={current} />
               </section>
+
+              <PluginNeeds plugin={current} />
 
               {/* Adds renders nothing for a plugin that adds nothing, and the heading goes with it. */}
               <section className="hidden flex-col gap-1 has-[ul]:flex">

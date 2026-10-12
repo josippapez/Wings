@@ -50,6 +50,8 @@
     "allow-plugin-open-pane",
     "allow-plugin-focus-pane",
     "allow-plugin-notify",
+    "allow-plugin-tools",
+    "allow-plugin-tool",
     "allow-bench-mode",
     "allow-bench-report",
     "allow-bench-config",

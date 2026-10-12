@@ -28,6 +28,7 @@ mod pty;
 mod spaces;
 mod statusline;
 mod tail;
+mod tools;
 
 use std::{
     collections::HashMap,
@@ -889,6 +890,20 @@ fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPane
     Ok(PanePlan { space_id: spaces[project].id.clone(), cwd, input: input.map(|line| line + "\r") })
 }
 
+/// The command-line tools an installed plugin runs, on or off, and whether each is installed.
+#[tauri::command(async)]
+fn plugin_tools(state: State<AppState>, id: String) -> Res<Vec<tools::ToolStatus>> {
+    let view = state.plugins.lock().unwrap().view(&id).ok_or_else(|| format!("{id} isn't installed"))?;
+    Ok(tools::statuses(&view.manifest.permissions, &plugins::find_program, cfg!(target_os = "macos")))
+}
+
+/// A plugin asks Wings to install a tool it runs. The UI then asks you, and on yes runs the table's own command.
+#[tauri::command(async)]
+fn plugin_tool(state: State<AppState>, plugin_id: String, program: String) -> Res<tools::ToolStatus> {
+    let plugin = plugin(&state, &plugin_id)?;
+    tools::requested(&plugin_id, &plugin.manifest.permissions, &program, &plugins::find_program, cfg!(target_os = "macos"))
+}
+
 /// A plugin may move focus to a pane that's open, if it may use panes at all.
 #[tauri::command]
 fn plugin_focus_pane(state: State<AppState>, plugin_id: String, pane_id: String) -> Res<()> {
@@ -1337,6 +1352,8 @@ pub fn run() {
             plugin_open_pane,
             plugin_focus_pane,
             plugin_notify,
+            plugin_tools,
+            plugin_tool,
             bench_mode,
             bench_report,
             bench::bench_config,

@@ -2,8 +2,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ViewPlace } from "@/lib/api";
+import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
+import { requestToolInstall } from "@/lib/tool-install";
 
 /**
  * Runs each plugin in a hidden `<iframe sandbox="allow-scripts">`. The opaque origin keeps it away from
@@ -545,6 +546,11 @@ export class PluginHost {
         await invoke("plugin_focus_pane", { pluginId, paneId });
         this.callbacks.focusPane(paneId);
         return null;
+      }
+      case "installTool": {
+        // Rust checks the plugin runs it and Wings knows it; the command shown and run comes from Rust's table.
+        const tool = await invoke<ToolStatus>("plugin_tool", { pluginId, program: String(p.program) });
+        return requestToolInstall({ pluginId, pluginName: plugin.plugin.name, tool });
       }
       case "notify":
         return invoke("plugin_notify", {
