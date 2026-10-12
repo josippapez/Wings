@@ -4,7 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.11 · 2026-10-12
+
 - Changes 0.2.0 adds commit history: a History tab in its sidebar with search and Load more, a commit graph window with every branch's lanes, and each commit's diff in the diff viewer.
+- Dev servers credits a server to the pane that started it, also when one pane's shell runs inside another's.
 
 ## 0.1.10 · 2026-10-12
 
