@@ -52,4 +52,6 @@ PLUGINS=$(printf '%s\n' "$PACKED" | while read -r f; do printf ' "%s"' "$f"; don
 echo
 echo "Built Wings $VERSION. Publish it with:"
 echo
-echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --title \"Wings $VERSION\" --notes \"$NOTES\""
+# Notes go in a file: pasted inside quotes, a backtick in them would run as a command.
+printf '%s\n' "$NOTES" > "$DIR/notes.md"
+echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --target main --title \"Wings $VERSION\" --notes-file \"$PWD/$DIR/notes.md\""
