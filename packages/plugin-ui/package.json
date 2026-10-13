@@ -1,6 +1,6 @@
 {
   "name": "wings-plugin-ui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "React components and the stylesheet for Wings plugin pages, on Base UI like the Wings app's shadcn/ui components.",
   "license": "MIT",
   "type": "module",
@@ -33,7 +33,7 @@
   "peerDependencies": {
     "react": ">=19",
     "react-dom": ">=19",
-    "wings-plugin-sdk": "^0.6.0"
+    "wings-plugin-sdk": "^0.6.0 || ^0.7.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
