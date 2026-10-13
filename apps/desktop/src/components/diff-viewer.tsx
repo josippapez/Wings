@@ -3,7 +3,7 @@ import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
 import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
-import { FileDiff, useVirtualizer, Virtualizer, WorkerPoolContext } from "@pierre/diffs/react";
+import { FileDiff, useVirtualizer, Virtualizer, WorkerPoolContext, type FileDiffOptions } from "@pierre/diffs/react";
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -42,6 +42,9 @@ type Entry = { file: FileDiffMetadata; added: number; removed: number };
 type Thread = { root: DiffComment; replies: DiffComment[] };
 /** What sits under a line: a plugin's comment thread, a comment of yours that isn't sent yet, or the box you're typing one in. */
 type Note = { kind: "thread"; thread: Thread } | { kind: "review"; comment: ReviewComment } | { kind: "draft"; range: SelectedLineRange };
+
+/** No unsent comments, as one array, so the annotations built from it keep their identity. */
+const NO_REVIEW: ReviewComment[] = [];
 
 const rangeLabel = (r: SelectedLineRange) => (r.start === r.end ? `line ${r.start}` : `lines ${Math.min(r.start, r.end)} to ${Math.max(r.start, r.end)}`);
 
@@ -347,7 +350,7 @@ export function DiffViewer({
   const [flash, setFlash] = useState<(ResolvedFocus & { path: string; done?: boolean }) | null>(null);
   const focused = useRef<DiffView["focus"]>(undefined);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const reviewItems = review.id === diff?.id ? review.items : [];
+  const reviewItems = review.id === diff?.id ? review.items : NO_REVIEW;
   const loading = !!diff && diff.patch === undefined && !diff.error;
   const shown = useMemo(() => files.filter((e) => e.file.name.toLowerCase().includes(query.trim().toLowerCase())), [files, query]);
   const rows = useMemo(() => (tree ? treeRows(buildTree(shown), collapsed) : []), [tree, shown, collapsed]);
@@ -377,19 +380,40 @@ export function DiffViewer({
   const totals = files.reduce((t, e) => ({ added: t.added + e.added, removed: t.removed + e.removed }), { added: 0, removed: 0 });
   const commentCount = diff?.comments?.length ?? 0;
   const outdated = diff?.comments?.filter((c) => c.line === null && c.replyTo === null).length ?? 0;
-  const annotations: DiffLineAnnotation<Note>[] = current
-    ? [
-        ...(threads.get(current.file.name) ?? [])
-          .filter((t) => t.root.line !== null)
-          .map((t): DiffLineAnnotation<Note> => ({ side: t.root.side, lineNumber: t.root.line!, metadata: { kind: "thread", thread: t } })),
-        ...reviewItems
-          .filter((c) => c.path === current.file.name)
-          .map((c): DiffLineAnnotation<Note> => ({ side: c.side, lineNumber: Math.max(c.start, c.end), metadata: { kind: "review", comment: c } })),
-        ...(draft && draft.path === current.file.name
-          ? [{ side: draft.range.endSide ?? draft.range.side ?? "additions", lineNumber: Math.max(draft.range.start, draft.range.end), metadata: { kind: "draft", range: draft.range } } satisfies DiffLineAnnotation<Note>]
-          : []),
-      ]
-    : [];
+  // The file's annotations and options keep their identity until what they show changes. @pierre/diffs compares both
+  // by identity (options key by key), so a new one, on every render of App, redrew every row of the open file.
+  const annotations = useMemo<DiffLineAnnotation<Note>[]>(
+    () =>
+      current
+        ? [
+            ...(threads.get(current.file.name) ?? [])
+              .filter((t) => t.root.line !== null)
+              .map((t): DiffLineAnnotation<Note> => ({ side: t.root.side, lineNumber: t.root.line!, metadata: { kind: "thread", thread: t } })),
+            ...reviewItems
+              .filter((c) => c.path === current.file.name)
+              .map((c): DiffLineAnnotation<Note> => ({ side: c.side, lineNumber: Math.max(c.start, c.end), metadata: { kind: "review", comment: c } })),
+            ...(draft && draft.path === current.file.name
+              ? [{ side: draft.range.endSide ?? draft.range.side ?? "additions", lineNumber: Math.max(draft.range.start, draft.range.end), metadata: { kind: "draft", range: draft.range } } satisfies DiffLineAnnotation<Note>]
+              : []),
+          ]
+        : [],
+    [current, threads, reviewItems, draft],
+  );
+  const currentName = current?.file.name;
+  const options = useMemo<FileDiffOptions<Note, undefined>>(
+    () => ({
+      theme: "pierre-dark",
+      themeType: "dark",
+      diffStyle: split ? "split" : "unified",
+      stickyHeader: true,
+      // The + that shows beside a line number: click it for one line, drag it for several.
+      enableGutterUtility: true,
+      onGutterUtilityClick: (range) => {
+        if (currentName !== undefined) setDraft({ path: currentName, range });
+      },
+    }),
+    [split, currentName],
+  );
 
   const addReview = (path: string, range: SelectedLineRange, body: string) => {
     const side = range.side ?? "additions";
@@ -644,15 +668,7 @@ export function DiffViewer({
                         <ReviewDraft range={rangeLabel(a.metadata.range)} onAdd={(body) => addReview(current.file.name, a.metadata.kind === "draft" ? a.metadata.range : { start: 0, end: 0 }, body)} onCancel={() => setDraft(null)} />
                       )
                     }
-                    options={{
-                      theme: "pierre-dark",
-                      themeType: "dark",
-                      diffStyle: split ? "split" : "unified",
-                      stickyHeader: true,
-                      // The + that shows beside a line number: click it for one line, drag it for several.
-                      enableGutterUtility: true,
-                      onGutterUtilityClick: (range) => setDraft({ path: current.file.name, range }),
-                    }}
+                    options={options}
                   />
                 ) : (
                   <Empty>

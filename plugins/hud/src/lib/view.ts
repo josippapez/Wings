@@ -45,7 +45,8 @@ function cacheText(cache: Cache, now = Date.now()) {
   return cache.warm && cache.expiresAt && cache.expiresAt * 1000 > now ? `Warm until ${clock(cache.expiresAt * 1000)}` : "Expired";
 }
 
-export function badge(s: Session): WingsBadge {
+/** The pane badge, only when something needs a look: a context running full or an MCP server that failed or needs sign-in. The HUD sidebar shows the rest. */
+export function badge(s: Session): WingsBadge | null {
   const ctx = context(s);
   const all = servers(s);
   const failed = all.filter((x) => x.state === "failed");
@@ -54,6 +55,7 @@ export function badge(s: Session): WingsBadge {
   const label = [ctx ? `Context ${ctx.percent}%` : "Context", failed.length ? `${failed.length} MCP failed` : null].filter(Boolean).join(" · ");
   const contextTone: Tone | undefined = !ctx ? undefined : ctx.percent >= CONTEXT_CRITICAL ? "danger" : ctx.percent >= CONTEXT_WARN ? "warning" : undefined;
   const signIn = all.filter((x) => x.state === "sign-in").length;
+  if (!contextTone && !failed.length && !signIn) return null;
   const skills = [...s.skills];
   const cache = ctx && cacheText(ctx.cache);
   return {

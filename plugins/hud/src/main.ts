@@ -1,5 +1,5 @@
 // What a terminal status line like claude-hud shows, in Wings instead: your usage limits and memory next to the
-// HUD title bar button, and each Claude session's context, MCP servers and skills on its pane.
+// HUD title bar button, and a badge on a Claude session's pane when its context runs full or an MCP server fails.
 //
 // The usage limits, and the context and cache Claude Code itself reports, come from `wings.statusline()`, once
 // `wings statusline` is Claude Code's status line. Without it the context is worked out from the transcript the

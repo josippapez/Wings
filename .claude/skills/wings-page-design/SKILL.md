@@ -24,7 +24,8 @@ Plugin pages use `wings-plugin-ui`. Its components carry the padding, spacing an
    - Page CSS only lays out the page's own blocks.
 5. **Width.** Reading pages centre a column of at most about 860px. Lists fill the width. At 640px the toolbar must still fit: actions wrap or collapse into a `Menu`, and they're never clipped.
 6. **States.** Each page has a designed loading, empty and error state, using `Loading`, `Empty` and an error card.
-7. **App pages** follow the shadcn components in `apps/desktop/src/components/ui` and the direction in memory `wings-ui-direction`. They don't use one-off styles.
+7. **No `transition-all` inside a tab or pane.** Inactive tabs are `visibility: hidden`. A transition on the inherited `visibility` leaves WKWebView with stale paint, so badges stay blank until hover. List the properties instead (`transition`, `transition-colors`). Check with `pnpm --dir apps/desktop repaint`.
+8. **App pages** follow the shadcn components in `apps/desktop/src/components/ui` and the direction in memory `wings-ui-direction`. They don't use one-off styles.
 
 ## Check before done
 

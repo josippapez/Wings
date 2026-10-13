@@ -1,11 +1,11 @@
-// Follows each Claude session in a pane: a badge with its model and context, and a sidebar with recent activity.
+// Follows each Claude session in a pane for a sidebar with its recent activity.
 // It reads the newest transcript entries once per run of `claude`, then only what Claude appends. A resumed
 // session's transcript also holds earlier runs, which only count for the model and context.
 
 import { openChanges } from "./lib/diff";
 import { emptyTokens, ingest, session, sessions, type Entry, type Session } from "./lib/session";
 import type { Detail, ToMain, ToPage } from "./lib/types";
-import { badge, snapshot } from "./lib/view";
+import { snapshot } from "./lib/view";
 
 // Many entries are small attachments, so this reaches back a bit further than the number suggests.
 const BACKLOG = 500;
@@ -15,32 +15,20 @@ let panes = new Map<string, Session>();
 
 const send = (message: ToPage) => wings.broadcast(message);
 
-// Changes come in bursts while Claude works, so the badge and sidebar update at most every 300 ms.
-let pending = new Set<string>();
+// Changes come in bursts while Claude works, so the sidebar updates at most every 300 ms.
 let timer: ReturnType<typeof setTimeout> | null = null;
-function changed(s: Session) {
-  pending.add(s.id);
+function changed() {
   timer ??= setTimeout(flush, 300);
 }
 function flush() {
   timer = null;
-  for (const id of pending) {
-    const s = sessions.get(id);
-    if (s?.paneId) void wings.setBadge(s.paneId, badge(s)).catch(() => {});
-  }
-  pending = new Set();
   void send({ type: "sessions", sessions: snapshot() });
 }
 
 wings.onPanes(async (list) => {
-  const open = new Set(list.map((p) => p.paneId));
   const next = new Map(list.filter((p) => p.session).map((p) => [p.paneId, p]));
-  // A pane that stopped running this session loses its badge. Wings drops the badges of closed panes itself.
   for (const [paneId, s] of panes) {
-    if (next.get(paneId)?.session?.sessionId !== s.id) {
-      s.paneId = null;
-      if (open.has(paneId)) void wings.setBadge(paneId, null).catch(() => {});
-    }
+    if (next.get(paneId)?.session?.sessionId !== s.id) s.paneId = null;
   }
   const current = new Map<string, Session>();
   for (const [paneId, pane] of next) {
@@ -61,7 +49,7 @@ wings.onPanes(async (list) => {
         console.error(error);
       }
     }
-    changed(s);
+    changed();
   }
   panes = current;
   if (current.size === 0) void send({ type: "sessions", sessions: [] });
@@ -71,7 +59,7 @@ wings.onTranscript(({ sessionId, entry }) => {
   const s = sessions.get(sessionId);
   if (!s?.loaded) return;
   ingest(s, entry as Entry);
-  changed(s);
+  changed();
 });
 
 // A sidebar that just opened asks for the current state, and one that opens a row asks for its detail.

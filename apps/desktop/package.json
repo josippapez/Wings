@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.29",
+  "version": "0.1.30",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,8 @@
     "test": "node --test",
     "tokens": "node scripts/plugin-tokens.mjs",
     "parity": "node parity/run.mjs",
+    "diff-rerender": "node scripts/diff-rerender/run.mjs",
+    "repaint": "node scripts/webkit-repaint/run.mjs",
     "tauri": "tauri",
     "build:mac": "sh scripts/build-mac-app.sh",
     "install:mac": "sh scripts/install-mac-app.sh",

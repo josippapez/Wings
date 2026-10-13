@@ -11,6 +11,8 @@ export interface HistoryView {
   rows: CommitRow[];
   more?: boolean;
   error?: string;
+  /** The repo, search and scope the rows are of, so a first page for the same list keeps the rows after it. */
+  source?: string;
 }
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });

@@ -8,27 +8,6 @@ const tokenLine = (s: Session) => {
 };
 const running = (s: Session) => [...s.tools.values()].filter((t) => !t.done);
 
-export function badge(s: Session): WingsBadge {
-  const now = s.state === "working" ? running(s).at(-1) : null;
-  // Always the model, never the running tool: a label that changes with every tool call jumps around the header.
-  const label = [modelName(s.model), s.context != null ? tokens(s.context) : null].filter(Boolean).join(" · ") || "Claude";
-  const status = ({ working: "Working", blocked: "Waiting for you", done: "Finished", idle: "Idle" } as Record<string, string>)[s.state] ?? s.state;
-  return {
-    label,
-    tone: s.state === "blocked" ? "warning" : "neutral",
-    title: "Claude session",
-    subtitle: s.name ?? undefined,
-    rows: [
-      { label: "Status", value: now ? `${now.name} ${now.summary}`.trim() : status, tone: s.state === "blocked" ? "warning" : undefined },
-      { label: "Model", value: modelName(s.model) || "—" },
-      { label: "Context", value: s.context != null ? `${tokens(s.context)} tokens` : "—" },
-      { label: "Files edited", value: String(s.files.size) },
-      { label: "Tokens", value: tokenLine(s) },
-      ...(s.lastPrompt ? [{ label: "Last prompt", value: s.lastPrompt }] : []),
-    ],
-  };
-}
-
 /** What the sidebar shows, kept under the 64 KB a broadcast may carry. */
 export function snapshot(): SessionView[] {
   const list = [...sessions.values()].filter((s) => s.paneId).sort((a, b) => b.updated - a.updated).slice(0, 6);

@@ -23,11 +23,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
         {...props}
       />
       {toasts.length >= 2 && (
-        // Sits in the 48px gutter under the stack, so it never covers a toast.
+        // Sits in the 48px gutter under the stack, right-aligned with it (the toaster's offset), so it never covers a toast.
         <Button
-          variant="ghost"
+          variant="outline"
           size="xs"
-          className="fixed right-8 bottom-2"
+          className="fixed right-12 bottom-3 z-50 rounded-full bg-popover px-2.5 text-muted-foreground shadow-md hover:text-foreground"
           onClick={() => toast.dismiss()}
         >
           Clear all

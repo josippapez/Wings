@@ -1,10 +1,10 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "minWingsVersion": "0.1.20",
   "icon": "icon.svg",
-  "description": "Shows what each Claude session is doing: its model and context size, and recent tool calls, edited files with their diffs, and its to-do list.",
+  "description": "Shows what each Claude session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -20,7 +20,6 @@
   },
   "contributes": {
     "ui": [
-      "badges",
       "diff"
     ],
     "sidebars": [

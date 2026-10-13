@@ -4,7 +4,14 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.30 · 2026-10-13
+
 - Plugin pages take their colours, radius and font from the app's theme, and their buttons, tabs, chips, selects and menus now match the app's. `wings-plugin-ui` 0.6.0.
+- The toasts' Clear all button is a small pill lined up under the stack's right edge.
+- Fewer pane badges: Session 0.5.0 drops its model and context badge, and HUD 0.4.0 shows its badge only when the context runs past 70% or an MCP server fails or needs sign-in. The HUD sidebar keeps the full numbers.
+- The diff viewer no longer redraws the open file every time the app updates.
+- Changes 0.3.1: History keeps the commits "Load more" added when a new commit lands, so the list stays where you were reading.
+- Pane badges no longer stay blank until hovered after switching back to a tab.
 - PR tracker 0.13.1: a pull request opened from the All list has its back link in the page toolbar, as a breadcrumb.
 
 ## 0.1.29 · 2026-10-13

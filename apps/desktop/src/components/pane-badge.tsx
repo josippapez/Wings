@@ -62,7 +62,9 @@ export function PaneBadge({ badge, onAction }: { badge: Badge; onAction: (action
             transition={{ type: "spring", stiffness: 500, damping: 32 }}
             className={cn(
               badgeVariants(),
-              "h-6 cursor-pointer gap-1.5 px-2.5 text-[12px] ring-1 ring-inset hover:brightness-125 aria-expanded:brightness-125 [&>svg]:size-3.5!",
+              // `transition`, not the badge's `transition-all`: a hidden tab is `visibility: hidden`, and a badge that
+              // transitions the visibility it inherits is left half drawn by WKWebView after a quick tab switch until hover.
+              "transition h-6 cursor-pointer gap-1.5 px-2.5 text-[12px] ring-1 ring-inset hover:brightness-125 aria-expanded:brightness-125 [&>svg]:size-3.5!",
               tone.pill,
             )}
           />

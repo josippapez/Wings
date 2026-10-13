@@ -8,6 +8,7 @@ import { Button, Card, Chips, Empty, Loading, Row, showSidebar, Spinner, Stack, 
 import { FileTree } from "./components/FileTree";
 import { History, type HistoryView } from "./components/History";
 import { plural } from "./lib/format";
+import { withFirstPage } from "./lib/history-rows";
 import type { CommitRow, HistoryMessage, Mode, StateMessage, Tab } from "./lib/types";
 import "./sidebar.css";
 
@@ -54,10 +55,14 @@ function Sidebar() {
         if (m.query !== ui.query || m.all !== ui.all) return;
         const rowsOf = m.rows ?? [];
         const historyTab = ui.historyTab;
-        // A next page appends, unless the repo changed under it; a first page replaces the list.
+        const source = JSON.stringify([m.repo?.root, m.query, m.all]);
+        // A next page appends, unless the repo changed under it. A first page replaces the list, or for the list on
+        // screen (a poll, a refresh) only its top, so the pages Load more added stay.
         if (m.skip > 0 && historyTab && historyTab.repo?.root === m.repo?.root && m.skip === historyTab.rows.length) ui.historyTab = { ...historyTab, rows: [...historyTab.rows, ...rowsOf], more: m.more, loadingMore: false };
-        else if (m.skip === 0) ui.historyTab = { repo: m.repo, rows: rowsOf, more: m.more, error: m.error };
-        else return;
+        else if (m.skip === 0) {
+          const rows = historyTab?.source === source && !m.error ? withFirstPage(historyTab.rows, rowsOf) : rowsOf;
+          ui.historyTab = { repo: m.repo, rows, more: rows.length > rowsOf.length ? historyTab?.more : m.more, error: m.error, source };
+        } else return;
         if (ui.tab === "history") render();
         return;
       }
