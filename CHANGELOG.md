@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.21 · 2026-10-13
+
+- The docked right sidebar fills the window's height again. In 0.1.20 its page shrank to its header.
+
 ## 0.1.20 · 2026-10-13
 
 - Fixes a graphics memory leak: closing the focused pane or tab kept its terminal's graphics memory for good, about 33 to 66 MB each time. The WebGL renderer's cursor blink timer outlived it (a bug in @xterm/addon-webgl 0.19.0, fixed upstream but not yet released), so Wings now blurs a terminal before dropping its renderer.
