@@ -4,6 +4,7 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text, Toolbar } from "wings-plugin-ui";
 import type { Overview } from "../lib/refs";
+import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS } from "../lib/state";
 import { ago, focusOf, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import type { Comment, Failing, PrArgs, Reviewer, Status } from "../lib/types";
@@ -24,6 +25,8 @@ export interface PrViewProps {
   onReply: (root: Comment, body: string) => Promise<void>;
   /** Approves the pull request as you. Absent where the provider's approval can't be sent from here. */
   onApprove?: () => Promise<void>;
+  /** Azure DevOps votes instead of approving: its menu of votes. */
+  onVote?: (vote: AzureVote) => Promise<void>;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -53,39 +56,48 @@ async function copyText(text: string) {
 }
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove } = props;
+  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">("overview");
   const [checksOpen, setChecksOpen] = useState(false);
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
-  const [confirming, setConfirming] = useState(false);
+  const [menu, setMenu] = useState(false);
+  /** What the user picked and has yet to confirm. */
+  const [pending, setPending] = useState<{ label: string; run: () => Promise<void> } | null>(null);
   const [approving, setApproving] = useState(false);
   const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
   const open = st ? !["Merged", "Closed"].includes(st.label) : false;
+  const ref = `${args.repo} ${args.provider === "gitlab" ? "!" : "#"}${args.number}`;
 
-  const approve = async () => {
+  const send = async () => {
+    const choice = pending!;
     setApproving(true);
     setVerdict(null);
     try {
-      await onApprove!();
-      setVerdict({ ok: true, text: "Approved." });
+      await choice.run();
+      setVerdict({ ok: true, text: `${choice.label}: done.` });
     } catch (e) {
       setVerdict({ ok: false, text: String((e as Error).message ?? e) });
     } finally {
       setApproving(false);
-      setConfirming(false);
+      setPending(null);
     }
+  };
+  const pick = (choice: { label: string; run: () => Promise<void> }) => {
+    setMenu(false);
+    setPending(choice);
   };
 
   const toolbar = (
     <Toolbar
-      title={`${args.repo} ${args.provider === "gitlab" ? "!" : "#"}${args.number}`}
+      title={ref}
       actions={
         <>
           <Button variant="outline" size="sm" onClick={onRefresh}>Refresh</Button>
           <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => onRun("agent")}>Send to agent</Button>
           <Button variant="outline" size="sm" onClick={() => void wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
-          {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={confirming} onClick={() => setConfirming((c) => !c)} data-testid="pr-approve">Approve</Button> : null}
+          {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={pending !== null} onClick={() => pick({ label: "Approve", run: onApprove })} data-testid="pr-approve">Approve</Button> : null}
+          {onVote && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={menu} aria-haspopup="true" onClick={() => setMenu((m) => !m)} data-testid="pr-vote">Vote ▾</Button> : null}
           <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
         </>
       }
@@ -113,12 +125,19 @@ export function PrView(props: PrViewProps) {
             {st?.updated ? <Text tone="muted" size="small" as="span"><When iso={st.updated} prefix="updated " /></Text> : null}
           </div>
           {notice ? <Text tone="danger" role="alert">{notice}</Text> : null}
-          {confirming ? (
-            <div className="pr-card pr-confirm" role="group" aria-label="Confirm approval" data-testid="pr-confirm">
-              <Text>Approve {args.repo} {args.provider === "gitlab" ? "!" : "#"}{args.number} as you? Everyone on it sees your approval.</Text>
+          {menu && onVote ? (
+            <div className="pr-card pr-confirm" role="menu" aria-label="Vote" data-testid="pr-vote-menu">
+              {(Object.keys(AZURE_VOTES) as AzureVote[]).map((v) => (
+                <Button key={v} size="sm" variant="ghost" role="menuitem" onClick={() => pick({ label: AZURE_VOTES[v], run: () => onVote(v) })}>{AZURE_VOTES[v]}</Button>
+              ))}
+            </div>
+          ) : null}
+          {pending ? (
+            <div className="pr-card pr-confirm" role="group" aria-label="Confirm" data-testid="pr-confirm">
+              <Text>{pending.label} on {ref} as you? Everyone on it sees your vote.</Text>
               <div className="pr-reply-actions">
-                <Button size="sm" busy={approving} onClick={() => void approve()}>Approve</Button>
-                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+                <Button size="sm" busy={approving} onClick={() => void send()}>{pending.label}</Button>
+                <Button size="sm" variant="ghost" onClick={() => setPending(null)}>Cancel</Button>
               </div>
             </div>
           ) : null}

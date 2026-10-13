@@ -5,8 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
 import { Button, Empty, Heading, Loading, Row, showTab, Stack } from "wings-plugin-ui";
-import { approveWith, canApprove, commentsOf, linkOf, overviewOf, replyWith, type Overview } from "./lib/refs";
+import { approveWith, canApprove, commentsOf, linkOf, overviewOf, replyWith, voteWith, type Overview } from "./lib/refs";
 import type { Comment, Link, PrArgs } from "./lib/types";
+import type { AzureVote } from "./lib/vote";
 import "./pr.css";
 import { PrView } from "./ui/pr-view";
 import { ProjectPulls } from "./ui/pulls-list";
@@ -99,6 +100,11 @@ function Pr({ args }: { args: PrArgs }) {
     await load();
   }, [link, load, overview]);
 
+  const onVote = useCallback(async (vote: AzureVote) => {
+    await voteWith(link!, vote);
+    await load();
+  }, [link, load]);
+
   return (
     <PrView
       args={args}
@@ -112,6 +118,7 @@ function Pr({ args }: { args: PrArgs }) {
       onRun={run}
       onReply={onReply}
       onApprove={link && canApprove(link.provider) ? onApprove : undefined}
+      onVote={link?.provider === "azure" ? onVote : undefined}
     />
   );
 }

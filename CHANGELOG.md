@@ -4,6 +4,8 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- PR tracker 0.12.0 votes on Azure DevOps pull requests: Approve, Approve with suggestions, Wait for author, Reject or Reset vote, each confirmed first.
+
 ## 0.1.28 · 2026-10-13
 
 - A plugin call that a permission pins to one value, like approve only, always goes out as JSON. A plugin could otherwise send it as form data that a server reads as a different value.

@@ -1451,6 +1451,7 @@ mod tests {
             ("az", &["devops", "invoke", "--area", "build", "--resource", "timeline", "--route-parameters", "project=My Project", "buildId=123", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "build", "--resource", "logs", "--route-parameters", "project=My Project", "buildId=123", "logId=4", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+            ("az", &["repos", "pr", "set-vote", "--id", "42", "--vote", "approve-with-suggestions", "--organization", "https://dev.azure.com/o", "-o", "json"]),
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
@@ -1458,6 +1459,12 @@ mod tests {
             assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
+        // az's own file and method flags still can't ride along on a vote.
+        let vote = |extra: &[&str]| -> Vec<String> { ["repos", "pr", "set-vote", "--id", "1", "--vote", "reset"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(may_exec(&p, "az", &vote(&[])));
+        assert!(!may_exec(&p, "az", &vote(&["--detect"])), "a flag that isn't listed");
+        assert!(vote(&["--file", "x"]).iter().any(|a| is_unsafe_flag("az", a)));
+        assert!(is_unsafe_flag("az", "@/etc/passwd"));
         let posts = [
             ("gh", "repos/o/r/pulls/1/comments/2/replies", None),
             ("gh", "repos/o/r/pulls/1/comments/2/replies", Some("ghe.example.com")),

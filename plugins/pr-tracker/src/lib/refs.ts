@@ -1,9 +1,10 @@
 /** A PR's ref to and from the args of its tab, and what the tab shows of it. */
-import { azureComments, azureLink, azureOverview, azureReply, azureShow } from "./azure";
+import { azureComments, azureLink, azureOverview, azureReply, azureShow, azureVote } from "./azure";
 import { bitbucketApprove, bitbucketComments, bitbucketOverview, bitbucketReply } from "./bitbucket";
 import { giteaApprove, giteaComments, giteaOverview, giteaReply } from "./gitea";
 import { githubApprove, githubComments, githubOverview, githubReply } from "./github";
 import { gitlabApprove, gitlabComments, gitlabOverview, gitlabReply } from "./gitlab";
+import type { AzureVote } from "./vote";
 import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Provider, Reviewer, Status } from "./types";
 
 export function argsOf(link: Link, title: string, cwd: string): PrArgs {
@@ -57,11 +58,10 @@ export function replyWith(link: Link, root: Comment, body: string): Promise<Comm
   }
 }
 
-/** Providers whose approval can be scoped to one call in the manifest. Azure DevOps votes with a PUT that Wings doesn't offer. */
+/** Providers that can approve with one scoped call. Azure DevOps votes instead, through `voteWith`. */
 export const canApprove = (provider: Provider) => provider !== "azure";
 
-/** Approves the pull request as the signed-in user. */
-/** `sha` is the head commit the user was looking at (GitLab approves only that one). */
+/** Approves the pull request as the signed-in user. `sha` is the head commit the user was looking at (GitLab approves only that one). */
 export async function approveWith(link: Link, sha: string): Promise<void> {
   switch (link.provider) {
     case "github":
@@ -73,6 +73,12 @@ export async function approveWith(link: Link, sha: string): Promise<void> {
     case "gitea":
       return giteaApprove(link);
     case "azure":
-      throw new Error("Approving an Azure DevOps pull request isn't supported here yet. Vote on its page.");
+      throw new Error("Vote on an Azure DevOps pull request with the Vote menu.");
   }
+}
+
+/** Casts an Azure DevOps vote. */
+export async function voteWith(link: Link, vote: AzureVote): Promise<void> {
+  if (link.provider !== "azure") throw new Error("Only Azure DevOps pull requests take a vote.");
+  return azureVote(link, vote);
 }

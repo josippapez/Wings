@@ -2,6 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, git, post } from "./cli";
 import { problems, status } from "./state";
+import { voteArgs, type AzureVote } from "./vote";
 import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
 
 /** A thread from the `pullRequestThreads` resource. */
@@ -261,4 +262,12 @@ export async function azureReply(link: AzureLink, root: Comment, body: string): 
   const url = `${org}/${encodeURIComponent(name)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullRequests/${link.number}/threads/${thread}/comments?api-version=7.1`;
   const c = (await post("az", url, { content: body, parentCommentId: root.id % 10_000, commentType: 1 })) as AzureComment;
   return { ...root, id: thread * 10_000 + c.id, replyTo: root.id, author: c.author?.displayName ?? "you", body: c.content ?? body, createdAt: c.publishedDate, canReply: false };
+}
+
+// ---------- voting ----------
+
+/** Casts your vote through `az repos pr set-vote`, which works out your reviewer identity itself. */
+export async function azureVote(link: AzureLink, vote: AzureVote): Promise<void> {
+  const out = await cli(link.remote.org, "az", voteArgs(link.number, link.remote.org, vote));
+  if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az failed");
 }
