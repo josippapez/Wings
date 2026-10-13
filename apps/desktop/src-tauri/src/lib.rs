@@ -709,11 +709,21 @@ fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest
     let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
     let url = plugins::fetch_url(&plugin, &method, &request.url, request.body.as_deref()).ok_or_else(|| format!("{plugin_id} may not {method} {}", request.url))?;
     let mut builder = tauri::http::Request::builder().method(method.as_str()).uri(&url);
+    let json_only = plugins::fetch_needs_json(&plugin, &method, &url);
     for (name, value) in &request.headers {
         if !plugins::fetch_header_ok(name) {
             return Err(format!("{plugin_id} may not set the {name} header"));
         }
+        if json_only && name.eq_ignore_ascii_case("content-type") {
+            if !value.trim().eq_ignore_ascii_case("application/json") {
+                return Err(format!("{plugin_id} must send this body as application/json"));
+            }
+            continue;
+        }
         builder = builder.header(name, value);
+    }
+    if json_only {
+        builder = builder.header("Content-Type", "application/json");
     }
     if let Some(name) = &request.bearer {
         let token = stored_secret(&state, &plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;

@@ -895,6 +895,13 @@ pub fn fetch_url(plugin: &Plugin, method: &str, url: &str, body: Option<&str>) -
     allowed.then(|| normal.to_string())
 }
 
+/// Whether a pinned `POST` rule covers this call. Its body was checked as JSON, so it must go out as JSON: with a
+/// form or UTF-16 content type, `{"event":"APPROVED","x":"&event=REQUEST_CHANGES&"}` reads as the other event.
+pub fn fetch_needs_json(plugin: &Plugin, method: &str, url: &str) -> bool {
+    method.eq_ignore_ascii_case("POST")
+        && plugin.manifest.permissions.fetch.iter().filter_map(|e| fetch_rule(e)).any(|rule| rule.method == Some("POST") && !rule.pins.is_empty() && post_url_matches(rule.target, url))
+}
+
 /// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
 /// different site or path behind the same server (`Host`, `X-Forwarded-*`, `X-HTTP-Host-Override`).
 pub fn fetch_header_ok(name: &str) -> bool {
@@ -1841,6 +1848,20 @@ mod tests {
         ] {
             assert!(fetch_rule(entry).is_none(), "{entry}");
         }
+    }
+
+    #[test]
+    fn a_pinned_post_goes_out_as_json_only() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.fetch = vec![
+            "POST https://api.example.com/v1/repos/*/*/pulls/*/reviews {event=APPROVED}".into(),
+            "POST https://api.example.com/v1/repos/*/*/issues/*/comments".into(),
+        ];
+        assert!(fetch_needs_json(&p, "POST", "https://api.example.com/v1/repos/o/r/pulls/1/reviews"));
+        assert!(fetch_needs_json(&p, "post", "https://api.example.com/v1/repos/o/r/pulls/1/reviews"));
+        // An unpinned rule has nothing to read two ways, and other methods carry no checked body.
+        assert!(!fetch_needs_json(&p, "POST", "https://api.example.com/v1/repos/o/r/issues/1/comments"));
+        assert!(!fetch_needs_json(&p, "GET", "https://api.example.com/v1/repos/o/r/pulls/1/reviews"));
     }
 
     #[test]

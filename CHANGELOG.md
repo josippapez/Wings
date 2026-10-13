@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.28 · 2026-10-13
+
+- A plugin call that a permission pins to one value, like approve only, always goes out as JSON. A plugin could otherwise send it as form data that a server reads as a different value.
+
 ## 0.1.27 · 2026-10-13
 
 - Tabs get the whole title bar. The project name, branch, plugin buttons, history and settings move to a slim bar under the tabs.
