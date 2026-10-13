@@ -1,4 +1,4 @@
-import { ArrowDownIcon, ArrowUpIcon, FilePenLineIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, PencilIcon } from "lucide-react";
 
 import type { CountIcon } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const kinds: Record<CountIcon, { Icon: typeof ArrowUpIcon; label: (n: number) => string; tint: string }> = {
-  changed: { Icon: FilePenLineIcon, label: (n) => plural(n, "changed file"), tint: "text-muted-foreground" },
+  changed: { Icon: PencilIcon, label: (n) => plural(n, "changed file"), tint: "text-muted-foreground" },
   push: { Icon: ArrowUpIcon, label: (n) => `${plural(n, "commit")} to push`, tint: "text-[#9cc0ff]" },
   pull: { Icon: ArrowDownIcon, label: (n) => `${plural(n, "commit")} to pull, as of the last fetch`, tint: "text-working" },
 };

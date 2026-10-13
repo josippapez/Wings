@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.26 · 2026-10-13
+
+- The changed-files count uses a plain pencil icon. The old file-and-pencil icon looked like two icons on top of each other at that size.
+
 ## 0.1.25 · 2026-10-13
 
 - A project row in the sidebar makes room for both of its hover buttons, so they no longer cover the name and the change count.
