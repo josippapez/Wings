@@ -2,7 +2,9 @@
 
 What changed in each Wings release, newest first.
 
-## Unreleased  ## 0.1.22 · 2026-10-13
+## Unreleased
+
+## 0.1.22 · 2026-10-13
 
 - The + button gets a menu next to it: Terminal, then each plugin page that can open as a tab. The command palette lists the same pages as "New tab: <name>", and Settings, General picks what plain + opens. ⌘T still opens a terminal.
 - New Notes plugin: notes per project, in a sidebar or a tab. Claude reads them with `notes__read` and adds to them with `notes__write`, which only appends. Notes are kept in Wings, up to 30,000 characters per project.
