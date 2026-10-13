@@ -2,7 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, post } from "./cli";
 import { problems } from "./state";
-import type { Comment, FailureDetail, Failing, GithubLink, Icon, Link, ListedPr, Result, Status } from "./types";
+import type { Comment, FailureDetail, Failing, GithubLink, GithubRemote, Icon, Link, ListedPr, Result, Status } from "./types";
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
@@ -12,6 +12,19 @@ const GH_LIST_FIELDS = `${GH_FIELDS},comments,reviews`;
 // gh auth refresh -h <host>" (cli/cli internal/ghcmd/cmd.go). A missing scope also suggests `gh auth refresh`, but
 // not after "Try authenticating with:", so it doesn't count.
 const GH_LOGGED_OUT = /gh auth login|GH_TOKEN|Try authenticating with:\s+gh auth refresh\b/;
+
+const DOTCOM = "github.com";
+
+/** The host a PR URL is on: github.com or a GitHub Enterprise Server. */
+const hostOf = (url: string) => new URL(url).host;
+/** The key of a host's login problem and missing-CLI note: "github" for github.com, as it always was. */
+export const ghKey = (host: string) => (host === DOTCOM ? "github" : `github:${host}`);
+/** `owner/repo` from a PR URL on any host. */
+const repoOf = (url: string) => new URL(url).pathname.match(/^\/([^/]+\/[^/]+)\/pull\//)?.[1] ?? "";
+/** `gh api` against the PR's host; gh's default is github.com. */
+const apiArgs = (host: string, path: string, ...rest: string[]) => ["api", ...(host === DOTCOM ? [] : ["--hostname", host]), path, ...rest];
+/** gh finds the repo of a folder by its remotes, but names the repo outright for an Enterprise host, where a remote that gh isn't signed in to is skipped. */
+const repoArgs = (remote: GithubRemote) => (remote.host === DOTCOM ? [] : ["--repo", `${remote.host}/${remote.path}`]);
 
 /** The fields of `gh pr view --json` the tracker reads. */
 interface GhPr {
@@ -79,29 +92,28 @@ export async function fromTranscript(sessionId: string): Promise<Link | null> {
 }
 
 /** Remembers a logged-out `gh`, so the pane offers a sign-in button instead of an error. */
-function checkGhLogin(out: { code: number | null; stderr: string }) {
+function checkGhLogin(out: { code: number | null; stderr: string }, host: string) {
   if (out.code !== 0 && GH_LOGGED_OUT.test(out.stderr)) {
-    problems.set("github", { login: true, message: "Sign in to GitHub to see this branch's pull request." });
+    problems.set(ghKey(host), { login: true, message: `Sign in to ${host === DOTCOM ? "GitHub" : host} to see this branch's pull request.` });
   } else if (out.code === 0) {
-    problems.delete("github");
+    problems.delete(ghKey(host));
   }
 }
 
-export async function findGithub(cwd: string, _remote: unknown, branch: string): Promise<Link | null> {
-  const out = await cli("github", "gh", ["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { cwd });
-  checkGhLogin(out);
+export async function findGithub(cwd: string, remote: GithubRemote, branch: string): Promise<Link | null> {
+  const out = await cli(ghKey(remote.host), "gh", ["pr", "list", ...repoArgs(remote), "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { cwd });
+  checkGhLogin(out, remote.host);
   const pr = out.code === 0 ? (JSON.parse(out.stdout) as { url: string; number: number }[])[0] : null;
   if (!pr) return null;
-  const repo = pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1] ?? "";
-  return { provider: "github", url: pr.url, number: pr.number, repo };
+  return { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) };
 }
 
 // ---------- status ----------
 
 async function ghView(url: string, fields: string) {
   // A Claude pane can know its PR from the transcript without gh, so this can be the first gh call.
-  const out = await cli("github", "gh", ["pr", "view", url, "--json", fields]);
-  checkGhLogin(out);
+  const out = await cli(ghKey(hostOf(url)), "gh", ["pr", "view", url, "--json", fields]);
+  checkGhLogin(out, hostOf(url));
   if (out.code !== 0) throw new Error(out.stderr.trim() || "gh failed");
   return JSON.parse(out.stdout) as GhPr;
 }
@@ -128,8 +140,8 @@ function githubStatusOf(pr: GhPr): Status {
     .filter((_, i) => results[i] === "failed")
     .map((c): Failing => {
       const url = c.detailsUrl ?? c.targetUrl ?? null;
-      // A GitHub Actions job; other apps' checks only link to their own page.
-      const job = url?.match(/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+\/job\/(\d+)/)?.[1];
+      // A GitHub Actions job on the PR's own host; other apps' checks only link to their own page.
+      const job = url?.startsWith(`https://${hostOf(pr.url)}/`) ? url.match(/\/actions\/runs\/\d+\/job\/(\d+)/)?.[1] : undefined;
       return { id: (url ?? c.name ?? c.context)!, name: c.name ?? c.context, url, job, summary: c.description || null };
     });
   let [label, tone, icon]: [string, Tone, Icon] = ["Open", "info", "pr-open"];
@@ -158,15 +170,14 @@ function githubStatusOf(pr: GhPr): Status {
 // ---------- the repo's open PRs ----------
 
 /** One `gh pr list` per query, run in the project's folder: the open PRs you wrote, and the ones waiting for your review. */
-export async function githubList(cwd: string): Promise<ListedPr[]> {
+export async function githubList(cwd: string, remote: GithubRemote): Promise<ListedPr[]> {
   const query = async (filter: string[], mine: boolean) => {
-    const out = await cli("github", "gh", ["pr", "list", ...filter, "--state", "open", "--limit", "50", "--json", GH_LIST_FIELDS], { cwd });
-    checkGhLogin(out);
+    const out = await cli(ghKey(remote.host), "gh", ["pr", "list", ...repoArgs(remote), ...filter, "--state", "open", "--limit", "50", "--json", GH_LIST_FIELDS], { cwd });
+    checkGhLogin(out, remote.host);
     if (out.code !== 0) throw new Error(out.stderr.trim() || "gh pr list failed");
     return (JSON.parse(out.stdout) as GhPr[]).map((pr): ListedPr => {
-      const repo = pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1] ?? "";
       return {
-        link: { provider: "github", url: pr.url, number: pr.number, repo },
+        link: { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) },
         title: pr.title,
         head: pr.headRefName,
         mine,
@@ -184,10 +195,11 @@ export async function githubList(cwd: string): Promise<ListedPr[]> {
 /** A failed GitHub Actions job: its failed step and the end of its log. Unlike `gh run view`, this works while the rest of the run is still going. */
 export async function githubFailure(link: GithubLink, f: Failing): Promise<FailureDetail[]> {
   if (!f.job) return [{ check: f.name, summary: f.summary ?? "Failed", log: "", url: f.url }];
+  const [key, host] = [ghKey(hostOf(link.url)), hostOf(link.url)];
   const [job, log] = await Promise.all([
-    cli("github", "gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}`]),
+    cli(key, "gh", apiArgs(host, `repos/${link.repo}/actions/jobs/${f.job}`)),
     // The log keeps the CI's colours, which gh only prints with this flag.
-    cli("github", "gh", ["api", `repos/${link.repo}/actions/jobs/${f.job}/logs`, "--allow-escape-sequences"]),
+    cli(key, "gh", apiArgs(host, `repos/${link.repo}/actions/jobs/${f.job}/logs`, "--allow-escape-sequences")),
   ]);
   if (log.code !== 0) throw new Error(log.stderr.trim().split("\n").at(-1) || "gh api failed");
   const step = job.code === 0 ? (JSON.parse(job.stdout) as { steps?: { name: string; conclusion: string }[] }).steps?.find((s) => s.conclusion === "failure")?.name : null;
@@ -201,16 +213,17 @@ export async function githubFailure(link: GithubLink, f: Failing): Promise<Failu
 // ---------- diff and comments ----------
 
 export async function githubDiff(link: GithubLink) {
-  const [diff, comments] = await Promise.all([cli("github", "gh", ["pr", "diff", link.url]), githubComments(link)]);
+  const [diff, comments] = await Promise.all([cli(ghKey(hostOf(link.url)), "gh", ["pr", "diff", link.url]), githubComments(link)]);
   if (diff.code !== 0) throw new Error(diff.stderr.trim() || "gh pr diff failed");
   return { patch: diff.stdout, comments };
 }
 
 /** The PR's review threads and its comments on the whole change, without the diff. */
 export async function githubComments(link: GithubLink): Promise<Comment[]> {
+  const host = hostOf(link.url);
   const [comments, discussion] = await Promise.all([
-    cli("github", "gh", ["api", `repos/${link.repo}/pulls/${link.number}/comments`, "--paginate", "--slurp"]),
-    cli("github", "gh", ["pr", "view", link.url, "--json", "comments,reviews"]),
+    cli(ghKey(host), "gh", apiArgs(host, `repos/${link.repo}/pulls/${link.number}/comments`, "--paginate", "--slurp")),
+    cli(ghKey(host), "gh", ["pr", "view", link.url, "--json", "comments,reviews"]),
   ]);
   const list = comments.code === 0 ? (JSON.parse(comments.stdout) as GhComment[][]).flat() : [];
   const pr: GhDiscussion = discussion.code === 0 ? (JSON.parse(discussion.stdout) as GhDiscussion) : { comments: [], reviews: [] };
@@ -220,11 +233,11 @@ export async function githubComments(link: GithubLink): Promise<Comment[]> {
     ...pr.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
     ...pr.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url: link.url })),
   ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
-  return [...general, ...list.map(githubComment)];
+  return [...general, ...list.map((c) => githubComment(c, host))];
 }
 
-/** A line comment from the REST API. GitHub threads only line comments, so only those take replies. */
-function githubComment(c: GhComment): Comment {
+/** A line comment from the REST API. GitHub threads only line comments, so only those take replies, and only on github.com: `wings.post` can't name another gh host. */
+function githubComment(c: GhComment, host: string): Comment {
   return {
     id: c.id,
     replyTo: c.in_reply_to_id ?? null,
@@ -235,12 +248,12 @@ function githubComment(c: GhComment): Comment {
     body: c.body ?? "",
     createdAt: c.created_at,
     url: c.html_url,
-    canReply: !c.in_reply_to_id,
+    canReply: !c.in_reply_to_id && host === DOTCOM,
   };
 }
 
 // ---------- replies ----------
 
 export async function githubReply(link: GithubLink, root: Comment, body: string) {
-  return githubComment((await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body })) as GhComment);
+  return githubComment((await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body })) as GhComment, DOTCOM);
 }

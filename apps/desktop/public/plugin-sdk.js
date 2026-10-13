@@ -16,9 +16,14 @@
   listeners.project = [];
   listeners.projects = [];
   // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
-  let focused = true;
+  // Wings sets `focused` in the init of a block, which can mount out of view; every other page starts in front.
+  let focused = init.focused ?? true;
   let focusKnown = false;
   const tools = new Map();
+  // `setHeight`: the height asked for last, the one sent last, and whether a send is queued for the end of this tick.
+  let wantedHeight = null;
+  let sentHeight = null;
+  let heightQueued = false;
   // Each `on*` returns a function that removes the listener, for a page that subscribes in a React effect.
   const subscribe = (list, listener) => {
     list.push(listener);
@@ -246,7 +251,7 @@
      * already open with other args takes the new ones and reloads; a view with `multiple` opens a new tab unless one in that project already has the same args.
      */
     openView: (id, { as, args } = {}) => call("openView", { id, as, args }),
-    /** Where this page shows: "sidebar", "tab", "modal" or "window". `null` in the plugin's main script. */
+    /** Where this page shows: "sidebar", "tab", "modal", "window" or "block". `null` in the plugin's main script. */
     placement: () => init.placement ?? null,
     /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once, as a copy. */
     viewArgs: () => (init.args == null ? null : structuredClone(init.args)),
@@ -309,6 +314,33 @@
      * the page being unloaded while hidden. Rejects outside a tab or when the state is too big.
      */
     setTabState: (state) => call("setTabState", { state }),
+    /** In a block on a Project page: the state it last saved with `setBlockState`, or `null`. Outside a block it is `null`. */
+    blockState: () => (init.placement === "block" ? call("blockState", {}) : Promise.resolve(null)),
+    /**
+     * In a block: saves JSON state (up to 16 KB) on the block. Wings keeps it with the Project page across restarts, and
+     * across the block being unloaded while out of view. Rejects outside a block or when the state is too big.
+     */
+    setBlockState: (state) => (init.placement === "block" ? call("setBlockState", { state }) : Promise.reject(new Error("wings.setBlockState works in a page shown as a block on a Project page"))),
+    /**
+     * In a block: asks for a height in CSS pixels, which Wings clamps to the block's `minHeight` and 1200. Call it when
+     * the content's height changes; asking for the height already asked for does nothing, and several calls in one tick send the last.
+     * Throws outside a block.
+     */
+    setHeight: (px) => {
+      if (init.placement !== "block") throw new Error("wings.setHeight works in a page shown as a block on a Project page");
+      if (typeof px !== "number" || !Number.isFinite(px)) throw new TypeError("wings.setHeight needs a number of pixels");
+      const height = Math.round(px);
+      if (height === wantedHeight) return;
+      wantedHeight = height;
+      if (heightQueued) return;
+      heightQueued = true;
+      queueMicrotask(() => {
+        heightQueued = false;
+        if (wantedHeight === sentHeight) return;
+        sentHeight = wantedHeight;
+        call("setHeight", { px: sentHeight }).catch((error) => console.error(error));
+      });
+    },
     /** Closes a sidebar or view wherever it's open. */
     closeView: (id) => call("closeView", { id }),
     /** Opens Wings Settings at this plugin's settings page, the manifest's `contributes.settings`. */

@@ -94,24 +94,42 @@ export function staleViewTabs<T extends object>(tabs: (T | ViewTab)[], plugins: 
   });
 }
 
+/** A project's Project page open as a tab: one per project. Its content lives in Wings' storage, so nothing else is saved here. */
+export type ProjectTab = { id: string; spaceId: string; project: true };
+/** A Project page tab as saved, with its place among all the saved tabs. */
+export type SavedProjectTab = ProjectTab & { at: number };
+
+export const isProjectTab = <T extends object>(tab: T | ProjectTab): tab is ProjectTab => "project" in tab;
+
+/** Adds the project's Project page tab, or finds the one already there. */
+export function openProjectTab<T extends { id: string; spaceId: string }>(tabs: (T | ProjectTab)[], spaceId: string, newId: string) {
+  const open = tabs.find((t): t is ProjectTab => isProjectTab(t) && t.spaceId === spaceId);
+  if (open) return { tabs, id: open.id };
+  const tab: ProjectTab = { id: newId, spaceId, project: true };
+  return { tabs: [...tabs, tab], id: newId };
+}
+
 /**
- * Splits the tabs for saving: terminal tabs stay in `tabs`, and view tabs go in `viewTabs` with their place, so an
- * older Wings, which reads every saved tab as panes, still loads the rest.
+ * Splits the tabs for saving: terminal tabs stay in `tabs`, and view tabs and Project page tabs go apart with their
+ * place, so an older Wings, which reads every saved tab as panes, still loads the rest.
  */
-export function saveTabs<T extends object>(tabs: (T | ViewTab)[]) {
+export function saveTabs<T extends object>(tabs: (T | ViewTab | ProjectTab)[]) {
   const panes: T[] = [];
   const viewTabs: SavedViewTab[] = [];
+  const projectTabs: SavedProjectTab[] = [];
   tabs.forEach((t, at) => {
+    if (isProjectTab(t)) return void projectTabs.push({ ...t, at });
     if (!isViewTab(t)) return void panes.push(t);
     const { rev: _rev, ...saved } = t;
     viewTabs.push({ ...saved, at });
   });
-  return { tabs: panes, viewTabs };
+  return { tabs: panes, viewTabs, projectTabs };
 }
 
-/** Puts saved view tabs back among the restored terminal tabs, each at its old place or at the end. */
-export function restoreTabs<T extends object>(panes: T[], viewTabs: SavedViewTab[] = []) {
-  const tabs: (T | ViewTab)[] = [...panes];
-  for (const { at, ...tab } of [...viewTabs].sort((a, b) => a.at - b.at)) tabs.splice(Math.min(at, tabs.length), 0, tab);
+/** Puts saved view tabs and Project page tabs back among the restored terminal tabs, each at its old place or at the end. */
+export function restoreTabs<T extends object>(panes: T[], viewTabs: SavedViewTab[] = [], projectTabs: SavedProjectTab[] = []) {
+  const tabs: (T | ViewTab | ProjectTab)[] = [...panes];
+  const others: (SavedViewTab | SavedProjectTab)[] = [...viewTabs, ...projectTabs];
+  for (const { at, ...tab } of others.sort((a, b) => a.at - b.at)) tabs.splice(Math.min(at, tabs.length), 0, tab);
   return tabs;
 }

@@ -147,3 +147,23 @@ export function openTasks(tasks: Task[]): Task[] {
   const order = { doing: 0, todo: 1, done: 2 } as const;
   return tasks.filter((t) => t.status !== "done").sort((a, b) => order[a.status] - order[b.status] || a.createdAt - b.createdAt);
 }
+
+// ---------- the Board block ----------
+
+/** What the block's state keeps. `hideDone` leaves the Done column out. */
+export interface BoardBlockState {
+  hideDone?: boolean;
+}
+
+/** Block state from `wings.blockState()`, which is any JSON the page once saved. */
+export function cleanBlockState(raw: unknown): BoardBlockState {
+  return (raw as Partial<BoardBlockState> | null)?.hideDone === true ? { hideDone: true } : {};
+}
+
+/** The board's columns, each in the order the Tasks tab shows: oldest first, and done newest first. */
+export function boardColumns(tasks: Task[], hideDone = false): { status: Status; tasks: Task[] }[] {
+  return STATUSES.filter((s) => !(hideDone && s === "done")).map((status) => ({
+    status,
+    tasks: tasks.filter((t) => t.status === status).sort((a, b) => (status === "done" ? b.updatedAt - a.updatedAt : a.createdAt - b.createdAt)),
+  }));
+}

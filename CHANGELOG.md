@@ -4,6 +4,15 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.24 · 2026-10-13
+
+- Each project has a Project page: a table of facts, Markdown sections with tables, lists and pasted images, and live blocks from plugins. Open it from the project in the sidebar, the + menu or the command palette. What you kept in Project info moves into it the first time it opens.
+- Agents read and write the Project page with Wings' own `project_info_*` tools, which need no plugin. They never replace a section you edited.
+- Plugin blocks: Tasks adds its board, Work item the current sprint (yours or the whole sprint), and PR tracker the project's open pull requests. A block loads when it scrolls into view and stops checking for updates while it's out of sight.
+- PR tracker 0.9.0 also works with GitHub Enterprise Server, self-managed GitLab, Bitbucket Cloud and Codeberg. Bitbucket and Codeberg need an API token, added on its Settings page. When a host isn't signed in, its block and badge offer a Sign in or Add token button.
+- The Notes plugin (Project info) is retired. Its 0.3.0 has no tools and only points to the Project page, so agents see one place for project info.
+- Plugin SDK 0.10.0 adds `contributes.blocks`, `wings.blockState()`, `wings.setBlockState()` and `wings.setHeight()`.
+
 ## 0.1.23 · 2026-10-13
 
 - Projects in the sidebar list what plugins add under them, like open pull requests, tasks and work items. A row opens as a tab in that project, and each list collapses and remembers it.

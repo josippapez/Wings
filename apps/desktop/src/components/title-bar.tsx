@@ -6,6 +6,7 @@ import {
   ArrowRightIcon,
   ChevronDownIcon,
   EllipsisIcon,
+  FileTextIcon,
   RotateCcwClockIcon,
   PanelLeftIcon,
   PencilIcon,
@@ -130,7 +131,9 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
  */
 export type TabView =
   | { id: string; label: PaneLabelInfo; /** What the tab shows: your name for it, or the automatic title made unique. */ title: string; named: boolean; layout: LayoutNode; focusedPane: string; state: AgentState | null }
-  | { id: string; view: { title: string; icon: string; iconSvg?: string | null } };
+  | { id: string; view: { title: string; icon: string; iconSvg?: string | null } }
+  /** A project's page, which is Wings' own and not a plugin's. */
+  | { id: string; project: { title: string } };
 
 const spring = { type: "spring", stiffness: 520, damping: 38, mass: 0.8 } as const;
 
@@ -152,6 +155,7 @@ export function TitleBar(props: {
   newTabEntries: NewTabEntry[];
   onNewTerminal: () => void;
   onNewPage: (entry: NewTabEntry) => void;
+  onNewProjectPage: () => void;
   onHistory: () => void;
   onSettings: () => void;
   /** The notification bell, shown before Past sessions. */
@@ -268,13 +272,13 @@ export function TitleBar(props: {
             <AnimatePresence initial={false} mode="popLayout">
               {props.tabs.map((tab, i) => {
                 const active = tab.id === props.activeTabId;
-                const title = "view" in tab ? tab.view.title : tab.title;
+                const title = "view" in tab ? tab.view.title : "project" in tab ? tab.project.title : tab.title;
                 return (
                   <motion.div
                     key={tab.id}
                     data-tab-id={tab.id}
                     // A pane dropped on a terminal tab moves into it.
-                    data-pane-drop={"view" in tab ? undefined : ""}
+                    data-pane-drop={"view" in tab || "project" in tab ? undefined : ""}
                     layout={dragId === tab.id ? false : "position"}
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
@@ -326,6 +330,8 @@ export function TitleBar(props: {
                           >
                             {"view" in tab ? (
                               <PluginGlyph name={tab.view.icon} svg={tab.view.iconSvg} className="size-3.5 shrink-0 text-muted-foreground" />
+                            ) : "project" in tab ? (
+                              <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                             ) : tab.state && !tab.label.agent ? (
                               <StatusDot state={tab.state} />
                             ) : (
@@ -382,27 +388,29 @@ export function TitleBar(props: {
           <IconButton label="New tab" shortcut={shortcutLabel.newTab} onClick={props.onNew} data-pane-drop-new="" className="ml-1 data-drop-over:bg-white/20 data-drop-over:text-foreground">
             <PlusIcon />
           </IconButton>
-          {props.newTabEntries.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={<Button variant="ghost" size="icon-sm" aria-label="New tab menu" title="New tab menu" className="-ml-1 w-4 text-muted-foreground hover:text-foreground" />}
-              >
-                <ChevronDownIcon className="size-3" aria-hidden />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={props.onNewTerminal}>
-                  <TerminalIcon aria-hidden />
-                  <span className="flex-1 whitespace-nowrap">Terminal</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label="New tab menu" title="New tab menu" className="-ml-1 w-4 text-muted-foreground hover:text-foreground" />}
+            >
+              <ChevronDownIcon className="size-3" aria-hidden />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onClick={props.onNewTerminal}>
+                <TerminalIcon aria-hidden />
+                <span className="flex-1 whitespace-nowrap">Terminal</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={props.onNewProjectPage} disabled={!props.space}>
+                <FileTextIcon aria-hidden />
+                <span className="flex-1 whitespace-nowrap">Project page</span>
+              </DropdownMenuItem>
+              {props.newTabEntries.map((entry) => (
+                <DropdownMenuItem key={entry.key} onClick={() => props.onNewPage(entry)}>
+                  <PluginGlyph name={entry.icon} svg={entry.iconSvg} />
+                  <span className="flex-1 whitespace-nowrap">{entry.title}</span>
                 </DropdownMenuItem>
-                {props.newTabEntries.map((entry) => (
-                  <DropdownMenuItem key={entry.key} onClick={() => props.onNewPage(entry)}>
-                    <PluginGlyph name={entry.icon} svg={entry.iconSvg} />
-                    <span className="flex-1 whitespace-nowrap">{entry.title}</span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </Tabs>
       </LayoutGroup>
 

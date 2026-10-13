@@ -1,8 +1,8 @@
 {
   "id": "work-item",
   "name": "Work item",
-  "version": "0.4.0",
-  "minWingsVersion": "0.1.23",
+  "version": "0.5.0",
+  "minWingsVersion": "0.1.24",
   "icon": "icon.svg",
   "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Also tells you when your work items change state, when a comment mentions you, and about activity on your pull requests. Opens a work item in a tab with its description, comments and linked pull requests, and lists the work items assigned to you in the current sprint under each project.",
   "api": 1,
@@ -46,6 +46,15 @@
           "tab"
         ],
         "multiple": true
+      }
+    ],
+    "blocks": [
+      {
+        "id": "sprint",
+        "title": "Sprint",
+        "icon": "kanban",
+        "page": "sprint.html",
+        "minHeight": 160
       }
     ],
     "projectSections": [

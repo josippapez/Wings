@@ -197,7 +197,7 @@ export async function azureDiff(link: AzureLink) {
   const { base, head, baseCommit, headCommit } = status.get(link.url) as Status;
   // Fetch only the PR's two commits, then diff from their merge base, like the PR page does.
   const [from, to] = baseCommit && headCommit ? [baseCommit, headCommit] : [base!, head!];
-  await git(link.cwd, ["fetch", "--quiet", "origin", from, to]);
+  await git(link.cwd, ["fetch", "--quiet", "--end-of-options", "origin", from, to]);
   const range = baseCommit && headCommit ? `${from}...${to}` : `origin/${base}...origin/${head}`;
   const patch = await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", range]);
   return { patch: `${patch}\n`, comments: await azureComments(link) };

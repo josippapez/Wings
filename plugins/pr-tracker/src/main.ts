@@ -6,18 +6,17 @@
 // When checks fail, the badge says which step failed and why, and Claude can read the logs with `failing_checks`.
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { azureReply } from "./lib/azure";
 import { openDiffFor } from "./lib/diffview";
-import { githubReply } from "./lib/github";
-import { gitlabReply } from "./lib/gitlab";
 import { refreshLinks } from "./lib/links";
-import { markSeen, refreshProjects } from "./lib/projects";
-import { linkOf } from "./lib/refs";
+import { markSeen, pullsFor, refreshProjects } from "./lib/projects";
+import { remoteFor } from "./lib/remote";
+import type { PullsAction, PullsChanged, PullsRequest, PullsResponse } from "./lib/pulls";
+import { linkOf, replyWith } from "./lib/refs";
 import { retry, signIn } from "./lib/signin";
 import { diffs, known, links, linkFor, problems, remotes, state, sync, viewers } from "./lib/state";
 import { refreshStatus } from "./lib/status";
 import { failingChecks } from "./lib/tool";
-import type { Comment, Diff, Link, PrArgs } from "./lib/types";
+import type { Diff, Link, PrArgs } from "./lib/types";
 import { problemKey } from "./lib/view";
 
 const LINK_POLL_MS = 15_000;
@@ -54,11 +53,7 @@ wings.onReply(async ({ diffId, replyTo, body }) => {
   const cached = (url && diffs.get(url)) as Diff | undefined;
   const root = cached?.comments.find((c) => c.id === replyTo);
   if (!link || !root?.canReply) throw new Error("This pull request isn't open in a pane any more. Reopen it from the badge.");
-  const reply = await ({ github: githubReply, azure: azureReply, gitlab: gitlabReply }[link.provider] as (link: Link, root: Comment, body: string) => Promise<Comment>)(
-    link,
-    root,
-    body,
-  );
+  const reply = await replyWith(link, root, body);
   cached!.comments = [...cached!.comments, reply];
   await wings.updateDiff(diffId, { comments: cached!.comments });
 });
@@ -90,7 +85,7 @@ async function handleRequest({ op, args }: PrRequest) {
   if (!link) {
     // No pane is on it: diff in the folder of the project whose row opened it, not the first project that listed the repo.
     link = known.get(args.url) ?? (await linkOf(args));
-    if (link.provider === "azure") link = { ...link, cwd: args.cwd };
+    if (link.provider === "azure" || link.provider === "bitbucket") link = { ...link, cwd: args.cwd };
     known.set(args.url, link);
   }
   if (op === "diff") return openDiffFor(link, { title: args.title });
@@ -110,4 +105,37 @@ wings.onBroadcast(async (message) => {
     error = String((e as Error).message ?? e);
   }
   await wings.broadcast({ type: "pr-response", rid: request.rid, error });
+});
+
+// ---------- the Pull requests block ----------
+
+/** A block on a Project page asks for its project's open pull requests, from the same cache as the sidebar section. */
+wings.onBroadcast(async (message) => {
+  const request = message as PullsRequest | null;
+  if (request?.type !== "pulls-request" || typeof request.path !== "string") return;
+  let response: Omit<PullsResponse, "type" | "rid">;
+  try {
+    response = await pullsFor(request.path);
+  } catch (e) {
+    response = { error: String((e as Error).message ?? e).slice(0, 300) };
+  }
+  await wings.broadcast({ type: "pulls-response", rid: request.rid, ...response } satisfies PullsResponse);
+});
+
+/** The block's button: what the pane badge's Sign in, Add token or Install does for this project's host. */
+wings.onBroadcast(async (message) => {
+  const request = message as PullsAction | null;
+  if (request?.type !== "pulls-action" || typeof request.path !== "string") return;
+  const remote = await remoteFor(request.path);
+  const problem = problems.get(problemKey(remote));
+  // A host no CLI knew: look at the CLIs' hosts again.
+  if (remote.kind === "none") await retry();
+  else if (problem?.missing) await wings.installTool(problem.missing);
+  else await signIn(remote);
+  await wings.broadcast({ type: "pulls-changed" } satisfies PullsChanged);
+});
+
+// Settings saved a token: ask again with it.
+wings.onBroadcast((message) => {
+  if ((message as { settingsChanged?: boolean } | null)?.settingsChanged) void retry().then(() => refreshProjects(true));
 });

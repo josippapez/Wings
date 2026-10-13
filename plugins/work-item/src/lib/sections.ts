@@ -49,6 +49,12 @@ export function assignedQuery(project: string, paths: string[]): string {
   return `SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType] FROM WorkItems WHERE [System.TeamProject] = '${quote(project)}' AND [System.IterationPath] IN (${list}) AND [System.AssignedTo] = @Me AND [System.State] <> 'Removed' ORDER BY [System.ChangedDate] DESC`;
 }
 
+/** WIQL for every work item in `paths`, newest change first: the sprint block's "whole sprint", one query per Azure project. */
+export function sprintQuery(project: string, paths: string[]): string {
+  const list = paths.map((p) => `'${quote(p)}'`).join(", ");
+  return `SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType],[System.AssignedTo] FROM WorkItems WHERE [System.TeamProject] = '${quote(project)}' AND [System.IterationPath] IN (${list}) AND [System.State] <> 'Removed' ORDER BY [System.ChangedDate] DESC`;
+}
+
 type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "merged";
 
 /** A state's tone from its name: the section has no per-type workflow, and the names differ by process. */
@@ -62,7 +68,7 @@ export function stateTone(state: string): Tone {
 
 export interface QueryRow {
   id: number;
-  fields: { "System.Title"?: string; "System.State"?: string; "System.WorkItemType"?: string };
+  fields: { "System.Title"?: string; "System.State"?: string; "System.WorkItemType"?: string; "System.AssignedTo"?: { displayName?: string } | string };
 }
 
 export interface SectionRow {
@@ -87,4 +93,84 @@ export function sectionRows(org: string, project: string, rows: QueryRow[]): Sec
       open: { view: "item", args: { id: r.id, org, project } },
     };
   });
+}
+
+// ---------- the Sprint block ----------
+
+/** The most work items a block takes. A broadcast is limited to 64 KB, and 100 of these are about 25 KB. */
+export const BLOCK_ITEMS_CAP = 100;
+
+/** What the block's state keeps. `mine`: only what's assigned to you; false is the whole sprint. */
+export interface SprintBlockState {
+  mine: boolean;
+}
+
+/** Block state from `wings.blockState()`, which is any JSON the page once saved. Yours by default. */
+export function cleanBlockState(raw: unknown): SprintBlockState {
+  return { mine: (raw as Partial<SprintBlockState> | null)?.mine !== false };
+}
+
+/** A cached read taken at `at` is still good at `now`. */
+export const isFresh = (at: number, now: number, ttl: number) => now - at < ttl;
+
+export interface BlockItem {
+  id: number;
+  title: string;
+  type: string;
+  state: string;
+  assignee?: string;
+}
+
+/** The block's page asks main for a project's sprint.  */
+export interface SprintRequest {
+  type: "sprint-request";
+  rid: string;
+  path: string;
+  mine: boolean;
+}
+
+/** `none` is a project that isn't on Azure DevOps; `items` is empty with no running sprint. `total` counts past the cap. */
+export interface SprintResponse {
+  type: "sprint-response";
+  rid: string;
+  none?: true;
+  org?: string;
+  project?: string;
+  sprints?: string[];
+  items?: BlockItem[];
+  total?: number;
+  error?: string;
+}
+
+export function blockItems(rows: QueryRow[]): BlockItem[] {
+  return rows.slice(0, BLOCK_ITEMS_CAP).map((r) => {
+    const who = r.fields["System.AssignedTo"];
+    const assignee = typeof who === "string" ? who : who?.displayName;
+    return {
+      id: r.id,
+      title: cut(r.fields["System.Title"] || `#${r.id}`, 120),
+      type: cut(r.fields["System.WorkItemType"] ?? "Work item", 24),
+      state: cut(r.fields["System.State"] || "No state", 24),
+      ...(assignee ? { assignee: cut(assignee, 40) } : {}),
+    };
+  });
+}
+
+export interface StateColumn {
+  state: string;
+  tone: Tone;
+  items: BlockItem[];
+}
+
+const TONE_ORDER: Tone[] = ["neutral", "info", "warning", "merged", "success", "danger"];
+
+/** One column per state, in the order work moves through them (not started, active, review, resolved, done), each keeping the order the items came in. */
+export function groupByState(items: BlockItem[]): StateColumn[] {
+  const columns = new Map<string, StateColumn>();
+  for (const item of items) {
+    const column = columns.get(item.state) ?? { state: item.state, tone: stateTone(item.state), items: [] };
+    column.items.push(item);
+    columns.set(item.state, column);
+  }
+  return [...columns.values()].sort((a, b) => TONE_ORDER.indexOf(a.tone) - TONE_ORDER.indexOf(b.tone));
 }

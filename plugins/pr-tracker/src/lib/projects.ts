@@ -1,11 +1,15 @@
 /** The Pull requests section under each project in the sidebar: its open PRs, yours first, then the ones waiting for your review. */
 import { azureList } from "./azure";
+import { bitbucketList } from "./bitbucket";
+import { giteaList } from "./gitea";
 import { githubList } from "./github";
 import { gitlabList } from "./gitlab";
 import { remoteFor } from "./remote";
 import { argsOf } from "./refs";
-import { known, links, refOf, state, status } from "./state";
-import type { AzureRemote, GitlabRemote, ListedPr, Remote, Status } from "./types";
+import { known, links, problems, refOf, state, status } from "./state";
+import { problemKey } from "./view";
+import { BLOCK_ROWS, orderPulls, serveCached, type PullRow, type PullsResponse } from "./pulls";
+import type { AzureRemote, BitbucketRemote, GiteaRemote, GithubRemote, GitlabRemote, KnownRemote, ListedPr, Status } from "./types";
 
 const SECTION = "pulls";
 const MAX_ROWS = 50;
@@ -27,14 +31,16 @@ const loaded = wings.storage.get("seen").then((saved) => {
   persisted = JSON.stringify(Object.fromEntries(seen));
 });
 
-/** A repo never listed is fetched; a listed one only when `fresh` (the focused poll) says so and the cache has aged. */
-function listFor(cwd: string, remote: Remote, fresh: boolean) {
+/** A repo never listed is fetched. A listed one is served at any age when `anyAge` (a redraw from pane changes), else only while younger than the TTL. */
+function listFor(cwd: string, remote: KnownRemote, anyAge: boolean) {
   const hit = lists.get(remote.origin!);
-  if (hit && (!fresh || Date.now() - hit.at < LIST_TTL_MS)) return hit.items;
+  if (hit && serveCached(Date.now() - hit.at, LIST_TTL_MS, anyAge)) return hit.items;
   const items = {
-    github: () => githubList(cwd),
+    github: () => githubList(cwd, remote as GithubRemote),
     azure: () => azureList(cwd, remote as AzureRemote),
     gitlab: () => gitlabList(remote as GitlabRemote),
+    bitbucket: () => bitbucketList(cwd, remote as BitbucketRemote),
+    gitea: () => giteaList(remote as GiteaRemote),
     none: () => Promise.resolve([]),
   }[remote.kind]();
   lists.set(remote.origin!, { at: Date.now(), items });
@@ -91,7 +97,7 @@ export async function refreshProjects(fresh = false) {
       projects.map(async (project) => {
         try {
           const remote = await remoteFor(project.path);
-          const items = remote.kind === "none" ? [] : await listFor(project.path, remote, fresh);
+          const items = remote.kind === "none" ? [] : await listFor(project.path, remote, !fresh);
           remember(items);
           items.forEach((i) => live.add(i.link.url));
           // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
@@ -122,10 +128,41 @@ export async function refreshProjects(fresh = false) {
   }
 }
 
+/** Sign-in or Try again: the lists that failed, or came back empty for lack of it, are fetched again. */
+export function forgetLists() {
+  lists.clear();
+}
+
 /** The tab for a PR is open: everything up to its latest comment counts as read. */
 export function markSeen(url: string) {
   const count = activity.get(url);
   if (count === undefined) return;
   seen.set(url, count);
   void refreshProjects();
+}
+
+/**
+ * The open pull requests of one project's repo for a Pull requests block. It shares the cache of the sidebar section,
+ * so a block and a section cost one list per repo. A block asks only while visible and focused, so it never serves a list older than the TTL.
+ */
+export async function pullsFor(path: string): Promise<Omit<PullsResponse, "type" | "rid">> {
+  await loaded;
+  const remote = await remoteFor(path);
+  if (remote.kind === "none") return { none: true, host: remote.host };
+  let items: ListedPr[];
+  try {
+    items = await listFor(path, remote, false);
+  } catch (error) {
+    // A host that needs signing in, a token or a CLI gets a short message and a button, not the error.
+    const problem = problems.get(problemKey(remote));
+    if (problem?.missing) return { problem: { message: problem.message, action: "Install" } };
+    if (problem?.login) return { problem: { message: problem.message, action: problem.token ? "Add token" : "Sign in" } };
+    throw error;
+  }
+  remember(items);
+  const rows: PullRow[] = items.map((item) => {
+    const { id, label, detail, badge, open } = row(item, path);
+    return { id, title: label, detail: detail ?? "", mine: item.mine, badge: badge as PullRow["badge"], args: (open as { args: PullRow["args"] }).args };
+  });
+  return { rows: orderPulls(rows).slice(0, BLOCK_ROWS) };
 }

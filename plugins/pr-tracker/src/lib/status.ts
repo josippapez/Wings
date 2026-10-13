@@ -1,9 +1,12 @@
 /** Loading a PR's status, the details of its failed checks, and its diff, from whichever provider it's on. */
 import { azureChecks, azureDiff, azureFailure } from "./azure";
+import { bitbucketDiff, bitbucketStatus } from "./bitbucket";
+import { plainFailure } from "./forges";
+import { giteaDiff, giteaStatus } from "./gitea";
 import { githubDiff, githubFailure, githubStatus } from "./github";
 import { gitlabDiff, gitlabFailure, gitlabStatus } from "./gitlab";
 import { diffLoads, diffs, failKey, failures, inFlight, linkFor, manual, status } from "./state";
-import type { AzureLink, Comment, Diff, FailureDetail, Failing, GitlabLink, Link, Status } from "./types";
+import type { AzureLink, BitbucketLink, Comment, Diff, FailureDetail, Failing, GiteaLink, GitlabLink, Link, Status } from "./types";
 import { render } from "./view";
 
 // ---------- status ----------
@@ -19,6 +22,8 @@ export function refreshStatus(url: string, { byUser = false } = {}): Promise<voi
         github: () => githubStatus(link),
         azure: () => azureChecks(link as AzureLink),
         gitlab: () => gitlabStatus(link as GitlabLink),
+        bitbucket: () => bitbucketStatus(link as BitbucketLink),
+        gitea: () => giteaStatus(link as GiteaLink),
       }[link.provider];
       status.set(url, await load());
     } catch (error) {
@@ -48,7 +53,7 @@ export function loadFailures(url: string) {
   const link = linkFor(url);
   // The pane moved off this PR while its status loaded.
   if (!link) return Promise.resolve([]);
-  const load = { github: githubFailure, azure: azureFailure, gitlab: gitlabFailure }[link.provider] as (link: Link, f: Failing) => Promise<FailureDetail[]>;
+  const load = { github: githubFailure, azure: azureFailure, gitlab: gitlabFailure, bitbucket: plainFailure, gitea: plainFailure }[link.provider] as (link: Link, f: Failing) => Promise<FailureDetail[]>;
   const items = Promise.all(
     st.failing.map((f) =>
       load(link, f).catch((error: Error): FailureDetail[] => [{ check: f.name, summary: `${f.summary ?? "Failed"} (no log: ${String(error.message ?? error)})`, log: "", url: f.url }]),
@@ -75,7 +80,7 @@ export function loadDiff(url: string): Promise<Diff> {
   // The pane moved off this PR while its status loaded.
   if (!link) return Promise.reject(new Error("This pull request isn't open in a pane any more."));
   const load = (async () => {
-    const entry = await ({ github: githubDiff, azure: azureDiff, gitlab: gitlabDiff }[link.provider] as (link: Link) => Promise<{ patch: string; comments: Comment[] }>)(
+    const entry = await ({ github: githubDiff, azure: azureDiff, gitlab: gitlabDiff, bitbucket: bitbucketDiff, gitea: giteaDiff }[link.provider] as (link: Link) => Promise<{ patch: string; comments: Comment[] }>)(
       link,
     );
     diffs.set(url, { key, ...entry });

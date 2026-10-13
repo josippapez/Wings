@@ -6,16 +6,17 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
-function frame() {
+function frame(init?: unknown) {
   const handlers: ((event: { source: unknown; data: unknown }) => void)[] = [];
   const posts: { id: number; method: string; params: unknown }[] = [];
   const parent = { postMessage: (m: { id: number; method: string; params: unknown }) => posts.push(m) };
   const context: Record<string, unknown> = {
     parent,
     __wingsNonce: "n",
+    __wingsInit: init,
     addEventListener: (type: string, fn: (event: { source: unknown; data: unknown }) => void) => type === "message" && handlers.push(fn),
     getSelection: () => null,
     console,
@@ -136,4 +137,41 @@ test("onProjects gets the list once at start, then on each change until it's rem
   assert.deepEqual(got, [[{ id: "p" }], [{ id: "q" }]]);
   void wings.setProjectSection("p", "s", null);
   assert.deepEqual(JSON.parse(JSON.stringify(calls("setProjectSection")[0].params)), { projectId: "p", sectionId: "s", rows: null });
+});
+
+test("in a block, blockState and setBlockState go to Wings, and setHeight sends the last height of a tick once", async () => {
+  const { wings, calls } = frame({ placement: "block" });
+  void wings.blockState();
+  void wings.setBlockState({ a: 1 });
+  assert.deepEqual([calls("blockState").length, JSON.stringify(calls("setBlockState")[0]?.params)], [1, '{"state":{"a":1}}']);
+  wings.setHeight(300);
+  wings.setHeight(320.4);
+  await Promise.resolve();
+  assert.equal(JSON.stringify(calls("setHeight").map((c) => c.params)), '[{"px":320}]');
+  wings.setHeight(320);
+  await Promise.resolve();
+  assert.equal(calls("setHeight").length, 1);
+  wings.setHeight(400);
+  await Promise.resolve();
+  assert.equal(JSON.stringify(calls("setHeight").map((c) => c.params)), '[{"px":320},{"px":400}]');
+  assert.throws(() => wings.setHeight(NaN), /number of pixels/);
+});
+
+test("a block that mounts out of view has wings.focused false before Wings sends anything, and a page without it starts true", () => {
+  assert.equal(frame({ placement: "block", focused: false }).wings.focused, false);
+  assert.equal(frame({ placement: "block", focused: true }).wings.focused, true);
+  assert.equal(frame({ placement: "tab" }).wings.focused, true);
+  const { wings, send } = frame({ placement: "block", focused: false });
+  const got: boolean[] = [];
+  wings.onFocus((e) => got.push(e.focused));
+  send("focus", { focused: true });
+  assert.deepEqual([wings.focused, got], [true, [true]]);
+});
+
+test("outside a block, blockState is null and setBlockState and setHeight fail with a clear message", async () => {
+  const { wings, calls } = frame({ placement: "tab" });
+  assert.equal(await wings.blockState(), null);
+  await assert.rejects(wings.setBlockState({}), /shown as a block/);
+  assert.throws(() => wings.setHeight(200), /shown as a block/);
+  assert.equal(calls("blockState").length + calls("setBlockState").length + calls("setHeight").length, 0);
 });

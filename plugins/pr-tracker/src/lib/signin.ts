@@ -1,7 +1,10 @@
 /** Signing in to a provider's CLI from the badge, and trying again from scratch. */
+import { forgetUsers } from "./forge";
 import { refreshLinks } from "./links";
-import { lookups, PROVIDERS, problems, signingIn, status } from "./state";
-import type { GitlabRemote, Remote } from "./types";
+import { forgetLists } from "./projects";
+import { forgetHosts } from "./remote";
+import { lookups, PROVIDERS, problems, signInKey, signingIn, status } from "./state";
+import type { GithubRemote, GitlabRemote, Remote } from "./types";
 import { render } from "./view";
 
 const SIGN_IN_TIMEOUT_MS = 300_000;
@@ -14,21 +17,24 @@ const SIGN_IN_TIMEOUT_MS = 300_000;
 export async function signIn(remote: Remote | undefined) {
   const provider = remote?.kind;
   if (!PROVIDERS[provider as string]) return;
-  if (signingIn.has(provider as string)) return;
-  signingIn.set(provider as string, {});
+  // Bitbucket and Codeberg have no CLI to sign in with: the token is pasted in Settings.
+  if (provider === "bitbucket" || provider === "gitea") return wings.openSettings();
+  const id = signInKey(remote!);
+  if (signingIn.has(id)) return;
+  signingIn.set(id, {});
   render();
   try {
     const out =
       provider === "github"
-        ? await wings.exec("gh", ["auth", "login", "--web", "--clipboard", "--hostname", "github.com"], {
+        ? await wings.exec("gh", ["auth", "login", "--web", "--clipboard", "--hostname", (remote as GithubRemote).host], {
             timeoutMs: SIGN_IN_TIMEOUT_MS,
             onOutput: (line) => {
               const code = line.match(/code(?::| \()\s*([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1];
               if (code) {
-                signingIn.set(provider, { code });
+                signingIn.set(id, { code });
                 render();
               }
-              const url = line.match(/https:\/\/github\.com\/\S+/)?.[0];
+              const url = line.match(new RegExp(`https://${(remote as GithubRemote).host.replace(/\./g, "\\.")}/\\S+`))?.[0];
               if (url) void wings.openUrl(url);
             },
           })
@@ -37,12 +43,15 @@ export async function signIn(remote: Remote | undefined) {
           : await wings.exec("az", ["login", "--allow-no-subscriptions", "--output", "none"], { timeoutMs: SIGN_IN_TIMEOUT_MS });
     if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "Sign-in failed");
   } finally {
-    signingIn.delete(provider as string);
+    signingIn.delete(id);
   }
   return retry();
 }
 
 export function retry() {
+  forgetHosts();
+  forgetUsers();
+  forgetLists();
   problems.clear();
   lookups.clear();
   status.clear();

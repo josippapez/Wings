@@ -5,10 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
 import { Badge, Button, Card, Empty, Heading, List, ListItem, Loading, Page, Properties, Row, showTab, Spinner, Stack, Text, Toolbar } from "wings-plugin-ui";
-import { azureReply } from "./lib/azure";
-import { githubReply } from "./lib/github";
-import { gitlabReply } from "./lib/gitlab";
-import { commentsOf, linkOf, overviewOf, type Overview } from "./lib/refs";
+import { commentsOf, linkOf, overviewOf, replyWith, type Overview } from "./lib/refs";
 import { PROVIDERS } from "./lib/state";
 import type { Comment, Link, PrArgs } from "./lib/types";
 import "./pr.css";
@@ -60,9 +57,6 @@ function askMain(op: "diff" | "agent" | "seen", args: PrArgs) {
     });
   });
 }
-
-const replyWith = (link: Link, root: Comment, body: string) =>
-  ({ github: githubReply, azure: azureReply, gitlab: gitlabReply }[link.provider] as (link: Link, root: Comment, body: string) => Promise<Comment>)(link, root, body);
 
 function Pr({ args }: { args: PrArgs }) {
   const [link, setLink] = useState<Link | null>(null);

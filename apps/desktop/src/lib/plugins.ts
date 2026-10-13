@@ -3,6 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { boundedJson, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
@@ -82,7 +83,7 @@ export type PluginPane = {
 /** The project a page is about: `wings.project()`. */
 export type PluginProject = { id: string; name: string; path: string; branch: string | null };
 /** Where a page shows, as `wings.placement()` reports it. */
-export type PagePlacement = "sidebar" | "tab" | "modal" | "window";
+export type PagePlacement = "sidebar" | "tab" | "modal" | "window" | "block";
 /** A page open as a tab: its tab, and the project the tab belongs to. */
 export type PageTab = { tabId: string; spaceId: string; args?: unknown };
 
@@ -137,11 +138,15 @@ type Running = {
   /** Its sidebar and view ids. */
   views: string[];
   /** `main` runs the plugin's script; the others show one of its pages, `viewId`, a sidebar's popover page or its settings page. */
-  kind: "main" | ViewPlace | "popover" | "settings";
+  kind: "main" | ViewPlace | "popover" | "settings" | "block";
   viewId?: string;
   ready: boolean;
   /** Set on a page open as a tab: its tab and project. */
   tab?: PageTab;
+  /** Set on a page shown as a block on a Project page: the project it is fixed to, and its saved state. */
+  block?: BlockMount;
+  /** A block that is out of view, or in a tab that is hidden: its `focus` event says not focused. */
+  hidden?: boolean;
   /** The project this frame last learned of, as JSON, once it asked with `project`; changes are sent from then on. */
   lastProject?: string;
   /** The project list this frame last learned of, as JSON, once it asked with `projects`. */
@@ -168,9 +173,9 @@ export const tauriBus = (): Bus => {
 };
 
 /** The first thing in every plugin document: hands the SDK its nonce. */
-const nonceScript = (nonce: string, placement: PagePlacement | null, args?: unknown) =>
+const nonceScript = (nonce: string, placement: PagePlacement | null, args?: unknown, focused?: boolean) =>
   // `<` is escaped so JSON in the args can't close the script tag.
-  `<script>window.__wingsNonce=${JSON.stringify(nonce)};window.__wingsInit=${JSON.stringify({ placement, args: args ?? null }).replace(/</g, "\\u003c")}</script>`;
+  `<script>window.__wingsNonce=${JSON.stringify(nonce)};window.__wingsInit=${JSON.stringify({ placement, args: args ?? null, focused }).replace(/</g, "\\u003c")}</script>`;
 
 const tones: Tone[] = ["neutral", "info", "success", "warning", "danger", "merged"];
 const icons: BadgeIcon[] = ["pr-open", "pr-merged", "pr-closed", "pr-draft"];
@@ -275,7 +280,7 @@ export class PluginHost {
   private unlistenTranscript = api.onPluginTranscript((events) => this.publishTranscript(events));
   /** Starts true: Wings opens in front, and the document is checked for focus. */
   private focus = new FocusTracker(document.hasFocus(), (focused) => {
-    for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "focus", data: { focused } });
+    for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "focus", data: { focused: focused && !plugin.hidden } });
   });
   private unlistenFocus = api.onWingsFocus((focused) => this.focus.report(focused));
 
@@ -310,14 +315,14 @@ export class PluginHost {
     this.track(frame, plugin, "main", nonce);
   }
 
-  private entry(plugin: PluginView, kind: Running["kind"], nonce: string, viewId: string | undefined, port: Pick<Running, "post" | "remove">, tab?: PageTab): Running {
-    return { id: plugin.id, version: plugin.version, plugin, ui: plugin.contributes.ui, views: pagesOf(plugin).map((v) => v.id), kind, viewId, ready: false, tab, nonce, ...port };
+  private entry(plugin: PluginView, kind: Running["kind"], nonce: string, viewId: string | undefined, port: Pick<Running, "post" | "remove">, tab?: PageTab, block?: BlockMount): Running {
+    return { id: plugin.id, version: plugin.version, plugin, ui: plugin.contributes.ui, views: pagesOf(plugin).map((v) => v.id), kind, viewId, ready: false, tab, block, nonce, ...port };
   }
 
-  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string, viewId?: string, tab?: PageTab) {
+  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string, viewId?: string, tab?: PageTab, block?: BlockMount) {
     const win = frame.contentWindow;
     if (!win) return;
-    const running = this.entry(plugin, kind, nonce, viewId, { post: (message) => this.post(win, message), remove: () => frame.remove() }, tab);
+    const running = this.entry(plugin, kind, nonce, viewId, { post: (message) => this.post(win, message), remove: () => frame.remove() }, tab, block);
     this.frames.set(win, running);
     // The plugin's own document loads once. A second load means it navigated away, so let it go.
     let loads = 0;
@@ -327,7 +332,12 @@ export class PluginHost {
   }
 
   /** The file and title of a page: a sidebar or view by `viewId`, a sidebar's popover, or the plugin's settings page. */
-  private pageFile(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings") {
+  private pageFile(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings" | "block") {
+    if (kind === "block") {
+      const block = findBlock(plugin, String(viewId));
+      if (!block) throw new Error(`${plugin.id} has no block ${viewId}`);
+      return { title: block.title, file: block.page };
+    }
     if (kind === "settings") {
       const file = plugin.contributes.settings?.page;
       if (!file) throw new Error(`${plugin.id} has no settings page`);
@@ -341,13 +351,13 @@ export class PluginHost {
   }
 
   /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
-  private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings", placement: PagePlacement, args?: unknown) {
+  private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings" | "block", placement: PagePlacement, args?: unknown, focused?: boolean) {
     const { title, file } = this.pageFile(plugin, viewId, kind);
     const run = newRun();
     const html = await (await fetch(pluginUrl(plugin.id, run, file))).text();
     const base = pluginUrl(plugin.id, run, file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
-    const head = `<meta charset="utf-8">${nonceScript(nonce, placement, args)}<base href="${base}"><style>${pluginUiCss}</style><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
+    const head = `<meta charset="utf-8">${nonceScript(nonce, placement, args, focused)}<base href="${base}"><style>${pluginUiCss}</style><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
     return { title, srcdoc, nonce };
   }
@@ -370,6 +380,42 @@ export class PluginHost {
     this.track(frame, plugin, kind, nonce, viewId ?? undefined, tab);
     const win = frame.contentWindow;
     return () => void (win && this.stop(win));
+  }
+
+  /**
+   * Shows one of a plugin's blocks inside `container`, sandboxed like a tab page, fixed to `block.spaceId`'s project.
+   * Rejects when that project already has `MAX_LIVE_BLOCKS` block frames. Resolves `remove`, and `setHidden`, which
+   * tells the page it is out of view (its `focus` event turns false, so polls pause) or back in view.
+   */
+  async mountBlock(plugin: PluginView, container: HTMLElement, block: BlockMount) {
+    // Checked again after the page loads: blocks that mount together all pass the first check.
+    const full = () => {
+      if ([...this.frames.values()].filter((r) => r.block?.spaceId === block.spaceId).length >= MAX_LIVE_BLOCKS) {
+        throw new Error(`A Project page shows at most ${MAX_LIVE_BLOCKS} blocks at once. Scroll the others out of view or remove one`);
+      }
+    };
+    full();
+    const { title, srcdoc, nonce } = await this.pageDocument(plugin, block.blockId, "block", "block", undefined, this.focus.focused && !block.hidden);
+    full();
+    const frame = document.createElement("iframe");
+    frame.sandbox.add("allow-scripts", "allow-forms");
+    frame.title = title;
+    frame.className = "size-full border-0 bg-transparent";
+    frame.srcdoc = srcdoc;
+    container.replaceChildren(frame);
+    const win = frame.contentWindow;
+    if (!win) throw new Error("The block's frame didn't start");
+    this.track(frame, plugin, "block", nonce, undefined, undefined, block);
+    const running = this.frames.get(win);
+    if (running) running.hidden = block.hidden;
+    return {
+      remove: () => this.stop(win),
+      setHidden: (hidden: boolean) => {
+        if (!running || running.hidden === hidden) return;
+        running.hidden = hidden;
+        if (running.ready) running.post({ event: "focus", data: { focused: this.focus.focused && !hidden } });
+      },
+    };
   }
 
   /** Opens a plugin page in a window of its own, or brings its window to the front. */
@@ -432,7 +478,7 @@ export class PluginHost {
 
   /** The project a frame is about: its tab's, or the one on screen. */
   private projectFor(plugin: Running) {
-    return this.callbacks.projectOf(plugin.tab?.spaceId ?? this.callbacks.currentProject());
+    return this.callbacks.projectOf(plugin.tab?.spaceId ?? plugin.block?.spaceId ?? this.callbacks.currentProject());
   }
 
   /** Tells the frames that asked for their project when it changed: the one on screen switched, or a branch or name did. */
@@ -563,7 +609,7 @@ export class PluginHost {
       plugin.post({ id, result });
       if (msg.method === "ready") {
         plugin.post({ event: "panes", data: this.panes });
-        plugin.post({ event: "focus", data: { focused: this.focus.focused } });
+        plugin.post({ event: "focus", data: { focused: this.focus.focused && !plugin.hidden } });
       }
     } catch (error) {
       plugin.post({ id, error: String(error instanceof Error ? error.message : error) });
@@ -750,6 +796,21 @@ export class PluginHost {
       case "setTabState": {
         if (!plugin.tab) throw new Error("wings.setTabState works in a page open as a tab");
         this.callbacks.setTabState(plugin.tab.tabId, JSON.parse(boundedJson(p.state, TAB_STATE_MAX, "Tab state")));
+        return null;
+      }
+      case "blockState":
+        return plugin.block ? (plugin.block.state ?? null) : null;
+      case "setBlockState": {
+        if (!plugin.block) throw new Error("wings.setBlockState works in a page shown as a block on a Project page");
+        const state = JSON.parse(blockStateJson(p.state));
+        // The page hears of a failed save, and blockState() only ever gives what was stored.
+        await plugin.block.onState(state);
+        plugin.block.state = state;
+        return null;
+      }
+      case "setHeight": {
+        if (!plugin.block) throw new Error("wings.setHeight works in a page shown as a block on a Project page");
+        plugin.block.onHeight(clampBlockHeight(p.px, plugin.block.minHeight));
         return null;
       }
       case "openSettings":

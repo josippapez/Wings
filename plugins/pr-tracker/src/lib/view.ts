@@ -1,5 +1,6 @@
 // ---------- badge ----------
-import { CLIS, failKey, failures, inFlight, links, manual, PROVIDERS, problems, refOf, remotes, signingIn, state, status, sync } from "./state";
+import { ghKey } from "./github";
+import { CLIS, failKey, failures, inFlight, links, manual, PROVIDERS, problems, refOf, remotes, signInKey, signingIn, state, status, sync } from "./state";
 import type { Link, Problem, Provider, Remote, Status, StatusEntry } from "./types";
 
 function ago(iso: string) {
@@ -63,9 +64,25 @@ function badgeFor(link: Link, entry: StatusEntry | undefined, local: { ahead: nu
   };
 }
 
-export const problemKey = (remote: Remote | undefined) => (remote?.kind === "github" ? "github" : remote?.kind === "gitlab" ? `gitlab:${remote.host}` : remote?.org);
+export function problemKey(remote: Remote | undefined) {
+  switch (remote?.kind) {
+    case "github":
+      return ghKey(remote.host);
+    case "gitlab":
+      return `gitlab:${remote.host}`;
+    case "bitbucket":
+      return "bitbucket";
+    case "gitea":
+      return `gitea:${remote.host}`;
+    case "azure":
+      return remote.org;
+    default:
+      return undefined;
+  }
+}
 
-function problemBadge(provider: Provider, problem: Problem): WingsBadge {
+function problemBadge(remote: Remote, problem: Problem): WingsBadge {
+  const provider = remote.kind as Provider;
   const { name, tone } = PROVIDERS[provider];
   if (problem.missing) {
     return {
@@ -87,7 +104,17 @@ function problemBadge(provider: Provider, problem: Problem): WingsBadge {
       actions: [{ id: "retry", label: "Try again", primary: true }],
     };
   }
-  const run = signingIn.get(provider);
+  if (problem.token) {
+    return {
+      label: `Add ${name} token`,
+      tone,
+      icon: "pr-open",
+      title: name,
+      subtitle: problem.message,
+      actions: [{ id: "signin", label: "Add token", primary: true }, { id: "retry", label: "Try again" }],
+    };
+  }
+  const run = signingIn.get(signInKey(remote));
   let label = `Sign in to ${name}`;
   let subtitle = problem.message;
   if (run?.code) [label, subtitle] = [`Code ${run.code}`, `Enter this code on the ${name} page in your browser. It's on your clipboard too.`];
@@ -109,7 +136,7 @@ export function render() {
     const remote = remotes.get(pane.cwd);
     const problem = problems.get(problemKey(remote));
     if (problem?.login || problem?.missing || (problem && !link)) {
-      void wings.setBadge(pane.paneId, problemBadge(remote!.kind as Provider, problem));
+      void wings.setBadge(pane.paneId, problemBadge(remote!, problem));
     } else if (link) {
       const loading = inFlight.has(link.url) && (!status.has(link.url) || manual.has(link.url));
       void wings.setBadge(pane.paneId, { ...badgeFor(link, status.get(link.url), sync.get(pane.paneId)), loading });

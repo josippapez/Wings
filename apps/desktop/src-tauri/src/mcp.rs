@@ -125,17 +125,31 @@ fn tools(app: &AppHandle) -> Vec<Value> {
                 json!({ "name": format!("{id}{SEPARATOR}{}", t.name), "description": t.description, "inputSchema": t.input_schema })
             })
         });
-    crate::history::mcp_tools().into_iter().chain(crate::mcp_panes::tools()).chain(plugin_tools).collect()
+    crate::history::mcp_tools().into_iter().chain(crate::mcp_panes::tools()).chain(crate::project_info::mcp_tools()).chain(plugin_tools).collect()
 }
 
 /// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.
 fn builtin(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<ToolResult> {
     let state = app.state::<AppState>();
     let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)
+        .or_else(|| project_info_tool(app, name, arguments, ppid))
         .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, &|| ppid.and_then(|pid| pane_of(app, pid))))?;
     Some(match result {
         Ok(text) => ToolResult { text, is_error: false },
         Err(text) => ToolResult { text, is_error: true },
+    })
+}
+
+/// The `project_info_*` tools, for the project of the pane the call came from.
+fn project_info_tool(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<Result<String, String>> {
+    if !name.starts_with("project_info_") {
+        return None;
+    }
+    let state = app.state::<AppState>();
+    let space = ppid.and_then(|pid| pane_of(app, pid)).and_then(|id| state.panes.lock().unwrap().get(&id).map(|p| p.space_id.clone()));
+    let spaces = state.spaces.lock().unwrap().spaces.clone();
+    crate::project_info::call_tool(&state.project_info, &spaces, space.as_deref(), name, arguments, &|id| {
+        let _ = app.emit("project-info-changed", json!({ "projectId": id }));
     })
 }
 

@@ -1,8 +1,8 @@
 {
   "id": "tasks",
   "name": "Tasks",
-  "version": "0.1.0",
-  "minWingsVersion": "0.1.23",
+  "version": "0.2.0",
+  "minWingsVersion": "0.1.24",
   "icon": "icon.svg",
   "description": "A task list for each project. Keep a short list in the sidebar and a board in a tab, and Claude lists, adds and finishes tasks with tasks__list, tasks__add, tasks__done and tasks__update.",
   "api": 1,
@@ -25,6 +25,15 @@
         "opens": ["tab"],
         "newTab": true,
         "multiple": false
+      }
+    ],
+    "blocks": [
+      {
+        "id": "board",
+        "title": "Tasks board",
+        "icon": "todo",
+        "page": "block.html",
+        "minHeight": 160
       }
     ],
     "projectSections": [{ "id": "tasks", "title": "Tasks" }],

@@ -5,7 +5,7 @@
   "scripts": {
     "build": "node build.mjs",
     "check": "tsc --noEmit && node build.mjs --check",
-    "test": "node --test worktrees/src/lib/ work-item/src/lib/ notes/src/lib/ tasks/src/lib/"
+    "test": "node --test worktrees/src/lib/ work-item/src/lib/ tasks/src/lib/ pr-tracker/src/lib/"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",

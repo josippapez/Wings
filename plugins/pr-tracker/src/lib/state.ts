@@ -21,14 +21,19 @@ export const diffs = new Map<string, Diff>();
 export const diffLoads = new Map<string, Promise<Diff>>();
 /** Open diff viewer id → PR url, so a reply typed in it reaches the right PR. */
 export const viewers = new Map<string, string>();
-/** "github", an Azure org or `gitlab:<host>` → { login, missing, message }, when its CLI can't be used there. `missing` names a CLI that isn't installed. */
+/** "github", `github:<host>`, an Azure org, `gitlab:<host>`, "bitbucket" or `gitea:<host>` → { login, missing, message }, when its CLI can't be used there. `missing` names a CLI that isn't installed. */
 export const problems = new Map<string | undefined, Problem>();
 /** Provider whose sign-in is running → { code, url } once the CLI prints them. */
 export const signingIn = new Map<string, { code?: string }>();
+/** Sign-in state per provider, and per host for GitHub and GitLab, so github.com and an Enterprise host don't share it. */
+export const signInKey = (remote: Remote) => (remote.kind === "github" || remote.kind === "gitlab" ? `${remote.kind}:${remote.host}` : remote.kind);
 export const PROVIDERS: Record<string, { name: string; tone: Tone }> = {
   github: { name: "GitHub", tone: "merged" },
   azure: { name: "Azure DevOps", tone: "warning" },
   gitlab: { name: "GitLab", tone: "info" },
+  bitbucket: { name: "Bitbucket", tone: "danger" },
+  // The only host the manifest's `fetch` reaches is codeberg.org.
+  gitea: { name: "Codeberg", tone: "success" },
 };
 export const CLIS: Record<Cli, string> = { gh: "GitHub CLI", az: "Azure CLI", glab: "GitLab CLI" };
 

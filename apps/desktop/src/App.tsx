@@ -24,9 +24,10 @@ import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
-import { defaultNewTab, isViewTab, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { defaultNewTab, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
 import { collapseKey, restoreCollapsed, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
+import { ProjectPageTab } from "@/components/project-page/project-page-tab";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -57,9 +58,10 @@ import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 /** `name` is what you called the tab; absent means its automatic title. */
 type PaneTab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: string; zoomedPane: string | null; name?: string };
 /** A tab of terminal panes, or a plugin view open as a tab. */
-type Tab = PaneTab | ViewTab;
+type Tab = PaneTab | ViewTab | ProjectTab;
+const isPaneTab = (tab: Tab): tab is PaneTab => "layout" in tab;
 /** The terminal tab holding a pane. */
-const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => !isViewTab(t) && paneIds(t.layout).includes(key));
+const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => isPaneTab(t) && paneIds(t.layout).includes(key));
 /**
  * `sessionId` is the agent session last seen in the pane, of agent `kind`, `name` its title; `live` once Wings has seen
  * it running this launch; `args` its flags. `asleep`, `resumeAt` and `resumeFailed` are the sleep and resume state (`sleep.ts`).
@@ -88,6 +90,8 @@ type SavedWorkspace = {
   tabs: PaneTab[];
   /** Plugin views open as tabs, apart from `tabs` so an older Wings still loads those. Absent in older files. */
   viewTabs?: SavedViewTab[];
+  /** Project pages open as tabs, apart from `tabs` for the same reason. Absent in older files. */
+  projectTabs?: SavedProjectTab[];
   /** What the + button opens, as `pluginId:viewId`; absent or null is a terminal. */
   newTabPage?: string | null;
   /** Plugin sections folded shut under a project, as `collapseKey` makes them. Absent in older files. */
@@ -286,7 +290,7 @@ export default function App() {
   const activeTabId = activeSpaceId ? (activeTabBySpace[activeSpaceId] ?? spaceTabs[0]?.id ?? null) : null;
   const shownTab = tabs.find((t) => t.id === activeTabId) ?? null;
   /** The terminal tab on screen; null while a plugin view's tab shows. */
-  const activeTab = shownTab && !isViewTab(shownTab) ? shownTab : null;
+  const activeTab = shownTab && isPaneTab(shownTab) ? shownTab : null;
   const shownView = shownTab && isViewTab(shownTab) ? `${shownTab.view.pluginId}:${shownTab.view.viewId}` : null;
   const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
     // A sidebar or view button opens its page in the first place its manifest lists.
@@ -344,7 +348,7 @@ export default function App() {
   const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.kind === "claude" && a.sessionId ? [a.sessionId] : []))), [agents]);
 
   /** The names you gave panes, kept in their tabs' layouts. */
-  const names = useMemo(() => Object.assign({}, ...tabs.map((t) => (isViewTab(t) ? {} : paneNames(t.layout)))) as Record<string, string>, [tabs]);
+  const names = useMemo(() => Object.assign({}, ...tabs.map((t) => (isPaneTab(t) ? paneNames(t.layout) : {}))) as Record<string, string>, [tabs]);
   const labels = useMemo(() => {
     const out: Record<string, PaneLabelInfo> = {};
     for (const [key, meta] of Object.entries(panes)) {
@@ -357,7 +361,7 @@ export default function App() {
   }, [panes, agentsByPane, paneInfo, spaces, names]);
 
   const updateTab = useCallback((tabId: string, patch: (t: PaneTab) => Partial<PaneTab>) => {
-    setTabs((ts) => ts.map((t) => (t.id === tabId && !isViewTab(t) ? { ...t, ...patch(t) } : t)));
+    setTabs((ts) => ts.map((t) => (t.id === tabId && isPaneTab(t) ? { ...t, ...patch(t) } : t)));
   }, []);
 
   const focusPane = useCallback((key: string) => {
@@ -448,7 +452,7 @@ export default function App() {
   const closeTabs = useCallback((tabIds: string[]) => {
     const gone = tabsRef.current.filter((t) => tabIds.includes(t.id));
     if (!gone.length) return;
-    for (const tab of gone) if (!isViewTab(tab)) paneIds(tab.layout).forEach(disposePane);
+    for (const tab of gone) if (isPaneTab(tab)) paneIds(tab.layout).forEach(disposePane);
     const rest = tabsRef.current.filter((t) => !tabIds.includes(t.id));
     setTabs(rest);
     setActiveTabBySpace((m) => {
@@ -467,6 +471,14 @@ export default function App() {
   /** Shows a plugin view's tab in a project, opening it if it isn't there yet. */
   const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string, options?: { multiple: boolean; args?: unknown }) => {
     const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID(), options);
+    if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
+    setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
+    setActiveSpaceId(spaceId);
+  }, []);
+
+  /** Shows a project's Project page, opening its tab if it isn't there yet. */
+  const showProjectPage = useCallback((spaceId: string) => {
+    const opened = openProjectTab(tabsRef.current, spaceId, crypto.randomUUID());
     if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
     setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
     setActiveSpaceId(spaceId);
@@ -508,7 +520,7 @@ export default function App() {
   const renameTab = useCallback((tabId: string, name: string) => {
     setTabs((ts) =>
       ts.map((t) => {
-        if (t.id !== tabId || isViewTab(t)) return t;
+        if (t.id !== tabId || !isPaneTab(t)) return t;
         const { name: _old, ...rest } = t;
         return name.trim() ? { ...rest, name: name.trim() } : rest;
       }),
@@ -516,7 +528,7 @@ export default function App() {
     // Back to the terminal you were typing in.
     requestAnimationFrame(() => {
       const tab = tabsRef.current.find((t) => t.id === tabId);
-      if (tab && !isViewTab(tab)) terminals.get(tab.focusedPane)?.focus();
+      if (tab && isPaneTab(tab)) terminals.get(tab.focusedPane)?.focus();
     });
   }, []);
 
@@ -528,7 +540,7 @@ export default function App() {
     const from = tabOfPane(tabsRef.current, key);
     const leaf = from && findPane(from.layout, key);
     if (!from || !leaf || target === from.id) return;
-    const to = target === "new" ? null : tabsRef.current.find((t): t is PaneTab => t.id === target && !isViewTab(t) && t.spaceId === from.spaceId);
+    const to = target === "new" ? null : tabsRef.current.find((t): t is PaneTab => t.id === target && isPaneTab(t) && t.spaceId === from.spaceId);
     if (target !== "new" && !to) return;
     const rest = remove(from.layout, key);
     const newId = crypto.randomUUID();
@@ -609,7 +621,7 @@ export default function App() {
           return { ...t, layout, focusedPane, zoomedPane: t.zoomedPane ? (keys[t.zoomedPane] ?? null) : null };
         });
       if (asleepKeys.length) setPanes((p) => ({ ...p, ...Object.fromEntries(asleepKeys.map((k) => [k, { ...p[k], asleep: true }])) }));
-      const all = restoreTabs<PaneTab>(restored, saved.viewTabs?.filter((t) => known.has(t.spaceId)));
+      const all = restoreTabs<PaneTab>(restored, saved.viewTabs?.filter((t) => known.has(t.spaceId)), saved.projectTabs?.filter((t) => known.has(t.spaceId)));
       if (!all.length) return false;
       const tabIds = new Set(all.map((t) => t.id));
       setTabs(all);
@@ -685,7 +697,7 @@ export default function App() {
     const asleep = Object.entries(panes).flatMap(([key, meta]) => (meta.asleep && meta.sessionId ? [key] : []));
     const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
     const livePanes = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[key, meta.paneId]] : [])));
-    const { tabs: paneTabs, viewTabs } = saveTabs<PaneTab>(tabs);
+    const { tabs: paneTabs, viewTabs, projectTabs } = saveTabs<PaneTab>(tabs);
     const saved: SavedWorkspace = {
       version: 1,
       activeSpaceId,
@@ -700,6 +712,7 @@ export default function App() {
       terminalLook,
       tabs: paneTabs,
       viewTabs,
+      projectTabs,
       sessions,
       sessionKinds,
       asleep,
@@ -955,7 +968,7 @@ export default function App() {
         if (placement === "tab") key = openTab(spaceId, input, null, cwd);
         else {
           const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-          if (!tab || isViewTab(tab)) throw new Error('There is no pane to split. Use placement "tab".');
+          if (!tab || !isPaneTab(tab)) throw new Error('There is no pane to split. Use placement "tab".');
           // A tab holds one project's panes.
           if (tab.spaceId !== spaceId) throw new Error("A split opens beside the focused pane, so its cwd must be in the project on screen");
           key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd);
@@ -1063,7 +1076,7 @@ export default function App() {
   /** Runs `claude --resume` at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
   function resumeHere(session: { id: string; cwd: string }) {
     const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-    const key = tab && !isViewTab(tab) ? tab.focusedPane : undefined;
+    const key = tab && isPaneTab(tab) ? tab.focusedPane : undefined;
     const paneId = key ? panesRef.current[key]?.paneId : null;
     // The line is typed into a terminal, where a control character acts as a key press.
     if (!key || !paneId || !isSessionId(session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
@@ -1166,7 +1179,7 @@ export default function App() {
       // If the check itself fails, the agent is treated as busy.
       const background = await api.agentBusy(agent.pid).catch(() => true);
       const now = panesRef.current[key];
-      const visible = activeTabIdRef.current ? paneIds(tabsRef.current.find((t): t is PaneTab => t.id === activeTabIdRef.current && !isViewTab(t))?.layout ?? pane("")).includes(key) : false;
+      const visible = activeTabIdRef.current ? paneIds(tabsRef.current.find((t): t is PaneTab => t.id === activeTabIdRef.current && isPaneTab(t))?.layout ?? pane("")).includes(key) : false;
       const current = now?.paneId ? agentsRef.current.find((a) => a.paneId === now.paneId) : undefined;
       if (now && canSleep({ agent: current, visible, draft: !!now.paneId && paneInput.hasDraft(now.paneId), busy: now.asleep || now.resumeAt !== null, background })) sleepPane(key);
       else {
@@ -1229,8 +1242,9 @@ export default function App() {
   }, [panes]);
 
   /** Each tab's title: your name, or the automatic one with what tells it from a tab that would read the same. */
-  const shown = tabTitles(spaceTabs.flatMap((t) => (isViewTab(t) ? [] : [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }])));
+  const shown = tabTitles(spaceTabs.flatMap((t) => (isPaneTab(t) ? [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }] : [])));
   const tabViews: TabView[] = spaceTabs.map((t) => {
+    if (isProjectTab(t)) return { id: t.id, project: { title: "Project page" } };
     if (isViewTab(t)) {
       const plugin = activePlugins.find((p) => p.id === t.view.pluginId);
       const page = plugin && pagesOf(plugin).find((v) => v.id === t.view.viewId);
@@ -1270,6 +1284,7 @@ export default function App() {
     paneKeyOf: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : []))),
     paneOrder: Object.fromEntries(Object.keys(panes).map((key, i) => [key, i])),
     onNewTab: (id) => openTab(id),
+    onOpenProjectPage: showProjectPage,
     projectSections,
     plugins: activePlugins,
     collapsedSections,
@@ -1292,7 +1307,7 @@ export default function App() {
   const editor = defaultEditor(editors, editorId);
   const closeFocused = () => {
     const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-    if (tab && isViewTab(tab)) closeTab(tab.id);
+    if (tab && !isPaneTab(tab)) closeTab(tab.id);
     else if (tab) closePane(tab.focusedPane);
   };
   const focusToward = (dir: "left" | "right" | "up" | "down") => {
@@ -1368,6 +1383,9 @@ export default function App() {
     const items: PaletteItem[] = commands
       .filter((c) => c.enabled && c.id !== "palette")
       .map((c) => ({ id: `command:${c.id}`, kind: "command", title: c.title, subtitle: undefined, keywords: c.group, shortcut: shortcutText(c, isMac) || undefined, opensUi: opens.has(c.id), run: c.run }));
+    for (const s of spaces) {
+      items.push({ id: `project-page:${s.id}`, kind: "command", title: `Project page: ${s.name}`, keywords: "notes facts info", run: () => showProjectPage(s.id) });
+    }
     for (const entry of newTabs) {
       items.push({ id: `new-tab:${entry.key}`, kind: "command", title: `New tab: ${entry.title}`, keywords: "plugin page", disabled: !activeSpace, run: () => openNewTab(entry) });
     }
@@ -1376,7 +1394,7 @@ export default function App() {
       items.push({ id: `worktree:${s.id}`, kind: "project", title: `New agent in worktree: ${s.name}`, keywords: "branch", opensUi: true, run: () => requestWorktreeAgent(s.id) });
     }
     for (const t of tabs) {
-      const title = isViewTab(t) ? (() => { const v = tabViews.find((x) => x.id === t.id); return v && "view" in v ? v.view.title : t.view.viewId; })() : (t.name ?? labels[t.focusedPane]?.title ?? "Terminal");
+      const title = isProjectTab(t) ? "Project page" : isViewTab(t) ? (() => { const v = tabViews.find((x) => x.id === t.id); return v && "view" in v ? v.view.title : t.view.viewId; })() : (t.name ?? labels[t.focusedPane]?.title ?? "Terminal");
       items.push({
         id: `tab:${t.id}`,
         kind: "tab",
@@ -1426,7 +1444,7 @@ export default function App() {
   launchSessionRef.current = launchSession;
   const focusTerminal = useCallback(() => {
     const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-    if (tab && !isViewTab(tab)) terminals.get(tab.focusedPane)?.focus();
+    if (tab && isPaneTab(tab)) terminals.get(tab.focusedPane)?.focus();
   }, []);
 
   /** What a plugin button on the title bar does; `rect` is the button, which a panel opens under. */
@@ -1463,6 +1481,7 @@ export default function App() {
             onNew={() => openNewTab(defaultNewTab(newTabs, newTabPage))}
             onNewTerminal={() => openNewTab(null)}
             onNewPage={openNewTab}
+            onNewProjectPage={() => activeSpace && showProjectPage(activeSpace.id)}
             onHistory={() => setHistoryOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             bell={
@@ -1524,7 +1543,16 @@ export default function App() {
             <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
               <main className="relative h-full min-h-0 min-w-0">
                 {tabs.map((tab) =>
-                  isViewTab(tab) ? (
+                  isProjectTab(tab) ? (
+                    <ProjectPageTab
+                      key={tab.id}
+                      space={spaces.find((s) => s.id === tab.spaceId)}
+                      branch={git[tab.spaceId]?.branch}
+                      plugins={activePlugins}
+                      host={pluginHost.current}
+                      visible={tab.id === activeTabId}
+                    />
+                  ) : isViewTab(tab) ? (
                     <PluginTab
                       key={tab.id}
                       plugin={activePlugins.find((p) => p.id === tab.view.pluginId)}

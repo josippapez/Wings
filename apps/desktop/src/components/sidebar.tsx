@@ -10,6 +10,7 @@ import {
   CircleDashedIcon,
   CopyIcon,
   FolderIcon,
+  FileTextIcon,
   FolderOpenIcon,
   GitBranchIcon,
   GitBranchPlusIcon,
@@ -101,6 +102,8 @@ export function Sidebar(props: {
   paneKeyOf: Record<string, string>;
   paneOrder: Record<string, number>;
   onNewTab: (spaceId: string) => void;
+  /** Opens the project's Project page as a tab. */
+  onOpenProjectPage: (spaceId: string) => void;
   /** What plugins list under each project, the plugins that are on, and the sections folded shut. */
   projectSections: ProjectSectionsState;
   plugins: PluginView[];
@@ -291,6 +294,14 @@ export function Sidebar(props: {
                         </span>
                       )}
                       <IconButton
+                        label="Project page"
+                        side="right"
+                        onClick={() => props.onOpenProjectPage(space.id)}
+                        className="hidden size-6 group-hover/row:inline-flex focus-visible:inline-flex [&_svg]:size-3.5"
+                      >
+                        <FileTextIcon />
+                      </IconButton>
+                      <IconButton
                         label="Remove from sidebar"
                         side="right"
                         onClick={() => props.onRemoveSpace(space.id)}
@@ -313,6 +324,10 @@ export function Sidebar(props: {
                     <ContextMenuItem onClick={() => props.onNewTab(space.id)}>
                       <SquareTerminalIcon />
                       New tab
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => props.onOpenProjectPage(space.id)}>
+                      <FileTextIcon />
+                      Project page
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => requestWorktreeAgent(space.id)}>
                       <GitBranchPlusIcon />

@@ -128,7 +128,8 @@ interface Wings {
   onPanes(listener: (panes: WingsPane[]) => void): () => void;
   /**
    * Whether the user is in Wings: true while any Wings window (the main one or a view window) is in front, false
-   * while another app is. Called once with the current state, then on each change. Needs no permission. Pause timers
+   * while another app is. In a block on a Project page it is also false while the block is out of view or its tab is hidden.
+   * Called once with the current state, then on each change. Needs no permission. Pause timers
    * while it is false and check once when it turns true, or use `pollWhileFocused` from `wings-plugin-sdk/poll`.
    */
   onFocus(listener: (event: { focused: boolean }) => void): () => void;
@@ -246,11 +247,11 @@ interface Wings {
    */
   openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab"; args?: unknown }): Promise<void>;
   /** Where this page shows. `null` in the plugin's main script. Needs Wings 0.1.22. */
-  placement(): "sidebar" | "tab" | "modal" | "window" | null;
+  placement(): "sidebar" | "tab" | "modal" | "window" | "block" | null;
   /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once. Needs Wings 0.1.22. */
   viewArgs<T = unknown>(): T | null;
   /**
-   * The project this page is about, or `null` when none is open. A tab page's project is the one the tab belongs to
+   * The project this page is about, or `null` when none is open. A tab page's or block's project is the one it belongs to
    * and never changes; any other page gets the project on screen. Needs Wings 0.1.22.
    */
   project(): Promise<WingsProject | null>;
@@ -280,6 +281,23 @@ interface Wings {
    * unloaded. Rejects outside a tab or when the state is too big. Needs Wings 0.1.22.
    */
   setTabState(state: unknown): Promise<void>;
+  /**
+   * In a block on a Project page, `contributes.blocks`: the state it last saved with `setBlockState`, or `null`. Outside a
+   * block it is `null`. Needs Wings 0.1.24.
+   */
+  blockState<T = unknown>(): Promise<T | null>;
+  /**
+   * In a block: saves JSON state, up to 16 KB, on the block, like which board or filter it shows. Wings keeps it with the
+   * Project page across restarts and while the block is unloaded. Rejects outside a block or when the state is too big.
+   * Needs Wings 0.1.24.
+   */
+  setBlockState(state: unknown): Promise<void>;
+  /**
+   * In a block: asks for a height in CSS pixels. Wings rounds it and clamps it to the block's `minHeight` (default 160)
+   * up to 1200, and applies it without reloading the page. Call it when the content's height changes: asking for the
+   * height already asked for does nothing, and calls in the same tick send only the last. Throws outside a block. Needs Wings 0.1.24.
+   */
+  setHeight(px: number): void;
   /** Closes a sidebar or view wherever it's open. */
   closeView(id: string): Promise<void>;
   /** Opens Wings Settings at the plugin's settings page, `contributes.settings`. Wings 0.1.15 and newer. */

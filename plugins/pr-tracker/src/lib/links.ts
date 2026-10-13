@@ -1,6 +1,8 @@
 // ---------- finding the PR for a pane ----------
 import { findAzure } from "./azure";
+import { findBitbucket } from "./bitbucket";
 import { git } from "./cli";
+import { findGitea } from "./gitea";
 import { findGithub, fromTranscript } from "./github";
 import { findGitlab } from "./gitlab";
 import { remoteFor } from "./remote";
@@ -14,6 +16,7 @@ const LOOKUP_TTL_MS = 60_000;
 async function findForPane(pane: WingsPane) {
   const remote = await remoteFor(pane.cwd);
   if (remote.kind === "none") return null;
+  // A Claude pane's PR is the one Claude Code recorded, which only GitHub links carry.
   if (remote.kind === "github" && pane.session) {
     const link = await fromTranscript(pane.session.sessionId);
     if (link) return link;
@@ -23,7 +26,7 @@ async function findForPane(pane: WingsPane) {
   const key = `${remote.origin} ${branch}`;
   const hit = lookups.get(key);
   if (hit && Date.now() - hit.at < LOOKUP_TTL_MS) return hit.link;
-  const find = { github: findGithub, azure: findAzure, gitlab: findGitlab }[remote.kind] as (cwd: string, remote: Remote, branch: string) => Promise<Link | null>;
+  const find = { github: findGithub, azure: findAzure, gitlab: findGitlab, bitbucket: findBitbucket, gitea: findGitea }[remote.kind] as (cwd: string, remote: Remote, branch: string) => Promise<Link | null>;
   const link = find(pane.cwd, remote, branch);
   lookups.set(key, { at: Date.now(), link });
   link.catch(() => lookups.delete(key));

@@ -82,6 +82,8 @@ export type PluginPage = { id: string; title: string; icon: string; page: string
 };
 /** A list a plugin shows under each project in the sidebar, filled with `wings.setProjectSection`. An empty `icon` means the plugin's own. */
 export type PluginProjectSection = { id: string; title: string; icon: string };
+/** A page of the plugin the user can place on a Project page. `minHeight` is in CSS pixels, 80 to 800; absent means 160. An empty `icon` means the plugin's own. */
+export type PluginBlock = { id: string; title: string; icon: string; page: string; minHeight?: number };
 /** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars, views and a settings page. */
 export type PluginContributes = {
   ui: string[];
@@ -91,6 +93,8 @@ export type PluginContributes = {
   views: PluginPage[];
   /** Sections it can show under each project; absent when it has none. */
   projectSections?: PluginProjectSection[];
+  /** Pages it offers for the Project page; absent when it has none. */
+  blocks?: PluginBlock[];
   /** Its page in Wings Settings, under Plugin settings. Absent when it has none. */
   settings?: { page: string };
 };

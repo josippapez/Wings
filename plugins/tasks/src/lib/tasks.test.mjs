@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyOp, openTasks, LIMITS } from "./tasks.ts";
+import { applyOp, boardColumns, cleanBlockState, openTasks, LIMITS } from "./tasks.ts";
 
 const add = (tasks, title, extra = {}, now = 1) => applyOp(tasks, { kind: "add", title, ...extra }, now).tasks;
 
@@ -47,4 +47,18 @@ test("openTasks lists doing first, then todo by age, and no done", () => {
   tasks = applyOp(tasks, { kind: "update", id: tasks[2].id, status: "doing" }).tasks;
   tasks = applyOp(tasks, { kind: "update", id: tasks[0].id, status: "done" }).tasks;
   assert.deepEqual(openTasks(tasks).map((t) => t.title), ["c", "b"]);
+});
+
+test("boardColumns: three columns, oldest first, done newest first; hideDone drops done", () => {
+  const t = (id, status, createdAt, updatedAt = createdAt) => ({ id, title: id, status, createdAt, updatedAt });
+  const tasks = [t("b", "todo", 2), t("a", "todo", 1), t("d1", "done", 1, 10), t("d2", "done", 2, 20), t("x", "doing", 3)];
+  const cols = boardColumns(tasks);
+  assert.deepEqual(cols.map((c) => c.status), ["todo", "doing", "done"]);
+  assert.deepEqual(cols.map((c) => c.tasks.map((k) => k.id)), [["a", "b"], ["x"], ["d2", "d1"]]);
+  assert.deepEqual(boardColumns(tasks, true).map((c) => c.status), ["todo", "doing"]);
+});
+
+test("cleanBlockState keeps only hideDone: true", () => {
+  assert.deepEqual(cleanBlockState({ hideDone: true, junk: 1 }), { hideDone: true });
+  for (const bad of [null, undefined, "x", { hideDone: "yes" }, {}]) assert.deepEqual(cleanBlockState(bad), {});
 });

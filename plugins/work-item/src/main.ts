@@ -6,7 +6,7 @@ import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
 import { createWatcher, DEFAULT_SETTINGS, type Settings } from "./lib/watch";
 import { workItemUrl, type StoredEvent } from "./lib/updates";
-import { assignedQuery, currentIterations, SECTION_ID, sectionRows, type IterationNode, type QueryRow, type SectionRow } from "./lib/sections";
+import { assignedQuery, blockItems, isFresh, currentIterations, SECTION_ID, sectionRows, sprintQuery, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
 const BRANCH_POLL_MS = 15_000;
@@ -359,10 +359,9 @@ const sent = new Map<string, string>();
 let sectionsRunning = false;
 let sectionsAgain = false;
 
-async function sectionRowsFor(org: string, project: string): Promise<SectionRow[]> {
+/** The paths of the sprints running now in an Azure project, read at most once an hour. */
+async function sprintPaths(org: string, project: string): Promise<string[]> {
   const key = `${org} ${project}`;
-  const cached = sections.get(key);
-  if (cached && Date.now() - cached.at < SECTION_TTL_MS) return cached.rows;
   let known = sprints.get(key);
   if (!known || Date.now() - known.at > SPRINT_TTL_MS) {
     const root = (await azQuiet(org, [
@@ -372,9 +371,17 @@ async function sectionRowsFor(org: string, project: string): Promise<SectionRow[
     known = { at: Date.now(), paths: currentIterations(Array.isArray(root) ? null : root, Date.now()) };
     sprints.set(key, known);
   }
+  return known.paths;
+}
+
+async function sectionRowsFor(org: string, project: string): Promise<SectionRow[]> {
+  const key = `${org} ${project}`;
+  const cached = sections.get(key);
+  if (cached && Date.now() - cached.at < SECTION_TTL_MS) return cached.rows;
+  const paths = await sprintPaths(org, project);
   let rows: SectionRow[] = [];
-  if (known.paths.length) {
-    const found = await azQuiet(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, known.paths)]);
+  if (paths.length) {
+    const found = await azQuiet(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, paths)]);
     rows = sectionRows(org, project, Array.isArray(found) ? (found as QueryRow[]) : []);
   }
   sections.set(key, { at: Date.now(), rows });
@@ -422,3 +429,45 @@ async function refreshSections() {
 
 wings.onProjects(() => void refreshSections());
 pollWhileFocused(() => void refreshSections(), SECTION_POLL_MS);
+
+// ---------- the Sprint block ----------
+
+/** A little under the block's 60 s poll: a poll reads fresh, and blocks that ask together share one query. Older than this is never served. */
+const BLOCK_TTL_MS = 55_000;
+
+type SprintAnswer = Omit<SprintResponse, "type" | "rid">;
+
+/** `${org} ${project} ${mine}` → the answer, when it was read. A read in flight is shared, so two blocks make one query. */
+const blocks = new Map<string, { at: number; answer: Promise<SprintAnswer> }>();
+
+function sprintFor(org: string, project: string, mine: boolean): Promise<SprintAnswer> {
+  const key = `${org} ${project} ${mine}`;
+  const hit = blocks.get(key);
+  if (hit && isFresh(hit.at, Date.now(), BLOCK_TTL_MS)) return hit.answer;
+  const answer = (async (): Promise<SprintAnswer> => {
+    const paths = await sprintPaths(org, project);
+    if (!paths.length) return { org, project, sprints: [], items: [], total: 0 };
+    const query = mine ? assignedQuery(project, paths) : sprintQuery(project, paths);
+    const found = await azQuiet(org, ["boards", "query", "--project", project, "--wiql", query]);
+    const rows = Array.isArray(found) ? (found as QueryRow[]) : [];
+    return { org, project, sprints: paths.map((p) => p.split("\\").at(-1) ?? p), items: blockItems(rows), total: rows.length };
+  })();
+  blocks.set(key, { at: Date.now(), answer });
+  // A failed read isn't kept, so the next ask tries again.
+  answer.catch(() => blocks.get(key)?.answer === answer && blocks.delete(key));
+  return answer;
+}
+
+/** A Sprint block on a Project page asks for its project's sprint. It only asks while Wings is in front and the block is on screen. */
+wings.onBroadcast(async (message) => {
+  const request = message as SprintRequest | null;
+  if (request?.type !== "sprint-request" || typeof request.path !== "string") return;
+  let answer: SprintAnswer;
+  try {
+    const remote = await remoteFor(request.path);
+    answer = remote.kind === "azure" ? await sprintFor(remote.org, remote.project, request.mine !== false) : { none: true };
+  } catch (error) {
+    answer = { error: String((error as Error).message ?? error).slice(0, 300) };
+  }
+  await wings.broadcast({ type: "sprint-response", rid: request.rid, ...answer } satisfies SprintResponse);
+});

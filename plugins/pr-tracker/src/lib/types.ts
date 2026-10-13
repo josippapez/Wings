@@ -1,6 +1,6 @@
 /** The shapes the PR tracker keeps in its maps, and the parts of the CLIs' JSON it reads. */
 
-export type Provider = "github" | "azure" | "gitlab";
+export type Provider = "github" | "azure" | "gitlab" | "bitbucket" | "gitea";
 export type Cli = "gh" | "az" | "glab";
 export type Icon = NonNullable<WingsBadge["icon"]>;
 
@@ -19,7 +19,39 @@ export interface GitlabRemote {
   origin?: string;
 }
 
-export type Remote = { kind: "github"; origin?: string } | AzureRemote | GitlabRemote | { kind: "none"; origin?: string; org?: undefined };
+/** `host` is github.com or a GitHub Enterprise Server host that `gh` is signed in to; `path` is `owner/repo`. */
+export interface GithubRemote {
+  kind: "github";
+  host: string;
+  path: string;
+  origin?: string;
+}
+
+export interface BitbucketRemote {
+  kind: "bitbucket";
+  workspace: string;
+  repo: string;
+  origin?: string;
+}
+
+/** Gitea and Forgejo, like codeberg.org. */
+export interface GiteaRemote {
+  kind: "gitea";
+  host: string;
+  owner: string;
+  repo: string;
+  origin?: string;
+}
+
+/** A host that no provider's name gives away: `gh` or `glab` being signed in to it says what it is. */
+export interface UnknownRemote {
+  kind: "unknown";
+  host: string;
+  path: string;
+  origin?: string;
+}
+
+export type Remote = GithubRemote | AzureRemote | GitlabRemote | BitbucketRemote | GiteaRemote | UnknownRemote | { kind: "none"; origin?: string; org?: undefined; host?: string };
 
 export interface GithubLink {
   provider: "github";
@@ -46,8 +78,29 @@ export interface GitlabLink {
   remote: GitlabRemote;
 }
 
+export interface BitbucketLink {
+  provider: "bitbucket";
+  url: string;
+  number: number;
+  repo: string;
+  remote: BitbucketRemote;
+  /** The project's folder, which the diff is made in. */
+  cwd: string;
+}
+
+export interface GiteaLink {
+  provider: "gitea";
+  url: string;
+  number: number;
+  repo: string;
+  remote: GiteaRemote;
+}
+
+/** A remote whose provider is settled. */
+export type KnownRemote = Exclude<Remote, UnknownRemote>;
+
 /** PR ref { provider, url, number, repo, ...provider fields } */
-export type Link = GithubLink | AzureLink | GitlabLink;
+export type Link = GithubLink | AzureLink | GitlabLink | BitbucketLink | GiteaLink;
 
 export type Result = "passed" | "failed" | "running";
 export type Counts = Record<Result, number>;
@@ -88,7 +141,7 @@ export interface PrArgs {
   repo: string;
   title: string;
   cwd: string;
-  remote?: AzureRemote | GitlabRemote;
+  remote?: AzureRemote | GitlabRemote | BitbucketRemote | GiteaRemote;
 }
 
 /** Normalized status of a PR. */
@@ -139,6 +192,8 @@ export interface Diff {
 
 export interface Problem {
   login?: boolean;
+  /** Signing in means pasting a token in Settings, since there is no CLI to sign in with. */
+  token?: boolean;
   missing?: Cli;
   message: string;
 }

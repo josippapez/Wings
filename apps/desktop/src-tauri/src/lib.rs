@@ -22,6 +22,7 @@ mod mcp;
 mod mcp_panes;
 mod plugin_store;
 mod plugin_storage;
+mod project_info;
 mod plugins;
 mod ports;
 #[cfg(target_os = "macos")]
@@ -72,6 +73,7 @@ struct AppState {
     mcp: mcp::Mcp,
     plugins: Mutex<Store>,
     storage: plugin_storage::Storage,
+    project_info: project_info::Store,
     next_pane: AtomicU64,
     /// Recent plugin notifications, for their rate limit.
     notified: Mutex<plugins::NotifyLog>,
@@ -615,6 +617,36 @@ fn plugin_secret_delete(state: State<AppState>, plugin_id: String, name: String)
 fn plugin_secret_has(state: State<AppState>, plugin_id: String, name: String) -> Res<bool> {
     plugin(&state, &plugin_id)?;
     Ok(stored_secret(&state, &plugin_id, &name)?.is_some())
+}
+
+// The Project page's data (project_info.rs). Async like the commands that touch disk.
+#[tauri::command(async)]
+fn project_info_get(state: State<AppState>, project_id: String) -> Res<project_info::Info> {
+    state.project_info.get(&project_id)
+}
+
+#[tauri::command(async)]
+fn project_info_apply(app: AppHandle, state: State<AppState>, project_id: String, op: project_info::Op) -> Res<project_info::Info> {
+    let info = state.project_info.apply(&project_id, op)?;
+    let _ = app.emit("project-info-changed", serde_json::json!({ "projectId": project_id }));
+    Ok(info)
+}
+
+/// The image's bytes are the request body, so a 5 MB image isn't sent as a JSON array. Headers: `x-project-id`
+/// (URI-encoded, ids are paths) and `x-ext`. Returns the image's name for `![](wings-image:<name>)`.
+#[tauri::command(async)]
+fn project_info_add_image(state: State<AppState>, request: tauri::ipc::Request<'_>) -> Res<String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("Send the image as bytes.".into()) };
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let id = header("x-project-id").ok_or("x-project-id is missing")?;
+    let id = project_info::percent_decode(&id)?;
+    state.project_info.add_image(&id, bytes, &header("x-ext").unwrap_or_default())
+}
+
+/// An image's bytes. The asset protocol isn't enabled, so the page turns these into a blob URL.
+#[tauri::command(async)]
+fn project_info_image(state: State<AppState>, project_id: String, name: String) -> Res<tauri::ipc::Response> {
+    state.project_info.image(&project_id, &name).map(tauri::ipc::Response::new)
 }
 
 /// The plugin's storage scope, looked up in the same lock as the check that it's on, so a plugin removed
@@ -1304,6 +1336,7 @@ pub fn run() {
             app.manage(AppState {
                 plugins,
                 storage: plugin_storage::Storage::new(data.join("plugin-storage")),
+                project_info: project_info::Store::new(data.join("projects"), data.join("plugin-storage")),
                 claude_dir,
                 history: history::History::default(),
                 spaces: Mutex::new(store),
@@ -1344,6 +1377,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            project_info_get,
+            project_info_apply,
+            project_info_add_image,
+            project_info_image,
             spaces_list,
             spaces_add,
             spaces_remove,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assignedQuery, currentIterations, iterationPath, sectionRows, stateTone } from "./sections.ts";
+import { assignedQuery, blockItems, cleanBlockState, currentIterations, groupByState, isFresh, iterationPath, sectionRows, sprintQuery, stateTone } from "./sections.ts";
 import { commentsOf, itemArgs, pullRequestLinks } from "./item.ts";
 
 const NOW = Date.parse("2026-10-13T10:00:00Z");
@@ -67,4 +67,39 @@ test("commentsOf keeps revisions with a History, oldest first", () => {
 test("itemArgs accepts only an id and an https org", () => {
   assert.deepEqual(itemArgs({ id: 5, org: "https://dev.azure.com/o", project: "P" }), { id: 5, org: "https://dev.azure.com/o", project: "P" });
   for (const bad of [null, {}, { id: "5", org: "https://x" }, { id: 5, org: "--x" }, { id: 0, org: "https://x" }]) assert.equal(itemArgs(bad), null);
+});
+
+test("sprintQuery has no assignee filter and asks for the assignee", () => {
+  const q = sprintQuery("O'Neil", ["O'Neil\\Sprint 1", "O'Neil\\Sprint 2"]);
+  assert.doesNotMatch(q, /@Me/);
+  assert.match(q, /\[System\.AssignedTo\] FROM/);
+  assert.match(q, /IN \('O''Neil\\Sprint 1', 'O''Neil\\Sprint 2'\)/);
+});
+
+test("blockItems: capped at 100, assignee from an identity or a string", () => {
+  const row = (id, who) => ({ id, fields: { "System.Title": `T${id}`, "System.State": "Active", "System.WorkItemType": "Bug", ...(who ? { "System.AssignedTo": who } : {}) } });
+  const out = blockItems([row(1, { displayName: "Ana" }), row(2, "Bo"), row(3), ...Array.from({ length: 120 }, (_, i) => row(i + 10))]);
+  assert.equal(out.length, 100);
+  assert.deepEqual(out.slice(0, 3).map((i) => i.assignee), ["Ana", "Bo", undefined]);
+  assert.deepEqual(out[2], { id: 3, title: "T3", type: "Bug", state: "Active" });
+});
+
+test("groupByState: columns in workflow order, items keep their order", () => {
+  const it = (id, state) => ({ id, title: `T${id}`, type: "Task", state });
+  const cols = groupByState([it(1, "Done"), it(2, "Active"), it(3, "New"), it(4, "Active"), it(5, "Ready for QA")]);
+  assert.deepEqual(cols.map((c) => c.state), ["New", "Active", "Ready for QA", "Done"]);
+  assert.deepEqual(cols[1].items.map((i) => i.id), [2, 4]);
+  assert.deepEqual(groupByState([]), []);
+});
+
+test("cleanBlockState is yours unless it says otherwise", () => {
+  assert.deepEqual(cleanBlockState(null), { mine: true });
+  assert.deepEqual(cleanBlockState({ mine: false }), { mine: false });
+  assert.deepEqual(cleanBlockState({ mine: "no" }), { mine: true });
+});
+
+test("isFresh: a read is good only inside the TTL", () => {
+  assert.equal(isFresh(1000, 1000 + 54_999, 55_000), true);
+  assert.equal(isFresh(1000, 1000 + 55_000, 55_000), false);
+  assert.equal(isFresh(0, 3 * 3_600_000, 55_000), false);
 });

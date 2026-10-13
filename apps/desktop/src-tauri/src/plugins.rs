@@ -62,10 +62,32 @@ pub struct Contributes {
     /// Lists it can show under each project in the sidebar, filled with `wings.setProjectSection`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub project_sections: Vec<ProjectSection>,
+    /// Pages that can be placed on a project's Project page, each in a frame of its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<Block>,
     /// Its own page in Wings Settings, under Plugin settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsPage>,
 }
+
+/// A plugin page the user can place on a Project page. The page is an HTML file like a view's, so a view may share it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Block {
+    pub id: String,
+    pub title: String,
+    /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
+    #[serde(default)]
+    pub icon: String,
+    pub page: String,
+    /// The least height in CSS pixels, within `BLOCK_MIN_HEIGHT`. Absent means `BLOCK_MIN_HEIGHT_DEFAULT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<u32>,
+}
+
+pub const BLOCK_MIN_HEIGHT: (u32, u32) = (80, 800);
+pub const BLOCK_MIN_HEIGHT_DEFAULT: u32 = 160;
+pub const MAX_BLOCKS: usize = 8;
 
 /// A plugin's page in Wings Settings: an HTML file in the plugin, sandboxed like its sidebars.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -380,6 +402,25 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if !section.icon.is_empty() && !PANEL_ICONS.contains(&section.icon) {
             return Err(format!("project section icon {:?} must be one of {:?}, or left out to use the plugin icon", section.icon, PANEL_ICONS.as_slice()));
         }
+    }
+    if manifest.contributes.blocks.len() > MAX_BLOCKS {
+        return Err(format!("at most {MAX_BLOCKS} blocks"));
+    }
+    for (i, block) in manifest.contributes.blocks.iter().enumerate() {
+        if !valid_id(&block.id) || block.title.is_empty() || block.title.len() > 40 {
+            return Err(format!("block {:?} needs an id like a plugin id and a title up to 40 characters", block.id));
+        }
+        if manifest.contributes.blocks[..i].iter().any(|b| b.id == block.id) {
+            return Err(format!("block id {:?} is used twice", block.id));
+        }
+        if !block.icon.is_empty() && !PANEL_ICONS.contains(&block.icon) {
+            return Err(format!("block icon {:?} must be one of {:?}, or left out to use the plugin icon", block.icon, PANEL_ICONS.as_slice()));
+        }
+        let (lo, hi) = BLOCK_MIN_HEIGHT;
+        if block.min_height.is_some_and(|h| !(lo..=hi).contains(&h)) {
+            return Err(format!("block {:?} minHeight must be {lo} to {hi}", block.id));
+        }
+        resolve(dir, &block.page).ok_or_else(|| format!("block page {:?} isn't in the plugin folder", block.page))?;
     }
     if let Some(settings) = &manifest.contributes.settings {
         resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
@@ -1899,6 +1940,54 @@ mod tests {
         // Without them the contributes serialize as before, so plugins approved earlier keep their grant.
         let plain = manifest(serde_json::json!([])).unwrap();
         assert!(serde_json::to_value(&plain.manifest.contributes).unwrap().get("projectSections").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blocks_are_checked_and_stay_out_of_older_manifests() {
+        let dir = std::env::temp_dir().join(format!("wings-blocks-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "board.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |blocks: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "blocks": blocks } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let icon = PANEL_ICONS[0].clone();
+        let ok = manifest(serde_json::json!([{ "id": "board", "title": "Board", "page": "board.html", "icon": icon, "minHeight": 200 }, { "id": "other", "title": "Other", "page": "board.html" }])).unwrap();
+        let blocks = &ok.manifest.contributes.blocks;
+        assert_eq!((blocks[0].min_height, blocks[1].min_height, blocks[1].icon.as_str()), (Some(200), None, ""));
+        let json = serde_json::to_value(&ok.manifest.contributes).unwrap();
+        assert_eq!(json["blocks"][0]["minHeight"], 200);
+        assert!(json["blocks"][1].get("minHeight").is_none());
+        let block = |extra: Value| {
+            let mut b = serde_json::json!({ "id": "a", "title": "A", "page": "board.html" });
+            b.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            b
+        };
+        let many: Vec<Value> = (0..9).map(|i| serde_json::json!({ "id": format!("b{i}"), "title": "B", "page": "board.html" })).collect();
+        assert!(manifest(serde_json::json!(many[..8])).is_ok());
+        for (bad, error) in [
+            (serde_json::json!(many), "at most 8"),
+            (serde_json::json!([block(serde_json::json!({ "id": "Bad Id" }))]), "needs an id"),
+            (serde_json::json!([block(serde_json::json!({ "title": "" }))]), "needs an id"),
+            (serde_json::json!([block(serde_json::json!({ "title": "x".repeat(41) }))]), "needs an id"),
+            (serde_json::json!([block(serde_json::json!({})), block(serde_json::json!({}))]), "used twice"),
+            (serde_json::json!([block(serde_json::json!({ "icon": "nope" }))]), "icon"),
+            (serde_json::json!([block(serde_json::json!({ "minHeight": 79 }))]), "minHeight"),
+            (serde_json::json!([block(serde_json::json!({ "minHeight": 801 }))]), "minHeight"),
+            (serde_json::json!([block(serde_json::json!({ "page": "missing.html" }))]), "isn't in the plugin folder"),
+            (serde_json::json!([block(serde_json::json!({ "page": "../x.html" }))]), "isn't in the plugin folder"),
+        ] {
+            assert!(manifest(bad.clone()).err().unwrap().contains(error), "{bad}");
+        }
+        for h in [80, 800] {
+            assert!(manifest(serde_json::json!([block(serde_json::json!({ "minHeight": h }))])).is_ok());
+        }
+        let plain = manifest(serde_json::json!([])).unwrap();
+        assert!(serde_json::to_value(&plain.manifest.contributes).unwrap().get("blocks").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
