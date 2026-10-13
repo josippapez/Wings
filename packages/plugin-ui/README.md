@@ -123,6 +123,8 @@ page has:
 | `--wings-menu-bg`, `--wings-menu-ring`, `--wings-menu-active`, `--wings-shadow` | A raised layer like a menu or a list of suggestions, as Wings' own menus draw it: its opaque background, its edge, the highlighted option and its shadow |
 | `--wings-font`, `--wings-mono` | Fonts |
 
+The colours, radius and font come from the Wings app's theme (`apps/desktop/src/index.css`), copied into the generated block at the top of `plugin-ui.css` by `pnpm tokens` in `apps/desktop`; edit the theme there, not the block. The file keeps those values, so the package works on its own.
+
 ```tsx
 // src/sidebar.tsx
 import "./sidebar.css";

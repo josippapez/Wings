@@ -30,6 +30,8 @@ export interface PrViewProps {
   onVote?: (vote: AzureVote) => Promise<void>;
   /** Why a failed check failed: its log, fetched when its row is opened. */
   onLoadFailure?: (f: Failing) => Promise<FailureDetail[]>;
+  /** Goes back to the project's list, when the PR was picked from it in this tab. */
+  onBack?: () => void;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -59,7 +61,7 @@ async function copyText(text: string) {
 }
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure } = props;
+  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">("overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
@@ -94,7 +96,7 @@ export function PrView(props: PrViewProps) {
 
   const toolbar = (
     <Toolbar
-      title={ref}
+      title={onBack ? undefined : ref}
       actions={
         <>
           <Button variant="outline" size="sm" onClick={onRefresh}>Refresh</Button>
@@ -105,7 +107,17 @@ export function PrView(props: PrViewProps) {
           <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
         </>
       }
-    />
+    >
+      {onBack ? (
+        <nav className="pr-crumbs" aria-label="Breadcrumb">
+          <Button variant="ghost" size="sm" onClick={onBack} data-testid="pr-back">
+            <span aria-hidden="true">←</span> All pull requests
+          </Button>
+          <span aria-hidden="true" className="pr-crumb-sep">/</span>
+          <span className="pr-crumb" title={ref}>{ref}</span>
+        </nav>
+      ) : null}
+    </Toolbar>
   );
 
   return (

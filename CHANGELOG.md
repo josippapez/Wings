@@ -4,6 +4,9 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- Plugin pages take their colours, radius and font from the app's theme, and their buttons, tabs, chips, selects and menus now match the app's. `wings-plugin-ui` 0.6.0.
+- PR tracker 0.13.1: a pull request opened from the All list has its back link in the page toolbar, as a breadcrumb.
+
 ## 0.1.29 · 2026-10-13
 
 - Big diffs open fast: the diff viewer draws only the lines near the screen and highlights code in the background. A 30,000-line file went from about 4.4 s to 0.1 s in testing. "View in diff" lands on the right line in split and unified view.

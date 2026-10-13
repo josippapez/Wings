@@ -20,5 +20,5 @@
       "react/*": ["./node_modules/@types/react/*"]
     }
   },
-  "include": ["*/src", "shared"]
+  "include": ["*/src", "*/preview", "shared"]
 }

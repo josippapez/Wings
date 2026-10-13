@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "node --test",
+    "tokens": "node scripts/plugin-tokens.mjs",
+    "parity": "node parity/run.mjs",
     "tauri": "tauri",
     "build:mac": "sh scripts/build-mac-app.sh",
     "install:mac": "sh scripts/install-mac-app.sh",

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Button, Empty, Loading, Page, Row, showTab, Stack } from "wings-plugin-ui";
+import { Empty, Loading, Page, showTab } from "wings-plugin-ui";
 import { approveWith, canApprove, commentsOf, failureOf, linkOf, overviewOf, replyWith, voteWith, type Overview } from "./lib/refs";
 import type { Comment, Failing, Link, PrArgs } from "./lib/types";
 import type { AzureVote } from "./lib/vote";
@@ -39,7 +39,7 @@ function askMain(op: "diff" | "agent" | "seen", args: PrArgs, focus?: WingsDiffF
   });
 }
 
-function Pr({ args }: { args: PrArgs }) {
+function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const [link, setLink] = useState<Link | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -122,6 +122,7 @@ function Pr({ args }: { args: PrArgs }) {
       onApprove={link && canApprove(link.provider) ? onApprove : undefined}
       onVote={link?.provider === "azure" ? onVote : undefined}
       onLoadFailure={link ? onLoadFailure : undefined}
+      onBack={onBack}
     />
   );
 }
@@ -134,12 +135,7 @@ function Home() {
     void wings.project().then(setProject);
   }, []);
   if (picked) {
-    return (
-      <Stack gap="s">
-        <Row><Button size="sm" onClick={() => setPicked(null)}>All pull requests</Button></Row>
-        <Pr key={picked.url} args={picked} />
-      </Stack>
-    );
+    return <Pr key={picked.url} args={picked} onBack={() => setPicked(null)} />;
   }
   if (project === undefined) return <Loading>Loading pull requests</Loading>;
   if (!project) return <Empty title="No pull request" description="Open one from a project's Pull requests list." />;

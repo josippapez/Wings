@@ -9,26 +9,37 @@
 @layer wings-base, theme, base, wings-components, components, utilities;
 
 @layer wings-base {
+/* tokens:start (generated from apps/desktop/src/index.css by apps/desktop/scripts/plugin-tokens.mjs, do not edit) */
+:root {
+  --wings-fg: #ece9e4;
+  --wings-muted: #9d978f;
+  --wings-hover: rgb(255 255 255 / 0.06);
+  --wings-pressed: rgb(255 255 255 / 0.10);
+  --wings-hairline: rgb(255 255 255 / 0.07);
+  --wings-hairline-strong: rgb(255 255 255 / 0.16);
+  --wings-ring: rgb(255 255 255 / 0.32);
+  --wings-primary: #ece9e4;
+  --wings-primary-fg: #17151a;
+  --wings-success: #7dd3a7;
+  --wings-warning: #e9b65f;
+  --wings-danger: #f2786a;
+  --wings-secondary: rgb(255 255 255 / 0.08);
+  --wings-border: rgb(255 255 255 / 0.08);
+  --wings-control-border: rgb(255 255 255 / 0.10);
+  --wings-menu-bg: rgb(32 29 35);
+  --wings-menu-active: rgb(255 255 255 / 0.08);
+  --wings-accent-fg: #f4f1ec;
+  --wings-radius: 0.625rem;
+  --wings-font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, sans-serif;
+}
+/* tokens:end */
+
 :root {
   color-scheme: dark;
   --wings-bg: transparent;
   --wings-surface: rgb(255 255 255 / 0.04);
-  --wings-fg: #ece9e4;
-  --wings-muted: #9d978f;
-  --wings-hover: rgb(255 255 255 / 0.06);
-  --wings-pressed: rgb(255 255 255 / 0.1);
-  --wings-hairline: rgb(255 255 255 / 0.07);
-  --wings-hairline-strong: rgb(255 255 255 / 0.16);
   --wings-input: rgb(255 255 255 / 0.06);
-  --wings-ring: rgb(255 255 255 / 0.32);
-  --wings-primary: #ece9e4;
-  --wings-primary-fg: #17151a;
   --wings-info: #9cc0ff;
-  --wings-success: #7dd3a7;
-  --wings-warning: #e9b65f;
-  --wings-danger: #f2786a;
-  --wings-radius: 10px;
-  --wings-font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, sans-serif;
   --wings-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
@@ -164,16 +175,12 @@ textarea::placeholder {
 /* Raised layers, like a list of suggestions or a menu, as Wings' own menus draw them, and the controls as the app's
    own shadcn/ui ones do. */
 :root {
-  --wings-menu-bg: rgb(32 29 35);
-  --wings-menu-ring: rgb(236 233 228 / 0.1);
-  --wings-menu-active: rgb(255 255 255 / 0.08);
+  --wings-menu-ring: color-mix(in srgb, var(--wings-fg) 10%, transparent);
+  --wings-shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
   --wings-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --wings-border: rgb(255 255 255 / 0.08);
-  --wings-control-border: rgb(255 255 255 / 0.1);
-  --wings-control-bg: rgb(255 255 255 / 0.03);
-  --wings-control-bg-hover: rgb(255 255 255 / 0.05);
-  --wings-secondary: rgb(255 255 255 / 0.08);
-  --wings-ring-soft: rgb(255 255 255 / 0.16);
+  --wings-control-bg: color-mix(in srgb, var(--wings-control-border) 30%, transparent);
+  --wings-control-bg-hover: color-mix(in srgb, var(--wings-control-border) 50%, transparent);
+  --wings-ring-soft: color-mix(in srgb, var(--wings-ring) 50%, transparent);
   --wings-radius-sm: calc(var(--wings-radius) * 0.6);
   --wings-radius-md: calc(var(--wings-radius) * 0.8);
 }
@@ -947,50 +954,50 @@ textarea::placeholder {
     transform 100ms;
 }
 .w-button[data-variant="default"]:hover {
-  background: color-mix(in srgb, var(--wings-primary) 80%, transparent);
+  background-color: color-mix(in srgb, var(--wings-primary) 80%, transparent);
 }
 .w-button[data-variant="secondary"] {
-  background: var(--wings-secondary);
+  background-color: var(--wings-secondary);
   color: var(--wings-fg);
 }
 .w-button[data-variant="secondary"]:hover {
-  background: color-mix(in srgb, var(--wings-secondary), var(--wings-fg) 5%);
+  background-color: color-mix(in srgb, var(--wings-secondary), var(--wings-fg) 5%);
 }
 .w-button[data-variant="outline"] {
   border-color: var(--wings-control-border);
-  background: var(--wings-control-bg);
+  background-color: var(--wings-control-bg);
   color: var(--wings-fg);
 }
 .w-button[data-variant="outline"]:hover {
-  background: var(--wings-control-bg-hover);
+  background-color: var(--wings-control-bg-hover);
 }
 .w-button[data-variant="outline"][aria-expanded="true"] {
-  background: var(--wings-hover);
+  background-color: var(--wings-hover);
 }
 .w-button[data-variant="ghost"] {
-  background: transparent;
+  background-color: transparent;
   color: var(--wings-fg);
 }
 .w-button[data-variant="ghost"]:hover {
-  background: color-mix(in srgb, var(--wings-hover) 50%, transparent);
+  background-color: color-mix(in srgb, var(--wings-hover) 50%, transparent);
 }
 .w-button[data-variant="ghost"][aria-expanded="true"] {
-  background: var(--wings-hover);
+  background-color: var(--wings-hover);
 }
 .w-button[data-variant="destructive"] {
-  background: color-mix(in srgb, var(--wings-danger) 20%, transparent);
+  background-color: color-mix(in srgb, var(--wings-danger) 20%, transparent);
   color: var(--wings-danger);
 }
 .w-button[data-variant="destructive"]:hover {
-  background: color-mix(in srgb, var(--wings-danger) 30%, transparent);
+  background-color: color-mix(in srgb, var(--wings-danger) 30%, transparent);
 }
 .w-button[data-variant="link"] {
-  background: transparent;
+  background-color: transparent;
   color: var(--wings-primary);
   text-underline-offset: 4px;
 }
 .w-button[data-variant="link"]:hover {
-  background: transparent;
+  background-color: transparent;
   text-decoration: underline;
 }
 .w-button[data-size="xs"] {
@@ -999,6 +1006,7 @@ textarea::placeholder {
   padding: 0 8px;
   border-radius: var(--wings-radius-md);
   font-size: 12px;
+  line-height: 16px;
 }
 .w-button[data-size="sm"] {
   gap: 4px;
@@ -1006,6 +1014,7 @@ textarea::placeholder {
   padding: 0 10px;
   border-radius: var(--wings-radius-md);
   font-size: 12.8px;
+  line-height: 1.5;
 }
 .w-button[data-size="lg"] {
   height: 36px;
@@ -1073,12 +1082,13 @@ textarea::placeholder {
   min-width: 28px;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: var(--wings-radius-md);
   background: transparent;
   color: var(--wings-fg);
   font-size: 12.8px;
   font-weight: 500;
+  line-height: 1.5;
   white-space: nowrap;
   cursor: pointer;
   outline: none;
@@ -1160,7 +1170,7 @@ textarea::placeholder {
   border-color: var(--wings-control-border);
   background: var(--wings-control-bg);
   color: var(--wings-fg);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  box-shadow: var(--wings-shadow-sm);
 }
 .w-tabs[data-variant="line"] > .w-tab[data-active] {
   border-color: transparent;
@@ -1263,7 +1273,7 @@ textarea::placeholder {
 .w-select {
   justify-content: space-between;
   gap: 6px;
-  padding: 0 8px 0 10px;
+  padding: 8px 8px 8px 10px;
   text-align: left;
   white-space: nowrap;
   user-select: none;
@@ -1377,6 +1387,20 @@ textarea::placeholder {
   border-color: color-mix(in srgb, var(--wings-danger) 40%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--wings-danger) 40%, transparent);
 }
+/* The app's outline button and active tab keep their border on focus, since their dark border colour outranks the
+   focus one there. */
+.w-button[data-variant="outline"]:focus-visible,
+.w-tab[data-active]:focus-visible {
+  border-color: var(--wings-control-border);
+}
+.w-tab[data-active]:focus-visible {
+  box-shadow:
+    0 0 0 3px var(--wings-ring-soft),
+    var(--wings-shadow-sm);
+}
+.w-tabs[data-variant="line"] > .w-tab[data-active]:focus-visible {
+  box-shadow: 0 0 0 3px var(--wings-ring-soft);
+}
 .w-tab:focus-visible {
   outline: 1px solid var(--wings-ring);
 }
@@ -1459,7 +1483,7 @@ textarea::placeholder {
 .w-option[data-highlighted],
 .w-menu-item[data-highlighted] {
   background: var(--wings-menu-active);
-  color: #f4f1ec;
+  color: var(--wings-accent-fg);
 }
 .w-select-item[data-disabled],
 .w-menu-item[data-disabled] {

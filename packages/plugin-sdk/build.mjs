@@ -133,7 +133,7 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
 }
 
 /** Files at the top of a plugin folder that are for building it, not for Wings. */
-const SOURCE_ONLY = /^(src|node_modules|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig.*\.json|README.*|HANDOVER.*|.*\.wings-plugin)$/;
+const SOURCE_ONLY = /^(src|preview|node_modules|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig.*\.json|README.*|HANDOVER.*|.*\.wings-plugin)$/;
 
 /** Copies what the plugin ships from `from` to `to`: everything but its source, dependencies and dotfiles. */
 function copyShipped(from, to, top = true) {

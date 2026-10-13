@@ -16,6 +16,35 @@
   padding: 6px 0 24px;
 }
 
+/* Toolbar: back to the list, then the repo it's in. */
+.pr-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pr-crumbs .w-button {
+  flex: none;
+  margin-left: -8px;
+}
+.pr-crumb-sep {
+  flex: none;
+  color: var(--wings-hairline-strong);
+}
+.pr-crumb {
+  overflow: hidden;
+  color: var(--wings-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Narrow frames keep the back link and drop the repo name, so the action buttons fit. */
+@media (max-width: 760px) {
+  .pr-crumb-sep,
+  .pr-crumb {
+    display: none;
+  }
+}
+
 /* Header */
 .pr-header {
   display: flex;

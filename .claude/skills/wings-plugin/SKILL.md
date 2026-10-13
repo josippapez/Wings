@@ -5,7 +5,7 @@ description: Creates or changes a Wings plugin, a folder with `wings-plugin.json
 
 # Wings plugins
 
-The API reference is `plugins/README.md`: manifest, permissions, every `wings.*` call, and the badge and comment shapes. Read it first. `plugins/pr-tracker/` is the worked example.
+The API reference is `plugins/README.md`: manifest, permissions, every `wings.*` call, and the badge and comment shapes. Read it first. `plugins/pr-tracker/` is the worked example. For anything a page shows, follow the `wings-page-design` skill and render it with `pnpm --dir plugins shot` before calling it done.
 
 ## Where the pieces live
 

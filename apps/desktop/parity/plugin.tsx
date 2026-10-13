@@ -1,0 +1,49 @@
+// The plugin side of `pnpm parity`: wings-plugin-ui's components with only its stylesheet, as a plugin page has them.
+import { createRoot } from "react-dom/client"
+import "wings-plugin-ui/plugin-ui.css"
+import { Badge, Button, Chip, Menu, Select, Tabs, TextInput } from "wings-plugin-ui"
+
+const variants = ["default", "secondary", "outline", "ghost", "destructive", "link"] as const
+const sizes = ["default", "sm", "xs", "lg"] as const
+const fruit = [
+  { value: "apple", label: "Apple" },
+  { value: "pear", label: "Pear" },
+]
+const tabs = [
+  { value: "a", label: "First" },
+  { value: "b", label: "Second" },
+]
+const noop = () => {}
+
+createRoot(document.getElementById("root")!).render(
+  <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16, width: 520 }}>
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {variants.map((v) => (
+        <Button key={v} variant={v} {...{ "data-case": `button-${v}` }}>{v}</Button>
+      ))}
+      {sizes.map((s) => (
+        <Button key={s} variant="outline" size={s} {...{ "data-case": `button-size-${s}` }}>{s}</Button>
+      ))}
+    </div>
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {(["default", "secondary", "destructive", "outline", "ghost", "link"] as const).map((v) => (
+        <Badge key={v} variant={v} {...{ "data-case": `badge-${v}` }}>{v}</Badge>
+      ))}
+    </div>
+    <TextInput {...{ "data-case": "input" }} placeholder="Search" label="Search" />
+    <TextInput {...{ "data-case": "input-value" }} defaultValue="Typed text" label="Typed" />
+    {(["default", "line"] as const).map((variant) => (
+      <Tabs key={variant} variant={variant} items={tabs} value="a" onChange={noop} label="Tabs" {...{ "data-case": `tabs-${variant}` }} />
+    ))}
+    <div style={{ display: "flex", gap: 8 }}>
+      <Chip pressed={false} {...{ "data-case": "chip" }}>Off</Chip>
+      <Chip pressed {...{ "data-case": "chip-on" }}>On</Chip>
+    </div>
+    <div style={{ width: 200 }} data-case="select">
+      <Select options={fruit} defaultValue="apple" label="Fruit" />
+    </div>
+    <div data-case="menu">
+      <Menu variant="outline" label="Actions" items={[{ id: "r", label: "Rename", onSelect: noop }, { id: "d", label: "Delete", variant: "destructive", onSelect: noop }]} />
+    </div>
+  </div>
+)
