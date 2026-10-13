@@ -1,13 +1,15 @@
 /** GitHub: the PR from the transcript or `gh pr list`, its status and failed Actions jobs, the diff, comments and replies. */
 import { cleanLog, counts, detail } from "./checks";
+import { failingOf, ghItem, type GhCheck } from "./checklist";
+import { ghWho } from "./who";
 import { cli, post } from "./cli";
 import { problems } from "./state";
 import type { Comment, FailureDetail, Failing, GithubLink, GithubRemote, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
-/** What `gh pr list` returns per PR: the status fields, plus the comment and review counts. One call covers every PR of the repo. */
-const GH_LIST_FIELDS = `${GH_FIELDS},comments,reviews`;
+/** What `gh pr list` returns per PR: the status fields, plus the comment and review counts, the author and who is asked to review. One call covers every PR of the repo. */
+const GH_LIST_FIELDS = `${GH_FIELDS},comments,reviews,author,reviewRequests`;
 // No token prints `gh auth login` or GH_TOKEN; an expired token that gh can renew prints "Try authenticating with:
 // gh auth refresh -h <host>" (cli/cli internal/ghcmd/cmd.go). A missing scope also suggests `gh auth refresh`, but
 // not after "Try authenticating with:", so it doesn't count.
@@ -35,6 +37,7 @@ interface GhPr {
   author?: { login?: string };
   comments?: unknown[];
   reviews?: unknown[];
+  reviewRequests?: { login?: string }[];
   createdAt?: string;
   latestReviews?: { author?: { login?: string }; state: string }[];
   state: string;
@@ -48,19 +51,6 @@ interface GhPr {
   headRefName: string;
   baseRefName: string;
   updatedAt: string;
-}
-
-/** A CheckRun or a StatusContext in `statusCheckRollup`. */
-interface GhCheck {
-  __typename?: string;
-  state?: string;
-  status?: string;
-  conclusion?: string;
-  detailsUrl?: string;
-  targetUrl?: string;
-  name?: string;
-  context?: string;
-  description?: string;
 }
 
 /** A line comment from `gh api repos/.../pulls/N/comments`. */
@@ -133,21 +123,11 @@ export async function githubOverview(link: Pick<Link, "url">) {
 }
 
 function githubStatusOf(pr: GhPr): Status {
-  const results = (pr.statusCheckRollup ?? []).map((c): Result => {
-    const r = c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : "PENDING";
-    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(r!)) return "passed";
-    if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(r!)) return "failed";
-    return "running";
-  });
+  const items = (pr.statusCheckRollup ?? []).map((c, i) => ghItem(c, hostOf(pr.url), i));
+  const results = items.map((c): Result => (c.state === "failed" ? "failed" : c.state === "running" || c.state === "queued" ? "running" : "passed"));
   const checks = counts(results);
-  const failing = (pr.statusCheckRollup ?? [])
-    .filter((_, i) => results[i] === "failed")
-    .map((c): Failing => {
-      const url = c.detailsUrl ?? c.targetUrl ?? null;
-      // A GitHub Actions job on the PR's own host; other apps' checks only link to their own page.
-      const job = url?.startsWith(`https://${hostOf(pr.url)}/`) ? url.match(/\/actions\/runs\/\d+\/job\/(\d+)/)?.[1] : undefined;
-      return { id: (url ?? c.name ?? c.context)!, name: c.name ?? c.context, url, job, summary: c.description || null };
-    });
+  // A GitHub Actions job on the PR's own host has a log; other apps' checks only link to their own page.
+  const failing = failingOf(items);
   let [label, tone, icon]: [string, Tone, Icon] = ["Open", "info", "pr-open"];
   if (pr.state === "MERGED") [label, tone, icon] = ["Merged", "merged", "pr-merged"];
   else if (pr.state === "CLOSED") [label, tone, icon] = ["Closed", "neutral", "pr-closed"];
@@ -164,7 +144,7 @@ function githubStatusOf(pr: GhPr): Status {
   return {
     key: pr.updatedAt,
     title: pr.title,
-    label, tone, icon, checks, review, failing,
+    label, tone, icon, checks, review, failing, items,
     changes: `+${pr.additions} −${pr.deletions} in ${pr.changedFiles} files`,
     branch: `${pr.headRefName} → ${pr.baseRefName}`,
     updated: pr.updatedAt,
@@ -173,25 +153,41 @@ function githubStatusOf(pr: GhPr): Status {
 
 // ---------- the repo's open PRs ----------
 
-/** One `gh pr list` per query, run in the project's folder: the open PRs you wrote, and the ones waiting for your review. */
+/** The login `gh` is signed in as, per host, which marks the PRs you wrote and the ones that wait for you. */
+const logins = new Map<string, string>();
+
+async function me(host: string): Promise<string> {
+  let login = logins.get(host);
+  if (!login) {
+    const out = await cli(ghKey(host), "gh", apiArgs(host, "user", "--jq", ".login"));
+    checkGhLogin(out, host);
+    login = out.stdout.trim();
+    if (out.code !== 0 || !login) throw new Error(out.stderr.trim() || "gh api user failed");
+    logins.set(host, login);
+  }
+  return login;
+}
+
+/** One `gh pr list` for every open PR of the repo (up to 100) and one for the ones asking for your review, each marked yours or waiting for you. */
 export async function githubList(cwd: string, remote: GithubRemote): Promise<ListedPr[]> {
-  const query = async (filter: string[], mine: boolean) => {
-    const out = await cli(ghKey(remote.host), "gh", ["pr", "list", ...repoArgs(remote), ...filter, "--state", "open", "--limit", "50", "--json", GH_LIST_FIELDS], { cwd });
-    checkGhLogin(out, remote.host);
-    if (out.code !== 0) throw new Error(out.stderr.trim() || "gh pr list failed");
-    return (JSON.parse(out.stdout) as GhPr[]).map((pr): ListedPr => {
-      return {
-        link: { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) },
-        title: pr.title,
-        head: pr.headRefName,
-        mine,
-        status: githubStatusOf(pr),
-        activity: (pr.comments?.length ?? 0) + (pr.reviews?.length ?? 0),
-      };
-    });
-  };
-  const [mine, review] = await Promise.all([query(["--author", "@me"], true), query(["--search", "review-requested:@me"], false)]);
-  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
+  const [user, out, asked] = await Promise.all([
+    me(remote.host),
+    cli(ghKey(remote.host), "gh", ["pr", "list", ...repoArgs(remote), "--state", "open", "--limit", "100", "--json", GH_LIST_FIELDS], { cwd }),
+    // `reviewRequests` has no login for a team, so this search says which PRs ask for you or one of your teams.
+    cli(ghKey(remote.host), "gh", ["pr", "list", ...repoArgs(remote), "--state", "open", "--limit", "100", "--search", "review-requested:@me", "--json", "number"], { cwd }),
+  ]);
+  const requested = new Set(asked.code === 0 ? (JSON.parse(asked.stdout) as { number: number }[]).map((p) => p.number) : []);
+  checkGhLogin(out, remote.host);
+  if (out.code !== 0) throw new Error(out.stderr.trim() || "gh pr list failed");
+  return (JSON.parse(out.stdout) as GhPr[]).map((pr): ListedPr => ({
+    link: { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) },
+    title: pr.title,
+    head: pr.headRefName,
+    ...ghWho(pr, user, requested),
+    author: pr.author?.login ?? null,
+    status: githubStatusOf(pr),
+    activity: (pr.comments?.length ?? 0) + (pr.reviews?.length ?? 0),
+  }));
 }
 
 // ---------- failed checks ----------

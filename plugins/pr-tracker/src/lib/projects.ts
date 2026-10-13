@@ -8,10 +8,11 @@ import { remoteFor } from "./remote";
 import { argsOf } from "./refs";
 import { known, links, problems, refOf, state, status } from "./state";
 import { problemKey } from "./view";
-import { BLOCK_ROWS, orderPulls, serveCached, type PullRow, type PullsResponse } from "./pulls";
+import { BLOCK_ROWS, fitRows, orderPulls, serveCached, type PullRow, type PullsResponse } from "./pulls";
 import type { AzureRemote, BitbucketRemote, GiteaRemote, GithubRemote, GitlabRemote, KnownRemote, ListedPr, Status } from "./types";
 
 const SECTION = "pulls";
+/** The sidebar shows only yours and the ones asked of you, so a short list. */
 const MAX_ROWS = 50;
 /** A little under the 60 s poll, so each poll fetches fresh while a burst of pane changes shares one list. */
 const LIST_TTL_MS = 55_000;
@@ -102,7 +103,9 @@ export async function refreshProjects(fresh = false) {
           items.forEach((i) => live.add(i.link.url));
           // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
           for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
-          const rows = items.slice(0, MAX_ROWS).map((i) => row(i, project.path));
+          // The sidebar is yours and the ones asked of you; the tab and the block list the rest.
+          const mine = [...items.filter((i) => i.mine), ...items.filter((i) => !i.mine && i.reviewing)];
+          const rows = mine.slice(0, MAX_ROWS).map((i) => row(i, project.path));
           const json = JSON.stringify(rows);
           if (sent.get(project.id) === json) return;
           await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null);
@@ -161,8 +164,27 @@ export async function pullsFor(path: string): Promise<Omit<PullsResponse, "type"
   }
   remember(items);
   const rows: PullRow[] = items.map((item) => {
-    const { id, label, detail, badge, open } = row(item, path);
-    return { id, title: label, detail: detail ?? "", mine: item.mine, badge: badge as PullRow["badge"], args: (open as { args: PullRow["args"] }).args };
+    const { link } = item;
+    const entry = status.get(link.url);
+    const st = (entry && !entry.error ? entry : item.status) as Status;
+    const count = activity.get(link.url);
+    const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === link.url);
+    return {
+      id: `${link.provider}:${link.number}`,
+      title: item.title.slice(0, 160),
+      number: refOf(link).split(" ").at(-1)!,
+      author: item.author,
+      branch: st.branch,
+      scope: item.mine ? "mine" : item.reviewing ? "review" : "other",
+      draft: st.label === "Draft",
+      badge: { text: st.label, tone: st.tone },
+      review: st.review,
+      checks: st.checks,
+      updated: st.updated,
+      unread: count !== undefined && seen.has(link.url) ? Math.max(0, count - seen.get(link.url)!) : 0,
+      agent: agent ? (agent.session!.state === "working" ? "working" : "here") : null,
+      args: argsOf(link, item.title, path),
+    };
   });
-  return { rows: orderPulls(rows).slice(0, BLOCK_ROWS) };
+  return { rows: fitRows(orderPulls(rows).slice(0, BLOCK_ROWS)) };
 }

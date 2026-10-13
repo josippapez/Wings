@@ -7,7 +7,8 @@ import type { Overview } from "../lib/refs";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS } from "../lib/state";
 import { ago, focusOf, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
-import type { Comment, Failing, PrArgs, Reviewer, Status } from "../lib/types";
+import type { Comment, FailureDetail, Failing, PrArgs, Reviewer, Status } from "../lib/types";
+import { ChecksView } from "./checks-view";
 
 const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
 const VOTE_WORD: Record<Reviewer["vote"], string> = { approved: "approved", changes: "requested changes", waiting: "is waiting for the author", none: "has not voted" };
@@ -27,6 +28,8 @@ export interface PrViewProps {
   onApprove?: () => Promise<void>;
   /** Azure DevOps votes instead of approving: its menu of votes. */
   onVote?: (vote: AzureVote) => Promise<void>;
+  /** Why a failed check failed: its log, fetched when its row is opened. */
+  onLoadFailure?: (f: Failing) => Promise<FailureDetail[]>;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -56,11 +59,12 @@ async function copyText(text: string) {
 }
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote } = props;
+  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">("overview");
-  const [checksOpen, setChecksOpen] = useState(false);
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
+  /** Open comment threads, which a comment requirement counts. Null until the conversation has loaded. */
+  const unresolved = useMemo(() => (comments ? comments.filter((c) => c.replyTo === null && !c.system && c.thread?.state === "active").length : null), [comments]);
   const [menu, setMenu] = useState(false);
   /** What the user picked and has yet to confirm. */
   const [pending, setPending] = useState<{ label: string; run: () => Promise<void> } | null>(null);
@@ -108,7 +112,7 @@ export function PrView(props: PrViewProps) {
     <Page toolbar={toolbar} className="pr-page" data-testid="pr-page">
       <div className="pr-wrap">
         <header className="pr-header">
-          <h1 className="pr-title" data-testid="pr-title">
+          <h1 className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
             {st?.title ?? args.title}
             <span className="pr-number">{args.provider === "gitlab" ? "!" : "#"}{args.number}</span>
           </h1>
@@ -156,12 +160,11 @@ export function PrView(props: PrViewProps) {
             {error ? <Text tone="danger" role="alert">{error}</Text> : null}
             <div className="pr-summary" data-testid="pr-summary">
               <ReviewChip overview={overview} />
-              {checkTotal ? <ChecksChip status={st} open={checksOpen} onToggle={() => setChecksOpen((o) => !o)} /> : <Badge variant="outline">No checks</Badge>}
+              {checkTotal ? <ChecksChip status={st} onOpen={() => setTab("checks")} /> : <Badge variant="outline">No checks</Badge>}
               {st.label === "Conflicts" ? <Badge tone="danger" variant="outline">Conflicts</Badge> : null}
-              {st.merge ? <Badge variant="outline" title="Merge strategy">{st.merge}</Badge> : null}
+              {st.merge ? <Badge variant="outline" title={`Merge strategy: ${st.merge}`}>{st.merge}</Badge> : null}
               {st.changes ? <Badge variant="outline">{st.changes}</Badge> : null}
             </div>
-            {checksOpen ? <div className="pr-card" id="pr-checks-inline"><ChecksList status={st} /></div> : null}
 
             <Tabs
               label="Pull request"
@@ -175,7 +178,7 @@ export function PrView(props: PrViewProps) {
               ]}
             >
               {tab === "overview" ? <OverviewTab {...props} overview={overview} /> : null}
-              {tab === "checks" ? <div className="pr-card"><ChecksList status={st} /></div> : null}
+              {tab === "checks" ? <div className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} /></div> : null}
               {tab === "files" ? (
                 <div className="pr-card pr-files">
                   <Text>{st.changes ?? "The changed files open in Wings' diff viewer, with the review comments on their lines."}</Text>
@@ -195,11 +198,11 @@ function Branch({ branch }: { branch: string }) {
   const [source, target] = branch.split(" → ");
   return (
     <span className="pr-branch">
-      <code title="Source branch">{source}</code>
+      <code title={`Source branch ${source}`}>{source}</code>
       {target ? (
         <>
           <span aria-hidden="true">→</span>
-          <code title="Target branch">{target}</code>
+          <code title={`Target branch ${target}`}>{target}</code>
         </>
       ) : null}
       <button
@@ -239,39 +242,14 @@ function ReviewChip({ overview }: { overview: Overview }) {
   );
 }
 
-function ChecksChip({ status, open, onToggle }: { status: Status; open: boolean; onToggle: () => void }) {
+function ChecksChip({ status, onOpen }: { status: Status; onOpen: () => void }) {
   const { passed, failed, running } = status.checks;
   const parts = [failed && `${failed} failed`, running && `${running} running`, passed && `${passed} passed`].filter(Boolean).join(" · ");
   return (
-    <Chip className="pr-chip" data-tone={failed ? "danger" : running ? "warn" : "success"} aria-expanded={open} aria-controls="pr-checks-inline" onClick={onToggle} data-testid="pr-checks">
+    <Chip className="pr-chip" data-tone={failed ? "danger" : running ? "warn" : "success"} aria-label={`${parts}. Show the checks`} onClick={onOpen} data-testid="pr-checks">
       {parts}
-      <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+      <span aria-hidden="true">›</span>
     </Chip>
-  );
-}
-
-function ChecksList({ status }: { status: Status }) {
-  const { passed, failed, running } = status.checks;
-  if (!passed && !failed && !running) return <Text tone="muted">No checks reported.</Text>;
-  return (
-    <div className="pr-checks">
-      {status.failing.length ? (
-        <ul className="pr-check-list" aria-label="Failing checks">
-          {status.failing.map((f: Failing) => (
-            <li key={String(f.id)} className="pr-check" data-result="failed">
-              <span aria-hidden="true" className="pr-check-mark">✕</span>
-              <span className="pr-check-name">{f.name ?? "Check"}</span>
-              {f.summary ? <Text tone="muted" size="small" as="span" className="pr-check-summary">{f.summary}</Text> : null}
-              {f.url?.startsWith("https://") ? <Button size="sm" variant="ghost" aria-label={`Open ${f.name ?? "check"}`} onClick={() => void wings.openUrl(f.url!)}>Open</Button> : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <Text tone="muted" size="small">
-        {[failed && !status.failing.length && `${failed} failed`, running && `${running} running`, passed && `${passed} passed`].filter(Boolean).join(", ")}
-        {status.failing.length ? ` besides the ${failed} above` : ""}. Passing and running checks aren't listed by name.
-      </Text>
-    </div>
   );
 }
 

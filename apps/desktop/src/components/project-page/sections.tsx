@@ -1,4 +1,4 @@
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, PencilIcon, SparklesIcon, Trash2Icon, UserIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 
 import { IconButton } from "@/components/icon-button";
@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { LIMITS, editSection, projectInfo, type Section } from "@/lib/project-info";
 
+import { ago } from "./ago";
+import { useNow } from "./now";
 import { imageExt, imageMarkdown, takeStored, type EditorState } from "./merge";
 import { markClass, type Mark } from "./search";
 import { messageOf, type Apply } from "./use-project-info";
@@ -21,18 +23,19 @@ const same = (a: Section, b: Section) => a.id === b.id && a.title === b.title &&
 /** Re-renders only when its own section or position changes, so typing in one doesn't render the others. */
 export const SectionCard = memo(
   function SectionCard({ projectId, section, first, last, startEditing, apply, read, mark }: { projectId: string; section: Section; first: boolean; last: boolean; startEditing: boolean; apply: Apply; read: LocalImage; mark?: Mark }) {
+    const now = useNow();
     const [editing, setEditing] = useState(startEditing);
     const [confirm, setConfirm] = useState(false);
     const [error, setError] = useState("");
     const act = (op: Parameters<Apply>[0]) => apply(op).then(() => setError(""), (e) => setError(messageOf(e)));
     return (
-      <article id={`item-${section.id}`} aria-label={section.title} className={cn("group/section rounded-xl border border-hairline bg-white/[0.02] p-4", markClass(mark))}>
+      <article id={`item-${section.id}`} aria-label={section.title} className={cn("group/section rounded-xl border border-hairline bg-white/[0.02] px-5 py-4 transition-colors hover:border-hairline-strong focus-within:border-hairline-strong", markClass(mark))}>
         {editing ? (
           <SectionEditor projectId={projectId} section={section} apply={apply} onDone={() => setEditing(false)} />
         ) : (
           <>
-            <header className="mb-2 flex items-center gap-1">
-              <h3 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{section.title}</h3>
+            <header className="mb-2 flex min-h-8 items-center gap-1">
+              <h3 className="min-w-0 flex-1 truncate text-[16px] font-semibold tracking-tight">{section.title}</h3>
               <span className="flex items-center opacity-0 transition-opacity group-focus-within/section:opacity-100 group-hover/section:opacity-100">
                 <IconButton label={`Move ${section.title} up`} disabled={first} onClick={() => void act({ kind: "moveItem", id: section.id, dir: -1 })}>
                   <ArrowUpIcon />
@@ -63,9 +66,14 @@ export const SectionCard = memo(
               <ErrorBoundary resetKey={section.body} fallback={<div className="text-[13px] text-muted-foreground"><p>This section couldn't be shown.</p><pre className="mt-1 whitespace-pre-wrap font-mono text-[12px]">{section.body}</pre></div>}>
                 <Markdown source={section.body} read={read} />
               </ErrorBoundary>
-            ) : <p className="text-[13px] text-muted-foreground">Empty. Press Edit to write.</p>}
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {section.by === "agent" ? "Written by an agent" : "Written by you"}, {new Date(section.updatedAt).toLocaleString()}
+            ) : <button type="button" onClick={() => setEditing(true)} className="-mx-1 rounded-md px-1 text-left text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">Empty. Press Edit to write.</button>}
+            <p className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              {section.by === "agent" ? <SparklesIcon className="size-3" aria-hidden /> : <UserIcon className="size-3" aria-hidden />}
+              <span>{section.by === "agent" ? "Written by an agent" : "Written by you"}</span>
+              <span aria-hidden>·</span>
+              <time dateTime={new Date(section.updatedAt).toISOString()} title={new Date(section.updatedAt).toLocaleString()}>
+                {ago(section.updatedAt, now)}
+              </time>
             </p>
           </>
         )}

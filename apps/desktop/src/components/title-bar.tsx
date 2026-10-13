@@ -230,11 +230,19 @@ export function TitleBar(props: {
   return (
     <header
       data-tauri-drag-region="deep"
-      className="relative flex h-10 shrink-0 items-center gap-1 pr-2.5 pl-[84px]"
+      data-title-bar=""
+      // --main-r is how far the main pane's right edge is from the window's (App keeps it current), so the strip
+      // stops there when the right sidebar is open.
+      className="relative flex h-10 shrink-0 items-center pr-[calc(var(--main-r,0px)+0.625rem)]"
     >
-      <IconButton label={props.sidebarOpen ? "Hide sidebar" : "Show sidebar"} shortcut={shortcutLabel.toggleSidebar} onClick={props.onToggleSidebar}>
-        <PanelLeftIcon />
-      </IconButton>
+      {/* Traffic lights and the toggle stay over the sidebar. Open, this part is as wide as the sidebar (--main-l is
+          the main pane's left edge, which App keeps current while the sidebar is dragged) plus the project bar's
+          padding, so the tabs start where the project name does. */}
+      <div className={cn("flex h-full shrink-0 items-center gap-1 pl-[84px]", props.sidebarOpen ? "min-w-[calc(var(--main-l,0px)+0.75rem)]" : "pr-1")}>
+        <IconButton label={props.sidebarOpen ? "Hide sidebar" : "Show sidebar"} shortcut={shortcutLabel.toggleSidebar} onClick={props.onToggleSidebar}>
+          <PanelLeftIcon />
+        </IconButton>
+      </div>
 
       <LayoutGroup id="tabs">
         {/* Base UI Tabs for the tab strip (arrow keys move between tabs); the sliding pill is ours. */}

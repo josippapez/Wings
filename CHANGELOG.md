@@ -4,6 +4,14 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.29 · 2026-10-13
+
+- Big diffs open fast: the diff viewer draws only the lines near the screen and highlights code in the background. A 30,000-line file went from about 4.4 s to 0.1 s in testing. "View in diff" lands on the right line in split and unified view.
+- Tabs start at the main pane's left edge and follow the sidebar as you resize it.
+- A section in the sidebar can have an All button that opens the plugin's full list. Pull requests use it to open every open PR of the project.
+- The plugin approval dialog scrolls when a plugin asks for a lot.
+- The Project page and the Tasks pages are redesigned.
+- PR tracker 0.13.0: a Checks tab lists every check and policy with its status, failing ones open to the end of their log, and Azure policies say what's missing. The pull request list shows every open PR with All, Mine, Review requested and Drafts filters.
 - PR tracker 0.12.0 votes on Azure DevOps pull requests: Approve, Approve with suggestions, Wait for author, Reject or Reset vote, each confirmed first.
 
 ## 0.1.28 · 2026-10-13

@@ -13,6 +13,9 @@ import { findFact } from "./merge";
 import { markClass, type Mark } from "./search";
 import { messageOf, type Apply } from "./use-project-info";
 
+/** The add row sits quiet, like an empty property in Notion, until you point at it or type. */
+const quiet = "border-dashed border-input bg-transparent placeholder:italic focus-visible:border-solid focus-visible:border-ring dark:bg-transparent";
+
 const byLabel = (by: Fact["by"]) => (by === "agent" ? "Written by an agent" : "Written by you");
 
 /** Key and value inputs: edits a fact, or with `add` is the empty row under the table. */
@@ -42,9 +45,9 @@ function FactForm({ initial, add, keyRef, onSave, onCancel }: { initial?: Fact; 
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Input ref={key} aria-label="Fact name" placeholder="Dev server" maxLength={LIMITS.key} defaultValue={initial?.key} autoFocus={!add} onKeyDown={enter} className="w-44 flex-none" />
-      <Input ref={value} aria-label="Fact value" placeholder="pnpm dev, port 5173" maxLength={LIMITS.value} defaultValue={initial?.value} onKeyDown={enter} className="min-w-48 flex-1" />
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void submit()}>
+      <Input ref={key} aria-label="Fact name" placeholder={add ? "Name" : "Dev server"} maxLength={LIMITS.key} defaultValue={initial?.key} autoFocus={!add} onKeyDown={enter} className={cn("w-40 flex-none", add && quiet)} />
+      <Input ref={value} aria-label="Fact value" placeholder={add ? "Value" : "pnpm dev, port 5173"} maxLength={LIMITS.value} defaultValue={initial?.value} onKeyDown={enter} className={cn("min-w-48 flex-1", add && quiet)} />
+      <Button size="sm" variant={add ? "ghost" : "secondary"} disabled={busy} onClick={() => void submit()}>
         {add ? "Add fact" : "Save"}
       </Button>
       {onCancel && (
@@ -70,46 +73,47 @@ export function FactsTable({ facts, apply, addRef, marks }: { facts: Fact[]; app
     }
   };
   return (
-    <section aria-label="Facts" className="flex flex-col gap-2">
-      <h2 className="text-[13px] font-semibold text-muted-foreground">Facts</h2>
+    <section aria-label="Facts" className="flex flex-col gap-1.5">
+      <h2 className="flex items-baseline gap-2 px-1 text-[12px] font-medium text-muted-foreground">
+        Facts
+        {facts.length > 0 && <span className="text-[11px] font-normal tabular-nums opacity-70">{facts.length}</span>}
+      </h2>
       {facts.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-hairline">
-          <table className="w-full border-collapse text-[13px]">
-            <tbody>
-              {facts.map((f) =>
-                editing === f.key ? (
-                  <tr key={f.key} className="border-b border-hairline last:border-b-0">
-                    <td colSpan={3} className="p-2">
-                      <FactForm initial={f} onCancel={() => setEditing(null)} onSave={(key, value) => run(apply({ kind: "setFact", key, value, oldKey: f.key }).then(() => setEditing(null)))} />
-                    </td>
-                  </tr>
-                ) : (
-                  <tr key={f.key} data-fact-key={f.key} className={cn("group/fact border-b border-hairline last:border-b-0", markClass(marks.get(f.key)))}>
-                    <th scope="row" className="w-44 px-3 py-1.5 text-left align-top font-medium">
-                      {f.key}
-                    </th>
-                    <td className="px-3 py-1.5 align-top break-words">
-                      <MarkdownInline text={f.value} />
-                    </td>
-                    <td className="w-px px-2 py-1 align-top whitespace-nowrap">
+        <table className="w-full table-fixed border-collapse text-[13px]">
+          <tbody>
+            {facts.map((f) =>
+              editing === f.key ? (
+                <tr key={f.key}>
+                  <td colSpan={3} className="py-1">
+                    <FactForm initial={f} onCancel={() => setEditing(null)} onSave={(key, value) => run(apply({ kind: "setFact", key, value, oldKey: f.key }).then(() => setEditing(null)))} />
+                  </td>
+                </tr>
+              ) : (
+                <tr key={f.key} data-fact-key={f.key} className={cn("group/fact border-t border-hairline first:border-t-0 hover:bg-hover/60 focus-within:bg-hover/60", markClass(marks.get(f.key)))}>
+                  <th scope="row" className="w-40 rounded-l-lg px-2 py-1.5 text-left align-top text-[12.5px] font-normal text-muted-foreground break-words">
+                    {f.key}
+                  </th>
+                  <td className="px-2 py-1.5 align-top break-words">
+                    <MarkdownInline text={f.value} />
+                  </td>
+                  <td className="w-[92px] rounded-r-lg px-1 py-1 text-right align-top whitespace-nowrap">
+                    <span className="inline-flex items-center opacity-0 transition-opacity group-focus-within/fact:opacity-100 group-hover/fact:opacity-100">
                       <span className="mr-1 text-[11px] text-muted-foreground" title={byLabel(f.by)}>
                         {f.by === "agent" ? "agent" : "you"}
                       </span>
-                      <span className="inline-flex opacity-0 transition-opacity group-focus-within/fact:opacity-100 group-hover/fact:opacity-100">
-                        <IconButton label={`Edit ${f.key}`} onClick={() => setEditing(f.key)}>
-                          <PencilIcon />
-                        </IconButton>
-                        <IconButton label={`Remove ${f.key}`} onClick={() => void run(apply({ kind: "removeFact", key: f.key })).catch(() => {})}>
-                          <Trash2Icon />
-                        </IconButton>
-                      </span>
-                    </td>
-                  </tr>
-                ),
-              )}
-            </tbody>
-          </table>
-        </div>
+                      <IconButton label={`Edit ${f.key}`} onClick={() => setEditing(f.key)}>
+                        <PencilIcon />
+                      </IconButton>
+                      <IconButton label={`Remove ${f.key}`} onClick={() => void run(apply({ kind: "removeFact", key: f.key })).catch(() => {})}>
+                        <Trash2Icon />
+                      </IconButton>
+                    </span>
+                  </td>
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
       )}
       {facts.length < LIMITS.facts ? (
         <FactForm add keyRef={addRef} onSave={(key, value) => {

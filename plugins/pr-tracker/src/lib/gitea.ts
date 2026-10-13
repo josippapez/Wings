@@ -12,6 +12,8 @@ export const giteaForge = (host: string): Forge => ({
   writeHint: "The access token needs the write:issue scope to reply and write:repository to approve.",
 });
 
+/** Gitea answers at most 50 items a page (`MAX_RESPONSE_ITEMS`). */
+const PAGE = 50;
 const api = (r: { host: string; owner: string; repo: string }) => `https://${r.host}/api/v1/repos/${r.owner}/${r.repo}`;
 const forgeOf = (link: GiteaLink) => giteaForge(link.remote.host);
 const prUrl = (link: GiteaLink) => `${api(link.remote)}/pulls/${link.number}`;
@@ -58,10 +60,9 @@ export async function giteaOverview(link: GiteaLink) {
 /** One call for the repo's open PRs, kept when you wrote them or were asked to review them. */
 export async function giteaList(remote: GiteaRemote): Promise<ListedPr[]> {
   const forge = giteaForge(remote.host);
-  const [user, prs] = await Promise.all([
-    forgeUser<{ login?: string }>(forge, `https://${remote.host}/api/v1/user`, (u) => u.login),
-    forgeJson<GtPr[]>(forge, `${api(remote)}/pulls?state=open&sort=recentupdate&limit=50`),
-  ]);
+  const url = `${api(remote)}/pulls?state=open&sort=recentupdate&limit=${PAGE}`;
+  const [user, first] = await Promise.all([forgeUser<{ login?: string }>(forge, `https://${remote.host}/api/v1/user`, (u) => u.login), forgeJson<GtPr[]>(forge, url)]);
+  const prs = first.length === PAGE ? [...first, ...(await forgeJson<GtPr[]>(forge, `${url}&page=2`))] : first;
   return gtListed(prs, user, (pr) => linkOf(pr, remote));
 }
 

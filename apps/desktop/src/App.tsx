@@ -1,6 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import { MotionConfig } from "motion/react";
 
@@ -189,7 +189,27 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pinnedButtons, setPinnedButtons] = useState<string[]>([]);
   const [widths, setWidths] = useState<Widths>({ left: SIDES.left.initial, right: SIDES.right.initial });
-  const leftPanel = usePanelRef();
+  const frame = useRef<HTMLDivElement>(null);
+  const mainBox = useRef<HTMLDivElement>(null);
+  // The title bar's tabs line up with the main pane. Its edges go to CSS variables straight from a ResizeObserver, so
+  // dragging or sliding a sidebar moves the tabs without rendering App.
+  // Before the first paint, so the tabs don't jump from their start position to the sidebar's edge on launch.
+  useLayoutEffect(() => {
+    const box = mainBox.current;
+    // Only the title bar reads them, so they go on it: a variable on the root would restyle every pane on each change.
+    const root = frame.current?.querySelector<HTMLElement>("[data-title-bar]");
+    if (!box || !root) return;
+    const sync = () => {
+      const r = box.getBoundingClientRect();
+      root.style.setProperty("--main-l", `${r.left}px`);
+      root.style.setProperty("--main-r", `${Math.max(0, document.documentElement.clientWidth - r.right)}px`);
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(box);
+    sync();
+    return () => observer.disconnect();
+  }, []);
+const leftPanel = usePanelRef();
   const rightPanel = usePanelRef();
   const panelGroup = useRef<HTMLDivElement>(null);
   const placed = useRef(false);
@@ -1480,7 +1500,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delay={500}>
-        <div className="flex h-full flex-col bg-glass text-foreground">
+        <div ref={frame} className="flex h-full flex-col bg-glass text-foreground">
           <TitleBar
             hasSpace={activeSpace !== null}
             tabs={tabViews}
@@ -1537,7 +1557,7 @@ export default function App() {
             </ResizablePanel>
             <SideHandle disabled={!sidebarOpen} />
             <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
-              <div className="flex h-full min-w-0 flex-col">
+              <div ref={mainBox} className="flex h-full min-w-0 flex-col">
               <ProjectBar
                 space={activeSpace}
                 git={activeSpace ? git[activeSpace.id] : null}

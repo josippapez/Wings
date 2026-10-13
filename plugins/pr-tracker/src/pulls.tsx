@@ -24,7 +24,7 @@ function Pulls() {
     void wings.project().then(setProject);
   }, []);
   useFit(root);
-  return <div ref={root}>{project === undefined ? <Loading>Loading pull requests</Loading> : project ? <ProjectPulls path={project.path} onOpen={(args) => void wings.openView("pr", { as: "tab", args })} /> : <Text tone="muted">No project.</Text>}</div>;
+  return <div ref={root}>{project === undefined ? <Loading>Loading pull requests</Loading> : project ? <ProjectPulls path={project.path} name={project.name} store="block" onOpen={(args) => void wings.openView("pr", { as: "tab", args })} /> : <Text tone="muted">No project.</Text>}</div>;
 }
 
 showView(<Pulls />);

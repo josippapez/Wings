@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Button, Empty, Heading, Loading, Row, showTab, Stack } from "wings-plugin-ui";
-import { approveWith, canApprove, commentsOf, linkOf, overviewOf, replyWith, voteWith, type Overview } from "./lib/refs";
-import type { Comment, Link, PrArgs } from "./lib/types";
+import { Button, Empty, Loading, Page, Row, showTab, Stack } from "wings-plugin-ui";
+import { approveWith, canApprove, commentsOf, failureOf, linkOf, overviewOf, replyWith, voteWith, type Overview } from "./lib/refs";
+import type { Comment, Failing, Link, PrArgs } from "./lib/types";
 import type { AzureVote } from "./lib/vote";
 import "./pr.css";
 import { PrView } from "./ui/pr-view";
@@ -105,6 +105,8 @@ function Pr({ args }: { args: PrArgs }) {
     await load();
   }, [link, load]);
 
+  const onLoadFailure = useCallback((f: Failing) => failureOf(link!, f), [link]);
+
   return (
     <PrView
       args={args}
@@ -119,6 +121,7 @@ function Pr({ args }: { args: PrArgs }) {
       onReply={onReply}
       onApprove={link && canApprove(link.provider) ? onApprove : undefined}
       onVote={link?.provider === "azure" ? onVote : undefined}
+      onLoadFailure={link ? onLoadFailure : undefined}
     />
   );
 }
@@ -141,10 +144,9 @@ function Home() {
   if (project === undefined) return <Loading>Loading pull requests</Loading>;
   if (!project) return <Empty title="No pull request" description="Open one from a project's Pull requests list." />;
   return (
-    <Stack gap="s">
-      <Heading level={2}>Open pull requests</Heading>
-      <ProjectPulls path={project.path} onOpen={setPicked} />
-    </Stack>
+    <Page className="pr-page">
+      <ProjectPulls path={project.path} name={project.name} store="tab" onOpen={setPicked} />
+    </Page>
   );
 }
 

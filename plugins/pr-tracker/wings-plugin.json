@@ -1,10 +1,10 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "minWingsVersion": "0.1.27",
   "icon": "icon.svg",
-  "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, checks and why they failed, the diff and review comments. Lists each project's open pull requests in the sidebar and in a block on the Project page, and opens one as a tab to read, reply to and send to an agent.",
+  "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, every check and policy and why it failed, the diff and review comments. Lists each project's pull requests in the sidebar (yours and the ones waiting for your review) and, in a tab or a block on the Project page, every open one with filters, and opens one as a tab to read, reply to and send to an agent.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -95,7 +95,8 @@
       {
         "id": "pulls",
         "title": "Pull requests",
-        "icon": "git-compare"
+        "icon": "git-compare",
+        "all": "pr"
       }
     ],
     "settings": {

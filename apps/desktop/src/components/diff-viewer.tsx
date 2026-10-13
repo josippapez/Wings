@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
-import { FileDiff } from "@pierre/diffs/react";
+import { getOrCreateWorkerPoolSingleton, type WorkerPoolManager } from "@pierre/diffs/worker";
+import { FileDiff, useVirtualizer, Virtualizer, WorkerPoolContext } from "@pierre/diffs/react";
+import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ChevronRightIcon,
@@ -30,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
+import { LINE_HEIGHT, rowNumber, rowTop } from "@/lib/diff-scroll";
 import { resolveFocus, type ResolvedFocus } from "@/lib/diff-focus";
 import type { DiffComment, DiffView } from "@/lib/plugins";
 import { quoteLines, type ReviewComment, type ReviewTarget } from "@/lib/review";
@@ -217,8 +220,44 @@ function ReplyBox({ onSend }: { onSend: (body: string) => Promise<void> }) {
   );
 }
 
-/** Brings a thread that a plugin pointed at (`focus`) to the middle of the diff. */
-const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "center", behavior: "smooth" });
+/**
+ * Brings the line a plugin pointed at (`focus`) to the middle of the diff. A big file draws only the lines near the viewport, so a far line
+ * has no element yet: scroll toward it from whichever row is on screen until it shows, then centre it. The distance comes from the hunks (rows and
+ * the separators between them), since a big diff has far fewer rows than lines. It aims 15 rows above the line so the line lands inside the drawn
+ * window, not on its edge, and waits for the window to move before it steps again so it can't overshoot.
+ */
+function ScrollToLine({ file, line, side }: { file: FileDiffMetadata | undefined; line: number | undefined; side: "additions" | "deletions" }) {
+  const virtualizer = useVirtualizer();
+  useEffect(() => {
+    const row = file && line !== undefined ? rowNumber(file, side, line) : null;
+    if (!row) return;
+    let frame = 0;
+    let tries = 0;
+    let stepped: { from: number; frames: number } | null = null;
+    const tick = () => {
+      const root = document.querySelector("diffs-container")?.shadowRoot;
+      const unified = root?.querySelector("code[data-unified]");
+      const column = unified ?? root?.querySelector(side === "deletions" ? "code[data-deletions]" : "code[data-additions]");
+      // Split columns number rows by their own side. The unified column has one numbering, which rowNumber maps to.
+      const want = unified ? row.number : line!;
+      const rows = [...(column?.querySelectorAll("[data-line]") ?? [])].filter((el) => !unified || (el.getAttribute("data-line-type") === "change-deletion") === row.deleted);
+      const hit = rows.find((el) => Number(el.getAttribute("data-line")) === want);
+      if (hit) return hit.scrollIntoView({ block: "center" });
+      const seen = rows[0] ? Number(rows[0].getAttribute("data-line")) : 0;
+      if (seen && virtualizer && !(stepped && stepped.from === seen && ++stepped.frames < 30)) {
+        const split = !unified;
+        const from = rowTop(file!, split ? side : row.deleted ? "deletions" : "additions", seen, split);
+        const to = rowTop(file!, split ? side : row.deleted ? "deletions" : "additions", want, split);
+        if (from !== null && to !== null) virtualizer.scrollTo({ top: virtualizer.getScrollTop() + to - from - 15 * LINE_HEIGHT });
+        stepped = { from: seen, frames: 0 };
+      }
+      if (++tries < 240) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [file, line, side, virtualizer]);
+  return null;
+}
 
 function CommentThread({
   thread,
@@ -229,14 +268,13 @@ function CommentThread({
 }: {
   thread: Thread;
   className?: string;
-  /** The plugin pointed at this thread: scroll to it and ring it while the highlight lasts. */
+  /** The plugin pointed at this thread: ring it while the highlight lasts. */
   focused?: boolean;
   onOpen: (url: string) => void;
   onReply?: (replyTo: number, body: string) => Promise<void>;
 }) {
   return (
     <div
-      ref={focused ? reveal : undefined}
       className={cn(
         "max-w-3xl rounded-xl border border-hairline bg-[#1d1b22] p-3 font-sans shadow-[0_6px_20px_rgb(0_0_0/0.25)] transition-shadow duration-500",
         focused && "ring-2 ring-white/40",
@@ -291,6 +329,9 @@ export function DiffViewer({
   /** Pastes the review into the pane; presses Enter after when `submit`. */
   onSendReview: (paneId: string, text: string, submit: boolean) => Promise<void>;
 }) {
+  // The highlighter workers start the first time a diff opens (while its patch still loads) and then stay, so a later open doesn't pay for the WASM and Shiki set-up again.
+  const [pool, setPool] = useState<WorkerPoolManager>();
+  if (diff && !pool) setPool(getOrCreateWorkerPoolSingleton({ poolOptions: { workerFactory: () => new DiffWorker(), poolSize: 2 }, highlighterOptions: { theme: "pierre-dark" } }));
   const files = useMemo(() => (diff?.patch ? entries(diff.patch) : []), [diff?.patch]);
   const threads = useMemo(() => threadsByPath(diff?.comments), [diff?.comments]);
   /** A file index, or null for the discussion. */
@@ -416,6 +457,7 @@ export function DiffViewer({
   };
 
   return (
+    <WorkerPoolContext.Provider value={pool}>
     <Dialog
       open={diff !== null}
       onOpenChange={(open) => {
@@ -573,7 +615,8 @@ export function DiffViewer({
                 </ScrollArea>
               </aside>
 
-              <section className="min-w-0 flex-1 overflow-auto bg-[#141217]">
+              <Virtualizer className="min-w-0 flex-1 overflow-auto bg-[#141217]">
+                <ScrollToLine file={flash ? files.find((e) => e.file.name === flash.path)?.file : undefined} line={flash?.line} side={flash?.side ?? "additions"} />
                 {selected === null ? (
                   <div className="flex flex-col gap-3 p-5">
                     {discussion.map((thread) => (
@@ -619,7 +662,7 @@ export function DiffViewer({
                     </EmptyHeader>
                   </Empty>
                 )}
-              </section>
+              </Virtualizer>
               {reviewItems.length > 0 && (
                 <ReviewPanel
                   comments={reviewItems}
@@ -641,5 +684,6 @@ export function DiffViewer({
         </AnimatePresence>
       </DialogContent>
     </Dialog>
+    </WorkerPoolContext.Provider>
   );
 }

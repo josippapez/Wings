@@ -1,5 +1,7 @@
 /** GitLab: the merge request for the branch, its pipeline, approvals and discussions, all through `glab api`. */
 import { cleanLog, counts, detail } from "./checks";
+import { glItem } from "./checklist";
+import { glWho } from "./who";
 import { cli, post } from "./cli";
 import { problems } from "./state";
 import type { Comment, FailureDetail, Failing, GitlabLink, GitlabRemote, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
@@ -12,6 +14,7 @@ interface GlMr {
   title: string;
   description?: string | null;
   author?: { name?: string; username?: string };
+  reviewers?: { username?: string }[];
   user_notes_count?: number;
   created_at?: string;
   draft?: boolean;
@@ -29,8 +32,12 @@ interface GlJob {
   id: number;
   name: string;
   status: string;
+  stage?: string;
   allow_failure?: boolean;
   web_url: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration?: number | null;
 }
 
 interface GlNote {
@@ -132,6 +139,8 @@ async function gitlabStatusOf(link: GitlabLink, mr: GlMr): Promise<Status> {
     key: mr.sha,
     title: mr.title,
     label, tone, icon, checks, review, failing,
+    // Manual jobs are listed, though they don't count.
+    items: jobs.map((j) => glItem(j, pipeline!.project_id)),
     changes: mr.changes_count ? `${mr.changes_count} files` : null,
     branch: `${mr.source_branch} → ${mr.target_branch}`,
     updated: mr.updated_at,
@@ -164,21 +173,33 @@ function listStatus(mr: GlMr): Status {
   };
 }
 
-/** One `glab api` per query: the open MRs you wrote (`created_by_me`) and the ones you review (`reviews_for_me`). */
+/** The username `glab` is signed in as, per host. */
+const users = new Map<string, string>();
+
+async function me(remote: GitlabRemote): Promise<string> {
+  let name = users.get(remote.host);
+  if (!name) {
+    name = ((await glab(remote, "user")) as { username?: string }).username;
+    if (!name) throw new Error("GitLab didn't say who you are.");
+    users.set(remote.host, name);
+  }
+  return name;
+}
+
+/** Every open MR of the project (up to 100) in one call, each marked yours or waiting for you. */
 export async function gitlabList(remote: GitlabRemote): Promise<ListedPr[]> {
-  const query = async (scope: string, mine: boolean) =>
-    ((await glab(remote, `${project(remote)}/merge_requests?state=opened&scope=${scope}&order_by=updated_at&per_page=50`)) as GlMr[]).map(
-      (mr): ListedPr => ({
-        link: { provider: "gitlab", url: mr.web_url, number: mr.iid, repo: remote.path, remote },
-        title: mr.title,
-        head: mr.source_branch,
-        mine,
-        status: listStatus(mr),
-        activity: mr.user_notes_count ?? null,
-      }),
-    );
-  const [mine, review] = await Promise.all([query("created_by_me", true), query("reviews_for_me", false)]);
-  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
+  const [user, mrs] = await Promise.all([me(remote), glab(remote, `${project(remote)}/merge_requests?state=opened&order_by=updated_at&per_page=100`) as Promise<GlMr[]>]);
+  return mrs.map(
+    (mr): ListedPr => ({
+      link: { provider: "gitlab", url: mr.web_url, number: mr.iid, repo: remote.path, remote },
+      title: mr.title,
+      head: mr.source_branch,
+      ...glWho(mr, user),
+      author: mr.author?.name ?? mr.author?.username ?? null,
+      status: listStatus(mr),
+      activity: mr.user_notes_count ?? null,
+    }),
+  );
 }
 
 // ---------- failed checks ----------

@@ -1,11 +1,12 @@
 /** A PR's ref to and from the args of its tab, and what the tab shows of it. */
-import { azureComments, azureLink, azureOverview, azureReply, azureShow, azureVote } from "./azure";
+import { azureComments, azureFailure, azureLink, azureOverview, azureReply, azureShow, azureVote } from "./azure";
 import { bitbucketApprove, bitbucketComments, bitbucketOverview, bitbucketReply } from "./bitbucket";
+import { plainFailure } from "./forges";
 import { giteaApprove, giteaComments, giteaOverview, giteaReply } from "./gitea";
-import { githubApprove, githubComments, githubOverview, githubReply } from "./github";
-import { gitlabApprove, gitlabComments, gitlabOverview, gitlabReply } from "./gitlab";
+import { githubApprove, githubComments, githubFailure, githubOverview, githubReply } from "./github";
+import { gitlabApprove, gitlabComments, gitlabFailure, gitlabOverview, gitlabReply } from "./gitlab";
 import type { AzureVote } from "./vote";
-import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Provider, Reviewer, Status } from "./types";
+import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, FailureDetail, Failing, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Provider, Reviewer, Status } from "./types";
 
 export function argsOf(link: Link, title: string, cwd: string): PrArgs {
   const base = { provider: link.provider, url: link.url, number: link.number, repo: link.repo, title, cwd };
@@ -81,4 +82,18 @@ export async function approveWith(link: Link, sha: string): Promise<void> {
 export async function voteWith(link: Link, vote: AzureVote): Promise<void> {
   if (link.provider !== "azure") throw new Error("Only Azure DevOps pull requests take a vote.");
   return azureVote(link, vote);
+}
+
+/** Why one failed check failed: its failed step and the end of its log. The Checks view asks when a failure is opened, not before. */
+export function failureOf(link: Link, f: Failing): Promise<FailureDetail[]> {
+  switch (link.provider) {
+    case "github":
+      return githubFailure(link, f);
+    case "azure":
+      return azureFailure(link, f);
+    case "gitlab":
+      return gitlabFailure(link, f);
+    default:
+      return plainFailure(link, f);
+  }
 }

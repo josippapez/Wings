@@ -1,9 +1,11 @@
-import { FolderIcon, GitBranchIcon, SearchIcon } from "lucide-react";
+import { FolderIcon, GitBranchIcon, SearchIcon, StickyNoteIcon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PluginView } from "@/lib/api";
 import { listBlocks, type BlockEntry } from "@/lib/plugin-blocks";
 import type { PluginHost } from "@/lib/plugins";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
 import { LIMITS, projectInfo, type Place } from "@/lib/project-info";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +14,7 @@ import { BlockItem } from "./blocks";
 import { FactsTable } from "./facts";
 import { freshTitle } from "./merge";
 import { clampMatch, findMatches, matchId, PROJECT_PAGE_FIND, stepMatch, markClass, type Mark } from "./search";
+import { NowProvider } from "./now";
 import { SectionCard } from "./sections";
 import { messageOf, useProjectInfo } from "./use-project-info";
 
@@ -105,13 +108,22 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
       </div>
     );
   }
-  if (!info) return <div role="status" className="p-6 text-[13px] text-muted-foreground">Loading the project page</div>;
+  if (!info)
+    return (
+      <div role="status" aria-label="Loading the project page" className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-8">
+        <Skeleton className="h-8 w-56" />
+        <Skeleton className="h-4 w-72" />
+        <Skeleton className="mt-4 h-24 w-full rounded-xl" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+      </div>
+    );
 
   const sections = info.items.filter((i) => i.kind === "section");
   const blockCount = info.items.length - sections.length;
-  const addRow = (at: Place, label: string) => (
+  const addRow = (at: Place, label: string, always = false) => (
     <AddRow
       label={label}
+      always={always}
       blocks={blocks}
       canSection={sections.length < LIMITS.sections}
       canBlock={blockCount < LIMITS.blocks}
@@ -122,11 +134,30 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
   );
 
   return (
-    <div ref={page} className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8">
-      <header className="flex flex-col gap-1">
-        <div className="flex items-center gap-3">
-          <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold tracking-tight">{space.name}</h1>
-          <div role="search" className="flex items-center gap-2">
+    <NowProvider paused={!visible}>
+    <div ref={page} className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 pt-10 pb-16">
+      <header className="flex flex-col gap-3">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[28px] leading-9 font-semibold tracking-tight">{space.name}</h1>
+            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-muted-foreground">
+              <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-hover px-1.5 py-0.5" title={space.path}>
+                <FolderIcon className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">{space.path.replace(/^\/Users\/[^/]+/, "~")}</span>
+              </span>
+              {branch && (
+                <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-hover px-1.5 py-0.5">
+                  <GitBranchIcon className="size-3.5 shrink-0" aria-hidden />
+                  <span className="truncate">{branch}</span>
+                </span>
+              )}
+              <span className="px-1 tabular-nums">
+                {info.facts.length} {info.facts.length === 1 ? "fact" : "facts"} · {sections.length} {sections.length === 1 ? "section" : "sections"}
+                {blockCount > 0 && ` · ${blockCount} ${blockCount === 1 ? "block" : "blocks"}`}
+              </span>
+            </p>
+          </div>
+          <div role="search" className="flex shrink-0 items-center gap-2 pt-1.5">
             <label className="relative flex items-center">
               <SearchIcon className="pointer-events-none absolute left-2 size-3.5 text-muted-foreground" aria-hidden />
               <input
@@ -149,7 +180,7 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
                     else setAt(() => stepMatch(shown, e.shiftKey ? -1 : 1, matches.length));
                   }
                 }}
-                className="h-7 w-44 rounded-lg border border-input bg-transparent pr-2 pl-7 text-[12px] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="h-7 w-36 rounded-lg border border-transparent bg-hover pr-2 pl-7 text-[12px] transition-[width,border-color] outline-none placeholder:text-muted-foreground focus-visible:w-52 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               />
             </label>
             {applied.trim() !== "" && (
@@ -159,23 +190,21 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
             )}
           </div>
         </div>
-        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1" title={space.path}>
-            <FolderIcon className="size-3.5" aria-hidden />
-            {space.path.replace(/^\/Users\/[^/]+/, "~")}
-          </span>
-          {branch && (
-            <span className="inline-flex items-center gap-1">
-              <GitBranchIcon className="size-3.5" aria-hidden />
-              {branch}
-            </span>
-          )}
-        </p>
       </header>
       <FactsTable facts={info.facts} apply={apply} addRef={factInput} marks={factMarks} />
-      {info.items.length === 0 && <p className="mt-2 text-[13px] text-muted-foreground">Nothing written about {space.name} yet. Add a section below, or ask Claude to keep what it learns here.</p>}
+      {info.items.length === 0 && (
+        <Empty className="border border-hairline py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <StickyNoteIcon />
+            </EmptyMedia>
+            <EmptyTitle>Nothing written about {space.name} yet</EmptyTitle>
+            <EmptyDescription>Add a section or a plugin's block below, or ask Claude to keep what it learns here.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
       <div className="flex flex-col">
-        {addRow("top", info.items.length === 0 ? "Add" : "Add at the top")}
+        {addRow("top", info.items.length === 0 ? "Add" : "Add at the top", info.items.length === 0)}
         {info.items.map((item, i) => (
           <Fragment key={item.id}>
             {item.kind === "section" ? (
@@ -185,7 +214,7 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
                 <BlockItem projectId={space.id} item={item} plugins={plugins} host={host} visible={visible && onScreen.has(item.id)} first={i === 0} last={i === info.items.length - 1} apply={apply} />
               </div>
             )}
-            {addRow({ after: item.id }, `Add after ${item.kind === "section" ? item.title : item.blockId}`)}
+            {addRow({ after: item.id }, `Add after ${item.kind === "section" ? item.title : item.blockId}`, i === info.items.length - 1)}
           </Fragment>
         ))}
       </div>
@@ -195,5 +224,6 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
         </p>
       )}
     </div>
+    </NowProvider>
   );
 }

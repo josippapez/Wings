@@ -116,14 +116,43 @@ export interface Failing {
   project?: number;
 }
 
+/** What a check is doing. `skipped` is not run, not applicable or waiting for someone to start it. */
+export type CheckState = "failed" | "running" | "queued" | "passed" | "skipped";
+
+/** One check or policy of a PR, in the shape the Checks view shows whatever the provider. */
+export interface CheckItem {
+  id: string;
+  name: string;
+  state: CheckState;
+  /** True when it blocks the merge, false when it doesn't, null where the provider doesn't say. */
+  required: boolean | null;
+  /** What sort of check the provider says it is: a workflow, a build, a status check, required reviewers... */
+  kind: string | null;
+  /** When it finished, else when it started (ISO). */
+  at: string | null;
+  seconds: number | null;
+  /** Where the provider shows it. Only https is ever opened. */
+  url: string | null;
+  /** Why it is in this state, from the provider's data: "2 of 3 required reviewers approved". */
+  note: string | null;
+  /** Set where its log can be fetched, which `failureOf` takes. */
+  failing?: Failing;
+  /** The page fills the note from what it has loaded: a comment requirement counts the open threads. */
+  needs?: "unresolved";
+}
+
 /** An open PR from a repo's list, as a project's Pull requests section shows it. */
 export interface ListedPr {
   link: Link;
   title: string;
   /** The source branch, which an agent pane's branch is matched against. */
   head: string;
-  /** You wrote it; otherwise it's waiting for your review. */
+  /** You wrote it. */
   mine: boolean;
+  /** Your review is asked for. */
+  reviewing: boolean;
+  /** Who wrote it, where the list says. */
+  author: string | null;
   /** From the list alone, so GitLab and Azure DevOps have no check counts until the PR's own status loads. */
   status: Status;
   /** Comments and reviews so far, or null where the list doesn't say. */
@@ -155,6 +184,8 @@ export interface Status {
   checks: Counts;
   review: string;
   failing: Failing[];
+  /** Every check, from the data the status already loaded. */
+  items?: CheckItem[];
   changes: string | null;
   branch: string;
   updated: string;
@@ -216,12 +247,12 @@ export interface AzurePr {
   title: string;
   isDraft?: boolean;
   mergeStatus?: string;
-  reviewers?: { vote: number; displayName?: string }[];
+  reviewers?: { vote: number; displayName?: string; uniqueName?: string; isRequired?: boolean }[];
   repository?: { webUrl?: string };
   lastMergeSourceCommit?: { commitId: string };
   lastMergeTargetCommit?: { commitId: string };
   description?: string;
-  createdBy?: { displayName?: string };
+  createdBy?: { displayName?: string; uniqueName?: string };
   creationDate: string;
   closedDate?: string;
   sourceRefName?: string;
@@ -230,8 +261,11 @@ export interface AzurePr {
 
 export interface AzurePolicy {
   status: string;
+  startedDate?: string;
+  completedDate?: string;
   configuration?: {
     isEnabled?: boolean;
+    isBlocking?: boolean;
     type?: { id?: string; displayName?: string };
     settings?: Record<string, unknown> & { displayName?: string };
   };

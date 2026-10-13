@@ -2,10 +2,12 @@
 // between columns, and so do its buttons.
 
 import { useEffect, useRef, useState } from "react";
-import { Board, BoardColumn, Button, Card, Empty, Loading, Page, Row, showTab, Stack, Text, TextInput, Toolbar } from "wings-plugin-ui";
+import { Board, BoardColumn, Button, Empty, Loading, Page, Row, showTab, Stack, Summary, SummaryChip, Text, TextInput, Toolbar } from "wings-plugin-ui";
 import { AddTask } from "./lib/AddTask";
 import { LIMITS, STATUSES, STATUS_LABEL, type Op, type Task } from "./lib/tasks";
+import { StatusDot, TaskCard } from "./lib/parts";
 import { useTasks } from "./lib/useTasks";
+import "./tasks.css";
 
 const SAVE_MS = 800;
 
@@ -44,7 +46,18 @@ function ProjectBoard({ project }: { project: WingsProject }) {
   return (
     <Page
       flush
-      toolbar={<Toolbar title={`Tasks, ${project.name}`} actions={<AddTask apply={apply} branch={project.branch} />}>{error ? <Text tone="danger" role="alert">{error}</Text> : null}</Toolbar>}
+      toolbar={
+        <Toolbar title={`Tasks, ${project.name}`} actions={<AddTask apply={apply} branch={project.branch} />}>
+          {tasks ? (
+            <Summary aria-label="Task counts">
+              <SummaryChip>{tasks.filter((t) => t.status === "todo").length} to do</SummaryChip>
+              <SummaryChip tone="info">{tasks.filter((t) => t.status === "doing").length} doing</SummaryChip>
+              <SummaryChip tone="success">{tasks.filter((t) => t.status === "done").length} done</SummaryChip>
+            </Summary>
+          ) : null}
+          {error ? <Text tone="danger" role="alert">{error}</Text> : null}
+        </Toolbar>
+      }
     >
       {!tasks ? (
         <Loading>Loading tasks</Loading>
@@ -53,9 +66,12 @@ function ProjectBoard({ project }: { project: WingsProject }) {
           {STATUSES.map((status) => {
             const column = tasks.filter((t) => t.status === status).sort((a, b) => (status === "done" ? b.updatedAt - a.updatedAt : a.createdAt - b.createdAt));
             return (
-              <BoardColumn key={status} title={STATUS_LABEL[status]} count={column.length}>
+              <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
+                {column.length === 0 ? <p className="tk-column-empty">{status === "todo" ? "Nothing waiting" : status === "doing" ? "Nothing in progress" : "Nothing finished yet"}</p> : null}
                 {column.map((t) => (
-                  <TaskCard key={t.id} task={t} open={selected === t.id} onToggle={() => setSelected(selected === t.id ? null : t.id)} onMove={(by) => move(t, by)} send={send} branch={project.branch} />
+                  <TaskCard key={t.id} task={t} id={`task-${t.id}`} expanded={selected === t.id} onOpen={() => setSelected(selected === t.id ? null : t.id)} onMove={(by) => move(t, by)}>
+                    {selected === t.id ? <TaskEditor key={t.id} task={t} send={send} branch={project.branch} /> : null}
+                  </TaskCard>
                 ))}
               </BoardColumn>
             );
@@ -63,35 +79,6 @@ function ProjectBoard({ project }: { project: WingsProject }) {
         </Board>
       )}
     </Page>
-  );
-}
-
-function TaskCard({ task, open, onToggle, onMove, send, branch }: { task: Task; open: boolean; onToggle: () => void; onMove: (by: 1 | -1) => void; send: (op: Op) => Promise<void>; branch: string | null }) {
-  const index = STATUSES.indexOf(task.status);
-  return (
-    <Card>
-      <Stack gap="s">
-        <Button
-          id={`task-${task.id}`}
-          variant="ghost"
-          aria-expanded={open}
-          onClick={onToggle}
-          onKeyDown={(e) => {
-            if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
-            e.preventDefault();
-            onMove(e.key === "ArrowRight" ? 1 : -1);
-          }}
-        >
-          <Text as="span" weight="medium" clamp>{task.title}</Text>
-        </Button>
-        {task.links?.branch ? <Text tone="muted" size="tiny" mono truncate>{task.links.branch}</Text> : null}
-        {open ? <TaskEditor key={task.id} task={task} send={send} branch={branch} /> : null}
-        <Row gap="s" justify="between">
-          <Button size="xs" variant="outline" disabled={index === 0} aria-label={`Move "${task.title}" to ${STATUS_LABEL[STATUSES[index - 1] ?? task.status]}`} onClick={() => onMove(-1)}>←</Button>
-          <Button size="xs" variant="outline" disabled={index === STATUSES.length - 1} aria-label={`Move "${task.title}" to ${STATUS_LABEL[STATUSES[index + 1] ?? task.status]}`} onClick={() => onMove(1)}>→</Button>
-        </Row>
-      </Stack>
-    </Card>
   );
 }
 
@@ -143,11 +130,11 @@ function TaskEditor({ task, send, branch }: { task: Task; send: (op: Op) => Prom
   };
 
   return (
-    <Stack gap="s">
+    <Stack gap="s" className="tk-editor">
       <TextInput ref={title} label="Title" defaultValue={task.title} maxLength={LIMITS.title} onInput={edited} onBlur={() => save.current()} />
       <textarea ref={notes} aria-label="Notes" placeholder="Notes" rows={5} maxLength={LIMITS.notes} defaultValue={task.notes ?? ""} onInput={edited} onBlur={() => save.current()} />
       <TextInput ref={branchInput} label="Branch" placeholder="No branch" defaultValue={task.links?.branch ?? ""} maxLength={LIMITS.branch} onInput={edited} onBlur={() => save.current()} />
-      <Row gap="s">
+      <Row gap="s" wrap>
         {branch && branch !== task.links?.branch ? (
           <Button size="xs" variant="outline" onClick={() => { if (branchInput.current) branchInput.current.value = branch; edited(); save.current(); }}>
             Use branch {branch}

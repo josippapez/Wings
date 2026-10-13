@@ -10,6 +10,8 @@ import { listBlocks } from "@/lib/plugin-blocks";
 import type { PluginHost } from "@/lib/plugins";
 import type { Block } from "@/lib/project-info";
 
+import { cn } from "@/lib/utils";
+
 import { messageOf, type Apply } from "./use-project-info";
 
 /** A plugin's block on the page: a title bar with move and delete, then the plugin's page in its own frame. */
@@ -18,13 +20,13 @@ export function BlockItem({ projectId, item, plugins, host, visible, first, last
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState("");
   const act = (op: Parameters<Apply>[0]) => apply(op).then(() => setError(""), (e) => setError(messageOf(e)));
-  const title = entry?.title ?? item.blockId;
+  const title = entry?.title ?? `Missing block · ${item.pluginId}/${item.blockId}`;
   return (
     <article id={`item-${item.id}`} data-block-id={item.id} aria-label={title} className="group/block flex flex-col gap-1.5">
-      <header className="flex items-center gap-1.5 px-1">
+      <header className="flex min-h-8 items-center gap-1.5 px-1">
         {entry && <PluginGlyph name={entry.icon} svg={entry.iconSvg} className="size-3.5 shrink-0 text-muted-foreground" />}
-        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-muted-foreground">{title}</h3>
-        <span className="flex items-center opacity-0 transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100">
+        <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">{title}</h3>
+        <span className={cn("flex items-center transition-opacity", entry ? "opacity-0 group-focus-within/block:opacity-100 group-hover/block:opacity-100" : "opacity-100")}>
           <IconButton label={`Move ${title} up`} disabled={first} onClick={() => void act({ kind: "moveItem", id: item.id, dir: -1 })}>
             <ArrowUpIcon />
           </IconButton>
@@ -63,7 +65,7 @@ export function BlockItem({ projectId, item, plugins, host, visible, first, last
           onHeight={(height) => void act({ kind: "setBlockHeight", id: item.id, height })}
         />
       ) : (
-        <p className="rounded-xl border border-dashed border-hairline p-4 text-[13px] text-muted-foreground">The plugin for this block ({item.pluginId}) is off or no longer offers it. Turn it on in Settings, or remove the block.</p>
+        <p className="rounded-xl border border-dashed border-hairline px-5 py-4 text-[13px] text-muted-foreground">The plugin for this block ({item.pluginId}) is off or no longer offers it. Turn it on in Settings, or remove the block.</p>
       )}
       {error && (
         <p role="alert" className="px-1 text-[12px] text-destructive">

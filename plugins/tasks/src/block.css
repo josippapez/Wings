@@ -1,9 +1,0 @@
-/* The columns share the block's width instead of keeping their 272px, and scroll sideways only when they get too narrow. */
-.tasks-block-board {
-  padding: 0;
-}
-.tasks-block-board .w-board-column {
-  flex: 1 1 0;
-  width: auto;
-  min-width: 140px;
-}

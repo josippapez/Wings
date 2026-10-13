@@ -1,5 +1,7 @@
 /** Azure DevOps: the PR for the branch (`az repos`), its policies, failed builds, the diff from local git, comments from threads and replies. */
 import { cleanLog, counts, detail } from "./checks";
+import { azureItems } from "./checklist";
+import { azWho } from "./who";
 import { cli, git, post } from "./cli";
 import { problems, status } from "./state";
 import { voteArgs, type AzureVote } from "./vote";
@@ -67,24 +69,20 @@ export async function azureShow(remote: AzureRemote, number: number): Promise<Az
 
 // ---------- the repo's active PRs ----------
 
-/** `az repos pr list` for the signed-in user: `--creator` and `--reviewer` take a name or email, which `az account show` has. */
+/** Every active PR of the repo (up to 100) in one `az repos pr list`, each marked yours or waiting for you; `az account show` says who you are. */
 export async function azureList(cwd: string, remote: AzureRemote): Promise<ListedPr[]> {
   const account = await cli(remote.org, "az", ["account", "show", "--query", "user.name", "-o", "tsv"]);
   const me = account.stdout.trim();
   if (account.code !== 0 || !me) throw new Error(account.stderr.trim() || "az account show failed");
-  const query = async (flag: "--creator" | "--reviewer", mine: boolean) => {
-    const out = await cli(remote.org, "az", [
-      "repos", "pr", "list", "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
-      flag, me, "--status", "active", "--top", "50", "-o", "json",
-    ]);
-    if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az repos pr list failed");
-    return (JSON.parse(out.stdout) as AzurePr[]).map((pr): ListedPr => {
-      const status = { ...azureStatus(pr, { passed: 0, failed: 0, running: 0 }), failing: [] };
-      return { link: azureLink(pr, remote, cwd), title: pr.title, head: status.head, mine, status, activity: null };
-    });
-  };
-  const [mine, review] = await Promise.all([query("--creator", true), query("--reviewer", false)]);
-  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
+  const out = await cli(remote.org, "az", [
+    "repos", "pr", "list", "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
+    "--status", "active", "--top", "100", "-o", "json",
+  ]);
+  if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az repos pr list failed");
+  return (JSON.parse(out.stdout) as AzurePr[]).map((pr): ListedPr => {
+    const status = { ...azureStatus(pr, { passed: 0, failed: 0, running: 0 }), failing: [] };
+    return { link: azureLink(pr, remote, cwd), title: pr.title, head: status.head, ...azWho(pr, me), author: pr.createdBy?.displayName ?? null, status, activity: null };
+  });
 }
 
 // ---------- status ----------
@@ -160,7 +158,7 @@ export async function azureChecks(link: AzureLink): Promise<Status> {
       const build = r.context?.buildId ?? null;
       return { id: build ?? name, name, build };
     });
-  return { ...azureStatus(link.raw, counts(results)), failing, merge: mergeStrategy(records) };
+  return { ...azureStatus(link.raw, counts(results)), failing, items: azureItems(records, link.raw, link.remote.org, link.remote.project), merge: mergeStrategy(records) };
 }
 
 // ---------- failed checks ----------

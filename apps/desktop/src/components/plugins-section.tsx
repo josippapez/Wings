@@ -142,7 +142,11 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
             {p?.approved === false && p.enabled ? "This version asks for different access than you approved before." : "Here's what it will be able to do."}
           </DialogDescription>
         </DialogHeader>
-        {p && <Permissions plugin={p} />}
+        {p && (
+          <div className="-mx-2 max-h-[min(55vh,32rem)] overflow-y-auto overscroll-contain px-2">
+            <Permissions plugin={p} />
+          </div>
+        )}
         <p className="text-[12px] text-muted-foreground">Commands run as you, so only turn on plugins you trust.</p>
         <DialogFooter>
           <Button variant="ghost" onClick={props.onCancel}>

@@ -82,7 +82,7 @@ export function withoutPlugin(all: ProjectSections, pluginId: string): ProjectSe
 }
 
 /** A section as the sidebar draws it. `key` is its identity in the project, and in `collapsed`. */
-export type SectionGroup = { key: string; pluginId: string; title: string; icon: string; iconSvg: string | null; rows: ProjectSectionRow[] };
+export type SectionGroup = { key: string; pluginId: string; title: string; icon: string; iconSvg: string | null; all?: string; rows: ProjectSectionRow[] };
 
 /** A project's non-empty sections of plugins that are on, in plugin order and each plugin's declared order. */
 export function sectionGroups(project: Record<string, ProjectSectionRow[]> | undefined, plugins: PluginView[]): SectionGroup[] {
@@ -90,7 +90,7 @@ export function sectionGroups(project: Record<string, ProjectSectionRow[]> | und
   return plugins.flatMap((p) =>
     (p.contributes.projectSections ?? []).flatMap((s) => {
       const rows = project[sectionId(p.id, s.id)];
-      return rows?.length ? [{ key: sectionId(p.id, s.id), pluginId: p.id, title: s.title, icon: s.icon, iconSvg: p.iconSvg, rows }] : [];
+      return rows?.length ? [{ key: sectionId(p.id, s.id), pluginId: p.id, title: s.title, icon: s.icon, iconSvg: p.iconSvg, all: s.all || undefined, rows }] : [];
     }),
   );
 }

@@ -6,6 +6,8 @@ import { status } from "./state";
 import type { BitbucketLink, BitbucketRemote, Comment, Link, ListedPr, Status } from "./types";
 
 const API = "https://api.bitbucket.org/2.0/";
+/** Bitbucket answers at most 50 pull requests a page. */
+const PAGE = 50;
 export const BITBUCKET: Forge = {
   key: "bitbucket",
   secret: "bitbucket",
@@ -67,9 +69,11 @@ export async function bitbucketOverview(link: BitbucketLink) {
 
 // ---------- the repo's open PRs ----------
 
-/** One call for the repo's open PRs, kept when you wrote them or are a reviewer; the list has no check results, which the PR's own status adds. */
+/** Every open PR of the repo: one call, and a second for a repo with more than a page. The list has no check results, which the PR's own status adds. */
 export async function bitbucketList(cwd: string, remote: BitbucketRemote): Promise<ListedPr[]> {
-  const [user, prs] = await Promise.all([me(), getPage<BbPr>(`${repoPath(remote)}/pullrequests?state=OPEN&sort=-updated_on&pagelen=50&${LIST_FIELDS}`)]);
+  const url = `${repoPath(remote)}/pullrequests?state=OPEN&sort=-updated_on&pagelen=${PAGE}&${LIST_FIELDS}`;
+  const [user, first] = await Promise.all([me(), getPage<BbPr>(url)]);
+  const prs = first.length === PAGE ? [...first, ...(await getPage<BbPr>(`${url}&page=2`))] : first;
   return bbListed(prs, user, (pr) => linkOf(pr, remote, cwd));
 }
 

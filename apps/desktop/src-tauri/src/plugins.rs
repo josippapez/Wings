@@ -162,6 +162,9 @@ pub struct ProjectSection {
     /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
     #[serde(default)]
     pub icon: String,
+    /// A view that opens as a tab and lists everything, not just the rows: the section's All button opens it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub all: String,
 }
 
 pub const VIEW_PLACES: [&str; 4] = ["sidebar", "modal", "window", "tab"];
@@ -409,6 +412,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         }
         if !section.icon.is_empty() && !PANEL_ICONS.contains(&section.icon) {
             return Err(format!("project section icon {:?} must be one of {:?}, or left out to use the plugin icon", section.icon, PANEL_ICONS.as_slice()));
+        }
+        if !section.all.is_empty() && !manifest.contributes.views.iter().any(|v| v.id == section.all && v.opens.iter().any(|o| o == "tab")) {
+            return Err(format!("project section {:?} names {:?} as its all view, which isn't one of the views that open as a tab", section.id, section.all));
         }
     }
     if manifest.contributes.blocks.len() > MAX_BLOCKS {
@@ -2372,6 +2378,8 @@ mod tests {
         let sections = &ok.manifest.contributes.project_sections;
         assert_eq!((sections[0].id.as_str(), sections[1].icon.as_str()), ("prs", ""));
         assert_eq!(serde_json::to_value(&ok.manifest.contributes).unwrap()["projectSections"][0]["title"], "Pull requests");
+        // A section without `all` serializes as before, so its approval stays.
+        assert!(serde_json::to_value(&ok.manifest.contributes).unwrap()["projectSections"][0].get("all").is_none());
         let many: Vec<Value> = (0..9).map(|i| serde_json::json!({ "id": format!("s{i}"), "title": "S" })).collect();
         for (bad, error) in [
             (serde_json::json!(many), "at most 8"),
@@ -2381,6 +2389,8 @@ mod tests {
             (serde_json::json!([{ "id": "a", "title": "x".repeat(41) }]), "needs an id"),
             (serde_json::json!([{ "id": "a", "title": "S" }, { "id": "a", "title": "T" }]), "used twice"),
             (serde_json::json!([{ "id": "a", "title": "S", "icon": "nope" }]), "icon"),
+            // `all` must be a view that opens as a tab; this manifest has no views at all.
+            (serde_json::json!([{ "id": "a", "title": "S", "all": "list" }]), "all view"),
         ] {
             assert!(manifest(bad.clone()).err().unwrap().contains(error), "{bad}");
         }

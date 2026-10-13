@@ -1,6 +1,7 @@
 // The token-authenticated forges, Bitbucket Cloud and Gitea/Forgejo: how their API objects map onto the tracker's
 // status, rows and comments. No `wings`, no I/O, so node tests drive it.
 import { counts } from "./checks.ts";
+import { bbItem, gtItem } from "./checklist.ts";
 import type { Comment, FailureDetail, Failing, Icon, Link, ListedPr, Result, Status } from "./types.ts";
 
 /**
@@ -64,9 +65,12 @@ export interface BbPr {
 export interface BbStatus {
   key: string;
   state: "FAILED" | "INPROGRESS" | "STOPPED" | "SUCCESSFUL";
+  type?: string;
   name?: string;
   description?: string;
   url?: string;
+  created_on?: string;
+  updated_on?: string;
 }
 
 export interface BbComment {
@@ -105,6 +109,7 @@ export function bbStatusOf(pr: BbPr, statuses: BbStatus[]): Status {
     key: pr.source.commit?.hash ?? pr.updated_on,
     title: pr.title,
     label, tone, icon, checks, failing,
+    items: statuses.map(bbItem),
     review: changes ? "Changes requested" : approved ? `${approved} approved` : "No approvals yet",
     changes: null,
     branch: `${pr.source.branch.name} → ${pr.destination.branch.name}`,
@@ -125,15 +130,14 @@ export function bbWho(pr: BbPr, me: string) {
   return { mine: pr.author?.uuid === me, reviewing };
 }
 
-/** The open PRs of a repo that are yours or wait for you, in the list's order. `link` builds the ref, since a Bitbucket link carries the folder. */
+/** Every open PR of a repo, in the list's order, each marked yours or waiting for you. `link` builds the ref, since a Bitbucket link carries the folder. */
 export function bbListed(prs: BbPr[], me: string, link: (pr: BbPr) => Link): ListedPr[] {
   return prs.flatMap((pr): ListedPr[] => {
     const { mine, reviewing } = bbWho(pr, me);
-    if (!mine && !reviewing) return [];
     const { changes } = bbReviews(pr);
     const [label, tone, icon] = labelOf({ draft: pr.draft, checks: NO_CHECKS, changes });
     const status = { ...bbStatusOf(pr, []), label, tone, icon };
-    return [{ link: link(pr), title: pr.title, head: pr.source.branch.name, mine, status, activity: pr.comment_count ?? null }];
+    return [{ link: link(pr), title: pr.title, head: pr.source.branch.name, mine, reviewing, author: pr.author ? bbName(pr.author) : null, status, activity: pr.comment_count ?? null }];
   });
 }
 
@@ -198,6 +202,8 @@ export interface GtCommitStatus {
   context?: string;
   description?: string;
   target_url?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface GtReview {
@@ -242,6 +248,7 @@ export function gtStatusOf(pr: GtPr, statuses: GtCommitStatus[], reviews: GtRevi
     key: pr.head.sha,
     title: pr.title,
     label, tone, icon, checks, failing,
+    items: statuses.map(gtItem),
     review: changes ? "Changes requested" : approved ? `${approved} approved` : "No approvals yet",
     changes: files === undefined ? null : `+${pr.additions ?? 0} −${pr.deletions ?? 0} in ${files} files`,
     branch: `${pr.head.ref} → ${pr.base.ref}`,
@@ -263,9 +270,8 @@ export function gtWho(pr: GtPr, me: string) {
 export function gtListed(prs: GtPr[], me: string, link: (pr: GtPr) => Link): ListedPr[] {
   return prs.flatMap((pr): ListedPr[] => {
     const { mine, reviewing } = gtWho(pr, me);
-    if (!mine && !reviewing) return [];
     const [label, tone, icon] = labelOf({ draft: pr.draft, conflicts: pr.mergeable === false, checks: NO_CHECKS });
-    return [{ link: link(pr), title: pr.title, head: pr.head.ref, mine, status: { ...gtStatusOf(pr, [], []), label, tone, icon }, activity: (pr.comments ?? 0) + (pr.review_comments ?? 0) }];
+    return [{ link: link(pr), title: pr.title, head: pr.head.ref, mine, reviewing, author: pr.user ? gtName(pr.user) : null, status: { ...gtStatusOf(pr, [], []), label, tone, icon }, activity: (pr.comments ?? 0) + (pr.review_comments ?? 0) }];
   });
 }
 

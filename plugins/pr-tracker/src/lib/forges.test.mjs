@@ -39,7 +39,7 @@ test("Bitbucket status: state, draft, checks and reviews decide the label", () =
   assert.deepEqual([st.key, st.branch, st.base, st.head, st.label], ["abc123", "feat → main", "main", "feat", "In review"]);
 });
 
-test("Bitbucket list keeps the PRs you wrote or review, yours first by the list's own order", () => {
+test("Bitbucket list keeps every open PR and marks the ones you wrote or review", () => {
   const prs = [
     bb({ id: 1, author: { uuid: "{other}" } }),
     bb({ id: 2, author: { uuid: "{other}" }, participants: [{ role: "REVIEWER", user: { uuid: "{me}" } }] }),
@@ -49,9 +49,9 @@ test("Bitbucket list keeps the PRs you wrote or review, yours first by the list'
   ];
   assert.deepEqual(bbWho(prs[1], "{me}"), { mine: false, reviewing: true });
   const rows = bbListed(prs, "{me}", (pr) => ({ number: pr.id }));
-  assert.deepEqual(rows.map((r) => [r.link.number, r.mine]), [[2, false], [3, false], [4, true]]);
-  assert.equal(rows[2].activity, 3);
-  assert.equal(rows[2].head, "feat");
+  assert.deepEqual(rows.map((r) => [r.link.number, r.mine, r.reviewing]), [[1, false, false], [2, false, true], [3, false, true], [4, true, false], [5, false, false]]);
+  assert.equal(rows[3].activity, 3);
+  assert.equal(rows[3].head, "feat");
 });
 
 test("Bitbucket comments: inline position, deleted ones dropped, replies under the thread's first comment", () => {
@@ -111,12 +111,12 @@ test("Gitea status: merged, closed, draft, conflicts, checks and reviews decide 
   assert.deepEqual([st.key, st.branch, st.changes, st.label], ["deadbeef", "fix → main", "+10 −4 in 3 files", "In review"]);
 });
 
-test("Gitea list keeps the PRs you wrote or were asked to review, matching the login without case", () => {
+test("Gitea list keeps every open PR and marks the ones you wrote or were asked to review, matching the login without case", () => {
   const prs = [gt({ number: 1, user: { login: "other" } }), gt({ number: 2, user: { login: "other" }, requested_reviewers: [{ login: "ME" }] }), gt({ number: 3 }), gt({ number: 4, requested_reviewers: null, user: { login: "x" } })];
   const rows = gtListed(prs, "me", (pr) => ({ number: pr.number }));
-  assert.deepEqual(rows.map((r) => [r.link.number, r.mine]), [[2, false], [3, true]]);
-  assert.equal(rows[1].activity, 3);
-  assert.equal(rows[1].head, "fix");
+  assert.deepEqual(rows.map((r) => [r.link.number, r.mine, r.reviewing]), [[1, false, false], [2, false, true], [3, true, false], [4, false, false]]);
+  assert.equal(rows[2].activity, 3);
+  assert.equal(rows[2].head, "fix");
   assert.equal(gtListed([gt({ draft: true })], "me", (pr) => ({ number: pr.number }))[0].status.label, "Draft");
 });
 

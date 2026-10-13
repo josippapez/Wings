@@ -2,11 +2,12 @@
 // line above, move one with its buttons or Alt+Left and Alt+Right, open the board tab for the rest.
 
 import { useEffect, useRef, useState } from "react";
-import { Board, BoardColumn, Button, Card, Chip, Empty, Loading, Row, showView, Stack, Text } from "wings-plugin-ui";
+import { Board, BoardColumn, Chip, Empty, Loading, Row, showView, Stack, Text } from "wings-plugin-ui";
 import { AddTask } from "./lib/AddTask";
 import { boardColumns, cleanBlockState, STATUSES, STATUS_LABEL, type BoardBlockState, type Op, type Task } from "./lib/tasks";
+import { TaskCard, StatusDot } from "./lib/parts";
 import { useTasks } from "./lib/useTasks";
-import "./block.css";
+import "./tasks.css";
 
 /** Tells Wings how tall the content is, so the block fits it. */
 function useFit(ref: React.RefObject<HTMLElement | null>) {
@@ -37,7 +38,7 @@ function BlockPage() {
 
   let body;
   if (project === undefined || !state) body = <Loading>Loading tasks</Loading>;
-  else if (!project) body = <Text tone="muted">No project.</Text>;
+  else if (!project) body = <Empty title="No project" description="Open a project to see its tasks." />;
   else body = <ProjectBlock key={project.id} project={project} hideDone={state.hideDone === true} onHideDone={setHideDone} />;
   return <div ref={root}>{body}</div>;
 }
@@ -60,11 +61,11 @@ function ProjectBlock({ project, hideDone, onHideDone }: { project: WingsProject
 
   return (
     <Stack gap="s">
-      <Row gap="s" justify="between">
+      <Row gap="m" justify="between">
         <AddTask apply={apply} branch={project.branch} />
         <Chip pressed={hideDone} onClick={() => onHideDone(!hideDone)}>Hide done</Chip>
       </Row>
-      {error ? <Text tone="danger" role="alert">{error}</Text> : null}
+      {error ? <Text tone="danger" role="alert" size="small">{error}</Text> : null}
       {!tasks ? (
         <Loading>Loading tasks</Loading>
       ) : tasks.length === 0 ? (
@@ -72,39 +73,14 @@ function ProjectBlock({ project, hideDone, onHideDone }: { project: WingsProject
       ) : (
         <Board className="tasks-block-board" label={`Tasks for ${project.name}`}>
           {boardColumns(tasks, hideDone).map(({ status, tasks: column }) => (
-            <BoardColumn key={status} title={STATUS_LABEL[status]} count={column.length}>
-              {column.map((t) => <TaskCard key={t.id} task={t} onMove={(by) => move(t, by)} onOpen={() => void wings.openView("board", { as: "tab", args: { taskId: t.id } })} />)}
+            <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
+              {column.length === 0 ? <p className="tk-column-empty">Nothing here</p> : null}
+              {column.map((t) => <TaskCard key={t.id} task={t} id={`block-task-${t.id}`} compact onMove={(by) => move(t, by)} onOpen={() => void wings.openView("board", { as: "tab", args: { taskId: t.id } })} />)}
             </BoardColumn>
           ))}
         </Board>
       )}
     </Stack>
-  );
-}
-
-function TaskCard({ task, onMove, onOpen }: { task: Task; onMove: (by: 1 | -1) => void; onOpen: () => void }) {
-  const index = STATUSES.indexOf(task.status);
-  return (
-    <Card compact>
-      <Stack gap="xs">
-        <Button
-          id={`block-task-${task.id}`}
-          variant="ghost"
-          onClick={onOpen}
-          onKeyDown={(e) => {
-            if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
-            e.preventDefault();
-            onMove(e.key === "ArrowRight" ? 1 : -1);
-          }}
-        >
-          <Text as="span" weight="medium" clamp>{task.title}</Text>
-        </Button>
-        <Row gap="s" justify="between">
-          <Button size="xs" variant="outline" disabled={index === 0} aria-label={`Move "${task.title}" to ${STATUS_LABEL[STATUSES[index - 1] ?? task.status]}`} onClick={() => onMove(-1)}>←</Button>
-          <Button size="xs" variant="outline" disabled={index === STATUSES.length - 1} aria-label={`Move "${task.title}" to ${STATUS_LABEL[STATUSES[index + 1] ?? task.status]}`} onClick={() => onMove(1)}>→</Button>
-        </Row>
-      </Stack>
-    </Card>
   );
 }
 

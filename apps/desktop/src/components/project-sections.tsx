@@ -43,6 +43,7 @@ export const ProjectSections = memo(function ProjectSections({
         const hidden = group.rows.length - rows.length;
         return (
           <section key={group.key} aria-label={group.title}>
+            <div className="group/head flex items-center">
             <button
               type="button"
               aria-expanded={open}
@@ -50,11 +51,23 @@ export const ProjectSections = memo(function ProjectSections({
               title={`${group.title}, ${group.rows.length}`}
               aria-label={`${group.title}, ${group.rows.length} ${group.rows.length === 1 ? "item" : "items"}`}
               onClick={() => onToggle(projectId, group.key)}
-              className="group/header flex h-6 w-full items-center gap-1 rounded-md px-1.5 text-left text-[11px] text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="group/header flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 text-left text-[11px] text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <span className="truncate">{group.title}</span>
               <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none", open ? "hidden rotate-90 group-hover/sections:block group-focus-visible/header:block" : "block")} aria-hidden />
             </button>
+            {group.all && (
+              <button
+                type="button"
+                onClick={() => onOpen(projectId, group.pluginId, { view: group.all! })}
+                title={`All ${group.title.toLowerCase()}`}
+                aria-label={`All ${group.title.toLowerCase()}`}
+                className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                All
+              </button>
+            )}
+            </div>
             {open && (
               <ul id={listId} className="flex flex-col">
                 {rows.map((row) => {
