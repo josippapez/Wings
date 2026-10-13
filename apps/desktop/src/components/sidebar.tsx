@@ -261,7 +261,7 @@ export function Sidebar(props: {
                       onPointerDown={child ? undefined : (e) => dragSpace(e, space.id)}
                       aria-current={active ? "page" : undefined}
                       title={space.path}
-                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50", child && "pl-6", !active && "hover:bg-hover")}
+                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left group-focus-within/row:pr-[3.75rem] group-hover/row:pr-[3.75rem] outline-none focus-visible:ring-2 focus-visible:ring-ring/50", child && "pl-6", !active && "hover:bg-hover")}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center">
                         {state ? <StatusDot state={state} /> : child ? <GitBranchIcon className="size-4 text-muted-foreground" /> : <FolderIcon className="size-4 text-muted-foreground" />}
