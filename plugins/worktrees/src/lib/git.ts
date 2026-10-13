@@ -36,10 +36,17 @@ async function pool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>)
   return out;
 }
 
-/** The checkout a folder is in; null outside a repo. Cached, since a pane's folder rarely changes repo. */
+/**
+ * The checkout a folder is in; null outside a repo. Only found checkouts are cached, since a pane's folder rarely
+ * changes repo: a failed check (git refused, the plugin not approved yet) is asked again next time.
+ */
 const tops = new Map<string, Promise<string | null>>();
 export const topOf = (cwd: string) => {
-  if (!tops.has(cwd)) tops.set(cwd, gitOk(cwd, ["rev-parse", "--show-toplevel"]).then((r) => r || null));
+  if (!tops.has(cwd)) {
+    const top = gitOk(cwd, ["rev-parse", "--show-toplevel"]).then((r) => r || null);
+    tops.set(cwd, top);
+    void top.then((r) => r === null && tops.delete(cwd));
+  }
   return tops.get(cwd)!;
 };
 

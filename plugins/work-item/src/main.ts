@@ -1,8 +1,11 @@
 // Work item: shows the Azure Boards work item named in each pane's branch, like `feature/1234-login`,
-// as a pane badge with its state, sprint and parent, and moves it to its next state.
+// as a pane badge with its state, sprint and parent, and moves it to its next state. It also polls Azure DevOps
+// for updates to your work items and pull requests (see lib/watch.ts) and tells you about them.
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
+import { createWatcher, DEFAULT_SETTINGS, type Settings } from "./lib/watch";
+import { workItemUrl, type StoredEvent } from "./lib/updates";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
 const BRANCH_POLL_MS = 15_000;
@@ -61,7 +64,9 @@ pollWhileFocused(() => [...new Set([...refs.values()].map((r) => r.key))].forEac
 async function remoteFor(cwd: string) {
   if (!remotes.has(cwd)) {
     try {
-      remotes.set(cwd, parseRemote(await git(cwd, ["remote", "get-url", "origin"])));
+      const remote = parseRemote(await git(cwd, ["remote", "get-url", "origin"]));
+      remotes.set(cwd, remote);
+      if (remote.kind === "azure") void watcher.addProject(remote.org, remote.project);
     } catch {
       remotes.set(cwd, { kind: "none" });
     }
@@ -159,6 +164,7 @@ async function loadItem({ org, id }: Ref): Promise<WorkItem> {
   const wi = await show(org, id);
   const f = wi.fields;
   const project = f["System.TeamProject"];
+  void watcher.addProject(org, project);
   const type = f["System.WorkItemType"];
   const [states, parent] = await Promise.all([
     statesOf(org, project, type).catch((): TypeState[] => []),
@@ -175,8 +181,7 @@ async function loadItem({ org, id }: Ref): Promise<WorkItem> {
     sprint: iteration.includes("\\") ? iteration.split("\\").at(-1)! : "None",
     assigned: f["System.AssignedTo"]?.displayName ?? "Unassigned",
     parent: f["System.Parent"] ? `#${f["System.Parent"]} ${parent}`.trim() : null,
-    // A visualstudio.com org also answers at dev.azure.com, the one URL prefix the manifest allows.
-    url: `${org.replace(/^https:\/\/([^.]+)\.visualstudio\.com$/, "https://dev.azure.com/$1")}/${encodeURIComponent(project)}/_workitems/edit/${wi.id}`,
+    url: workItemUrl(org, project, wi.id),
   };
 }
 
@@ -269,3 +274,57 @@ wings.onAction(async ({ paneId, actionId }) => {
     return moveTo(ref, state);
   }
 });
+
+// ---------- updates ----------
+
+/** `az` for the background check: a failure there is the check's, and doesn't turn the pane badges into a sign-in prompt. */
+async function azQuiet(org: string, args: string[]): Promise<unknown> {
+  const out = await wings.exec("az", [...args, "--organization", org, "-o", "json"]);
+  if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az failed");
+  // `az boards query` prints nothing for an empty result.
+  return out.stdout.trim() ? JSON.parse(out.stdout) : [];
+}
+
+const watcher = createWatcher({
+  az: azQuiet,
+  get: (key) => wings.storage.get(key),
+  set: (key, value) => wings.storage.set(key, value),
+  notify: (note) => wings.notify(note),
+  now: Date.now,
+});
+
+let settings: Settings = DEFAULT_SETTINGS;
+let timer: ReturnType<typeof setInterval> | undefined;
+let checking = false;
+
+async function checkUpdates() {
+  // A check that outlasts the interval makes the next tick wait, rather than pile up az processes.
+  if (checking || !settings.enabled) return;
+  checking = true;
+  try {
+    if ((await watcher.cycle(await watcher.targets(), settings.intervalMin * 60_000)).length) wings.broadcast({ type: "updates" });
+    await showUnread();
+  } finally {
+    checking = false;
+  }
+}
+
+async function showUnread() {
+  const unread = (await watcher.stored()).filter((e: StoredEvent) => !e.read).length;
+  await wings.setSidebarLabel("updates", unread ? `${unread} new` : null);
+}
+
+async function loadSettings() {
+  const saved = (await wings.storage.get("settings")) as Partial<Settings> | null;
+  settings = { ...DEFAULT_SETTINGS, ...saved };
+  clearInterval(timer);
+  // Not tied to focus: it keeps running while Wings is in the background, which is when you want to hear about it.
+  timer = settings.enabled ? setInterval(() => void checkUpdates(), settings.intervalMin * 60_000) : undefined;
+}
+
+wings.onBroadcast((message) => {
+  const m = message as { type?: string; settingsChanged?: boolean } | null;
+  if (m?.settingsChanged) void loadSettings();
+  if (m?.type === "read") void showUnread();
+});
+void loadSettings().then(() => setTimeout(() => void checkUpdates(), 15_000));

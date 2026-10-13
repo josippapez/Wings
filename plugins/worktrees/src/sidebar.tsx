@@ -28,7 +28,8 @@ function Worktrees() {
   const cwdsRef = useRef<string[]>([]);
   cwdsRef.current = cwds;
   const seq = useRef(0);
-  const knownRepos = useRef("");
+  // null until the first look, so a first look that finds no repo still loads (and shows) the empty state.
+  const knownRepos = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current;

@@ -1,8 +1,9 @@
 {
-  "id": "worktrees",
+  "id": "worktrees", "icon": "list",
   "name": "Worktrees",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "minWingsVersion": "0.1.17",
+  "icon": "icon.svg",
   "description": "Lists the git worktrees of your open projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm.",
   "api": 1,
   "main": "main.js",

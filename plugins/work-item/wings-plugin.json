@@ -1,9 +1,10 @@
 {
   "id": "work-item",
   "name": "Work item",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "minWingsVersion": "0.1.17",
-  "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state.",
+  "icon": "icon.svg",
+  "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Also tells you when your work items change state, when a comment mentions you, and about activity on your pull requests.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -12,16 +13,28 @@
       "git branch --show-current",
       "az boards work-item show",
       "az boards work-item update [--id --state --organization -o]",
+      "az boards query [--wiql --project --organization -o]",
       "az devops invoke",
       "az login"
     ],
     "openUrl": [
       "https://dev.azure.com/"
-    ]
+    ],
+    "notify": true
   },
   "contributes": {
     "ui": [
       "badges"
-    ]
+    ],
+    "sidebars": [
+      {
+        "id": "updates", "icon": "globe",
+        "title": "Updates",
+        "page": "sidebar.html"
+      }
+    ],
+    "settings": {
+      "page": "settings.html"
+    }
   }
 }
