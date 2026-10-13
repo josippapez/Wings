@@ -63,6 +63,34 @@ export interface Failing {
   project?: number;
 }
 
+/** An open PR from a repo's list, as a project's Pull requests section shows it. */
+export interface ListedPr {
+  link: Link;
+  title: string;
+  /** The source branch, which an agent pane's branch is matched against. */
+  head: string;
+  /** You wrote it; otherwise it's waiting for your review. */
+  mine: boolean;
+  /** From the list alone, so GitLab and Azure DevOps have no check counts until the PR's own status loads. */
+  status: Status;
+  /** Comments and reviews so far, or null where the list doesn't say. */
+  activity: number | null;
+}
+
+/**
+ * What a "pr" tab is opened with (`wings.openView("pr", { as: "tab", args })`, read with `wings.viewArgs()`): enough
+ * to find the PR again without the pane or the list that showed it. `cwd` is the project, where Azure DevOps diffs from.
+ */
+export interface PrArgs {
+  provider: Provider;
+  url: string;
+  number: number;
+  repo: string;
+  title: string;
+  cwd: string;
+  remote?: AzureRemote | GitlabRemote;
+}
+
 /** Normalized status of a PR. */
 export interface Status {
   error?: undefined;
@@ -127,6 +155,8 @@ export interface AzurePr {
   repository?: { webUrl?: string };
   lastMergeSourceCommit?: { commitId: string };
   lastMergeTargetCommit?: { commitId: string };
+  description?: string;
+  createdBy?: { displayName?: string };
   creationDate: string;
   closedDate?: string;
   sourceRefName?: string;

@@ -1,10 +1,10 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.6.4",
-  "minWingsVersion": "0.1.17",
+  "version": "0.7.0",
+  "minWingsVersion": "0.1.23",
   "icon": "icon.svg",
-  "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks and why they failed, the diff and review comments.",
+  "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks and why they failed, the diff and review comments. Lists each project's open pull requests in the sidebar and opens one as a tab to read, reply to and send to an agent.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -26,7 +26,9 @@
       "az repos pr list",
       "az repos pr policy list",
       "az devops invoke",
-      "az login"
+      "az login",
+      "az repos pr show",
+      "az account show"
     ],
     "post": [
       "gh repos/*/*/pulls/*/comments/*/replies",
@@ -56,6 +58,25 @@
           "properties": {},
           "additionalProperties": false
         }
+      }
+    ],
+    "views": [
+      {
+        "id": "pr",
+        "title": "Pull request",
+        "icon": "git-compare",
+        "page": "pr.html",
+        "opens": [
+          "tab"
+        ],
+        "multiple": true
+      }
+    ],
+    "projectSections": [
+      {
+        "id": "pulls",
+        "title": "Pull requests",
+        "icon": "git-compare"
       }
     ]
   }

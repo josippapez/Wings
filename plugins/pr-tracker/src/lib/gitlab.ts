@@ -2,7 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, post } from "./cli";
 import { problems } from "./state";
-import type { Comment, FailureDetail, Failing, GitlabLink, GitlabRemote, Icon, Link, Result, Status } from "./types";
+import type { Comment, FailureDetail, Failing, GitlabLink, GitlabRemote, Icon, Link, ListedPr, Result, Status } from "./types";
 
 /** The fields of a merge request the tracker reads. */
 interface GlMr {
@@ -10,6 +10,9 @@ interface GlMr {
   web_url: string;
   state: string;
   title: string;
+  description?: string | null;
+  author?: { name?: string; username?: string };
+  user_notes_count?: number;
   draft?: boolean;
   has_conflicts?: boolean;
   detailed_merge_status?: string;
@@ -73,8 +76,19 @@ export async function findGitlab(_cwd: string, remote: GitlabRemote, branch: str
 
 /** GitLab status from the MR, its approvals and its head pipeline's jobs. */
 export async function gitlabStatus(link: GitlabLink): Promise<Status> {
+  return gitlabStatusOf(link, await glabMr(link));
+}
+
+const glabMr = (link: GitlabLink) => glab(link.remote, `${project(link.remote)}/merge_requests/${link.number}`) as Promise<GlMr>;
+
+/** The status page: the status plus who wrote the MR and its description. */
+export async function gitlabOverview(link: GitlabLink) {
+  const mr = await glabMr(link);
+  return { status: await gitlabStatusOf(link, mr), author: mr.author?.name ?? mr.author?.username ?? "unknown", body: mr.description ?? "" };
+}
+
+async function gitlabStatusOf(link: GitlabLink, mr: GlMr): Promise<Status> {
   const base = `${project(link.remote)}/merge_requests/${link.number}`;
-  const mr = (await glab(link.remote, base)) as GlMr;
   const pipeline = mr.head_pipeline;
   const [approvals, jobs] = (await Promise.all([
     glab(link.remote, `${base}/approvals`).catch(() => null),
@@ -119,6 +133,49 @@ export async function gitlabStatus(link: GitlabLink): Promise<Status> {
   };
 }
 
+// ---------- the project's open MRs ----------
+
+/** What the list can say without a call per MR: the merge status stands in for the pipeline's jobs. */
+function listStatus(mr: GlMr): Status {
+  const merge = mr.detailed_merge_status;
+  let [label, tone, icon]: [string, Tone, Icon] = ["In review", "info", "pr-open"];
+  if (mr.draft) [label, tone, icon] = ["Draft", "neutral", "pr-draft"];
+  else if (mr.has_conflicts || merge === "conflict") [label, tone] = ["Conflicts", "danger"];
+  else if (merge === "ci_must_pass") [label, tone] = ["Checks not passing", "warning"];
+  else if (merge === "requested_changes") [label, tone] = ["Changes requested", "danger"];
+  else if (merge === "ci_still_running") [label, tone] = ["Checks running", "warning"];
+  else if (merge === "discussions_not_resolved") [label, tone] = ["Unresolved threads", "warning"];
+  else if (merge === "mergeable") [label, tone] = ["Ready to merge", "success"];
+  return {
+    key: mr.sha,
+    title: mr.title,
+    label, tone, icon,
+    checks: { passed: 0, failed: 0, running: 0 },
+    review: "",
+    failing: [],
+    changes: null,
+    branch: `${mr.source_branch} → ${mr.target_branch}`,
+    updated: mr.updated_at,
+  };
+}
+
+/** One `glab api` per query: the open MRs you wrote (`created_by_me`) and the ones you review (`reviews_for_me`). */
+export async function gitlabList(remote: GitlabRemote): Promise<ListedPr[]> {
+  const query = async (scope: string, mine: boolean) =>
+    ((await glab(remote, `${project(remote)}/merge_requests?state=opened&scope=${scope}&order_by=updated_at&per_page=50`)) as GlMr[]).map(
+      (mr): ListedPr => ({
+        link: { provider: "gitlab", url: mr.web_url, number: mr.iid, repo: remote.path, remote },
+        title: mr.title,
+        head: mr.source_branch,
+        mine,
+        status: listStatus(mr),
+        activity: mr.user_notes_count ?? null,
+      }),
+    );
+  const [mine, review] = await Promise.all([query("created_by_me", true), query("reviews_for_me", false)]);
+  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
+}
+
 // ---------- failed checks ----------
 
 /** A failed GitLab job: its trace. */
@@ -131,13 +188,20 @@ export async function gitlabFailure(link: GitlabLink, f: Failing): Promise<Failu
 // ---------- diff and comments ----------
 
 export async function gitlabDiff(link: GitlabLink) {
-  const [diff, discussions] = await Promise.all([
+  const [diff, comments] = await Promise.all([
     cli(`gitlab:${link.remote.host}`, "glab", ["mr", "diff", String(link.number), "--raw", "--repo", `https://${link.remote.host}/${link.remote.path}`]),
-    glab(link.remote, `${project(link.remote)}/merge_requests/${link.number}/discussions?per_page=100`, { paginate: true }).catch(() => []) as Promise<
-      { id: string; notes?: GlNote[] }[]
-    >,
+    gitlabComments(link),
   ]);
   if (diff.code !== 0) throw new Error(diff.stderr.trim() || "glab mr diff failed");
+  return { patch: diff.stdout, comments };
+}
+
+/** The MR's discussions, without the diff. */
+export async function gitlabComments(link: GitlabLink): Promise<Comment[]> {
+  const discussions = (await glab(link.remote, `${project(link.remote)}/merge_requests/${link.number}/discussions?per_page=100`, { paginate: true }).catch(() => [])) as {
+    id: string;
+    notes?: GlNote[];
+  }[];
   const comments: Comment[] = [];
   for (const d of discussions) {
     const notes = (d.notes ?? []).filter((n) => !n.system);
@@ -159,7 +223,7 @@ export async function gitlabDiff(link: GitlabLink) {
       });
     });
   }
-  return { patch: diff.stdout, comments };
+  return comments;
 }
 
 // ---------- replies ----------

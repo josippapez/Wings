@@ -65,6 +65,45 @@ The PR list and the PR tab can start inside the PR tracker plugin, which already
 4. Project notes, the smallest of the plugins and the one that proves MCP reading and writing.
 5. Project sections in the sidebar, with PRs from the PR tracker and a PR review tab.
 6. Tasks, then the Azure DevOps tabs.
+7. The Project page in Wings, with plugin blocks (below).
+
+## Next: the Project page in Wings itself
+
+Project notes grow into a page that every project has, built into Wings rather than a plugin. It's where you and your agents keep what a project is, and where plugins put live views of it.
+
+### What's on it
+
+- **Facts:** a table of key project details, like the dev command, test command, staging URL and package manager.
+- **Sections:** named Markdown sections with tables, lists, links and images, edited in place.
+- **Blocks:** live plugin views placed between sections, like the sprint board from Work item, the Tasks board or open pull requests. Each block is a plugin page in its own frame, sized to fit, that shows the page's project.
+- **Add:** "+ Add" between any two items offers a section, a fact, or one of the blocks the plugins offer.
+
+### SDK
+
+| Addition | What it's for |
+|---|---|
+| `contributes.blocks: [{ id, title, page, icon?, minHeight? }]` | A plugin page that can be placed on a Project page |
+| `wings.placement()` returns `"block"` | The page draws a compact version for a block |
+| `wings.setHeight(px)` | A block grows with its content, within limits |
+| `wings.blockState()`, `wings.setBlockState()` | Settings per block, like which board or which filter |
+
+A block gets `wings.project()` like a tab page. A block page is a normal plugin page, so the same page can also open as a tab.
+
+### Agents
+
+Wings' own MCP server gets `project_info` tools: read the page, set a fact, write or add to a section, and list the blocks. A tool call uses the project of the pane it came from, as Notes does now. The text an agent reads is the user's data, not instructions.
+
+### Why in Wings and not a plugin
+
+- **Storage:** the page lives in Wings' app data, so it's not bound by a plugin's 1 MB of storage. Images can be real files instead of links only.
+- **Blocks:** only Wings can place one plugin's frame inside another page.
+- **Tools:** the tools work with no plugin turned on.
+
+The Notes plugin's facts and sections move into the page the first time it opens. After that, the plugin is retired.
+
+### Performance
+
+Each block is a frame, so a page holds at most 8 blocks. A block loads when it scrolls into view, pauses its polling while the page is hidden (`pollWhileFocused` plus visibility), and unloads after 5 minutes hidden, like sidebars.
 
 ## Open questions
 

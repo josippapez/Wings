@@ -334,3 +334,17 @@ export function Menu(props: Omit<Props<"button">, "children"> & { label: ReactNo
 export function Disclosure(
   props: Omit<Props<"div">, "children"> & { summary: ReactNode; children?: ReactNode; open?: boolean; defaultOpen?: boolean; onOpenChange?: (open: boolean) => void },
 ): ReactElement;
+
+// ---------- markdown ----------
+
+/**
+ * Markdown as React elements: headings, paragraphs, lists (with read-only task checkboxes), fenced code, quotes,
+ * rules, GFM tables, bold, italics, strikethrough, inline code, links, bare https URLs and images. No HTML is ever
+ * parsed. Links open through `wings.openUrl` and only when they are https, so the manifest needs
+ * `permissions.openUrl: ["https://"]` for them to work. Images load only from https or `data:image/` (png, jpeg, gif,
+ * webp) URLs of up to 8,000 characters; anything else shows its alt text. A remote https image shows as a "Load image from <host>" button and loads only when clicked, since text an agent wrote could otherwise leak data in the URL; a data: image shows at once. `inline` renders only the inline parts, in
+ * a span, for a table cell or a one-line value. Re-renders only when `source` changes.
+ */
+export function Markdown(props: Omit<Props<"div">, "children"> & { source: string; inline?: boolean }): ReactElement;
+/** The longest `data:image/` URL, in characters, that `Markdown` shows. */
+export const MAX_DATA_IMAGE: number;

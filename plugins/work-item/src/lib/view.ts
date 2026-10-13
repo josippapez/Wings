@@ -39,7 +39,7 @@ function toneOf(item: WorkItem): Tone {
 }
 
 /** The next two states in the type's workflow order, skipping Removed. */
-export function nextStates(item: WorkItem) {
+export function nextStates(item: Pick<WorkItem, "state" | "states">) {
   const forward = item.states.filter((s) => s.category !== "Removed");
   const at = forward.findIndex((s) => s.name === item.state);
   if (at < 0) return [];
@@ -52,7 +52,7 @@ export function badgeFor(ref: Ref, item: Exclude<Item, { missing: true }> | unde
   // Until the item loads there's no link to open.
   if (!item) return { label, tone: "neutral", title: "Loading work item…", subtitle: `Work item #${ref.id}`, actions: [refresh] };
   if (item.error !== undefined) return { label, tone: "neutral", title: `Work item #${ref.id}`, rows: [{ label: "Status", value: item.error, tone: "danger" }], actions: [{ ...refresh, primary: true }] };
-  const actions = [{ id: "open", label: "Open in Azure DevOps", primary: true }, refresh];
+  const actions = [{ id: "details", label: "Open details", primary: true }, { id: "open", label: "Open in Azure DevOps" }, refresh];
   const tone = toneOf(item);
   return {
     label: `#${ref.id} ${item.state}`,

@@ -80,6 +80,8 @@ export type PluginPage = { id: string; title: string; icon: string; page: string
   /** Opening it as a tab always opens a new one, instead of showing the project's existing tab. */
   multiple?: boolean;
 };
+/** A list a plugin shows under each project in the sidebar, filled with `wings.setProjectSection`. An empty `icon` means the plugin's own. */
+export type PluginProjectSection = { id: string; title: string; icon: string };
 /** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars, views and a settings page. */
 export type PluginContributes = {
   ui: string[];
@@ -87,6 +89,8 @@ export type PluginContributes = {
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
   views: PluginPage[];
+  /** Sections it can show under each project; absent when it has none. */
+  projectSections?: PluginProjectSection[];
   /** Its page in Wings Settings, under Plugin settings. Absent when it has none. */
   settings?: { page: string };
 };

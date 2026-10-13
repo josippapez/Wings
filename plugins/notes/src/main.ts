@@ -1,7 +1,10 @@
-// The notes tools Claude calls, and the only writer of the notes. Pages send saves here and tools append here, one
-// at a time, each against what storage holds at that moment.
+// Project info: the tools Claude calls, and the only writer of the info. Pages send their changes here and tools
+// apply theirs here, one at a time, each against what storage holds at that moment.
 
-import { appendSection, mergeSave, readNotes, writeNotes, type NotesMessage, type SaveMessage } from "./lib/notes";
+import { applyOp, renderInfo, emptyInfo, type Op, type Who } from "./lib/model";
+import type { InfoMessage, OpMessage } from "./lib/messages";
+import { resolveProject } from "./lib/resolve";
+import { legacyProjects, loadInfo, saveInfo } from "./lib/store";
 
 let panes: WingsPane[] = [];
 wings.onPanes((list) => (panes = list));
@@ -14,47 +17,60 @@ const serial = <T>(job: () => Promise<T>): Promise<T> => {
   return run;
 };
 
-const notify = (message: NotesMessage) => wings.broadcast(message).catch(console.error);
+const notify = (message: InfoMessage) => wings.broadcast(message).catch(console.error);
+
+/** Applies `op` to a project's info and saves it. */
+const change = (projectId: string, op: Op, by: Who) =>
+  serial(async () => {
+    const info = (await loadInfo(projectId)) ?? emptyInfo();
+    const next = applyOp(info, op, by, Date.now());
+    if (next !== info) await saveInfo(projectId, next);
+  });
+
+// Old notes move into the new shape once, in the same queue as every write.
+void legacyProjects()
+  .then((ids) => ids.forEach((id) => void serial(() => loadInfo(id)).catch(console.error)))
+  .catch(console.error);
 
 wings.onBroadcast((message) => {
-  const m = message as Partial<SaveMessage> | null;
-  if (m?.type !== "save" || typeof m.projectId !== "string" || typeof m.base !== "string" || typeof m.text !== "string" || typeof m.rid !== "string") return;
-  const { projectId, base, text, rid } = m;
-  void serial(async () => {
-    const name = panes.find((p) => p.projectId === projectId)?.project ?? "this project";
-    try {
-      await writeNotes(projectId, mergeSave((await readNotes(projectId)).text, base, text), name);
-      await notify({ type: "notes", projectId, rid });
-    } catch (error) {
-      await notify({ type: "notes", projectId, rid, error: error instanceof Error ? error.message : String(error) });
-    }
-  });
+  const m = message as Partial<OpMessage> | null;
+  if (m?.type !== "op" || typeof m.projectId !== "string" || typeof m.rid !== "string" || !m.op || typeof m.op !== "object") return;
+  const { projectId, rid, op } = m as OpMessage;
+  change(projectId, op, "you").then(
+    () => notify({ type: "info", projectId, rid }),
+    (error) => notify({ type: "info", projectId, rid, error: error instanceof Error ? error.message : String(error) }),
+  );
 });
 
-/** The project of the calling terminal, or of the terminal inside the `project` folder when one is given. */
-function resolve(input: { project?: unknown }, paneId: string | null): { id: string; name: string } {
-  const folder = typeof input.project === "string" && input.project ? input.project.replace(/\/+$/, "") : null;
-  const within = (inner: string, outer: string) => inner === outer || inner.startsWith(`${outer}/`);
-  const pane = folder ? panes.find((p) => within(p.cwd, folder) || within(folder, p.cwd)) : panes.find((p) => p.paneId === paneId);
-  if (!pane) {
-    throw new Error(folder ? `No terminal in Wings is open in ${folder}. Open a terminal in that project, or leave out project.` : "Can't tell which project this call comes from. Pass project, an absolute path inside the project.");
-  }
-  return { id: pane.projectId, name: pane.project };
+const resolve = (input: { project?: unknown }, paneId: string | null) => resolveProject(panes, typeof input.project === "string" ? input.project : null, paneId);
+
+type Input = { project?: unknown; [key: string]: unknown };
+
+/** Runs an agent's change and tells pages. */
+async function agentChange(input: Input, paneId: string | null, op: Op, done: (name: string) => string) {
+  const project = resolve(input, paneId);
+  await change(project.id, op, "agent");
+  await notify({ type: "info", projectId: project.id });
+  return done(project.name);
 }
 
-wings.onTool("read", async (input: { project?: unknown }, { paneId }) => {
+wings.onTool("read", async (input: Input, { paneId }) => {
   const project = resolve(input, paneId);
-  const { text } = await readNotes(project.id);
-  return text.trim() ? text : `No notes yet for ${project.name}.`;
+  return renderInfo((await serial(() => loadInfo(project.id))) ?? emptyInfo(), project.name);
 });
 
-wings.onTool("write", (input: { project?: unknown; text?: unknown }, { paneId }) => {
-  if (typeof input.text !== "string" || !input.text.trim()) throw new Error("text is required.");
-  const text = input.text;
-  const project = resolve(input, paneId);
-  return serial(async () => {
-    await writeNotes(project.id, appendSection((await readNotes(project.id)).text, text), project.name);
-    await notify({ type: "notes", projectId: project.id });
-    return `Added to the notes for ${project.name}.`;
-  });
-});
+wings.onTool("set_fact", (input: Input, { paneId }) =>
+  agentChange(input, paneId, { kind: "setFact", key: input.key as string, value: input.value as string }, (name) => `Saved the fact for ${name}.`),
+);
+
+wings.onTool("remove_fact", (input: Input, { paneId }) =>
+  agentChange(input, paneId, { kind: "removeFact", key: input.key as string }, (name) => `Removed the fact from ${name}.`),
+);
+
+wings.onTool("write_section", (input: Input, { paneId }) =>
+  agentChange(input, paneId, { kind: "writeSection", title: input.title as string, body: input.markdown as string }, (name) => `Wrote the section in the info for ${name}.`),
+);
+
+wings.onTool("append", (input: Input, { paneId }) =>
+  agentChange(input, paneId, { kind: "appendSection", title: input.title as string, body: input.markdown as string }, (name) => `Added to the section in the info for ${name}.`),
+);

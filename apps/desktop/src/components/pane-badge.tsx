@@ -16,7 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import type { Badge, BadgeIcon, Tone } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 
-const toneClass: Record<Tone, { pill: string; text: string; dot: string }> = {
+export const toneClass: Record<Tone, { pill: string; text: string; dot: string }> = {
   neutral: { pill: "bg-white/[0.06] text-muted-foreground ring-white/10", text: "text-muted-foreground", dot: "bg-idle" },
   info: { pill: "bg-[#7aa7f2]/12 text-[#9cc0ff] ring-[#7aa7f2]/25", text: "text-[#9cc0ff]", dot: "bg-[#7aa7f2]" },
   success: { pill: "bg-done/12 text-done ring-done/25", text: "text-done", dot: "bg-done" },

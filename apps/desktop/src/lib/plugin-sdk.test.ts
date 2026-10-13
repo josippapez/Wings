@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; readonly focused: boolean };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame() {
@@ -26,7 +26,7 @@ function frame() {
   vm.runInContext(readFileSync(new URL("../../public/plugin-sdk.js", import.meta.url), "utf8"), context);
   const send = (event: string, data: unknown) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, event, data } }));
   const calls = (method: string) => posts.filter((m) => m.method === method);
-  const reply = (id: number, error?: string) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, id, result: null, error } }));
+  const reply = (id: number, error?: string, result: unknown = null) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, id, result, error } }));
   return { wings: context.wings as Sdk, send, calls, reply };
 }
 
@@ -122,4 +122,18 @@ test("onFocus registered after the state is known hears it right away", async ()
   assert.deepEqual(got, []);
   await Promise.resolve();
   assert.deepEqual(got, [false]);
+});
+
+test("onProjects gets the list once at start, then on each change until it's removed, and setProjectSection sends its arguments", async () => {
+  const { wings, send, calls, reply } = frame();
+  const got: unknown[] = [];
+  const off = wings.onProjects((p) => got.push(p));
+  reply(calls("projects")[0].id, undefined, [{ id: "p" }]);
+  await new Promise((r) => setTimeout(r));
+  send("projects", [{ id: "q" }]);
+  off();
+  send("projects", [{ id: "r" }]);
+  assert.deepEqual(got, [[{ id: "p" }], [{ id: "q" }]]);
+  void wings.setProjectSection("p", "s", null);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls("setProjectSection")[0].params)), { projectId: "p", sectionId: "s", rows: null });
 });

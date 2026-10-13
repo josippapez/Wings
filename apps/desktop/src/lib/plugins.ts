@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { boundedJson, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 import { requestToolInstall } from "@/lib/tool-install";
@@ -113,6 +114,10 @@ type Callbacks = {
   showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab", tab?: { multiple: boolean; args?: unknown }) => void;
   /** The project with this id, with its branch as it is now. */
   projectOf: (spaceId: string | null) => PluginProject | null;
+  /** Every project, with its branch as it is now. */
+  projects: () => PluginProject[];
+  /** A plugin set, or with null cleared, one of its sections under a project in the sidebar. */
+  setProjectSection: (pluginId: string, projectId: string, sectionId: string, rows: ProjectSectionRow[] | null) => void;
   /** The state a view tab saved with `setTabState`, if the tab is still open. */
   tabState: (tabId: string) => unknown;
   setTabState: (tabId: string, state: unknown) => void;
@@ -139,6 +144,8 @@ type Running = {
   tab?: PageTab;
   /** The project this frame last learned of, as JSON, once it asked with `project`; changes are sent from then on. */
   lastProject?: string;
+  /** The project list this frame last learned of, as JSON, once it asked with `projects`. */
+  lastProjects?: string;
   /**
    * Given only to the frame's own document, and required on every message. A frame that navigates keeps its
    * window, so this is what stops a page it navigated to from speaking as the plugin.
@@ -440,6 +447,18 @@ export class PluginHost {
     }
   }
 
+  /** Tells the frames that asked for the project list when a project was added, removed or renamed, or a branch changed. */
+  publishProjectList() {
+    let json: string | undefined;
+    for (const plugin of this.frames.values()) {
+      if (!plugin.ready || plugin.lastProjects === undefined) continue;
+      json ??= JSON.stringify(this.callbacks.projects());
+      if (json === plugin.lastProjects) continue;
+      plugin.lastProjects = json;
+      plugin.post({ event: "projects", data: JSON.parse(json) });
+    }
+  }
+
   publishPanes(panes: PluginPane[]) {
     this.panes = panes;
     for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "panes", data: panes });
@@ -708,6 +727,23 @@ export class PluginHost {
         const project = this.projectFor(plugin);
         plugin.lastProject = JSON.stringify(project);
         return project;
+      }
+      case "projects": {
+        const projects = this.callbacks.projects();
+        plugin.lastProjects = JSON.stringify(projects);
+        return projects;
+      }
+      case "setProjectSection": {
+        const sectionId = String(p.sectionId);
+        if (!plugin.plugin.contributes.projectSections?.some((s) => s.id === sectionId)) {
+          throw new Error(`${pluginId} has no project section ${sectionId}. Declare it in contributes.projectSections`);
+        }
+        const projectId = String(p.projectId);
+        if (!this.callbacks.projectOf(projectId)) throw new Error(`no project ${projectId}`);
+        const tabViews = plugin.plugin.contributes.views.filter((v) => v.opens.includes("tab")).map((v) => v.id);
+        const rows = p.rows === null ? null : cleanSectionRows(p.rows, tabViews);
+        this.callbacks.setProjectSection(pluginId, projectId, sectionId, rows);
+        return null;
       }
       case "tabState":
         return plugin.tab ? (this.callbacks.tabState(plugin.tab.tabId) ?? null) : null;

@@ -1,11 +1,16 @@
-// The Updates sidebar: what Azure DevOps told you since you last looked (state changes, mentions, pull request
-// activity), newest first, each with a link. A desktop notification can't be clicked, so the links live here.
+// The Updates list: what Azure DevOps told you since you last looked (state changes, mentions, pull request
+// activity), newest first, read or unread. It shows in the sidebar, and in a tab as an inbox with more of each
+// update. A desktop notification can't be clicked, so this is where an update is opened: a work item opens in the
+// item tab, a pull request in the browser.
 
 import { useCallback, useEffect, useState } from "react";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Button, Empty, Heading, List, ListItem, Loading, Row, showSidebar, Stack, Text } from "wings-plugin-ui";
+import { Button, Dot, Empty, Heading, List, ListItem, Loading, Page, Row, showSidebar, showTab, Stack, Text, Toolbar } from "wings-plugin-ui";
 
 import type { StoredEvent } from "./lib/updates";
+
+const KEY = "watch:events";
+const inTab = wings.placement() === "tab";
 
 const ago = (iso: string) => {
   const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
@@ -15,17 +20,14 @@ const ago = (iso: string) => {
   return `${Math.round(minutes / 1440)} d ago`;
 };
 
+/** Main is the only writer of the events, so a change is a message to it, and it broadcasts `updates` when done. */
+const ask = (op: "read" | "clear", key?: string) => wings.broadcast({ type: "events-op", rid: crypto.randomUUID(), op, key });
+
 function Updates() {
   const [events, setEvents] = useState<StoredEvent[] | null>(null);
 
   const load = useCallback(async () => {
-    const stored = ((await wings.storage.get("watch:events")) as StoredEvent[] | null) ?? [];
-    setEvents(stored);
-    // Seeing the list is reading it: the label next to the title bar button clears.
-    if (stored.some((e) => !e.read)) {
-      await wings.storage.set("watch:events", stored.map((e) => ({ ...e, read: true })));
-      wings.broadcast({ type: "read" });
-    }
+    setEvents(((await wings.storage.get(KEY)) as StoredEvent[] | null) ?? []);
   }, []);
 
   useEffect(() => void load(), [load]);
@@ -33,34 +35,57 @@ function Updates() {
     if ((message as { type?: string } | null)?.type === "updates") void load();
   });
 
-  if (!events) return <Loading />;
-  const clear = async () => {
-    await wings.storage.set("watch:events", []);
-    setEvents([]);
+  if (!events) return inTab ? <Page toolbar={<Toolbar title="Updates" />}><Loading /></Page> : <Loading />;
+
+  const unread = events.filter((e) => !e.read).length;
+  const markRead = async (key?: string) => {
+    setEvents(events.map((e) => (!key || e.key === key ? { ...e, read: true } : e)));
+    await ask("read", key);
   };
+  const open = async (e: StoredEvent) => {
+    void markRead(e.key);
+    if (e.item) await wings.openView("item", { as: "tab", args: e.item });
+    else await wings.openUrl(e.url);
+  };
+  const actions = (
+    <>
+      {unread ? <Button variant="ghost" size="sm" onClick={() => void markRead()}>Mark all read</Button> : null}
+      {events.length ? <Button variant="ghost" size="sm" onClick={() => { setEvents([]); void ask("clear"); }}>Clear</Button> : null}
+    </>
+  );
+
+  const list =
+    events.length === 0 ? (
+      <Empty title="Nothing new" description="State changes on your work items, comments that mention you and activity on your pull requests show up here." />
+    ) : (
+      <List>
+        {events.map((e) => (
+          <ListItem key={e.key}>
+            <Row gap="s" align="start" justify="between">
+              <Dot tone={e.read ? undefined : "info"} style={e.read ? { visibility: "hidden" } : undefined} label={e.read ? undefined : "Unread"} />
+              <Stack gap="xs" grow>
+                <Text weight={e.read ? undefined : "strong"}>{e.title}</Text>
+                <Text tone="muted" size="small" clamp={!inTab}>{e.body}</Text>
+                <Text tone="muted" size="tiny">{ago(e.at)}</Text>
+              </Stack>
+              <Row gap="xs">
+                <Button variant="ghost" size="sm" onClick={() => void open(e)}>{e.item ? "Open item" : "Open"}</Button>
+                {e.item && inTab ? <Button variant="ghost" size="sm" onClick={() => { void markRead(e.key); void wings.openUrl(e.url); }}>In browser</Button> : null}
+              </Row>
+            </Row>
+          </ListItem>
+        ))}
+      </List>
+    );
+
+  if (inTab) return <Page toolbar={<Toolbar title={unread ? `Updates (${unread} new)` : "Updates"} actions={actions} />}>{list}</Page>;
   return (
     <Stack gap="m">
-      <Heading actions={events.length ? <Button variant="ghost" size="sm" onClick={clear}>Clear</Button> : undefined}>Updates</Heading>
-      {events.length === 0 ? (
-        <Empty title="Nothing new" description="State changes on your work items, comments that mention you and activity on your pull requests show up here." />
-      ) : (
-        <List>
-          {events.map((e) => (
-            <ListItem key={e.key}>
-              <Row gap="s" align="start" justify="between">
-                <Stack gap="xs" grow>
-                  <Text weight={e.read ? undefined : "strong"}>{e.title}</Text>
-                  <Text tone="muted" size="small" clamp>{e.body}</Text>
-                  <Text tone="muted" size="tiny">{ago(e.at)}</Text>
-                </Stack>
-                <Button variant="ghost" size="sm" onClick={() => wings.openUrl(e.url)}>Open</Button>
-              </Row>
-            </ListItem>
-          ))}
-        </List>
-      )}
+      <Heading actions={actions}>Updates</Heading>
+      {list}
     </Stack>
   );
 }
 
-showSidebar(<Updates />);
+if (inTab) showTab(<Updates />, { fill: true });
+else showSidebar(<Updates />);

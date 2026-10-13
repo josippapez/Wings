@@ -2,7 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, git, post } from "./cli";
 import { problems, status } from "./state";
-import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, Result, Status } from "./types";
+import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, ListedPr, Result, Status } from "./types";
 
 /** A thread from the `pullRequestThreads` resource. */
 interface AzureThread {
@@ -48,8 +48,41 @@ export async function findAzure(cwd: string, remote: AzureRemote, branch: string
   // The open PR wins; otherwise the newest one for this branch.
   const pr = prs.find((p) => p.status === "active") ?? prs[0];
   if (!pr) return null;
+  return azureLink(pr, remote, cwd);
+}
+
+export function azureLink(pr: AzurePr, remote: AzureRemote, cwd: string): AzureLink {
   const base = pr.repository?.webUrl ?? `${remote.org}/${encodeURIComponent(remote.project)}/_git/${encodeURIComponent(remote.repo)}`;
   return { provider: "azure", url: `${base}/pullrequest/${pr.pullRequestId}`, number: pr.pullRequestId, repo: `${remote.project}/${remote.repo}`, remote, cwd, raw: pr };
+}
+
+/** A PR by number, for a page opened with only its identifiers. */
+export async function azureShow(remote: AzureRemote, number: number): Promise<AzurePr> {
+  const out = await cli(remote.org, "az", ["repos", "pr", "show", "--id", String(number), "--organization", remote.org, "-o", "json"]);
+  if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az failed");
+  return JSON.parse(out.stdout) as AzurePr;
+}
+
+// ---------- the repo's active PRs ----------
+
+/** `az repos pr list` for the signed-in user: `--creator` and `--reviewer` take a name or email, which `az account show` has. */
+export async function azureList(cwd: string, remote: AzureRemote): Promise<ListedPr[]> {
+  const account = await cli(remote.org, "az", ["account", "show", "--query", "user.name", "-o", "tsv"]);
+  const me = account.stdout.trim();
+  if (account.code !== 0 || !me) throw new Error(account.stderr.trim() || "az account show failed");
+  const query = async (flag: "--creator" | "--reviewer", mine: boolean) => {
+    const out = await cli(remote.org, "az", [
+      "repos", "pr", "list", "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
+      flag, me, "--status", "active", "--top", "50", "-o", "json",
+    ]);
+    if (out.code !== 0) throw new Error(out.stderr.trim().split("\n").at(-1) || "az repos pr list failed");
+    return (JSON.parse(out.stdout) as AzurePr[]).map((pr): ListedPr => {
+      const status = { ...azureStatus(pr, { passed: 0, failed: 0, running: 0 }), failing: [] };
+      return { link: azureLink(pr, remote, cwd), title: pr.title, head: status.head, mine, status, activity: null };
+    });
+  };
+  const [mine, review] = await Promise.all([query("--creator", true), query("--reviewer", false)]);
+  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
 }
 
 // ---------- status ----------
@@ -100,6 +133,12 @@ function mergeStrategy(records: AzurePolicy[]) {
   if (!r) return null;
   const types = Object.keys(MERGE_TYPES).filter((k) => r.configuration!.settings?.[k]).map((k) => MERGE_TYPES[k]).join(" or ");
   return r.status === "approved" ? types : `${types} only, pick it when completing`;
+}
+
+/** The status page: the status plus who wrote the PR and its description. */
+export async function azureOverview(link: AzureLink) {
+  const raw = await azureShow(link.remote, link.number);
+  return { status: await azureChecks({ ...link, raw }), author: raw.createdBy?.displayName ?? "unknown", body: raw.description ?? "" };
 }
 
 export async function azureChecks(link: AzureLink): Promise<Status> {
@@ -161,6 +200,11 @@ export async function azureDiff(link: AzureLink) {
   await git(link.cwd, ["fetch", "--quiet", "origin", from, to]);
   const range = baseCommit && headCommit ? `${from}...${to}` : `origin/${base}...origin/${head}`;
   const patch = await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", range]);
+  return { patch: `${patch}\n`, comments: await azureComments(link) };
+}
+
+/** The PR's threads, without the diff. */
+export async function azureComments(link: AzureLink): Promise<Comment[]> {
   const threads = await cli(link.remote.org, "az", [
     "devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
     "--route-parameters", `project=${link.remote.project}`, `repositoryId=${link.remote.repo}`, `pullRequestId=${link.number}`,
@@ -192,7 +236,7 @@ export async function azureDiff(link: AzureLink) {
       }),
     );
   }
-  return { patch: `${patch}\n`, comments };
+  return comments;
 }
 
 // ---------- replies ----------

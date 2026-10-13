@@ -8,11 +8,13 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 `worktrees/` lists the git worktrees of your open projects in a sidebar, with what each one is (merged into the default branch, upstream gone, uncommitted changes, locked, folder missing, open in a pane). It removes the ones you pick, or all merged and clean ones, after you confirm, with `git worktree remove` and never `--force`, prunes records of worktrees whose folder is gone, and can delete the branch with `git branch -d`.
 
-`work-item/` shows the Azure Boards work item named in each pane's branch, and moves it to its next state. It also checks Azure DevOps every 2 minutes (5, 10 or 30 under Settings, or off), even while Wings is in the background, for the projects of your panes' Azure remotes and of work items it has shown: a state change on a work item assigned to or created by you, a comment mentioning you on any recently changed work item or on a pull request you created or review, new comments on your pull requests, a reviewer's vote on them, one being completed or abandoned, and you being added as a reviewer. It only reads (`az boards query` and GET calls of `az devops invoke`), sends a desktop notification per event (one summary past three), and lists them with links in its Updates sidebar, since a notification can't be clicked. The first check of a project only records where it is, so old activity doesn't arrive as a flood. A comment mentions you when it carries your Azure DevOps identity id, `data-vss-mention="version:2.0,<id>"` in a work item comment and `@<id>` in a pull request comment. Each check looks into the 20 newest changed work items and the 20 newest pull requests of a project, so a very busy project can miss a mention.
+`work-item/` shows the Azure Boards work item named in each pane's branch, and moves it to its next state. It also checks Azure DevOps every 2 minutes (5, 10 or 30 under Settings, or off), even while Wings is in the background, for the projects of your panes' Azure remotes and of work items it has shown: a state change on a work item assigned to or created by you, a comment mentioning you on any recently changed work item or on a pull request you created or review, new comments on your pull requests, a reviewer's vote on them, one being completed or abandoned, and you being added as a reviewer. It only reads (`az boards query` and GET calls of `az devops invoke`), sends a desktop notification per event (one summary past three), and lists them with links in its Updates sidebar, since a notification can't be clicked. The first check of a project only records where it is, so old activity doesn't arrive as a flood. A comment mentions you when it carries your Azure DevOps identity id, `data-vss-mention="version:2.0,<id>"` in a work item comment and `@<id>` in a pull request comment. Each check looks into the 20 newest changed work items and the 20 newest pull requests of a project, so a very busy project can miss a mention. A work item opens as a tab with its description, comments and linked pull requests, the Updates list also opens as a tab with read and unread, and the work items assigned to you in the current sprint show under each Azure DevOps project in the sidebar.
 
-`notes/` keeps notes per project, in a sidebar or a tab (`newTab`, so it's in the + menu). Claude reads them with `notes__read` and adds a dated section with `notes__write`, which never overwrites. A tool call uses the project of the pane it came from. Notes are kept in Wings' storage, up to 30,000 characters per project.
+`notes/` is Project info: facts about each project, like its dev server or test command, in a table, and Markdown sections (tables, lists, code, https images) that you edit in a sidebar or a tab (`newTab`, so it's in the + menu). Claude reads it with `notes__read`, sets facts with `notes__set_fact` and `notes__remove_fact`, writes a section with `notes__write_section` (refused for a section you last edited) and adds to one with `notes__append`, which never removes text. A tool call uses the project of the pane it came from. Per project it holds up to 40 facts, 20 sections, 8,000 characters per section and 40,000 in all.
 
-`pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
+`tasks/` keeps a task list per project: a short list in a sidebar, a board with To do, Doing and Done columns in a tab, and the open tasks under the project in the sidebar. Claude lists, adds and updates tasks with `tasks__list`, `tasks__add`, `tasks__update` and `tasks__done`, for the project of the pane it came from.
+
+`pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login. Each project in the sidebar lists its open pull requests, yours first and then the ones waiting for your review, and one opens as a tab with its description, checks and review threads.
 
 ## Installing
 
@@ -27,9 +29,10 @@ The plugins in this folder install the same way:
 | Changes | `github.com/josippapez/Wings/plugins/changes` |
 | Dev servers | `github.com/josippapez/Wings/plugins/dev-servers` |
 | HUD | `github.com/josippapez/Wings/plugins/hud` |
-| Notes | `github.com/josippapez/Wings/plugins/notes` |
+| Project info | `github.com/josippapez/Wings/plugins/notes` |
 | PR tracker | `github.com/josippapez/Wings/plugins/pr-tracker` |
 | Session detail | `github.com/josippapez/Wings/plugins/session-detail` |
+| Tasks | `github.com/josippapez/Wings/plugins/tasks` |
 | Work item | `github.com/josippapez/Wings/plugins/work-item` |
 | Worktrees | `github.com/josippapez/Wings/plugins/worktrees` |
 
@@ -129,6 +132,7 @@ Pages use `wings-plugin-ui`: a page calls `showSidebar(<Page />)` (or `showView`
 | `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
 | `sidebars` | Up to 3 `{ id, title, icon?, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden. A sidebar may add `popover: { page, width, height }`, a smaller page shown under its button when you point at it or focus it, 240 to 480 wide and 160 to 640 high; see [Popovers](#popovers) |
 | `views` | Up to 3 `{ id, title, icon?, page, opens?, width?, height?, newTab?, multiple? }`: pages like `sidebars` that can also open in a modal over Wings, in a window of their own or as a tab. `opens` lists where, from `sidebar`, `modal`, `window` and `tab`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. `newTab: true` lists a view that opens as a tab in the + menu and the command palette (see Tabs). `multiple: true` lets it open several tabs per project. Both need `tab` in `opens`, or Wings refuses the plugin. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
+| `projectSections` | Up to 8 `{ id, title, icon? }`: lists the plugin can show under each project in the sidebar, filled with `wings.setProjectSection`. `id` is like a view id, unique in the plugin, `title` is up to 40 characters, and `icon` is one of the built-in names, or left out to use the plugin's icon. See Project sections. Needs Wings 0.1.23 |
 | `settings` | `{ page }`: the plugin's own HTML page in Wings Settings, listed under Plugin settings by the plugin's name. It runs sandboxed like a sidebar, with the same `wings` object, fills the settings area and stops when you leave it or close Settings. Keep what it saves in `wings.storage`. See [Settings page](#settings-page) |
 | `panels` | Up to 3 `{ id, title, icon?, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is one of `clock`, `globe`, `calendar`, `chart`, `list`, `git-compare`, `git-graph`, `git-branch`, `folder-tree`, `message`, `scroll`, `kanban`, `gauge`, `activity`, `timer`, `server`, `terminal`, `todo` or `puzzle` (Wings 0.1.20 and newer for all but the first five), and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
@@ -171,6 +175,9 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.placement()` | Where this page shows: `"sidebar"`, `"tab"`, `"modal"` or `"window"`, so a page can show more detail when it has room. `null` in the main script. A sidebar's popover reports `"sidebar"` and the settings page `"modal"`. Synchronous. Needs Wings 0.1.22 |
 | `wings.project()` | Resolves `{ id, name, path, branch }` of the project the page is about, or `null` when none is open. A tab page's project is the one the tab belongs to and never changes. Any other page gets the project on screen. Needs Wings 0.1.22 |
 | `wings.onProject(fn)` | Calls `fn` with the current project, then each time it changes: the project on screen switched (never for a tab page), or its branch or name changed. Returns a function that removes the listener. Needs Wings 0.1.22 |
+| `wings.projects()` | Resolves every project, `{ id, name, path, branch }[]`, in sidebar order. Worktrees are projects too. Works in the main script and in pages. Needs Wings 0.1.23 |
+| `wings.onProjects(fn)` | Calls `fn` with every project, then each time one is added, removed or renamed, or a branch changes. Returns a function that removes the listener. Needs Wings 0.1.23 |
+| `wings.setProjectSection(projectId, sectionId, rows)` | Shows `rows` as a section under that project in the sidebar, or removes it with `null`. `sectionId` is one the manifest declares in `contributes.projectSections`. A row is `{ id, label, detail?, badge?: { text, tone? }, open: { view, args? } }`. Rejects for an unknown project, an undeclared section, or an `open.view` that isn't one of the plugin's views with `tab` in `opens`. See Project sections. Needs Wings 0.1.23 |
 | `wings.tabState()` | In a tab page: resolves the state it last saved with `setTabState`, or `null`. Outside a tab it resolves `null`. Needs Wings 0.1.22 |
 | `wings.setTabState(state)` | In a tab page: saves JSON state, up to 64 KB, on the tab. Wings saves it with the tab and restores it on the next start and when the page loads again after being unloaded. Rejects outside a tab and when the state is too big. Needs Wings 0.1.22 |
 | `wings.closeView(id)` | Closes a sidebar or view wherever it's open |
@@ -240,7 +247,27 @@ With `tab` in `opens`, the view opens as a tab in the project on screen, next to
 
 Wings 0.1.14 and older refuse a plugin with `tab` in `opens`, so set `"minWingsVersion": "0.1.15"` to use it.
 
-A view with `"newTab": true` also shows in the + menu, a chevron next to the + button, with the plugin's icon, and in the command palette as "New tab: <title>". Under Settings, General, "New tab button opens" picks what the + button itself opens: a terminal (the default) or one of these pages. `"multiple": true` makes every open of the view, from + or `openView`, a new tab instead of showing the project's existing one. Give each tab its own `wings.setTabState` so they don't share. `newTab`, `multiple`, `args`, `project`, `placement` and tab state need Wings 0.1.22, so set `"minWingsVersion": "0.1.22"` when you use them.
+A view with `"newTab": true` also shows in the + menu, a chevron next to the + button, with the plugin's icon, and in the command palette as "New tab: <title>". Under Settings, General, "New tab button opens" picks what the + button itself opens: a terminal (the default) or one of these pages. `"multiple": true` makes an open of the view, from + or `openView`, a new tab instead of showing the project's existing one, except that an open with `args` equal to those of a tab of it already in the project shows that tab. Give each tab its own `wings.setTabState` so they don't share. `newTab`, `multiple`, `args`, `project`, `placement` and tab state need Wings 0.1.22, so set `"minWingsVersion": "0.1.22"` when you use them.
+
+## Project sections
+
+A plugin can list things under each project in the sidebar, like its open tasks or pull requests. Declare the section in the manifest, then fill it per project from the main script:
+
+```json
+"contributes": { "projectSections": [{ "id": "open", "title": "Open tasks", "icon": "todo" }] }
+```
+
+```ts
+wings.onProjects((projects) => {
+  for (const p of projects) {
+    wings.setProjectSection(p.id, "open", [
+      { id: "t1", label: "Fix the login", detail: "due Friday", badge: { text: "High", tone: "warning" }, open: { view: "board", args: { task: "t1" } } },
+    ]);
+  }
+});
+```
+
+A section shows under its project after the project's row, with the plugin's icon, its title and the row count, only while it has rows. Clicking its header folds it shut, and Wings remembers that per project and section. Clicking a row opens `open.view` as a tab in that row's project, switching to the project, with `args` for `viewArgs()` and following the same rules as `openView`: a tab already open with other args takes the new ones and reloads, and a view with `multiple` opens a new tab unless a tab of it in that project already has equal `args`. `open.view` must be one of the plugin's views with `tab` in `opens`, or the call rejects. Wings cuts text for you (label and detail 120 characters, badge 24, ids 64), keeps the first 50 rows, leaves out a row with no `id` or `label` or an `id` already used, and rejects `args` over 16 KB. A badge `tone` is one of the badge tones. Sections are kept in memory, not saved: they go when the plugin is turned off or removed, so fill them again on start, and send only when rows change. They need Wings 0.1.23, so set `"minWingsVersion": "0.1.23"`.
 
 ## Popovers
 

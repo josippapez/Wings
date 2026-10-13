@@ -51,8 +51,11 @@ export function boundedJson(value: unknown, max: number, what: string) {
 
 export const isViewTab = <T extends object>(tab: T | ViewTab): tab is ViewTab => "view" in tab;
 
+/** JSON text with object keys sorted, so equal values compare equal whatever order their keys came in. */
+const canonicalJson = (value: unknown) => JSON.stringify(value, (_, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v));
+
 /**
- * Adds the view's tab to the project, or finds the one already there: one tab per view per project, unless `multiple`.
+ * Adds the view's tab to the project, or finds the one already there: one tab per view per project, unless `multiple`, which opens a new one unless a tab of it already has the same `args`.
  * `args` is what the page reads with `viewArgs`. Opening the existing tab with args that differ from its own replaces
  * them, drops its `state` and bumps its `rev`, which reloads the page; without args the tab stays as it is.
  */
@@ -63,7 +66,13 @@ export function openViewTab<T extends { id: string; spaceId: string }>(
   newId: string,
   { multiple = false, args }: { multiple?: boolean; args?: unknown } = {},
 ) {
-  const open = multiple ? undefined : tabs.find((t): t is ViewTab => isViewTab(t) && t.spaceId === spaceId && t.view.pluginId === view.pluginId && t.view.viewId === view.viewId);
+  const sameView = (t: T | ViewTab): t is ViewTab => isViewTab(t) && t.spaceId === spaceId && t.view.pluginId === view.pluginId && t.view.viewId === view.viewId;
+  // A `multiple` view opens a new tab each time, except for args a tab of it already has: that one is shown.
+  if (multiple && args !== undefined) {
+    const same = tabs.find((t): t is ViewTab => sameView(t) && t.args !== undefined && canonicalJson(t.args) === canonicalJson(args));
+    if (same) return { tabs, id: same.id };
+  }
+  const open = multiple ? undefined : tabs.find(sameView);
   if (open) {
     if (args === undefined || JSON.stringify(open.args) === JSON.stringify(args)) return { tabs, id: open.id };
     // The saved state belonged to the old args, so it goes.

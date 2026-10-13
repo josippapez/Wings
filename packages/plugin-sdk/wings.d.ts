@@ -108,6 +108,20 @@ interface WingsProject {
   branch: string | null;
 }
 
+/** A line in a plugin's section under a project in the sidebar. Needs Wings 0.1.23. */
+interface WingsProjectSectionRow {
+  /** Up to 64 characters, unique in the section. */
+  id: string;
+  /** Up to 120 characters. */
+  label: string;
+  /** Muted text under the label, up to 120 characters. */
+  detail?: string;
+  /** A small pill after the label. `text` is up to 24 characters. */
+  badge?: { text: string; tone?: Tone };
+  /** Clicking the row opens `view`, one of the plugin's `contributes.views` that lists `tab` in `opens`, as a tab in the row's project, with `args` (JSON, up to 16 KB) as `viewArgs()`. */
+  open: { view: string; args?: unknown };
+}
+
 interface Wings {
   // Every `on*` call returns a function that removes the listener, for cleaning up in a React effect.
   /** Every terminal pane, on every change. */
@@ -227,8 +241,8 @@ interface Wings {
    * gets the same `wings` object wherever it opens.
    *
    * `args` (JSON, up to 16 KB, only with `as: "tab"`) is what the tab's page reads with `viewArgs`. A tab that's
-   * already open with other args takes the new ones, drops its saved tab state and reloads; a view with `"multiple": true` always opens a
-   * new tab. Needs Wings 0.1.22.
+   * already open with other args takes the new ones, drops its saved tab state and reloads; a view with `"multiple": true` opens a new tab,
+   * unless a tab of it in that project already has the same `args`: that one is shown. Needs Wings 0.1.22.
    */
   openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab"; args?: unknown }): Promise<void>;
   /** Where this page shows. `null` in the plugin's main script. Needs Wings 0.1.22. */
@@ -245,6 +259,20 @@ interface Wings {
    * tab page), or its branch or name changed. Needs Wings 0.1.22.
    */
   onProject(listener: (project: WingsProject | null) => void): () => void;
+  /** Every project in Wings, in sidebar order. Worktrees are projects too. Needs Wings 0.1.23. */
+  projects(): Promise<WingsProject[]>;
+  /**
+   * Calls the listener with every project, then each time one is added, removed or renamed, or a branch changes.
+   * Works in the main script and in pages. Needs Wings 0.1.23.
+   */
+  onProjects(listener: (projects: WingsProject[]) => void): () => void;
+  /**
+   * Shows `rows` under a project in the sidebar, in the section `sectionId` that the manifest declares in
+   * `contributes.projectSections`, or removes the section with `null`. Up to 50 rows. Rejects for a project that isn't
+   * there, a section the plugin didn't declare, or a row whose `open.view` isn't one of its views that opens as a tab.
+   * Sections are kept in memory and go when the plugin is turned off, so fill them again on start. Needs Wings 0.1.23.
+   */
+  setProjectSection(projectId: string, sectionId: string, rows: WingsProjectSectionRow[] | null): Promise<void>;
   /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. Opening the tab with new `args` clears it. Needs Wings 0.1.22. */
   tabState<T = unknown>(): Promise<T | null>;
   /**

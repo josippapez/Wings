@@ -4,6 +4,16 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.23 · 2026-10-13
+
+- Projects in the sidebar list what plugins add under them, like open pull requests, tasks and work items. A row opens as a tab in that project, and each list collapses and remembers it.
+- PR tracker 0.7.0 lists each project's open pull requests, yours first and then the ones waiting for your review, and opens one as a tab with its description, checks and review threads.
+- Work item 0.4.0 opens a work item as a tab with its description, comments and linked pull requests, opens Updates as a tab with read and unread, and lists your work items in the current sprint under each Azure DevOps project.
+- New Tasks plugin: tasks per project in a sidebar and on a board, which Claude can list, add and update.
+- Notes is now Project info: a table of facts about the project and Markdown sections with tables, lists and images. Claude can set facts and write or add to sections, but never replaces a section you edited.
+- Opening the same item again goes back to its tab instead of opening another one.
+- Plugin SDK 0.9.0 adds `contributes.projectSections`, `wings.projects()`, `wings.onProjects()` and `wings.setProjectSection()`. wings-plugin-ui 0.3.0 adds a `Markdown` component.
+
 ## 0.1.22 · 2026-10-13
 
 - Terminal tabs reopen in the folder you left them in after Wings restarts, instead of the project root. A folder that no longer exists falls back to the root.

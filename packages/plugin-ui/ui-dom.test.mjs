@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Menu, Select, Split, Tabs, TextInput } = await import("./ui.js");
+const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -596,5 +596,15 @@ test("Board is a focusable region, and a BoardColumn is named by its title and c
   const column = host.querySelector("section");
   assert.equal(document.getElementById(column.getAttribute("aria-labelledby")).textContent, "Doing");
   assert.equal(column.querySelector(".w-board-column-count").textContent, "2");
+  await unmount();
+});
+
+test("Markdown loads a remote image only after its button is clicked", async () => {
+  const { host, unmount } = await mount(h(Markdown, { source: "![chart](https://example.com/c.png)" }));
+  assert.equal(host.querySelector("img"), null);
+  await click(host.querySelector("button.w-md-image-load"));
+  const img = host.querySelector("img");
+  assert.equal(img.getAttribute("src"), "https://example.com/c.png");
+  assert.equal(host.querySelector("button.w-md-image-load"), null);
   await unmount();
 });

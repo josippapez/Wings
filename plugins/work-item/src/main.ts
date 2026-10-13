@@ -6,6 +6,7 @@ import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
 import { createWatcher, DEFAULT_SETTINGS, type Settings } from "./lib/watch";
 import { workItemUrl, type StoredEvent } from "./lib/updates";
+import { assignedQuery, currentIterations, SECTION_ID, sectionRows, type IterationNode, type QueryRow, type SectionRow } from "./lib/sections";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
 const BRANCH_POLL_MS = 15_000;
@@ -61,23 +62,29 @@ pollWhileFocused(() => [...new Set([...refs.values()].map((r) => r.key))].forEac
 
 // ---------- finding the work item for a pane ----------
 
-async function remoteFor(cwd: string) {
+/** Folders whose Azure project the Updates watcher was told about. Only panes put a project there, not the sidebar's sections. */
+const watched = new Set<string>();
+
+async function remoteFor(cwd: string, { watch = false } = {}) {
   if (!remotes.has(cwd)) {
     try {
-      const remote = parseRemote(await git(cwd, ["remote", "get-url", "origin"]));
-      remotes.set(cwd, remote);
-      if (remote.kind === "azure") void watcher.addProject(remote.org, remote.project);
+      remotes.set(cwd, parseRemote(await git(cwd, ["remote", "get-url", "origin"])));
     } catch {
       remotes.set(cwd, { kind: "none" });
     }
   }
-  return remotes.get(cwd)!;
+  const remote = remotes.get(cwd)!;
+  if (watch && remote.kind === "azure" && !watched.has(cwd)) {
+    watched.add(cwd);
+    void watcher.addProject(remote.org, remote.project);
+  }
+  return remote;
 }
 
 async function refreshRefs() {
   await Promise.all(
     panes.map(async (pane) => {
-      const remote = await remoteFor(pane.cwd);
+      const remote = await remoteFor(pane.cwd, { watch: true });
       const branch = remote.kind === "azure" ? await git(pane.cwd, ["branch", "--show-current"]).catch(() => "") : "";
       const id = workItemId(branch);
       if (!id) return void refs.delete(pane.paneId);
@@ -267,6 +274,7 @@ wings.onAction(async ({ paneId, actionId }) => {
   if (!ref) return;
   if (actionId === "refresh") return refreshItem(ref.key, { byUser: true });
   const item = items.get(ref.key);
+  if (actionId === "details") return wings.openView("item", { as: "tab", args: { id: Number(ref.id), org: ref.org } });
   if (actionId === "open" && item?.url) return wings.openUrl(item.url);
   if (actionId.startsWith("move:")) {
     const state = actionId.slice("move:".length);
@@ -323,8 +331,94 @@ async function loadSettings() {
 }
 
 wings.onBroadcast((message) => {
-  const m = message as { type?: string; settingsChanged?: boolean } | null;
+  const m = message as { type?: string; settingsChanged?: boolean; rid?: unknown; op?: string; key?: unknown } | null;
   if (m?.settingsChanged) void loadSettings();
-  if (m?.type === "read") void showUnread();
+  // The Updates pages don't write storage: main is its only writer, so their changes and new events can't overwrite each other.
+  if (m?.type === "events-op" && typeof m.rid === "string") {
+    const done = m.op === "clear" ? watcher.clear() : m.op === "read" ? watcher.markRead(typeof m.key === "string" ? m.key : undefined) : null;
+    void done?.then(() => showUnread()).then(() => wings.broadcast({ type: "updates", rid: m.rid }));
+  }
+  // The item tab moved a work item to another state.
+  if (m?.type === "item-changed") for (const key of new Set([...refs.values()].map((r) => r.key))) void refreshItem(key, { byUser: true });
 });
 void loadSettings().then(() => setTimeout(() => void checkUpdates(), 15_000));
+
+// ---------- projects' Work items sections ----------
+
+/** How long a project's rows, and its running sprints, are reused: a bit under the shortest poll interval. */
+const SECTION_TTL_MS = 100_000;
+const SECTION_POLL_MS = 120_000;
+const SPRINT_TTL_MS = 3_600_000;
+
+/** `${org} ${project}` → the rows, when they were read. */
+const sections = new Map<string, { at: number; rows: SectionRow[] }>();
+/** `${org} ${project}` → the running sprints' paths, when they were read. */
+const sprints = new Map<string, { at: number; paths: string[] }>();
+/** projectId → the rows last sent to Wings, as JSON, so an unchanged section isn't sent again. */
+const sent = new Map<string, string>();
+let sectionsRunning = false;
+let sectionsAgain = false;
+
+async function sectionRowsFor(org: string, project: string): Promise<SectionRow[]> {
+  const key = `${org} ${project}`;
+  const cached = sections.get(key);
+  if (cached && Date.now() - cached.at < SECTION_TTL_MS) return cached.rows;
+  let known = sprints.get(key);
+  if (!known || Date.now() - known.at > SPRINT_TTL_MS) {
+    const root = (await azQuiet(org, [
+      "devops", "invoke", "--area", "wit", "--resource", "classificationNodes",
+      "--route-parameters", `project=${project}`, "structureGroup=iterations", "--query-parameters", "$depth=4", "--api-version", "7.1",
+    ])) as IterationNode | never[];
+    known = { at: Date.now(), paths: currentIterations(Array.isArray(root) ? null : root, Date.now()) };
+    sprints.set(key, known);
+  }
+  let rows: SectionRow[] = [];
+  if (known.paths.length) {
+    const found = await azQuiet(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, known.paths)]);
+    rows = sectionRows(org, project, Array.isArray(found) ? (found as QueryRow[]) : []);
+  }
+  sections.set(key, { at: Date.now(), rows });
+  return rows;
+}
+
+/** One query per Azure project, whatever number of Wings projects point at it. Stale rows stay when a read fails. */
+async function refreshSections() {
+  // Wings in the background: the poll runs once when it comes back.
+  if (!wings.focused) return;
+  if (sectionsRunning) {
+    sectionsAgain = true;
+    return;
+  }
+  sectionsRunning = true;
+  try {
+    for (const project of await wings.projects()) {
+      const remote = await remoteFor(project.path);
+      let rows: SectionRow[] | null = null;
+      if (remote.kind === "azure") {
+        try {
+          rows = await sectionRowsFor(remote.org, remote.project);
+        } catch (error) {
+          console.warn("[work-item] work items section failed:", error instanceof Error ? error.message : error);
+          continue;
+        }
+      }
+      const json = JSON.stringify(rows);
+      if (sent.get(project.id) === json) continue;
+      try {
+        await wings.setProjectSection(project.id, SECTION_ID, rows);
+        sent.set(project.id, json);
+      } catch (error) {
+        console.warn("[work-item] setProjectSection failed:", error instanceof Error ? error.message : error);
+      }
+    }
+  } finally {
+    sectionsRunning = false;
+    if (sectionsAgain) {
+      sectionsAgain = false;
+      void refreshSections();
+    }
+  }
+}
+
+wings.onProjects(() => void refreshSections());
+pollWhileFocused(() => void refreshSections(), SECTION_POLL_MS);

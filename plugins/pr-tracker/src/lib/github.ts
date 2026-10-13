@@ -2,10 +2,12 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, post } from "./cli";
 import { problems } from "./state";
-import type { Comment, FailureDetail, Failing, GithubLink, Icon, Link, Result, Status } from "./types";
+import type { Comment, FailureDetail, Failing, GithubLink, Icon, Link, ListedPr, Result, Status } from "./types";
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
+/** What `gh pr list` returns per PR: the status fields, plus the comment and review counts. One call covers every PR of the repo. */
+const GH_LIST_FIELDS = `${GH_FIELDS},comments,reviews`;
 // No token prints `gh auth login` or GH_TOKEN; an expired token that gh can renew prints "Try authenticating with:
 // gh auth refresh -h <host>" (cli/cli internal/ghcmd/cmd.go). A missing scope also suggests `gh auth refresh`, but
 // not after "Try authenticating with:", so it doesn't count.
@@ -13,7 +15,13 @@ const GH_LOGGED_OUT = /gh auth login|GH_TOKEN|Try authenticating with:\s+gh auth
 
 /** The fields of `gh pr view --json` the tracker reads. */
 interface GhPr {
+  number: number;
+  url: string;
   title: string;
+  body?: string;
+  author?: { login?: string };
+  comments?: unknown[];
+  reviews?: unknown[];
   state: string;
   isDraft: boolean;
   reviewDecision: string;
@@ -90,12 +98,25 @@ export async function findGithub(cwd: string, _remote: unknown, branch: string):
 
 // ---------- status ----------
 
-export async function githubStatus(link: Pick<Link, "url">): Promise<Status> {
+async function ghView(url: string, fields: string) {
   // A Claude pane can know its PR from the transcript without gh, so this can be the first gh call.
-  const out = await cli("github", "gh", ["pr", "view", link.url, "--json", GH_FIELDS]);
+  const out = await cli("github", "gh", ["pr", "view", url, "--json", fields]);
   checkGhLogin(out);
   if (out.code !== 0) throw new Error(out.stderr.trim() || "gh failed");
-  const pr = JSON.parse(out.stdout) as GhPr;
+  return JSON.parse(out.stdout) as GhPr;
+}
+
+export async function githubStatus(link: Pick<Link, "url">): Promise<Status> {
+  return githubStatusOf(await ghView(link.url, GH_FIELDS));
+}
+
+/** The status page: the status plus who wrote the PR and its description. */
+export async function githubOverview(link: Pick<Link, "url">) {
+  const pr = await ghView(link.url, `${GH_FIELDS},body,author`);
+  return { status: githubStatusOf(pr), author: pr.author?.login ?? "unknown", body: pr.body ?? "" };
+}
+
+function githubStatusOf(pr: GhPr): Status {
   const results = (pr.statusCheckRollup ?? []).map((c): Result => {
     const r = c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : "PENDING";
     if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(r!)) return "passed";
@@ -134,6 +155,30 @@ export async function githubStatus(link: Pick<Link, "url">): Promise<Status> {
   };
 }
 
+// ---------- the repo's open PRs ----------
+
+/** One `gh pr list` per query, run in the project's folder: the open PRs you wrote, and the ones waiting for your review. */
+export async function githubList(cwd: string): Promise<ListedPr[]> {
+  const query = async (filter: string[], mine: boolean) => {
+    const out = await cli("github", "gh", ["pr", "list", ...filter, "--state", "open", "--limit", "50", "--json", GH_LIST_FIELDS], { cwd });
+    checkGhLogin(out);
+    if (out.code !== 0) throw new Error(out.stderr.trim() || "gh pr list failed");
+    return (JSON.parse(out.stdout) as GhPr[]).map((pr): ListedPr => {
+      const repo = pr.url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1] ?? "";
+      return {
+        link: { provider: "github", url: pr.url, number: pr.number, repo },
+        title: pr.title,
+        head: pr.headRefName,
+        mine,
+        status: githubStatusOf(pr),
+        activity: (pr.comments?.length ?? 0) + (pr.reviews?.length ?? 0),
+      };
+    });
+  };
+  const [mine, review] = await Promise.all([query(["--author", "@me"], true), query(["--search", "review-requested:@me"], false)]);
+  return [...mine, ...review.filter((r) => !mine.some((m) => m.link.url === r.link.url))];
+}
+
 // ---------- failed checks ----------
 
 /** A failed GitHub Actions job: its failed step and the end of its log. Unlike `gh run view`, this works while the rest of the run is still going. */
@@ -156,12 +201,17 @@ export async function githubFailure(link: GithubLink, f: Failing): Promise<Failu
 // ---------- diff and comments ----------
 
 export async function githubDiff(link: GithubLink) {
-  const [diff, comments, discussion] = await Promise.all([
-    cli("github", "gh", ["pr", "diff", link.url]),
+  const [diff, comments] = await Promise.all([cli("github", "gh", ["pr", "diff", link.url]), githubComments(link)]);
+  if (diff.code !== 0) throw new Error(diff.stderr.trim() || "gh pr diff failed");
+  return { patch: diff.stdout, comments };
+}
+
+/** The PR's review threads and its comments on the whole change, without the diff. */
+export async function githubComments(link: GithubLink): Promise<Comment[]> {
+  const [comments, discussion] = await Promise.all([
     cli("github", "gh", ["api", `repos/${link.repo}/pulls/${link.number}/comments`, "--paginate", "--slurp"]),
     cli("github", "gh", ["pr", "view", link.url, "--json", "comments,reviews"]),
   ]);
-  if (diff.code !== 0) throw new Error(diff.stderr.trim() || "gh pr diff failed");
   const list = comments.code === 0 ? (JSON.parse(comments.stdout) as GhComment[][]).flat() : [];
   const pr: GhDiscussion = discussion.code === 0 ? (JSON.parse(discussion.stdout) as GhDiscussion) : { comments: [], reviews: [] };
   // Comments on the whole PR: conversation comments plus review summaries. Their ids are GraphQL strings,
@@ -170,7 +220,7 @@ export async function githubDiff(link: GithubLink) {
     ...pr.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
     ...pr.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url: link.url })),
   ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
-  return { patch: diff.stdout, comments: [...general, ...list.map(githubComment)] };
+  return [...general, ...list.map(githubComment)];
 }
 
 /** A line comment from the REST API. GitHub threads only line comments, so only those take replies. */

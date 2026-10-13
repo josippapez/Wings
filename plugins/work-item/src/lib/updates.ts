@@ -12,6 +12,8 @@ export interface UpdateEvent {
   url: string;
   /** When it happened on Azure DevOps, ISO 8601. */
   at: string;
+  /** The work item it's about, when it's about one: the Updates list opens it in the item tab. */
+  item?: { org: string; project: string; id: number };
 }
 
 export interface StoredEvent extends UpdateEvent {
@@ -104,6 +106,7 @@ export function updateTime(u: WorkItemUpdate): string {
 export function workItemEvents(org: string, project: string, item: Candidate, updates: WorkItemUpdate[], me: string, since: string): UpdateEvent[] {
   const events: UpdateEvent[] = [];
   const url = workItemUrl(org, project, item.id);
+  const ref = { org, project, id: item.id };
   for (const u of updates) {
     const at = updateTime(u);
     if (!after(at, since) || u.revisedBy?.id?.toLowerCase() === me.toLowerCase()) continue;
@@ -111,11 +114,11 @@ export function workItemEvents(org: string, project: string, item: Candidate, up
     const state = u.fields?.["System.State"];
     if (item.mine && typeof state?.newValue === "string" && state.newValue !== state.oldValue) {
       const from = typeof state.oldValue === "string" ? `${state.oldValue} → ` : "";
-      events.push({ key: `wi:${org}:${item.id}:${u.id}:state`, kind: "state", title: `#${item.id} ${from}${state.newValue}`, body: `${item.title} · ${by}`, url, at });
+      events.push({ key: `wi:${org}:${item.id}:${u.id}:state`, kind: "state", title: `#${item.id} ${from}${state.newValue}`, body: `${item.title} · ${by}`, url, at, item: ref });
     }
     const history = u.fields?.["System.History"]?.newValue;
     if (typeof history === "string" && mentionsMe(history, me)) {
-      events.push({ key: `wi:${org}:${item.id}:${u.id}:mention`, kind: "mention", title: `${by} mentioned you on #${item.id}`, body: plain(history), url, at });
+      events.push({ key: `wi:${org}:${item.id}:${u.id}:mention`, kind: "mention", title: `${by} mentioned you on #${item.id}`, body: plain(history), url, at, item: ref });
     }
   }
   return events;

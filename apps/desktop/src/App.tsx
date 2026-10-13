@@ -25,6 +25,7 @@ import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
 import { defaultNewTab, isViewTab, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { collapseKey, restoreCollapsed, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
@@ -89,6 +90,8 @@ type SavedWorkspace = {
   viewTabs?: SavedViewTab[];
   /** What the + button opens, as `pluginId:viewId`; absent or null is a terminal. */
   newTabPage?: string | null;
+  /** Plugin sections folded shut under a project, as `collapseKey` makes them. Absent in older files. */
+  collapsedSections?: string[];
   sessions: Record<string, string | null>;
   /** Which agent each session in `sessions` belongs to. Absent in older files, which held Claude sessions only. */
   sessionKinds?: Record<string, SessionKind>;
@@ -195,6 +198,9 @@ export default function App() {
   const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
   // The sidebar page the right edge is peeking, so it stays loaded while shown.
   const [peekedSidebar, setPeekedSidebar] = useState<string | null>(null);
+  /** What plugins show under each project in the sidebar, and which of those you folded shut. */
+  const [projectSections, setProjectSections] = useState<ProjectSections>({});
+  const [collapsedSections, setCollapsedSections] = useState<string[]>([]);
   const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
   /** The plugin page shown in a modal, as `pluginId:viewId`. */
   const [modal, setModal] = useState<string | null>(null);
@@ -268,6 +274,10 @@ export default function App() {
   spacesRef.current = spaces;
   const gitRef = useRef(git);
   gitRef.current = git;
+  const pluginsRef = useRef(plugins);
+  pluginsRef.current = plugins;
+  /** A project as plugins see it: its branch as it is now. */
+  const pluginProject = useCallback((space: Space) => ({ id: space.id, name: space.name, path: space.path, branch: gitRef.current[space.id]?.branch ?? space.branch }), []);
   const paneInfoRef = useRef(paneInfo);
   paneInfoRef.current = paneInfo;
 
@@ -576,6 +586,7 @@ export default function App() {
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
       if (saved.newTabPage) setNewTabPage(saved.newTabPage);
+      setCollapsedSections(restoreCollapsed(saved.collapsedSections, list.map((s) => s.id)));
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
@@ -694,6 +705,7 @@ export default function App() {
       asleep,
       sleep,
       newTabPage,
+      collapsedSections,
       sessionArgs,
       cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
@@ -705,7 +717,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, collapsedSections, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -888,6 +900,7 @@ export default function App() {
           Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
         );
         setSidebarLabels((all) => Object.fromEntries(Object.entries(all).filter(([key]) => !key.startsWith(`${pluginId}:`))));
+        setProjectSections((all) => withoutPlugin(all, pluginId));
         // Its sidebar frames are gone too; a restart gets a new key so the page loads again.
         setEpochs((all) => ({ ...all, [pluginId]: (all[pluginId] ?? 0) + 1 }));
         setModal((key) => (key?.startsWith(`${pluginId}:`) ? null : key));
@@ -923,8 +936,10 @@ export default function App() {
       currentProject: () => activeSpaceIdRef.current,
       projectOf: (spaceId) => {
         const space = spacesRef.current.find((s) => s.id === spaceId);
-        return space ? { id: space.id, name: space.name, path: space.path, branch: gitRef.current[space.id]?.branch ?? space.branch } : null;
+        return space ? pluginProject(space) : null;
       },
+      projects: () => spacesRef.current.map(pluginProject),
+      setProjectSection: (pluginId, projectId, sectionId, rows) => setProjectSections((all) => withSection(all, projectId, pluginId, sectionId, rows)),
       tabState: (tabId) => {
         const tab = tabsRef.current.find((t) => t.id === tabId);
         return tab && isViewTab(tab) ? tab.state : undefined;
@@ -983,6 +998,7 @@ export default function App() {
   // Pages that asked for their project hear when it switches or its branch or name changes.
   useEffect(() => {
     pluginHost.current?.publishProjects();
+    pluginHost.current?.publishProjectList();
   }, [spaces, git, activeSpaceId]);
 
   // Plugins see every pane (with its Claude session, if any); badges go away with their pane.
@@ -1063,6 +1079,8 @@ export default function App() {
     await api.spacesRemove(spaceId);
     const rest = spaces.filter((s) => s.id !== spaceId);
     setSpaces(rest);
+    setProjectSections((all) => withoutProject(all, spaceId));
+    setCollapsedSections((all) => withoutProjectCollapsed(all, spaceId));
     if (activeSpaceId === spaceId) {
       if (rest[0]) selectSpace(rest[0].id);
       else setActiveSpaceId(null);
@@ -1229,6 +1247,15 @@ export default function App() {
     };
   });
 
+  const toggleSection = useCallback((projectId: string, key: string) => setCollapsedSections((all) => toggleCollapsed(all, collapseKey(projectId, key))), []);
+  /** A row under a project in the sidebar was clicked: its page opens as a tab in that project. */
+  const openSectionRow = useCallback(
+    (projectId: string, pluginId: string, open: { view: string; args?: unknown }) => {
+      const view = pluginsRef.current.find((p) => p.id === pluginId)?.contributes.views.find((v) => v.id === open.view && v.opens.includes("tab"));
+      if (view) showViewTab(projectId, pluginId, view.id, { multiple: view.multiple === true, args: open.args });
+    },
+    [showViewTab],
+  );
   const sidebarProps: Omit<ComponentProps<typeof Sidebar>, "open"> = {
     spaces,
     git,
@@ -1243,6 +1270,11 @@ export default function App() {
     paneKeyOf: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : []))),
     paneOrder: Object.fromEntries(Object.keys(panes).map((key, i) => [key, i])),
     onNewTab: (id) => openTab(id),
+    projectSections,
+    plugins: activePlugins,
+    collapsedSections,
+    onToggleSection: toggleSection,
+    onOpenSectionRow: openSectionRow,
     onForkAgent: forkAgent,
     onCloseAgent: closeAgent,
     onAddSpace: (path) => void addSpace(path),

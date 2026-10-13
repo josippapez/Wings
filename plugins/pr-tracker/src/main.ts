@@ -7,14 +7,17 @@
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { azureReply } from "./lib/azure";
+import { openDiffFor } from "./lib/diffview";
 import { githubReply } from "./lib/github";
 import { gitlabReply } from "./lib/gitlab";
 import { refreshLinks } from "./lib/links";
+import { markSeen, refreshProjects } from "./lib/projects";
+import { linkOf } from "./lib/refs";
 import { retry, signIn } from "./lib/signin";
-import { diffs, links, linkFor, problems, refOf, remotes, state, status, sync, viewers } from "./lib/state";
-import { loadDiff, refreshStatus } from "./lib/status";
+import { diffs, known, links, linkFor, problems, remotes, state, sync, viewers } from "./lib/state";
+import { refreshStatus } from "./lib/status";
 import { failingChecks } from "./lib/tool";
-import type { Comment, Diff, Link } from "./lib/types";
+import type { Comment, Diff, Link, PrArgs } from "./lib/types";
 import { problemKey } from "./lib/view";
 
 const LINK_POLL_MS = 15_000;
@@ -31,10 +34,15 @@ wings.onPanes((list) => {
     }
   }
   void refreshLinks();
+  // An agent starting or stopping on a PR's branch changes its row.
+  void refreshProjects();
 });
+wings.onProjects(() => void refreshProjects());
 // Both polls pause while Wings is in the background, and run once when you come back.
 pollWhileFocused(refreshLinks, LINK_POLL_MS);
 pollWhileFocused(() => [...new Set([...links.values()].map((l) => l.url))].forEach((url) => refreshStatus(url)), STATUS_POLL_MS);
+// The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
+pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
 
 wings.onTool("failing_checks", failingChecks);
 
@@ -68,23 +76,38 @@ wings.onAction(async ({ paneId, actionId }) => {
   if (!link) return;
   if (actionId === "open") return wings.openUrl(link.url);
   if (actionId === "refresh") return refreshStatus(link.url, { byUser: true });
-  if (actionId === "diff") {
-    const st = status.get(link.url);
-    const title = st?.title ?? `Pull request ${refOf(link)}`;
-    const subtitle = `${link.repo} ${refOf(link)}`;
-    const cached = diffs.get(link.url);
-    if (cached && cached.key === st?.key) {
-      const { id } = await wings.openDiff({ title, subtitle, patch: cached.patch, comments: cached.comments });
-      return void viewers.set(id, link.url);
-    }
-    // Not prefetched yet: open the viewer right away in its loading state, then fill it in.
-    const { id } = await wings.openDiff({ title, subtitle });
-    viewers.set(id, link.url);
-    try {
-      const { patch, comments } = await loadDiff(link.url);
-      await wings.updateDiff(id, { patch, comments });
-    } catch (error) {
-      await wings.updateDiff(id, { error: String((error as Error).message ?? error) });
-    }
+  if (actionId === "diff") return openDiffFor(link);
+});
+
+// ---------- the PR tab ----------
+
+/** What a "pr" tab asks of this script, since only it can open the diff viewer that takes replies and knows the agent panes. */
+type PrRequest = { type: "pr-request"; rid: string; op: "diff" | "agent" | "seen"; args: PrArgs };
+
+async function handleRequest({ op, args }: PrRequest) {
+  if (op === "seen") return markSeen(args.url);
+  let link: Link | undefined = [...links.values()].find((l) => l.url === args.url);
+  if (!link) {
+    // No pane is on it: diff in the folder of the project whose row opened it, not the first project that listed the repo.
+    link = known.get(args.url) ?? (await linkOf(args));
+    if (link.provider === "azure") link = { ...link, cwd: args.cwd };
+    known.set(args.url, link);
   }
+  if (op === "diff") return openDiffFor(link, { title: args.title });
+  // The agent working on this PR's branch: Send to agent in the viewer offers the one in this folder first.
+  const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === args.url);
+  if (!agent) throw new Error("No agent is working on this branch. Start Claude in a terminal on it, then try again.");
+  return openDiffFor(link, { title: args.title, cwd: agent.cwd });
+}
+
+wings.onBroadcast(async (message) => {
+  const request = message as PrRequest | null;
+  if (request?.type !== "pr-request") return;
+  let error: string | undefined;
+  try {
+    await handleRequest(request);
+  } catch (e) {
+    error = String((e as Error).message ?? e);
+  }
+  await wings.broadcast({ type: "pr-response", rid: request.rid, error });
 });

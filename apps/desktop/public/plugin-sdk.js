@@ -14,6 +14,7 @@
   listeners.transcript = [];
   listeners.focus = [];
   listeners.project = [];
+  listeners.projects = [];
   // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
   let focused = true;
   let focusKnown = false;
@@ -242,7 +243,7 @@
      * tab that's already open comes to the front. The page gets the same `wings` object wherever it opens.
      *
      * `args` (JSON, up to 16 KB, only with `as: "tab"`) is what the tab's page reads with `viewArgs`. A tab that's
-     * already open with other args takes the new ones and reloads; a view with `multiple` always opens a new tab.
+     * already open with other args takes the new ones and reloads; a view with `multiple` opens a new tab unless one in that project already has the same args.
      */
     openView: (id, { as, args } = {}) => call("openView", { id, as, args }),
     /** Where this page shows: "sidebar", "tab", "modal" or "window". `null` in the plugin's main script. */
@@ -272,6 +273,35 @@
         off();
       };
     },
+    /** Every project in Wings, `{ id, name, path, branch }[]` in sidebar order. Worktrees are projects too. */
+    projects: () => call("projects", {}),
+    /**
+     * Calls `listener` with every project, then each time one is added, removed or renamed, or a branch changes.
+     * Returns a function that removes the listener.
+     */
+    onProjects: (listener) => {
+      const off = subscribe(listeners.projects, listener);
+      let live = true;
+      call("projects", {}).then(
+        (projects) => {
+          if (live) listener(projects);
+        },
+        (error) => console.error(error),
+      );
+      return () => {
+        live = false;
+        off();
+      };
+    },
+    /**
+     * Shows a list under a project in the sidebar, in the section `sectionId` of the manifest's `contributes.projectSections`,
+     * or removes it with `rows: null`. A row is `{ id, label, detail?, badge?: { text, tone? }, open: { view, args? } }`:
+     * clicking it opens `open.view`, one of your views that opens as a tab, in that project, with `args`. Up to 50 rows;
+     * Wings cuts text to 120 characters (badge 24) and rejects args over 16 KB. Rejects for a project that isn't there, a
+     * section you didn't declare or a view that doesn't open as a tab. Sections are kept in memory and go when the plugin
+     * stops, so fill them again on start.
+     */
+    setProjectSection: (projectId, sectionId, rows) => call("setProjectSection", { projectId, sectionId, rows }),
     /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. */
     tabState: () => call("tabState", {}),
     /**

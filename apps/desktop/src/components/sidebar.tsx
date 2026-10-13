@@ -40,7 +40,9 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { elapsed } from "@/lib/agents";
-import type { Agent, AgentKind, AgentState, GitStatus, Space } from "@/lib/api";
+import type { Agent, AgentKind, AgentState, GitStatus, PluginView, Space } from "@/lib/api";
+import { ProjectSections, type OpenSectionRow } from "@/components/project-sections";
+import type { ProjectSections as ProjectSectionsState } from "@/lib/project-sections";
 import type { Phase } from "@/lib/sleep";
 import { trackDrag } from "@/lib/pointer-drag";
 import { shortcutLabel } from "@/lib/terminal";
@@ -99,6 +101,13 @@ export function Sidebar(props: {
   paneKeyOf: Record<string, string>;
   paneOrder: Record<string, number>;
   onNewTab: (spaceId: string) => void;
+  /** What plugins list under each project, the plugins that are on, and the sections folded shut. */
+  projectSections: ProjectSectionsState;
+  plugins: PluginView[];
+  collapsedSections: string[];
+  onToggleSection: (projectId: string, key: string) => void;
+  /** A row was clicked: its page opens as a tab in that project. */
+  onOpenSectionRow: OpenSectionRow;
   onForkAgent: (agent: Agent) => void;
   onCloseAgent: (agent: Agent) => void;
   onAddSpace: (path: string) => void;
@@ -291,6 +300,14 @@ export function Sidebar(props: {
                       </IconButton>
                     </span>
                     </div>
+                    <ProjectSections
+                      projectId={space.id}
+                      sections={props.projectSections[space.id]}
+                      plugins={props.plugins}
+                      collapsed={props.collapsedSections}
+                      onToggle={props.onToggleSection}
+                      onOpen={props.onOpenSectionRow}
+                    />
                   </ContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => props.onNewTab(space.id)}>

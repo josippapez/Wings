@@ -59,6 +59,9 @@ pub struct Contributes {
     pub sidebars: Vec<Sidebar>,
     /// Its own pages that can open in the right sidebar, in a modal over Wings, in a window of their own or as a tab.
     pub views: Vec<View>,
+    /// Lists it can show under each project in the sidebar, filled with `wings.setProjectSection`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub project_sections: Vec<ProjectSection>,
     /// Its own page in Wings Settings, under Plugin settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsPage>,
@@ -119,6 +122,16 @@ pub struct View {
     /// Opening it as a tab always opens a new tab, instead of showing the project's existing one. Needs `tab` in `opens`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multiple: bool,
+}
+
+/// A section a plugin may add under each project in the sidebar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSection {
+    pub id: String,
+    pub title: String,
+    /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
+    #[serde(default)]
+    pub icon: String,
 }
 
 pub const VIEW_PLACES: [&str; 4] = ["sidebar", "modal", "window", "tab"];
@@ -353,6 +366,20 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("view {:?} sets newTab or multiple, which need \"tab\" in opens", view.id));
         }
         resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
+    }
+    if manifest.contributes.project_sections.len() > 8 {
+        return Err("at most 8 project sections".into());
+    }
+    for (i, section) in manifest.contributes.project_sections.iter().enumerate() {
+        if !valid_id(&section.id) || section.title.is_empty() || section.title.len() > 40 {
+            return Err(format!("project section {:?} needs an id like a plugin id and a title up to 40 characters", section.id));
+        }
+        if manifest.contributes.project_sections[..i].iter().any(|s| s.id == section.id) {
+            return Err(format!("project section id {:?} is used twice", section.id));
+        }
+        if !section.icon.is_empty() && !PANEL_ICONS.contains(&section.icon) {
+            return Err(format!("project section icon {:?} must be one of {:?}, or left out to use the plugin icon", section.icon, PANEL_ICONS.as_slice()));
+        }
     }
     if let Some(settings) = &manifest.contributes.settings {
         resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
@@ -1839,6 +1866,39 @@ mod tests {
         assert!(!plain.new_tab && !plain.multiple);
         let json = serde_json::to_value(&plain).unwrap();
         assert!(json.get("newTab").is_none() && json.get("multiple").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_sections_are_checked_and_stay_out_of_older_manifests() {
+        let dir = std::env::temp_dir().join(format!("wings-sections-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |sections: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "projectSections": sections } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let icon = PANEL_ICONS[0].clone();
+        let ok = manifest(serde_json::json!([{ "id": "prs", "title": "Pull requests", "icon": icon }, { "id": "notes", "title": "Notes" }])).unwrap();
+        let sections = &ok.manifest.contributes.project_sections;
+        assert_eq!((sections[0].id.as_str(), sections[1].icon.as_str()), ("prs", ""));
+        assert_eq!(serde_json::to_value(&ok.manifest.contributes).unwrap()["projectSections"][0]["title"], "Pull requests");
+        let many: Vec<Value> = (0..9).map(|i| serde_json::json!({ "id": format!("s{i}"), "title": "S" })).collect();
+        for (bad, error) in [
+            (serde_json::json!(many), "at most 8"),
+            (serde_json::json!([{ "id": "Bad Id", "title": "S" }]), "needs an id"),
+            (serde_json::json!([{ "id": "", "title": "S" }]), "needs an id"),
+            (serde_json::json!([{ "id": "a", "title": "" }]), "needs an id"),
+            (serde_json::json!([{ "id": "a", "title": "x".repeat(41) }]), "needs an id"),
+            (serde_json::json!([{ "id": "a", "title": "S" }, { "id": "a", "title": "T" }]), "used twice"),
+            (serde_json::json!([{ "id": "a", "title": "S", "icon": "nope" }]), "icon"),
+        ] {
+            assert!(manifest(bad.clone()).err().unwrap().contains(error), "{bad}");
+        }
+        // Without them the contributes serialize as before, so plugins approved earlier keep their grant.
+        let plain = manifest(serde_json::json!([])).unwrap();
+        assert!(serde_json::to_value(&plain.manifest.contributes).unwrap().get("projectSections").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

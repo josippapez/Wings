@@ -37,8 +37,11 @@ export const failures = new Map<string, { key: string; items: Promise<FailureDet
 
 export const failKey = (st: Status) => st.failing.map((f) => f.id).join(" ");
 
+/** PR url → its ref, for PRs from the project lists and the PR page that no pane is on. */
+export const known = new Map<string, Link>();
+
 export function linkFor(url: string) {
-  return [...links.values()].find((l) => l.url === url);
+  return [...links.values()].find((l) => l.url === url) ?? known.get(url);
 }
 
 /** GitLab numbers merge requests `!12`; the others use `#12`. */

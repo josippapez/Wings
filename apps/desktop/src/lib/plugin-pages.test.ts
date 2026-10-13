@@ -95,6 +95,18 @@ test("a view that is multiple opens a new tab every time", () => {
   assert.deepEqual(second.tabs.map((t) => t.id), ["t1", "v1", "v2"]);
 });
 
+test("a multiple view shows the tab that already has the same args instead of opening another", () => {
+  const first = openViewTab([paneTab("t1")], "s1", board, "v1", { multiple: true, args: { pr: 7, repo: "a" } });
+  const again = openViewTab(first.tabs, "s1", board, "v2", { multiple: true, args: { repo: "a", pr: 7 } });
+  assert.equal(again.id, "v1");
+  assert.equal(again.tabs, first.tabs);
+  const other = openViewTab(first.tabs, "s1", board, "v3", { multiple: true, args: { pr: 8, repo: "a" } });
+  assert.equal(other.id, "v3");
+  // Another project, or no args, still opens a new tab.
+  assert.equal(openViewTab(first.tabs, "s2", board, "v4", { multiple: true, args: { pr: 7, repo: "a" } }).id, "v4");
+  assert.equal(openViewTab(first.tabs, "s1", board, "v5", { multiple: true }).id, "v5");
+});
+
 test("opening a view tab with different args replaces them and reloads it, same args or none leave it alone", () => {
   const opened = openViewTab([paneTab("t1")], "s1", board, "v1", { args: { task: 7 } });
   assert.deepEqual((opened.tabs[1] as ViewTab).args, { task: 7 });

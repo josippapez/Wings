@@ -80,6 +80,13 @@ async function mapLimit<T, R>(list: T[], fn: (item: T) => Promise<R>): Promise<R
 export function createWatcher(deps: Deps) {
   /** `org|project` → consecutive failed checks, and when to try again. */
   const failing = new Map<string, { failures: number; until: number }>();
+  /** Everything that reads and then writes the stored events goes through here, one at a time. */
+  let queue: Promise<unknown> = Promise.resolve();
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.then(fn, fn);
+    queue = run.catch(() => {});
+    return run;
+  };
 
   const wiql = async (t: Target, query: string): Promise<WiqlRow[]> => {
     // `az boards query` prints nothing at all for an empty result.
@@ -199,6 +206,15 @@ export function createWatcher(deps: Deps) {
       return (((await deps.get(KEYS.events)) as StoredEvent[] | null) ?? []).filter((e) => e && typeof e.key === "string");
     },
 
+    /** Marks one event read, or all of them. The Updates pages ask main to do it, so main is the only writer. */
+    markRead: (key?: string) =>
+      exclusive(async () => {
+        const kept = (await deps.get(KEYS.events)) as StoredEvent[] | null;
+        await deps.set(KEYS.events, (kept ?? []).map((e) => (!key || e.key === key ? { ...e, read: true } : e)));
+      }),
+
+    clear: () => exclusive(() => deps.set(KEYS.events, [])),
+
     /** One pass over `targets`. Resolves the new events, already stored and notified. */
     async cycle(targets: Target[], intervalMs: number): Promise<UpdateEvent[]> {
       const startedMs = deps.now();
@@ -216,7 +232,7 @@ export function createWatcher(deps: Deps) {
           console.warn(`[work-item] update check failed (${failures} in a row):`, error instanceof Error ? error.message : error);
         }
       }
-      return report(found);
+      return exclusive(() => report(found));
     },
   };
 
