@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { PluginView } from "./api.ts";
-import { cleanSectionRows, collapseKey, restoreCollapsed, sectionGroups, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection } from "./project-sections.ts";
+import { cleanSectionRows, collapseKey, restoreCollapsed, rowName, rowTitle, rowRef, sectionGroups, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection } from "./project-sections.ts";
 
 const views = ["board", "item"];
 const row = (extra: Record<string, unknown> = {}) => ({ id: "a", label: "A", open: { view: "board" }, ...extra });
@@ -106,4 +106,23 @@ test("removing a project drops its sections and collapse keys and keeps the othe
   assert.equal(withoutProject(all, "p9"), all);
   const collapsed = [collapseKey("p1", "tasks:open"), collapseKey("p10", "tasks:open"), collapseKey("p2", "tasks:open")];
   assert.deepEqual(withoutProjectCollapsed(collapsed, "p1"), [collapsed[1], collapsed[2]]);
+});
+
+test("rowRef takes a leading #/! reference out of the detail", () => {
+  assert.deepEqual(rowRef("#6399 · needs your review"), { ref: "#6399", rest: "needs your review" });
+  assert.deepEqual(rowRef("!12"), { ref: "!12" });
+  assert.deepEqual(rowRef("needs your review"), { rest: "needs your review" });
+  assert.deepEqual(rowRef("Defect #185638"), { ref: "#185638", rest: "Defect" });
+  assert.deepEqual(rowRef("Tech Story #187242 · Not linked to a repo"), { ref: "#187242", rest: "Tech Story · Not linked to a repo" });
+  assert.deepEqual(rowRef("# not a ref"), { rest: "# not a ref" });
+  assert.deepEqual(rowRef(undefined), {});
+  assert.equal(rowName({ id: "1", label: "Fix it", detail: "#1 · mine", badge: { text: "Approved", tone: "success" }, open: { view: "pr" } }), "Fix it, Approved, #1 · mine");
+});
+
+test("rowTitle drops leading [tags] only", () => {
+  assert.equal(rowTitle("[Waiting on decision] [#186963] FE: Spike - back navigation"), "FE: Spike - back navigation");
+  assert.equal(rowTitle("[WIP] Fix it"), "Fix it");
+  assert.equal(rowTitle("Fix [the] thing"), "Fix [the] thing");
+  assert.equal(rowTitle("[Only] [tags]"), "[Only] [tags]");
+  assert.equal(rowTitle("Plain"), "Plain");
 });

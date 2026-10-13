@@ -13,8 +13,30 @@ export const newTabEntries = (plugins: PluginView[]): NewTabEntry[] =>
         .map((v) => ({ key: `${p.id}:${v.id}`, pluginId: p.id, viewId: v.id, title: v.title, icon: v.icon, iconSvg: p.iconSvg, multiple: v.multiple === true })),
     );
 
-/** What the plain + opens: the page chosen in Settings while it's still offered, else a terminal (null). */
-export const defaultNewTab = (entries: NewTabEntry[], chosen: string | null) => entries.find((e) => e.key === chosen) ?? null;
+/**
+ * Settings, General, "New tab button opens": "terminal", "ask" (the plain + opens the menu), "project" (the Project page),
+ * or a plugin page's `pluginId:viewId`.
+ */
+export type NewTabChoice = string;
+
+/** What the plain + does for the saved choice. A page that's no longer offered, or an unknown value, is a terminal. */
+export type NewTabAction = { kind: "terminal" } | { kind: "ask" } | { kind: "project" } | { kind: "page"; entry: NewTabEntry };
+
+export function newTabAction(entries: NewTabEntry[], chosen: NewTabChoice | null | undefined): NewTabAction {
+  if (chosen === "ask") return { kind: "ask" };
+  if (chosen === "project") return { kind: "project" };
+  const entry = entries.find((e) => e.key === chosen);
+  return entry ? { kind: "page", entry } : { kind: "terminal" };
+}
+
+/** What a project's first tab is: set in Settings, General. */
+export type NewProjectOpens = "terminal" | "project";
+
+/** The saved choice, or the default (a terminal) for anything else. */
+export const parseNewProjectOpens = (value: unknown): NewProjectOpens => (value === "project" ? "project" : "terminal");
+
+/** The tab a project gets when it is selected: its Project page only for a project just added, and only when that is the choice. */
+export const firstTabFor = (choice: NewProjectOpens, justAdded: boolean): "terminal" | "project" => (justAdded && choice === "project" ? "project" : "terminal");
 
 /** The Settings section of a plugin's own settings page. Plugin ids can't hold `:`. */
 export const pluginSettingsSection = (pluginId: string) => `plugin:${pluginId}` as const;

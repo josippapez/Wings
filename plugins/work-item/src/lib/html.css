@@ -1,11 +1,100 @@
-.html { overflow-wrap: anywhere; line-height: 1.5; }
-.html p, .html ul, .html ol, .html blockquote, .html pre, .html table { margin: 0 0 8px; }
-.html ul, .html ol { padding-left: 20px; }
-.html a { color: var(--wings-info); cursor: pointer; text-decoration: underline; }
-.html blockquote { margin-left: 0; padding-left: 10px; border-left: 2px solid var(--wings-hairline-strong); color: var(--wings-muted); }
-.html pre, .html code { font-family: var(--wings-mono); font-size: 0.92em; }
-.html pre { padding: 8px 10px; overflow-x: auto; background: var(--wings-surface); border-radius: var(--wings-radius); }
-.html table { border-collapse: collapse; }
-.html td, .html th { padding: 3px 8px; border: 1px solid var(--wings-hairline); vertical-align: top; }
-.html hr { border: 0; border-top: 1px solid var(--wings-hairline); }
-.html .html-image { color: var(--wings-muted); font-style: italic; }
+/* Azure DevOps HTML drawn in the same type as plugin-ui's Markdown (.w-md): same size, spacing, code, quotes and tables. */
+.html {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.html > :last-child {
+  margin-bottom: 0;
+}
+.html p,
+.html ul,
+.html ol,
+.html blockquote,
+.html pre,
+.html .html-table {
+  margin: 0 0 10px;
+}
+.html ul,
+.html ol {
+  padding-left: 20px;
+}
+.html ul {
+  list-style: disc;
+}
+.html ol {
+  list-style: decimal;
+}
+.html .html-heading {
+  margin: 4px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.html a {
+  color: var(--wings-info);
+  cursor: pointer;
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+.html a:hover {
+  text-decoration: underline;
+}
+.html blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--wings-hairline-strong);
+  color: var(--wings-muted);
+}
+.html code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.08);
+  font-family: var(--wings-mono);
+  font-size: 0.92em;
+}
+.html pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.06);
+  font: 12px/1.45 var(--wings-mono);
+}
+.html pre code {
+  padding: 0;
+  background: none;
+  font: inherit;
+}
+.html .html-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--wings-hairline);
+  border-radius: 8px;
+}
+.html table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.html td,
+.html th {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--wings-hairline);
+  text-align: left;
+  vertical-align: top;
+}
+.html th {
+  background: var(--wings-surface);
+  font-weight: 600;
+}
+.html tr:last-child > td {
+  border-bottom: 0;
+}
+.html hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--wings-hairline);
+}
+.html .html-image {
+  color: var(--wings-muted);
+  font-style: italic;
+}

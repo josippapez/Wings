@@ -1,0 +1,4 @@
+# Built plugin bundles (plugins/build.mjs): committed so Wings can install a plugin from the default branch,
+# but nobody reviews them, and one minified line can be megabytes of diff.
+plugins/*/*.js -diff linguist-generated
+plugins/*/*.html linguist-generated

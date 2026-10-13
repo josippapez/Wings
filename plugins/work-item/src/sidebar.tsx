@@ -8,6 +8,8 @@ import { useBroadcast } from "wings-plugin-sdk/react";
 import { Button, Dot, Empty, Heading, List, ListItem, Loading, Page, Row, showSidebar, showTab, Stack, Text, Toolbar } from "wings-plugin-ui";
 
 import type { StoredEvent } from "./lib/updates";
+import { InboxView } from "./ui/inbox-view";
+import "./item.css";
 
 const KEY = "watch:events";
 const inTab = wings.placement() === "tab";
@@ -47,10 +49,17 @@ function Updates() {
     if (e.item) await wings.openView("item", { as: "tab", args: e.item });
     else await wings.openUrl(e.url);
   };
+  const clear = () => {
+    setEvents([]);
+    void ask("clear");
+  };
+  if (inTab) {
+    return <InboxView events={events} onOpen={(e) => void open(e)} onBrowser={(e) => { void markRead(e.key); void wings.openUrl(e.url); }} onMarkRead={(key) => void markRead(key)} onClear={clear} />;
+  }
   const actions = (
     <>
       {unread ? <Button variant="ghost" size="sm" onClick={() => void markRead()}>Mark all read</Button> : null}
-      {events.length ? <Button variant="ghost" size="sm" onClick={() => { setEvents([]); void ask("clear"); }}>Clear</Button> : null}
+      {events.length ? <Button variant="ghost" size="sm" onClick={clear}>Clear</Button> : null}
     </>
   );
 
@@ -65,12 +74,11 @@ function Updates() {
               <Dot tone={e.read ? undefined : "info"} style={e.read ? { visibility: "hidden" } : undefined} label={e.read ? undefined : "Unread"} />
               <Stack gap="xs" grow>
                 <Text weight={e.read ? undefined : "strong"}>{e.title}</Text>
-                <Text tone="muted" size="small" clamp={!inTab}>{e.body}</Text>
+                <Text tone="muted" size="small" clamp>{e.body}</Text>
                 <Text tone="muted" size="tiny">{ago(e.at)}</Text>
               </Stack>
               <Row gap="xs">
                 <Button variant="ghost" size="sm" onClick={() => void open(e)}>{e.item ? "Open item" : "Open"}</Button>
-                {e.item && inTab ? <Button variant="ghost" size="sm" onClick={() => { void markRead(e.key); void wings.openUrl(e.url); }}>In browser</Button> : null}
               </Row>
             </Row>
           </ListItem>
@@ -78,7 +86,6 @@ function Updates() {
       </List>
     );
 
-  if (inTab) return <Page toolbar={<Toolbar title={unread ? `Updates (${unread} new)` : "Updates"} actions={actions} />}>{list}</Page>;
   return (
     <Stack gap="m">
       <Heading actions={actions}>Updates</Heading>

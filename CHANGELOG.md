@@ -4,6 +4,17 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.27 · 2026-10-13
+
+- Tabs get the whole title bar. The project name, branch, plugin buttons, history and settings move to a slim bar under the tabs.
+- "New tab button opens" in Settings offers Terminal, Choose each time, Project page, or any plugin page that declares `newTab`.
+- Projects in the sidebar list pull requests, work items and tasks as one-line rows with a status dot. Leading tags like `[Waiting on decision]` are hidden, and long lists show 5 rows, then "Show N more".
+- Project page: add an item at the top, search the page with ⌘F, and an option to open new projects on their Project page.
+- PR tracker 0.11.0: "View in diff" jumps to the comment's line, replies work on GitHub Enterprise, Bitbucket and Codeberg, and Approve works on GitHub, GitLab, Bitbucket and Codeberg. A pull request tab opened on its own lists the project's pull requests.
+- Work item 0.6.0: the work item tab reads like the PR page, with Overview, Links and History, and Updates has filters. The sidebar's work items leave out finished ones and show each under the repo it's linked to.
+- Changes 0.3.0 shows big diffs: a file over 1 MB shows as too large instead of the whole diff failing. Every plugin command also returns about 20 ms sooner.
+- Plugins can only send to hosts their CLI is signed in to, and a write permission can pin a field so it can't be bypassed with a different-case key.
+
 ## 0.1.26 · 2026-10-13
 
 - The changed-files count uses a plain pencil icon. The old file-and-pencil icon looked like two icons on top of each other at that size.

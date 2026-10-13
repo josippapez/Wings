@@ -1,39 +1,16 @@
-// The work item tab: title, state with its next-state buttons, assignee, sprint, parent, the whole description,
-// comments and linked pull requests. The page shows at once and each part fills in as its call returns.
+// The work item tab: loads the work item and its parts, and hands them to ItemView (ui/item-view.tsx), which draws
+// them. The page shows at once and each part fills in as its call returns.
 
 import { useCallback, useEffect, useState } from "react";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Badge, Button, Card, Empty, Heading, Loading, Page, Properties, Row, showTab, Stack, Text, Toolbar } from "wings-plugin-ui";
+import { Empty, Page, Toolbar, showTab } from "wings-plugin-ui";
 
-import { Html } from "./lib/Html";
-import { commentsOf, itemArgs, pullRequestLinks, type Comment, type ItemArgs, type PrLink } from "./lib/item";
+import { allLinkIds, commentsOf, discussionOf, idsQuery, itemArgs, linkIds, linkedItems, pullRequestLinks, revisionsOf, type ItemArgs, type LinkedItem } from "./lib/item";
 import { prUrl, workItemUrl, type WorkItemUpdate } from "./lib/updates";
-import { stateTone } from "./lib/sections";
-import { nextStates, type TypeState } from "./lib/view";
-
-interface Fields {
-  "System.Title": string;
-  "System.TeamProject": string;
-  "System.WorkItemType": string;
-  "System.State": string;
-  "System.IterationPath"?: string;
-  "System.Parent"?: number;
-  "System.AssignedTo"?: { displayName?: string };
-  "System.Description"?: string;
-  "System.Tags"?: string;
-}
-
-interface Shown {
-  id: number;
-  fields: Fields;
-  relations: { rel?: string; url?: string; attributes?: { name?: string } }[] | null;
-}
-
-interface PrInfo extends PrLink {
-  title?: string;
-  status?: string;
-  repo?: string;
-}
+import type { QueryRow } from "./lib/sections";
+import type { TypeState } from "./lib/view";
+import { ItemError, ItemSkeleton, ItemView, type ItemViewProps, type Part, type PrInfo, type Shown } from "./ui/item-view";
+import "./item.css";
 
 async function az(org: string, args: string[]): Promise<unknown> {
   const out = await wings.exec("az", [...args, "--organization", org, "-o", "json"]);
@@ -46,17 +23,17 @@ const invoke = (area: string, resource: string, route: Record<string, string | n
   "--route-parameters", ...Object.entries(route).map(([k, v]) => `${k}=${v}`),
 ];
 
-const when = (iso: string) => (iso ? new Date(iso).toLocaleString() : "");
 const message = (e: unknown) => String((e as { message?: unknown })?.message ?? e);
+const none = { data: null, error: null };
 
 function Item({ args }: { args: ItemArgs }) {
   const { org, id } = args;
   const [item, setItem] = useState<Shown | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [states, setStates] = useState<TypeState[]>([]);
-  const [parent, setParent] = useState<string | null>(null);
-  const [comments, setComments] = useState<Comment[] | null>(null);
-  const [prs, setPrs] = useState<PrInfo[] | null>(null);
+  const [linked, setLinked] = useState<Part<Record<number, LinkedItem>>>(none);
+  const [updates, setUpdates] = useState<ItemViewProps["updates"]>(none);
+  const [prs, setPrs] = useState<PrInfo[]>([]);
   const [moving, setMoving] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -76,14 +53,23 @@ function Item({ args }: { args: ItemArgs }) {
     void az(org, invoke("wit", "workItemTypeStates", { project, type: f["System.WorkItemType"] }))
       .then((r) => setStates((r as { value?: TypeState[] }).value ?? []))
       .catch(() => setStates([]));
-    if (f["System.Parent"]) {
-      void az(org, ["boards", "work-item", "show", "--id", String(f["System.Parent"])])
-        .then((p) => setParent((p as Shown).fields["System.Title"] ?? ""))
-        .catch(() => setParent(""));
+    const ids = allLinkIds(linkIds(shown.relations, f["System.Parent"]));
+    if (ids.length) {
+      // One query for every linked work item, not a call each.
+      void az(org, ["boards", "query", "--project", project, "--wiql", idsQuery(ids)])
+        .then((rows) => setLinked({ data: linkedItems(Array.isArray(rows) ? (rows as QueryRow[]) : []), error: null }))
+        .catch((e) => setLinked({ data: null, error: message(e) }));
+    } else {
+      setLinked({ data: {}, error: null });
     }
     void az(org, invoke("wit", "updates", { project, id }))
-      .then((r) => setComments(commentsOf((r as { value?: WorkItemUpdate[] }).value ?? [])))
-      .catch(() => setComments([]));
+      .then((r) => {
+        const list = (r as { value?: WorkItemUpdate[] }).value ?? [];
+        const comments = commentsOf(list);
+        const revisions = revisionsOf(list);
+        setUpdates({ data: { comments, revisions, feed: discussionOf(comments, revisions) }, error: null });
+      })
+      .catch((e) => setUpdates({ data: null, error: message(e) }));
     const links = pullRequestLinks(shown.relations).slice(0, 10);
     setPrs(links);
     void Promise.all(
@@ -103,20 +89,10 @@ function Item({ args }: { args: ItemArgs }) {
     if ((m as { type?: string } | null)?.type === "item-changed") void load();
   });
 
-  if (error) {
-    return (
-      <Page toolbar={<Toolbar title={`Work item #${id}`} actions={<Button size="sm" onClick={() => void load()}>Try again</Button>} />}>
-        <Empty title="Couldn't load this work item" description={error} />
-      </Page>
-    );
-  }
-  if (!item) return <Page toolbar={<Toolbar title={`Work item #${id}`} />}><Loading /></Page>;
+  if (error) return <ItemError id={id} message={error} onRetry={() => void load()} />;
+  if (!item) return <ItemSkeleton id={id} />;
 
-  const f = item.fields;
-  const project = f["System.TeamProject"];
-  const state = f["System.State"];
-  const iteration = f["System.IterationPath"] ?? "";
-  const next = nextStates({ state, states });
+  const project = item.fields["System.TeamProject"];
   const move = async (to: string) => {
     setMoving(to);
     setMoveError(null);
@@ -132,83 +108,26 @@ function Item({ args }: { args: ItemArgs }) {
       setMoving(null);
     }
   };
-  const openItem = (target: number) => void wings.openView("item", { as: "tab", args: { id: target, org, project } });
 
   return (
-    <Page
-      toolbar={
-        <Toolbar
-          title={`#${id} ${f["System.Title"]}`}
-          actions={
-            <>
-              <Button size="sm" variant="ghost" onClick={() => void load()}>Refresh</Button>
-              <Button size="sm" onClick={() => void wings.openUrl(workItemUrl(org, project, id))}>Open in Azure DevOps</Button>
-            </>
-          }
-        />
-      }
-    >
-      <Stack gap="l">
-        <Row gap="m" wrap>
-          <Badge variant={stateTone(state) === "neutral" ? "outline" : undefined} tone={toneName(stateTone(state))}>{state}</Badge>
-          <Text tone="muted">{f["System.WorkItemType"]}</Text>
-          {next.map((s) => (
-            <Button key={s} size="sm" busy={moving === s} onClick={() => void move(s)}>{`Move to ${s}`}</Button>
-          ))}
-        </Row>
-        {moveError ? <Text tone="danger">{moveError}</Text> : null}
-        <Properties
-          items={[
-            { label: "Assigned to", value: f["System.AssignedTo"]?.displayName ?? "Unassigned" },
-            { label: "Sprint", value: iteration.includes("\\") ? iteration.split("\\").at(-1)! : "None" },
-            ...(f["System.Tags"] ? [{ label: "Tags", value: f["System.Tags"] }] : []),
-            ...(f["System.Parent"]
-              ? [{ label: "Parent", value: <Button size="sm" variant="ghost" onClick={() => openItem(f["System.Parent"]!)}>{`#${f["System.Parent"]}${parent ? ` ${parent}` : ""}`}</Button> }]
-              : []),
-          ]}
-        />
-
-        <Stack gap="s">
-          <Heading>Description</Heading>
-          {f["System.Description"]?.trim() ? <Html html={f["System.Description"]} /> : <Text tone="muted">No description.</Text>}
-        </Stack>
-
-        <Stack gap="s">
-          <Heading>Pull requests</Heading>
-          {prs === null ? <Loading /> : prs.length === 0 ? <Text tone="muted">No linked pull requests.</Text> : (
-            <Stack gap="s">
-              {prs.map((p) => (
-                <Row key={p.id} gap="s" justify="between">
-                  <Text grow truncate>{`PR #${p.id}${p.title ? ` ${p.title}` : ""}`}</Text>
-                  {p.status ? <Badge variant="outline">{p.status}</Badge> : null}
-                  <Button size="sm" variant="ghost" onClick={() => void wings.openUrl(prUrl(org, project, p.repoId, p.id))}>Open</Button>
-                </Row>
-              ))}
-            </Stack>
-          )}
-        </Stack>
-
-        <Stack gap="s">
-          <Heading>{comments ? `Comments (${comments.length})` : "Comments"}</Heading>
-          {comments === null ? <Loading /> : comments.length === 0 ? <Text tone="muted">No comments.</Text> : (
-            <Stack gap="m">
-              {comments.map((c) => (
-                <Card key={c.id} compact>
-                  <Stack gap="xs">
-                    <Row gap="s"><Text weight="strong">{c.author}</Text><Text tone="muted" size="small">{when(c.at)}</Text></Row>
-                    <Html html={c.html} />
-                  </Stack>
-                </Card>
-              ))}
-            </Stack>
-          )}
-        </Stack>
-      </Stack>
-    </Page>
+    <ItemView
+      args={args}
+      item={item}
+      states={states}
+      linked={linked}
+      updates={updates}
+      prs={prs}
+      moving={moving}
+      moveError={moveError}
+      onMove={(to) => void move(to)}
+      onRefresh={() => void load()}
+      onOpenItem={(target) => void wings.openView("item", { as: "tab", args: { id: target, org, project } })}
+      onOpenUrl={(url) => void wings.openUrl(url)}
+      prUrl={(p) => prUrl(org, project, p.repoId, p.id)}
+      workItemUrl={workItemUrl(org, project, id)}
+    />
   );
 }
-
-const toneName = (t: string) => (t === "success" ? "success" : t === "warning" ? "warn" : t === "neutral" ? undefined : "info");
 
 function Root() {
   const args = itemArgs(wings.viewArgs());

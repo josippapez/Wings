@@ -4,18 +4,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Empty, showTab } from "wings-plugin-ui";
-import { commentsOf, linkOf, overviewOf, replyWith, type Overview } from "./lib/refs";
+import { Button, Empty, Heading, Loading, Row, showTab, Stack } from "wings-plugin-ui";
+import { approveWith, canApprove, commentsOf, linkOf, overviewOf, replyWith, type Overview } from "./lib/refs";
 import type { Comment, Link, PrArgs } from "./lib/types";
 import "./pr.css";
 import { PrView } from "./ui/pr-view";
+import { ProjectPulls } from "./ui/pulls-list";
 
 const REFRESH_MS = 120_000;
 /** Longer than this and main isn't going to answer, so the button stops waiting. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Asks the main script to do something and waits for its answer. Every tab hears every answer, so the id is unique across tabs. */
-function askMain(op: "diff" | "agent" | "seen", args: PrArgs) {
+function askMain(op: "diff" | "agent" | "seen", args: PrArgs, focus?: WingsDiffFocus) {
   const rid = crypto.randomUUID();
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -29,7 +30,7 @@ function askMain(op: "diff" | "agent" | "seen", args: PrArgs) {
       off();
       m.error ? reject(new Error(m.error)) : resolve();
     });
-    wings.broadcast({ type: "pr-request", rid, op, args }).catch((e: Error) => {
+    wings.broadcast({ type: "pr-request", rid, op, args, focus }).catch((e: Error) => {
       clearTimeout(timer);
       off();
       reject(e);
@@ -73,11 +74,11 @@ function Pr({ args }: { args: PrArgs }) {
   // Another tab's reply, or the diff viewer's, shows here at the next refresh; this one's own is added at once.
   useBroadcast(() => {});
 
-  const run = useCallback(async (op: "diff" | "agent") => {
+  const run = useCallback(async (op: "diff" | "agent", focus?: WingsDiffFocus) => {
     setBusy(op);
     setNotice(null);
     try {
-      await askMain(op, args);
+      await askMain(op, args, focus);
     } catch (e) {
       setNotice(String((e as Error).message ?? e));
     } finally {
@@ -93,6 +94,11 @@ function Pr({ args }: { args: PrArgs }) {
     [link],
   );
 
+  const onApprove = useCallback(async () => {
+    await approveWith(link!, overview!.status.key);
+    await load();
+  }, [link, load, overview]);
+
   return (
     <PrView
       args={args}
@@ -105,9 +111,35 @@ function Pr({ args }: { args: PrArgs }) {
       onRefresh={() => void load()}
       onRun={run}
       onReply={onReply}
+      onApprove={link && canApprove(link.provider) ? onApprove : undefined}
     />
   );
 }
 
+/** A tab opened with no pull request (from its title bar button) lists the project's open ones; picking one opens it here, so the tab stays one tab. */
+function Home() {
+  const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
+  const [picked, setPicked] = useState<PrArgs | null>(null);
+  useEffect(() => {
+    void wings.project().then(setProject);
+  }, []);
+  if (picked) {
+    return (
+      <Stack gap="s">
+        <Row><Button size="sm" onClick={() => setPicked(null)}>All pull requests</Button></Row>
+        <Pr key={picked.url} args={picked} />
+      </Stack>
+    );
+  }
+  if (project === undefined) return <Loading>Loading pull requests</Loading>;
+  if (!project) return <Empty title="No pull request" description="Open one from a project's Pull requests list." />;
+  return (
+    <Stack gap="s">
+      <Heading level={2}>Open pull requests</Heading>
+      <ProjectPulls path={project.path} onOpen={setPicked} />
+    </Stack>
+  );
+}
+
 const args = wings.viewArgs<PrArgs>();
-showTab(args ? <Pr args={args} /> : <Empty title="No pull request" description="Open one from a project's Pull requests list." />, { fill: true });
+showTab(args ? <Pr args={args} /> : <Home />, { fill: true });

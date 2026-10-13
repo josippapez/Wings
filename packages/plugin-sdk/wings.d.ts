@@ -41,6 +41,14 @@ interface WingsBadge {
   actions?: { id: string; label: string; primary?: boolean }[];
 }
 
+/** Where the diff viewer scrolls to and highlights once the patch is shown. A path or line the patch doesn't have just opens the diff. */
+interface WingsDiffFocus {
+  path: string;
+  line?: number;
+  /** `new` (the default) counts lines after the change, `old` before it. */
+  side?: "old" | "new";
+}
+
 interface WingsComment {
   id: number;
   replyTo: number | null;
@@ -145,7 +153,7 @@ interface Wings {
    * is sent back as a failed call. `paneId` is the Wings pane Claude runs in, or `null`. Register it in `main`.
    */
   onTool(name: string, handler: (input: Record<string, unknown>, context: { paneId: string | null }) => unknown): void;
-  /** Runs a command from `permissions.exec`, like `git branch --show-current`. */
+  /** Runs a command from `permissions.exec`, like `git branch --show-current`. Rejects with `Output is larger than 8 MB` (and kills the program) when stdout or stderr passes 8 MB. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**
    * Needs `permissions.statusline`. What Claude Code last told its status line, once `wings statusline` is your
@@ -187,9 +195,9 @@ interface Wings {
   /** Needs `permissions.notify`. A desktop notification, up to 3 a minute. The title is cut at 64 characters, the body at 256. */
   notify(notification: { title: string; body?: string }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
-  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[] }): Promise<{ id: string }>;
+  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus }): Promise<{ id: string }>;
   /** Updates a viewer opened with `openDiff`; ignored once it's closed. `{ comments }` alone keeps the patch, like after a reply. */
-  updateDiff(id: string, update: { patch: string; comments?: WingsComment[] } | { comments: WingsComment[] } | { error: string }): Promise<void>;
+  updateDiff(id: string, update: { patch: string; comments?: WingsComment[]; focus?: WingsDiffFocus } | { comments: WingsComment[]; focus?: WingsDiffFocus } | { error: string }): Promise<void>;
   /**
    * Needs `"diff"` in `contributes.ui`. A reply typed under a comment with `canReply` in the diff viewer. Post it,
    * then add it with `updateDiff`. The reply box waits for the returned promise, and a thrown error shows under it
@@ -198,7 +206,8 @@ interface Wings {
   onReply(handler: (reply: WingsReply) => unknown): void;
   /**
    * POSTs `fields` (string or whole-number values, up to 64 KB) as JSON to a `permissions.post` path, as you:
-   * `gh api`, `glab api` against `host`, or `az rest` for Azure DevOps. Wings builds the command itself.
+   * `gh api` (against `host` for a GitHub Enterprise Server), `glab api` against `host`, or `az rest` for Azure
+   * DevOps. Wings builds the command itself. A manifest entry may pin a field, like `{event=APPROVE}`.
    */
   post(
     program: "gh" | "glab" | "az",
@@ -207,7 +216,8 @@ interface Wings {
     options?: { host?: string },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**
-   * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings sends
+   * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
+   * `POST <url with * segments>` (optionally `{field=value}`) for one write with a JSON `body`. `bearer` names a secret that Wings sends
    * as `Authorization: Bearer <secret>`. Resolves for any status; redirects aren't followed.
    */
   fetch(

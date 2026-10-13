@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ago, isAutomated, kindOf, oneLine, threadsOf } from "./threads.ts";
+import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf } from "./threads.ts";
 
 const c = (id, replyTo, createdAt, extra = {}) => ({ id, replyTo, path: null, line: null, side: "additions", author: "Ada", body: "x", createdAt, url: "", ...extra });
 
@@ -36,4 +36,11 @@ test("relative times", () => {
   assert.equal(ago("2026-03-01T09:00:00Z", now), "3 h ago");
   assert.equal(ago("2026-02-27T12:00:00Z", now), "2 d ago");
   assert.equal(ago("nonsense", now), "");
+});
+
+test("View in diff points at the thread's file and the line on its side", () => {
+  assert.deepEqual(focusOf(c(1, null, "t", { path: "src/a.ts", line: 12 })), { path: "src/a.ts", line: 12, side: "new" });
+  assert.deepEqual(focusOf(c(1, null, "t", { path: "src/a.ts", line: 3, side: "deletions" })), { path: "src/a.ts", line: 3, side: "old" });
+  assert.deepEqual(focusOf(c(1, null, "t", { path: "src/a.ts", line: null })), { path: "src/a.ts" }, "code that changed since has no line");
+  assert.equal(focusOf(c(1, null, "t")), undefined, "a comment on the whole PR has no file");
 });

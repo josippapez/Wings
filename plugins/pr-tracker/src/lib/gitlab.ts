@@ -239,3 +239,16 @@ export async function gitlabReply(link: GitlabLink, root: Comment, body: string)
   const n = (await post("glab", `${project(link.remote)}/merge_requests/${link.number}/discussions/${root.discussion}/notes`, { body }, { host: link.remote.host })) as GlNote;
   return { ...root, id: n.id, replyTo: root.id, author: n.author?.name ?? n.author?.username ?? "you", body: n.body ?? body, createdAt: n.created_at, canReply: false };
 }
+
+/**
+ * Approves the head commit you loaded (`sha`, the status's key), not whatever the head is now: GitLab answers 409 when
+ * the branch has moved on, so you never approve commits you haven't seen.
+ */
+export async function gitlabApprove(link: GitlabLink, sha: string): Promise<void> {
+  try {
+    await post("glab", `${project(link.remote)}/merge_requests/${link.number}/approve`, { sha }, { host: link.remote.host });
+  } catch (e) {
+    if (/\b409\b|conflict|does not match/i.test(String((e as Error).message))) throw new Error("New commits since you loaded this PR. Refresh and review again.");
+    throw e;
+  }
+}

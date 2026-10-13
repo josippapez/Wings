@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bbComments, bbListed, bbOwn, bbStatusOf, bbWho, encodeQuery, gtComments, gtListed, gtOwn, gtStatusOf, LIST_FIELDS, plainFailure } from "./forges.ts";
+import { bbComments, bbListed, bbOwn, bbStatusOf, bbWho, encodeQuery, gtComments, gtListed, gtOwn, gtQuoted, gtStatusOf, LIST_FIELDS, plainFailure } from "./forges.ts";
 import { signInKey } from "./state.ts";
 
 test("a query value stays in the normal form wings.fetch needs", () => {
@@ -74,7 +74,7 @@ test("Bitbucket comments: inline position, deleted ones dropped, replies under t
     [5, null, null, null, "additions"],
     [6, null, "b.ts", 3, "deletions"],
   ]);
-  assert.ok(list.every((c) => c.canReply === false));
+  assert.deepEqual(list.map((c) => c.canReply), [true, false, false, true, true], "a thread takes a reply on its first comment");
   assert.equal(list[3].author, "C");
   assert.equal(list[3].url, url);
 });
@@ -150,4 +150,18 @@ test("sign-in state is per host for GitHub and GitLab, so github.com and an Ente
   assert.notEqual(signInKey({ kind: "github", host: "github.com", path: "o/r" }), signInKey({ kind: "github", host: "ghe.example", path: "o/r" }));
   assert.notEqual(signInKey({ kind: "github", host: "x", path: "" }), signInKey({ kind: "gitlab", host: "x", path: "" }));
   assert.equal(signInKey({ kind: "bitbucket", workspace: "w", repo: "r" }), "bitbucket");
+});
+
+test("a Codeberg reply quotes the first lines of the comment it answers", () => {
+  assert.equal(gtQuoted({ author: "Ana", body: "Why 2?" }, "Because."), "> **Ana** wrote:\n> Why 2?\n\nBecause.");
+  const long = Array.from({ length: 9 }, (_, i) => `line ${i + 1}`).join("\n");
+  const quoted = gtQuoted({ author: "Ana", body: `${long}\n` }, "ok");
+  assert.equal(quoted.split("\n").filter((l) => l.startsWith("> line")).length, 6);
+  assert.match(quoted, /> …\n\nok$/);
+  assert.equal(gtQuoted({ author: "Ana", body: "a\n\nb" }, "ok"), "> **Ana** wrote:\n> a\n>\n> b\n\nok", "a blank line stays inside the quote");
+});
+
+test("Codeberg conversation comments take a reply", () => {
+  const list = gtComments([{ id: 5, user: { login: "ana" }, body: "hi", created_at: "t", html_url: "https://codeberg.org/o/r/pulls/1#issuecomment-5" }], [], "https://codeberg.org/o/r/pulls/1");
+  assert.equal(list[0].canReply, true);
 });

@@ -113,3 +113,24 @@ export function withoutProject(all: ProjectSections, projectId: string): Project
 
 /** Drops a removed project's collapse keys. */
 export const withoutProjectCollapsed = (collapsed: string[], projectId: string) => collapsed.filter((k) => !k.startsWith(`${projectId}\n`));
+
+/** Rows a section lists before "Show more". */
+export const SECTION_ROWS_SHOWN = 5;
+
+/**
+ * A row's short reference and what's left of its detail: `#6399 · needs your review` is `#6399` and `needs your review`,
+ * `Defect #185638` is `#185638` and `Defect`. The reference is the first `#123` or `!123` word, wherever it is.
+ */
+export function rowRef(detail: string | undefined): { ref?: string; rest?: string } {
+  if (!detail) return {};
+  const m = /(?<=^|\s)[#!]\d+(?=\s|$)/.exec(detail);
+  if (!m) return { rest: detail };
+  const rest = `${detail.slice(0, m.index)}${detail.slice(m.index + m[0].length)}`.split(" · ").map((p) => p.trim()).filter(Boolean).join(" · ");
+  return { ref: m[0], ...(rest ? { rest } : {}) };
+}
+
+/** What a screen reader says for a row, and the tooltip's text: `label, status, detail`. */
+export const rowName = (row: ProjectSectionRow) => [row.label, row.badge?.text, row.detail].filter(Boolean).join(", ");
+
+/** A row's title without its leading `[tag]` groups; the original when nothing else is left. Brackets later in the title stay. */
+export const rowTitle = (label: string) => label.replace(/^(?:\s*\[[^\]]*\])+\s*/, "") || label;

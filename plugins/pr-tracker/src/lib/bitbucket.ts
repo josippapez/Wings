@@ -1,6 +1,6 @@
-/** Bitbucket Cloud: pull requests through the REST API 2.0 with an API token, the diff from local git, comments read-only. */
+/** Bitbucket Cloud: pull requests through the REST API 2.0 with an API token, the diff from local git, replies and approvals through the same token. */
 import { git } from "./cli";
-import { forgeJson, forgeUser, type Forge } from "./forge";
+import { forgeJson, forgePost, forgeUser, type Forge } from "./forge";
 import { bbComments, LIST_FIELDS, bbListed, bbOwn, bbStatusOf, encodeQuery, type BbComment, type BbPr, type BbStatus } from "./forges";
 import { status } from "./state";
 import type { BitbucketLink, BitbucketRemote, Comment, Link, ListedPr, Status } from "./types";
@@ -11,6 +11,7 @@ export const BITBUCKET: Forge = {
   secret: "bitbucket",
   name: "Bitbucket",
   scopeHint: "The API token needs the read:pullrequest:bitbucket and read:user:bitbucket scopes.",
+  writeHint: "The API token needs the write:pullrequest:bitbucket scope to reply and approve.",
 };
 
 interface Page<T> {
@@ -87,4 +88,17 @@ export async function bitbucketDiff(link: BitbucketLink) {
 
 export async function bitbucketComments(link: BitbucketLink): Promise<Comment[]> {
   return bbComments(await getPage<BbComment>(`${prUrl(link)}/comments?pagelen=100`), link.url);
+}
+
+// ---------- replies and approval ----------
+
+/** Replies in the thread. The API threads a comment under `parent`, and a reply to a reply is moved under the thread's first comment on read. */
+export async function bitbucketReply(link: BitbucketLink, root: Comment, body: string): Promise<Comment> {
+  const created = JSON.parse(await forgePost(BITBUCKET, `${prUrl(link)}/comments`, { content: { raw: body }, parent: { id: root.id } })) as BbComment;
+  return { ...bbComments([created], link.url)[0], replyTo: root.id, canReply: false };
+}
+
+/** Approves as the token's account. */
+export async function bitbucketApprove(link: BitbucketLink): Promise<void> {
+  await forgePost(BITBUCKET, `${prUrl(link)}/approve`);
 }

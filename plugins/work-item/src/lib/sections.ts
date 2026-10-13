@@ -66,6 +66,82 @@ export function stateTone(state: string): Tone {
   return "neutral";
 }
 
+// ---------- which items a repo's section shows ----------
+
+/** Per work item type (lower case), the category of each state (lower case): Proposed, InProgress, Resolved, Completed, Removed. */
+export type StateCategories = Record<string, Record<string, string>>;
+
+/** `workItemTypes` as `az devops invoke` prints it, cut by `--query` to the names and categories. */
+export function stateCategories(types: { name?: string; states?: { name?: string; category?: string }[] }[] | null | undefined): StateCategories {
+  const out: StateCategories = {};
+  for (const t of types ?? []) {
+    if (!t.name) continue;
+    out[t.name.toLowerCase()] = Object.fromEntries((t.states ?? []).filter((s) => s.name && s.category).map((s) => [s.name!.toLowerCase(), s.category!]));
+  }
+  return out;
+}
+
+/** Without the type's categories (the lookup failed, or a custom type): the names processes give their last states. */
+const FINISHED_NAMES = /^(done|closed|completed|removed)$/i;
+
+/** A finished item is in a Completed or Removed state category. When the category isn't known, its state's name decides. */
+export function isFinished(type: string | undefined, state: string | undefined, categories?: StateCategories): boolean {
+  const category = categories?.[(type ?? "").toLowerCase()]?.[(state ?? "").toLowerCase()];
+  if (category) return category === "Completed" || category === "Removed";
+  return FINISHED_NAMES.test(state ?? "");
+}
+
+/** What a work item's relations say about the git repositories it touches: the repository ids in its branch, commit and pull request links (`vstfs:///Git/<kind>/<project id>%2F<repository id>%2F...`), lower case. */
+export function repoIdsOf(relations: { rel?: string; url?: string }[] | null | undefined): string[] {
+  const ids = new Set<string>();
+  for (const r of relations ?? []) {
+    const m = r.rel === "ArtifactLink" ? r.url?.match(/^vstfs:\/\/\/Git\/(?:Ref|Commit|PullRequestId)\/[^/]+?%2f([^/]+?)%2f/i) : null;
+    if (m) ids.add(m[1].toLowerCase());
+  }
+  return [...ids];
+}
+
+/** `workItems?ids=…&$expand=Relations` as `az devops invoke` prints it, as repository ids by work item id. */
+export function repoLinksOf(list: { value?: { id: number; relations?: { rel?: string; url?: string }[] | null }[] } | null | undefined): Record<number, string[]> {
+  return Object.fromEntries((list?.value ?? []).map((w) => [w.id, repoIdsOf(w.relations)]));
+}
+
+/** Dates and versions in a branch name (2026-10-13, 2026.10, v1.2.3): their numbers aren't work item ids. */
+const DATE_OR_VERSION = /\d{4}[-./]\d{1,2}(?:[-./]\d{1,2})?|v?\d+(?:\.\d+)+/gi;
+
+/** Whether a branch name carries the work item's id as a token of its own, at least 3 digits: `feature/1234-login` has 1234, `hotfix/2026-10-13` and `v1.2.3` have none. */
+export function branchHasId(branch: string, id: number): boolean {
+  if (id < 100) return false;
+  return new RegExp(`(?<![A-Za-z0-9])${id}(?![A-Za-z0-9])`).test(branch.replace(DATE_OR_VERSION, " "));
+}
+
+export interface RepoRef {
+  /** Its Azure repository id, when it could be read. */
+  id?: string;
+  /** Local and remote branch names. */
+  branches: string[];
+}
+
+export const NOT_LINKED = "Not linked to a repo";
+
+/**
+ * The rows of one repository's section, from the team project's unfinished items. An item shows when it links to the
+ * repository (a branch, commit or pull request there) or a branch of it has the item's id, first. An item linked to no
+ * repository at all follows, marked "Not linked to a repo", under every repository of the team project. An item linked
+ * to other repositories only isn't shown.
+ */
+export function repoRows(org: string, project: string, rows: QueryRow[], links: Record<number, string[]>, repo: RepoRef): SectionRow[] {
+  const mine: QueryRow[] = [];
+  const loose: QueryRow[] = [];
+  for (const row of rows) {
+    const repos = links[row.id] ?? [];
+    if ((repo.id && repos.includes(repo.id.toLowerCase())) || repo.branches.some((b) => branchHasId(b, row.id))) mine.push(row);
+    else if (repos.length === 0) loose.push(row);
+  }
+  const out = sectionRows(org, project, [...mine, ...loose]);
+  return out.map((r, i) => (i >= mine.length ? { ...r, detail: `${r.detail} · ${NOT_LINKED}` } : r));
+}
+
 export interface QueryRow {
   id: number;
   fields: { "System.Title"?: string; "System.State"?: string; "System.WorkItemType"?: string; "System.AssignedTo"?: { displayName?: string } | string };

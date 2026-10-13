@@ -6,7 +6,7 @@ import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
 import { createWatcher, DEFAULT_SETTINGS, type Settings } from "./lib/watch";
 import { workItemUrl, type StoredEvent } from "./lib/updates";
-import { assignedQuery, blockItems, isFresh, currentIterations, SECTION_ID, sectionRows, sprintQuery, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
+import { assignedQuery, blockItems, isFinished, isFresh, currentIterations, repoLinksOf, repoRows, SECTION_ID, stateCategories, sprintQuery, type RepoRef, type StateCategories, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
 const BRANCH_POLL_MS = 15_000;
@@ -349,9 +349,8 @@ void loadSettings().then(() => setTimeout(() => void checkUpdates(), 15_000));
 const SECTION_TTL_MS = 100_000;
 const SECTION_POLL_MS = 120_000;
 const SPRINT_TTL_MS = 3_600_000;
+const FAILED_CATEGORIES_TTL_MS = 120_000;
 
-/** `${org} ${project}` → the rows, when they were read. */
-const sections = new Map<string, { at: number; rows: SectionRow[] }>();
 /** `${org} ${project}` → the running sprints' paths, when they were read. */
 const sprints = new Map<string, { at: number; paths: string[] }>();
 /** projectId → the rows last sent to Wings, as JSON, so an unchanged section isn't sent again. */
@@ -374,18 +373,90 @@ async function sprintPaths(org: string, project: string): Promise<string[]> {
   return known.paths;
 }
 
-async function sectionRowsFor(org: string, project: string): Promise<SectionRow[]> {
+/** `${org} ${project}` → each work item type's state categories, read at most once an hour. A failed read is `null`: names decide then. */
+const categories = new Map<string, { at: number; value: StateCategories | null }>();
+/** `${org} ${project} ${repo}` → the repository's id, which links carry in place of its name. */
+const repoIds = new Map<string, string | undefined>();
+
+async function stateCategoriesFor(org: string, project: string): Promise<StateCategories | null> {
   const key = `${org} ${project}`;
-  const cached = sections.get(key);
-  if (cached && Date.now() - cached.at < SECTION_TTL_MS) return cached.rows;
+  const known = categories.get(key);
+  if (known && Date.now() - known.at < SPRINT_TTL_MS) return known.value;
+  let value: StateCategories | null = null;
+  try {
+    // `--query` keeps what az prints to the names and categories: the whole answer is over a megabyte.
+    value = stateCategories((await azQuiet(org, [
+      "devops", "invoke", "--area", "wit", "--resource", "workItemTypes", "--route-parameters", `project=${project}`, "--api-version", "7.1",
+      "--query", "value[].{name:name,states:states[].{name:name,category:category}}",
+    ])) as never);
+  } catch (error) {
+    console.warn("[work-item] state categories failed, using state names:", error instanceof Error ? error.message : error);
+  }
+  // A failed read is only remembered briefly, so the next refresh tries again soon.
+  categories.set(key, { at: value ? Date.now() : Date.now() - SPRINT_TTL_MS + FAILED_CATEGORIES_TTL_MS, value });
+  return value;
+}
+
+async function repoIdFor(org: string, project: string, repo: string): Promise<string | undefined> {
+  const key = `${org} ${project} ${repo}`;
+  if (!repoIds.has(key)) {
+    try {
+      const found = (await azQuiet(org, ["devops", "invoke", "--area", "git", "--resource", "repositories", "--route-parameters", `project=${project}`, `repositoryId=${repo}`, "--api-version", "7.1"])) as { id?: string };
+      repoIds.set(key, found.id);
+    } catch {
+      // Not remembered: the next refresh asks again, and until then only branches match.
+      return undefined;
+    }
+  }
+  return repoIds.get(key);
+}
+
+/** The most unfinished items one team project's section looks at: one `workItems` read takes 200 ids. */
+const ITEMS_CAP = 100;
+
+interface TeamItems {
+  rows: QueryRow[];
+  /** work item id → ids of the repositories its links point at */
+  links: Record<number, string[]>;
+}
+
+/** `${org} ${project}` → the unfinished items assigned to you, with their repository links, when they were read. Every repo of the team project shares it. */
+const teamItems = new Map<string, { at: number; value: TeamItems }>();
+
+async function teamItemsFor(org: string, project: string): Promise<TeamItems> {
+  const key = `${org} ${project}`;
+  const cached = teamItems.get(key);
+  if (cached && Date.now() - cached.at < SECTION_TTL_MS) return cached.value;
   const paths = await sprintPaths(org, project);
-  let rows: SectionRow[] = [];
+  let value: TeamItems = { rows: [], links: {} };
   if (paths.length) {
     const found = await azQuiet(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, paths)]);
-    rows = sectionRows(org, project, Array.isArray(found) ? (found as QueryRow[]) : []);
+    const cats = await stateCategoriesFor(org, project);
+    const rows = (Array.isArray(found) ? (found as QueryRow[]) : []).filter((r) => !isFinished(r.fields["System.WorkItemType"], r.fields["System.State"], cats ?? undefined)).slice(0, ITEMS_CAP);
+    // One read for all the links, never one per item.
+    const links = rows.length
+      ? repoLinksOf((await azQuiet(org, ["devops", "invoke", "--area", "wit", "--resource", "workItems", "--route-parameters", `project=${project}`, "--query-parameters", `ids=${rows.map((r) => r.id).join(",")}`, "$expand=Relations", "--api-version", "7.1"])) as never)
+      : {};
+    value = { rows, links };
   }
-  sections.set(key, { at: Date.now(), rows });
-  return rows;
+  teamItems.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** The local and remote branches of a repo: cheap and local, so read at each refresh. */
+async function branchesOf(cwd: string): Promise<string[]> {
+  try {
+    return (await git(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"])).split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function sectionRowsFor(remote: { org: string; project: string; repo: string }, cwd: string): Promise<SectionRow[]> {
+  const { org, project, repo } = remote;
+  const team = await teamItemsFor(org, project);
+  const ref: RepoRef = { id: await repoIdFor(org, project, repo), branches: await branchesOf(cwd) };
+  return repoRows(org, project, team.rows, team.links, ref);
 }
 
 /** One query per Azure project, whatever number of Wings projects point at it. Stale rows stay when a read fails. */
@@ -403,7 +474,7 @@ async function refreshSections() {
       let rows: SectionRow[] | null = null;
       if (remote.kind === "azure") {
         try {
-          rows = await sectionRowsFor(remote.org, remote.project);
+          rows = await sectionRowsFor(remote, project.path);
         } catch (error) {
           console.warn("[work-item] work items section failed:", error instanceof Error ? error.message : error);
           continue;

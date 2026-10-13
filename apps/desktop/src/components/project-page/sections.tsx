@@ -6,9 +6,11 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { Markdown, type LocalImage } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { LIMITS, editSection, projectInfo, type Section } from "@/lib/project-info";
 
 import { imageExt, imageMarkdown, takeStored, type EditorState } from "./merge";
+import { markClass, type Mark } from "./search";
 import { messageOf, type Apply } from "./use-project-info";
 
 /** Typing costs no render and no write: the text lives in the textarea, and a save goes out this long after typing stops, and on blur. */
@@ -18,13 +20,13 @@ const same = (a: Section, b: Section) => a.id === b.id && a.title === b.title &&
 
 /** Re-renders only when its own section or position changes, so typing in one doesn't render the others. */
 export const SectionCard = memo(
-  function SectionCard({ projectId, section, first, last, startEditing, apply, read }: { projectId: string; section: Section; first: boolean; last: boolean; startEditing: boolean; apply: Apply; read: LocalImage }) {
+  function SectionCard({ projectId, section, first, last, startEditing, apply, read, mark }: { projectId: string; section: Section; first: boolean; last: boolean; startEditing: boolean; apply: Apply; read: LocalImage; mark?: Mark }) {
     const [editing, setEditing] = useState(startEditing);
     const [confirm, setConfirm] = useState(false);
     const [error, setError] = useState("");
     const act = (op: Parameters<Apply>[0]) => apply(op).then(() => setError(""), (e) => setError(messageOf(e)));
     return (
-      <article id={`item-${section.id}`} aria-label={section.title} className="group/section rounded-xl border border-hairline bg-white/[0.02] p-4">
+      <article id={`item-${section.id}`} aria-label={section.title} className={cn("group/section rounded-xl border border-hairline bg-white/[0.02] p-4", markClass(mark))}>
         {editing ? (
           <SectionEditor projectId={projectId} section={section} apply={apply} onDone={() => setEditing(false)} />
         ) : (
@@ -75,7 +77,7 @@ export const SectionCard = memo(
       </article>
     );
   },
-  (a, b) => a.projectId === b.projectId && a.first === b.first && a.last === b.last && a.apply === b.apply && a.read === b.read && a.startEditing === b.startEditing && same(a.section, b.section),
+  (a, b) => a.projectId === b.projectId && a.first === b.first && a.last === b.last && a.apply === b.apply && a.read === b.read && a.startEditing === b.startEditing && a.mark === b.mark && same(a.section, b.section),
 );
 
 function SectionEditor({ projectId, section, apply, onDone }: { projectId: string; section: Section; apply: Apply; onDone: () => void }) {

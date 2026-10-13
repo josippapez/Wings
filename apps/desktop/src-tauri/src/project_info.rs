@@ -82,6 +82,15 @@ impl Default for Info {
     }
 }
 
+/// Where an added item goes: `"top"`, `"end"` or `{ "after": <item id> }`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Place {
+    Top,
+    End,
+    After(String),
+}
+
 /// One change. `kind` is the variant's name in camelCase; fields are camelCase too.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -95,9 +104,9 @@ pub enum Op {
     /// The user edits a section. `base_len` (UTF-16 units) and `base_hash` (FNV-1a over them) describe the body the
     /// page started from: what an agent appended after that stays after the user's text.
     EditSection { id: String, title: Option<String>, body: Option<String>, base_len: usize, base_hash: u32 },
-    /// A new empty section, after item `after` or at the end.
-    AddSection { title: String, after: Option<String> },
-    AddBlock { plugin_id: String, block_id: String, after: Option<String> },
+    /// A new empty section at `at`.
+    AddSection { title: String, at: Place },
+    AddBlock { plugin_id: String, block_id: String, at: Place },
     SetBlockState { id: String, state: Option<Value> },
     SetBlockHeight { id: String, height: u32 },
     MoveItem { id: String, dir: i32 },
@@ -166,12 +175,13 @@ fn block_count(items: &[Item]) -> usize {
     items.iter().filter(|i| matches!(i, Item::Block { .. })).count()
 }
 
-fn insert_after(items: &mut Vec<Item>, after: Option<&str>, item: Item) -> Result<(), String> {
-    match after {
-        None => items.push(item),
-        Some(id) => {
-            let at = items.iter().position(|i| i.id() == id).ok_or("The item to add after was removed.")?;
-            items.insert(at + 1, item);
+fn insert_at(items: &mut Vec<Item>, at: &Place, item: Item) -> Result<(), String> {
+    match at {
+        Place::Top => items.insert(0, item),
+        Place::End => items.push(item),
+        Place::After(id) => {
+            let pos = items.iter().position(|i| i.id() == id).ok_or("The item to add after was removed.")?;
+            items.insert(pos + 1, item);
         }
     }
     Ok(())
@@ -312,7 +322,7 @@ pub fn apply_op(info: &Info, op: Op, now: u64, id: &dyn Fn() -> String) -> Resul
             *by = Who::You;
             *updated_at = now;
         }
-        Op::AddSection { title, after } => {
+        Op::AddSection { title, at } => {
             let title = clean_title(&title)?;
             if let Some(at) = section_pos(&items, &title) {
                 let Item::Section { title: t, .. } = &items[at] else { unreachable!() };
@@ -321,16 +331,16 @@ pub fn apply_op(info: &Info, op: Op, now: u64, id: &dyn Fn() -> String) -> Resul
             if section_count(&items) >= MAX_SECTIONS {
                 return Err(format!("A project is limited to {MAX_SECTIONS} sections."));
             }
-            insert_after(&mut items, after.as_deref(), Item::Section { id: id(), title, body: String::new(), by: Who::You, updated_at: now })?;
+            insert_at(&mut items, &at, Item::Section { id: id(), title, body: String::new(), by: Who::You, updated_at: now })?;
         }
-        Op::AddBlock { plugin_id, block_id, after } => {
+        Op::AddBlock { plugin_id, block_id, at } => {
             if plugin_id.is_empty() || block_id.is_empty() {
                 return Err("pluginId and blockId are required.".into());
             }
             if block_count(&items) >= MAX_BLOCKS {
                 return Err(format!("A project page holds at most {MAX_BLOCKS} blocks, because each one is a frame. Remove one first."));
             }
-            insert_after(&mut items, after.as_deref(), Item::Block { id: id(), plugin_id, block_id, state: None, height: None })?;
+            insert_at(&mut items, &at, Item::Block { id: id(), plugin_id, block_id, state: None, height: None })?;
         }
         Op::SetBlockState { id: bid, state } => {
             if let Some(s) = &state {
@@ -866,12 +876,12 @@ mod tests {
     fn section_cap() {
         let mut i = Info::default();
         for n in 0..MAX_SECTIONS {
-            i = app(&i, Op::AddSection { title: format!("S{n}"), after: None }).unwrap();
+            i = app(&i, Op::AddSection { title: format!("S{n}"), at: Place::End }).unwrap();
         }
-        assert!(app(&i, Op::AddSection { title: "more".into(), after: None }).unwrap_err().contains("30 sections"));
+        assert!(app(&i, Op::AddSection { title: "more".into(), at: Place::End }).unwrap_err().contains("30 sections"));
         assert!(app(&i, Op::AppendSection { title: "more".into(), body: "x".into(), by: Who::Agent }).is_err());
         assert!(app(&i, Op::WriteSection { title: "more".into(), body: "x".into(), by: Who::Agent }).is_err());
-        assert!(app(&i, Op::AddSection { title: "s1".into(), after: None }).unwrap_err().contains("already"));
+        assert!(app(&i, Op::AddSection { title: "s1".into(), at: Place::End }).unwrap_err().contains("already"));
     }
 
     fn base(text: &str) -> (usize, u32) {
@@ -918,7 +928,7 @@ mod tests {
 
     #[test]
     fn blocks_state_height_and_caps() {
-        let add = |i: &Info| app(i, Op::AddBlock { plugin_id: "tasks".into(), block_id: "board".into(), after: None });
+        let add = |i: &Info| app(i, Op::AddBlock { plugin_id: "tasks".into(), block_id: "board".into(), at: Place::End });
         let mut i = Info::default();
         for _ in 0..MAX_BLOCKS {
             i = add(&i).unwrap();
@@ -937,7 +947,7 @@ mod tests {
         assert!(matches!(&i.items[0], Item::Block { height: Some(300), .. }));
         assert!(app(&i, Op::SetBlockHeight { id: "nope".into(), height: 300 }).unwrap_err().contains("removed"));
         // A section is not a block.
-        let s = app(&Info::default(), Op::AddSection { title: "S".into(), after: None }).unwrap();
+        let s = app(&Info::default(), Op::AddSection { title: "S".into(), at: Place::End }).unwrap();
         assert!(app(&s, Op::SetBlockHeight { id: s.items[0].id().into(), height: 300 }).is_err());
     }
 
@@ -945,16 +955,16 @@ mod tests {
     fn add_after_move_and_delete() {
         let mut i = Info::default();
         for t in ["A", "B", "C"] {
-            i = app(&i, Op::AddSection { title: t.into(), after: None }).unwrap();
+            i = app(&i, Op::AddSection { title: t.into(), at: Place::End }).unwrap();
         }
         let title = |i: &Info, n: usize| match &i.items[n] {
             Item::Section { title, .. } => title.clone(),
             Item::Block { block_id, .. } => format!("block:{block_id}"),
         };
         let a = i.items[0].id().to_string();
-        let i = app(&i, Op::AddBlock { plugin_id: "p".into(), block_id: "b".into(), after: Some(a.clone()) }).unwrap();
+        let i = app(&i, Op::AddBlock { plugin_id: "p".into(), block_id: "b".into(), at: Place::After(a.clone()) }).unwrap();
         assert_eq!(title(&i, 1), "block:b");
-        let i = app(&i, Op::AddSection { title: "D".into(), after: Some(a.clone()) }).unwrap();
+        let i = app(&i, Op::AddSection { title: "D".into(), at: Place::After(a.clone()) }).unwrap();
         assert_eq!((title(&i, 0), title(&i, 1), title(&i, 2)), ("A".into(), "D".into(), "block:b".into()));
         let i = app(&i, Op::MoveItem { id: a.clone(), dir: 1 }).unwrap();
         assert_eq!(title(&i, 1), "A");
@@ -967,15 +977,31 @@ mod tests {
         assert_eq!(i.items.len(), n - 1);
         // Deleting what is already gone changes nothing.
         assert_eq!(app(&i, Op::DeleteItem { id: a }).unwrap(), i);
-        assert!(app(&i, Op::AddSection { title: "X".into(), after: Some("gone".into()) }).is_err());
+        assert!(app(&i, Op::AddSection { title: "X".into(), at: Place::After("gone".into()) }).is_err());
+    }
+
+    #[test]
+    fn add_at_top_middle_and_end() {
+        let order = |i: &Info| i.items.iter().map(|x| match x { Item::Section { title, .. } => title.clone(), Item::Block { block_id, .. } => block_id.clone() }).collect::<Vec<_>>().join(",");
+        let mut i = app(&Info::default(), Op::AddSection { title: "A".into(), at: Place::Top }).unwrap();
+        i = app(&i, Op::AddSection { title: "B".into(), at: Place::End }).unwrap();
+        i = app(&i, Op::AddSection { title: "T".into(), at: Place::Top }).unwrap();
+        assert_eq!(order(&i), "T,A,B");
+        let a = i.items[1].id().to_string();
+        i = app(&i, Op::AddBlock { plugin_id: "p".into(), block_id: "blk".into(), at: Place::After(a) }).unwrap();
+        assert_eq!(order(&i), "T,A,blk,B");
+        i = app(&i, Op::AddBlock { plugin_id: "p".into(), block_id: "top".into(), at: Place::Top }).unwrap();
+        assert_eq!(order(&i), "top,T,A,blk,B");
+        let op: Op = serde_json::from_value(json!({ "kind": "addSection", "title": "x", "at": "top" })).unwrap();
+        assert!(matches!(op, Op::AddSection { at: Place::Top, .. }));
     }
 
     #[test]
     fn json_shape_matches_the_page() {
         let op: Op = serde_json::from_value(json!({ "kind": "editSection", "id": "a", "body": "x", "baseLen": 1, "baseHash": 2 })).unwrap();
         assert!(matches!(op, Op::EditSection { base_len: 1, base_hash: 2, title: None, .. }));
-        let op: Op = serde_json::from_value(json!({ "kind": "addBlock", "pluginId": "p", "blockId": "b", "after": "z" })).unwrap();
-        assert!(matches!(op, Op::AddBlock { after: Some(_), .. }));
+        let op: Op = serde_json::from_value(json!({ "kind": "addBlock", "pluginId": "p", "blockId": "b", "at": { "after": "z" } })).unwrap();
+        assert!(matches!(op, Op::AddBlock { at: Place::After(_), .. }));
         let op: Op = serde_json::from_value(json!({ "kind": "setFact", "key": "k", "value": "v" })).unwrap();
         assert!(matches!(op, Op::SetFact { by: Who::You, .. }));
         let info = Info { items: vec![Item::Block { id: "i".into(), plugin_id: "p".into(), block_id: "b".into(), state: None, height: Some(90) }], ..Info::default() };

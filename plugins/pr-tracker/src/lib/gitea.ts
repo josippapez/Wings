@@ -1,6 +1,6 @@
-/** Gitea and Forgejo (Codeberg): pull requests through `/api/v1` with an access token, the diff from the API's `.diff`, comments read-only. */
-import { forgeGet, forgeJson, forgeUser, type Forge } from "./forge";
-import { encodeQuery, gtComments, gtListed, gtOwn, gtStatusOf, type GtComment, type GtCommitStatus, type GtPr, type GtReview } from "./forges";
+/** Gitea and Forgejo (Codeberg): pull requests through `/api/v1` with an access token, the diff from the API's `.diff`, replies and approvals. */
+import { forgeGet, forgeJson, forgePost, forgeUser, type Forge } from "./forge";
+import { encodeQuery, gtComments, gtListed, gtQuoted, gtOwn, gtStatusOf, type GtComment, type GtCommitStatus, type GtPr, type GtReview } from "./forges";
 import type { Comment, GiteaLink, GiteaRemote, Link, ListedPr, Status } from "./types";
 
 /** One token per host, saved under a name made of the host's letters: `codeberg` for codeberg.org. */
@@ -9,6 +9,7 @@ export const giteaForge = (host: string): Forge => ({
   secret: host.split(".")[0],
   name: host,
   scopeHint: "The access token needs the read:repository, read:issue and read:user scopes.",
+  writeHint: "The access token needs the write:issue scope to reply and write:repository to approve.",
 });
 
 const api = (r: { host: string; owner: string; repo: string }) => `https://${r.host}/api/v1/repos/${r.owner}/${r.repo}`;
@@ -81,4 +82,17 @@ export async function giteaComments(link: GiteaLink): Promise<Comment[]> {
     forgeJson<GtReview[]>(forge, `${prUrl(link)}/reviews`),
   ]);
   return gtComments(comments, reviews, link.url);
+}
+
+// ---------- replies and approval ----------
+
+/** Quotes the comment and posts it as a new comment on the pull request: the API has no reply to a comment. */
+export async function giteaReply(link: GiteaLink, root: Comment, body: string): Promise<Comment> {
+  const created = JSON.parse(await forgePost(forgeOf(link), `${api(link.remote)}/issues/${link.number}/comments`, { body: gtQuoted(root, body) })) as GtComment;
+  return { ...gtComments([created], [], link.url)[0], replyTo: root.id, canReply: false };
+}
+
+/** Approves as the token's account; Gitea refuses it for your own pull request. */
+export async function giteaApprove(link: GiteaLink): Promise<void> {
+  await forgePost(forgeOf(link), `${prUrl(link)}/reviews`, { event: "APPROVED" });
 }

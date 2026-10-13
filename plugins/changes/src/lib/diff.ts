@@ -1,18 +1,18 @@
 import { plural } from "./format";
 import { changes, MAX_UNTRACKED_READ, type Changes, type FileChange } from "./changes";
+import { batched, fitPatch, placeholder } from "./batch";
 import { basename, COLOR, git, literal } from "./git";
 import type { Mode } from "./types";
 
-/** About 2 MB of patch. Past this the viewer would take seconds to draw, so "View all" says so instead. */
+/** About 2 MB of patch in all. Past this the biggest files turn into "Too large to show" entries, since the viewer would take seconds to draw them. */
 export const MAX_PATCH_LINES = 50_000;
 export const MAX_PATCH_BYTES = 2 * 1024 * 1024;
 export const MAX_PATCH_FILES = 1_500;
 
 /** A patch for files git doesn't track yet, read with `git grep`, since Wings refuses `git diff --no-index`. */
 async function untrackedPatch(root: string, files: FileChange[]) {
-  const read = files.slice(0, MAX_UNTRACKED_READ);
-  if (read.length === 0) return "";
-  const paths = read.map((f) => f.path);
+  if (files.length === 0) return "";
+  const paths = files.map((f) => f.path);
   const r = await wings.exec("git", ["grep", "--untracked", "-I", "-z", "--no-color", "--no-line-number", "--no-column", "-e", "", "--", ...literal(paths)], { cwd: root });
   if (r.code !== null && r.code > 1) throw new Error(r.stderr.trim() || "git grep failed");
   const text = new Map<string, string[]>();
@@ -51,10 +51,17 @@ async function patchOf(c: Changes, path: string | null) {
   }
   const tracked = files.filter((f) => !f.untracked);
   const untracked = files.filter((f) => f.untracked);
-  const spec = path == null ? [] : ["--", ...literal(tracked.flatMap((f) => (f.oldPath ? [f.oldPath, f.path] : [f.path])))];
-  const [diff, added] = await Promise.all([tracked.length ? git(c.root, ["diff", c.base, "-M", ...COLOR, ...spec]) : "", untrackedPatch(c.root, untracked)]);
-  const patch = diff + added;
-  if (patch.length > MAX_PATCH_BYTES) throw new Error(`Too large to show: ${Math.round(patch.length / 1024 / 1024)} MB of changes in ${plural(files.length, "file")}.`);
+  // Never one giant patch: git's output is capped at 8 MB, and one minified bundle can be most of it.
+  const tooBig = (path: string) => placeholder(`diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n`, "Too large to show (over 8 MB)");
+  const [diff, added] = await Promise.all([
+    batched(
+      tracked,
+      (part) => git(c.root, ["diff", c.base, "-M", ...COLOR, "--", ...literal(part.flatMap((f) => (f.oldPath ? [f.oldPath, f.path] : [f.path])))]),
+      (f) => tooBig(f.path),
+    ),
+    batched(untracked.slice(0, MAX_UNTRACKED_READ), (part) => untrackedPatch(c.root, part), (f) => tooBig(f.path)),
+  ]);
+  const patch = fitPatch(diff + added, { total: MAX_PATCH_BYTES });
   const skipped = untracked.length - Math.min(untracked.length, MAX_UNTRACKED_READ);
   return { patch, note: skipped ? ` · ${plural(skipped, "new file")} not shown` : "" };
 }

@@ -26,7 +26,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGlyph } from "@/components/layout-glyph";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
 import { StatusDot } from "@/components/status-dot";
-import type { AgentState, Space } from "@/lib/api";
+import type { AgentState, GitStatus, Space } from "@/lib/api";
+import { GitCounts } from "@/components/git-counts";
 import type { LayoutNode } from "@/lib/layout";
 import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
 import type { NewTabEntry } from "@/lib/plugin-pages";
@@ -138,7 +139,8 @@ export type TabView =
 const spring = { type: "spring", stiffness: 520, damping: 38, mass: 0.8 } as const;
 
 export function TitleBar(props: {
-  space: Space | null;
+  /** Whether a project is open, which the + menu's Project page needs. */
+  hasSpace: boolean;
   tabs: TabView[];
   activeTabId: string | null;
   sidebarOpen: boolean;
@@ -151,30 +153,17 @@ export function TitleBar(props: {
   onMove: (id: string, index: number) => void;
   /** What the plain + button does. */
   onNew: () => void;
+  /** The plain + opens the menu instead, anchored to it. */
+  newAsk: boolean;
   /** Plugin pages the + menu offers after Terminal; the chevron shows only when there are some. */
   newTabEntries: NewTabEntry[];
   onNewTerminal: () => void;
   onNewPage: (entry: NewTabEntry) => void;
   onNewProjectPage: () => void;
-  onHistory: () => void;
-  onSettings: () => void;
-  /** The notification bell, shown before Past sessions. */
-  bell?: ReactNode;
-  /** Sidebar and panel buttons from plugins that are on. Pinned ones and the first few show, the rest go in a menu. */
-  pluginButtons: PluginButton[];
-  /** Keys of the buttons you pinned to the title bar, in the order you pinned them. */
-  pinned: string[];
-  onTogglePin: (key: string) => void;
-  onPluginButton: (button: PluginButton, rect: DOMRect) => void;
-  onMountPopover: MountPopover;
 }) {
-  const pinned = props.pinned.flatMap((key) => props.pluginButtons.filter((b) => b.key === key));
-  const rest = props.pluginButtons.filter((b) => !props.pinned.includes(b.key));
-  const free = Math.max(0, INLINE_BUTTONS - pinned.length);
-  const inline = [...pinned, ...rest.slice(0, free)];
-  const overflow = rest.slice(free);
-  const more = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const plus = useRef<HTMLButtonElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   /** A rename chosen in the context menu starts once the menu has closed, so closing doesn't take the focus back. */
   const renameAfterMenu = useRef<string | null>(null);
@@ -241,18 +230,11 @@ export function TitleBar(props: {
   return (
     <header
       data-tauri-drag-region="deep"
-      className="relative flex h-12 shrink-0 items-center gap-1.5 pr-2.5 pl-[84px]"
+      className="relative flex h-10 shrink-0 items-center gap-1 pr-2.5 pl-[84px]"
     >
       <IconButton label={props.sidebarOpen ? "Hide sidebar" : "Show sidebar"} shortcut={shortcutLabel.toggleSidebar} onClick={props.onToggleSidebar}>
         <PanelLeftIcon />
       </IconButton>
-
-      {props.space && (
-        <div className="mr-2 ml-1 flex min-w-0 max-w-44 flex-col leading-tight">
-          <span className="truncate text-[13px] font-semibold">{props.space.name}</span>
-          {props.space.branch && <span className="truncate text-[11px] text-muted-foreground">{props.space.branch}</span>}
-        </div>
-      )}
 
       <LayoutGroup id="tabs">
         {/* Base UI Tabs for the tab strip (arrow keys move between tabs); the sliding pill is ours. */}
@@ -262,7 +244,7 @@ export function TitleBar(props: {
           <TabsList
             ref={list}
             variant="line"
-            aria-label="Terminals"
+            aria-label="Tabs"
             // A mouse wheel only scrolls up and down, and the strip only scrolls sideways.
             onWheel={(e) => {
               if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
@@ -284,7 +266,7 @@ export function TitleBar(props: {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
                     transition={spring}
-                    className="group/tab relative flex shrink-0 rounded-[10px] data-drop-over:bg-white/[0.1] data-drop-over:ring-1 data-drop-over:ring-ring"
+                    className="group/tab relative flex shrink-0 rounded-lg data-drop-over:bg-white/[0.1] data-drop-over:ring-1 data-drop-over:ring-ring"
                   >
                     <ContextMenu
                       onOpenChangeComplete={(open) => {
@@ -299,16 +281,16 @@ export function TitleBar(props: {
                             // Plain while its tab is dragged, so it can't slide against the tab it belongs to.
                             layoutId={dragId === tab.id ? undefined : "active-tab"}
                             transition={spring}
-                            className="absolute inset-0 rounded-[10px] border border-hairline-strong bg-white/[0.07] shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_1px_3px_rgb(0_0_0/0.25)]"
+                            className="absolute inset-0 rounded-lg border border-hairline-strong bg-white/[0.07] shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_1px_3px_rgb(0_0_0/0.25)]"
                           />
                         )}
                         {editing === tab.id && "label" in tab ? (
-                          <span className="relative flex h-8 items-center gap-2 pr-3 pl-3">
+                          <span className="relative flex h-7 items-center gap-2 pr-2 pl-2.5">
                             <PaneIcon agent={tab.label.agent} />
                             <InlineName
                               initial={tab.title}
                               label="Tab name"
-                              className="h-6 w-40 text-[13px] font-medium"
+                              className="h-5 w-36 text-[12px] font-medium"
                               onDone={(name) => {
                                 setEditing(null);
                                 if (name !== null) props.onRename(tab.id, name);
@@ -324,7 +306,7 @@ export function TitleBar(props: {
                             onDoubleClick={() => "label" in tab && setEditing(tab.id)}
                             title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}`}
                             className={cn(
-                              "relative h-8 max-w-60 flex-none justify-start gap-2 rounded-[10px] border-0 pr-8 pl-3 text-[13px] font-normal after:hidden",
+                              "relative h-7 max-w-48 flex-none justify-start gap-1.5 rounded-lg border-0 pr-7 pl-2.5 text-[12px] font-normal after:hidden",
                               active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
                             )}
                           >
@@ -339,7 +321,7 @@ export function TitleBar(props: {
                             )}
                             <span className="truncate font-medium">{title}</span>
                             {"label" in tab && tab.label.detail && !tab.named && (
-                              <span className="hidden truncate text-muted-foreground xl:inline">{tab.label.detail}</span>
+                              <span className="hidden truncate text-muted-foreground 2xl:inline">{tab.label.detail}</span>
                             )}
                             {"layout" in tab && <LayoutGlyph layout={tab.layout} focused={tab.focusedPane} />}
                           </TabsTrigger>
@@ -347,7 +329,7 @@ export function TitleBar(props: {
                         <IconButton
                           label="Close tab"
                           onClick={() => props.onClose(tab.id)}
-                          className="absolute top-1.5 right-1.5 size-5 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5"
+                          className="absolute top-1 right-1 size-5 opacity-0 transition-opacity group-hover/tab:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5"
                         >
                           <XIcon />
                         </IconButton>
@@ -385,21 +367,21 @@ export function TitleBar(props: {
               })}
             </AnimatePresence>
           </TabsList>
-          <IconButton label="New tab" shortcut={shortcutLabel.newTab} onClick={props.onNew} data-pane-drop-new="" className="ml-1 data-drop-over:bg-white/20 data-drop-over:text-foreground">
+          <IconButton ref={plus} label="New tab" shortcut={shortcutLabel.newTab} onClick={props.newAsk ? () => setMenuOpen(true) : props.onNew} data-pane-drop-new="" className="ml-1 data-drop-over:bg-white/20 data-drop-over:text-foreground">
             <PlusIcon />
           </IconButton>
-          <DropdownMenu>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger
               render={<Button variant="ghost" size="icon-sm" aria-label="New tab menu" title="New tab menu" className="-ml-1 w-4 text-muted-foreground hover:text-foreground" />}
             >
               <ChevronDownIcon className="size-3" aria-hidden />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="start" anchor={props.newAsk ? plus : undefined}>
               <DropdownMenuItem onClick={props.onNewTerminal}>
                 <TerminalIcon aria-hidden />
                 <span className="flex-1 whitespace-nowrap">Terminal</span>
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={props.onNewProjectPage} disabled={!props.space}>
+              <DropdownMenuItem onClick={props.onNewProjectPage} disabled={!props.hasSpace}>
                 <FileTextIcon aria-hidden />
                 <span className="flex-1 whitespace-nowrap">Project page</span>
               </DropdownMenuItem>
@@ -414,6 +396,53 @@ export function TitleBar(props: {
         </Tabs>
       </LayoutGroup>
 
+    </header>
+  );
+}
+
+/** The slim bar under the tabs, inside the main area: the project on the left, plugin buttons and the app's own on the right. */
+export function ProjectBar(props: {
+  space: Space | null;
+  git?: GitStatus | null;
+  onHistory: () => void;
+  onSettings: () => void;
+  /** The notification bell, shown before Past sessions. */
+  bell?: ReactNode;
+  /** Sidebar and panel buttons from plugins that are on. Pinned ones and the first few show, the rest go in a menu. */
+  pluginButtons: PluginButton[];
+  /** Keys of the buttons you pinned to the bar, in the order you pinned them. */
+  pinned: string[];
+  onTogglePin: (key: string) => void;
+  onPluginButton: (button: PluginButton, rect: DOMRect) => void;
+  onMountPopover: MountPopover;
+}) {
+  const pinned = props.pinned.flatMap((key) => props.pluginButtons.filter((b) => b.key === key));
+  const rest = props.pluginButtons.filter((b) => !props.pinned.includes(b.key));
+  const free = Math.max(0, INLINE_BUTTONS - pinned.length);
+  const inline = [...pinned, ...rest.slice(0, free)];
+  const overflow = rest.slice(free);
+  const more = useRef<HTMLButtonElement>(null);
+  const { space, git } = props;
+  return (
+    <div role="toolbar" aria-label="Project" data-testid="project-bar" className="flex h-9 shrink-0 items-center gap-1 border-b border-hairline pr-2 pl-3">
+      {space && (
+        <div className="mr-2 flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden" title={space.path}>
+          <span className="shrink-0 truncate text-[13px] font-semibold">{space.name}</span>
+          {space.branch && <span className="min-w-0 shrink truncate text-[11px] text-muted-foreground">{space.branch}</span>}
+          {git && (
+            <GitCounts
+              tinted
+              counts={[
+                { icon: "changed" as const, value: git.changed },
+                { icon: "push" as const, value: git.ahead },
+                { icon: "pull" as const, value: git.behind },
+              ].filter((c) => c.value > 0)}
+            />
+          )}
+          <span className="hidden min-w-0 truncate text-[11px] text-muted-foreground/70 xl:inline">{space.path}</span>
+        </div>
+      )}
+      {!space && <div className="flex-1" />}
       {/* Plugin buttons sit left of a hairline, the app's own buttons right of it. */}
       {inline.map((button) => {
         const icon = (
@@ -503,7 +532,7 @@ export function TitleBar(props: {
             })}
             {overflow.length > 0 && <DropdownMenuSeparator />}
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Keep in title bar</DropdownMenuLabel>
+              <DropdownMenuLabel>Keep in bar</DropdownMenuLabel>
               {props.pluginButtons.map((button) => (
                 <DropdownMenuCheckboxItem key={button.key} checked={props.pinned.includes(button.key)} onCheckedChange={() => props.onTogglePin(button.key)}>
                   {button.title}
@@ -521,6 +550,6 @@ export function TitleBar(props: {
       <IconButton label="Settings" onClick={props.onSettings}>
         <SettingsIcon />
       </IconButton>
-    </header>
+    </div>
   );
 }

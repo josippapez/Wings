@@ -903,3 +903,128 @@ export const Markdown = memo(function Markdown({ source, inline, className, ...r
     }),
   );
 });
+
+// ---------- activity: times, a summary row, skeletons and a timeline ----------
+
+/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. */
+export function ago(iso, now = Date.now()) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const minutes = Math.max(0, Math.round((now - t) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)} h ago`;
+  if (minutes < 43_200) return `${Math.round(minutes / 1440)} d ago`;
+  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** A moment as a `time` element: how long ago, with the exact date and time on hover. Nothing when `iso` isn't a date. */
+export function Time({ iso, prefix, now, className, ...rest }) {
+  const text = ago(iso, now);
+  if (!text) return null;
+  return h("time", { title: new Date(iso).toLocaleString(), ...rest, className, dateTime: iso }, prefix, text);
+}
+
+/** A row of `SummaryChip`s under a page's header: the facts about the thing at a glance. */
+export function Summary({ className, ...rest }) {
+  return h("div", { ...rest, className: cx("w-summary", className) });
+}
+
+/** One fact in a `Summary`. With `onClick` it's a button (it takes you to where the fact comes from); without, plain text. */
+export function SummaryChip({ tone, className, onClick, type = "button", ...rest }) {
+  const props = { ...rest, className: cx("w-summary-chip", className), "data-tone": tone };
+  return onClick ? h("button", { ...props, type, onClick }) : h("span", props);
+}
+
+/** A grey block that stands in for content that is still loading, sized by `width` and `height` (CSS lengths or px). It shimmers unless the user asked for less motion. */
+export function Skeleton({ width, height, className, style, ...rest }) {
+  const size = (v) => (typeof v === "number" ? `${v}px` : v);
+  return h("span", {
+    ...rest,
+    className: cx("w-skeleton", className),
+    style: { ...style, ...(width === undefined ? null : { "--w-width": size(width) }), ...(height === undefined ? null : { "--w-height": size(height) }) },
+    "aria-hidden": true,
+  });
+}
+
+/** Skeletons that stand in for a section, announced once as `label` and `aria-busy`. */
+export function Skeletons({ label, children, className, ...rest }) {
+  // The label is text inside the region, which a live region announces; an aria-label alone isn't.
+  return h("div", { ...rest, className: cx("w-skeletons", className), role: "status", "aria-busy": true }, h("span", { className: "w-visually-hidden" }, label), children);
+}
+
+/** A conversation or an activity feed: an ordered list of `TimelineCard`s and `TimelineNote`s. */
+export function Timeline({ label, className, ...rest }) {
+  return h("ol", { ...rest, className: cx("w-timeline", className), "aria-label": label });
+}
+
+const FOCUSABLE = "a[href], button, input, select, textarea, summary, [tabindex]";
+
+/** Cuts `children` after a few lines until the reader asks for the rest; focusable things below the cut are inert meanwhile. The button only shows when something was cut. */
+function Clamped({ children }) {
+  const box = useRef(null);
+  const [more, setMore] = useState(false);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (more) {
+      for (const f of el.querySelectorAll(FOCUSABLE)) f.inert = false;
+      return;
+    }
+    const measure = () => {
+      setCut(el.scrollHeight > el.clientHeight + 1);
+      // What the cut hides can't be reached by keyboard or screen reader until "Show more".
+      const bottom = el.getBoundingClientRect().bottom;
+      for (const f of el.querySelectorAll(FOCUSABLE)) f.inert = f.getBoundingClientRect().top >= bottom - 1;
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [more]);
+  return h(
+    "div",
+    { className: "w-clamp" },
+    h("div", { ref: box, className: "w-clamp-box", "data-clamped": more ? undefined : "", "data-cut": cut && !more ? "" : undefined }, children),
+    cut || more ? h("button", { type: "button", className: "w-clamp-toggle", "aria-expanded": more, onClick: () => setMore(!more) }, more ? "Show less" : "Show more") : null,
+  );
+}
+
+/**
+ * One entry of a `Timeline`, a card: the author's `Avatar`, name and when, a `tag` (like "Author") and `actions` on the
+ * right, and `children` as the body. `quiet` draws it without a fill, for what a bot or the system wrote. `clamp` cuts
+ * a long body until "Show more" is pressed.
+ */
+export function TimelineCard({ author, at, tag, actions, quiet, clamp, children, className, ...rest }) {
+  return h(
+    "li",
+    { ...rest, className: cx("w-timeline-item", className), "data-quiet": quiet ? "" : undefined },
+    h(
+      "article",
+      { className: "w-timeline-card", "aria-label": `By ${author}` },
+      h(
+        "div",
+        { className: "w-timeline-head" },
+        h(Avatar, { name: author }),
+        h("strong", { className: "w-timeline-author" }, author),
+        tag ? h("span", { className: "w-timeline-tag" }, tag) : null,
+        h(Time, { iso: at, className: "w-timeline-time" }),
+        actions ? h("span", { className: "w-timeline-actions" }, actions) : null,
+      ),
+      clamp ? h(Clamped, null, children) : children,
+    ),
+  );
+}
+
+/** A quiet one-line entry of a `Timeline`, like "Ada moved it to Active": a small avatar, then `children`, then when. */
+export function TimelineNote({ author, at, children, className, ...rest }) {
+  return h(
+    "li",
+    { ...rest, className: cx("w-timeline-item w-timeline-note", className) },
+    h(Avatar, { name: author, size: "small" }),
+    h("span", { className: "w-timeline-note-text" }, h("strong", null, author), " ", children),
+    h(Time, { iso: at, className: "w-timeline-time" }),
+  );
+}

@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LIMITS, type Fact } from "@/lib/project-info";
 
+import { cn } from "@/lib/utils";
+
 import { findFact } from "./merge";
+import { markClass, type Mark } from "./search";
 import { messageOf, type Apply } from "./use-project-info";
 
 const byLabel = (by: Fact["by"]) => (by === "agent" ? "Written by an agent" : "Written by you");
@@ -54,7 +57,7 @@ function FactForm({ initial, add, keyRef, onSave, onCancel }: { initial?: Fact; 
 }
 
 /** The facts as a table, each row editable in place, with a row to add one. */
-export function FactsTable({ facts, apply, addRef }: { facts: Fact[]; apply: Apply; addRef: RefObject<HTMLInputElement | null> }) {
+export function FactsTable({ facts, apply, addRef, marks }: { facts: Fact[]; apply: Apply; addRef: RefObject<HTMLInputElement | null>; marks: ReadonlyMap<string, Mark> }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const run = async (job: Promise<unknown>) => {
@@ -81,7 +84,7 @@ export function FactsTable({ facts, apply, addRef }: { facts: Fact[]; apply: App
                     </td>
                   </tr>
                 ) : (
-                  <tr key={f.key} className="group/fact border-b border-hairline last:border-b-0">
+                  <tr key={f.key} data-fact-key={f.key} className={cn("group/fact border-b border-hairline last:border-b-0", markClass(marks.get(f.key)))}>
                     <th scope="row" className="w-44 px-3 py-1.5 text-left align-top font-medium">
                       {f.key}
                     </th>

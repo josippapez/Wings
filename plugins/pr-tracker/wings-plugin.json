@@ -1,8 +1,8 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.10.0",
-  "minWingsVersion": "0.1.24",
+  "version": "0.11.0",
+  "minWingsVersion": "0.1.27",
   "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, checks and why they failed, the diff and review comments. Lists each project's open pull requests in the sidebar and in a block on the Project page, and opens one as a tab to read, reply to and send to an agent.",
   "api": 1,
@@ -33,7 +33,9 @@
     ],
     "post": [
       "gh repos/*/*/pulls/*/comments/*/replies",
+      "gh repos/*/*/pulls/*/reviews {event=APPROVE}",
       "glab projects/*/merge_requests/*/discussions/*/notes",
+      "glab projects/*/merge_requests/*/approve",
       "az https://dev.azure.com/*/*/_apis/git/repositories/*/pullRequests/*/threads/*/comments?api-version=7.1"
     ],
     "transcript": [
@@ -43,8 +45,12 @@
       "https://"
     ],
     "fetch": [
-      "https://api.bitbucket.org/2.0/",
-      "https://codeberg.org/api/v1/"
+      "GET https://api.bitbucket.org/2.0/",
+      "POST https://api.bitbucket.org/2.0/repositories/*/*/pullrequests/*/comments",
+      "POST https://api.bitbucket.org/2.0/repositories/*/*/pullrequests/*/approve",
+      "GET https://codeberg.org/api/v1/",
+      "POST https://codeberg.org/api/v1/repos/*/*/issues/*/comments",
+      "POST https://codeberg.org/api/v1/repos/*/*/pulls/*/reviews {event=APPROVED}"
     ]
   },
   "contributes": {

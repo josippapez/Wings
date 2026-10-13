@@ -8,9 +8,9 @@ import { createElement, type ReactNode } from "react";
 import "./html.css";
 
 /** Tags drawn as themselves. */
-const KEEP = new Set(["p", "div", "ul", "ol", "li", "blockquote", "pre", "code", "b", "strong", "i", "em", "u", "s", "strike", "del", "table", "thead", "tbody", "tr", "td", "th", "hr"]);
-/** Tags drawn as the tag that says the same. */
-const RENAME: Record<string, string> = { h1: "strong", h2: "strong", h3: "strong", h4: "strong", h5: "strong", h6: "strong" };
+const KEEP = new Set(["p", "div", "ul", "ol", "li", "blockquote", "pre", "code", "b", "strong", "i", "em", "u", "s", "strike", "del", "thead", "tbody", "tr", "td", "th", "hr"]);
+/** Headings are drawn as a bold paragraph: the page decides how big a heading is, not the comment. */
+const HEADINGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 /** Tags dropped with everything inside them. */
 const DROP = new Set(["script", "style", "iframe", "object", "embed", "link", "meta", "svg", "math", "template", "noscript", "form", "input", "button", "select", "textarea", "head", "title"]);
 /** What `permissions.openUrl` allows, so a link to anywhere else stays text. */
@@ -50,7 +50,10 @@ function convert(node: Node, key: number, depth: number): ReactNode {
   if (tag === "img") return createElement("span", { key, className: "html-image" }, `[image${el.getAttribute("alt") ? `: ${el.getAttribute("alt")}` : ""}]`);
   const children = [...el.childNodes].map((child, i) => convert(child, i, depth + 1));
   if (tag === "a") return link(el, children, key);
-  if (KEEP.has(tag) || RENAME[tag]) return createElement(RENAME[tag] ?? tag, { key }, ...children);
+  if (HEADINGS.has(tag)) return createElement("p", { key, className: "html-heading" }, ...children);
+  // A wide table scrolls inside its own box instead of pushing the page sideways.
+  if (tag === "table") return createElement("div", { key, className: "html-table" }, createElement("table", null, ...children));
+  if (KEEP.has(tag)) return createElement(tag, { key }, ...children);
   // Anything else (span, font, section, an unknown tag) keeps its text and loses its markup.
   return createElement("span", { key }, ...children);
 }

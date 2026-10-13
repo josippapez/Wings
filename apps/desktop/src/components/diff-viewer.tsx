@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
+import { resolveFocus, type ResolvedFocus } from "@/lib/diff-focus";
 import type { DiffComment, DiffView } from "@/lib/plugins";
 import { quoteLines, type ReviewComment, type ReviewTarget } from "@/lib/review";
 import { cn } from "@/lib/utils";
@@ -216,21 +217,29 @@ function ReplyBox({ onSend }: { onSend: (body: string) => Promise<void> }) {
   );
 }
 
+/** Brings a thread that a plugin pointed at (`focus`) to the middle of the diff. */
+const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "center", behavior: "smooth" });
+
 function CommentThread({
   thread,
   className,
+  focused,
   onOpen,
   onReply,
 }: {
   thread: Thread;
   className?: string;
+  /** The plugin pointed at this thread: scroll to it and ring it while the highlight lasts. */
+  focused?: boolean;
   onOpen: (url: string) => void;
   onReply?: (replyTo: number, body: string) => Promise<void>;
 }) {
   return (
     <div
+      ref={focused ? reveal : undefined}
       className={cn(
-        "max-w-3xl rounded-xl border border-hairline bg-[#1d1b22] p-3 font-sans shadow-[0_6px_20px_rgb(0_0_0/0.25)]",
+        "max-w-3xl rounded-xl border border-hairline bg-[#1d1b22] p-3 font-sans shadow-[0_6px_20px_rgb(0_0_0/0.25)] transition-shadow duration-500",
+        focused && "ring-2 ring-white/40",
         className ?? "my-1.5 mr-3 ml-12",
       )}
     >
@@ -293,11 +302,34 @@ export function DiffViewer({
   /** Your unsent comments, kept for the diff they were written on. */
   const [review, setReview] = useState<{ id: string | null; items: ReviewComment[] }>({ id: null, items: [] });
   const [draft, setDraft] = useState<{ path: string; range: SelectedLineRange } | null>(null);
+  /** The line a plugin pointed at, highlighted for a moment. */
+  const [flash, setFlash] = useState<(ResolvedFocus & { path: string; done?: boolean }) | null>(null);
+  const focused = useRef<DiffView["focus"]>(undefined);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reviewItems = review.id === diff?.id ? review.items : [];
   const loading = !!diff && diff.patch === undefined && !diff.error;
   const shown = useMemo(() => files.filter((e) => e.file.name.toLowerCase().includes(query.trim().toLowerCase())), [files, query]);
   const rows = useMemo(() => (tree ? treeRows(buildTree(shown), collapsed) : []), [tree, shown, collapsed]);
   const current = selected === null ? undefined : files[selected];
+  // Once the patch is here, open the file the plugin pointed at and flash its line. Each `focus` is acted on once,
+  // so a later `updateDiff` with only comments leaves where you are alone.
+  useEffect(() => {
+    const focus = diff?.focus;
+    if (!focus || diff?.patch === undefined || focused.current === focus) return;
+    focused.current = focus;
+    const hit = resolveFocus(files.map((e) => e.file), focus);
+    if (!hit) return;
+    setSelected(hit.index);
+    clearTimeout(flashTimer.current);
+    if (hit.line === undefined) return setFlash(null);
+    setFlash({ ...hit, path: files[hit.index].file.name });
+    // First clear the selection (null), then drop the prop: a library selection that was set from outside stays until told otherwise.
+    flashTimer.current = setTimeout(() => {
+      setFlash((f) => f && { ...f, done: true });
+      flashTimer.current = setTimeout(() => setFlash(null), 200);
+    }, 2500);
+  }, [diff?.focus, diff?.patch, files]);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
   // Comments on the whole PR, then ones on code that has changed since, which have no line to sit on.
   const discussion = [...(threads.get(null) ?? []), ...[...threads].flatMap(([path, list]) => (path === null ? [] : list.filter((t) => t.root.line === null)))];
   const discussionCount = discussion.reduce((n, t) => n + 1 + t.replies.length, 0);
@@ -553,9 +585,16 @@ export function DiffViewer({
                     key={`${current.file.name}-${split}`}
                     fileDiff={current.file}
                     lineAnnotations={annotations}
+                    // Undefined, not null, when nothing is flashing: a passed value makes the selection controlled, which would stop the gutter drag from highlighting.
+                    selectedLines={flash?.path === current.file.name ? (flash.done ? null : { start: flash.line!, end: flash.line!, side: flash.side }) : undefined}
                     renderAnnotation={(a) =>
                       a.metadata.kind === "thread" ? (
-                        <CommentThread thread={a.metadata.thread} onOpen={openComment} onReply={reply} />
+                        <CommentThread
+                          thread={a.metadata.thread}
+                          focused={flash?.path === current.file.name && !flash.done && flash.line === a.lineNumber && flash.side === a.side}
+                          onOpen={openComment}
+                          onReply={reply}
+                        />
                       ) : a.metadata.kind === "review" ? (
                         <ReviewNote comment={a.metadata.comment} onRemove={() => removeReview(a.metadata.kind === "review" ? a.metadata.comment.id : "")} />
                       ) : (

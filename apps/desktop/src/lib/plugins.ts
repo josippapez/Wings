@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { boundedJson, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
@@ -64,6 +65,8 @@ export type DiffView = {
   cwd?: string;
   patch?: string;
   comments?: DiffComment[];
+  /** Where the viewer scrolls to and briefly highlights once the patch is shown, even when it arrives later through `updateDiff`. */
+  focus?: DiffFocus;
   error?: string;
 };
 
@@ -238,9 +241,11 @@ function cleanComments(raw: unknown): DiffComment[] | undefined {
 
 /** Fields of an openDiff/updateDiff call; the patch is passed through as-is, the viewer only parses it. */
 function cleanDiffUpdate(p: Record<string, unknown>): Partial<DiffView> {
+  const focus = cleanFocus(p.focus);
   return {
     ...(typeof p.patch === "string" ? { patch: p.patch } : {}),
     ...(p.comments !== undefined ? { comments: cleanComments(p.comments) } : {}),
+    ...(focus ? { focus } : {}),
     ...(typeof p.error === "string" ? { error: p.error.slice(0, 500) } : {}),
   };
 }

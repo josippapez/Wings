@@ -369,6 +369,9 @@ button.pr-chip {
 .pr-error {
   align-items: flex-start;
 }
+.pr-confirm {
+  align-items: flex-start;
+}
 
 /* Loading */
 .pr-skeleton {

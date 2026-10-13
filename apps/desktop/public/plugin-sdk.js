@@ -212,7 +212,8 @@
     /** A desktop notification, with `permissions.notify`. Up to 3 a minute; there's no click action. */
     notify: ({ title, body = "" } = {}) => call("notify", { title, body }),
     /**
-     * An HTTP request to a URL under `permissions.fetch`, made by Wings. `bearer` names a secret that Wings
+     * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
+     * `POST <url with * segments> [{field=value}]` for one write with a JSON `body`. `bearer` names a secret that Wings
      * sends as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status;
      * redirects aren't followed.
      */
@@ -351,7 +352,10 @@
     onBroadcast: (listener) => subscribe(listeners.broadcast, listener),
     /**
      * Opens the Wings diff viewer. Leave out `patch` to open it in a loading state, then fill it with
-     * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`.
+     * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`. `focus`,
+     * `{ path, line?, side?: "old" | "new" }`, makes the viewer open that file once the patch is shown, scroll to
+     * the line and highlight it for a moment. It works when the patch arrives later through `updateDiff`, and a
+     * path that isn't in the patch just opens the diff as usual. `updateDiff` takes `focus` too.
      */
     openDiff: (diff) => call("openDiff", diff),
     /**
@@ -362,8 +366,9 @@
     onReply: (handler) => void (replyHandler = handler),
     /**
      * POSTs `fields` as JSON to an API path in `permissions.post`, through that CLI's own sign-in: `gh api`,
-     * `glab api` (pass the GitLab `host`) or `az rest` for Azure DevOps. Field values are strings or whole
-     * numbers. Resolves `{ code, stdout, stderr }`.
+     * `glab api` (pass the GitLab `host`; for `gh` pass a GitHub Enterprise Server's) or `az rest` for Azure
+     * DevOps. Field values are strings or whole numbers; a manifest entry may pin a field, as in
+     * `gh <path> {event=APPROVE}`. Resolves `{ code, stdout, stderr }`.
      */
     post: (program, url, fields, { host } = {}) => call("post", { program, url, fields, host }),
     /** Updates a viewer opened with `openDiff`; ignored once the user has closed it. */

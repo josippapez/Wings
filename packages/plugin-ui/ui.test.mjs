@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -86,4 +86,42 @@ test("Avatar shows initials on a colour that depends only on the name", () => {
   assert.equal(out("Ada Lovelace"), out("Ada Lovelace"));
   assert.notEqual(out("Ada Lovelace"), out("Grace Hopper"));
   assert.match(out("Ada", { label: "Ada, author", size: "small" }), /data-size="small" role="img" aria-label="Ada, author"/);
+});
+
+test("ago counts minutes, hours and days, then gives the date, and is empty for a non-date", () => {
+  const now = Date.parse("2026-10-13T12:00:00Z");
+  assert.equal(ago("2026-10-13T12:00:00Z", now), "just now");
+  assert.equal(ago("2026-10-13T11:55:00Z", now), "5 min ago");
+  assert.equal(ago("2026-10-13T09:00:00Z", now), "3 h ago");
+  assert.equal(ago("2026-10-11T12:00:00Z", now), "2 d ago");
+  assert.match(ago("2026-01-02T12:00:00Z", now), /2026/);
+  assert.equal(ago("nope", now), "");
+  assert.equal(ago("2026-10-13T13:00:00Z", now), "just now");
+});
+
+test("Time is a time element with the exact moment as its title, and nothing for a non-date", () => {
+  const now = Date.parse("2026-10-13T12:00:00Z");
+  const out = html(h(Time, { iso: "2026-10-13T11:55:00Z", now, prefix: "opened " }));
+  assert.match(out, /^<time title="[^"]+" dateTime="2026-10-13T11:55:00Z">opened 5 min ago<\/time>$/);
+  assert.equal(html(h(Time, { iso: "" })), "");
+});
+
+test("SummaryChip is a button only when it has a click handler, and carries its tone", () => {
+  assert.equal(html(h(SummaryChip, { tone: "danger" }, "2 failed")), '<span class="w-summary-chip" data-tone="danger">2 failed</span>');
+  assert.match(html(h(SummaryChip, { onClick() {} }, "2 PRs")), /^<button class="w-summary-chip" type="button">2 PRs<\/button>$/);
+  assert.equal(html(h(Summary, null, "x")), '<div class="w-summary">x</div>');
+});
+
+test("Skeletons announce once and hide their blocks; Skeleton sizes through CSS variables", () => {
+  const out = html(h(Skeletons, { label: "Loading links" }, h(Skeleton, { width: 120, height: "2em" })));
+  assert.match(out, /<div[^>]*role="status"[^>]*aria-busy="true"[^>]*><span class="w-visually-hidden">Loading links<\/span>/);
+  assert.match(out, /<span class="w-skeleton" style="--w-width:120px;--w-height:2em" aria-hidden="true">/);
+});
+
+test("TimelineCard shows who and when, marks quiet entries, and a note is one line", () => {
+  const out = html(h(Timeline, { label: "Discussion" }, h(TimelineCard, { author: "Ada Lovelace", at: "2026-10-13T11:55:00Z", tag: "Author", quiet: true }, h("p", null, "Hi")), h(TimelineNote, { author: "Grace Hopper", at: "2026-10-13T11:55:00Z" }, "moved it to Active")));
+  assert.match(out, /<ol class="w-timeline" aria-label="Discussion">/);
+  assert.match(out, /<li class="w-timeline-item" data-quiet=""><article[^>]*aria-label="By Ada Lovelace"/);
+  assert.match(out, /<strong class="w-timeline-author">Ada Lovelace<\/strong><span class="w-timeline-tag">Author<\/span>/);
+  assert.match(out, /<li class="w-timeline-item w-timeline-note">[\s\S]*<strong>Grace Hopper<\/strong> moved it to Active/);
 });

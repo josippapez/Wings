@@ -158,7 +158,7 @@ export function bbComments(values: BbComment[], url: string): Comment[] {
       body: c.content?.raw ?? "",
       createdAt: c.created_on,
       url: c.links?.html?.href ?? url,
-      canReply: false,
+      canReply: root === c.id,
     };
   });
 }
@@ -279,5 +279,15 @@ export function gtComments(comments: GtComment[], reviews: GtReview[], url: stri
     ...comments.map((c) => ({ id: c.id, user: c.user, body: c.body, at: c.created_at, url: c.html_url })),
     ...reviews.filter((r) => r.body && r.state !== "PENDING").map((r) => ({ id: -r.id, user: r.user, body: r.body, at: r.submitted_at, url: r.html_url })),
   ];
-  return general.map((c): Comment => ({ id: c.id, replyTo: null, path: null, line: null, side: "additions", author: gtName(c.user), body: c.body ?? "", createdAt: c.at, url: c.url ?? url, canReply: false }));
+  return general.map((c): Comment => ({ id: c.id, replyTo: null, path: null, line: null, side: "additions", author: gtName(c.user), body: c.body ?? "", createdAt: c.at, url: c.url ?? url, canReply: true }));
+}
+
+/**
+ * A reply to a Codeberg comment. The API has no threaded replies (a review comment can't take a parent, and the conversation
+ * is flat), so a reply is a new comment on the pull request that quotes the first lines of what it answers.
+ */
+export function gtQuoted(root: Pick<Comment, "author" | "body">, reply: string): string {
+  const lines = root.body.trim().split("\n").slice(0, 6).map((l) => `> ${l}`.trimEnd());
+  const more = root.body.trim().split("\n").length > 6 ? ["> …"] : [];
+  return `> **${root.author}** wrote:\n${[...lines, ...more].join("\n")}\n\n${reply}`;
 }

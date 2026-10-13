@@ -19,6 +19,12 @@ export function threadsOf(comments: Comment[]): Thread[] {
     .sort((a, b) => Date.parse(a.root.createdAt) - Date.parse(b.root.createdAt));
 }
 
+/** Where the diff viewer should look for a thread: its file, and its line on the side it was written on. */
+export function focusOf(root: Comment): WingsDiffFocus | undefined {
+  if (!root.path) return undefined;
+  return root.line ? { path: root.path, line: root.line, side: root.side === "deletions" ? "old" : "new" } : { path: root.path };
+}
+
 export type Kind = "open" | "resolved" | "automated";
 
 /** How a thread shows: a thread a person wrote and that is still open reads in full, the rest start collapsed. */

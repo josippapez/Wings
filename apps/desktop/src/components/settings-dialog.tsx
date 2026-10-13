@@ -9,7 +9,7 @@ import { BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, Scr
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import type { PluginView } from "@/lib/api";
-import { pluginSettingsSection, type NewTabEntry } from "@/lib/plugin-pages";
+import { pluginSettingsSection, type NewProjectOpens, type NewTabEntry } from "@/lib/plugin-pages";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
@@ -205,8 +205,10 @@ export function SettingsDialog(props: {
   onSleepChange: (sleep: SleepSettings) => void;
   /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
   newTabs: NewTabEntry[];
-  newTabPage: string | null;
-  onNewTabPageChange: (key: string | null) => void;
+  newTabPage: string;
+  onNewTabPageChange: (choice: string) => void;
+  newProjectOpens: NewProjectOpens;
+  onNewProjectOpensChange: (value: NewProjectOpens) => void;
 }) {
   const { keys, look, host } = props;
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
@@ -348,12 +350,20 @@ export function SettingsDialog(props: {
             <TabsContent value="general" className="flex flex-col gap-3 p-6">
               <h3 className="text-[15px] font-semibold">General</h3>
               <Group>
-                <Row id="new-tab-page" label="New tab button opens" hint="What the + button opens. Plugin pages that offer it also show in the menu next to it and in the command palette.">
+                <Row id="new-tab-page" label="New tab button opens" hint="What the + button does: open a terminal or the Project page, choose each time from the menu, or open a plugin page. Plugin pages that declare &quot;newTab&quot;: true in their view show here and in the menu next to the button. Cmd+T always opens a terminal.">
                   <Choice
                     id="new-tab-page"
-                    items={[{ value: "terminal", label: "Terminal" }, ...props.newTabs.map((e) => ({ value: e.key, label: e.title }))]}
-                    value={props.newTabs.some((e) => e.key === props.newTabPage) ? (props.newTabPage as string) : "terminal"}
-                    onChange={(key) => props.onNewTabPageChange(key === "terminal" ? null : key)}
+                    items={[{ value: "terminal", label: "Terminal" }, { value: "ask", label: "Choose each time" }, { value: "project", label: "Project page" }, ...props.newTabs.map((e) => ({ value: e.key, label: e.title }))]}
+                    value={["ask", "project"].includes(props.newTabPage) || props.newTabs.some((e) => e.key === props.newTabPage) ? props.newTabPage : "terminal"}
+                    onChange={props.onNewTabPageChange}
+                  />
+                </Row>
+                <Row id="new-project-opens" label="New projects open with" hint="The first tab of a project you add to Wings.">
+                  <Choice
+                    id="new-project-opens"
+                    items={[{ value: "terminal", label: "Terminal" }, { value: "project", label: "Project page" }]}
+                    value={props.newProjectOpens}
+                    onChange={(v) => props.onNewProjectOpensChange(v === "project" ? "project" : "terminal")}
                   />
                 </Row>
               </Group>

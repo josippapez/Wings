@@ -1687,4 +1687,194 @@ span.w-md {
 .w-md-table [data-align="right"] {
   text-align: right;
 }
+
+/* Activity: a summary row, skeletons and a timeline, shared by pages like a pull request and a work item. */
+.w-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.w-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 999px;
+  background: var(--wings-surface);
+  color: var(--wings-fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+button.w-summary-chip {
+  cursor: pointer;
+  transition: background-color 150ms;
+}
+button.w-summary-chip:hover {
+  background: var(--wings-hover);
+}
+button.w-summary-chip:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: 2px;
+}
+.w-summary-chip[data-tone="info"] {
+  --w-tone: var(--wings-info);
+}
+.w-summary-chip[data-tone="success"] {
+  --w-tone: var(--wings-success);
+}
+.w-summary-chip[data-tone="warn"] {
+  --w-tone: var(--wings-warning);
+}
+.w-summary-chip[data-tone="danger"] {
+  --w-tone: var(--wings-danger);
+}
+.w-summary-chip[data-tone] {
+  border-color: color-mix(in srgb, var(--w-tone) 40%, transparent);
+  color: var(--w-tone);
+}
+
+.w-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.w-skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.w-skeleton {
+  display: block;
+  width: var(--w-width, 100%);
+  height: var(--w-height, 14px);
+  border-radius: var(--wings-radius);
+  background: linear-gradient(90deg, var(--wings-surface), var(--wings-hover), var(--wings-surface)) 0 0 / 200% 100%;
+  animation: w-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes w-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .w-skeleton {
+    animation: none;
+  }
+}
+
+.w-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.w-timeline-item {
+  min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}
+.w-timeline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+.w-timeline-item[data-quiet] > .w-timeline-card {
+  background: transparent;
+  font-size: 12px;
+}
+.w-timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.w-timeline-author {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.w-timeline-tag {
+  padding: 0 6px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 999px;
+  color: var(--wings-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+.w-timeline-time {
+  color: var(--wings-muted);
+  font-size: 12px;
+}
+.w-timeline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.w-timeline-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  color: var(--wings-muted);
+  font-size: 12px;
+}
+.w-timeline-note-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.w-timeline-note-text strong {
+  color: var(--wings-fg);
+  font-weight: 600;
+}
+.w-clamp {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.w-clamp-box {
+  width: 100%;
+  min-width: 0;
+}
+.w-clamp-box[data-clamped] {
+  max-height: 11em;
+  overflow: hidden;
+}
+.w-clamp-box[data-cut] {
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.w-clamp-toggle {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wings-info);
+  font-size: 12px;
+  cursor: pointer;
+}
+.w-clamp-toggle:hover {
+  background: var(--wings-hover);
+}
+.w-clamp-toggle:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: 2px;
+}
 }

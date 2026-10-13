@@ -5,7 +5,7 @@ import { memo, useMemo, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text, Toolbar } from "wings-plugin-ui";
 import type { Overview } from "../lib/refs";
 import { PROVIDERS } from "../lib/state";
-import { ago, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
+import { ago, focusOf, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import type { Comment, Failing, PrArgs, Reviewer, Status } from "../lib/types";
 
 const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
@@ -20,8 +20,10 @@ export interface PrViewProps {
   busy: string | null;
   canReply: boolean;
   onRefresh: () => void;
-  onRun: (op: "diff" | "agent") => void;
+  onRun: (op: "diff" | "agent", focus?: WingsDiffFocus) => void;
   onReply: (root: Comment, body: string) => Promise<void>;
+  /** Approves the pull request as you. Absent where the provider's approval can't be sent from here. */
+  onApprove?: () => Promise<void>;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -51,11 +53,29 @@ async function copyText(text: string) {
 }
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, notice, busy, onRefresh, onRun } = props;
+  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">("overview");
   const [checksOpen, setChecksOpen] = useState(false);
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
+  const [confirming, setConfirming] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
+  const open = st ? !["Merged", "Closed"].includes(st.label) : false;
+
+  const approve = async () => {
+    setApproving(true);
+    setVerdict(null);
+    try {
+      await onApprove!();
+      setVerdict({ ok: true, text: "Approved." });
+    } catch (e) {
+      setVerdict({ ok: false, text: String((e as Error).message ?? e) });
+    } finally {
+      setApproving(false);
+      setConfirming(false);
+    }
+  };
 
   const toolbar = (
     <Toolbar
@@ -65,6 +85,7 @@ export function PrView(props: PrViewProps) {
           <Button variant="outline" size="sm" onClick={onRefresh}>Refresh</Button>
           <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => onRun("agent")}>Send to agent</Button>
           <Button variant="outline" size="sm" onClick={() => void wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
+          {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={confirming} onClick={() => setConfirming((c) => !c)} data-testid="pr-approve">Approve</Button> : null}
           <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
         </>
       }
@@ -92,6 +113,16 @@ export function PrView(props: PrViewProps) {
             {st?.updated ? <Text tone="muted" size="small" as="span"><When iso={st.updated} prefix="updated " /></Text> : null}
           </div>
           {notice ? <Text tone="danger" role="alert">{notice}</Text> : null}
+          {confirming ? (
+            <div className="pr-card pr-confirm" role="group" aria-label="Confirm approval" data-testid="pr-confirm">
+              <Text>Approve {args.repo} {args.provider === "gitlab" ? "!" : "#"}{args.number} as you? Everyone on it sees your approval.</Text>
+              <div className="pr-reply-actions">
+                <Button size="sm" busy={approving} onClick={() => void approve()}>Approve</Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+              </div>
+            </div>
+          ) : null}
+          {verdict ? <Text tone={verdict.ok ? "success" : "danger"} role={verdict.ok ? "status" : "alert"} data-testid="pr-verdict">{verdict.text}</Text> : null}
         </header>
 
         {error && !overview ? (
@@ -242,7 +273,7 @@ function OverviewTab({ overview, comments, error, canReply, onReply, onRun }: Pr
   const threads = useMemo(() => (comments ? threadsOf(comments) : null), [comments]);
   const [showResolved, setShowResolved] = useState(false);
   const resolved = threads?.filter((t) => kindOf(t) === "resolved").length ?? 0;
-  const diff = useMemo(() => () => onRun("diff"), [onRun]);
+  const diff = useMemo(() => (focus?: WingsDiffFocus) => onRun("diff", focus), [onRun]);
 
   return (
     <div className="pr-overview">
@@ -304,7 +335,7 @@ interface ThreadProps {
   prAuthor: string;
   canReply: boolean;
   onReply: (root: Comment, body: string) => Promise<void>;
-  onDiff: () => void;
+  onDiff: (focus?: WingsDiffFocus) => void;
 }
 
 const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAuthor, canReply, onReply, onDiff }: ThreadProps) {
@@ -339,7 +370,7 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
         {where ? (
           <div className="pr-where">
             <code className="pr-path">{where}</code>
-            <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={onDiff}>View in diff</Button>
+            <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
           </div>
         ) : null}
         <Body source={root.body} clamp={kind === "automated"} />

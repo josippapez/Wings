@@ -40,7 +40,7 @@ export interface Target {
 
 interface WiqlRow {
   id: number;
-  fields: Record<string, unknown> & { "System.ChangedDate"?: string; "System.Title"?: string; "System.AssignedTo"?: { id?: string }; "System.CreatedBy"?: { id?: string } };
+  fields: Record<string, unknown> & { "System.ChangedDate"?: string; "System.Title"?: string; "System.WorkItemType"?: string; "System.AssignedTo"?: { id?: string }; "System.CreatedBy"?: { id?: string } };
 }
 
 const KEYS = {
@@ -136,7 +136,7 @@ export function createWatcher(deps: Deps) {
   async function workItems(t: Target, me: string, since: string): Promise<UpdateEvent[]> {
     const rows = await wiql(
       t,
-      `SELECT [System.Id],[System.Title],[System.ChangedDate],[System.AssignedTo],[System.CreatedBy] FROM WorkItems WHERE [System.TeamProject] = '${quote(t.project)}' AND [System.ChangedDate] >= '${dayBefore(since)}' ORDER BY [System.ChangedDate] DESC`,
+      `SELECT [System.Id],[System.Title],[System.WorkItemType],[System.ChangedDate],[System.AssignedTo],[System.CreatedBy] FROM WorkItems WHERE [System.TeamProject] = '${quote(t.project)}' AND [System.ChangedDate] >= '${dayBefore(since)}' ORDER BY [System.ChangedDate] DESC`,
     );
     const changed = rows.filter((r) => after(r.fields["System.ChangedDate"], since)).slice(0, ITEM_CAP);
     const lower = me.toLowerCase();
@@ -144,6 +144,7 @@ export function createWatcher(deps: Deps) {
       const item: Candidate = {
         id: row.id,
         title: row.fields["System.Title"] ?? "",
+        type: row.fields["System.WorkItemType"],
         mine: [row.fields["System.AssignedTo"]?.id, row.fields["System.CreatedBy"]?.id].some((id) => id?.toLowerCase() === lower),
       };
       return workItemEvents(t.org, t.project, item, await updatesOf(t, row.id), me, since);

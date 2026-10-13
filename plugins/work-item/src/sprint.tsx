@@ -4,8 +4,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { Badge, Board, BoardColumn, Button, Card, Chips, Empty, Loading, Row, showView, Stack, Text } from "wings-plugin-ui";
+import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, Row, showView, Stack, Text } from "wings-plugin-ui";
 import { cleanBlockState, groupByState, type BlockItem, type SprintBlockState, type SprintRequest, type SprintResponse } from "./lib/sections";
+import { TypeIcon } from "./lib/TypeIcon";
 import "./sprint.css";
 
 const POLL_MS = 60_000;
@@ -121,16 +122,18 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
 
 function ItemCard({ item, org, project, showAssignee }: { item: BlockItem; org: string; project: string; showAssignee: boolean }) {
   return (
-    <Card compact>
+    <Card compact className="sprint-card">
       <Button
         variant="ghost"
         onClick={() => void wings.openView("item", { as: "tab", args: { id: item.id, org, project } })}
+        aria-label={`Open ${item.type} ${item.id}: ${item.title}${showAssignee && item.assignee ? `, assigned to ${item.assignee}` : ""}`}
       >
         <Stack gap="xs">
           <Text weight="medium" clamp>{item.title}</Text>
           <Row gap="s">
-            <Badge variant="outline">{item.type} #{item.id}</Badge>
-            {showAssignee && item.assignee ? <Text tone="muted" size="tiny" truncate>{item.assignee}</Text> : null}
+            <TypeIcon type={item.type} size={14} />
+            <Text tone="muted" size="tiny" numeric>#{item.id}</Text>
+            {showAssignee && item.assignee ? <span className="sprint-assignee" title={item.assignee}><Avatar name={item.assignee} size="small" /></span> : null}
           </Row>
         </Stack>
       </Button>

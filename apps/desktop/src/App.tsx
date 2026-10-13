@@ -24,12 +24,13 @@ import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
-import { defaultNewTab, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { newTabAction, firstTabFor, parseNewProjectOpens, type NewProjectOpens, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
 import { collapseKey, restoreCollapsed, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
 import { ProjectPageTab } from "@/components/project-page/project-page-tab";
+import { PROJECT_PAGE_FIND } from "@/components/project-page/search";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
-import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
+import { ProjectBar, TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -94,6 +95,8 @@ type SavedWorkspace = {
   projectTabs?: SavedProjectTab[];
   /** What the + button opens, as `pluginId:viewId`; absent or null is a terminal. */
   newTabPage?: string | null;
+  /** What a project added to Wings opens first: "terminal" (absent) or "project" for its Project page. */
+  newProjectOpens?: NewProjectOpens;
   /** Plugin sections folded shut under a project, as `collapseKey` makes them. Absent in older files. */
   collapsedSections?: string[];
   sessions: Record<string, string | null>;
@@ -254,7 +257,10 @@ export default function App() {
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [sleepTick, setSleepTick] = useState(0);
-  const [newTabPage, setNewTabPage] = useState<string | null>(null);
+  const [newTabPage, setNewTabPage] = useState<string>("terminal");
+  const [newProjectOpens, setNewProjectOpens] = useState<NewProjectOpens>("terminal");
+  const newProjectOpensRef = useRef(newProjectOpens);
+  newProjectOpensRef.current = newProjectOpens;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("text");
@@ -598,6 +604,7 @@ export default function App() {
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
       if (saved.newTabPage) setNewTabPage(saved.newTabPage);
+      setNewProjectOpens(parseNewProjectOpens(saved.newProjectOpens));
       setCollapsedSections(restoreCollapsed(saved.collapsedSections, list.map((s) => s.id)));
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       const known = new Set(list.map((s) => s.id));
@@ -718,6 +725,7 @@ export default function App() {
       asleep,
       sleep,
       newTabPage,
+      newProjectOpens,
       collapsedSections,
       sessionArgs,
       cwds: JSON.parse(cwdsJson),
@@ -730,7 +738,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, collapsedSections, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, newProjectOpens, collapsedSections, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1059,8 +1067,10 @@ export default function App() {
 
   async function addSpace(path: string) {
     const space = await api.spacesAdd(path);
+    const added = !spacesRef.current.some((s) => s.id === space.id);
     setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
-    selectSpace(space.id);
+    if (added && firstTabFor(newProjectOpensRef.current, true) === "project") showProjectPage(space.id);
+    else selectSpace(space.id);
   }
 
   /** Opens a past session where it started, in the project that holds its folder. A new project is added. */
@@ -1331,6 +1341,7 @@ export default function App() {
   const commands = createCommands({
     project: activeSpaceId !== null,
     terminalTab: activeTab !== null,
+    projectPage: shownTab !== null && isProjectTab(shownTab),
     tabs: spaceTabs.length,
     dev: import.meta.env.DEV,
     run: {
@@ -1351,7 +1362,10 @@ export default function App() {
       "toggle-sidebar": () => setSidebarOpen((o) => !o),
       "next-agent": () => jumpToAgent(false),
       "previous-agent": () => jumpToAgent(true),
-      find: () => activeTab && terminals.get(activeTab.focusedPane)?.openFind(),
+      find: () => {
+        if (shownTab && isProjectTab(shownTab)) window.dispatchEvent(new CustomEvent(PROJECT_PAGE_FIND, { detail: shownTab.spaceId }));
+        else if (activeTab) terminals.get(activeTab.focusedPane)?.openFind();
+      },
       palette: () => setPaletteOpen((o) => !o),
       history: () => setHistoryOpen(true),
       "font-up": () => setFontSize((f) => Math.min(24, f + 1)),
@@ -1468,7 +1482,7 @@ export default function App() {
       <TooltipProvider delay={500}>
         <div className="flex h-full flex-col bg-glass text-foreground">
           <TitleBar
-            space={activeSpace}
+            hasSpace={activeSpace !== null}
             tabs={tabViews}
             activeTabId={activeTabId}
             sidebarOpen={sidebarOpen}
@@ -1478,33 +1492,15 @@ export default function App() {
             onRename={renameTab}
             onMove={moveTabTo}
             newTabEntries={newTabs}
-            onNew={() => openNewTab(defaultNewTab(newTabs, newTabPage))}
+            newAsk={newTabAction(newTabs, newTabPage).kind === "ask"}
+            onNew={() => {
+              const action = newTabAction(newTabs, newTabPage);
+              if (action.kind === "project") activeSpace && showProjectPage(activeSpace.id);
+              else openNewTab(action.kind === "page" ? action.entry : null);
+            }}
             onNewTerminal={() => openNewTab(null)}
             onNewPage={openNewTab}
             onNewProjectPage={() => activeSpace && showProjectPage(activeSpace.id)}
-            onHistory={() => setHistoryOpen(true)}
-            onSettings={() => setSettingsOpen(true)}
-            bell={
-              <NotificationBell
-                events={notifications}
-                onOpen={() => notify({ type: "readAll" })}
-                onClear={() => notify({ type: "clear" })}
-                onGoToPane={(paneId) => {
-                  const agent = agentsRef.current.find((a) => a.paneId === paneId);
-                  if (agent) selectAgent(agent);
-                  else toast("That pane has closed", { duration: 2000 });
-                }}
-              />
-            }
-            pluginButtons={pluginButtons}
-            pinned={pinnedButtons}
-            onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
-            onPluginButton={pressPluginButton}
-            onMountPopover={async (button, container) => {
-              const plugin = activePlugins.find((p) => p.id === button.pluginId);
-              if (!plugin || !pluginHost.current) throw new Error(`${button.pluginId} isn't running`);
-              return pluginHost.current.mountPage(plugin, button.id, container, "popover");
-            }}
           />
           {/* The peek sits on the row, not in the panes, so it starts at the window's edge, left of the closed sidebar's handle. */}
           <div className="relative min-h-0 flex-1">
@@ -1541,7 +1537,35 @@ export default function App() {
             </ResizablePanel>
             <SideHandle disabled={!sidebarOpen} />
             <ResizablePanel id="main" minSize={320} style={PANEL_STYLE}>
-              <main className="relative h-full min-h-0 min-w-0">
+              <div className="flex h-full min-w-0 flex-col">
+              <ProjectBar
+                space={activeSpace}
+                git={activeSpace ? git[activeSpace.id] : null}
+            onHistory={() => setHistoryOpen(true)}
+            onSettings={() => setSettingsOpen(true)}
+            bell={
+              <NotificationBell
+                events={notifications}
+                onOpen={() => notify({ type: "readAll" })}
+                onClear={() => notify({ type: "clear" })}
+                onGoToPane={(paneId) => {
+                  const agent = agentsRef.current.find((a) => a.paneId === paneId);
+                  if (agent) selectAgent(agent);
+                  else toast("That pane has closed", { duration: 2000 });
+                }}
+              />
+            }
+            pluginButtons={pluginButtons}
+            pinned={pinnedButtons}
+            onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
+            onPluginButton={pressPluginButton}
+            onMountPopover={async (button, container) => {
+              const plugin = activePlugins.find((p) => p.id === button.pluginId);
+              if (!plugin || !pluginHost.current) throw new Error(`${button.pluginId} isn't running`);
+              return pluginHost.current.mountPage(plugin, button.id, container, "popover");
+            }}
+              />
+              <main className="relative min-h-0 min-w-0 flex-1">
                 {tabs.map((tab) =>
                   isProjectTab(tab) ? (
                     <ProjectPageTab
@@ -1590,6 +1614,7 @@ export default function App() {
                   />
                 )}
               </main>
+              </div>
             </ResizablePanel>
             <SideHandle disabled={rightRef === null} />
             <ResizablePanel
@@ -1694,7 +1719,7 @@ export default function App() {
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}

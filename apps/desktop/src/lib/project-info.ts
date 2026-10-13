@@ -44,6 +44,8 @@ export function fingerprint(text: string): number {
 
 export const baseOf = (text: string): Base => ({ length: text.length, hash: fingerprint(text) });
 
+export type Place = "top" | "end" | { after: string };
+
 export type Op =
   /** `oldKey` is the key being renamed, when a row's key is edited. `by` defaults to "you". */
   | { kind: "setFact"; key: string; value: string; by?: Who; oldKey?: string }
@@ -52,9 +54,9 @@ export type Op =
   | { kind: "appendSection"; title: string; body: string; by?: Who }
   /** A user's edit. What an agent appended after `baseLen` stays after the new body. Leave `title` or `body` out to keep it. */
   | { kind: "editSection"; id: string; title?: string; body?: string; baseLen: number; baseHash: number }
-  /** Added after item `after`, or at the end. */
-  | { kind: "addSection"; title: string; after?: string }
-  | { kind: "addBlock"; pluginId: string; blockId: string; after?: string }
+  /** Added at `at`: the top of the page, its end, or after the item with that id. */
+  | { kind: "addSection"; title: string; at: Place }
+  | { kind: "addBlock"; pluginId: string; blockId: string; at: Place }
   | { kind: "setBlockState"; id: string; state: unknown | null }
   | { kind: "setBlockHeight"; id: string; height: number }
   | { kind: "moveItem"; id: string; dir: -1 | 1 }

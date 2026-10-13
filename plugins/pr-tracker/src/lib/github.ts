@@ -237,11 +237,11 @@ export async function githubComments(link: GithubLink): Promise<Comment[]> {
     ...pr.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
     ...pr.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url: link.url })),
   ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
-  return [...general, ...list.map((c) => githubComment(c, host))];
+  return [...general, ...list.map(githubComment)];
 }
 
-/** A line comment from the REST API. GitHub threads only line comments, so only those take replies, and only on github.com: `wings.post` can't name another gh host. */
-function githubComment(c: GhComment, host: string): Comment {
+/** A line comment from the REST API. GitHub threads only line comments, so only a thread's first one takes replies, on github.com and on an Enterprise host alike. */
+function githubComment(c: GhComment): Comment {
   return {
     id: c.id,
     replyTo: c.in_reply_to_id ?? null,
@@ -252,12 +252,20 @@ function githubComment(c: GhComment, host: string): Comment {
     body: c.body ?? "",
     createdAt: c.created_at,
     url: c.html_url,
-    canReply: !c.in_reply_to_id && host === DOTCOM,
+    canReply: !c.in_reply_to_id,
   };
 }
 
-// ---------- replies ----------
+// ---------- replies and approval ----------
+
+/** `wings.post` names the Enterprise host for `gh`; github.com is gh's default. */
+const postOptions = (url: string) => (hostOf(url) === DOTCOM ? undefined : { host: hostOf(url) });
 
 export async function githubReply(link: GithubLink, root: Comment, body: string) {
-  return githubComment((await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body })) as GhComment, DOTCOM);
+  return githubComment((await post("gh", `repos/${link.repo}/pulls/${link.number}/comments/${root.id}/replies`, { body }, postOptions(link.url))) as GhComment);
+}
+
+/** Approves as the signed-in user. The manifest pins the review's `event` to APPROVE, so this call can't request changes or comment. */
+export async function githubApprove(link: GithubLink): Promise<void> {
+  await post("gh", `repos/${link.repo}/pulls/${link.number}/reviews`, { event: "APPROVE" }, postOptions(link.url));
 }

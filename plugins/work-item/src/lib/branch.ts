@@ -1,4 +1,4 @@
-export type Remote = { kind: "azure"; org: string; project: string } | { kind: "none"; org?: undefined; project?: undefined };
+export type Remote = { kind: "azure"; org: string; project: string; repo: string } | { kind: "none"; org?: undefined; project?: undefined; repo?: undefined };
 
 export async function git(cwd: string, args: string[]) {
   const out = await wings.exec("git", args, { cwd });
@@ -10,9 +10,9 @@ export async function git(cwd: string, args: string[]) {
 export function parseRemote(url: string): Remote {
   let m = url.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (!m) m = url.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/);
-  if (m) return { kind: "azure", org: `https://dev.azure.com/${m[1]}`, project: decodeURIComponent(m[2]) };
+  if (m) return { kind: "azure", org: `https://dev.azure.com/${m[1]}`, project: decodeURIComponent(m[2]), repo: decodeURIComponent(m[3]) };
   m = url.match(/([^/.@]+)\.visualstudio\.com\/(?:DefaultCollection\/)?([^/]+)\/_git\/([^/]+?)(?:\.git)?$/);
-  if (m) return { kind: "azure", org: `https://${m[1]}.visualstudio.com`, project: decodeURIComponent(m[2]) };
+  if (m) return { kind: "azure", org: `https://${m[1]}.visualstudio.com`, project: decodeURIComponent(m[2]), repo: decodeURIComponent(m[3]) };
   return { kind: "none" };
 }
 

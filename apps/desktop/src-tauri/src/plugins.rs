@@ -8,7 +8,10 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -28,10 +31,15 @@ pub struct Permissions {
     /// URL prefixes the plugin may open in the browser: https, or http to this computer (`localhost`,
     /// `127.0.0.1` or `[::1]`).
     pub open_url: Vec<String>,
-    /// https URL prefixes the plugin may call with `wings.fetch`, like an API's base URL.
+    /// https URLs the plugin may call with `wings.fetch`. A bare entry is a prefix, like an API's base URL, for
+    /// any method. `GET <prefix>` allows only GET and HEAD. `POST <url>` allows one POST path, where `*` stands
+    /// for one path segment, with a JSON object (or no body, if nothing is pinned) and no query. Either may end with ` {field=a|b}` to
+    /// pin body fields (POST only).
     pub fetch: Vec<String>,
     /// API paths the plugin may POST to through a signed-in CLI, as `<gh|glab|az> <pattern>`. `*` stands for
-    /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag.
+    /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag. An
+    /// entry may end with ` {field=a|b}`, which pins a body field to one of those values, like
+    /// `gh repos/*/*/pulls/*/reviews {event=APPROVE}`.
     pub post: Vec<String>,
     /// Lets the plugin open terminals in your projects and move focus to a pane. Each entry is a command it
     /// may start in a new pane, matched like `exec`; `[]` allows plain shells only. Absent, it can do neither.
@@ -425,8 +433,10 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(settings) = &manifest.contributes.settings {
         resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
     }
-    if let Some(prefix) = manifest.permissions.fetch.iter().find(|p| !fetch_prefix_ok(p)) {
-        return Err(format!("fetch prefix {prefix:?} must be an https URL with a path, like https://api.example.com/"));
+    if let Some(entry) = manifest.permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
+        return Err(format!(
+            "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
+        ));
     }
     let flags_ok = |e: &str| {
         let (_, flags) = exec_entry(e);
@@ -490,20 +500,26 @@ pub fn exec_timeout(requested_ms: Option<u64>) -> Duration {
     requested_ms.map_or(EXEC_TIMEOUT, |ms| Duration::from_millis(ms).clamp(Duration::from_secs(1), EXEC_TIMEOUT_MAX))
 }
 const EXEC_OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
+/// What a plugin's exec rejects with when a program prints more than `EXEC_OUTPUT_LIMIT` bytes to stdout or stderr.
+pub const EXEC_OUTPUT_TOO_LARGE: &str = "Output is larger than 8 MB";
 
 /// Gets each output line while the program runs, for prompts like a sign-in code.
 pub type OnLine = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Reads a pipe on its own thread so a chatty program can't block on a full pipe.
-fn read_pipe(pipe: impl Read + Send + 'static, on_line: Option<OnLine>) -> JoinHandle<String> {
+/// Returns the text and whether the program printed more than the limit. One byte past it is read to tell.
+fn read_pipe(pipe: impl Read + Send + 'static, on_line: Option<OnLine>, overflow: Arc<AtomicBool>) -> JoinHandle<String> {
     std::thread::spawn(move || {
-        let mut reader = BufReader::new(pipe.take(EXEC_OUTPUT_LIMIT));
+        let mut reader = BufReader::new(pipe.take(EXEC_OUTPUT_LIMIT + 1));
         let (mut all, mut line) = (Vec::new(), Vec::new());
         while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 {
             if let Some(f) = &on_line {
                 f(String::from_utf8_lossy(&line).trim_end());
             }
             all.append(&mut line);
+        }
+        if all.len() as u64 > EXEC_OUTPUT_LIMIT {
+            overflow.store(true, Ordering::SeqCst);
         }
         String::from_utf8_lossy(&all).into_owned()
     })
@@ -597,10 +613,17 @@ fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on
         cmd.current_dir(dir);
     }
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let out_reader = read_pipe(child.stdout.take().unwrap(), on_line.clone());
-    let err_reader = read_pipe(child.stderr.take().unwrap(), on_line);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let out_reader = read_pipe(child.stdout.take().unwrap(), on_line.clone(), overflow.clone());
+    let err_reader = read_pipe(child.stderr.take().unwrap(), on_line, overflow.clone());
     let start = Instant::now();
     let status = loop {
+        // Checked before the exit status: a program cut off by the closed pipe dies by signal and would look like a failure.
+        if overflow.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(EXEC_OUTPUT_TOO_LARGE.into());
+        }
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
@@ -608,9 +631,14 @@ fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on
             let _ = child.kill();
             return Err(format!("{program} timed out after {}s", timeout.as_secs()));
         }
-        std::thread::sleep(Duration::from_millis(20));
+        // 2 ms: at 20 ms every exec paid ~22 ms of waiting after the program had already finished (measured on echo: 25 ms -> 3 ms).
+        std::thread::sleep(Duration::from_millis(2));
     };
-    Ok(ExecResult { code: status.code(), stdout: out_reader.join().unwrap_or_default(), stderr: err_reader.join().unwrap_or_default() })
+    let (stdout, stderr) = (out_reader.join().unwrap_or_default(), err_reader.join().unwrap_or_default());
+    if overflow.load(Ordering::SeqCst) {
+        return Err(EXEC_OUTPUT_TOO_LARGE.into());
+    }
+    Ok(ExecResult { code: status.code(), stdout, stderr })
 }
 
 /// GUI apps don't get the shell's PATH on macOS and Linux, so ask the login shell once.
@@ -726,14 +754,113 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
 /// A fetch prefix has to name a host and end its host part with `/`, so `https://api.example.com` can't
 /// also match `https://api.example.com.evil.net`.
 fn fetch_prefix_ok(prefix: &str) -> bool {
-    prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains('@')))
+    prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains(['@', '*'])))
 }
 
-/// The URL to send, if the plugin may call it: https, no credentials, under a `permissions.fetch` prefix,
-/// and already in normal form. The path may only use letters, digits and `-_.~/`, with no `;` or percent
-/// escapes, so no server can read it as a different path (`..;/`, `..%2F`, double encoding) than the one
-/// that was checked.
-pub fn fetch_url(plugin: &Plugin, url: &str) -> Option<String> {
+/// One `permissions.fetch` entry.
+struct FetchRule<'a> {
+    /// `None` is a bare prefix for any method.
+    method: Option<&'a str>,
+    target: &'a str,
+    pins: Vec<Pin<'a>>,
+}
+
+/// A body field that must be one of these values: `{event=APPROVE}` or `{vote=10|5|0}`.
+type Pin<'a> = (&'a str, Vec<&'a str>);
+
+/// Splits a trailing ` {field=a|b,other=c}` off an entry. `None` if it is there but malformed.
+fn split_pins(entry: &str) -> Option<(&str, Vec<Pin<'_>>)> {
+    let entry = entry.trim_end();
+    if !entry.ends_with('}') {
+        return Some((entry, Vec::new()));
+    }
+    let at = entry.rfind(" {")?;
+    let mut pins = Vec::new();
+    for item in entry[at + 2..entry.len() - 1].split(',') {
+        let (key, values) = item.split_once('=')?;
+        let word = |w: &str| !w.is_empty() && w.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+        let values: Vec<&str> = values.split('|').collect();
+        if !word(key) || key.contains(['-', '.']) || !values.iter().all(|v| word(v)) {
+            return None;
+        }
+        pins.push((key, values));
+    }
+    (!pins.is_empty()).then_some((&entry[..at], pins))
+}
+
+/// Whether a body's top-level keys can't be read two ways. Go and .NET servers match JSON keys without regard to
+/// case (Go also folds `ſ` to `s` and the Kelvin sign to `k`), so with a pinned field `{"event":"APPROVED",
+/// "EVENT":"REQUEST_CHANGES"}` would pass the pin and act on the other key. A body that pins anything must use ASCII
+/// keys, none repeated, none equal to another ignoring ASCII case.
+fn keys_unambiguous<'a>(keys: impl IntoIterator<Item = &'a str>) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    keys.into_iter().all(|k| k.is_ascii() && seen.insert(k.to_ascii_lowercase()))
+}
+
+/// The top-level keys of a JSON object in order, repeats included, which `serde_json::Value` would merge.
+fn json_keys(text: &str) -> Option<Vec<String>> {
+    struct Keys(Vec<String>);
+    impl<'de> Deserialize<'de> for Keys {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> serde::de::Visitor<'de> for V {
+                type Value = Keys;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a JSON object")
+                }
+                fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Keys, A::Error> {
+                    let mut keys = Vec::new();
+                    while let Some((k, _)) = map.next_entry::<String, serde::de::IgnoredAny>()? {
+                        keys.push(k);
+                    }
+                    Ok(Keys(keys))
+                }
+            }
+            d.deserialize_map(V)
+        }
+    }
+    serde_json::from_str::<Keys>(text).ok().map(|k| k.0)
+}
+
+/// Whether the body's fields hold every pinned value, as text (a whole number counts as its digits).
+fn pins_hold(pins: &[Pin<'_>], body: &serde_json::Map<String, Value>) -> bool {
+    pins.iter().all(|(key, values)| {
+        let got = match body.get(*key) {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => return false,
+        };
+        values.contains(&got.as_str())
+    })
+}
+
+fn fetch_rule(entry: &str) -> Option<FetchRule<'_>> {
+    let (core, pins) = split_pins(entry)?;
+    let (method, target) = match core.split_once(' ') {
+        Some((m @ ("GET" | "POST"), rest)) => (Some(m), rest),
+        Some(_) => return None,
+        None => (None, core),
+    };
+    if method != Some("POST") && (!pins.is_empty() || target.contains('*')) {
+        return None;
+    }
+    if method == Some("POST") && (target.contains(['?', '#']) || !target.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%".contains(&b))) {
+        return None;
+    }
+    fetch_prefix_ok(target).then_some(FetchRule { method, target, pins })
+}
+
+/// Whether a `POST` rule's URL pattern covers `url`: the same segments, where `*` takes one plain segment.
+fn post_url_matches(pattern: &str, url: &str) -> bool {
+    let (want, got): (Vec<&str>, Vec<&str>) = (pattern.split('/').collect(), url.split('/').collect());
+    want.len() == got.len() && want.iter().zip(&got).enumerate().all(|(i, (w, g))| if *w == "*" { i > 2 && post_segment_ok(g) } else { w == g })
+}
+
+/// The URL to send, if the plugin may call it with this method and body: https, no credentials, under a
+/// `permissions.fetch` entry, and already in normal form. The path may only use letters, digits and `-_.~/`, with
+/// no `;` or percent escapes, so no server can read it as a different path (`..;/`, `..%2F`, double encoding) than
+/// the one that was checked. A `POST` entry also needs the body to be a JSON object that holds its pinned fields.
+pub fn fetch_url(plugin: &Plugin, method: &str, url: &str, body: Option<&str>) -> Option<String> {
     let parsed = tauri::Url::parse(url).ok()?;
     let normal = parsed.as_str();
     let plain_path = parsed.path().bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~/".contains(&b));
@@ -742,9 +869,30 @@ pub fn fetch_url(plugin: &Plugin, url: &str) -> Option<String> {
         && parsed.password().is_none()
         && parsed.fragment().is_none()
         && normal == url
-        && plain_path
-        && plugin.manifest.permissions.fetch.iter().any(|prefix| normal.starts_with(prefix));
-    ok.then(|| normal.to_string())
+        && plain_path;
+    if !ok {
+        return None;
+    }
+    let method = method.to_ascii_uppercase();
+    let allowed = plugin.manifest.permissions.fetch.iter().filter_map(|e| fetch_rule(e)).any(|rule| match rule.method {
+        None => normal.starts_with(rule.target),
+        Some("GET") => matches!(method.as_str(), "GET" | "HEAD") && normal.starts_with(rule.target),
+        _ => {
+            method == "POST"
+                && parsed.query().is_none()
+                && post_url_matches(rule.target, normal)
+                && match body.filter(|b| !b.is_empty()) {
+                    // A POST that pins nothing may send no body, like Bitbucket's approve.
+                    None => rule.pins.is_empty(),
+                    Some(b) => {
+                        b.len() <= POST_BODY_LIMIT
+                            && (rule.pins.is_empty() || json_keys(b).is_some_and(|k| keys_unambiguous(k.iter().map(String::as_str))))
+                            && matches!(serde_json::from_str::<Value>(b), Ok(Value::Object(o)) if pins_hold(&rule.pins, &o))
+                    }
+                }
+        }
+    });
+    allowed.then(|| normal.to_string())
 }
 
 /// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
@@ -753,8 +901,9 @@ pub fn fetch_header_ok(name: &str) -> bool {
     ["accept", "accept-language", "content-type", "if-none-match", "if-modified-since", "cache-control"].contains(&name.to_ascii_lowercase().as_str())
 }
 
-/// `permissions.post` entry → (program, pattern), if it's well formed.
-fn post_entry(entry: &str) -> Option<(&str, &str)> {
+/// `permissions.post` entry → (program, pattern, pinned body fields), if it's well formed.
+fn post_entry(entry: &str) -> Option<(&str, &str, Vec<Pin<'_>>)> {
+    let (entry, pins) = split_pins(entry)?;
     let (program, pattern) = entry.split_once(' ')?;
     // `?` and `=` for a fixed query like `?api-version=7.1`. A `*` only matches a whole plain segment.
     let chars_ok = !pattern.is_empty() && pattern.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%?=".contains(&b));
@@ -763,7 +912,7 @@ fn post_entry(entry: &str) -> Option<(&str, &str)> {
         "az" => pattern.strip_prefix("https://").is_some_and(|rest| rest.split('/').next().is_some_and(|host| !host.is_empty() && !host.contains('*'))),
         _ => false,
     };
-    (chars_ok && shape_ok).then_some((program, pattern))
+    (chars_ok && shape_ok).then_some((program, pattern, pins))
 }
 
 /// A URL segment matched by `*`. Percent escapes stay, since GitLab project paths (`g%2Fp`) and Azure project
@@ -791,15 +940,20 @@ fn post_segment_ok(segment: &str) -> bool {
 }
 
 /// Whether a `permissions.post` entry covers a POST by `program` to `url`.
-fn may_post(plugin: &Plugin, program: &str, url: &str) -> bool {
+fn may_post(plugin: &Plugin, program: &str, url: &str, fields: &serde_json::Map<String, Value>) -> bool {
     let parts: Vec<&str> = url.split('/').collect();
-    plugin.manifest.permissions.post.iter().filter_map(|e| post_entry(e)).any(|(p, pattern)| {
+    plugin.manifest.permissions.post.iter().filter_map(|e| post_entry(e)).any(|(p, pattern, pins)| {
         let want: Vec<&str> = pattern.split('/').collect();
-        p == program && want.len() == parts.len() && want.iter().zip(&parts).all(|(w, part)| if *w == "*" { post_segment_ok(part) } else { w == part })
+        p == program
+            && want.len() == parts.len()
+            && want.iter().zip(&parts).all(|(w, part)| if *w == "*" { post_segment_ok(part) } else { w == part })
+            && (pins.is_empty() || keys_unambiguous(fields.keys().map(String::as_str)))
+            && pins_hold(&pins, fields)
     })
 }
 
-/// A POST a plugin asks for: its fields become the JSON body. `host` is the GitLab server for `glab`.
+/// A POST a plugin asks for: its fields become the JSON body. `host` is the GitLab server for `glab`, and the
+/// GitHub Enterprise Server for `gh` (absent or `github.com` is github.com).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostRequest {
@@ -822,7 +976,7 @@ fn hostname_ok(host: &str) -> bool {
 fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, String> {
     let PostRequest { program, url, host, fields } = request;
     let id = &plugin.manifest.id;
-    if !may_post(plugin, program, url) {
+    if !may_post(plugin, program, url, fields) {
         return Err(format!("{id} may not post to {program} {url}"));
     }
     let key_ok = |k: &str| !k.is_empty() && k.len() <= 40 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
@@ -842,6 +996,11 @@ fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, Stri
             if program == "glab" {
                 let host = host.as_deref().filter(|h| hostname_ok(h)).ok_or("a glab post needs the GitLab host name")?;
                 args.extend(["--hostname".into(), host.into()]);
+            } else if let Some(host) = host.as_deref().filter(|h| *h != "github.com") {
+                if !hostname_ok(host) {
+                    return Err("a gh post's host must be a plain host name".into());
+                }
+                args.extend(["--hostname".into(), host.into()]);
             }
             args.extend(["--method".into(), "POST".into(), url.clone()]);
             // `-f` sends the text as it is: only `-F` reads `@file` or fills in placeholders, and a number can't start with either.
@@ -859,9 +1018,53 @@ fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, Stri
     Ok(args)
 }
 
+/// The hosts `gh` is signed in to, from `gh auth status --json hosts`.
+fn parse_gh_hosts(json: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(json).ok().and_then(|v| v.get("hosts")?.as_object().map(|h| h.keys().cloned().collect())).unwrap_or_default()
+}
+
+/// The hosts `glab` is set up for: each block of `glab auth status --all` starts with its host name, unindented.
+fn parse_glab_hosts(text: &str) -> Vec<String> {
+    text.lines().filter(|l| !l.starts_with(char::is_whitespace) && hostname_ok(l.trim())).map(|l| l.trim().to_string()).collect()
+}
+
+/// Looks the CLI's signed-in hosts up, and keeps the answer for a minute.
+fn signed_in_hosts(program: &str) -> Result<Vec<String>, String> {
+    static CACHE: std::sync::Mutex<Vec<(String, std::time::Instant, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, at, hosts)) = cache.iter().find(|(p, ..)| p == program) {
+        if at.elapsed() < Duration::from_secs(60) {
+            return Ok(hosts.clone());
+        }
+    }
+    let args: Vec<String> = (if program == "gh" { &["auth", "status", "--json", "hosts"][..] } else { &["auth", "status", "--all"][..] }).iter().map(|a| a.to_string()).collect();
+    let out = run(program, &args, None, EXEC_TIMEOUT, None)?;
+    // glab writes its report to stderr when a token is bad, so read both.
+    let hosts = if program == "gh" { parse_gh_hosts(&out.stdout) } else { parse_glab_hosts(&format!("{}\n{}", out.stdout, out.stderr)) };
+    cache.retain(|(p, ..)| p != program);
+    cache.push((program.to_string(), std::time::Instant::now(), hosts.clone()));
+    Ok(hosts)
+}
+
+/// A CLI sends its token to whatever `--hostname` names (`gh` sends GH_ENTERPRISE_TOKEN to any host but github.com), so a
+/// plugin may only name a host the CLI is already set up for. github.com is gh's own default.
+fn host_is_signed_in(program: &str, host: Option<&str>, hosts: &dyn Fn(&str) -> Result<Vec<String>, String>) -> Result<(), String> {
+    let Some(host) = host.filter(|h| !(program == "gh" && *h == "github.com")) else { return Ok(()) };
+    if hosts(program)?.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        Ok(())
+    } else {
+        Err(format!("{program} isn't signed in to {host}, so Wings won't send a request there."))
+    }
+}
+
 /// Sends a POST the manifest allows, like a reply to a review comment, as you through the CLI's own sign-in.
 pub fn post(plugin: &Plugin, request: &PostRequest) -> Result<ExecResult, String> {
+    post_checked(plugin, request, &signed_in_hosts)
+}
+
+fn post_checked(plugin: &Plugin, request: &PostRequest, hosts: &dyn Fn(&str) -> Result<Vec<String>, String>) -> Result<ExecResult, String> {
     let args = post_args(plugin, request)?;
+    host_is_signed_in(&request.program, request.host.as_deref(), hosts)?;
     run(&request.program, &args, None, EXEC_TIMEOUT, None)
 }
 
@@ -1103,7 +1306,7 @@ mod tests {
     #[test]
     fn fetch_only_reaches_declared_https_prefixes() {
         let p = plugin(Path::new("/tmp"), &[], &[]);
-        assert_eq!(fetch_url(&p, "https://api.example.com/v1/timers").as_deref(), Some("https://api.example.com/v1/timers"));
+        assert_eq!(fetch_url(&p, "GET", "https://api.example.com/v1/timers", None).as_deref(), Some("https://api.example.com/v1/timers"));
         for url in [
             "http://api.example.com/v1/timers",
             "https://api.example.com/v2/x",
@@ -1121,9 +1324,9 @@ mod tests {
             "https://api.example.com/v1/a%20b",
             "https://api.example.com/v1/x#frag",
         ] {
-            assert!(fetch_url(&p, url).is_none(), "{url}");
+            assert!(fetch_url(&p, "GET", url, None).is_none(), "{url}");
         }
-        assert_eq!(fetch_url(&p, "https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08").as_deref(), Some("https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08"));
+        assert_eq!(fetch_url(&p, "GET", "https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08", None).as_deref(), Some("https://api.example.com/v1/time-entries?from=2026-10-05&to=2026-10-08"));
         for name in ["Accept", "content-type", "If-None-Match"] {
             assert!(fetch_header_ok(name), "{name}");
         }
@@ -1135,6 +1338,17 @@ mod tests {
         }
         assert!(fetch_prefix_ok("https://api.example.com/"));
         assert!(!fetch_prefix_ok("https://api.example.com") && !fetch_prefix_ok("http://x.com/") && !fetch_prefix_ok("https:///x"));
+    }
+
+    #[test]
+    fn exec_rejects_output_over_the_limit_without_waiting_for_the_timeout() {
+        let p = plugin(Path::new("/tmp"), &["yes", "echo"], &[]);
+        let start = Instant::now();
+        // `yes` never stops on its own: the host has to cut it off, long before the 30 s timeout.
+        let err = exec(&p, "yes", &[], None, EXEC_TIMEOUT, None).unwrap_err();
+        assert_eq!(err, EXEC_OUTPUT_TOO_LARGE);
+        assert!(start.elapsed() < Duration::from_secs(10), "took {:?}", start.elapsed());
+        assert!(exec(&p, "echo", &["fine".into()], None, EXEC_TIMEOUT, None).is_ok());
     }
 
     #[test]
@@ -1239,12 +1453,40 @@ mod tests {
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
         let posts = [
             ("gh", "repos/o/r/pulls/1/comments/2/replies", None),
+            ("gh", "repos/o/r/pulls/1/comments/2/replies", Some("ghe.example.com")),
+            ("glab", "projects/g%2Fp/merge_requests/1/approve", Some("gitlab.com")),
             ("glab", "projects/g%2Fp/merge_requests/1/discussions/ab12/notes", Some("gitlab.com")),
             ("az", "https://dev.azure.com/o/My%20Project/_apis/git/repositories/Repo.Name/pullRequests/1/threads/44590/comments?api-version=7.1", None),
         ];
         for (program, url, host) in posts {
             assert!(post_args(&p, &post_request(program, url, host)).is_ok(), "{program} {url} not declared");
         }
+        // Approving on GitHub is pinned to the APPROVE event, on github.com and on an Enterprise host.
+        let review = |event: &str, host: Option<&str>| {
+            let mut r = post_request("gh", "repos/o/r/pulls/1/reviews", host);
+            r.fields = serde_json::json!({ "event": event }).as_object().unwrap().clone();
+            r
+        };
+        assert!(post_args(&p, &review("APPROVE", None)).is_ok());
+        assert!(post_args(&p, &review("APPROVE", Some("ghe.example.com"))).is_ok());
+        assert!(post_args(&p, &review("REQUEST_CHANGES", None)).is_err());
+        assert!(post_args(&p, &review("COMMENT", None)).is_err());
+        let bb = "https://api.bitbucket.org/2.0/repositories/ws/repo/pullrequests/4";
+        let reply = Some(r#"{"content":{"raw":"Thanks"},"parent":{"id":12}}"#);
+        assert!(fetch_url(&p, "GET", &format!("{bb}/comments?pagelen=100"), None).is_some());
+        assert!(fetch_url(&p, "POST", &format!("{bb}/comments"), reply).is_some());
+        assert!(fetch_url(&p, "POST", &format!("{bb}/approve"), None).is_some());
+        for method in ["PUT", "DELETE", "PATCH"] {
+            assert!(fetch_url(&p, method, &format!("{bb}/comments"), reply).is_none(), "{method}");
+        }
+        assert!(fetch_url(&p, "POST", &format!("{bb}/merge"), Some("{}")).is_none());
+        assert!(fetch_url(&p, "DELETE", &format!("{bb}/approve"), None).is_none());
+        let cb = "https://codeberg.org/api/v1/repos/o/r";
+        assert!(fetch_url(&p, "GET", &format!("{cb}/pulls/4.diff"), None).is_some());
+        assert!(fetch_url(&p, "POST", &format!("{cb}/issues/4/comments"), Some(r#"{"body":"> quoted\n\nThanks"}"#)).is_some());
+        assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"APPROVED"}"#)).is_some());
+        assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"REQUEST_CHANGES","body":"no"}"#)).is_none());
+        assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/merge"), Some(r#"{"Do":"merge"}"#)).is_none());
     }
 
     #[test]
@@ -1452,9 +1694,10 @@ mod tests {
 
     #[test]
     fn post_only_reaches_declared_paths() {
+        let fields = serde_json::Map::new();
         let mut p = plugin(Path::new("/tmp"), &["gh api"], &[]);
         p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/comments/*/replies".into(), "glab projects/*/merge_requests/*/discussions/*/notes".into()];
-        assert!(may_post(&p, "gh", "repos/o/r/pulls/1/comments/2/replies"));
+        assert!(may_post(&p, "gh", "repos/o/r/pulls/1/comments/2/replies", &fields));
         for url in [
             "repos/o/r/pulls/1/comments/2/replies/x",
             "repos/o/r/pulls/1/comments/replies",
@@ -1465,10 +1708,10 @@ mod tests {
             "repos/o/r/pulls/1/comments/2?x=1/replies",
             "repos/o/r/pulls/1/comments/a%2F..%2Fb/replies",
         ] {
-            assert!(!may_post(&p, "gh", url), "{url}");
+            assert!(!may_post(&p, "gh", url, &fields), "{url}");
         }
-        assert!(!may_post(&p, "glab", "repos/o/r/pulls/1/comments/2/replies"));
-        assert!(may_post(&p, "glab", "projects/g%2Fp/merge_requests/1/discussions/ab12/notes"));
+        assert!(!may_post(&p, "glab", "repos/o/r/pulls/1/comments/2/replies", &fields));
+        assert!(may_post(&p, "glab", "projects/g%2Fp/merge_requests/1/discussions/ab12/notes", &fields));
         // An exec permission for `gh api` still can't write.
         assert!(is_unsafe_flag("gh", "--method"));
     }
@@ -1492,6 +1735,182 @@ mod tests {
         assert!(post_args(&p, &bad).is_err());
         bad.fields = serde_json::Map::new();
         assert!(post_args(&p, &bad).is_err());
+    }
+
+    #[test]
+    fn a_post_entry_can_pin_body_fields() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/reviews {event=APPROVE}".into(), "az https://dev.azure.com/*/reviewers/*/vote?api-version=7.1 {vote=10|5|0|-5|-10}".into()];
+        let fields = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let url = "repos/o/r/pulls/1/reviews";
+        assert!(may_post(&p, "gh", url, &fields(serde_json::json!({ "event": "APPROVE" }))));
+        assert!(may_post(&p, "gh", url, &fields(serde_json::json!({ "event": "APPROVE", "body": "Looks good" }))));
+        for bad in [
+            serde_json::json!({ "event": "REQUEST_CHANGES" }),
+            serde_json::json!({ "event": "approve" }),
+            serde_json::json!({ "event": "APPROVE|COMMENT" }),
+            serde_json::json!({ "body": "no event" }),
+            serde_json::json!({ "event": 1 }),
+        ] {
+            assert!(!may_post(&p, "gh", url, &fields(bad.clone())), "{bad}");
+        }
+        let vote = "https://dev.azure.com/o/reviewers/me/vote?api-version=7.1";
+        assert!(may_post(&p, "az", vote, &fields(serde_json::json!({ "vote": -5 }))));
+        assert!(!may_post(&p, "az", vote, &fields(serde_json::json!({ "vote": 7 }))));
+        // The pin is part of the entry, so an entry with a malformed pin is refused on load.
+        for entry in ["gh repos/x {event=APPROVE", "gh repos/x {}", "gh repos/x {event}", "gh repos/x {event=}", "gh repos/x {ev-ent=A}", "gh repos/x {event=A B}"] {
+            assert!(post_entry(entry).is_none(), "{entry}");
+        }
+        assert!(post_entry("gh repos/x {event=APPROVE}").is_some());
+    }
+
+    #[test]
+    fn a_gh_post_names_an_enterprise_host() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/comments/*/replies".into()];
+        let url = "repos/o/r/pulls/1/comments/2/replies";
+        let args = post_args(&p, &post_request("gh", url, Some("ghe.example.com"))).unwrap();
+        assert_eq!(args, ["api", "--hostname", "ghe.example.com", "--method", "POST", url, "-f", "body=Thanks, fixed"]);
+        assert_eq!(post_args(&p, &post_request("gh", url, Some("github.com"))).unwrap()[1], "--method");
+        assert!(post_args(&p, &post_request("gh", url, Some("-x"))).is_err());
+        assert!(post_args(&p, &post_request("gh", url, Some("a b"))).is_err());
+    }
+
+    #[test]
+    fn fetch_writes_need_their_own_pinned_entry() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.fetch = vec![
+            "GET https://api.example.com/2.0/".into(),
+            "POST https://api.example.com/2.0/repos/*/*/pulls/*/comments".into(),
+            "POST https://api.example.com/2.0/repos/*/*/pulls/*/approve".into(),
+            "POST https://api.example.com/v1/repos/*/*/pulls/*/reviews {event=APPROVED}".into(),
+        ];
+        let comments = "https://api.example.com/2.0/repos/w/r/pulls/3/comments";
+        let body = Some(r#"{"content":{"raw":"Thanks"},"parent":{"id":7}}"#);
+        assert!(fetch_url(&p, "GET", "https://api.example.com/2.0/repos/w/r/pulls/3", None).is_some());
+        assert!(fetch_url(&p, "head", "https://api.example.com/2.0/user", None).is_some());
+        assert!(fetch_url(&p, "POST", comments, body).is_some());
+        // A GET prefix doesn't let a write through, anywhere under it.
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert!(fetch_url(&p, method, "https://api.example.com/2.0/repos/w/r/pulls/3/merge", Some("{}")).is_none(), "{method}");
+        }
+        // Only POST, only that path, no query, a JSON object body.
+        assert!(fetch_url(&p, "PUT", comments, body).is_none());
+        assert!(fetch_url(&p, "DELETE", comments, None).is_none());
+        assert!(fetch_url(&p, "POST", "https://api.example.com/2.0/repos/w/r/pulls/3/comments/9", body).is_none());
+        assert!(fetch_url(&p, "POST", "https://api.example.com/2.0/repos/w/r/pulls/3/comments?x=1", body).is_none());
+        assert!(fetch_url(&p, "POST", "https://api.example.com/2.0/repos/w/r/pulls/../comments", body).is_none());
+        assert!(fetch_url(&p, "POST", "https://api.example.com/2.0/repos/w/r/pulls/%2e%2e/comments", body).is_none());
+        assert!(fetch_url(&p, "POST", comments, Some("not json")).is_none());
+        assert!(fetch_url(&p, "POST", comments, Some("[1]")).is_none());
+        let huge = format!(r#"{{"content":"{}"}}"#, "x".repeat(POST_BODY_LIMIT));
+        assert!(fetch_url(&p, "POST", comments, Some(&huge)).is_none());
+        // No body is fine where nothing is pinned (Bitbucket's approve), but not where a field is.
+        assert!(fetch_url(&p, "POST", "https://api.example.com/2.0/repos/w/r/pulls/3/approve", None).is_some());
+        let review = "https://api.example.com/v1/repos/o/r/pulls/3/reviews";
+        assert!(fetch_url(&p, "POST", review, Some(r#"{"event":"APPROVED"}"#)).is_some());
+        assert!(fetch_url(&p, "POST", review, Some(r#"{"event":"REQUEST_CHANGES","body":"x"}"#)).is_none());
+        assert!(fetch_url(&p, "POST", review, Some(r#"{"body":"x"}"#)).is_none());
+        assert!(fetch_url(&p, "POST", review, None).is_none());
+        // A host's own path can't be reached by a `*` (the host is literal).
+        assert!(fetch_url(&p, "POST", "https://evil.example.com/2.0/repos/w/r/pulls/3/comments", body).is_none());
+    }
+
+    #[test]
+    fn fetch_entries_are_checked_on_load() {
+        for entry in [
+            "https://api.example.com/",
+            "GET https://api.example.com/2.0/",
+            "POST https://api.example.com/x/*/y",
+            "POST https://api.example.com/x/*/reviews {event=APPROVED}",
+        ] {
+            assert!(fetch_rule(entry).is_some(), "{entry}");
+        }
+        for entry in [
+            "PUT https://api.example.com/x",
+            "DELETE https://api.example.com/",
+            "GET https://api.example.com/x/*/y",
+            "GET https://api.example.com/ {a=b}",
+            "https://api.example.com/*/y",
+            "POST https://*/x",
+            "POST https://api.example.com/x?y=1",
+            "POST https://api.example.com {a=b}",
+            "POST https://api.example.com/x {a=}",
+            "POST http://api.example.com/x",
+            "GET",
+        ] {
+            assert!(fetch_rule(entry).is_none(), "{entry}");
+        }
+    }
+
+    #[test]
+    fn a_pinned_body_cannot_hide_a_second_key() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/reviews {event=APPROVE}".into()];
+        p.manifest.permissions.fetch = vec!["POST https://api.example.com/v1/repos/*/*/pulls/*/reviews {event=APPROVED}".into()];
+        let fields = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let url = "repos/o/r/pulls/1/reviews";
+        for bad in [
+            serde_json::json!({ "event": "APPROVE", "EVENT": "REQUEST_CHANGES" }),
+            serde_json::json!({ "event": "APPROVE", "Event": "REQUEST_CHANGES" }),
+            serde_json::json!({ "event": "APPROVE", "ſ": "x" }),
+            serde_json::json!({ "event": "APPROVE", "\u{212A}ey": "x" }),
+        ] {
+            assert!(!may_post(&p, "gh", url, &fields(bad.clone())), "{bad}");
+        }
+        assert!(may_post(&p, "gh", url, &fields(serde_json::json!({ "event": "APPROVE", "body": "ok" }))));
+        let review = "https://api.example.com/v1/repos/o/r/pulls/1/reviews";
+        for bad in [
+            r#"{"event":"APPROVED","EVENT":"REQUEST_CHANGES"}"#,
+            r#"{"event":"REQUEST_CHANGES","event":"APPROVED"}"#,
+            r#"{"event":"APPROVED","event":"REQUEST_CHANGES"}"#,
+            r#"{"event":"APPROVED","ſ":"x"}"#,
+            r#"{"event":"APPROVED","\u212Aey":"x"}"#,
+            r#"{"ev\u0065nt":"APPROVED","EVENT":"REQUEST_CHANGES"}"#,
+        ] {
+            assert!(fetch_url(&p, "POST", review, Some(bad)).is_none(), "{bad}");
+        }
+        assert!(fetch_url(&p, "POST", review, Some(r#"{"event":"APPROVED","body":"ok"}"#)).is_some());
+        // An entry that pins nothing is not affected.
+        p.manifest.permissions.fetch = vec!["POST https://api.example.com/v1/c/*/comments".into()];
+        assert!(fetch_url(&p, "POST", "https://api.example.com/v1/c/1/comments", Some(r#"{"a":1,"A":2}"#)).is_some());
+    }
+
+    #[test]
+    fn a_post_rule_is_only_a_post_to_exactly_its_path() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.fetch = vec!["POST https://api.example.com/v1/repos/*/pulls/*/comments".into()];
+        let ok = "https://api.example.com/v1/repos/o/pulls/3/comments";
+        assert!(fetch_url(&p, "POST", ok, Some("{}")).is_some());
+        for method in ["HEAD", "OPTIONS", "GET", "TRACE"] {
+            assert!(fetch_url(&p, method, ok, Some("{}")).is_none(), "{method}");
+        }
+        assert!(fetch_url(&p, "POST", &format!("{ok}/"), Some("{}")).is_none(), "trailing slash");
+        assert!(fetch_url(&p, "POST", "https://api.example.com/v1/repos/o%2Fx/pulls/3/comments", Some("{}")).is_none(), "%2F in a segment");
+        assert!(fetch_url(&p, "POST", "https://api.example.com/v1/repos/o/pulls/3/comments/", Some("{}")).is_none());
+    }
+
+    #[test]
+    fn a_cli_post_only_names_a_host_it_is_signed_in_to() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh repos/*/*/pulls/*/comments/*/replies".into(), "glab projects/*/notes".into()];
+        let signed_in = |program: &str| -> Result<Vec<String>, String> { Ok(if program == "gh" { vec!["github.com".into(), "ghe.example.com".into()] } else { vec!["gitlab.example.com".into()] }) };
+        assert!(host_is_signed_in("gh", None, &signed_in).is_ok());
+        assert!(host_is_signed_in("gh", Some("github.com"), &|_| Err("gh not looked up for its default host".into())).is_ok());
+        assert!(host_is_signed_in("gh", Some("GHE.example.com"), &signed_in).is_ok());
+        let refused = host_is_signed_in("gh", Some("attacker.example"), &signed_in).unwrap_err();
+        assert!(refused.contains("isn't signed in to attacker.example"), "{refused}");
+        assert!(host_is_signed_in("glab", Some("gitlab.example.com"), &signed_in).is_ok());
+        assert!(host_is_signed_in("glab", Some("gitlab.com"), &signed_in).is_err());
+        // post_checked stops before running anything.
+        let url = "repos/o/r/pulls/1/comments/2/replies";
+        let err = post_checked(&p, &post_request("gh", url, Some("attacker.example")), &signed_in).unwrap_err();
+        assert!(err.contains("isn't signed in"), "{err}");
+        assert!(post_checked(&p, &post_request("gh", url, Some("a b")), &signed_in).is_err());
+        assert_eq!(parse_gh_hosts(r#"{"hosts":{"github.com":[{"state":"success"}],"ghe.example.com":[]}}"#).len(), 2);
+        assert!(parse_gh_hosts("not json").is_empty());
+        let text = "gitlab.com\n  x gitlab.com: API call failed\n  ! No token found\n\ngitlab.example.com\n  ✓ Logged in to gitlab.example.com\n\n   ERROR  \n\n  X could not authenticate";
+        assert_eq!(parse_glab_hosts(text), ["gitlab.com", "gitlab.example.com"]);
     }
 
     #[test]

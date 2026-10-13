@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { PluginView } from "./api.ts";
-import { boundedJson, defaultNewTab, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type ViewTab } from "./plugin-pages.ts";
+import { boundedJson, firstTabFor, newTabAction, parseNewProjectOpens, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type ViewTab } from "./plugin-pages.ts";
 
 const plugin = (id: string, name: string, extra: Partial<PluginView> & { settings?: boolean } = {}): PluginView => {
   const { settings, ...rest } = extra;
@@ -149,8 +149,23 @@ test("the + menu lists newTab views that open as a tab, from plugins that are on
   ];
   const entries = newTabEntries(list);
   assert.deepEqual(entries.map((e) => [e.key, e.multiple]), [["notes:notes", false], ["tasks:board", true]]);
-  assert.equal(defaultNewTab(entries, "tasks:board")?.viewId, "board");
-  // A chosen page that's no longer offered falls back to a terminal.
-  assert.equal(defaultNewTab(entries, "off:x"), null);
-  assert.equal(defaultNewTab(entries, null), null);
+  const action = newTabAction(entries, "tasks:board");
+  assert.ok(action.kind === "page" && action.entry.viewId === "board");
+  assert.deepEqual(newTabAction(entries, "terminal"), { kind: "terminal" });
+  assert.deepEqual(newTabAction(entries, "ask"), { kind: "ask" });
+  assert.deepEqual(newTabAction(entries, "project"), { kind: "project" });
+  // A chosen page that's no longer offered, nothing saved, or an unknown value falls back to a terminal.
+  assert.deepEqual(newTabAction(entries, "off:x"), { kind: "terminal" });
+  assert.deepEqual(newTabAction(entries, null), { kind: "terminal" });
+  assert.deepEqual(newTabAction(entries, "nonsense"), { kind: "terminal" });
+});
+
+test("a project added opens its Project page only when Settings says so", () => {
+  assert.equal(firstTabFor("project", true), "project");
+  assert.equal(firstTabFor("terminal", true), "terminal");
+  // A project that was already there, or is only being selected, keeps its terminal.
+  assert.equal(firstTabFor("project", false), "terminal");
+  assert.equal(parseNewProjectOpens("project"), "project");
+  assert.equal(parseNewProjectOpens(undefined), "terminal");
+  assert.equal(parseNewProjectOpens("nonsense"), "terminal");
 });

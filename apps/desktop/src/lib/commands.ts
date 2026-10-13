@@ -80,6 +80,8 @@ export type CommandContext = {
   project: boolean;
   /** A terminal tab is on screen. */
   terminalTab: boolean;
+  /** A Project page is on screen: Find searches it. */
+  projectPage?: boolean;
   /** More than one tab in the project on screen. */
   tabs: number;
   dev: boolean;
@@ -105,7 +107,7 @@ export function createCommands(ctx: CommandContext, commands: CommandMeta[] = CO
     "focus-right": ctx.terminalTab,
     "focus-up": ctx.terminalTab,
     "focus-down": ctx.terminalTab,
-    find: ctx.terminalTab,
+    find: ctx.terminalTab || !!ctx.projectPage,
   };
   return commands.map((c) => ({ ...c, enabled: !!ctx.run[c.id] && (needs[c.id] ?? true) && (!c.devOnly || ctx.dev), run: ctx.run[c.id] ?? (() => {}) }));
 }

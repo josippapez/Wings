@@ -354,3 +354,28 @@ export function Disclosure(
 export function Markdown(props: Omit<Props<"div">, "children"> & { source: string; inline?: boolean }): ReactElement;
 /** The longest `data:image/` URL, in characters, that `Markdown` shows. */
 export const MAX_DATA_IMAGE: number;
+
+// ---------- activity: times, a summary row, skeletons and a timeline ----------
+
+/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date; "" when `iso` isn't a date. `now` is for tests. */
+export function ago(iso: string, now?: number): string;
+/** A moment as a `time` element: how long ago (after `prefix`), the exact date and time as its title. Renders nothing when `iso` isn't a date. */
+export function Time(props: Omit<Props<"time">, "dateTime" | "children"> & { iso: string; prefix?: ReactNode; now?: number }): ReactElement | null;
+/** A row of `SummaryChip`s under a page's header. */
+export function Summary(props: Props<"div">): ReactElement;
+/** One fact in a `Summary`: a button when it has `onClick`, text otherwise. `tone` colours it. */
+export function SummaryChip(props: Omit<Props<"span">, "onClick"> & { tone?: "info" | "success" | "warn" | "danger"; onClick?: Props<"button">["onClick"]; type?: "button" | "submit" }): ReactElement;
+/** A block that stands in for loading content, `width` and `height` in px or any CSS length. Decoration: wrap a group in `Skeletons`. */
+export function Skeleton(props: Props<"span"> & { width?: number | string; height?: number | string }): ReactElement;
+/** A group of `Skeleton`s announced once as `label`, with `aria-busy`. */
+export function Skeletons(props: Omit<Props<"div">, "role" | "aria-label"> & { label: string }): ReactElement;
+/** An ordered list of `TimelineCard`s and `TimelineNote`s, named `label`. */
+export function Timeline(props: Props<"ol"> & { label: string }): ReactElement;
+/**
+ * An entry of a `Timeline`: the `Avatar`, name and time of `author` and `at` (ISO), an optional `tag` and `actions`
+ * at the right of that line, and `children` as the body. `quiet` for what a bot or the system wrote; `clamp` cuts a long
+ * body until "Show more".
+ */
+export function TimelineCard(props: Omit<Props<"li">, "children"> & { author: string; at?: string; tag?: ReactNode; actions?: ReactNode; quiet?: boolean; clamp?: boolean; children?: ReactNode }): ReactElement;
+/** A quiet one-line entry of a `Timeline`: a small avatar, the author in bold, `children`, then the time. */
+export function TimelineNote(props: Omit<Props<"li">, "children"> & { author: string; at?: string; children?: ReactNode }): ReactElement;

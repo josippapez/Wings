@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput } = await import("./ui.js");
+const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput, TimelineCard } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -607,4 +607,41 @@ test("Markdown loads a remote image only after its button is clicked", async () 
   assert.equal(img.getAttribute("src"), "https://example.com/c.png");
   assert.equal(host.querySelector("button.w-md-image-load"), null);
   await unmount();
+});
+
+test("TimelineCard with clamp offers Show more only when the body was cut, and toggles it", async () => {
+  const sizes = { scrollHeight: 400, clientHeight: 100 };
+  for (const key of Object.keys(sizes)) Object.defineProperty(dom.window.HTMLElement.prototype, key, { configurable: true, get: () => sizes[key] });
+  const { host, unmount } = await mount(h(TimelineCard, { author: "Ada", at: "2026-10-13T11:55:00Z", clamp: true }, h("p", null, "long")));
+  const box = host.querySelector(".w-clamp-box");
+  assert.equal(box.hasAttribute("data-clamped"), true);
+  const toggle = host.querySelector(".w-clamp-toggle");
+  assert.equal(toggle.textContent, "Show more");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  await click(toggle);
+  assert.equal(host.querySelector(".w-clamp-box").hasAttribute("data-clamped"), false);
+  assert.equal(host.querySelector(".w-clamp-toggle").textContent, "Show less");
+  await unmount();
+  sizes.scrollHeight = 50;
+  const short = await mount(h(TimelineCard, { author: "Ada", clamp: true }, h("p", null, "short")));
+  assert.equal(short.host.querySelector(".w-clamp-toggle"), null);
+  await short.unmount();
+  for (const key of Object.keys(sizes)) delete dom.window.HTMLElement.prototype[key];
+});
+
+test("a clamped body makes what the cut hides inert until Show more", async () => {
+  const sizes = { scrollHeight: 400, clientHeight: 100 };
+  for (const key of Object.keys(sizes)) Object.defineProperty(dom.window.HTMLElement.prototype, key, { configurable: true, get: () => sizes[key] });
+  // jsdom has no layout: the box ends at 100, the first link sits above that, the second below.
+  const top = (el) => (el.dataset.at ? Number(el.dataset.at) : 0);
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () { return { top: top(this), bottom: this.classList.contains("w-clamp-box") ? 100 : top(this) + 20 }; };
+  const body = h("div", null, h("a", { href: "#a", "data-at": 10, id: "a" }, "a"), h("a", { href: "#b", "data-at": 300, id: "b" }, "b"));
+  const { host, unmount } = await mount(h(TimelineCard, { author: "Ada", clamp: true }, body));
+  assert.equal(host.querySelector("#a").inert, false);
+  assert.equal(host.querySelector("#b").inert, true);
+  await click(host.querySelector(".w-clamp-toggle"));
+  assert.equal(host.querySelector("#b").inert, false);
+  await unmount();
+  delete dom.window.HTMLElement.prototype.getBoundingClientRect;
+  for (const key of Object.keys(sizes)) delete dom.window.HTMLElement.prototype[key];
 });

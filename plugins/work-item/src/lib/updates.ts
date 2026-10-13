@@ -12,6 +12,10 @@ export interface UpdateEvent {
   url: string;
   /** When it happened on Azure DevOps, ISO 8601. */
   at: string;
+  /** Who did it, when the source says: the Updates tab draws their avatar. Events kept before this was recorded have none. */
+  by?: string;
+  /** The type of the work item it's about, when known. */
+  itemType?: string;
   /** The work item it's about, when it's about one: the Updates list opens it in the item tab. */
   item?: { org: string; project: string; id: number };
 }
@@ -94,6 +98,8 @@ export interface WorkItemUpdate {
 export interface Candidate {
   id: number;
   title: string;
+  /** Its work item type, for the Updates tab's icon. */
+  type?: string;
   /** Assigned to me or created by me: the items whose state changes are worth a notification. */
   mine: boolean;
 }
@@ -114,11 +120,11 @@ export function workItemEvents(org: string, project: string, item: Candidate, up
     const state = u.fields?.["System.State"];
     if (item.mine && typeof state?.newValue === "string" && state.newValue !== state.oldValue) {
       const from = typeof state.oldValue === "string" ? `${state.oldValue} → ` : "";
-      events.push({ key: `wi:${org}:${item.id}:${u.id}:state`, kind: "state", title: `#${item.id} ${from}${state.newValue}`, body: `${item.title} · ${by}`, url, at, item: ref });
+      events.push({ key: `wi:${org}:${item.id}:${u.id}:state`, kind: "state", title: `#${item.id} ${from}${state.newValue}`, body: `${item.title} · ${by}`, url, at, by, itemType: item.type, item: ref });
     }
     const history = u.fields?.["System.History"]?.newValue;
     if (typeof history === "string" && mentionsMe(history, me)) {
-      events.push({ key: `wi:${org}:${item.id}:${u.id}:mention`, kind: "mention", title: `${by} mentioned you on #${item.id}`, body: plain(history), url, at, item: ref });
+      events.push({ key: `wi:${org}:${item.id}:${u.id}:mention`, kind: "mention", title: `${by} mentioned you on #${item.id}`, body: plain(history), url, at, by, itemType: item.type, item: ref });
     }
   }
   return events;
@@ -191,7 +197,7 @@ export function diffPrs(org: string, project: string, prev: PrSnaps, prs: Pr[], 
     const mine = same(pr.createdBy?.id, me);
     if (!before) {
       if (!mine) {
-        events.push({ key: `pr:${org}:${pr.pullRequestId}:reviewer`, kind: "pr-reviewer", title: `${pr.createdBy?.displayName ?? "Someone"} asked you to review PR #${pr.pullRequestId}`, body: pr.title, url, at });
+        events.push({ key: `pr:${org}:${pr.pullRequestId}:reviewer`, kind: "pr-reviewer", title: `${pr.createdBy?.displayName ?? "Someone"} asked you to review PR #${pr.pullRequestId}`, body: pr.title, url, at, by: pr.createdBy?.displayName });
       }
       continue;
     }
@@ -200,7 +206,7 @@ export function diffPrs(org: string, project: string, prev: PrSnaps, prs: Pr[], 
       if (!r.id || same(r.id, me)) continue;
       const vote = r.vote ?? 0;
       if (vote === (before.votes[r.id] ?? 0)) continue;
-      events.push({ key: `pr:${org}:${pr.pullRequestId}:vote:${r.id}:${vote}`, kind: "pr-vote", title: `${r.displayName ?? "A reviewer"} ${voteLabel(vote)} on PR #${pr.pullRequestId}`, body: pr.title, url, at });
+      events.push({ key: `pr:${org}:${pr.pullRequestId}:vote:${r.id}:${vote}`, kind: "pr-vote", title: `${r.displayName ?? "A reviewer"} ${voteLabel(vote)} on PR #${pr.pullRequestId}`, body: pr.title, url, at, by: r.displayName });
     }
   }
   const active = new Set(prs.map((p) => String(p.pullRequestId)));
@@ -239,6 +245,7 @@ export function threadEvents(org: string, project: string, pr: Pr, threads: Thre
         body: plain(c.content ?? ""),
         url: prUrl(org, project, pr.repository.name, pr.pullRequestId, thread.id),
         at: c.publishedDate,
+        by,
       });
     }
   }

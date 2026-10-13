@@ -77,9 +77,9 @@ wings.onAction(async ({ paneId, actionId }) => {
 // ---------- the PR tab ----------
 
 /** What a "pr" tab asks of this script, since only it can open the diff viewer that takes replies and knows the agent panes. */
-type PrRequest = { type: "pr-request"; rid: string; op: "diff" | "agent" | "seen"; args: PrArgs };
+type PrRequest = { type: "pr-request"; rid: string; op: "diff" | "agent" | "seen"; args: PrArgs; focus?: WingsDiffFocus };
 
-async function handleRequest({ op, args }: PrRequest) {
+async function handleRequest({ op, args, focus }: PrRequest) {
   if (op === "seen") return markSeen(args.url);
   let link: Link | undefined = [...links.values()].find((l) => l.url === args.url);
   if (!link) {
@@ -88,11 +88,11 @@ async function handleRequest({ op, args }: PrRequest) {
     if (link.provider === "azure" || link.provider === "bitbucket") link = { ...link, cwd: args.cwd };
     known.set(args.url, link);
   }
-  if (op === "diff") return openDiffFor(link, { title: args.title });
+  if (op === "diff") return openDiffFor(link, { title: args.title, focus });
   // The agent working on this PR's branch: Send to agent in the viewer offers the one in this folder first.
   const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === args.url);
   if (!agent) throw new Error("No agent is working on this branch. Start Claude in a terminal on it, then try again.");
-  return openDiffFor(link, { title: args.title, cwd: agent.cwd });
+  return openDiffFor(link, { title: args.title, cwd: agent.cwd, focus });
 }
 
 wings.onBroadcast(async (message) => {

@@ -1,11 +1,10 @@
 /** A PR's ref to and from the args of its tab, and what the tab shows of it. */
 import { azureComments, azureLink, azureOverview, azureReply, azureShow } from "./azure";
-import { bitbucketComments, bitbucketOverview } from "./bitbucket";
-import { giteaComments, giteaOverview } from "./gitea";
-import { githubComments, githubOverview, githubReply } from "./github";
-import { gitlabComments, gitlabOverview, gitlabReply } from "./gitlab";
-import { PROVIDERS } from "./state";
-import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Reviewer, Status } from "./types";
+import { bitbucketApprove, bitbucketComments, bitbucketOverview, bitbucketReply } from "./bitbucket";
+import { giteaApprove, giteaComments, giteaOverview, giteaReply } from "./gitea";
+import { githubApprove, githubComments, githubOverview, githubReply } from "./github";
+import { gitlabApprove, gitlabComments, gitlabOverview, gitlabReply } from "./gitlab";
+import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Provider, Reviewer, Status } from "./types";
 
 export function argsOf(link: Link, title: string, cwd: string): PrArgs {
   const base = { provider: link.provider, url: link.url, number: link.number, repo: link.repo, title, cwd };
@@ -42,7 +41,7 @@ export function commentsOf(link: Link): Promise<Comment[]> {
   return { github: githubComments, azure: (l: Link) => azureComments(l as AzureLink, true), gitlab: (l: Link) => gitlabComments(l as GitlabLink, true), bitbucket: bitbucketComments, gitea: giteaComments }[link.provider](link as never);
 }
 
-/** Posts a reply to a thread. Bitbucket and Codeberg threads are read-only here: their comments carry no `canReply`, so this is a guard. */
+/** Posts a reply to a thread. Azure DevOps, GitLab and GitHub reply in the thread; Bitbucket under the comment; Codeberg as a new comment that quotes it. */
 export function replyWith(link: Link, root: Comment, body: string): Promise<Comment> {
   switch (link.provider) {
     case "github":
@@ -51,7 +50,29 @@ export function replyWith(link: Link, root: Comment, body: string): Promise<Comm
       return azureReply(link, root, body);
     case "gitlab":
       return gitlabReply(link, root, body);
-    default:
-      return Promise.reject(new Error(`Replies to ${PROVIDERS[link.provider].name} comments aren't supported yet. Open the pull request there to reply.`));
+    case "bitbucket":
+      return bitbucketReply(link, root, body);
+    case "gitea":
+      return giteaReply(link, root, body);
+  }
+}
+
+/** Providers whose approval can be scoped to one call in the manifest. Azure DevOps votes with a PUT that Wings doesn't offer. */
+export const canApprove = (provider: Provider) => provider !== "azure";
+
+/** Approves the pull request as the signed-in user. */
+/** `sha` is the head commit the user was looking at (GitLab approves only that one). */
+export async function approveWith(link: Link, sha: string): Promise<void> {
+  switch (link.provider) {
+    case "github":
+      return githubApprove(link);
+    case "gitlab":
+      return gitlabApprove(link, sha);
+    case "bitbucket":
+      return bitbucketApprove(link);
+    case "gitea":
+      return giteaApprove(link);
+    case "azure":
+      throw new Error("Approving an Azure DevOps pull request isn't supported here yet. Vote on its page.");
   }
 }

@@ -706,8 +706,8 @@ struct FetchResponse {
 #[tauri::command(async)]
 fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest) -> Res<FetchResponse> {
     let plugin = plugin(&state, &plugin_id)?;
-    let url = plugins::fetch_url(&plugin, &request.url).ok_or_else(|| format!("{plugin_id} may not fetch {}", request.url))?;
     let method = request.method.as_deref().unwrap_or("GET").to_uppercase();
+    let url = plugins::fetch_url(&plugin, &method, &request.url, request.body.as_deref()).ok_or_else(|| format!("{plugin_id} may not {method} {}", request.url))?;
     let mut builder = tauri::http::Request::builder().method(method.as_str()).uri(&url);
     for (name, value) in &request.headers {
         if !plugins::fetch_header_ok(name) {
