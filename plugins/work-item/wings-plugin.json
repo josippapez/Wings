@@ -1,8 +1,8 @@
 {
   "id": "work-item",
   "name": "Work item",
-  "version": "0.3.0",
-  "minWingsVersion": "0.1.17",
+  "version": "0.3.1",
+  "minWingsVersion": "0.1.20",
   "icon": "icon.svg",
   "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Also tells you when your work items change state, when a comment mentions you, and about activity on your pull requests.",
   "api": 1,
@@ -28,7 +28,7 @@
     ],
     "sidebars": [
       {
-        "id": "updates", "icon": "globe",
+        "id": "updates",
         "title": "Updates",
         "page": "sidebar.html"
       }

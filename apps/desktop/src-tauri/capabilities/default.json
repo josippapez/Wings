@@ -31,6 +31,7 @@
     "allow-pane-attach",
     "allow-pane-focus",
     "allow-agents-list",
+    "allow-agent-busy",
     "allow-pane-info",
     "allow-git-status",
     "allow-git-refresh",

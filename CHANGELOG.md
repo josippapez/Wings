@@ -4,6 +4,20 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.20 · 2026-10-13
+
+- Fixes a graphics memory leak: closing the focused pane or tab kept its terminal's graphics memory for good, about 33 to 66 MB each time. The WebGL renderer's cursor blink timer outlived it (a bug in @xterm/addon-webgl 0.19.0, fixed upstream but not yet released), so Wings now blurs a terminal before dropping its renderer.
+- Work item 0.3.0 tells you about Azure DevOps updates: a state change on your work items, comments that mention you on work items and pull requests, and activity on pull requests you created or review (new comments, votes, completed or abandoned, you added as a reviewer). It checks every 2 minutes, also while Wings is in the background (Settings, Work item: off, or 5 to 30 minutes), only reads, and lists each update with a link in a new Updates sidebar. Work item 0.3.1 uses its own icon.
+- The right sidebar peeks like the left one: with it closed, pointing at the window's right edge floats the plugin page you opened last over the panes (switch between opened pages from its tabs) without resizing them or reloading the page. Nothing happens until you have opened a plugin sidebar once.
+- Idle Claude Code and opencode agents go to sleep after 15 minutes out of sight (Settings, Agents: off, or 5 to 60 minutes), which frees about 400 MB each. Wings ends them with their own `/exit`, never by killing them, and leaves alone any that is working, needs you, has text typed in its prompt, or isn't started straight from the pane's shell. A sleeping agent stays in the Agents list like one restored at startup, and opening its pane or row resumes the session in place (`claude --resume`, `opencode --session`). Sleeping agents survive a restart.
+- An agent's row no longer disappears for a moment while it is being resumed, at startup or when you click it: it shows "resuming…" until the agent is detected, then becomes the live row in the same place, and says "couldn't resume, retry" after 20 seconds without one.
+- Plugins can pick from more title bar icons. Sprint board 0.4.1 uses a kanban board.
+- A plugin can ship its own icon: `"icon": "icon.svg"` in `wings-plugin.json`, a file up to 32 KB. It replaces the puzzle piece in the Plugins list, and a sidebar, view or panel that leaves out `icon` uses it on its title bar button and tab. Wings draws it as a one-colour mask, never as part of the page, so nothing in the file can run. The built-in plugins ship one each (Changes, Dev servers, HUD, PR tracker, Session detail, Work item, Worktrees).
+- Worktrees 0.1.3 looks again when a first check of a folder failed, for example while the plugin was waiting for approval, instead of showing "No git repo" until restart.
+- The notification list scrolls inside its popover instead of running past it.
+- A welcome when no project is open: four steps (add a project, run an agent, the command palette, jump to the agent that needs you) with your actual shortcuts and an Add a project button. The palette already lists every shortcut.
+- Title bar: plugin buttons are set apart from the bell, Past sessions and Settings by a hairline, and the plugin overflow button has a tooltip. Sidebar project rows show a focus ring when reached with the keyboard.
+
 ## 0.1.19 · 2026-10-12
 
 - Diff review comments only go to a pane running an agent. A plain terminal is no longer offered: the quoted code would have run there on Enter.

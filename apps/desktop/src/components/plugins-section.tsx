@@ -17,6 +17,7 @@ import { TerminalCommandRow } from "@/components/terminal-command";
 import { PluginNeeds } from "@/components/tool-install";
 import { api, type McpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
+import { iconMaskStyle } from "@/lib/plugin-icon-mask";
 import { cn } from "@/lib/utils";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -61,7 +62,7 @@ function Adds({ plugin }: { plugin: PluginView }) {
 function PluginIcon({ plugin, className }: { plugin: PluginView; className: string }) {
   return (
     <span className={cn("flex shrink-0 items-center justify-center rounded-lg bg-white/[0.06]", plugin.enabled && plugin.approved && "bg-[#b392f0]/15 text-[#c9b2f7]", className)}>
-      <PuzzleIcon className="size-1/2" aria-hidden />
+      {plugin.iconSvg ? <span aria-hidden className="size-1/2 bg-current" style={iconMaskStyle(plugin.iconSvg)} /> : <PuzzleIcon className="size-1/2" aria-hidden />}
     </span>
   );
 }

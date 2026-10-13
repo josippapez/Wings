@@ -318,6 +318,7 @@ mod tests {
             args: vec![],
             started_at: 0,
             state_since: None,
+            direct: true,
         }
     }
 

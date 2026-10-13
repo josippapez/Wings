@@ -74,7 +74,8 @@ pub struct SettingsPage {
 pub struct Sidebar {
     pub id: String,
     pub title: String,
-    /// One of `PANEL_ICONS`.
+    /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
+    #[serde(default)]
     pub icon: String,
     /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
     pub page: String,
@@ -99,7 +100,8 @@ pub const POPOVER_HEIGHT: (u32, u32) = (160, 640);
 pub struct View {
     pub id: String,
     pub title: String,
-    /// One of `PANEL_ICONS`.
+    /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
+    #[serde(default)]
     pub icon: String,
     /// An HTML file in the plugin. It runs sandboxed like the plugin itself, with the same `wings` object.
     pub page: String,
@@ -123,7 +125,8 @@ fn sidebar_only() -> Vec<String> {
 pub struct Panel {
     pub id: String,
     pub title: String,
-    /// One of `PANEL_ICONS`.
+    /// One of `PANEL_ICONS`, or empty to use the plugin's own `icon`.
+    #[serde(default)]
     pub icon: String,
     /// An https page. It runs as a normal website, with no access to Wings.
     pub url: String,
@@ -131,7 +134,9 @@ pub struct Panel {
     pub height: Option<u32>,
 }
 
-const PANEL_ICONS: [&str; 5] = ["clock", "globe", "calendar", "chart", "list"];
+/// The icon names the UI can draw, shared with `src/lib/plugin-icons.ts`.
+static PANEL_ICONS: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| serde_json::from_str(include_str!("../../src/lib/plugin-icons.json")).expect("plugin-icons.json"));
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,6 +168,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_wings_version: Option<String>,
     pub main: String,
+    /// An SVG file in the plugin folder, like `icon.svg`: its tile in the Plugins list, and the icon of any
+    /// sidebar, view or panel that doesn't name a built-in one. Wings draws it as a one-colour mask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(default)]
     pub permissions: Permissions,
     #[serde(default)]
@@ -173,6 +182,55 @@ pub struct Manifest {
 pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
+    /// The checked contents of `manifest.icon`.
+    pub icon_svg: Option<String>,
+}
+
+/// The largest icon file Wings reads.
+pub const ICON_MAX_BYTES: u64 = 32 * 1024;
+
+/// Reads and checks a plugin's icon: a relative path to an SVG file inside the plugin folder, up to `ICON_MAX_BYTES`.
+/// The markup is only ever handed to the UI as an image (a CSS mask), never as part of the page.
+fn load_icon(dir: &Path, relative: &str) -> Result<String, String> {
+    use std::path::Component;
+    let path = Path::new(relative);
+    let plain = path.components().all(|c| matches!(c, Component::Normal(_)));
+    if relative.is_empty() || !plain || relative.contains('\\') || !relative.to_ascii_lowercase().ends_with(".svg") {
+        return Err(format!("icon {relative:?} must be a relative path to an .svg file in the plugin folder, like icon.svg"));
+    }
+    let file = resolve(dir, relative).filter(|f| f.is_file()).ok_or_else(|| format!("icon {relative:?} isn't a file in the plugin folder"))?;
+    let mut bytes = Vec::new();
+    fs::File::open(&file).and_then(|f| f.take(ICON_MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(|e| format!("icon {relative:?}: {e}"))?;
+    if bytes.len() as u64 > ICON_MAX_BYTES {
+        return Err(format!("icon {relative:?} is over {} KB", ICON_MAX_BYTES / 1024));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| format!("icon {relative:?} isn't UTF-8 text"))?;
+    if !is_svg(&text) {
+        return Err(format!("icon {relative:?} isn't an SVG: its root element must be <svg>"));
+    }
+    Ok(text)
+}
+
+/// Whether the document's root element is `svg`, after an optional BOM, XML declaration, comments and doctype.
+fn is_svg(text: &str) -> bool {
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    loop {
+        let skip = if rest.starts_with("<?") {
+            rest.find("?>").map(|i| i + 2)
+        } else if rest.starts_with("<!--") {
+            rest.find("-->").map(|i| i + 3)
+        } else if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case("<!doctype") {
+            // A doctype may hold an internal subset in [...]; Wings never expands entities, but doesn't read past one.
+            if rest.contains('[') { return false } else { rest.find('>').map(|i| i + 1) }
+        } else {
+            break;
+        };
+        match skip {
+            Some(n) => rest = rest[n..].trim_start(),
+            None => return false,
+        }
+    }
+    rest.strip_prefix("<svg").is_some_and(|r| r.starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')) && rest.contains('>')
 }
 
 const API_VERSION: u32 = 1;
@@ -254,8 +312,8 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if !valid_id(&sidebar.id) || sidebar.title.is_empty() || sidebar.title.len() > 40 {
             return Err(format!("sidebar {:?} needs an id like a plugin id and a title up to 40 characters", sidebar.id));
         }
-        if !PANEL_ICONS.contains(&sidebar.icon.as_str()) {
-            return Err(format!("sidebar icon {:?} must be one of {PANEL_ICONS:?}", sidebar.icon));
+        if !sidebar.icon.is_empty() && !PANEL_ICONS.contains(&sidebar.icon) {
+            return Err(format!("sidebar icon {:?} must be one of {:?}, or left out to use the plugin icon", sidebar.icon, PANEL_ICONS.as_slice()));
         }
         resolve(dir, &sidebar.page).ok_or_else(|| format!("sidebar page {:?} isn't in the plugin folder", sidebar.page))?;
         if let Some(popover) = &sidebar.popover {
@@ -278,8 +336,8 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if uses > 1 {
             return Err(format!("view id {:?} is used twice", view.id));
         }
-        if !PANEL_ICONS.contains(&view.icon.as_str()) {
-            return Err(format!("view icon {:?} must be one of {PANEL_ICONS:?}", view.icon));
+        if !view.icon.is_empty() && !PANEL_ICONS.contains(&view.icon) {
+            return Err(format!("view icon {:?} must be one of {:?}, or left out to use the plugin icon", view.icon, PANEL_ICONS.as_slice()));
         }
         let unique = view.opens.iter().enumerate().all(|(i, o)| !view.opens[..i].contains(o));
         if view.opens.is_empty() || !unique || view.opens.iter().any(|o| !VIEW_PLACES.contains(&o.as_str())) {
@@ -310,14 +368,15 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if !valid_id(&panel.id) || panel.title.is_empty() || panel.title.len() > 40 {
             return Err(format!("panel {:?} needs an id like a plugin id and a title up to 40 characters", panel.id));
         }
-        if !PANEL_ICONS.contains(&panel.icon.as_str()) {
-            return Err(format!("panel icon {:?} must be one of {PANEL_ICONS:?}", panel.icon));
+        if !panel.icon.is_empty() && !PANEL_ICONS.contains(&panel.icon) {
+            return Err(format!("panel icon {:?} must be one of {:?}, or left out to use the plugin icon", panel.icon, PANEL_ICONS.as_slice()));
         }
         if !panel.url.starts_with("https://") || tauri::Url::parse(&panel.url).is_err() {
             return Err(format!("panel url {:?} must be an https URL", panel.url));
         }
     }
-    Ok(Plugin { manifest, dir: dir.to_path_buf() })
+    let icon_svg = manifest.icon.as_deref().map(|icon| load_icon(dir, icon)).transpose()?;
+    Ok(Plugin { manifest, dir: dir.to_path_buf(), icon_svg })
 }
 
 /// A file inside the plugin folder; `None` if the path escapes it (`..`, symlinks out).
@@ -949,6 +1008,7 @@ mod tests {
                 api: 1,
                 min_wings_version: None,
                 main: "main.js".into(),
+                icon: None,
                 permissions: Permissions {
                     exec: exec.iter().map(|s| s.to_string()).collect(),
                     transcript: transcript.iter().map(|s| s.to_string()).collect(),
@@ -959,6 +1019,7 @@ mod tests {
                 contributes: Contributes::default(),
             },
             dir: dir.to_path_buf(),
+            icon_svg: None,
         }
     }
 
@@ -1220,7 +1281,7 @@ mod tests {
     fn work_item_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
         let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
-        let p = Plugin { manifest, dir: dir.to_path_buf() };
+        let p = Plugin { manifest, dir: dir.to_path_buf(), icon_svg: None };
         let org = "https://dev.azure.com/o";
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
@@ -1235,12 +1296,46 @@ mod tests {
             ),
             ("az", &["boards", "work-item", "update", "--id", "123456", "--state", "Ready for Peer Review/QA", "--organization", org, "-o", "json"]),
             ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+            // The updates check: reads only.
+            (
+                "az",
+                &[
+                    "boards", "query", "--project", "My Project", "--wiql",
+                    "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'My Project' AND [System.AssignedTo] = @Me", "--organization", org, "-o", "json",
+                ],
+            ),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "wit", "--resource", "updates", "--api-version", "7.1", "--route-parameters", "project=My Project", "id=123456",
+                    "--query-parameters", "$skip=200", "--organization", org, "-o", "json",
+                ],
+            ),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "git", "--resource", "pullRequests", "--api-version", "7.1", "--route-parameters", "project=My Project",
+                    "--query-parameters", "searchCriteria.reviewerId=00000000-0000-4000-8000-000000000000", "searchCriteria.status=active", "$top=100", "--organization", org, "-o", "json",
+                ],
+            ),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "git", "--resource", "pullRequestThreads", "--api-version", "7.1", "--route-parameters", "project=My Project",
+                    "repositoryId=r1", "pullRequestId=7", "--organization", org, "-o", "json",
+                ],
+            ),
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
             assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
         }
+        assert!(p.manifest.permissions.notify);
+        // The query entry only takes the flags it lists, and no other `boards` subcommand but the declared ones.
+        let query = |extra: &[&str]| -> Vec<String> { ["boards", "query"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(may_exec(&p, "az", &query(&["--wiql", "SELECT 1"])));
+        assert!(!may_exec(&p, "az", &query(&["--path", "Shared Queries/x"])));
         // The update entry can't read a file into a field or the state, and can't reach other commands.
         let update = |extra: &[&str]| -> Vec<String> { ["boards", "work-item", "update", "--id", "1"].iter().chain(extra).map(|a| a.to_string()).collect() };
         for extra in [&["--state", "@/etc/passwd"][..], &["--fields", "System.Title=@/etc/passwd"], &["--description=@notes.md"], &["-f", "x=1"], &["-d", "x"]] {
@@ -1603,6 +1698,69 @@ mod tests {
             assert!(manifest(&[bad]).err().unwrap().contains("panes entry"), "{bad:?}");
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn icons_are_checked_when_the_plugin_loads() {
+        let dir = std::env::temp_dir().join(format!("wings-icon-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("img")).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        fs::write(dir.join("sidebar.html"), "").unwrap();
+        let svg = r#"<?xml version="1.0"?><!-- lucide --><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24"/></svg>"#;
+        fs::write(dir.join("icon.svg"), svg).unwrap();
+        fs::write(dir.join("img/nested.svg"), "<svg/>").unwrap();
+        fs::write(dir.join("big.svg"), format!("<svg>{}</svg>", " ".repeat(ICON_MAX_BYTES as usize))).unwrap();
+        fs::write(dir.join("page.svg"), "<html><svg></svg></html>").unwrap();
+        fs::write(dir.join("entity.svg"), "<!DOCTYPE svg [<!ENTITY a \"b\">]><svg></svg>").unwrap();
+        fs::write(dir.join("binary.svg"), [0xff, 0xfe, 0x00]).unwrap();
+        fs::write(dir.join("notsvg.png"), "<svg/>").unwrap();
+        let outside = dir.with_file_name(format!("{}-outside.svg", dir.file_name().unwrap().to_string_lossy()));
+        fs::write(&outside, "<svg/>").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("link.svg")).unwrap();
+        let manifest = |icon: Option<&str>, sidebar_icon: Option<&str>| {
+            let mut sidebar = serde_json::json!({ "id": "s", "title": "S", "page": "sidebar.html" });
+            if let Some(i) = sidebar_icon {
+                sidebar["icon"] = i.into();
+            }
+            let mut m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "sidebars": [sidebar] } });
+            if let Some(i) = icon {
+                m["icon"] = i.into();
+            }
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let ok = manifest(Some("icon.svg"), None).unwrap();
+        assert_eq!(ok.icon_svg.as_deref(), Some(svg));
+        assert_eq!(ok.manifest.contributes.sidebars[0].icon, "");
+        assert_eq!(manifest(Some("img/nested.svg"), Some("clock")).unwrap().icon_svg.as_deref(), Some("<svg/>"));
+        assert_eq!(manifest(None, Some("clock")).unwrap().icon_svg, None);
+        assert!(manifest(None, Some("not-an-icon")).err().unwrap().contains("sidebar icon"));
+        let outside_path = outside.to_string_lossy().to_string();
+        for (bad, error) in [
+            ("../wings-icon-outside.svg", "must be a relative path"),
+            (outside_path.as_str(), "must be a relative path"),
+            ("/icon.svg", "must be a relative path"),
+            ("img/../icon.svg", "must be a relative path"),
+            ("img\\..\\icon.svg", "must be a relative path"),
+            ("", "must be a relative path"),
+            ("notsvg.png", "must be a relative path"),
+            ("link.svg", "isn't a file in the plugin folder"),
+            ("missing.svg", "isn't a file in the plugin folder"),
+            ("img", "must be a relative path"),
+            ("big.svg", "is over 32 KB"),
+            ("page.svg", "isn't an SVG"),
+            ("entity.svg", "isn't an SVG"),
+            ("binary.svg", "isn't UTF-8"),
+        ] {
+            let e = manifest(Some(bad), None).err().unwrap_or_else(|| panic!("{bad:?} was accepted"));
+            assert!(e.contains(error), "{bad:?}: {e}");
+        }
+        for (text, svg) in [("<svg/>", true), ("\u{feff}\n<svg width=\"1\">", true), ("<svgx/>", false), ("<svg", false), ("", false), ("<!-- never closed <svg/>", false), ("<?xml <svg/>", false)] {
+            assert_eq!(is_svg(text), svg, "{text:?}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&outside);
     }
 
     #[test]

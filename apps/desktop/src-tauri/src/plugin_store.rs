@@ -91,6 +91,8 @@ pub struct PluginView {
     /// False until the user approves this version's permissions, and again after an update changes them.
     pub approved: bool,
     pub source: Option<Source>,
+    /// The checked SVG markup of the manifest's `icon`. The UI draws it only as a CSS mask.
+    pub icon_svg: Option<String>,
     /// Loaded from the repo's `plugins/` folder by a dev build: always approved, can't be removed.
     pub dev: bool,
 }
@@ -140,6 +142,7 @@ impl Store {
             enabled: entry.map_or(dev, |e| e.enabled),
             approved: dev || entry.and_then(|e| e.approved.as_ref()) == Some(&Grant::of(&plugin.manifest)),
             source: entry.map(|e| e.source.clone()),
+            icon_svg: plugin.icon_svg.clone(),
             dev,
         })
     }

@@ -5,11 +5,12 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEffect, useRef, useState } from "react";
-import { CodeIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { BotIcon, CodeIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import type { PluginView } from "@/lib/api";
 import { pluginSettingsSection } from "@/lib/plugin-pages";
+import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 import { acceleratorFromEvent, DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
@@ -119,6 +120,7 @@ const sections = [
   { id: "history", label: "History and selection", icon: ScrollTextIcon },
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "editor", label: "Editor", icon: CodeIcon },
+  { id: "agents", label: "Agents", icon: BotIcon },
   { id: "plugins", label: "Plugins", icon: PuzzleIcon },
 ] as const;
 
@@ -198,6 +200,8 @@ export function SettingsDialog(props: {
   onHotkeyChange: (hotkey: GlobalHotkey) => void;
   look: TerminalLook;
   onLookChange: (look: TerminalLook) => void;
+  sleep: SleepSettings;
+  onSleepChange: (sleep: SleepSettings) => void;
 }) {
   const { keys, look, host } = props;
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
@@ -339,6 +343,26 @@ export function SettingsDialog(props: {
             <TabsContent value="editor" className="flex flex-col gap-3 p-6">
               <h3 className="text-[15px] font-semibold">Editor</h3>
               <EditorSettings />
+            </TabsContent>
+            <TabsContent value="agents" className="flex flex-col gap-3 p-6">
+              <h3 className="text-[15px] font-semibold">Agents</h3>
+              <Group>
+                <Row
+                  id="sleep-agents"
+                  label="Put idle agents to sleep"
+                  hint="Ends an idle Claude Code or opencode that isn't on screen, which frees about 400 MB each. It stays in the Agents list as sleeping, and opening it picks the session up again."
+                >
+                  <Switch id="sleep-agents" checked={props.sleep.enabled} onCheckedChange={(enabled) => props.onSleepChange({ ...props.sleep, enabled })} />
+                </Row>
+                <Row id="sleep-after" label="Sleep after" hint="Time out of sight and idle. An agent that is working, needs you or has text typed in its prompt is left alone.">
+                  <Choice
+                    id="sleep-after"
+                    items={SLEEP_MINUTES.map((m) => ({ value: m, label: m === 60 ? "1 hour" : `${m} minutes` }))}
+                    value={props.sleep.minutes}
+                    onChange={(minutes) => props.onSleepChange({ ...props.sleep, minutes })}
+                  />
+                </Row>
+              </Group>
             </TabsContent>
             <TabsContent value="plugins" className="min-h-0 flex-1">
               <PluginsSection {...props.pluginsProps} />

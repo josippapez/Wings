@@ -16,7 +16,7 @@ const agent = (paneId: string, state: AgentState): Agent => ({
   waitingFor: null,
   args: [],
   startedAt: 0,
-  stateSince: null,
+  stateSince: null, direct: true,
 });
 const list = [agent("a", "done"), agent("b", "working"), agent("c", "blocked"), agent("d", "blocked"), agent("e", "idle")];
 const next = (focused: string | null, back = false) => nextNeedingYou(list, focused, back)?.paneId ?? null;

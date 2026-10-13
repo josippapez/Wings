@@ -81,7 +81,8 @@ export function NotificationBell({
             </EmptyHeader>
           </Empty>
         ) : (
-          <ScrollArea className="max-h-96">
+          <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-96">
+            {/* The cap goes on the viewport: a percentage height inside a max-height root resolves to auto and never scrolls. */}
             <ul className="flex flex-col p-1.5">
               {events.map((e) => (
                 <li key={e.id} className={cn("flex items-start gap-2.5 rounded-lg px-2.5 py-2", fresh.has(e.id) && "bg-white/[0.04]")}>

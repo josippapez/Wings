@@ -14,6 +14,17 @@ export function resumeCommand(sessionId: string, args: readonly string[] = []) {
   return ["claude", "--resume", ...[sessionId, ...flags].map(shellQuote)].join(" ") + "\r";
 }
 
+/** Which agent CLI a session belongs to. */
+export type SessionKind = "claude" | "opencode";
+
+/** Session ids get typed into a shell, so only the shapes the CLIs use are accepted: Claude Code's UUID, opencode's `ses_…`. */
+export const isSessionIdOf = (kind: SessionKind, id: string) => (kind === "claude" ? /^[0-9a-f-]{36}$/i.test(id) : /^ses_[A-Za-z0-9]{8,}$/.test(id));
+
+/** The line that continues a session in its pane's shell. opencode: `opencode --session <id>` (`opencode --help`). */
+export function resumeLine(kind: SessionKind, sessionId: string, args: readonly string[] = []) {
+  return kind === "claude" ? resumeCommand(sessionId, args) : `opencode --session ${shellQuote(sessionId)}\r`;
+}
+
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh"]);
 
 /** True when a pane's foreground program (`PaneInfo.command`) is a shell, so a typed line reaches its prompt and not a program. */

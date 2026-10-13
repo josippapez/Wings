@@ -553,6 +553,11 @@ export class TerminalSession {
   private disableWebgl() {
     if (!this.webgl) return;
     const canvases = [...this.el.querySelectorAll("canvas")];
+    // @xterm/addon-webgl 0.19 never disposes its cursor blink timer (fixed upstream in xterm.js 7a6e724, not released
+    // yet). A renderer disposed while its terminal has focus keeps that timer running, and the timer holds the
+    // renderer, its canvases and their GPU memory for good: 59 MB for a 1500 x 1000 pane on a Retina screen
+    // (measured). A blur stops the timer first. Every caller is hiding or closing the pane, so the focus goes anyway.
+    if (this.term.textarea === document.activeElement) this.term.blur();
     this.webgl.dispose();
     this.webgl = null;
     // The addon only removes its canvas, so the context and its GPU memory stay until the canvas is garbage

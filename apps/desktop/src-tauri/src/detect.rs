@@ -53,6 +53,9 @@ pub struct Agent {
     pub started_at: u64,
     /// When `state` last changed, in ms since 1970, from Claude Code's session file. For "working for 2m".
     pub state_since: Option<u64>,
+    /// True when the agent's parent is the pane's own shell, so nothing like `npx` or `script` wraps it. Wings
+    /// only puts an agent to sleep when it is, since the shell then goes back to its prompt once the agent exits.
+    pub direct: bool,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -152,6 +155,15 @@ impl Detector {
                 None => Default::default(),
             })
             .collect();
+        let direct: HashMap<String, bool> = panes
+            .iter()
+            .zip(&found)
+            .filter_map(|(pane, (_, agent))| {
+                let (pid, _) = (*agent)?;
+                let parent = processes.get(&pid)?.parent().map(Pid::as_u32);
+                Some((pane.pane_id.clone(), pane.shell_pid.is_some() && parent == pane.shell_pid))
+            })
+            .collect();
         // The working directory changes with every `cd`, so it is re-read each scan, for these processes only.
         let current: Vec<Pid> = found.iter().filter_map(|(pid, _)| *pid).collect();
         self.system.refresh_processes_specifics(ProcessesToUpdate::Some(&current), false, ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always));
@@ -227,6 +239,7 @@ impl Detector {
                 args,
                 started_at,
                 state_since: file.status_updated_at,
+                direct: direct.get(&pane.pane_id).copied().unwrap_or(false),
             });
         }
         self.opencode.set_panes(opencode_panes);
@@ -244,6 +257,30 @@ impl Detector {
         }
         if *unseen { AgentState::Done } else { raw }
     }
+}
+
+/// Programs Claude Code and opencode start their MCP servers with.
+const MCP_LAUNCHERS: &[&str] = &["node", "npm", "npx", "pnpm", "bun", "bunx", "deno", "uv", "uvx", "python", "python3"];
+
+/// Whether a child of an agent process could be running work for it. Claude Code runs each Bash tool command,
+/// background ones like a dev server included, as a child `zsh -c source …/shell-snapshots/…`; its other children are
+/// MCP servers. Anything that is neither a known launcher nor named for MCP counts as work, so doubt reads as busy.
+fn is_background_work(name: &str, cmd: &[OsString]) -> bool {
+    let mcp = cmd.iter().any(|a| a.to_string_lossy().to_lowercase().contains("mcp"));
+    !(mcp || MCP_LAUNCHERS.contains(&name))
+}
+
+/// True when `pid`, an agent, has a child that is running work (see `is_background_work`). A one-off read of the
+/// process table, for the moment before Wings ends an idle agent; nothing calls it on a timer.
+pub fn agent_busy(pid: u32) -> bool {
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let children = children_by_parent(system.processes());
+    children.get(&Pid::from_u32(pid)).into_iter().flatten().any(|child| {
+        let name = name_of(system.processes(), *child);
+        let cmd = system.processes().get(child).map(|p| p.cmd().to_vec()).unwrap_or_default();
+        is_background_work(&name, &cmd)
+    })
 }
 
 /// A process keeps its pid when it execs another program, and sysinfo keeps the argv and name it cached. One
@@ -462,6 +499,7 @@ mod tests {
         assert_eq!(scan.panes["p1"].command, "claude");
         let agents = scan.agents;
         assert_eq!(agents.len(), 1, "claude child not found");
+        assert!(agents[0].direct, "claude is the shell's own child");
         let pid = agents[0].pid;
 
         fs::write(
@@ -530,6 +568,72 @@ mod tests {
         let _ = shell.wait();
         let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// An agent started through another process (here an inner `sh`) is not the shell's own child.
+    #[cfg(unix)]
+    #[test]
+    fn agent_behind_a_wrapper_is_not_direct() {
+        let tmp = std::env::temp_dir().join(format!("wings-wrap-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("claude");
+        let _ = fs::remove_file(&fake);
+        std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+        let mut shell = Command::new("/bin/sh").arg("-c").arg(format!("sh -c \"'{}' 30; true\"; true", fake.display())).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+
+        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new() };
+        let agents = Detector::new(&tmp).scan(std::slice::from_ref(&probe), None).agents;
+        assert_eq!(agents.len(), 1);
+        assert!(!agents[0].direct, "the inner sh sits between the shell and claude");
+
+        shell.kill().unwrap();
+        let _ = shell.wait();
+        let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Claude Code runs a Bash command as a child shell: that is work, while MCP servers and no children are not.
+    #[cfg(unix)]
+    #[test]
+    fn agent_with_a_shell_child_is_busy() {
+        let tmp = std::env::temp_dir().join(format!("wings-busy-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("claude");
+        let _ = fs::remove_file(&fake);
+        std::os::unix::fs::symlink("/bin/sh", &fake).unwrap();
+        let run = |script: &str| Command::new(&fake).args(["-c", script]).spawn().unwrap();
+        let wait_for = |pid: u32, want: bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while agent_busy(pid) != want && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            agent_busy(pid)
+        };
+        // `sleep 37; true` keeps the child a separate process; `sh -c` is the shell child.
+        let mut busy = run("sh -c 'sleep 37'; true");
+        let mut mcp = run("sh -c '/bin/sleep 37; true' standalone-mcp; true");
+        let mut idle = Command::new("/bin/sleep").arg("37").spawn().unwrap();
+        assert!(wait_for(busy.id(), true), "a shell child is background work");
+        assert!(!wait_for(idle.id(), false), "no children is not busy");
+        assert!(!agent_busy(mcp.id()), "an MCP server child is not work");
+        for c in [&mut busy, &mut mcp, &mut idle] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        let _ = Command::new("pkill").arg("-f").arg("sleep 37").status();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn tells_mcp_servers_from_work() {
+        let argv = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(is_background_work("zsh", &argv(&["/bin/zsh", "-c", "source ~/.claude/shell-snapshots/x.sh && npm run dev"])));
+        assert!(is_background_work("sh", &argv(&["sh", "-c", "sleep 30"])));
+        assert!(is_background_work("something-unknown", &argv(&["something-unknown"])));
+        assert!(!is_background_work("node", &argv(&["node", "/x/server.js"])));
+        assert!(!is_background_work("npm", &argv(&["npm", "exec", "@some/server"])));
+        assert!(!is_background_work("tool", &argv(&["tool", "/x/standalone-mcp.cjs"])));
     }
 
     /// The Unix path: the PTY's foreground process is `claude`, found without a full process scan.

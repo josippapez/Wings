@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  CircleAlertIcon,
   CircleDashedIcon,
   CopyIcon,
   FolderIcon,
@@ -39,7 +40,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { elapsed } from "@/lib/agents";
-import type { Agent, AgentState, GitStatus, Space } from "@/lib/api";
+import type { Agent, AgentKind, AgentState, GitStatus, Space } from "@/lib/api";
+import type { Phase } from "@/lib/sleep";
 import { trackDrag } from "@/lib/pointer-drag";
 import { shortcutLabel } from "@/lib/terminal";
 import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
@@ -68,6 +70,15 @@ function Elapsed({ since }: { since: number }) {
   return <span className="tabular-nums"> {elapsed(now - since)}</span>;
 }
 
+export type PendingAgent = { key: string; spaceId: string; kind: AgentKind; phase: Phase; title: string | null };
+
+const pendingLabel: Record<Phase, string> = {
+  restored: "starts when you open it",
+  sleeping: "sleeping",
+  starting: "resuming…",
+  failed: "couldn't resume, retry",
+};
+
 export function Sidebar(props: {
   open: boolean;
   /** The copy shown over the panes while the sidebar is closed, with its own row highlight. */
@@ -80,9 +91,13 @@ export function Sidebar(props: {
   focusedPaneId: string | null;
   onSelectSpace: (id: string) => void;
   onSelectAgent: (agent: Agent) => void;
-  /** Claude sessions in tabs Wings restored but you haven't opened yet: they start when you go to them. */
-  restored: { key: string; spaceId: string; title: string | null }[];
-  onSelectRestored: (key: string) => void;
+  /** Sessions with no live agent: restored ones you haven't opened yet, sleeping ones, ones being resumed and ones that couldn't be. */
+  pending: PendingAgent[];
+  /** Resumes a pending session (or retries one that failed) and goes to its pane. */
+  onSelectPending: (key: string) => void;
+  /** The pane key of each live agent's pane, by pane id, and each pane key's place in creation order. A row keeps its key and its place when the agent takes over from a pending row. */
+  paneKeyOf: Record<string, string>;
+  paneOrder: Record<string, number>;
   onNewTab: (spaceId: string) => void;
   onForkAgent: (agent: Agent) => void;
   onCloseAgent: (agent: Agent) => void;
@@ -93,7 +108,13 @@ export function Sidebar(props: {
 }) {
   const { spaces, agents } = props;
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? id;
-  const sortedAgents = [...agents].sort((a, b) => agentOrder[a.state] - agentOrder[b.state]);
+  // One list, so a pending row and the live agent that replaces it sit in the same place under the same key.
+  const agentRows = [
+    ...agents.map((agent) => ({ id: props.paneKeyOf[agent.paneId] ?? agent.paneId, rank: agentOrder[agent.state], agent, pending: undefined })),
+    ...props.pending.map((pending) => ({ id: pending.key, rank: agentOrder.idle, agent: undefined, pending })),
+  ]
+    .map((row) => ({ ...row, order: props.paneOrder[row.id] ?? Number.MAX_SAFE_INTEGER }))
+    .sort((a, b) => a.rank - b.rank || a.order - b.order);
   const [refreshing, setRefreshing] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const list = useRef<HTMLElement>(null);
@@ -228,7 +249,7 @@ export function Sidebar(props: {
                       onPointerDown={child ? undefined : (e) => dragSpace(e, space.id)}
                       aria-current={active ? "page" : undefined}
                       title={space.path}
-                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left", child && "pl-6", !active && "hover:bg-hover")}
+                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50", child && "pl-6", !active && "hover:bg-hover")}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center">
                         {state ? <StatusDot state={state} /> : child ? <GitBranchIcon className="size-4 text-muted-foreground" /> : <FolderIcon className="size-4 text-muted-foreground" />}
@@ -330,20 +351,47 @@ export function Sidebar(props: {
                 <Kbd>{shortcutLabel.nextAgent}</Kbd>
               </TooltipContent>
             </Tooltip>
-            {agents.length + props.restored.length > 0 && <span className="tabular-nums">{agents.length + props.restored.length}</span>}
+            {agentRows.length > 0 && <span className="tabular-nums">{agentRows.length}</span>}
           </h2>
           {/* Grows with the list up to five agents, then scrolls. */}
           <ScrollArea className="max-h-[249px] min-h-0">
             <ul className="flex flex-col gap-px">
-              {sortedAgents.length === 0 && props.restored.length === 0 && (
+              {agentRows.length === 0 && (
                 <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
                   Run <code className="rounded bg-hover px-1 py-px text-[12px]">claude</code> in any terminal and it shows up here.
                 </li>
               )}
               <AnimatePresence initial={false}>
-                {sortedAgents.map((agent) => (
+                {agentRows.map(({ id, agent, pending }) =>
+                  pending ? (
+                    <motion.li key={id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={spring}>
+                      <Item
+                        size="xs"
+                        render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
+                        onClick={() => props.onSelectPending(pending.key)}
+                        aria-busy={pending.phase === "starting"}
+                        className={cn("flex-nowrap gap-2.5 px-2 py-1.5 text-left", pending.phase === "starting" ? "cursor-progress" : "hover:bg-hover")}
+                      >
+                        <span className="flex size-4 shrink-0 items-center justify-center">
+                          {pending.phase === "starting" ? (
+                            <span className="size-2.5 rounded-full border-[1.5px] border-working/30 border-t-working motion-safe:animate-spin" aria-hidden />
+                          ) : pending.phase === "failed" ? (
+                            <CircleAlertIcon className="size-3.5 text-blocked" aria-hidden />
+                          ) : (
+                            <CircleDashedIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className={cn("block truncate text-[13px] font-medium", pending.phase !== "starting" && "text-muted-foreground")}>{pending.title ?? agentLabel(pending.kind)}</span>
+                          <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+                            {spaceName(pending.spaceId)}, {pendingLabel[pending.phase]}
+                          </span>
+                        </span>
+                      </Item>
+                    </motion.li>
+                  ) : agent && (
                   <motion.li
-                    key={agent.paneId}
+                    key={id}
                     layout
                     initial={{ opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -396,25 +444,8 @@ export function Sidebar(props: {
                       </ContextMenuContent>
                     </ContextMenu>
                   </motion.li>
-                ))}
-                {props.restored.map((r) => (
-                  <motion.li key={r.key} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={spring}>
-                    <Item
-                      size="xs"
-                      render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
-                      onClick={() => props.onSelectRestored(r.key)}
-                      className="flex-nowrap gap-2.5 px-2 py-1.5 text-left hover:bg-hover"
-                    >
-                      <span className="flex size-4 shrink-0 items-center justify-center">
-                        <CircleDashedIcon className="size-3.5 text-muted-foreground" aria-hidden />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium text-muted-foreground">{r.title ?? "Claude"}</span>
-                        <span className="block truncate text-[11px] leading-4 text-muted-foreground">{spaceName(r.spaceId)}, starts when you open it</span>
-                      </span>
-                    </Item>
-                  </motion.li>
-                ))}
+                  ),
+                )}
               </AnimatePresence>
             </ul>
           </ScrollArea>

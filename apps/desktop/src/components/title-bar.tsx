@@ -4,13 +4,8 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
-  CalendarIcon,
-  ChartColumnIcon,
-  ClockIcon,
   EllipsisIcon,
-  GlobeIcon,
   RotateCcwClockIcon,
-  ListIcon,
   PanelLeftIcon,
   PencilIcon,
   PlusIcon,
@@ -33,9 +28,9 @@ import type { LayoutNode } from "@/lib/layout";
 import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
 import { trackDrag } from "@/lib/pointer-drag";
 import { isMac, shortcutLabel } from "@/lib/terminal";
+import { PluginGlyph } from "@/components/plugin-glyph";
 import { cn } from "@/lib/utils";
 
-const panelIcons: Record<string, typeof ClockIcon> = { clock: ClockIcon, globe: GlobeIcon, calendar: CalendarIcon, chart: ChartColumnIcon, list: ListIcon };
 
 /** Plugin buttons that show before the rest move into a menu. Pinned ones always show, and take these places first. */
 const INLINE_BUTTONS = 3;
@@ -47,7 +42,9 @@ export type PluginButton = {
   kind: "sidebar" | "modal" | "window" | "tab" | "panel";
   id: string;
   title: string;
+  /** A built-in icon name, or empty for the plugin's own `iconSvg`. */
   icon: string;
+  iconSvg?: string | null;
   /** Short text from the plugin, like a running timer. */
   label?: string;
   /** Shown when you point at the button. */
@@ -130,7 +127,7 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
  */
 export type TabView =
   | { id: string; label: PaneLabelInfo; /** What the tab shows: your name for it, or the automatic title made unique. */ title: string; named: boolean; layout: LayoutNode; focusedPane: string; state: AgentState | null }
-  | { id: string; view: { title: string; icon: string } };
+  | { id: string; view: { title: string; icon: string; iconSvg?: string | null } };
 
 const spring = { type: "spring", stiffness: 520, damping: 38, mass: 0.8 } as const;
 
@@ -264,7 +261,6 @@ export function TitleBar(props: {
               {props.tabs.map((tab, i) => {
                 const active = tab.id === props.activeTabId;
                 const title = "view" in tab ? tab.view.title : tab.title;
-                const ViewIcon = "view" in tab ? (panelIcons[tab.view.icon] ?? GlobeIcon) : null;
                 return (
                   <motion.div
                     key={tab.id}
@@ -321,7 +317,7 @@ export function TitleBar(props: {
                             )}
                           >
                             {"view" in tab ? (
-                              ViewIcon && <ViewIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                              <PluginGlyph name={tab.view.icon} svg={tab.view.iconSvg} className="size-3.5 shrink-0 text-muted-foreground" />
                             ) : tab.state && !tab.label.agent ? (
                               <StatusDot state={tab.state} />
                             ) : (
@@ -381,8 +377,8 @@ export function TitleBar(props: {
         </Tabs>
       </LayoutGroup>
 
+      {/* Plugin buttons sit left of a hairline, the app's own buttons right of it. */}
       {inline.map((button) => {
-        const Icon = panelIcons[button.icon] ?? GlobeIcon;
         const icon = (
           <IconButton
             key={button.key}
@@ -424,7 +420,7 @@ export function TitleBar(props: {
                 aria-hidden
               />
             )}
-            <Icon />
+            <PluginGlyph name={button.icon} svg={button.iconSvg} />
             {button.label && <span className="max-w-72 truncate text-[12px] font-medium tabular-nums">{button.label}</span>}
           </IconButton>
         );
@@ -441,20 +437,19 @@ export function TitleBar(props: {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button ref={more} variant="ghost" size="icon-sm" aria-label={overflow.length ? `${overflow.length} more from plugins` : "Plugin buttons"} className="text-muted-foreground hover:text-foreground" />
+              <Button ref={more} variant="ghost" size="icon-sm" aria-label={overflow.length ? `${overflow.length} more from plugins` : "Plugin buttons"} title="Plugin buttons" className="text-muted-foreground hover:text-foreground" />
             }
           >
             <EllipsisIcon aria-hidden />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {overflow.map((button) => {
-              const Icon = panelIcons[button.icon] ?? GlobeIcon;
               return (
                 <DropdownMenuItem
                   key={button.key}
                   onClick={() => props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect())}
                 >
-                  <Icon aria-hidden />
+                  <PluginGlyph name={button.icon} svg={button.iconSvg} />
                   <span className="flex-1 whitespace-nowrap">{button.title}</span>
                   {button.label && (
                     <span
@@ -481,6 +476,7 @@ export function TitleBar(props: {
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      {(inline.length > 0 || overflow.length > 0 || pinned.length > 0) && <span className="mx-1 h-4 w-px shrink-0 bg-hairline" aria-hidden />}
       {props.bell}
       <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
         <RotateCcwClockIcon />

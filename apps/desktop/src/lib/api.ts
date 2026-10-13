@@ -1,6 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { paneInput } from "./pane-input.ts";
+
 export type Space = {
   id: string;
   name: string;
@@ -35,6 +37,8 @@ export type Agent = {
   startedAt: number;
   /** When `state` last changed, in ms since 1970; null when Claude Code doesn't say. */
   stateSince: number | null;
+  /** True when the pane's own shell started the agent, with nothing wrapped around it. */
+  direct: boolean;
 };
 
 /** Commits to push and pull (as of the last fetch) and changed files, per project. */
@@ -69,7 +73,7 @@ export type PluginPopover = { page: string; width: number; height: number };
 /** One of the plugin's own pages, shown in the right sidebar from a title bar button. */
 export type PluginSidebar = { id: string; title: string; icon: string; page: string; popover?: PluginPopover };
 export type ViewPlace = "sidebar" | "modal" | "window" | "tab";
-/** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. */
+/** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. An empty `icon` means the plugin's own. */
 export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null };
 /** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars, views and a settings page. */
 export type PluginContributes = {
@@ -83,10 +87,11 @@ export type PluginContributes = {
 };
 
 /** Every page of a plugin: its sidebars, which only open in the sidebar, then its views. Ids are unique across both. */
-export const pagesOf = (plugin: PluginView): PluginPage[] => [
-  ...plugin.contributes.sidebars.map((s) => ({ ...s, opens: ["sidebar"] satisfies ViewPlace[], width: null, height: null })),
-  ...plugin.contributes.views,
-];
+export const pagesOf = (plugin: PluginView): (PluginPage & { iconSvg: string | null })[] =>
+  [
+    ...plugin.contributes.sidebars.map((s) => ({ ...s, opens: ["sidebar"] satisfies ViewPlace[], width: null, height: null })),
+    ...plugin.contributes.views,
+  ].map((page) => ({ ...page, iconSvg: plugin.iconSvg }));
 /**
  * A command-line tool a plugin runs, like the GitHub CLI. `command` is the Homebrew line Wings runs to install it:
  * set only when it's missing, on macOS, with Homebrew there. `needsHomebrew` is missing on macOS without Homebrew.
@@ -109,6 +114,8 @@ export type PluginView = {
   version: string;
   description: string;
   main: string;
+  /** The checked markup of its `icon` file. Draw it with `PluginGlyph`, never as page content. */
+  iconSvg: string | null;
   permissions: PluginPermissions;
   contributes: PluginContributes;
   enabled: boolean;
@@ -212,6 +219,8 @@ export const api = {
   hotkeySet: (accelerator: string | null) => invoke<void>("hotkey_set", { accelerator }),
   /** The global shortcut was pressed; Wings is already in front. */
   onGlobalHotkey: (cb: () => void): Promise<UnlistenFn> => listen("global-hotkey", () => cb()),
+  /** Whether an agent process has a child doing work: a Bash command still running, possibly in the background. */
+  agentBusy: (pid: number) => invoke<boolean>("agent_busy", { pid }),
   agentsList: () => invoke<Agent[]>("agents_list"),
   gitStatus: () => invoke<Record<string, GitStatus>>("git_status"),
   gitRefresh: () => invoke<Record<string, GitStatus>>("git_refresh"),
@@ -229,7 +238,13 @@ export const api = {
     /** A folder inside the project to start in, instead of its root. */
     cwd: string | null = null,
   ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd }),
-  paneWrite: (id: string, data: string) => invoke<void>("pane_write", { id, data }),
+  /** Keys you type (the terminal's input). Remembered per pane, so Wings can tell a draft is waiting in one. */
+  paneWrite: (id: string, data: string) => {
+    paneInput.note(id, data);
+    return invoke<void>("pane_write", { id, data });
+  },
+  /** Input Wings sends itself, like a resume line: it is no draft of yours. */
+  paneSend: (id: string, data: string) => invoke<void>("pane_write", { id, data }),
   paneResize: (id: string, cols: number, rows: number) => invoke<void>("pane_resize", { id, cols, rows }),
   paneClose: (id: string) => invoke<void>("pane_close", { id }),
   panesList: () => invoke<LivePane[]>("panes_list"),

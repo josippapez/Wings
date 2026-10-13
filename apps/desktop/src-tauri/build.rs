@@ -19,6 +19,7 @@ const COMMANDS: &[&str] = &[
     "pane_attach",
     "pane_focus",
     "agents_list",
+    "agent_busy",
     "pane_info",
     "git_status",
     "git_refresh",

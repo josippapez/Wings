@@ -1,8 +1,9 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "minWingsVersion": "0.1.17",
+  "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub, GitLab and Azure DevOps), with live status, checks and why they failed, the diff and review comments.",
   "api": 1,
   "main": "main.js",

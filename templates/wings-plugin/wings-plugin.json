@@ -5,6 +5,7 @@
   "description": "Shows the current git branch as a badge on every pane.",
   "api": 1,
   "main": "main.js",
+  "icon": "icon.svg",
   "permissions": {
     "exec": ["git branch --show-current"]
   },

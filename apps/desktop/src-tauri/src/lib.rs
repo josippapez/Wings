@@ -996,6 +996,12 @@ fn workspace_save(app: AppHandle, json: String) -> Res<()> {
     std::fs::rename(tmp, dir.join("workspace.json")).map_err(err)
 }
 
+/// Whether an agent process has a child doing work, asked right before Wings puts an idle agent to sleep.
+#[tauri::command]
+async fn agent_busy(pid: u32) -> bool {
+    detect::agent_busy(pid)
+}
+
 #[tauri::command]
 fn agents_list(state: State<AppState>) -> Vec<Agent> {
     state.agents.lock().unwrap().clone()
@@ -1357,6 +1363,7 @@ pub fn run() {
             pane_attach,
             pane_focus,
             agents_list,
+            agent_busy,
             pane_info,
             git_status,
             git_refresh,

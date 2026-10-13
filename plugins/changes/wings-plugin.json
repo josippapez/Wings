@@ -1,8 +1,9 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.2.4",
-  "minWingsVersion": "0.1.17",
+  "version": "0.2.6",
+  "minWingsVersion": "0.1.20",
+  "icon": "icon.svg",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
   "main": "main.js",
@@ -27,7 +28,6 @@
       {
         "id": "changes",
         "title": "Changes",
-        "icon": "list",
         "page": "sidebar.html"
       }
     ],
@@ -35,7 +35,7 @@
       {
         "id": "graph",
         "title": "Commit graph",
-        "icon": "chart",
+        "icon": "git-graph",
         "page": "graph.html",
         "opens": ["window", "modal"],
         "width": 1100,

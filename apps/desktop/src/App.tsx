@@ -11,7 +11,7 @@ import { notificationsReducer } from "@/lib/notifications";
 import { reviewTargets, sendToPane } from "@/lib/review";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginModal, type ModalRef } from "@/components/plugin-modal";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Welcome } from "@/components/welcome";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
 import { agentLabel, paneLabel, type PaneLabelInfo } from "@/components/pane-label";
@@ -39,14 +39,16 @@ import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
 import { tabTitles } from "@/lib/tab-names";
 import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
-import { createCommands, shortcutText } from "@/lib/commands";
+import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
 import { defaultEditor, openInEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
-import { DEFAULT_GLOBAL_HOTKEY, type GlobalHotkey } from "@/lib/hotkey";
+import { DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
 import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { isShellCommand, resumeCommand, shellQuote } from "@/lib/resume";
+import { isSessionIdOf, isShellCommand, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { paneInput } from "@/lib/pane-input";
+import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
@@ -57,8 +59,11 @@ type PaneTab = { id: string; spaceId: string; layout: LayoutNode; focusedPane: s
 type Tab = PaneTab | ViewTab;
 /** The terminal tab holding a pane. */
 const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => !isViewTab(t) && paneIds(t.layout).includes(key));
-/** `sessionId` is the Claude session last seen in the pane; `live` once Wings has seen it running this launch; `args` its flags. */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; live: boolean; args: string[] };
+/**
+ * `sessionId` is the agent session last seen in the pane, of agent `kind`, `name` its title; `live` once Wings has seen
+ * it running this launch; `args` its flags. `asleep`, `resumeAt` and `resumeFailed` are the sleep and resume state (`sleep.ts`).
+ */
+type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean };
 
 type SavedWorkspace = {
   version: 1;
@@ -82,6 +87,12 @@ type SavedWorkspace = {
   /** Plugin views open as tabs, apart from `tabs` so an older Wings still loads those. Absent in older files. */
   viewTabs?: SavedViewTab[];
   sessions: Record<string, string | null>;
+  /** Which agent each session in `sessions` belongs to. Absent in older files, which held Claude sessions only. */
+  sessionKinds?: Record<string, SessionKind>;
+  /** Panes whose agent Wings put to sleep. */
+  asleep?: string[];
+  /** When idle agents sleep. */
+  sleep?: SleepSettings;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
   /** The Rust pane behind each pane, by the same keys. Still running only after a webview reload. */
@@ -147,7 +158,7 @@ function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
 }
 
 /** Session ids get typed into a shell, so only accept the UUID shape Claude Code uses. */
-const isSessionId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
+const isSessionId = (id: string) => isSessionIdOf("claude", id);
 const forkCommand = (sessionId: string) => `claude --resume ${sessionId} --fork-session\r`;
 
 export default function App() {
@@ -177,6 +188,8 @@ export default function App() {
   /** The plugin sidebar on the right, as `pluginId:sidebarId`, and every one opened so far (kept running). */
   const [rightSidebar, setRightSidebar] = useState<string | null>(null);
   const [openedSidebars, setOpenedSidebars] = useState<string[]>([]);
+  // The sidebar page the right edge is peeking, so it stays loaded while shown.
+  const [peekedSidebar, setPeekedSidebar] = useState<string | null>(null);
   const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
   /** The plugin page shown in a modal, as `pluginId:viewId`. */
   const [modal, setModal] = useState<string | null>(null);
@@ -224,6 +237,8 @@ export default function App() {
   const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
+  const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
+  const [sleepTick, setSleepTick] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("text");
@@ -243,6 +258,8 @@ export default function App() {
   tabsRef.current = tabs;
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const paneInfoRef = useRef(paneInfo);
+  paneInfoRef.current = paneInfo;
 
   const activeSpace = spaces.find((s) => s.id === activeSpaceId) ?? null;
   const spaceTabs = tabs.filter((t) => t.spaceId === activeSpaceId);
@@ -260,13 +277,14 @@ export default function App() {
       id: s.id,
       title: s.title,
       icon: s.icon,
+      iconSvg: s.iconSvg,
       label: sidebarLabels[`${p.id}:${s.id}`]?.text,
       rows: sidebarLabels[`${p.id}:${s.id}`]?.rows,
       tone: sidebarLabels[`${p.id}:${s.id}`]?.tone,
       active: (s.opens[0] === "sidebar" ? rightSidebar : s.opens[0] === "tab" ? shownView : modal) === `${p.id}:${s.id}`,
       popover: popoverOf(p, s.id),
     })),
-    ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon })),
+    ...p.contributes.panels.map((panel) => ({ key: `${p.id}:panel:${panel.id}`, pluginId: p.id, kind: "panel" as const, id: panel.id, title: panel.title, icon: panel.icon, iconSvg: p.iconSvg })),
   ]);
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
@@ -278,29 +296,31 @@ export default function App() {
     recentTabs.current = [activeTabId, ...recentTabs.current.filter((id) => id !== activeTabId)].slice(0, 2);
   }
   // Plugin pages not on screen for a while unload and load again when shown (a page asks its plugin for its state).
-  const unloadedSidebars = useIdleUnload(openedSidebars, rightSidebar, SIDEBAR_UNLOAD_MS);
+  const unloadedSidebars = useIdleUnload(openedSidebars, rightSidebar ?? peekedSidebar, SIDEBAR_UNLOAD_MS);
   const unloadedViewTabs = useIdleUnload(tabs.filter(isViewTab).map((t) => t.id), activeTabId, TAB_PAGE_UNLOAD_MS);
   const activeSpaceIdRef = useRef(activeSpaceId);
   activeSpaceIdRef.current = activeSpaceId;
   const focusedPaneId = activeTab ? (panes[activeTab.focusedPane]?.paneId ?? null) : null;
-  // Restored Claude sessions whose tab hasn't been opened yet, so the Agents list still shows them.
+  // Rows for sessions with no live agent: restored ones whose tab hasn't been opened yet, sleeping ones, and ones
+  // being resumed (or that couldn't be), so the Agents list never drops a session while it is coming back.
   const [sessionTitles, setSessionTitles] = useState<Record<string, string | null>>({});
-  const restored = useMemo(
+  const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
+  const pending = useMemo(
     () =>
-      Object.entries(panes).flatMap(([key, meta]) =>
-        meta.sessionId && !meta.paneId ? [{ key, spaceId: meta.spaceId, title: sessionTitles[meta.sessionId] ?? null }] : [],
-      ),
-    [panes, sessionTitles],
+      Object.entries(panes).flatMap(([key, meta]) => {
+        const phase = phaseOf(meta, meta.paneId ? agentsByPane.get(meta.paneId) : undefined);
+        return phase ? [{ key, spaceId: meta.spaceId, kind: meta.kind, phase, title: meta.name ?? (meta.sessionId ? sessionTitles[meta.sessionId] : null) ?? null }] : [];
+      }),
+    [panes, agentsByPane, sessionTitles],
   );
-  const restoredSpaces = [...new Set(restored.map((r) => r.spaceId))].join(" ");
+  const pendingSpaces = [...new Set(pending.filter((r) => r.kind === "claude").map((r) => r.spaceId))].join(" ");
   useEffect(() => {
-    for (const spaceId of restoredSpaces.split(" ").filter(Boolean)) {
+    for (const spaceId of pendingSpaces.split(" ").filter(Boolean)) {
       void api.sessionsList(spaceId).then((list) =>
         setSessionTitles((t) => ({ ...t, ...Object.fromEntries(list.map((s) => [s.id, s.title ?? s.firstPrompt])) })),
       );
     }
-  }, [restoredSpaces]);
-  const agentsByPane = useMemo(() => new Map(agents.map((a) => [a.paneId, a])), [agents]);
+  }, [pendingSpaces]);
   const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.kind === "claude" && a.sessionId ? [a.sessionId] : []))), [agents]);
 
   /** The names you gave panes, kept in their tabs' layouts. */
@@ -334,22 +354,27 @@ export default function App() {
       cwd: string | null = null,
       args: string[] = [],
       attachTo: string | null = null,
+      kind: SessionKind = "claude",
     ) => {
       const key = crypto.randomUUID();
+      // A pane that starts with a resume line: its agent isn't detected for a moment after the pane starts, and the
+      // Agents row holds its place as "starting" until it is.
+      const resuming = !!sessionId && !!initialInput && !attachTo;
       terminals.set(
         key,
         new TerminalSession(
           spaceId,
           {
             onFocus: () => focusPane(key),
-            onStarted: (paneId) => setPanes((p) => ({ ...p, [key]: { ...p[key], paneId } })),
+            onStarted: (paneId) =>
+              setPanes((p) => ({ ...p, [key]: { ...p[key], paneId, ...(resuming && p[key].resumeAt === null ? { ...noResume, resumeAt: Date.now() } : {}) } })),
           },
           cwd,
           attachTo,
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, live: false, args } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -538,22 +563,28 @@ export default function App() {
       if (saved.globalHotkey) setGlobalHotkey({ ...DEFAULT_GLOBAL_HOTKEY, ...saved.globalHotkey });
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
+      if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       const known = new Set(list.map((s) => s.id));
+      const asleepKeys: string[] = [];
       const restored = saved.tabs
         .filter((t) => known.has(t.spaceId))
         .map((t) => {
           const keys: Record<string, string> = {};
           const layout = mapPanes(t.layout, (old) => {
             const session = saved.sessions[old];
-            const resume = session && isSessionId(session) ? session : null;
+            const kind = saved.sessionKinds?.[old] ?? "claude";
+            const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
-            // The resume command runs only if the pane can't attach: Claude still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeCommand(resume, args), resume, null, args, running.get(old) ?? null);
+            // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind);
+            // Still asleep until opened, as Wings left it.
+            if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
           });
           const focusedPane = keys[t.focusedPane] ?? paneIds(layout)[0];
           return { ...t, layout, focusedPane, zoomedPane: t.zoomedPane ? (keys[t.zoomedPane] ?? null) : null };
         });
+      if (asleepKeys.length) setPanes((p) => ({ ...p, ...Object.fromEntries(asleepKeys.map((k) => [k, { ...p[k], asleep: true }])) }));
       const all = restoreTabs<PaneTab>(restored, saved.viewTabs?.filter((t) => known.has(t.spaceId)));
       if (!all.length) return false;
       const tabIds = new Set(all.map((t) => t.id));
@@ -594,15 +625,17 @@ export default function App() {
     return () => unlisten.forEach((p) => void p.then((off) => off()));
   }, [selectSpace, closePane, restore]);
 
-  // Remember which Claude session each pane runs, so a restart can resume it.
+  // Remember which agent session each pane runs, so a restart or a sleep can resume it. An agent seen in a pane
+  // ends its resume: the row has handed over to the live one.
   useEffect(() => {
     setPanes((prev) => {
       let next: Record<string, PaneMeta> | null = null;
       for (const [key, meta] of Object.entries(prev)) {
         const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
         let patch: Partial<PaneMeta> | null = null;
-        if (agent?.kind === "claude" && agent.sessionId && (agent.sessionId !== meta.sessionId || !meta.live)) patch = { sessionId: agent.sessionId, live: true, args: agent.args };
-        else if (agent?.kind !== "claude" && meta.live) patch = { sessionId: null, live: false, args: [] };
+        if (agent && (settled(meta, agent) || (agent.sessionId && (agent.sessionId !== meta.sessionId || agent.kind !== meta.kind || !meta.live)))) {
+          patch = { ...(agent.sessionId ? { sessionId: agent.sessionId, kind: agent.kind, args: agent.args } : {}), name: agent.name ?? meta.name, live: true, ...noResume };
+        } else if (!agent && meta.live && !meta.asleep && meta.resumeAt === null) patch = { sessionId: null, live: false, args: [] };
         if (patch) {
           next ??= { ...prev };
           next[key] = { ...meta, ...patch };
@@ -622,6 +655,8 @@ export default function App() {
   useEffect(() => {
     if (!ready) return;
     const sessions =Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
+    const sessionKinds = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId ? [[key, meta.kind]] : [])));
+    const asleep = Object.entries(panes).flatMap(([key, meta]) => (meta.asleep && meta.sessionId ? [key] : []));
     const sessionArgs = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.sessionId && meta.args.length ? [[key, meta.args]] : [])));
     const livePanes = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[key, meta.paneId]] : [])));
     const { tabs: paneTabs, viewTabs } = saveTabs<PaneTab>(tabs);
@@ -640,6 +675,9 @@ export default function App() {
       tabs: paneTabs,
       viewTabs,
       sessions,
+      sessionKinds,
+      asleep,
+      sleep,
       sessionArgs,
       paneIds: livePanes,
     };
@@ -650,7 +688,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1017,13 +1055,132 @@ export default function App() {
     if (key) closePane(key);
   }
 
+  const patchPane = (key: string, patch: Partial<PaneMeta>) => setPanes((p) => (p[key] ? { ...p, [key]: { ...p[key], ...patch } } : p));
+
+  /**
+   * Brings a pane's session back: a pane not started yet starts with the resume line, a started one gets it typed at
+   * its prompt. Its row shows "starting" from here until the agent is seen, or "couldn't resume" after
+   * RESUME_TIMEOUT_MS or when the pane isn't at a shell prompt.
+   */
+  function resumePane(key: string, focus = true) {
+    const meta = panesRef.current[key];
+    if (!meta?.sessionId) return;
+    // Already on its way: go to the pane, and don't type the line again.
+    if (meta.resumeAt !== null && !meta.resumeFailed) return focus ? selectPaneKey(key) : undefined;
+    const shellReady = !!meta.paneId && isShellCommand(paneInfoRef.current[meta.paneId]?.command);
+    if (meta.paneId && !shellReady) return patchPane(key, { ...noResume, resumeAt: Date.now(), resumeFailed: true });
+    patchPane(key, { ...noResume, resumeAt: Date.now() });
+    if (meta.paneId) void api.paneSend(meta.paneId, resumeLine(meta.kind, meta.sessionId, meta.args)).catch((e) => console.error(e));
+    if (focus) selectPaneKey(key);
+  }
+  const resumePaneRef = useRef(resumePane);
+  resumePaneRef.current = resumePane;
+
+  /** Ends the agent in a pane with its own exit command (`/exit` in Claude Code and opencode), never by killing it. */
+  function sleepPane(key: string) {
+    const paneId = panesRef.current[key]?.paneId;
+    if (!paneId) return;
+    patchPane(key, { asleep: true });
+    // The slash command menu opens as `/exit` is typed, so Enter comes a moment later as its own key press.
+    void api.paneSend(paneId, "/exit").catch((e) => console.error(e));
+    setTimeout(() => void api.paneSend(paneId, "\r").catch((e) => console.error(e)), 200);
+    // If the agent hasn't left, or something else took its place, the pane isn't asleep.
+    setTimeout(() => {
+      const stillThere = agentsRef.current.some((a) => a.paneId === paneId) || !isShellCommand(paneInfoRef.current[paneId]?.command);
+      if (!stillThere) return;
+      // It didn't take /exit: leave this pane awake from now on instead of typing into it again.
+      sleepRefused.current.add(key);
+      patchPane(key, { asleep: false });
+    }, EXIT_GRACE_MS);
+  }
+  const sleepPaneRef = useRef(sleepPane);
+  sleepPaneRef.current = sleepPane;
+
+  /**
+   * The last check before ending an agent whose clock ran out: one read of its process children, which says whether
+   * a command it started (a dev server in the background, say) is still running. If so the agent stays awake and
+   * its clock starts over. Nothing polls this; it happens once per deadline.
+   */
+  const sleepChecking = useRef(new Set<string>());
+  async function sleepIfQuiet(key: string) {
+    if (sleepChecking.current.has(key)) return;
+    sleepChecking.current.add(key);
+    try {
+      const meta = panesRef.current[key];
+      const agent = meta?.paneId ? agentsRef.current.find((a) => a.paneId === meta.paneId) : undefined;
+      if (!meta || !agent) return;
+      // If the check itself fails, the agent is treated as busy.
+      const background = await api.agentBusy(agent.pid).catch(() => true);
+      const now = panesRef.current[key];
+      const visible = activeTabIdRef.current ? paneIds(tabsRef.current.find((t): t is PaneTab => t.id === activeTabIdRef.current && !isViewTab(t))?.layout ?? pane("")).includes(key) : false;
+      const current = now?.paneId ? agentsRef.current.find((a) => a.paneId === now.paneId) : undefined;
+      if (now && canSleep({ agent: current, visible, draft: !!now.paneId && paneInput.hasDraft(now.paneId), busy: now.asleep || now.resumeAt !== null, background })) sleepPane(key);
+      else {
+        sleepSince.current.set(key, Date.now());
+        setSleepTick((n) => n + 1);
+      }
+    } finally {
+      sleepChecking.current.delete(key);
+    }
+  }
+  const sleepIfQuietRef = useRef(sleepIfQuiet);
+  sleepIfQuietRef.current = sleepIfQuiet;
+
+  // The pane keys on screen. Opening one that holds a sleeping agent wakes it.
+  const visibleKeys = activeTab ? paneIds(activeTab.layout).join(" ") : "";
+  useEffect(() => {
+    for (const key of visibleKeys.split(" ")) {
+      const meta = panes[key];
+      if (meta?.asleep && meta.paneId && meta.resumeAt === null && !agentsByPane.has(meta.paneId)) resumePaneRef.current(key, false);
+    }
+  }, [visibleKeys, panes, agentsByPane]);
+
+  // Sleep: panes that stay eligible for `sleep.minutes` are put to sleep. It runs when agents, panes or the visible tab
+  // change, and sets one timer for the earliest deadline: nothing polls, the detection ticks already report every change.
+  const sleepSince = useRef(new Map<string, number>());
+  const sleepRefused = useRef(new Set<string>());
+  useEffect(() => {
+    if (!sleep.enabled) {
+      sleepSince.current = new Map();
+      return;
+    }
+    const visible = new Set(visibleKeys.split(" "));
+    const eligible = Object.entries(panes)
+      .filter(([key, meta]) => !sleepRefused.current.has(key) && canSleep({ agent: meta.paneId ? agentsByPane.get(meta.paneId) : undefined, visible: visible.has(key), draft: !!meta.paneId && paneInput.hasDraft(meta.paneId), busy: meta.asleep || meta.resumeAt !== null, background: false }))
+      .map(([key]) => key);
+    const now = Date.now();
+    const plan = planSleep(sleepSince.current, eligible, now, sleep.minutes);
+    sleepSince.current = plan.since;
+    for (const key of plan.due) void sleepIfQuietRef.current(key);
+    if (plan.nextAt === null) return;
+    // A fresh render pass at the deadline: the state is the same, the clock has moved.
+    const timer = setTimeout(() => setSleepTick((n) => n + 1), Math.max(0, plan.nextAt - now));
+    return () => clearTimeout(timer);
+  }, [agentsByPane, panes, visibleKeys, sleep, sleepTick]);
+
+  // A resume that shows no agent in time becomes "couldn't resume", and stays in the list for a retry.
+  useEffect(() => {
+    const at = nextResumeDeadline(Object.values(panes));
+    if (at === null) return;
+    const timer = setTimeout(
+      () =>
+        setPanes((prev) => {
+          const now = Date.now();
+          const expired = Object.entries(prev).filter(([, m]) => m.resumeAt !== null && !m.resumeFailed && resumeExpired(m.resumeAt, now));
+          return expired.length ? { ...prev, ...Object.fromEntries(expired.map(([k, m]) => [k, { ...m, resumeFailed: true }])) } : prev;
+        }),
+      Math.max(0, at - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [panes]);
+
   /** Each tab's title: your name, or the automatic one with what tells it from a tab that would read the same. */
   const shown = tabTitles(spaceTabs.flatMap((t) => (isViewTab(t) ? [] : [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }])));
   const tabViews: TabView[] = spaceTabs.map((t) => {
     if (isViewTab(t)) {
       const plugin = activePlugins.find((p) => p.id === t.view.pluginId);
       const page = plugin && pagesOf(plugin).find((v) => v.id === t.view.viewId);
-      return { id: t.id, view: { title: page?.title ?? t.view.viewId, icon: page?.icon ?? "" } };
+      return { id: t.id, view: { title: page?.title ?? t.view.viewId, icon: page?.icon ?? "", iconSvg: page?.iconSvg } };
     }
     return {
       id: t.id,
@@ -1045,8 +1202,10 @@ export default function App() {
     focusedPaneId,
     onSelectSpace: selectSpace,
     onSelectAgent: selectAgent,
-    restored,
-    onSelectRestored: selectPaneKey,
+    pending,
+    onSelectPending: resumePane,
+    paneKeyOf: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : []))),
+    paneOrder: Object.fromEntries(Object.keys(panes).map((key, i) => [key, i])),
     onNewTab: (id) => openTab(id),
     onForkAgent: forkAgent,
     onCloseAgent: closeAgent,
@@ -1311,12 +1470,12 @@ export default function App() {
                   ),
                 )}
                 {!activeSpace && (
-                  <Empty className="h-full">
-                    <EmptyHeader>
-                      <EmptyTitle>No project open</EmptyTitle>
-                      <EmptyDescription>Add a project with the + next to Projects to open a terminal in it.</EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
+                  <Welcome
+                    paletteKey={shortcutOf("palette", isMac)}
+                    jumpKey={shortcutOf("next-agent", isMac)}
+                    hotkey={globalHotkey.enabled ? hotkeyLabel(globalHotkey.accelerator, isMac) : null}
+                    onAdd={(path) => void addSpace(path)}
+                  />
                 )}
               </main>
             </ResizablePanel>
@@ -1332,9 +1491,12 @@ export default function App() {
               defaultSize={0}
               groupResizeBehavior="preserve-pixel-size"
               style={PANEL_STYLE}
+              className="has-[[data-peek]]:!overflow-visible"
             >
               <RightSidebar
                 open={rightRef}
+                width={widths.right}
+                onPeek={setPeekedSidebar}
                 mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
                 unloaded={unloadedSidebars}
                 host={pluginHost.current}
@@ -1420,7 +1582,7 @@ export default function App() {
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}
