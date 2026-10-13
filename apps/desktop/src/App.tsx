@@ -750,7 +750,6 @@ export default function App() {
   // `commands.json`; it forwards them here.
   useEffect(() => {
     const unlisten = api.onMenu((id) => {
-      if (id === "check-updates") return void checkForUpdate({ manual: true });
       runCommand(id.startsWith("cmd:") ? id.slice(4) : id);
     });
     return () => void unlisten.then((off) => off());
@@ -1278,6 +1277,7 @@ export default function App() {
       "send-review": openReviewSend,
       "worktree-agent": () => activeSpaceId && requestWorktreeAgent(activeSpaceId),
       ...(editor && { "open-in-editor": () => activeSpaceId && openInEditor(editor, activeSpaceId) }),
+      "check-updates": () => void checkForUpdate({ manual: true }),
       settings: () => setSettingsOpen(true),
       reload: reloadUi,
     },

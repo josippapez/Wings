@@ -31,6 +31,7 @@
     { "id": "send-review", "title": "Send Review to Agent", "group": "View" },
     { "id": "worktree-agent", "title": "New Agent in Worktree", "group": "Tab" },
     { "id": "open-in-editor", "title": "Open Project in Editor", "group": "App" },
+    { "id": "check-updates", "title": "Check for Updates", "group": "App" },
     { "id": "settings", "title": "Settings", "group": "App", "key": ",", "native": true, "plain": true },
     { "id": "reload", "title": "Reload Interface", "group": "App", "key": "r", "extra": false, "devOnly": true }
   ],

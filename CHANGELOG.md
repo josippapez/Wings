@@ -7,6 +7,7 @@ What changed in each Wings release, newest first.
 ## 0.1.21 · 2026-10-13
 
 - The docked right sidebar fills the window's height again. In 0.1.20 its page shrank to its header.
+- Check for Updates is in the command palette too.
 
 ## 0.1.20 · 2026-10-13
 
