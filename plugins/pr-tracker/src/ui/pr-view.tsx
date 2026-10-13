@@ -32,6 +32,8 @@ export interface PrViewProps {
   onLoadFailure?: (f: Failing) => Promise<FailureDetail[]>;
   /** Goes back to the project's list, when the PR was picked from it in this tab. */
   onBack?: () => void;
+  /** The tab to open on, for a fixture; the page opens on the overview. */
+  initialTab?: "overview" | "checks" | "files";
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -63,7 +65,7 @@ async function copyText(text: string) {
 export function PrView(props: PrViewProps) {
   const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
   const st = overview?.status;
-  const [tab, setTab] = useState<"overview" | "checks" | "files">("overview");
+  const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
   /** Open comment threads, which a comment requirement counts. Null until the conversation has loaded. */
   const unresolved = useMemo(() => (comments ? comments.filter((c) => c.replyTo === null && !c.system && c.thread?.state === "active").length : null), [comments]);
@@ -162,6 +164,7 @@ export function PrView(props: PrViewProps) {
 
         {error && !overview ? (
           <div className="pr-card pr-error" role="alert" data-testid="pr-error">
+            <strong>Couldn't load this pull request</strong>
             <Text tone="danger">{error}</Text>
             <Button size="sm" variant="outline" onClick={onRefresh}>Try again</Button>
           </div>
@@ -184,7 +187,7 @@ export function PrView(props: PrViewProps) {
               value={tab}
               onChange={setTab}
               items={[
-                { value: "overview", label: `Overview${comments ? ` ${comments.length}` : ""}` },
+                { value: "overview", label: `Overview${comments?.length ? ` ${comments.length}` : ""}` },
                 { value: "checks", label: `Checks${checkTotal ? ` ${st.checks.passed}/${checkTotal}` : ""}` },
                 { value: "files", label: "Files" },
               ]}
@@ -193,7 +196,8 @@ export function PrView(props: PrViewProps) {
               {tab === "checks" ? <div className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} /></div> : null}
               {tab === "files" ? (
                 <div className="pr-card pr-files">
-                  <Text>{st.changes ?? "The changed files open in Wings' diff viewer, with the review comments on their lines."}</Text>
+                  <strong>{st.changes ?? "Changed files"}</strong>
+                  <Text tone="muted">The changed files open in Wings' diff viewer, with the review comments on their lines.</Text>
                   <div><Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button></div>
                 </div>
               ) : null}

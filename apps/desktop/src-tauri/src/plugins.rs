@@ -1161,9 +1161,9 @@ pub fn pane_cwd(cwd: &Path, projects: &[PathBuf], current: Option<usize>) -> Res
     project.map(|i| (i, dir)).ok_or_else(|| format!("{} isn't inside any of your Wings projects", cwd.display()))
 }
 
-/// Notifications a plugin may show in any minute: enough for a few things finishing together, too few to
-/// flood Notification Center.
-pub const NOTIFY_LIMIT: usize = 3;
+/// Notifications a plugin may show in any minute: enough for a burst of its own updates, too few to flood
+/// Notification Center.
+pub const NOTIFY_LIMIT: usize = 20;
 const NOTIFY_WINDOW: Duration = Duration::from_secs(60);
 const NOTIFY_TITLE_MAX: usize = 64;
 const NOTIFY_BODY_MAX: usize = 256;
@@ -1670,7 +1670,7 @@ mod tests {
             assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
             assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
         }
-        assert!(p.manifest.permissions.notify);
+        assert!(!p.manifest.permissions.notify);
         // The query entry only takes the flags it lists, and no other `boards` subcommand but the declared ones.
         let query = |extra: &[&str]| -> Vec<String> { ["boards", "query"].iter().chain(extra).map(|a| a.to_string()).collect() };
         assert!(may_exec(&p, "az", &query(&["--wiql", "SELECT 1"])));

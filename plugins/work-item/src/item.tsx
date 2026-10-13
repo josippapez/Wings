@@ -6,7 +6,7 @@ import { useBroadcast } from "wings-plugin-sdk/react";
 import { Empty, Page, Toolbar, showTab } from "wings-plugin-ui";
 
 import { allLinkIds, commentsOf, discussionOf, idsQuery, itemArgs, linkIds, linkedItems, pullRequestLinks, revisionsOf, type ItemArgs, type LinkedItem } from "./lib/item";
-import { prUrl, workItemUrl, type WorkItemUpdate } from "./lib/updates";
+import { prUrl, workItemUrl, type WorkItemUpdate } from "./lib/urls";
 import type { QueryRow } from "./lib/sections";
 import type { TypeState } from "./lib/view";
 import { ItemError, ItemSkeleton, ItemView, type ItemViewProps, type Part, type PrInfo, type Shown } from "./ui/item-view";
@@ -131,7 +131,7 @@ function Item({ args }: { args: ItemArgs }) {
 
 function Root() {
   const args = itemArgs(wings.viewArgs());
-  if (!args) return <Page toolbar={<Toolbar title="Work item" />}><Empty title="No work item" description="Open a work item from a pane's badge, the Updates list or a project's Work items." /></Page>;
+  if (!args) return <Page toolbar={<Toolbar title="Work item" />}><Empty title="No work item" description="Open a work item from a pane's badge or a project's Work items." /></Page>;
   return <Item args={args} />;
 }
 

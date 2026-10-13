@@ -11,10 +11,20 @@
   margin: -4px 2px 0;
 }
 
-/* Git commands get a colour of their own. */
+/* Git commands get a colour of their own (plugin-ui has no purple). */
+:root {
+  --git: #c9b2f7;
+}
 .w-badge:is(.commit, .merge, .branch, .pr) {
-  color: #c9b2f7;
-  background: rgb(179 146 240 / 0.16);
+  color: var(--git);
+  background: color-mix(in srgb, var(--git) 16%, transparent);
+}
+
+/* Badges in a row are as tall as its text, so a row with one is no taller than a row without. */
+.w-list-button .w-badge {
+  height: 18px;
+  padding-block: 0;
+  font-size: 11px;
 }
 
 /* What a row opens to. */

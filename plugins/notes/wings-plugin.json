@@ -1,7 +1,7 @@
 {
   "id": "notes",
   "name": "Project info",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minWingsVersion": "0.1.24",
   "icon": "icon.svg",
   "description": "Project info now lives on each project's Project page in Wings, which agents reach with Wings' own project_info tools. This plugin only points there, and you can turn it off.",

@@ -31,6 +31,12 @@ createRoot(document.getElementById("root")!).render(
         <Badge key={v} variant={v} data-case={`badge-${v}`}>{v}</Badge>
       ))}
     </div>
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {variants.map((v) => (
+        <Button key={v} variant={v} disabled data-case={`button-${v}-disabled`}>{v}</Button>
+      ))}
+    </div>
+    <Input data-case="input-disabled" disabled defaultValue="Disabled" aria-label="Disabled" />
     <Input data-case="input" placeholder="Search" aria-label="Search" />
     <Input data-case="input-value" defaultValue="Typed text" aria-label="Typed" />
     {(["default", "line"] as const).map((variant) => (
@@ -44,10 +50,22 @@ createRoot(document.getElementById("root")!).render(
     <div style={{ display: "flex", gap: 8 }}>
       <Toggle size="sm" data-case="chip" aria-label="Off">Off</Toggle>
       <Toggle size="sm" defaultPressed data-case="chip-on" aria-label="On">On</Toggle>
+      <Toggle size="sm" disabled data-case="chip-disabled" aria-label="Off disabled">Off</Toggle>
+      <Toggle size="sm" disabled defaultPressed data-case="chip-on-disabled" aria-label="On disabled">On</Toggle>
     </div>
     <div style={{ width: 200 }} data-case="select">
       <Select items={fruit} defaultValue="apple">
         <SelectTrigger className="w-full" aria-label="Fruit"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {fruit.map((f) => (<SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </div>
+    <div style={{ width: 200 }} data-case="select-disabled">
+      <Select items={fruit} defaultValue="apple" disabled>
+        <SelectTrigger className="w-full" aria-label="Fruit disabled"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectGroup>
             {fruit.map((f) => (<SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>))}

@@ -11,3 +11,21 @@
   display: inline-flex;
   margin-left: auto;
 }
+/* A card is one button: its title wraps to two lines and the row under it starts at the card's left edge. */
+.sprint-card .w-button {
+  display: block;
+  width: 100%;
+  height: auto;
+  padding: 0;
+  overflow: visible;
+  text-align: left;
+  white-space: normal;
+}
+.sprint-card .w-stack,
+.sprint-card .w-row {
+  align-items: flex-start;
+}
+.sprint-card .w-row {
+  width: 100%;
+  align-items: center;
+}

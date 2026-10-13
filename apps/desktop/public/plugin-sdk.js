@@ -209,7 +209,7 @@
      * it's already installed), false if you cancelled. Only az, gh and glab, and only ones in `permissions.exec`.
      */
     installTool: (program) => call("installTool", { program }),
-    /** A desktop notification, with `permissions.notify`. Up to 3 a minute; there's no click action. */
+    /** A desktop notification, with `permissions.notify`. Up to 20 a minute; there's no click action. */
     notify: ({ title, body = "" } = {}) => call("notify", { title, body }),
     /**
      * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or

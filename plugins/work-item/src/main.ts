@@ -1,11 +1,9 @@
 // Work item: shows the Azure Boards work item named in each pane's branch, like `feature/1234-login`,
-// as a pane badge with its state, sprint and parent, and moves it to its next state. It also polls Azure DevOps
-// for updates to your work items and pull requests (see lib/watch.ts) and tells you about them.
+// as a pane badge with its state, sprint and parent, and moves it to its next state.
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
-import { createWatcher, DEFAULT_SETTINGS, type Settings } from "./lib/watch";
-import { workItemUrl, type StoredEvent } from "./lib/updates";
+import { workItemUrl } from "./lib/urls";
 import { assignedQuery, blockItems, isFinished, isFresh, currentIterations, repoLinksOf, repoRows, SECTION_ID, stateCategories, sprintQuery, type RepoRef, type StateCategories, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
 import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
@@ -62,10 +60,7 @@ pollWhileFocused(() => [...new Set([...refs.values()].map((r) => r.key))].forEac
 
 // ---------- finding the work item for a pane ----------
 
-/** Folders whose Azure project the Updates watcher was told about. Only panes put a project there, not the sidebar's sections. */
-const watched = new Set<string>();
-
-async function remoteFor(cwd: string, { watch = false } = {}) {
+async function remoteFor(cwd: string) {
   if (!remotes.has(cwd)) {
     try {
       remotes.set(cwd, parseRemote(await git(cwd, ["remote", "get-url", "origin"])));
@@ -73,18 +68,13 @@ async function remoteFor(cwd: string, { watch = false } = {}) {
       remotes.set(cwd, { kind: "none" });
     }
   }
-  const remote = remotes.get(cwd)!;
-  if (watch && remote.kind === "azure" && !watched.has(cwd)) {
-    watched.add(cwd);
-    void watcher.addProject(remote.org, remote.project);
-  }
-  return remote;
+  return remotes.get(cwd)!;
 }
 
 async function refreshRefs() {
   await Promise.all(
     panes.map(async (pane) => {
-      const remote = await remoteFor(pane.cwd, { watch: true });
+      const remote = await remoteFor(pane.cwd);
       const branch = remote.kind === "azure" ? await git(pane.cwd, ["branch", "--show-current"]).catch(() => "") : "";
       const id = workItemId(branch);
       if (!id) return void refs.delete(pane.paneId);
@@ -171,7 +161,6 @@ async function loadItem({ org, id }: Ref): Promise<WorkItem> {
   const wi = await show(org, id);
   const f = wi.fields;
   const project = f["System.TeamProject"];
-  void watcher.addProject(org, project);
   const type = f["System.WorkItemType"];
   const [states, parent] = await Promise.all([
     statesOf(org, project, type).catch((): TypeState[] => []),
@@ -283,8 +272,6 @@ wings.onAction(async ({ paneId, actionId }) => {
   }
 });
 
-// ---------- updates ----------
-
 /** `az` for the background check: a failure there is the check's, and doesn't turn the pane badges into a sign-in prompt. */
 async function azQuiet(org: string, args: string[]): Promise<unknown> {
   const out = await wings.exec("az", [...args, "--organization", org, "-o", "json"]);
@@ -293,55 +280,10 @@ async function azQuiet(org: string, args: string[]): Promise<unknown> {
   return out.stdout.trim() ? JSON.parse(out.stdout) : [];
 }
 
-const watcher = createWatcher({
-  az: azQuiet,
-  get: (key) => wings.storage.get(key),
-  set: (key, value) => wings.storage.set(key, value),
-  notify: (note) => wings.notify(note),
-  now: Date.now,
-});
-
-let settings: Settings = DEFAULT_SETTINGS;
-let timer: ReturnType<typeof setInterval> | undefined;
-let checking = false;
-
-async function checkUpdates() {
-  // A check that outlasts the interval makes the next tick wait, rather than pile up az processes.
-  if (checking || !settings.enabled) return;
-  checking = true;
-  try {
-    if ((await watcher.cycle(await watcher.targets(), settings.intervalMin * 60_000)).length) wings.broadcast({ type: "updates" });
-    await showUnread();
-  } finally {
-    checking = false;
-  }
-}
-
-async function showUnread() {
-  const unread = (await watcher.stored()).filter((e: StoredEvent) => !e.read).length;
-  await wings.setSidebarLabel("updates", unread ? `${unread} new` : null);
-}
-
-async function loadSettings() {
-  const saved = (await wings.storage.get("settings")) as Partial<Settings> | null;
-  settings = { ...DEFAULT_SETTINGS, ...saved };
-  clearInterval(timer);
-  // Not tied to focus: it keeps running while Wings is in the background, which is when you want to hear about it.
-  timer = settings.enabled ? setInterval(() => void checkUpdates(), settings.intervalMin * 60_000) : undefined;
-}
-
+// The item tab moved a work item to another state.
 wings.onBroadcast((message) => {
-  const m = message as { type?: string; settingsChanged?: boolean; rid?: unknown; op?: string; key?: unknown } | null;
-  if (m?.settingsChanged) void loadSettings();
-  // The Updates pages don't write storage: main is its only writer, so their changes and new events can't overwrite each other.
-  if (m?.type === "events-op" && typeof m.rid === "string") {
-    const done = m.op === "clear" ? watcher.clear() : m.op === "read" ? watcher.markRead(typeof m.key === "string" ? m.key : undefined) : null;
-    void done?.then(() => showUnread()).then(() => wings.broadcast({ type: "updates", rid: m.rid }));
-  }
-  // The item tab moved a work item to another state.
-  if (m?.type === "item-changed") for (const key of new Set([...refs.values()].map((r) => r.key))) void refreshItem(key, { byUser: true });
+  if ((message as { type?: string } | null)?.type === "item-changed") for (const key of new Set([...refs.values()].map((r) => r.key))) void refreshItem(key, { byUser: true });
 });
-void loadSettings().then(() => setTimeout(() => void checkUpdates(), 15_000));
 
 // ---------- projects' Work items sections ----------
 

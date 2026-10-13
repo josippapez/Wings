@@ -1,10 +1,10 @@
 {
   "id": "work-item",
   "name": "Work item",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "minWingsVersion": "0.1.24",
   "icon": "icon.svg",
-  "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Also tells you when your work items change state, when a comment mentions you, and about activity on your pull requests. Opens a work item in a tab with its description, comments and linked pull requests, and lists the work items assigned to you in the current sprint under each project.",
+  "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Opens a work item in a tab with its description, comments and linked pull requests, and lists the work items assigned to you in the current sprint under each project.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -20,24 +20,13 @@
     ],
     "openUrl": [
       "https://dev.azure.com/"
-    ],
-    "notify": true
+    ]
   },
   "contributes": {
     "ui": [
       "badges"
     ],
     "views": [
-      {
-        "id": "updates",
-        "title": "Updates",
-        "page": "sidebar.html",
-        "opens": [
-          "sidebar",
-          "tab"
-        ],
-        "newTab": true
-      },
       {
         "id": "item",
         "title": "Work item",
@@ -63,9 +52,6 @@
         "id": "work-items",
         "title": "Work items"
       }
-    ],
-    "settings": {
-      "page": "settings.html"
-    }
+    ]
   }
 }

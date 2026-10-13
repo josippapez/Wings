@@ -2,10 +2,9 @@
 // line above, move one with its buttons or Alt+Left and Alt+Right, open the board tab for the rest.
 
 import { useEffect, useRef, useState } from "react";
-import { Board, BoardColumn, Chip, Empty, Loading, Row, showView, Stack, Text } from "wings-plugin-ui";
-import { AddTask } from "./lib/AddTask";
-import { boardColumns, cleanBlockState, STATUSES, STATUS_LABEL, type BoardBlockState, type Op, type Task } from "./lib/tasks";
-import { TaskCard, StatusDot } from "./lib/parts";
+import { Empty, Loading, showView } from "wings-plugin-ui";
+import { BlockView } from "./lib/block-view";
+import { cleanBlockState, STATUSES, type BoardBlockState, type Op, type Task } from "./lib/tasks";
 import { useTasks } from "./lib/useTasks";
 import "./tasks.css";
 
@@ -59,29 +58,7 @@ function ProjectBlock({ project, hideDone, onHideDone }: { project: WingsProject
     );
   };
 
-  return (
-    <Stack gap="s">
-      <Row gap="m" justify="between">
-        <AddTask apply={apply} branch={project.branch} />
-        <Chip pressed={hideDone} onClick={() => onHideDone(!hideDone)}>Hide done</Chip>
-      </Row>
-      {error ? <Text tone="danger" role="alert" size="small">{error}</Text> : null}
-      {!tasks ? (
-        <Loading>Loading tasks</Loading>
-      ) : tasks.length === 0 ? (
-        <Empty title="No tasks yet" description="Add one above." />
-      ) : (
-        <Board className="tasks-block-board" label={`Tasks for ${project.name}`}>
-          {boardColumns(tasks, hideDone).map(({ status, tasks: column }) => (
-            <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
-              {column.length === 0 ? <p className="tk-column-empty">Nothing here</p> : null}
-              {column.map((t) => <TaskCard key={t.id} task={t} id={`block-task-${t.id}`} compact onMove={(by) => move(t, by)} onOpen={() => void wings.openView("board", { as: "tab", args: { taskId: t.id } })} />)}
-            </BoardColumn>
-          ))}
-        </Board>
-      )}
-    </Stack>
-  );
+  return <BlockView project={project} tasks={tasks} error={error} hideDone={hideDone} onHideDone={onHideDone} apply={apply} onMove={move} onOpen={(t) => void wings.openView("board", { as: "tab", args: { taskId: t.id } })} />;
 }
 
 showView(<BlockPage />);

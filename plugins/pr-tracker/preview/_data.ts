@@ -104,3 +104,19 @@ export const rows: PullRow[] = [
   row(475, "Migrate the settings page to the new form components", "grace/settings-forms → main", "Grace Hopper", "review", { review: "Waiting for you" }),
   row(470, "Bump the build toolchain", "alan/toolchain → main", "Alan Turing", "other", { checks: { passed: 4, failed: 0, running: 1 } }),
 ];
+
+/** Every check of the pull request, so the Checks tab has something to group. */
+export const items: NonNullable<Overview["status"]["items"]> = [
+  { id: "lint", name: "Lint", state: "passed", required: true, kind: "Workflow", at: ago(40), seconds: 48, url: "https://github.com/acme/web/actions/runs/1", note: null },
+  { id: "unit", name: "Unit tests", state: "failed", required: true, kind: "Workflow", at: ago(38), seconds: 214, url: "https://github.com/acme/web/actions/runs/2", note: "3 tests failed in src/sync/client.test.ts", failing: { id: "2", name: "Unit tests", summary: "3 tests failed" } },
+  { id: "e2e", name: "End-to-end (chromium)", state: "running", required: true, kind: "Workflow", at: ago(6), seconds: null, url: null, note: "Started 6 min ago" },
+  { id: "e2e-ff", name: "End-to-end (firefox)", state: "queued", required: false, kind: "Workflow", at: null, seconds: null, url: null, note: "Waiting for a runner" },
+  { id: "types", name: "Type check", state: "passed", required: true, kind: "Workflow", at: ago(41), seconds: 95, url: "https://github.com/acme/web/actions/runs/3", note: null },
+  { id: "build", name: "Build", state: "passed", required: true, kind: "Workflow", at: ago(39), seconds: 132, url: "https://github.com/acme/web/actions/runs/4", note: null },
+  { id: "cov", name: "Coverage", state: "passed", required: false, kind: "Status check", at: ago(37), seconds: null, url: null, note: "91.2% of lines" },
+  { id: "reviews", name: "Required reviewers", state: "running", required: true, kind: "Policy", at: null, seconds: null, url: null, note: "1 of 2 required reviewers approved" },
+  { id: "threads", name: "Comment requirements", state: "failed", required: true, kind: "Policy", at: null, seconds: null, url: null, note: null, needs: "unresolved" },
+  { id: "docs", name: "Docs preview", state: "skipped", required: false, kind: "Status check", at: null, seconds: null, url: null, note: "No docs changed" },
+];
+
+export const withChecks: PrViewProps = { ...props, overview: { ...overview, status: { ...overview.status, items } }, onLoadFailure: async () => [] };

@@ -131,7 +131,7 @@ function CheckRow({ item: c, load, onAsk, canLoad }: { item: CheckItem; load: Lo
             {[time, took].filter(Boolean).join(" · ")}
           </Text>
         ) : null}
-        {url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void wings.openUrl(url)}>Open</Button> : null}
+        <span className="pr-check-open">{url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void wings.openUrl(url)}>Open</Button> : null}</span>
       </div>
       {open ? <FailureBody id={detailId} load={load} /> : null}
     </li>

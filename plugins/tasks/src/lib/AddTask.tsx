@@ -25,7 +25,7 @@ export function AddTask({ apply, branch }: { apply: (op: Op) => Promise<void>; b
   return (
     <Row as="form" gap="s" className="tk-add" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
       <TextInput label="New task" placeholder="Add a task" value={title} maxLength={LIMITS.title} onChange={(e) => setTitle(e.currentTarget.value)} />
-      <Button type="submit" size="sm" busy={busy} disabled={!title.trim()}>Add</Button>
+      <Button type="submit" busy={busy} disabled={!title.trim()}>Add</Button>
       {error ? <Text tone="danger" role="alert" size="small">{error}</Text> : null}
     </Row>
   );

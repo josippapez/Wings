@@ -19,6 +19,9 @@
 .tk-side {
   min-width: 0;
 }
+.tk-side .w-heading {
+  margin-top: 0;
+}
 .tk-count {
   color: var(--wings-muted);
   font-weight: 400;
@@ -46,6 +49,9 @@
 }
 .tk-open {
   display: flex;
+  height: auto;
+  min-height: 0;
+  align-self: flex-start;
   flex: 1;
   flex-direction: column;
   align-items: flex-start;
@@ -123,7 +129,7 @@
 }
 .tk-card-head .w-dot {
   flex: none;
-  margin-top: 5px;
+  margin-top: 8px;
 }
 .tk-card-title.w-button {
   flex: 1;
@@ -165,10 +171,21 @@
   color: var(--wings-muted);
   font-size: 11px;
 }
+.tk-card-foot {
+  position: relative;
+  min-height: 24px;
+}
+.tk-card-foot time {
+  white-space: nowrap;
+}
+/* They sit over the foot's right end, so a narrow column keeps its time on one line. */
 .tk-moves {
+  position: absolute;
+  right: 0;
   display: flex;
-  flex: none;
   gap: 4px;
+  padding-left: 6px;
+  background: var(--wings-surface);
 }
 /* Where a pointer can hover, the move buttons wait until you are on the card or in it with the keyboard. */
 @media (hover: hover) {
@@ -197,7 +214,26 @@
   resize: vertical;
 }
 .tk-error {
+  flex: none;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--wings-hairline);
+}
+.tk-editor .w-button {
   max-width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 24px;
+  padding-block: 4px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The tab's columns share the width, and scroll sideways only when narrower than three of 240px. */
+.tk-board .w-board-column {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 240px;
 }
 
 /* The block: its columns share the width instead of keeping their 272px, and scroll sideways only when too narrow. */

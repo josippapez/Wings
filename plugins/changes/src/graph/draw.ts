@@ -7,7 +7,7 @@ const css = getComputedStyle(document.documentElement);
 /** Wings' own colours first, then four more that read on the dark background. */
 const PALETTE = [...["--wings-info", "--wings-success", "--wings-warning", "--wings-danger"].map((v) => css.getPropertyValue(v).trim()), "#c4a7ff", "#6fd3d0", "#f0a3d0", "#b9cf6e"];
 
-export const laneX = (lane: number) => 10 + lane * LANE;
+export const laneX = (lane: number) => 16 + lane * LANE;
 export const graphWidth = (lanes: number) => laneX(lanes) + 4;
 
 /** The lanes of rows `top` to `top + size`, onto a canvas as tall as those rows. */

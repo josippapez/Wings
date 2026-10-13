@@ -47,19 +47,23 @@
 .commit {
   flex-direction: column;
   align-items: stretch;
-  gap: 1px;
+  gap: 2px;
 }
 .commit .w-badge {
   flex: 0 1 auto;
-  min-width: 3em;
-  max-width: 45%;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .commit .w-badge.head {
   border-color: color-mix(in srgb, var(--wings-info) 55%, transparent);
   font-weight: 600;
 }
-.subject {
-  flex: 1 0 40%;
+.commit .w-row {
+  min-width: 0;
 }
 #more {
   align-self: center;
@@ -69,4 +73,15 @@
   .chevron {
     transition: none;
   }
+}
+
+/* A git error shown above the list it left in place. */
+.notice {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wings-warning) 12%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }

@@ -192,7 +192,7 @@ interface Wings {
    * Resolves true once the install started (or it's already installed), false if you cancelled.
    */
   installTool(program: "az" | "gh" | "glab"): Promise<boolean>;
-  /** Needs `permissions.notify`. A desktop notification, up to 3 a minute. The title is cut at 64 characters, the body at 256. */
+  /** Needs `permissions.notify`. A desktop notification, up to 20 a minute. The title is cut at 64 characters, the body at 256. */
   notify(notification: { title: string; body?: string }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
   openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus }): Promise<{ id: string }>;

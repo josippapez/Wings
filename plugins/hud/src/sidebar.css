@@ -1,0 +1,4 @@
+/* A failed server's error, under its name and aligned with it (past the dot and its gap). */
+.server-error {
+  padding-left: 14px;
+}

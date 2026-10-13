@@ -104,7 +104,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Post to these addresses as you, like replying to a review comment", items: post },
     { title: "Open terminals in your projects and move your typing to any pane", items: [], on: panes !== null },
     { title: "Start these commands in a new terminal, as you", items: panes ?? [] },
-    { title: "Show desktop notifications, up to 3 a minute", items: [], on: notify },
+    { title: "Show desktop notifications, up to 20 a minute", items: [], on: notify },
     { title: "Read these parts of your Claude Code sessions", items: transcript },
     { title: "Read your Claude usage limits and each session's context and cache, from Claude Code's status line", items: [], on: statusline },
     { title: "See which local ports the programs in your terminals listen on", items: [], on: ports },

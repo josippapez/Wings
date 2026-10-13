@@ -1265,7 +1265,7 @@ textarea::placeholder {
   color: var(--wings-muted);
 }
 .w-input:disabled {
-  background: var(--wings-control-bg-hover);
+  background: color-mix(in srgb, var(--wings-control-border) 80%, transparent);
   opacity: 0.5;
   cursor: not-allowed;
   pointer-events: none;

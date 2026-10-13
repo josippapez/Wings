@@ -10,6 +10,9 @@
   flex: 1;
   min-width: 0;
 }
+#rows .grow {
+  min-width: 80px;
+}
 .ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -99,7 +102,8 @@
 }
 .refs {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   gap: 4px;
   max-width: 40%;
   overflow: hidden;
@@ -110,6 +114,12 @@
 .author {
   flex: none;
   width: 160px;
+}
+/* Too narrow for every column: the author goes, so the hash and date columns stay put. */
+@media (max-width: 720px) {
+  .author {
+    display: none;
+  }
 }
 .date {
   flex: none;

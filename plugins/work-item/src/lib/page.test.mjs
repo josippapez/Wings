@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { allLinkIds, discussionOf, idsQuery, lastSegment, linkIds, linkedItems, prStatus, revisionsOf, summaryOf, tagsOf, LINKS_CAP } from "./item.ts";
-import { counts, groupByDay, matches } from "./inbox.ts";
 import { typeStyle } from "./type.ts";
 
 const rel = (rel, id) => ({ rel, url: `https://dev.azure.com/org/_apis/wit/workItems/${id}`, attributes: { name: rel } });
@@ -123,29 +122,6 @@ test("typeStyle gives Azure's colours to the common types and a grey dot to the 
   assert.equal(typeStyle("Test Case").glyph, "test");
   assert.equal(typeStyle("Epic").glyph, "epic");
   assert.equal(typeStyle("Whatever").glyph, "other");
-});
-
-const ev = (key, kind, at, read = false) => ({ key, kind, title: key, body: "", url: "", at: new Date(at).toISOString(), read });
-
-test("the inbox filters keep what they say", () => {
-  const events = [ev("a", "state", 1, true), ev("b", "mention", 2), ev("c", "pr-mention", 3), ev("d", "pr-vote", 4), ev("e", "pr-comment", 5, true)];
-  const keys = (f) => events.filter((e) => matches(e, f)).map((e) => e.key);
-  assert.deepEqual(keys("all"), ["a", "b", "c", "d", "e"]);
-  assert.deepEqual(keys("unread"), ["b", "c", "d"]);
-  assert.deepEqual(keys("mentions"), ["b", "c"]);
-  assert.deepEqual(keys("state"), ["a"]);
-  assert.deepEqual(keys("prs"), ["c", "d", "e"]);
-  assert.deepEqual(counts(events), { all: 5, unread: 3, mentions: 2, state: 1, prs: 3 });
-});
-
-test("groupByDay: today, yesterday, then dates, newest first", () => {
-  const now = new Date(2026, 9, 13, 15, 0).getTime();
-  const at = (d, h) => new Date(2026, 9, d, h).getTime();
-  const days = groupByDay([ev("old", "state", at(9, 8)), ev("t1", "state", at(13, 9)), ev("y1", "state", at(12, 23)), ev("t2", "state", at(13, 14))], now);
-  assert.deepEqual(days.map((d) => d.label).slice(0, 2), ["Today", "Yesterday"]);
-  assert.equal(days.length, 3);
-  assert.deepEqual(days[0].events.map((e) => e.key), ["t2", "t1"]);
-  assert.deepEqual(days[2].events.map((e) => e.key), ["old"]);
 });
 
 // ---------- a repo's Work items section ----------

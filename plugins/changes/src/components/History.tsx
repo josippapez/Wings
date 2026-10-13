@@ -31,6 +31,8 @@ function ago(at: number) {
   return unit ? relative.format(Math.round(s / unit[1]), unit[0]) : "just now";
 }
 
+/** Refs shown under a commit; the rest are a count, with their names in its tooltip. */
+const MAX_REFS = 3;
 const REF_KIND = { H: "HEAD", b: "Branch", r: "Remote branch", t: "Tag", s: "Stash" };
 const REF_TONE = { H: "info", b: "success", t: "warn" } as const;
 /** A small tag for a branch or tag. `value` is `kind:name`. */
@@ -51,14 +53,9 @@ function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => v
   return (
     <ListItem>
       <ListButton id={`c:${hash}`} className="commit" title={`${subject}\n${hash}\n${author}, ${date}`} onClick={() => onOpen(row)}>
-        <Row as="span">
-          {refs.map((r, i) => (
-            <RefPill key={i} value={r} />
-          ))}
-          <Text truncate className="subject">
-            {subject}
-          </Text>
-        </Row>
+        <Text truncate className="subject">
+          {subject}
+        </Text>
         <Row as="span">
           <Text tone="muted" size="tiny" mono>
             {hash.slice(0, 7)}
@@ -70,6 +67,16 @@ function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => v
             {ago(at)}
           </Text>
         </Row>
+        {refs.length ? (
+          <Row as="span" gap="xs" wrap>
+            {refs.slice(0, MAX_REFS).map((r, i) => (
+              <RefPill key={i} value={r} />
+            ))}
+            {refs.length > MAX_REFS ? (
+              <Badge variant="outline" title={refs.slice(MAX_REFS).map((r) => r.slice(2)).join("\n")}>{`+${refs.length - MAX_REFS}`}</Badge>
+            ) : null}
+          </Row>
+        ) : null}
       </ListButton>
     </ListItem>
   );
@@ -135,7 +142,7 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
       <Row>
         <Stack grow>
           {/* Uncontrolled, so typing in it never loses the caret. Filled once when it mounts, without a value attribute. */}
-          <SearchField id="search" placeholder="Message, author or hash" label="Search commits" ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
+          <SearchField id="search" placeholder="Search commits" label="Search commits" ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
         </Stack>
         <Button variant="outline" onClick={onGraph} title="Every branch as a commit graph">
           Graph

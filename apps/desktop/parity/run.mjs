@@ -32,16 +32,21 @@ const probes = [
   ...["default", "secondary", "outline", "ghost", "destructive", "link"].map((v) => ({ name: `button ${v}`, sel: `[data-case="button-${v}"]`, states: ["base", "hover", "focus"] })),
   ...["default", "sm", "xs", "lg"].map((s) => ({ name: `button size ${s}`, sel: `[data-case="button-size-${s}"]`, states: ["base"] })),
   ...["default", "secondary", "destructive", "outline", "ghost", "link"].map((v) => ({ name: `badge ${v}`, sel: `[data-case="badge-${v}"]`, states: ["base"] })),
+  ...["default", "secondary", "outline", "ghost", "destructive", "link"].map((v) => ({ name: `button ${v} disabled`, sel: `[data-case="button-${v}-disabled"]`, states: ["base"] })),
+  { name: "input disabled", sel: '[data-case="input-disabled"]', states: ["base"] },
   { name: "input", sel: '[data-case="input"]', states: ["base", "hover", "focus"] },
   { name: "input with text", sel: '[data-case="input-value"]', states: ["base"] },
   { name: "tabs list", sel: '[data-case="tabs-default"] [role="tablist"]', states: ["base"] },
   { name: "tab active", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="true"]', states: ["base", "focus"] },
-  { name: "tab idle", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="false"]', states: ["base", "hover"] },
+  { name: "tab idle", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="false"]', states: ["base", "hover", "focus"] },
   { name: "line tabs list", sel: '[data-case="tabs-line"] [role="tablist"]', states: ["base"] },
   { name: "line tab active", sel: '[data-case="tabs-line"] [role="tab"][aria-selected="true"]', states: ["base"] },
   { name: "line tab idle", sel: '[data-case="tabs-line"] [role="tab"][aria-selected="false"]', states: ["base"] },
   { name: "chip off", sel: '[data-case="chip"]', states: ["base", "hover"] },
   { name: "chip on", sel: '[data-case="chip-on"]', states: ["base"] },
+  { name: "chip off disabled", sel: '[data-case="chip-disabled"]', states: ["base"] },
+  { name: "chip on disabled", sel: '[data-case="chip-on-disabled"]', states: ["base"] },
+  { name: "select trigger disabled", sel: '[data-case="select-disabled"] [role="combobox"]', states: ["base"] },
   { name: "select trigger", sel: '[data-case="select"] [role="combobox"]', states: ["base", "hover", "focus"] },
   { name: "menu trigger", sel: '[data-case="menu"] button', states: ["base", "hover"] },
 ];
@@ -95,7 +100,7 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 // ---------- Chrome over the DevTools protocol ----------
 
 const profile = mkdtempSync(join(tmpdir(), "wings-parity-chrome-"));
-const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--hide-scrollbars", "--force-device-scale-factor=2", "--window-size=600,800", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--hide-scrollbars", "--force-device-scale-factor=2", "--window-size=600,1000", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 const wsUrl = await new Promise((resolve, reject) => {
   let log = "";
   proc.stderr.on("data", (d) => {
@@ -136,7 +141,7 @@ async function openPage(file) {
     const m = JSON.parse(data);
     if (m.sessionId === sessionId && m.method === "Runtime.exceptionThrown") errors.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
   });
-  await call("Emulation.setDeviceMetricsOverride", { width: 800, height: 560, deviceScaleFactor: 2, mobile: false });
+  await call("Emulation.setDeviceMetricsOverride", { width: 800, height: 1000, deviceScaleFactor: 2, mobile: false });
   await call("Page.navigate", { url: `${origin}/${file}` });
   for (let i = 0; i < 100; i++) {
     if ((await evaluate(call, "document.querySelector('[data-case]') !== null")) === true) break;

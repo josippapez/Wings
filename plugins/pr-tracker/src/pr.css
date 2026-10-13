@@ -156,22 +156,18 @@ button.pr-chip {
 }
 .pr-reviewers {
   display: inline-flex;
+  gap: 6px;
+  margin: 0 -2px 0 2px;
 }
 .pr-reviewer {
   position: relative;
   display: inline-flex;
-  margin-left: -4px;
-}
-.pr-reviewer:first-child {
-  margin-left: 0;
-}
-.pr-reviewer .w-avatar {
-  box-shadow: 0 0 0 2px #1c1a1e;
 }
 .pr-reviewer[data-vote]:not([data-vote="none"])::after {
   position: absolute;
-  right: -3px;
+  right: -4px;
   bottom: -3px;
+  box-shadow: 0 0 0 1.5px var(--wings-surface);
   display: grid;
   place-items: center;
   width: 10px;
@@ -237,6 +233,11 @@ button.pr-chip {
 }
 .pr-md {
   font-size: 13px;
+}
+/* A code block wraps instead of scrolling, so its right padding stays visible at any width. */
+.pr-md .w-md-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* A long comment is cut after a few lines until it's asked for in full. */
 .pr-body-box {
@@ -507,6 +508,13 @@ button.pr-check-main {
 .pr-check-time {
   flex: none;
   white-space: nowrap;
+}
+/* The Open button's slot is always there, so the times line up whether or not a row has a link. */
+.pr-check-open {
+  display: inline-flex;
+  flex: none;
+  justify-content: flex-end;
+  width: 52px;
 }
 .pr-tag[data-tone="required"] {
   border-color: color-mix(in srgb, var(--wings-warning) 40%, transparent);

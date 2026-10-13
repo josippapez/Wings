@@ -4,6 +4,18 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.31 · 2026-10-13
+
+- A plugin may show up to 20 desktop notifications a minute, up from 3. `wings-plugin-sdk` 0.11.1 says so in its types.
+- Work item 0.7.0 drops the Updates feed and its notifications: it only saw pull requests you created or review, so mentions elsewhere were missed.
+- Visual polish across plugin pages, each checked in screenshots at two widths:
+  - PR tracker 0.13.2: reviewer avatars clear their label, code blocks wrap at narrow widths, check times line up, a titled error state.
+  - Work item: sprint cards wrap their titles instead of cutting them.
+  - Tasks 0.3.1: the board's columns share the width, errors sit under the toolbar, rows line up.
+  - Changes 0.3.2: the list stays on screen when git reports an error, shown above it. History puts branch and tag labels on their own row, and the commit graph lines up at narrow widths.
+  - HUD 0.4.1 and Session 0.5.1: tidier sidebar rows.
+- `wings-plugin-ui` 0.7.0: a disabled text box matches the app's.
+
 ## 0.1.30 · 2026-10-13
 
 - Plugin pages take their colours, radius and font from the app's theme, and their buttons, tabs, chips, selects and menus now match the app's. `wings-plugin-ui` 0.6.0.

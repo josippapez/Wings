@@ -45,6 +45,8 @@ export interface ItemViewProps {
   /** The address of a pull request in the browser. */
   prUrl: (pr: PrInfo) => string;
   workItemUrl: string;
+  /** The tab to open on, for a fixture; the page opens on the overview. */
+  initialTab?: Tab;
 }
 
 type Tab = "overview" | "links" | "history";
@@ -108,7 +110,7 @@ export function ItemError({ id, message, onRetry }: { id: number; message: strin
 export function ItemView(props: ItemViewProps) {
   const { item, args, linked, updates, prs, moveError, onRefresh, onOpenUrl, workItemUrl } = props;
   const f = item.fields;
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(props.initialTab ?? "overview");
   const links = linkIds(item.relations, f["System.Parent"]);
   const linkCount = allLinkIds(links).length + prs.length;
   const comments = updates.data?.comments.length;

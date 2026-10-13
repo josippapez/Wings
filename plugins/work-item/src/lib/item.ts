@@ -2,7 +2,7 @@
 // updates return. No `wings`, no I/O, so node tests drive it.
 
 import type { QueryRow } from "./sections.ts";
-import { updateTime, type WorkItemUpdate } from "./updates.ts";
+import { updateTime, type WorkItemUpdate } from "./urls.ts";
 
 /** What the "item" view is opened with. `project` is optional: the page learns it from the work item. */
 export interface ItemArgs {
