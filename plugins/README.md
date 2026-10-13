@@ -10,6 +10,8 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 `work-item/` shows the Azure Boards work item named in each pane's branch, and moves it to its next state. It also checks Azure DevOps every 2 minutes (5, 10 or 30 under Settings, or off), even while Wings is in the background, for the projects of your panes' Azure remotes and of work items it has shown: a state change on a work item assigned to or created by you, a comment mentioning you on any recently changed work item or on a pull request you created or review, new comments on your pull requests, a reviewer's vote on them, one being completed or abandoned, and you being added as a reviewer. It only reads (`az boards query` and GET calls of `az devops invoke`), sends a desktop notification per event (one summary past three), and lists them with links in its Updates sidebar, since a notification can't be clicked. The first check of a project only records where it is, so old activity doesn't arrive as a flood. A comment mentions you when it carries your Azure DevOps identity id, `data-vss-mention="version:2.0,<id>"` in a work item comment and `@<id>` in a pull request comment. Each check looks into the 20 newest changed work items and the 20 newest pull requests of a project, so a very busy project can miss a mention.
 
+`notes/` keeps notes per project, in a sidebar or a tab (`newTab`, so it's in the + menu). Claude reads them with `notes__read` and adds a dated section with `notes__write`, which never overwrites. A tool call uses the project of the pane it came from. Notes are kept in Wings' storage, up to 30,000 characters per project.
+
 `pr-tracker/` is the example: it shows the pull request for each pane's current branch as a badge on the pane, for GitHub (`gh`), GitLab (`glab`) and Azure DevOps (`az` and `git`). When a check fails, the badge shows which step failed and its error, and the `failing_checks` tool hands Claude the end of each failed log. When a CLI isn't signed in, the badge has a Sign in button that runs the CLI's own browser login.
 
 ## Installing
@@ -25,6 +27,7 @@ The plugins in this folder install the same way:
 | Changes | `github.com/josippapez/Wings/plugins/changes` |
 | Dev servers | `github.com/josippapez/Wings/plugins/dev-servers` |
 | HUD | `github.com/josippapez/Wings/plugins/hud` |
+| Notes | `github.com/josippapez/Wings/plugins/notes` |
 | PR tracker | `github.com/josippapez/Wings/plugins/pr-tracker` |
 | Session detail | `github.com/josippapez/Wings/plugins/session-detail` |
 | Work item | `github.com/josippapez/Wings/plugins/work-item` |
