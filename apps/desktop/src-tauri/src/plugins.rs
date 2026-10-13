@@ -113,6 +113,12 @@ pub struct View {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// Lists the view in the + menu and the command palette. Needs `tab` in `opens`.
+    #[serde(default, rename = "newTab", skip_serializing_if = "std::ops::Not::not")]
+    pub new_tab: bool,
+    /// Opening it as a tab always opens a new tab, instead of showing the project's existing one. Needs `tab` in `opens`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multiple: bool,
 }
 
 pub const VIEW_PLACES: [&str; 4] = ["sidebar", "modal", "window", "tab"];
@@ -342,6 +348,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         let unique = view.opens.iter().enumerate().all(|(i, o)| !view.opens[..i].contains(o));
         if view.opens.is_empty() || !unique || view.opens.iter().any(|o| !VIEW_PLACES.contains(&o.as_str())) {
             return Err(format!("view {:?} opens must list some of {VIEW_PLACES:?}, each once", view.id));
+        }
+        if (view.new_tab || view.multiple) && !view.opens.iter().any(|o| o == "tab") {
+            return Err(format!("view {:?} sets newTab or multiple, which need \"tab\" in opens", view.id));
         }
         resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
     }
@@ -1799,6 +1808,37 @@ mod tests {
         let plain = manifest(None).unwrap().manifest.contributes.sidebars[0].clone();
         assert_eq!(plain.popover, None);
         assert!(serde_json::to_value(&plain).unwrap().get("popover").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn view_new_tab_and_multiple_need_a_tab_and_stay_out_of_older_manifests() {
+        let dir = std::env::temp_dir().join(format!("wings-newtab-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "page.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |extra: Value, opens: Value| {
+            let mut view = serde_json::json!({ "id": "v", "title": "V", "page": "page.html", "opens": opens });
+            for (k, v) in extra.as_object().unwrap() {
+                view[k] = v.clone();
+            }
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "views": [view] } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let ok = manifest(serde_json::json!({ "newTab": true, "multiple": true }), serde_json::json!(["modal", "tab"])).unwrap();
+        let view = &ok.manifest.contributes.views[0];
+        assert!(view.new_tab && view.multiple);
+        assert_eq!(serde_json::to_value(view).unwrap()["newTab"], true);
+        for extra in [serde_json::json!({ "newTab": true }), serde_json::json!({ "multiple": true })] {
+            assert!(manifest(extra, serde_json::json!(["modal"])).err().unwrap().contains("need \"tab\" in opens"));
+        }
+        // Without them a view serializes as before, so plugins approved earlier keep their grant.
+        let plain = manifest(serde_json::json!({}), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
+        assert!(!plain.new_tab && !plain.multiple);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("newTab").is_none() && json.get("multiple").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

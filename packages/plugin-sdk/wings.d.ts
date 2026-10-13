@@ -11,6 +11,8 @@ interface WingsPane {
   /** What runs in the pane right now, like `zsh` or `claude`. */
   command: string;
   project: string;
+  /** The id of that project, the same as `project().id`. Needs Wings 0.1.22. */
+  projectId: string;
   /** Set while Claude Code runs in the pane. `startedAt` is when that `claude` started, in ms; a resumed session's transcript also has what came before. */
   session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
   /** The focused pane of the tab on screen. At most one pane has it, and none while no tab is open. */
@@ -96,6 +98,14 @@ interface WingsExecOptions {
   timeoutMs?: number;
   /** Gets each stdout and stderr line while the program runs. */
   onOutput?: (line: string) => void;
+}
+
+/** A project (space) as pages see it. */
+interface WingsProject {
+  id: string;
+  name: string;
+  path: string;
+  branch: string | null;
 }
 
 interface Wings {
@@ -215,8 +225,33 @@ interface Wings {
    * in a window of its own or as a tab in the project on screen (`tab` needs Wings 0.1.15). `as` must be in the
    * view's `opens`, and defaults to the first. A window or tab that's already open comes to the front. The page
    * gets the same `wings` object wherever it opens.
+   *
+   * `args` (JSON, up to 16 KB, only with `as: "tab"`) is what the tab's page reads with `viewArgs`. A tab that's
+   * already open with other args takes the new ones, drops its saved tab state and reloads; a view with `"multiple": true` always opens a
+   * new tab. Needs Wings 0.1.22.
    */
-  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab" }): Promise<void>;
+  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab"; args?: unknown }): Promise<void>;
+  /** Where this page shows. `null` in the plugin's main script. Needs Wings 0.1.22. */
+  placement(): "sidebar" | "tab" | "modal" | "window" | null;
+  /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once. Needs Wings 0.1.22. */
+  viewArgs<T = unknown>(): T | null;
+  /**
+   * The project this page is about, or `null` when none is open. A tab page's project is the one the tab belongs to
+   * and never changes; any other page gets the project on screen. Needs Wings 0.1.22.
+   */
+  project(): Promise<WingsProject | null>;
+  /**
+   * Calls the listener with the current project, then each time it changes: the project on screen switched (not for a
+   * tab page), or its branch or name changed. Needs Wings 0.1.22.
+   */
+  onProject(listener: (project: WingsProject | null) => void): () => void;
+  /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. Opening the tab with new `args` clears it. Needs Wings 0.1.22. */
+  tabState<T = unknown>(): Promise<T | null>;
+  /**
+   * In a tab page: saves JSON state, up to 64 KB, on the tab. Wings keeps it across restarts and while the page is
+   * unloaded. Rejects outside a tab or when the state is too big. Needs Wings 0.1.22.
+   */
+  setTabState(state: unknown): Promise<void>;
   /** Closes a sidebar or view wherever it's open. */
   closeView(id: string): Promise<void>;
   /** Opens Wings Settings at the plugin's settings page, `contributes.settings`. Wings 0.1.15 and newer. */

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Badge, Button, Card, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
+import { Badge, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -69,4 +69,10 @@ test("Badge takes shadcn/ui's variants and Wings' tones", () => {
 test("Empty has a title and a description, and shows no description line without one", () => {
   assert.match(html(h(Empty, { title: "Nothing", description: "Try again" })), /<p class="w-empty-title">Nothing<\/p><p class="w-empty-description">Try again<\/p>/);
   assert.doesNotMatch(html(h(Empty, { title: "Nothing" })), /w-empty-description/);
+});
+
+test("Page puts its toolbar over a body that is flush when it lays itself out", () => {
+  const out = html(h(Page, { toolbar: h(Toolbar, { title: "Tasks", actions: "X" }, "filters"), flush: true }, "body"));
+  assert.match(out, /^<div class="w-page"><header class="w-toolbar"><h1 class="w-title w-toolbar-title" data-truncate="">Tasks<\/h1><div class="w-toolbar-main">filters<\/div><div class="w-toolbar-actions">X<\/div><\/header><div class="w-page-body" data-flush="">body<\/div><\/div>$/);
+  assert.equal(html(h(Page, {}, "body")), '<div class="w-page"><div class="w-page-body">body</div></div>');
 });

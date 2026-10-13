@@ -1,6 +1,6 @@
 {
   "name": "wings-plugin-sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "The wings API types, the page frame, React hooks and the build command for Wings plugins.",
   "license": "MIT",
   "type": "module",

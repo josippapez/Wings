@@ -74,7 +74,12 @@ export type PluginPopover = { page: string; width: number; height: number };
 export type PluginSidebar = { id: string; title: string; icon: string; page: string; popover?: PluginPopover };
 export type ViewPlace = "sidebar" | "modal" | "window" | "tab";
 /** One of the plugin's own pages, opened in the first of `opens` from its title bar button. Sizes are in CSS pixels. An empty `icon` means the plugin's own. */
-export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null };
+export type PluginPage = { id: string; title: string; icon: string; page: string; opens: ViewPlace[]; width: number | null; height: number | null;
+  /** Listed in the + menu and the command palette; needs `tab` in `opens`. */
+  newTab?: boolean;
+  /** Opening it as a tab always opens a new one, instead of showing the project's existing tab. */
+  multiple?: boolean;
+};
 /** What a plugin adds: UI it draws (`badges`, `diff`), tools it offers Claude over MCP, panels, sidebars, views and a settings page. */
 export type PluginContributes = {
   ui: string[];

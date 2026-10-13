@@ -4,6 +4,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  ChevronDownIcon,
   EllipsisIcon,
   RotateCcwClockIcon,
   PanelLeftIcon,
@@ -11,6 +12,7 @@ import {
   PlusIcon,
   XIcon,
   SettingsIcon,
+  TerminalIcon,
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
@@ -26,6 +28,7 @@ import { StatusDot } from "@/components/status-dot";
 import type { AgentState, Space } from "@/lib/api";
 import type { LayoutNode } from "@/lib/layout";
 import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
+import type { NewTabEntry } from "@/lib/plugin-pages";
 import { trackDrag } from "@/lib/pointer-drag";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { PluginGlyph } from "@/components/plugin-glyph";
@@ -143,7 +146,12 @@ export function TitleBar(props: {
   onRename: (id: string, name: string) => void;
   /** Moves a tab to a place among this project's tabs. */
   onMove: (id: string, index: number) => void;
+  /** What the plain + button does. */
   onNew: () => void;
+  /** Plugin pages the + menu offers after Terminal; the chevron shows only when there are some. */
+  newTabEntries: NewTabEntry[];
+  onNewTerminal: () => void;
+  onNewPage: (entry: NewTabEntry) => void;
   onHistory: () => void;
   onSettings: () => void;
   /** The notification bell, shown before Past sessions. */
@@ -374,6 +382,27 @@ export function TitleBar(props: {
           <IconButton label="New tab" shortcut={shortcutLabel.newTab} onClick={props.onNew} data-pane-drop-new="" className="ml-1 data-drop-over:bg-white/20 data-drop-over:text-foreground">
             <PlusIcon />
           </IconButton>
+          {props.newTabEntries.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="ghost" size="icon-sm" aria-label="New tab menu" title="New tab menu" className="-ml-1 w-4 text-muted-foreground hover:text-foreground" />}
+              >
+                <ChevronDownIcon className="size-3" aria-hidden />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={props.onNewTerminal}>
+                  <TerminalIcon aria-hidden />
+                  <span className="flex-1 whitespace-nowrap">Terminal</span>
+                </DropdownMenuItem>
+                {props.newTabEntries.map((entry) => (
+                  <DropdownMenuItem key={entry.key} onClick={() => props.onNewPage(entry)}>
+                    <PluginGlyph name={entry.icon} svg={entry.iconSvg} />
+                    <span className="flex-1 whitespace-nowrap">{entry.title}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </Tabs>
       </LayoutGroup>
 

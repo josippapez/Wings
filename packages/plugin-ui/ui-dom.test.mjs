@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, Menu, Select, Tabs, TextInput } = await import("./ui.js");
+const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Menu, Select, Split, Tabs, TextInput } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -492,5 +492,109 @@ test('Combobox open="whileText" keeps the list through a press outside, as a rea
   await click(document.body);
   await settle();
   assert.equal(shownOptions(), 2);
+  await unmount();
+});
+
+const key = (el, k, init = {}) => act(() => { el.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init })); });
+const pointer = (el, type, x, init = {}) => act(() => { el.dispatchEvent(new dom.window.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, pointerId: 1, ...init })); });
+
+test("Split is a separator that the arrow keys, Shift, Home and End resize, and tells onResize once per change", async () => {
+  const sizes = [];
+  const { host, unmount } = await mount(h(Split, { start: "A", end: "B", defaultSize: 200, min: 100, max: 300, onResize: (n) => sizes.push(n) }));
+  const handle = host.querySelector("[role=separator]");
+  assert.equal(handle.getAttribute("aria-orientation"), "vertical");
+  assert.equal(handle.getAttribute("aria-valuenow"), "200");
+  assert.equal(handle.getAttribute("aria-valuemin"), "100");
+  assert.equal(handle.getAttribute("aria-valuemax"), "300");
+  assert.equal(handle.getAttribute("tabindex"), "0");
+  assert.equal(handle.getAttribute("aria-controls"), host.querySelector(".w-split-pane").id);
+  await key(handle, "ArrowRight");
+  assert.equal(handle.getAttribute("aria-valuenow"), "216");
+  await key(handle, "ArrowLeft", { shiftKey: true });
+  assert.equal(handle.getAttribute("aria-valuenow"), "152");
+  await key(handle, "End");
+  await key(handle, "End");
+  assert.equal(handle.getAttribute("aria-valuenow"), "300");
+  await key(handle, "Home");
+  assert.equal(handle.getAttribute("aria-valuenow"), "100");
+  assert.equal(host.querySelector(".w-split").style.getPropertyValue("--w-split-size"), "100px");
+  assert.deepEqual(sizes, [216, 152, 300, 100], "a key that changes nothing says nothing");
+  await unmount();
+});
+
+test("Split vertical answers to the up and down arrows only", async () => {
+  const { host, unmount } = await mount(h(Split, { start: "A", end: "B", direction: "vertical", defaultSize: 200 }));
+  const handle = host.querySelector("[role=separator]");
+  assert.equal(handle.getAttribute("aria-orientation"), "horizontal");
+  await key(handle, "ArrowRight");
+  assert.equal(handle.getAttribute("aria-valuenow"), "200");
+  await key(handle, "ArrowDown");
+  assert.equal(handle.getAttribute("aria-valuenow"), "216");
+  await unmount();
+});
+
+test("Split drag moves the CSS variable and the handle's value, and commits to onResize on release only", async () => {
+  const sizes = [];
+  let renders = 0;
+  const Start = () => { renders++; return "A"; };
+  const { host, unmount } = await mount(h(Split, { start: h(Start), end: "B", defaultSize: 200, min: 100, max: 400, onResize: (n) => sizes.push(n) }));
+  const handle = host.querySelector("[role=separator]");
+  const split = host.querySelector(".w-split");
+  const before = renders;
+  await pointer(handle, "pointerdown", 500);
+  assert.ok(handle.hasAttribute("data-dragging"));
+  await pointer(handle, "pointermove", 530);
+  await pointer(handle, "pointermove", 560);
+  assert.equal(split.style.getPropertyValue("--w-split-size"), "260px");
+  assert.equal(handle.getAttribute("aria-valuenow"), "260");
+  assert.deepEqual(sizes, [], "nothing is committed mid-drag");
+  assert.equal(renders, before, "no render mid-drag");
+  await pointer(handle, "pointermove", 5000);
+  assert.equal(handle.getAttribute("aria-valuenow"), "400", "held at max");
+  await pointer(handle, "pointerup", 5000);
+  assert.ok(!handle.hasAttribute("data-dragging"));
+  assert.deepEqual(sizes, [400]);
+  await unmount();
+});
+
+test("Split drag that is cancelled puts the size back", async () => {
+  const sizes = [];
+  const { host, unmount } = await mount(h(Split, { start: "A", end: "B", defaultSize: 200, onResize: (n) => sizes.push(n) }));
+  const handle = host.querySelector("[role=separator]");
+  await pointer(handle, "pointerdown", 100);
+  await pointer(handle, "pointermove", 160);
+  await pointer(handle, "pointercancel", 160);
+  assert.equal(handle.getAttribute("aria-valuenow"), "200");
+  assert.equal(host.querySelector(".w-split").style.getPropertyValue("--w-split-size"), "200px");
+  assert.deepEqual(sizes, []);
+  await unmount();
+});
+
+test("ListDetail shows the empty placeholder until there is a detail, then the detail and a back button", async () => {
+  let backs = 0;
+  const { host, render, unmount } = await mount(h(ListDetail, { list: h("p", null, "Rows"), listLabel: "Tasks", detailLabel: "Task", onBack: () => backs++ }));
+  const root = host.querySelector(".w-list-detail");
+  assert.equal(root.style.getPropertyValue("--w-list-width"), "280px");
+  assert.ok(!root.hasAttribute("data-has-detail"));
+  assert.equal(host.querySelector("section[aria-label=Tasks]").textContent, "Rows");
+  assert.equal(host.querySelector("section[aria-label=Task]").textContent, "Nothing selected");
+  assert.equal(host.querySelector(".w-list-detail-back"), null);
+  await render(h(ListDetail, { list: "Rows", detail: h("p", null, "Fix it"), listWidth: 200, onBack: () => backs++ }));
+  assert.ok(host.querySelector(".w-list-detail").hasAttribute("data-has-detail"));
+  assert.equal(host.querySelector(".w-list-detail").style.getPropertyValue("--w-list-width"), "200px");
+  assert.ok(host.querySelector(".w-list-detail-detail").textContent.includes("Fix it"));
+  await click(host.querySelector(".w-list-detail-back"));
+  assert.equal(backs, 1);
+  await unmount();
+});
+
+test("Board is a focusable region, and a BoardColumn is named by its title and counts its cards", async () => {
+  const { host, unmount } = await mount(h(Board, { label: "Sprint" }, h(BoardColumn, { title: "Doing", count: 2 }, h("p", null, "Card"))));
+  const board = host.querySelector("[role=region]");
+  assert.equal(board.getAttribute("aria-label"), "Sprint");
+  assert.equal(board.getAttribute("tabindex"), "0");
+  const column = host.querySelector("section");
+  assert.equal(document.getElementById(column.getAttribute("aria-labelledby")).textContent, "Doing");
+  assert.equal(column.querySelector(".w-board-column-count").textContent, "2");
   await unmount();
 });

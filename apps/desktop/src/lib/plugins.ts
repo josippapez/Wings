@@ -3,6 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { boundedJson, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { FocusTracker } from "@/lib/plugin-focus";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 import { requestToolInstall } from "@/lib/tool-install";
@@ -70,10 +71,19 @@ export type PluginPane = {
   cwd: string;
   command: string;
   project: string;
+  /** The id of that project, as `wings.project().id` gives it. */
+  projectId: string;
   session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
   /** The focused pane of the tab on screen. */
   focused: boolean;
 };
+
+/** The project a page is about: `wings.project()`. */
+export type PluginProject = { id: string; name: string; path: string; branch: string | null };
+/** Where a page shows, as `wings.placement()` reports it. */
+export type PagePlacement = "sidebar" | "tab" | "modal" | "window";
+/** A page open as a tab: its tab, and the project the tab belongs to. */
+export type PageTab = { tabId: string; spaceId: string; args?: unknown };
 
 /** A new tab, or a split to the right of or below the focused pane. */
 export type PanePlacement = "tab" | "right" | "down";
@@ -96,8 +106,16 @@ type Callbacks = {
   openPane: (plan: PanePlan) => Promise<string>;
   /** Shows a pane and moves the keyboard to it. */
   focusPane: (paneId: string) => void;
-  /** Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself. */
-  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab") => void;
+  /**
+   * Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself.
+   * For a tab, `multiple` always opens a new one and `args` is what the page reads with `viewArgs`.
+   */
+  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab", tab?: { multiple: boolean; args?: unknown }) => void;
+  /** The project with this id, with its branch as it is now. */
+  projectOf: (spaceId: string | null) => PluginProject | null;
+  /** The state a view tab saved with `setTabState`, if the tab is still open. */
+  tabState: (tabId: string) => unknown;
+  setTabState: (tabId: string, state: unknown) => void;
   /** Takes a plugin page out of the sidebar, the modal and its tabs. */
   hideView: (pluginId: string, viewId: string) => void;
   /** Opens Wings Settings at the plugin's own settings page. */
@@ -117,6 +135,10 @@ type Running = {
   kind: "main" | ViewPlace | "popover" | "settings";
   viewId?: string;
   ready: boolean;
+  /** Set on a page open as a tab: its tab and project. */
+  tab?: PageTab;
+  /** The project this frame last learned of, as JSON, once it asked with `project`; changes are sent from then on. */
+  lastProject?: string;
   /**
    * Given only to the frame's own document, and required on every message. A frame that navigates keeps its
    * window, so this is what stops a page it navigated to from speaking as the plugin.
@@ -139,7 +161,9 @@ export const tauriBus = (): Bus => {
 };
 
 /** The first thing in every plugin document: hands the SDK its nonce. */
-const nonceScript = (nonce: string) => `<script>window.__wingsNonce=${JSON.stringify(nonce)}</script>`;
+const nonceScript = (nonce: string, placement: PagePlacement | null, args?: unknown) =>
+  // `<` is escaped so JSON in the args can't close the script tag.
+  `<script>window.__wingsNonce=${JSON.stringify(nonce)};window.__wingsInit=${JSON.stringify({ placement, args: args ?? null }).replace(/</g, "\\u003c")}</script>`;
 
 const tones: Tone[] = ["neutral", "info", "success", "warning", "danger", "merged"];
 const icons: BadgeIcon[] = ["pr-open", "pr-merged", "pr-closed", "pr-draft"];
@@ -274,19 +298,19 @@ export class PluginHost {
     frame.hidden = true;
     frame.title = `Plugin ${plugin.name}`;
     const nonce = crypto.randomUUID();
-    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, newRun(), plugin.main)}"></script>`;
+    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce, null)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, newRun(), plugin.main)}"></script>`;
     document.body.appendChild(frame);
     this.track(frame, plugin, "main", nonce);
   }
 
-  private entry(plugin: PluginView, kind: Running["kind"], nonce: string, viewId: string | undefined, port: Pick<Running, "post" | "remove">): Running {
-    return { id: plugin.id, version: plugin.version, plugin, ui: plugin.contributes.ui, views: pagesOf(plugin).map((v) => v.id), kind, viewId, ready: false, nonce, ...port };
+  private entry(plugin: PluginView, kind: Running["kind"], nonce: string, viewId: string | undefined, port: Pick<Running, "post" | "remove">, tab?: PageTab): Running {
+    return { id: plugin.id, version: plugin.version, plugin, ui: plugin.contributes.ui, views: pagesOf(plugin).map((v) => v.id), kind, viewId, ready: false, tab, nonce, ...port };
   }
 
-  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string, viewId?: string) {
+  private track(frame: HTMLIFrameElement, plugin: PluginView, kind: Running["kind"], nonce: string, viewId?: string, tab?: PageTab) {
     const win = frame.contentWindow;
     if (!win) return;
-    const running = this.entry(plugin, kind, nonce, viewId, { post: (message) => this.post(win, message), remove: () => frame.remove() });
+    const running = this.entry(plugin, kind, nonce, viewId, { post: (message) => this.post(win, message), remove: () => frame.remove() }, tab);
     this.frames.set(win, running);
     // The plugin's own document loads once. A second load means it navigated away, so let it go.
     let loads = 0;
@@ -310,13 +334,13 @@ export class PluginHost {
   }
 
   /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
-  private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings" = "page") {
+  private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings", placement: PagePlacement, args?: unknown) {
     const { title, file } = this.pageFile(plugin, viewId, kind);
     const run = newRun();
     const html = await (await fetch(pluginUrl(plugin.id, run, file))).text();
     const base = pluginUrl(plugin.id, run, file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
-    const head = `<meta charset="utf-8">${nonceScript(nonce)}<base href="${base}"><style>${pluginUiCss}</style><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
+    const head = `<meta charset="utf-8">${nonceScript(nonce, placement, args)}<base href="${base}"><style>${pluginUiCss}</style><script src="${new URL("/plugin-sdk.js", location.href).href}"></script>`;
     const srcdoc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => tag + head) : `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
     return { title, srcdoc, nonce };
   }
@@ -324,17 +348,19 @@ export class PluginHost {
   /**
    * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar or tab frame lives
    * until the plugin stops or the tab closes, so hiding it keeps its state. `viewId` is null for the settings page.
-   * Resolves a function that removes the frame.
+   * A tab page passes `tab`, which fixes its project and gives it its saved state and args. Resolves a function that removes the frame.
    */
-  async mountPage(plugin: PluginView, viewId: string | null, container: HTMLElement, kind: "sidebar" | "modal" | "tab" | "popover" | "settings") {
-    const { title, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover" || kind === "settings" ? kind : "page");
+  async mountPage(plugin: PluginView, viewId: string | null, container: HTMLElement, kind: "sidebar" | "modal" | "tab" | "popover" | "settings", tab?: PageTab) {
+    // A popover belongs to a sidebar button; the settings page lives in Wings Settings, a dialog.
+    const placement: PagePlacement = kind === "popover" ? "sidebar" : kind === "settings" ? "modal" : kind;
+    const { title, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover" || kind === "settings" ? kind : "page", placement, tab?.args);
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts", "allow-forms");
     frame.title = title;
     frame.className = "size-full border-0 bg-transparent";
     frame.srcdoc = srcdoc;
     container.replaceChildren(frame);
-    this.track(frame, plugin, kind, nonce, viewId ?? undefined);
+    this.track(frame, plugin, kind, nonce, viewId ?? undefined, tab);
     const win = frame.contentWindow;
     return () => void (win && this.stop(win));
   }
@@ -364,7 +390,7 @@ export class PluginHost {
     }
     // A window that says hello again has a new document, so its old frame is gone.
     if (known) this.frames.delete(label);
-    const { title, srcdoc, nonce } = await this.pageDocument(target.plugin, target.viewId);
+    const { title, srcdoc, nonce } = await this.pageDocument(target.plugin, target.viewId, "page", "window");
     const { id: pluginId } = target.plugin;
     this.frames.set(
       label,
@@ -395,6 +421,23 @@ export class PluginHost {
       void api.mcpToolResult(tool.callId, `${running.id} was turned off in Wings`, true);
     }
     this.callbacks.clearPlugin(running.id);
+  }
+
+  /** The project a frame is about: its tab's, or the one on screen. */
+  private projectFor(plugin: Running) {
+    return this.callbacks.projectOf(plugin.tab?.spaceId ?? this.callbacks.currentProject());
+  }
+
+  /** Tells the frames that asked for their project when it changed: the one on screen switched, or a branch or name did. */
+  publishProjects() {
+    for (const plugin of this.frames.values()) {
+      if (!plugin.ready || plugin.lastProject === undefined) continue;
+      const project = this.projectFor(plugin);
+      const json = JSON.stringify(project);
+      if (json === plugin.lastProject) continue;
+      plugin.lastProject = json;
+      plugin.post({ event: "project", data: project });
+    }
   }
 
   publishPanes(panes: PluginPane[]) {
@@ -653,8 +696,24 @@ export class PluginHost {
         if (!page) throw new Error(`${pluginId} has no view ${String(p.id)}`);
         const place = page.opens.find((o) => o === (p.as ?? page.opens[0]));
         if (!place) throw new Error(`${page.id} opens as ${page.opens.join(" or ")}, not ${String(p.as)}`);
+        // Args are JSON stored on the tab, so only a tab has them.
+        const hasArgs = p.args !== undefined && p.args !== null;
+        if (hasArgs && place !== "tab") throw new Error('openView args only work with as: "tab"');
+        const args = hasArgs ? JSON.parse(boundedJson(p.args, VIEW_ARGS_MAX, "openView args")) : undefined;
         if (place === "window") await this.openWindow(plugin.plugin, page.id);
-        else this.callbacks.showView(pluginId, page.id, place);
+        else this.callbacks.showView(pluginId, page.id, place, place === "tab" ? { multiple: page.multiple === true, args } : undefined);
+        return null;
+      }
+      case "project": {
+        const project = this.projectFor(plugin);
+        plugin.lastProject = JSON.stringify(project);
+        return project;
+      }
+      case "tabState":
+        return plugin.tab ? (this.callbacks.tabState(plugin.tab.tabId) ?? null) : null;
+      case "setTabState": {
+        if (!plugin.tab) throw new Error("wings.setTabState works in a page open as a tab");
+        this.callbacks.setTabState(plugin.tab.tabId, JSON.parse(boundedJson(p.state, TAB_STATE_MAX, "Tab state")));
         return null;
       }
       case "openSettings":

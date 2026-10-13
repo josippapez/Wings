@@ -78,6 +78,65 @@ export function Title(props: Props<"h1"> & { as?: "h1" | "h2" | "h3"; size?: "la
 /** A card. `compact` for a summary line. As a `form` it holds a form; as a `ul` or `ol`, a list of `li`. `as` types the props like `Row`'s. */
 export function Card<E extends CardAs = "div">(props: Own<E, { as?: E; compact?: boolean }>): ReactElement;
 
+// ---------- pages ----------
+
+/**
+ * A page that fills a tab: a `toolbar`, usually a `Toolbar`, over a body that scrolls. `flush` takes the body's padding
+ * and scrolling away, for a body that lays itself out, like a `ListDetail`, a `Split` or a `Board`. Show it with
+ * `showTab(<Page />, { fill: true })`.
+ */
+export function Page(props: Props<"div"> & { toolbar?: ReactNode; flush?: boolean }): ReactElement;
+/** A page's top row: a `title` (cut to one line) on the left, `children` like filters or a search box after it, and `actions` on the right. */
+export function Toolbar(props: Omit<Props<"header">, "title"> & { title?: ReactNode; actions?: ReactNode }): ReactElement;
+/**
+ * A `list` pane and a `detail` pane side by side. Without a `detail` the detail pane shows `empty`. When the page is
+ * narrower than 560px it shows one pane: the list, or the detail once there is one, with a back button if `onBack`
+ * is given. Each pane is a `section`; name them with `listLabel` and `detailLabel`.
+ */
+export function ListDetail(
+  props: Omit<Props<"div">, "children"> & {
+    list: ReactNode;
+    detail?: ReactNode;
+    /** What the detail pane shows without a `detail`: an `Empty` saying "Nothing selected" by default. */
+    empty?: ReactNode;
+    /** The list's width in px, 280 by default. */
+    listWidth?: number;
+    listLabel?: string;
+    detailLabel?: string;
+    /** Shows a back button above the detail when the page is too narrow for both panes. */
+    onBack?: () => void;
+    /** The back button's text, "Back" by default. */
+    backLabel?: string;
+  },
+): ReactElement;
+/** Columns side by side that scroll sideways, each a `BoardColumn`. A region named `label`, that takes keyboard focus so the arrow keys scroll it. */
+export function Board(props: Omit<Props<"div">, "role"> & { label: string }): ReactElement;
+/** A column of a `Board`: a `title` with the `count` of its cards and `actions`, over `children`, usually `Card`s, that scroll. */
+export function BoardColumn(props: Omit<Props<"section">, "title"> & { title: ReactNode; count?: number; actions?: ReactNode }): ReactElement;
+/**
+ * Two panes, `start` and `end`, with a handle between them. Drag the handle, or focus it and press the arrow keys
+ * (Shift for bigger steps), Home or End. A drag changes a CSS variable only and commits on release, so nothing renders
+ * per frame. The handle is a `separator` with `aria-valuenow` in px.
+ */
+export function Split(
+  props: Omit<Props<"div">, "children"> & {
+    start: ReactNode;
+    end: ReactNode;
+    /** "horizontal" (default) puts the panes side by side, "vertical" one over the other. */
+    direction?: "horizontal" | "vertical";
+    /** The start pane's size in px at first, 280 by default. Read from `wings.tabState()` to restore a saved one. */
+    defaultSize?: number;
+    /** The smallest either pane gets, in px, 120 by default. */
+    min?: number;
+    /** The biggest the start pane gets, in px. */
+    max?: number;
+    /** Gets the start pane's size in px when a drag or a key press ends, to save it with `wings.setTabState()`. */
+    onResize?: (size: number) => void;
+    /** Names the handle: "Resize panes" by default. */
+    label?: string;
+  },
+): ReactElement;
+
 // ---------- figures ----------
 
 /** A bar from 0 to 100, with the meter role. */

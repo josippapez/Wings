@@ -24,7 +24,7 @@ import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
-import { isViewTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { defaultNewTab, isViewTab, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
 import { PluginTab } from "@/components/plugin-tab";
 import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
@@ -86,6 +86,8 @@ type SavedWorkspace = {
   tabs: PaneTab[];
   /** Plugin views open as tabs, apart from `tabs` so an older Wings still loads those. Absent in older files. */
   viewTabs?: SavedViewTab[];
+  /** What the + button opens, as `pluginId:viewId`; absent or null is a terminal. */
+  newTabPage?: string | null;
   sessions: Record<string, string | null>;
   /** Which agent each session in `sessions` belongs to. Absent in older files, which held Claude sessions only. */
   sessionKinds?: Record<string, SessionKind>;
@@ -239,6 +241,7 @@ export default function App() {
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [sleepTick, setSleepTick] = useState(0);
+  const [newTabPage, setNewTabPage] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("text");
@@ -258,6 +261,10 @@ export default function App() {
   tabsRef.current = tabs;
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const spacesRef = useRef(spaces);
+  spacesRef.current = spaces;
+  const gitRef = useRef(git);
+  gitRef.current = git;
   const paneInfoRef = useRef(paneInfo);
   paneInfoRef.current = paneInfo;
 
@@ -443,8 +450,8 @@ export default function App() {
   const closeTab = useCallback((tabId: string) => closeTabs([tabId]), [closeTabs]);
 
   /** Shows a plugin view's tab in a project, opening it if it isn't there yet. */
-  const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string) => {
-    const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID());
+  const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string, options?: { multiple: boolean; args?: unknown }) => {
+    const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID(), options);
     if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
     setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
     setActiveSpaceId(spaceId);
@@ -563,6 +570,7 @@ export default function App() {
       if (saved.globalHotkey) setGlobalHotkey({ ...DEFAULT_GLOBAL_HOTKEY, ...saved.globalHotkey });
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
+      if (saved.newTabPage) setNewTabPage(saved.newTabPage);
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
@@ -678,6 +686,7 @@ export default function App() {
       sessionKinds,
       asleep,
       sleep,
+      newTabPage,
       sessionArgs,
       paneIds: livePanes,
     };
@@ -688,7 +697,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -875,13 +884,13 @@ export default function App() {
         setEpochs((all) => ({ ...all, [pluginId]: (all[pluginId] ?? 0) + 1 }));
         setModal((key) => (key?.startsWith(`${pluginId}:`) ? null : key));
       },
-      showView: (pluginId, viewId, place) => {
+      showView: (pluginId, viewId, place, options) => {
         const key = `${pluginId}:${viewId}`;
         if (place === "modal") return setModal(key);
         if (place === "tab") {
           const spaceId = activeSpaceIdRef.current;
           if (!spaceId) throw new Error("A view opens as a tab in the project on screen, and no project is open");
-          return showViewTab(spaceId, pluginId, viewId);
+          return showViewTab(spaceId, pluginId, viewId, options);
         }
         setRightSidebar(key);
         setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
@@ -904,6 +913,20 @@ export default function App() {
       updateDiff: (pluginId, id, update) =>
         setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
       currentProject: () => activeSpaceIdRef.current,
+      projectOf: (spaceId) => {
+        const space = spacesRef.current.find((s) => s.id === spaceId);
+        return space ? { id: space.id, name: space.name, path: space.path, branch: gitRef.current[space.id]?.branch ?? space.branch } : null;
+      },
+      tabState: (tabId) => {
+        const tab = tabsRef.current.find((t) => t.id === tabId);
+        return tab && isViewTab(tab) ? tab.state : undefined;
+      },
+      setTabState: (tabId, state) => {
+        const set = (ts: Tab[]) => ts.map((t) => (t.id === tabId && isViewTab(t) ? { ...t, state } : t));
+        // The ref only follows state on the next render, so write it now: a `tabState()` right after sees this value.
+        tabsRef.current = set(tabsRef.current);
+        setTabs(set);
+      },
       openPane: async ({ spaceId, cwd, input, placement }) => {
         let key: string | undefined;
         if (placement === "tab") key = openTab(spaceId, input, null, cwd);
@@ -949,6 +972,11 @@ export default function App() {
     };
   }, []);
 
+  // Pages that asked for their project hear when it switches or its branch or name changes.
+  useEffect(() => {
+    pluginHost.current?.publishProjects();
+  }, [spaces, git, activeSpaceId]);
+
   // Plugins see every pane (with its Claude session, if any); badges go away with their pane.
   useEffect(() => {
     const list = Object.values(panes).flatMap((meta) => {
@@ -962,6 +990,7 @@ export default function App() {
           cwd: info?.cwd ?? space?.path ?? "",
           command: info?.command ?? "",
           project: space?.name ?? "",
+          projectId: meta.spaceId,
           session: agent?.kind === "claude" && agent.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
           focused: meta.paneId === focusedPaneId,
         },
@@ -1284,6 +1313,14 @@ export default function App() {
   });
   commandsRef.current = commands;
 
+  /** The pages the + menu offers besides a terminal, and opening one (or a terminal for null) in the project on screen. */
+  const newTabs = useMemo(() => newTabEntries(plugins), [plugins]);
+  const openNewTab = (entry: NewTabEntry | null) => {
+    if (!activeSpace) return;
+    if (entry) showViewTab(activeSpace.id, entry.pluginId, entry.viewId, { multiple: entry.multiple });
+    else openTab(activeSpace.id);
+  };
+
   /** What the palette searches besides past sessions. Built only while it is open. */
   const paletteItems = (): PaletteItem[] => {
     const projectName = (id: string) => spaces.find((s) => s.id === id)?.name ?? "";
@@ -1291,6 +1328,9 @@ export default function App() {
     const items: PaletteItem[] = commands
       .filter((c) => c.enabled && c.id !== "palette")
       .map((c) => ({ id: `command:${c.id}`, kind: "command", title: c.title, subtitle: undefined, keywords: c.group, shortcut: shortcutText(c, isMac) || undefined, opensUi: opens.has(c.id), run: c.run }));
+    for (const entry of newTabs) {
+      items.push({ id: `new-tab:${entry.key}`, kind: "command", title: `New tab: ${entry.title}`, keywords: "plugin page", disabled: !activeSpace, run: () => openNewTab(entry) });
+    }
     for (const s of spaces) {
       items.push({ id: `project:${s.id}`, kind: "project", title: s.name, subtitle: s.path.replace(/^\/Users\/[^/]+/, "~"), keywords: s.path, run: () => selectSpace(s.id) });
       items.push({ id: `worktree:${s.id}`, kind: "project", title: `New agent in worktree: ${s.name}`, keywords: "branch", opensUi: true, run: () => requestWorktreeAgent(s.id) });
@@ -1379,7 +1419,10 @@ export default function App() {
             onClose={closeTab}
             onRename={renameTab}
             onMove={moveTabTo}
-            onNew={() => activeSpace && openTab(activeSpace.id)}
+            newTabEntries={newTabs}
+            onNew={() => openNewTab(defaultNewTab(newTabs, newTabPage))}
+            onNewTerminal={() => openNewTab(null)}
+            onNewPage={openNewTab}
             onHistory={() => setHistoryOpen(true)}
             onSettings={() => setSettingsOpen(true)}
             bell={
@@ -1446,7 +1489,8 @@ export default function App() {
                       key={tab.id}
                       plugin={activePlugins.find((p) => p.id === tab.view.pluginId)}
                       viewId={tab.view.viewId}
-                      pageKey={`${tab.id}:${activePlugins.find((p) => p.id === tab.view.pluginId)?.version}:${epochs[tab.view.pluginId] ?? 0}`}
+                      pageKey={`${tab.id}:${activePlugins.find((p) => p.id === tab.view.pluginId)?.version}:${epochs[tab.view.pluginId] ?? 0}:${tab.rev ?? 0}`}
+                      tab={{ tabId: tab.id, spaceId: tab.spaceId, args: tab.args }}
                       visible={tab.id === activeTabId}
                       loaded={!unloadedViewTabs.has(tab.id)}
                       host={pluginHost.current}
@@ -1582,7 +1626,7 @@ export default function App() {
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}

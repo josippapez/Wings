@@ -1,5 +1,21 @@
 import type { PluginView } from "@/lib/api";
 
+/** A page the + menu offers: a view that opens as a tab and sets `newTab`. `key` is `pluginId:viewId`. */
+export type NewTabEntry = { key: string; pluginId: string; viewId: string; title: string; icon: string; iconSvg: string | null; multiple: boolean };
+
+/** The + menu's plugin pages, in plugin order, from plugins that are on and approved. */
+export const newTabEntries = (plugins: PluginView[]): NewTabEntry[] =>
+  plugins
+    .filter((p) => p.enabled && p.approved)
+    .flatMap((p) =>
+      p.contributes.views
+        .filter((v) => v.newTab && v.opens.includes("tab"))
+        .map((v) => ({ key: `${p.id}:${v.id}`, pluginId: p.id, viewId: v.id, title: v.title, icon: v.icon, iconSvg: p.iconSvg, multiple: v.multiple === true })),
+    );
+
+/** What the plain + opens: the page chosen in Settings while it's still offered, else a terminal (null). */
+export const defaultNewTab = (entries: NewTabEntry[], chosen: string | null) => entries.find((e) => e.key === chosen) ?? null;
+
 /** The Settings section of a plugin's own settings page. Plugin ids can't hold `:`. */
 export const pluginSettingsSection = (pluginId: string) => `plugin:${pluginId}` as const;
 
@@ -13,18 +29,49 @@ export function shownSection<S extends string>(section: S, plugins: PluginView[]
   return settingsPlugins(plugins).some((p) => pluginSettingsSection(p.id) === section) ? section : "plugins";
 }
 
-/** A plugin view open as a tab in a project's tab strip: its page fills the pane area. */
-export type ViewTab = { id: string; spaceId: string; view: { pluginId: string; viewId: string } };
+/** What `wings.setTabState` may save per tab, and what `openView` may pass as `args`, as JSON text. */
+export const TAB_STATE_MAX = 64 * 1024;
+export const VIEW_ARGS_MAX = 16 * 1024;
+
+/**
+ * A plugin view open as a tab in a project's tab strip: its page fills the pane area. `state` is what the page saved with
+ * `setTabState`, `args` what `openView` passed, and `rev` counts the times new args reloaded the page (not saved).
+ */
+export type ViewTab = { id: string; spaceId: string; view: { pluginId: string; viewId: string }; state?: unknown; args?: unknown; rev?: number };
 /** A view tab as saved, with its place among all the saved tabs. */
-export type SavedViewTab = ViewTab & { at: number };
+export type SavedViewTab = Omit<ViewTab, "rev"> & { at: number };
+
+/** `value` as JSON text if it is JSON and fits `max` characters; throws a message naming `what` otherwise. */
+export function boundedJson(value: unknown, max: number, what: string) {
+  const text = JSON.stringify(value);
+  if (text === undefined) throw new Error(`${what} must be a JSON value`);
+  if (text.length > max) throw new Error(`${what} is limited to ${max / 1024} KB`);
+  return text;
+}
 
 export const isViewTab = <T extends object>(tab: T | ViewTab): tab is ViewTab => "view" in tab;
 
-/** Adds the view's tab to the project, or finds the one already there: one tab per view per project. */
-export function openViewTab<T extends { id: string; spaceId: string }>(tabs: (T | ViewTab)[], spaceId: string, view: ViewTab["view"], newId: string) {
-  const open = tabs.find((t) => isViewTab(t) && t.spaceId === spaceId && t.view.pluginId === view.pluginId && t.view.viewId === view.viewId);
-  if (open) return { tabs, id: open.id };
-  return { tabs: [...tabs, { id: newId, spaceId, view }], id: newId };
+/**
+ * Adds the view's tab to the project, or finds the one already there: one tab per view per project, unless `multiple`.
+ * `args` is what the page reads with `viewArgs`. Opening the existing tab with args that differ from its own replaces
+ * them, drops its `state` and bumps its `rev`, which reloads the page; without args the tab stays as it is.
+ */
+export function openViewTab<T extends { id: string; spaceId: string }>(
+  tabs: (T | ViewTab)[],
+  spaceId: string,
+  view: ViewTab["view"],
+  newId: string,
+  { multiple = false, args }: { multiple?: boolean; args?: unknown } = {},
+) {
+  const open = multiple ? undefined : tabs.find((t): t is ViewTab => isViewTab(t) && t.spaceId === spaceId && t.view.pluginId === view.pluginId && t.view.viewId === view.viewId);
+  if (open) {
+    if (args === undefined || JSON.stringify(open.args) === JSON.stringify(args)) return { tabs, id: open.id };
+    // The saved state belonged to the old args, so it goes.
+    const { state: _state, ...rest } = open;
+    return { tabs: tabs.map((t) => (t === open ? { ...rest, args, rev: (open.rev ?? 0) + 1 } : t)), id: open.id };
+  }
+  const tab: ViewTab = { id: newId, spaceId, view, ...(args === undefined ? {} : { args }) };
+  return { tabs: [...tabs, tab], id: newId };
 }
 
 /** The ids of view tabs whose plugin is off or gone, or whose view no longer opens as a tab. */
@@ -45,7 +92,11 @@ export function staleViewTabs<T extends object>(tabs: (T | ViewTab)[], plugins: 
 export function saveTabs<T extends object>(tabs: (T | ViewTab)[]) {
   const panes: T[] = [];
   const viewTabs: SavedViewTab[] = [];
-  tabs.forEach((t, at) => (isViewTab(t) ? viewTabs.push({ ...t, at }) : panes.push(t)));
+  tabs.forEach((t, at) => {
+    if (!isViewTab(t)) return void panes.push(t);
+    const { rev: _rev, ...saved } = t;
+    viewTabs.push({ ...saved, at });
+  });
   return { tabs: panes, viewTabs };
 }
 

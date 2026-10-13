@@ -1,0 +1,11 @@
+// Built from src/ by plugins/build.mjs. Edit src/ and run `pnpm build` in plugins/.
+"use strict";(()=>{var l=t=>`notes:${t}`;async function c(t){let e=await wings.storage.get(l(t));return{text:typeof e?.text=="string"?e.text:"",updatedAt:typeof e?.updatedAt=="number"?e.updatedAt:0}}async function p(t,e,n){if(e.length>3e4)throw new Error(`The notes for ${n} are limited to ${3e4.toLocaleString("en")} characters. Trim them first.`);await wings.storage.set(l(t),{text:e,updatedAt:Date.now()})}function f(t,e,n=new Date){let r=i=>String(i).padStart(2,"0"),s=`## ${`${n.getFullYear()}-${r(n.getMonth()+1)}-${r(n.getDate())} ${r(n.getHours())}:${r(n.getMinutes())}`} (Claude)
+
+${e.trim()}
+`;return t.trim()?t+(t.endsWith(`
+
+`)?"":t.endsWith(`
+`)?`
+`:`
+
+`)+s:s}function m(t,e,n){return t!==e&&t.startsWith(e)?n+t.slice(e.length):n}var g=[];wings.onPanes(t=>g=t);var w=Promise.resolve(),u=t=>{let e=w.then(t,t);return w=e.catch(()=>{}),e},d=t=>wings.broadcast(t).catch(console.error);wings.onBroadcast(t=>{let e=t;if(e?.type!=="save"||typeof e.projectId!="string"||typeof e.base!="string"||typeof e.text!="string"||typeof e.rid!="string")return;let{projectId:n,base:r,text:o,rid:s}=e;u(async()=>{let i=g.find(a=>a.projectId===n)?.project??"this project";try{await p(n,m((await c(n)).text,r,o),i),await d({type:"notes",projectId:n,rid:s})}catch(a){await d({type:"notes",projectId:n,rid:s,error:a instanceof Error?a.message:String(a)})}})});function h(t,e){let n=typeof t.project=="string"&&t.project?t.project.replace(/\/+$/,""):null,r=(s,i)=>s===i||s.startsWith(`${i}/`),o=n?g.find(s=>r(s.cwd,n)||r(n,s.cwd)):g.find(s=>s.paneId===e);if(!o)throw new Error(n?`No terminal in Wings is open in ${n}. Open a terminal in that project, or leave out project.`:"Can't tell which project this call comes from. Pass project, an absolute path inside the project.");return{id:o.projectId,name:o.project}}wings.onTool("read",async(t,{paneId:e})=>{let n=h(t,e),{text:r}=await c(n.id);return r.trim()?r:`No notes yet for ${n.name}.`});wings.onTool("write",(t,{paneId:e})=>{if(typeof t.text!="string"||!t.text.trim())throw new Error("text is required.");let n=t.text,r=h(t,e);return u(async()=>(await p(r.id,f((await c(r.id)).text,n),r.name),await d({type:"notes",projectId:r.id}),`Added to the notes for ${r.name}.`))});})();

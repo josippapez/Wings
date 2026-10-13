@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- The + button gets a menu next to it: Terminal, then each plugin page that can open as a tab. The command palette lists the same pages as "New tab: <name>", and Settings, General picks what plain + opens. ⌘T still opens a terminal.
+- New Notes plugin: notes per project, in a sidebar or a tab. Claude reads them with `notes__read` and adds to them with `notes__write`, which only appends. Notes are kept in Wings, up to 30,000 characters per project.
+- Plugin SDK 0.8.0: `wings.project()` and `wings.onProject()` give a page its project, `wings.placement()` says where it's open, `openView(id, { as: "tab", args })` with `wings.viewArgs()` opens a page for one item, and `wings.tabState()`/`setTabState()` keep state per tab. Views can set `newTab` to show in the + menu and `multiple` to open more than one tab. Panes from `onPanes` carry their `projectId`.
+- wings-plugin-ui 0.2.0 adds layouts for full tab pages: `Page`, `Toolbar`, `ListDetail`, `Board` with `BoardColumn`, and a resizable `Split`.
+
 ## 0.1.21 · 2026-10-13
 
 - The docked right sidebar fills the window's height again. In 0.1.20 its page shrank to its header.

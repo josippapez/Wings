@@ -111,6 +111,176 @@ export function Card({ as = "div", compact, className, ...rest }) {
   return h(as, { ...rest, className: cx("w-card", className), "data-size": compact ? "compact" : undefined });
 }
 
+// ---------- pages ----------
+
+/**
+ * A page that fills a tab: a `toolbar` (usually a `Toolbar`) over a body that scrolls. `flush` takes the body's padding
+ * and scrolling away, for a body that lays itself out, like a `ListDetail`, a `Split` or a `Board`. Show it with
+ * `showTab(<Page />, { fill: true })`.
+ */
+export function Page({ toolbar, flush, children, className, ...rest }) {
+  return h("div", { ...rest, className: cx("w-page", className) }, toolbar, h("div", { className: "w-page-body", "data-flush": flag(flush) }, children));
+}
+
+/** A page's top row: a `title` on the left, `children` like filters or a search box after it, and `actions` on the right. */
+export function Toolbar({ title, actions, children, className, ...rest }) {
+  return h(
+    "header",
+    { ...rest, className: cx("w-toolbar", className) },
+    title === undefined ? null : h(Title, { truncate: true, className: "w-toolbar-title" }, title),
+    h("div", { className: "w-toolbar-main" }, children),
+    actions ? h("div", { className: "w-toolbar-actions" }, actions) : null,
+  );
+}
+
+/**
+ * A `list` pane and a `detail` pane side by side. Without a `detail` the detail pane shows `empty`. Narrower than the
+ * page can fit both, it shows one: the list, or the detail once there is one, with a back button if `onBack` is given.
+ * `listWidth` is the list's width in px.
+ */
+export function ListDetail({ list, detail, empty = h(Empty, { title: "Nothing selected" }), listWidth = 280, listLabel, detailLabel, onBack, backLabel = "Back", className, style, ...rest }) {
+  const has = detail !== undefined && detail !== null && detail !== false;
+  return h(
+    "div",
+    // The width is data, not a style: plugin-ui.css sizes the list from it.
+    { ...rest, className: cx("w-list-detail", className), style: { ...style, "--w-list-width": `${listWidth}px` }, "data-has-detail": flag(has) },
+    h("section", { className: "w-list-detail-list", "aria-label": listLabel }, list),
+    h(
+      "section",
+      { className: "w-list-detail-detail", "aria-label": detailLabel },
+      has && onBack ? h(Button, { variant: "ghost", size: "sm", className: "w-list-detail-back", onClick: onBack }, backLabel) : null,
+      h("div", { className: "w-list-detail-body" }, has ? detail : empty),
+    ),
+  );
+}
+
+/** Columns side by side that scroll sideways, each a `BoardColumn`. `label` names the scrolling region. */
+export function Board({ label, className, ...rest }) {
+  // A scrolling region has to take focus, or a keyboard can't scroll it.
+  return h("div", { tabIndex: 0, ...rest, role: "region", "aria-label": label, className: cx("w-board", className) });
+}
+
+/** A column of a `Board`: a `title` with the `count` of cards and `actions`, over `children`, usually `Card`s, that scroll. */
+export function BoardColumn({ title, count, actions, children, className, ...rest }) {
+  const id = useId();
+  return h(
+    "section",
+    { ...rest, className: cx("w-board-column", className), "aria-labelledby": id },
+    h(
+      "header",
+      { className: "w-board-column-header" },
+      h("h2", { id, className: "w-board-column-title" }, title),
+      count === undefined ? null : h(Badge, { variant: "secondary", className: "w-board-column-count" }, count),
+      actions ? h("div", { className: "w-board-column-actions" }, actions) : null,
+    ),
+    h("div", { className: "w-board-column-body" }, children),
+  );
+}
+
+const SPLIT_STEP = 16;
+const SPLIT_STEP_LARGE = 64;
+const SPLIT_HANDLE = 9;
+
+/**
+ * Two panes, `start` and `end`, with a handle between them. Drag it or use the arrow keys, Home and End. While you drag
+ * only a CSS variable changes, so nothing renders per frame; `onResize` gets the start pane's size in px once, when
+ * the drag or the key press ends. `direction` horizontal puts the panes side by side, vertical one over the other.
+ */
+export function Split({ start, end, direction = "horizontal", defaultSize = 280, min = 120, max, onResize, label = "Resize panes", className, style, ...rest }) {
+  const id = useId();
+  const box = useRef(null);
+  const handle = useRef(null);
+  const drag = useRef(null);
+  const [size, setSize] = useState(defaultSize);
+  const vertical = direction === "vertical";
+
+  // The start pane can't be smaller than `min`, bigger than `max`, or leave the end pane less than `min`.
+  const limits = () => {
+    const rect = box.current?.getBoundingClientRect();
+    const total = rect ? (vertical ? rect.height : rect.width) : 0;
+    const room = total > 0 ? total - SPLIT_HANDLE - min : Infinity;
+    return [min, Math.max(min, Math.min(max ?? Infinity, room))];
+  };
+  const clamp = (value) => {
+    const [low, high] = limits();
+    return Math.round(Math.min(high, Math.max(low, value)));
+  };
+  const syncMax = () => {
+    const [, high] = limits();
+    if (Number.isFinite(high)) handle.current?.setAttribute("aria-valuemax", String(Math.round(high)));
+  };
+  // Dragging writes the DOM, not state: a render per pointer move would re-render the whole page.
+  const preview = (next) => {
+    box.current.style.setProperty("--w-split-size", `${next}px`);
+    handle.current.setAttribute("aria-valuenow", String(next));
+  };
+  const commit = (next) => {
+    setSize(next);
+    if (next !== size) onResize?.(next);
+  };
+  const endDrag = (e, keep) => {
+    if (!drag.current) return;
+    const { value } = drag.current;
+    drag.current = null;
+    handle.current.removeAttribute("data-dragging");
+    box.current.removeAttribute("data-dragging");
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (keep) commit(value);
+    else preview(size);
+  };
+  useLayoutEffect(syncMax);
+
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    syncMax();
+    drag.current = { from: vertical ? e.clientY : e.clientX, size, value: size };
+    handle.current.setAttribute("data-dragging", "");
+    box.current.setAttribute("data-dragging", "");
+  };
+  const onPointerMove = (e) => {
+    const d = drag.current;
+    if (!d) return;
+    d.value = clamp(d.size + (vertical ? e.clientY : e.clientX) - d.from);
+    preview(d.value);
+  };
+  const onKeyDown = (e) => {
+    const step = e.shiftKey ? SPLIT_STEP_LARGE : SPLIT_STEP;
+    const [low, high] = limits();
+    const [less, more] = vertical ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"];
+    const next = e.key === less ? size - step : e.key === more ? size + step : e.key === "Home" ? low : e.key === "End" ? high : null;
+    if (next === null || !Number.isFinite(next)) return;
+    e.preventDefault();
+    commit(clamp(next));
+  };
+
+  return h(
+    "div",
+    // The size is data, not a style: plugin-ui.css sizes the start pane from it.
+    { ...rest, ref: box, className: cx("w-split", className), style: { ...style, "--w-split-size": `${size}px` }, "data-direction": direction },
+    h("div", { id, className: "w-split-pane" }, start),
+    h("div", {
+      ref: handle,
+      className: "w-split-handle",
+      role: "separator",
+      tabIndex: 0,
+      "aria-label": label,
+      "aria-orientation": vertical ? "horizontal" : "vertical",
+      "aria-controls": id,
+      "aria-valuemin": min,
+      "aria-valuemax": max,
+      "aria-valuenow": size,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: (e) => endDrag(e, true),
+      onPointerCancel: (e) => endDrag(e, false),
+      onKeyDown,
+    }),
+    h("div", { className: "w-split-pane" }, end),
+  );
+}
+
 // ---------- figures ----------
 
 const levelTone = (percent, levels) => (!levels ? undefined : percent >= levels[1] ? "danger" : percent >= levels[0] ? "warn" : undefined);

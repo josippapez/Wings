@@ -5,11 +5,11 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEffect, useRef, useState } from "react";
-import { BotIcon, CodeIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import type { PluginView } from "@/lib/api";
-import { pluginSettingsSection } from "@/lib/plugin-pages";
+import { pluginSettingsSection, type NewTabEntry } from "@/lib/plugin-pages";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
@@ -115,6 +115,7 @@ function Choice<T extends string | number>(props: { id: string; items: { value: 
 }
 
 const sections = [
+  { id: "general", label: "General", icon: SlidersHorizontalIcon },
   { id: "text", label: "Text", icon: TypeIcon },
   { id: "cursor", label: "Cursor", icon: TextCursorIcon },
   { id: "history", label: "History and selection", icon: ScrollTextIcon },
@@ -202,6 +203,10 @@ export function SettingsDialog(props: {
   onLookChange: (look: TerminalLook) => void;
   sleep: SleepSettings;
   onSleepChange: (sleep: SleepSettings) => void;
+  /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
+  newTabs: NewTabEntry[];
+  newTabPage: string | null;
+  onNewTabPageChange: (key: string | null) => void;
 }) {
   const { keys, look, host } = props;
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
@@ -337,6 +342,19 @@ export function SettingsDialog(props: {
                     <HotkeyRecorder value={props.hotkey.accelerator} disabled={!props.hotkey.enabled} onChange={(accelerator) => props.onHotkeyChange({ ...props.hotkey, accelerator })} />
                     <Switch id="global-hotkey" checked={props.hotkey.enabled} onCheckedChange={(enabled) => props.onHotkeyChange({ ...props.hotkey, enabled })} />
                   </div>
+                </Row>
+              </Group>
+            </TabsContent>
+            <TabsContent value="general" className="flex flex-col gap-3 p-6">
+              <h3 className="text-[15px] font-semibold">General</h3>
+              <Group>
+                <Row id="new-tab-page" label="New tab button opens" hint="What the + button opens. Plugin pages that offer it also show in the menu next to it and in the command palette.">
+                  <Choice
+                    id="new-tab-page"
+                    items={[{ value: "terminal", label: "Terminal" }, ...props.newTabs.map((e) => ({ value: e.key, label: e.title }))]}
+                    value={props.newTabs.some((e) => e.key === props.newTabPage) ? (props.newTabPage as string) : "terminal"}
+                    onChange={(key) => props.onNewTabPageChange(key === "terminal" ? null : key)}
+                  />
                 </Row>
               </Group>
             </TabsContent>

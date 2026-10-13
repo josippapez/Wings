@@ -1,7 +1,7 @@
 // Checked by `tsc` in `pnpm test`, never run: `as` types a layout component's props for the element it renders.
 import type { FormEvent, MouseEvent } from "react";
 
-import { Badge, Button, Card, Combobox, Empty, Menu, Row, Select, Stack, Tabs } from "./ui";
+import { Badge, Board, BoardColumn, Button, Card, Combobox, Empty, ListDetail, Menu, Page, Row, Select, Split, Stack, Tabs, Toolbar } from "./ui";
 
 const submit = (e: FormEvent<HTMLFormElement>) => e.currentTarget.requestSubmit();
 
@@ -70,4 +70,21 @@ export const others = [
   <Menu label="More" items={[{ id: "a", label: "Delete", tone: "danger", onSelect() {} }]} />,
   <Tabs label="Views" items={[{ value: "a", label: "A" }]} value="a" onChange={(v) => v.toUpperCase()} variant="line" />,
   <Select label="Pick" options={[{ value: "a", label: "A" }]} onChange={(v) => v.toUpperCase()} onFocus={(e) => e.currentTarget.click()} />,
+];
+
+// Page layouts.
+export const pages = [
+  <Page toolbar={<Toolbar title="Tasks" actions={<Button />} />} flush>
+    <ListDetail list={<Stack />} detail={<Card />} listWidth={240} onBack={() => {}} />
+    <Split start={<Stack />} end={<Stack />} direction="vertical" defaultSize={200} min={80} max={400} onResize={(size: number) => size} />
+    <Board label="Board">
+      <BoardColumn title="Todo" count={3} actions={<Button />} />
+    </Board>
+  </Page>,
+  // @ts-expect-error a Split needs both panes
+  <Split start={<Stack />} />,
+  // @ts-expect-error a Board needs a label
+  <Board />,
+  // @ts-expect-error direction is horizontal or vertical
+  <Split start={<Stack />} end={<Stack />} direction="diagonal" />,
 ];

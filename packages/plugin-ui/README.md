@@ -68,6 +68,10 @@ message.
 | `Stats` | `items: { label, value, tone? }[]` | Small figures side by side, label over value |
 | `Properties` | `items: { label, value }[]` | Label and value pairs |
 | `List`, `ListItem`, `ListButton` | `ordered` and `compact` on `List`, `align` on the rows | A list of rows; a `ListButton` in a `ListItem` makes the row a button |
+| `Page`, `Toolbar` | `Page`: `toolbar`, `flush`; `Toolbar`: `title`, `actions`, `children` | A page that fills a tab: a toolbar row (title, then filters in `children`, `actions` on the right) over a body that scrolls. `flush` drops the body's padding and scrolling for a body that lays itself out. Show it with `showTab(<Page />, { fill: true })` |
+| `ListDetail` | `list`, `detail`, `empty`, `listWidth` (px, 280), `listLabel`, `detailLabel`, `onBack`, `backLabel` | A list pane and a detail pane side by side; `empty` shows until there is a `detail`. Under 560px wide it shows one pane, the list or the detail, with a back button when `onBack` is given |
+| `Board`, `BoardColumn` | `Board`: `label`; `BoardColumn`: `title`, `count`, `actions` | Columns that scroll sideways, each with a header, a count and a scrolling stack of cards (use `Card`). The board is a focusable region, so the arrow keys scroll it |
+| `Split` | `start`, `end`, `direction` (`horizontal`, `vertical`), `defaultSize` (px, 280), `min` (120), `max`, `onResize`, `label` | Two panes with a draggable handle, a `separator` with `aria-valuenow` in px. Arrow keys (Shift for bigger steps), Home and End resize it. A drag only changes a CSS variable and `onResize(size)` runs once when it ends, so save it with `wings.setTabState()` and pass it back as `defaultSize` |
 | `Dot`, `Spinner` | `tone`, `size`, `label`; `Dot` also `color` | A status dot or a spinner, announced only with a `label`. A dot's `color` comes from your data, like a work item type's `#cc293d` |
 | `Pill`, `Tag` | `tone` | A filled pill, or an outlined tag like a branch |
 | `Loading`, `Empty` | `Empty`: `title`, `description` | Before the first data, and nothing to show |
@@ -147,6 +151,7 @@ rather than styles.
 `w-shell` with `data-place` (`sidebar`, `popover`, `view`, `tab`, `settings`) and `data-fill`; `w-row`,
 `w-stack` with `data-gap`, `data-align`, `data-justify`, `data-wrap`, `data-grow`; `w-text` with `data-tone`,
 `data-size`, `data-weight`, `data-mono`, `data-numeric`, `data-truncate`, `data-clamp`, `data-grow`;
+`w-page`, `w-page-body` with `data-flush`; `w-toolbar`, `w-toolbar-title`, `w-toolbar-main`, `w-toolbar-actions`; `w-list-detail` with `data-has-detail` and `--w-list-width`, `w-list-detail-list`, `w-list-detail-detail`, `w-list-detail-body`, `w-list-detail-back`; `w-board`, `w-board-column`, `w-board-column-header`, `w-board-column-title`, `w-board-column-count`, `w-board-column-actions`, `w-board-column-body`; `w-split` with `data-direction`, `data-dragging` and `--w-split-size`, `w-split-pane`, `w-split-handle`;
 `w-title` with `data-size`; `w-heading`, `w-heading-row`; `w-card` with `data-size`; `w-gauge`, `w-gauge-label`, `w-gauge-value`,
 `w-gauge-note`, `w-meter` with `data-tone`, `w-meter-fill`; `w-stats`, `w-stat-label`, `w-stat-value`;
 `w-props`, `w-prop`, `w-prop-label`, `w-prop-value`; `w-list` with `data-density`, `w-list-item`,

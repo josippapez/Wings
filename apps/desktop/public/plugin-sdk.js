@@ -4,12 +4,16 @@
   // Set by Wings in this document only; every message carries it, so Wings knows it's really this page.
   const nonce = window.__wingsNonce;
   delete window.__wingsNonce;
+  // Where this page shows and what it was opened with, set by Wings in the same document as the nonce.
+  const init = window.__wingsInit ?? {};
+  delete window.__wingsInit;
   let nextId = 1;
   const pending = new Map();
   const listeners = { panes: [], action: [], broadcast: [] };
   let replyHandler = null;
   listeners.transcript = [];
   listeners.focus = [];
+  listeners.project = [];
   // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
   let focused = true;
   let focusKnown = false;
@@ -236,8 +240,45 @@
      * Opens one of the manifest's sidebars or views: in the sidebar, in a modal over Wings, in a window of its own
      * or as a tab in the project on screen, with `as` one of the view's `opens` (the first by default). A window or
      * tab that's already open comes to the front. The page gets the same `wings` object wherever it opens.
+     *
+     * `args` (JSON, up to 16 KB, only with `as: "tab"`) is what the tab's page reads with `viewArgs`. A tab that's
+     * already open with other args takes the new ones and reloads; a view with `multiple` always opens a new tab.
      */
-    openView: (id, { as } = {}) => call("openView", { id, as }),
+    openView: (id, { as, args } = {}) => call("openView", { id, as, args }),
+    /** Where this page shows: "sidebar", "tab", "modal" or "window". `null` in the plugin's main script. */
+    placement: () => init.placement ?? null,
+    /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once, as a copy. */
+    viewArgs: () => (init.args == null ? null : structuredClone(init.args)),
+    /**
+     * The project this page is about, `{ id, name, path, branch }`, or `null` when none is open. A tab page's project is
+     * the one the tab belongs to and never changes; any other page gets the project on screen.
+     */
+    project: () => call("project", {}),
+    /**
+     * Calls `listener` with the current project, then each time it changes: the project on screen switched (not for a
+     * tab page), or its branch or name changed. Returns a function that removes the listener.
+     */
+    onProject: (listener) => {
+      const off = subscribe(listeners.project, listener);
+      let live = true;
+      call("project", {}).then(
+        (project) => {
+          if (live) listener(project);
+        },
+        (error) => console.error(error),
+      );
+      return () => {
+        live = false;
+        off();
+      };
+    },
+    /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. */
+    tabState: () => call("tabState", {}),
+    /**
+     * In a tab page: saves JSON state (up to 64 KB) on the tab. Wings keeps it with the tab across restarts, and across
+     * the page being unloaded while hidden. Rejects outside a tab or when the state is too big.
+     */
+    setTabState: (state) => call("setTabState", { state }),
     /** Closes a sidebar or view wherever it's open. */
     closeView: (id) => call("closeView", { id }),
     /** Opens Wings Settings at this plugin's settings page, the manifest's `contributes.settings`. */
