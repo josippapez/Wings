@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
-import { isShellCommand, resumeCommand, shellQuote } from "./resume.ts";
+import { isShellCommand, paneCwds, resumeCommand, shellQuote } from "./resume.ts";
 
 const id = "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d";
 
@@ -41,4 +41,14 @@ test("a pane is at a prompt only when a shell is its foreground program", () => 
 test("flags holding control characters are not typed", () => {
   assert.equal(resumeCommand(id, ["--append-system-prompt", "line one\nline two"]), `claude --resume ${id}\r`);
   assert.equal(resumeCommand(id, ["--name", "a\x03b"]), `claude --resume ${id}\r`);
+});
+
+test("paneCwds keeps each pane's live folder, and the saved one for a pane whose shell hasn't started yet", () => {
+  const panes = {
+    ui: { paneId: "p1", savedCwd: "/repo" },
+    sdk: { paneId: null, savedCwd: "/repo/packages/plugin-sdk" },
+    fresh: { paneId: "p3" },
+  };
+  const info = { p1: { cwd: "/repo/packages/plugin-ui" }, p3: { cwd: null } };
+  assert.deepEqual(paneCwds(panes, info), { ui: "/repo/packages/plugin-ui", sdk: "/repo/packages/plugin-sdk" });
 });

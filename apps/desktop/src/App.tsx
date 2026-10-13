@@ -46,7 +46,7 @@ import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { isSessionIdOf, isShellCommand, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { isSessionIdOf, isShellCommand, paneCwds, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -62,8 +62,9 @@ const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => !
 /**
  * `sessionId` is the agent session last seen in the pane, of agent `kind`, `name` its title; `live` once Wings has seen
  * it running this launch; `args` its flags. `asleep`, `resumeAt` and `resumeFailed` are the sleep and resume state (`sleep.ts`).
+ * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one.
  */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean };
+type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null };
 
 type SavedWorkspace = {
   version: 1;
@@ -97,6 +98,8 @@ type SavedWorkspace = {
   sleep?: SleepSettings;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
+  /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
+  cwds?: Record<string, string>;
   /** The Rust pane behind each pane, by the same keys. Still running only after a webview reload. */
   paneIds?: Record<string, string>;
 };
@@ -362,6 +365,7 @@ export default function App() {
       args: string[] = [],
       attachTo: string | null = null,
       kind: SessionKind = "claude",
+      savedCwd: string | null = null,
     ) => {
       const key = crypto.randomUUID();
       // A pane that starts with a resume line: its agent isn't detected for a moment after the pane starts, and the
@@ -378,10 +382,11 @@ export default function App() {
           },
           cwd,
           attachTo,
+          savedCwd,
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -584,7 +589,7 @@ export default function App() {
             const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
             // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind);
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null);
             // Still asleep until opened, as Wings left it.
             if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
@@ -660,6 +665,8 @@ export default function App() {
     void Promise.resolve(unsaved.current && api.workspaceSave(unsaved.current)).finally(() => location.reload());
   }, []);
 
+  // A string, so the save below reruns when a folder changes and not on every other pane-info update.
+  const cwdsJson = useMemo(() => JSON.stringify(paneCwds(panes, paneInfo)), [panes, paneInfo]);
   useEffect(() => {
     if (!ready) return;
     const sessions =Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.sessionId]));
@@ -688,6 +695,7 @@ export default function App() {
       sleep,
       newTabPage,
       sessionArgs,
+      cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
     };
     const json = JSON.stringify(saved);
@@ -697,7 +705,7 @@ export default function App() {
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the

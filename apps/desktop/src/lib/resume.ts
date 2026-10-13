@@ -29,3 +29,13 @@ const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh
 
 /** True when a pane's foreground program (`PaneInfo.command`) is a shell, so a typed line reaches its prompt and not a program. */
 export const isShellCommand = (command: string | undefined) => SHELLS.has(command ?? "");
+
+/** The folder each pane's shell is in, or was in when last saved if its shell hasn't started this launch. */
+export function paneCwds(panes: Record<string, { paneId: string | null; savedCwd?: string | null }>, info: Record<string, { cwd: string | null }>) {
+  return Object.fromEntries(
+    Object.entries(panes).flatMap(([key, meta]) => {
+      const cwd = (meta.paneId ? info[meta.paneId]?.cwd : null) ?? meta.savedCwd;
+      return cwd ? [[key, cwd]] : [];
+    }),
+  );
+}

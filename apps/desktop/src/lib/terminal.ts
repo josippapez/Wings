@@ -249,6 +249,8 @@ export class TerminalSession {
     private cwd: string | null = null,
     /** A Rust pane still running from before a webview reload, to show again instead of starting a shell. */
     private attachTo: string | null = null,
+    /** The folder the pane was in before Wings restarted: its shell starts there, or in the root if it's gone. */
+    private savedCwd: string | null = null,
   ) {
     this.el.className = "h-full w-full";
     this.term.loadAddon(this.fit);
@@ -351,7 +353,7 @@ export class TerminalSession {
     // The pane exited during the reload: start over, as after a restart (a Claude pane resumes its session).
     this.paneId = attached
       ? attachTo
-      : await api.paneCreate(this.spaceId, this.term.cols, this.term.rows, initialInput, output(), this.cwd).catch((e) => {
+      : await this.create(initialInput, output).catch((e) => {
           this.resolveStarted(null);
           throw e;
         });
@@ -361,6 +363,12 @@ export class TerminalSession {
     this.term.onResize(({ cols, rows }) => void api.paneResize(id, cols, rows));
     this.handlers.onStarted(id);
     this.resolveStarted(id);
+  }
+
+  private create(initialInput: string | null, output: () => Channel<ArrayBuffer>) {
+    const { cols, rows } = this.term;
+    if (this.cwd || !this.savedCwd) return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.cwd);
+    return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.savedCwd).catch(() => api.paneCreate(this.spaceId, cols, rows, initialInput, output(), null));
   }
 
   /**
