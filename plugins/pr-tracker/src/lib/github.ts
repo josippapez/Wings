@@ -2,7 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, post } from "./cli";
 import { problems } from "./state";
-import type { Comment, FailureDetail, Failing, GithubLink, GithubRemote, Icon, Link, ListedPr, Result, Status } from "./types";
+import type { Comment, FailureDetail, Failing, GithubLink, GithubRemote, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
@@ -35,6 +35,8 @@ interface GhPr {
   author?: { login?: string };
   comments?: unknown[];
   reviews?: unknown[];
+  createdAt?: string;
+  latestReviews?: { author?: { login?: string }; state: string }[];
   state: string;
   isDraft: boolean;
   reviewDecision: string;
@@ -124,8 +126,10 @@ export async function githubStatus(link: Pick<Link, "url">): Promise<Status> {
 
 /** The status page: the status plus who wrote the PR and its description. */
 export async function githubOverview(link: Pick<Link, "url">) {
-  const pr = await ghView(link.url, `${GH_FIELDS},body,author`);
-  return { status: githubStatusOf(pr), author: pr.author?.login ?? "unknown", body: pr.body ?? "" };
+  const pr = await ghView(link.url, `${GH_FIELDS},body,author,createdAt,latestReviews`);
+  const votes: Record<string, Reviewer["vote"] | undefined> = { APPROVED: "approved", CHANGES_REQUESTED: "changes" };
+  const reviewers = (pr.latestReviews ?? []).flatMap((r): Reviewer[] => (votes[r.state] ? [{ name: r.author?.login ?? "unknown", vote: votes[r.state]! }] : []));
+  return { status: githubStatusOf(pr), author: pr.author?.login ?? "unknown", body: pr.body ?? "", createdAt: pr.createdAt, reviewers };
 }
 
 function githubStatusOf(pr: GhPr): Status {

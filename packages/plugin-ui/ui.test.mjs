@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Badge, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -75,4 +75,15 @@ test("Page puts its toolbar over a body that is flush when it lays itself out", 
   const out = html(h(Page, { toolbar: h(Toolbar, { title: "Tasks", actions: "X" }, "filters"), flush: true }, "body"));
   assert.match(out, /^<div class="w-page"><header class="w-toolbar"><h1 class="w-title w-toolbar-title" data-truncate="">Tasks<\/h1><div class="w-toolbar-main">filters<\/div><div class="w-toolbar-actions">X<\/div><\/header><div class="w-page-body" data-flush="">body<\/div><\/div>$/);
   assert.equal(html(h(Page, {}, "body")), '<div class="w-page"><div class="w-page-body">body</div></div>');
+});
+
+test("Avatar shows initials on a colour that depends only on the name", () => {
+  const out = (name, props) => html(h(Avatar, { name, ...props }));
+  assert.match(out("Ada Lovelace"), /^<span class="w-avatar" style="--w-hue:\d+" aria-hidden="true">AL<\/span>$/);
+  assert.match(out("ada-bot[bot]"), />AB</);
+  assert.match(out("ada"), />A</);
+  assert.match(out("  "), />\?</);
+  assert.equal(out("Ada Lovelace"), out("Ada Lovelace"));
+  assert.notEqual(out("Ada Lovelace"), out("Grace Hopper"));
+  assert.match(out("Ada", { label: "Ada, author", size: "small" }), /data-size="small" role="img" aria-label="Ada, author"/);
 });

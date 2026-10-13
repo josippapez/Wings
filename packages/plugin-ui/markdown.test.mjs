@@ -82,6 +82,8 @@ test("pathological 40k inputs parse in under 100 ms", () => {
     "rule-ish": "- ".repeat(n / 2) + "x",
     "table pipes": "|".repeat(n) + "\n|" + "-|".repeat(n / 2),
     "many lines of brackets": ("[a](b\n").repeat(n / 6),
+    "colons": ":".repeat(n),
+    "open shortcodes": ":a".repeat(n / 2),
     "nested images": "[![a](b)](c".repeat(n / 11),
   };
   for (const [name, src] of Object.entries(inputs)) {

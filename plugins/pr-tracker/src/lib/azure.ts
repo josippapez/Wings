@@ -2,12 +2,13 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, git, post } from "./cli";
 import { problems, status } from "./state";
-import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, ListedPr, Result, Status } from "./types";
+import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
 
 /** A thread from the `pullRequestThreads` resource. */
 interface AzureThread {
   id: number;
   isDeleted?: boolean;
+  status?: string;
   threadContext?: { filePath?: string; rightFileStart?: { line?: number }; leftFileStart?: { line?: number } } | null;
   comments?: AzureComment[];
 }
@@ -138,7 +139,8 @@ function mergeStrategy(records: AzurePolicy[]) {
 /** The status page: the status plus who wrote the PR and its description. */
 export async function azureOverview(link: AzureLink) {
   const raw = await azureShow(link.remote, link.number);
-  return { status: await azureChecks({ ...link, raw }), author: raw.createdBy?.displayName ?? "unknown", body: raw.description ?? "" };
+  const reviewers = (raw.reviewers ?? []).map((r): Reviewer => ({ name: r.displayName ?? "unknown", vote: r.vote > 0 ? "approved" : r.vote === -10 ? "changes" : r.vote === -5 ? "waiting" : "none" }));
+  return { status: await azureChecks({ ...link, raw }), author: raw.createdBy?.displayName ?? "unknown", body: raw.description ?? "", createdAt: raw.creationDate, reviewers };
 }
 
 export async function azureChecks(link: AzureLink): Promise<Status> {
@@ -203,8 +205,17 @@ export async function azureDiff(link: AzureLink) {
   return { patch: `${patch}\n`, comments: await azureComments(link) };
 }
 
-/** The PR's threads, without the diff. */
-export async function azureComments(link: AzureLink): Promise<Comment[]> {
+const THREAD_STATES: Record<string, Comment["thread"]> = {
+  active: { state: "active", label: "Active" },
+  pending: { state: "active", label: "Pending" },
+  fixed: { state: "resolved", label: "Resolved" },
+  wontFix: { state: "resolved", label: "Won't fix" },
+  closed: { state: "resolved", label: "Closed" },
+  byDesign: { state: "resolved", label: "By design" },
+};
+
+/** The PR's threads, without the diff. `system` adds Azure's own notes, like policy and vote updates, marked as such. */
+export async function azureComments(link: AzureLink, system = false): Promise<Comment[]> {
   const threads = await cli(link.remote.org, "az", [
     "devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
     "--route-parameters", `project=${link.remote.project}`, `repositoryId=${link.remote.repo}`, `pullRequestId=${link.number}`,
@@ -219,7 +230,7 @@ export async function azureComments(link: AzureLink): Promise<Comment[]> {
     const path = ctx?.filePath ? ctx.filePath.replace(/^\//, "") : null;
     const right = ctx?.rightFileStart?.line;
     const left = ctx?.leftFileStart?.line;
-    const texts = (t.comments ?? []).filter((c) => c.commentType === "text" && !c.isDeleted);
+    const texts = (t.comments ?? []).filter((c) => (c.commentType === "text" || (system && c.commentType === "system")) && !c.isDeleted);
     texts.forEach((c, i) =>
       comments.push({
         id: t.id * 10_000 + c.id,
@@ -232,7 +243,9 @@ export async function azureComments(link: AzureLink): Promise<Comment[]> {
         body: c.content ?? "",
         createdAt: c.publishedDate,
         url: link.url,
-        canReply: i === 0,
+        canReply: i === 0 && c.commentType === "text",
+        ...(i === 0 && t.status && THREAD_STATES[t.status] ? { thread: THREAD_STATES[t.status] } : {}),
+        ...(c.commentType === "system" ? { system: true } : {}),
       }),
     );
   }

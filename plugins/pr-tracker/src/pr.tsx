@@ -4,36 +4,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
-import { Badge, Button, Card, Empty, Heading, List, ListItem, Loading, Page, Properties, Row, showTab, Spinner, Stack, Text, Toolbar } from "wings-plugin-ui";
+import { Empty, showTab } from "wings-plugin-ui";
 import { commentsOf, linkOf, overviewOf, replyWith, type Overview } from "./lib/refs";
-import { PROVIDERS } from "./lib/state";
 import type { Comment, Link, PrArgs } from "./lib/types";
 import "./pr.css";
+import { PrView } from "./ui/pr-view";
 
 const REFRESH_MS = 120_000;
 /** Longer than this and main isn't going to answer, so the button stops waiting. */
 const REQUEST_TIMEOUT_MS = 30_000;
-
-const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
-
-const ago = (iso: string) => {
-  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
-  if (minutes < 60) return `${minutes} min ago`;
-  return minutes < 1440 ? `${Math.round(minutes / 60)} h ago` : `${Math.round(minutes / 1440)} d ago`;
-};
-
-interface Thread {
-  root: Comment;
-  replies: Comment[];
-}
-
-/** Line comments grouped under their first comment; comments on the whole PR come first. */
-function threadsOf(comments: Comment[]): Thread[] {
-  const roots = comments.filter((c) => c.replyTo === null);
-  return roots
-    .map((root) => ({ root, replies: comments.filter((c) => c.replyTo === root.id) }))
-    .sort((a, b) => Number(a.root.path !== null) - Number(b.root.path !== null));
-}
 
 /** Asks the main script to do something and waits for its answer. Every tab hears every answer, so the id is unique across tabs. */
 function askMain(op: "diff" | "agent" | "seen", args: PrArgs) {
@@ -94,7 +73,7 @@ function Pr({ args }: { args: PrArgs }) {
   // Another tab's reply, or the diff viewer's, shows here at the next refresh; this one's own is added at once.
   useBroadcast(() => {});
 
-  const run = async (op: "diff" | "agent") => {
+  const run = useCallback(async (op: "diff" | "agent") => {
     setBusy(op);
     setNotice(null);
     try {
@@ -104,152 +83,29 @@ function Pr({ args }: { args: PrArgs }) {
     } finally {
       setBusy(null);
     }
-  };
+  }, [args]);
 
-  const st = overview?.status;
-  const threads = comments ? threadsOf(comments) : null;
-  const toolbar = (
-    <Toolbar
-      title={`${args.repo} ${args.provider === "gitlab" ? "!" : "#"}${args.number}`}
-      actions={
-        <>
-          <Button variant="outline" size="sm" onClick={() => void load()}>Refresh</Button>
-          <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => run("agent")}>Send to agent</Button>
-          <Button variant="outline" size="sm" onClick={() => wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
-          <Button size="sm" busy={busy === "diff"} onClick={() => run("diff")}>Open diff</Button>
-        </>
-      }
+  const onReply = useCallback(
+    async (root: Comment, body: string) => {
+      const reply = await replyWith(link!, root, body);
+      setComments((all) => [...(all ?? []), reply]);
+    },
+    [link],
+  );
+
+  return (
+    <PrView
+      args={args}
+      overview={overview}
+      comments={comments}
+      error={error}
+      notice={notice}
+      busy={busy}
+      canReply={Boolean(link)}
+      onRefresh={() => void load()}
+      onRun={run}
+      onReply={onReply}
     />
-  );
-
-  return (
-    <Page toolbar={toolbar}>
-      <Stack gap="l">
-        <Stack gap="s">
-          <Row gap="m" wrap>
-            <Heading level={2}>{st?.title ?? args.title}</Heading>
-            {st ? <Badge tone={BADGE_TONE[st.tone]}>{st.label}</Badge> : <Spinner label="Loading" />}
-          </Row>
-          {notice ? <Text tone="danger">{notice}</Text> : null}
-          {error ? <Text tone="danger">{error}</Text> : null}
-        </Stack>
-
-        {overview && st ? (
-          <Properties
-            items={[
-              { label: "Author", value: overview.author },
-              { label: "Branch", value: st.branch },
-              { label: "Review", value: st.review },
-              {
-                label: "Checks",
-                value: st.checks.passed + st.checks.failed + st.checks.running
-                  ? `${st.checks.passed} passed, ${st.checks.failed} failed, ${st.checks.running} running`
-                  : "None",
-              },
-              ...(st.changes ? [{ label: "Changes", value: st.changes }] : []),
-              ...(st.merge ? [{ label: "Merge", value: st.merge }] : []),
-            ]}
-          />
-        ) : error ? null : (
-          <Loading>Loading pull request</Loading>
-        )}
-
-        {st?.failing.length ? (
-          <Stack gap="s">
-            <Heading level={3}>Failing checks</Heading>
-            <List compact>
-              {st.failing.map((f) => (
-                <ListItem key={String(f.id)}>
-                  <Text tone="danger">{f.name ?? "Check"}{f.summary ? `: ${f.summary}` : ""}</Text>
-                </ListItem>
-              ))}
-            </List>
-          </Stack>
-        ) : null}
-
-        {overview ? (
-          <Stack gap="s">
-            <Heading level={3}>Description</Heading>
-            {overview.body.trim() ? <Text as="p" className="pr-body">{overview.body}</Text> : <Text tone="muted">No description.</Text>}
-          </Stack>
-        ) : null}
-
-        <Stack gap="s">
-          <Heading level={3}>Review threads</Heading>
-          {!threads ? (
-            error ? null : <Loading>Loading threads</Loading>
-          ) : threads.length === 0 ? (
-            <Empty title="No comments yet" />
-          ) : (
-            threads.map((t) => (
-              <ThreadCard
-                key={t.root.id}
-                thread={t}
-                onReply={async (body) => {
-                  const reply = await replyWith(link!, t.root, body);
-                  setComments((all) => [...(all ?? []), reply]);
-                }}
-                canReply={Boolean(link)}
-              />
-            ))
-          )}
-        </Stack>
-      </Stack>
-    </Page>
-  );
-}
-
-function ThreadCard({ thread, canReply, onReply }: { thread: Thread; canReply: boolean; onReply: (body: string) => Promise<void> }) {
-  const { root, replies } = thread;
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const send = async () => {
-    if (!text.trim()) return;
-    setSending(true);
-    setError(null);
-    try {
-      await onReply(text.trim());
-      setText("");
-      setOpen(false);
-    } catch (e) {
-      setError(String((e as Error).message ?? e));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <Card>
-      <Stack gap="s">
-        {root.path ? <Text mono size="small" tone="muted" className="pr-thread-path">{root.path}{root.line ? `:${root.line}` : ""}</Text> : null}
-        {[root, ...replies].map((c) => (
-          <Stack gap="xs" key={c.id}>
-            <Row gap="s">
-              <Text weight="strong">{c.author}</Text>
-              <Text tone="muted" size="tiny">{ago(c.createdAt)}</Text>
-            </Row>
-            <Text as="p" className="pr-body">{c.body}</Text>
-          </Stack>
-        ))}
-        {root.canReply && canReply ? (
-          open ? (
-            <Stack gap="s">
-              <textarea aria-label="Reply" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
-              {error ? <Text tone="danger" size="small">{error}</Text> : null}
-              <Row gap="s">
-                <Button size="sm" busy={sending} onClick={send}>Reply</Button>
-                <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-              </Row>
-            </Stack>
-          ) : (
-            <Row><Button size="sm" variant="ghost" onClick={() => setOpen(true)}>Reply</Button></Row>
-          )
-        ) : null}
-      </Stack>
-    </Card>
   );
 }
 

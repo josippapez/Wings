@@ -5,7 +5,7 @@ import { giteaComments, giteaOverview } from "./gitea";
 import { githubComments, githubOverview, githubReply } from "./github";
 import { gitlabComments, gitlabOverview, gitlabReply } from "./gitlab";
 import { PROVIDERS } from "./state";
-import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Status } from "./types";
+import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Reviewer, Status } from "./types";
 
 export function argsOf(link: Link, title: string, cwd: string): PrArgs {
   const base = { provider: link.provider, url: link.url, number: link.number, repo: link.repo, title, cwd };
@@ -26,6 +26,10 @@ export interface Overview {
   status: Status;
   author: string;
   body: string;
+  /** When the PR was opened, where the provider says. */
+  createdAt?: string;
+  /** Each reviewer's latest verdict, where the provider says; the status's `review` text covers the rest. */
+  reviewers?: Reviewer[];
 }
 
 /** The status, author and description of the PR, from whichever provider it's on. */
@@ -33,8 +37,9 @@ export function overviewOf(link: Link): Promise<Overview> {
   return { github: githubOverview, azure: (l: Link) => azureOverview(l as AzureLink), gitlab: (l: Link) => gitlabOverview(l as GitlabLink), bitbucket: (l: Link) => bitbucketOverview(l as BitbucketLink), gitea: (l: Link) => giteaOverview(l as GiteaLink) }[link.provider](link as never);
 }
 
+/** The PR's comments for the tab, with the providers' own notes (policy updates, system notes), which the diff viewer leaves out. */
 export function commentsOf(link: Link): Promise<Comment[]> {
-  return { github: githubComments, azure: azureComments, gitlab: gitlabComments, bitbucket: bitbucketComments, gitea: giteaComments }[link.provider](link as never);
+  return { github: githubComments, azure: (l: Link) => azureComments(l as AzureLink, true), gitlab: (l: Link) => gitlabComments(l as GitlabLink, true), bitbucket: bitbucketComments, gitea: giteaComments }[link.provider](link as never);
 }
 
 /** Posts a reply to a thread. Bitbucket and Codeberg threads are read-only here: their comments carry no `canReply`, so this is a guard. */

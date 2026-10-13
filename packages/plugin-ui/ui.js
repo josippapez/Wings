@@ -17,7 +17,7 @@ import { ToggleGroup as BaseToggleGroup } from "@base-ui/react/toggle-group";
 import { createContext, createElement as h, useContext, useEffect, useId, memo, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { MAX_DATA_IMAGE, parseBlocks, parseInline } from "./markdown.js";
+import { MAX_DATA_IMAGE, emojify, parseBlocks, parseInline } from "./markdown.js";
 
 export { MAX_DATA_IMAGE };
 
@@ -363,6 +363,38 @@ export function Dot({ tone, color, label, className, style, ...rest }) {
     "data-tone": color ? undefined : tone,
     ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true }),
   });
+}
+
+/** Up to two initials of a name or login: "Ada Lovelace" is AL, "ada-bot[bot]" is AB, "ada" is A. */
+const initialsOf = (name) => {
+  const words = name.replace(/\[bot\]$/i, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 1)).toUpperCase();
+};
+
+/** A hue from 0 to 359 that depends only on the name, so a person has the same colour everywhere. */
+const hueOf = (name) => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return hash % 360;
+};
+
+/**
+ * A round avatar with the initials of a `name` on a colour taken from it. Decoration next to the name by default;
+ * with a `label` it's announced.
+ */
+export function Avatar({ name, size, label, className, style, ...rest }) {
+  return h(
+    "span",
+    {
+      ...rest,
+      className: cx("w-avatar", className),
+      // The hue comes from the name, as data: plugin-ui.css paints the avatar with it.
+      style: { ...style, "--w-hue": hueOf(name) },
+      "data-size": size,
+      ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true }),
+    },
+    initialsOf(name),
+  );
 }
 
 /** A spinner. With a `label` it's announced. */
@@ -795,15 +827,15 @@ function MdInline({ text }) {
       case "code":
         return h("code", { key: i, className: "w-md-code" }, part.text);
       case "strong":
-        return h("strong", { key: i }, part.text);
+        return h("strong", { key: i }, emojify(part.text));
       case "em":
-        return h("em", { key: i }, part.text);
+        return h("em", { key: i }, emojify(part.text));
       case "del":
-        return h("del", { key: i }, part.text);
+        return h("del", { key: i }, emojify(part.text));
       case "image":
         return h(MdImage, { key: i, src: part.src, alt: part.alt });
       case "link":
-        return h("a", { key: i, className: "w-md-link", href: part.href, onClick: (e) => openLink(e, part.href) }, part.text);
+        return h("a", { key: i, className: "w-md-link", href: part.href, onClick: (e) => openLink(e, part.href) }, emojify(part.text));
       default:
         return part.text;
     }

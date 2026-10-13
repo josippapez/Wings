@@ -174,6 +174,11 @@ export function Dot(
     label?: string;
   },
 ): ReactElement;
+/**
+ * A round avatar with the initials of `name` (up to two letters) on a colour that depends only on the name, so a person
+ * looks the same everywhere. Decoration next to the name unless given a `label`, which names it for assistive tech.
+ */
+export function Avatar(props: Props<"span"> & { name: string; size?: "small" | "large"; label?: string }): ReactElement;
 /** A spinner, 16px like the app's, in the colour of the text around it. With a `label` it's announced; otherwise it's decoration. */
 export function Spinner(props: Props<"span"> & { size?: "large"; label?: string }): ReactElement;
 /** shadcn/ui's Badge variants. */
@@ -339,7 +344,8 @@ export function Disclosure(
 
 /**
  * Markdown as React elements: headings, paragraphs, lists (with read-only task checkboxes), fenced code, quotes,
- * rules, GFM tables, bold, italics, strikethrough, inline code, links, bare https URLs and images. No HTML is ever
+ * rules, GFM tables, bold, italics, strikethrough, inline code, links, bare https URLs, images and emoji shortcodes like
+ * `:white_check_mark:` (unknown names and anything in code stay as typed). No HTML is ever
  * parsed. Links open through `wings.openUrl` and only when they are https, so the manifest needs
  * `permissions.openUrl: ["https://"]` for them to work. Images load only from https or `data:image/` (png, jpeg, gif,
  * webp) URLs of up to 8,000 characters; anything else shows its alt text. A remote https image shows as a "Load image from <host>" button and loads only when clicked, since text an agent wrote could otherwise leak data in the URL; a data: image shows at once. `inline` renders only the inline parts, in

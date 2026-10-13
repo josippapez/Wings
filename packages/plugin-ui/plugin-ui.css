@@ -744,6 +744,32 @@ textarea::placeholder {
 }
 
 /* Status: a dot, a spinner and a badge. */
+.w-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: hsl(var(--w-hue) 45% 32%);
+  color: hsl(var(--w-hue) 70% 90%);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.w-avatar[data-size="small"] {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+.w-avatar[data-size="large"] {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
 .w-dot {
   flex: none;
   width: 6px;

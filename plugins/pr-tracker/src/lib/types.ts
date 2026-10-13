@@ -182,6 +182,16 @@ export interface FailureDetail {
 export interface Comment extends WingsComment {
   /** The GitLab discussion a note belongs to, which a reply goes to. */
   discussion?: string;
+  /** On a thread's first comment, where the provider keeps thread states: open ("active") or done ("resolved"), with its own word for it. */
+  thread?: { state: "active" | "resolved"; label: string };
+  /** Written by the provider itself (a policy update, a status change) rather than a person. Only the PR tab asks for these. */
+  system?: boolean;
+}
+
+/** A reviewer's latest verdict on a PR. */
+export interface Reviewer {
+  name: string;
+  vote: "approved" | "changes" | "waiting" | "none";
 }
 
 export interface Diff {
@@ -206,7 +216,7 @@ export interface AzurePr {
   title: string;
   isDraft?: boolean;
   mergeStatus?: string;
-  reviewers?: { vote: number }[];
+  reviewers?: { vote: number; displayName?: string }[];
   repository?: { webUrl?: string };
   lastMergeSourceCommit?: { commitId: string };
   lastMergeTargetCommit?: { commitId: string };

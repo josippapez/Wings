@@ -2,7 +2,7 @@
 import { cleanLog, counts, detail } from "./checks";
 import { cli, post } from "./cli";
 import { problems } from "./state";
-import type { Comment, FailureDetail, Failing, GitlabLink, GitlabRemote, Icon, Link, ListedPr, Result, Status } from "./types";
+import type { Comment, FailureDetail, Failing, GitlabLink, GitlabRemote, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
 
 /** The fields of a merge request the tracker reads. */
 interface GlMr {
@@ -13,6 +13,7 @@ interface GlMr {
   description?: string | null;
   author?: { name?: string; username?: string };
   user_notes_count?: number;
+  created_at?: string;
   draft?: boolean;
   has_conflicts?: boolean;
   detailed_merge_status?: string;
@@ -36,6 +37,8 @@ interface GlNote {
   id: number;
   system?: boolean;
   type?: string | null;
+  resolvable?: boolean;
+  resolved?: boolean;
   position?: { new_path?: string; old_path?: string; new_line?: number | null; old_line?: number | null };
   author?: { name?: string; username?: string };
   body?: string;
@@ -84,7 +87,9 @@ const glabMr = (link: GitlabLink) => glab(link.remote, `${project(link.remote)}/
 /** The status page: the status plus who wrote the MR and its description. */
 export async function gitlabOverview(link: GitlabLink) {
   const mr = await glabMr(link);
-  return { status: await gitlabStatusOf(link, mr), author: mr.author?.name ?? mr.author?.username ?? "unknown", body: mr.description ?? "" };
+  const approved = (await glab(link.remote, `${project(link.remote)}/merge_requests/${link.number}/approvals`).catch(() => null)) as { approved_by?: { user?: { name?: string; username?: string } }[] } | null;
+  const reviewers = (approved?.approved_by ?? []).map((a): Reviewer => ({ name: a.user?.name ?? a.user?.username ?? "unknown", vote: "approved" }));
+  return { status: await gitlabStatusOf(link, mr), author: mr.author?.name ?? mr.author?.username ?? "unknown", body: mr.description ?? "", createdAt: mr.created_at, reviewers };
 }
 
 async function gitlabStatusOf(link: GitlabLink, mr: GlMr): Promise<Status> {
@@ -196,15 +201,15 @@ export async function gitlabDiff(link: GitlabLink) {
   return { patch: diff.stdout, comments };
 }
 
-/** The MR's discussions, without the diff. */
-export async function gitlabComments(link: GitlabLink): Promise<Comment[]> {
+/** The MR's discussions, without the diff. `system` adds GitLab's own notes ("added 2 commits"), marked as such. */
+export async function gitlabComments(link: GitlabLink, system = false): Promise<Comment[]> {
   const discussions = (await glab(link.remote, `${project(link.remote)}/merge_requests/${link.number}/discussions?per_page=100`, { paginate: true }).catch(() => [])) as {
     id: string;
     notes?: GlNote[];
   }[];
   const comments: Comment[] = [];
   for (const d of discussions) {
-    const notes = (d.notes ?? []).filter((n) => !n.system);
+    const notes = (d.notes ?? []).filter((n) => system || !n.system);
     notes.forEach((n, i) => {
       // Only diff notes have a position; the rest are comments on the whole MR.
       const pos = n.type === "DiffNote" ? n.position : null;
@@ -218,8 +223,10 @@ export async function gitlabComments(link: GitlabLink): Promise<Comment[]> {
         body: n.body ?? "",
         createdAt: n.created_at,
         url: link.url,
-        canReply: i === 0,
+        canReply: i === 0 && !n.system,
         discussion: d.id,
+        ...(i === 0 && n.resolvable ? { thread: n.resolved ? { state: "resolved" as const, label: "Resolved" } : { state: "active" as const, label: "Unresolved" } } : {}),
+        ...(n.system ? { system: true } : {}),
       });
     });
   }

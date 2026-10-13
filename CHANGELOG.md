@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.25 · 2026-10-13
+
+- A project row in the sidebar makes room for both of its hover buttons, so they no longer cover the name and the change count.
+- PR tracker 0.10.0 shows a pull request like a review page: the description and comments as Markdown with tables, code and emoji, reviewers with their votes, checks with failing ones first, and the conversation as threads with their status. Resolved and bot threads start collapsed.
+- wings-plugin-ui 0.4.0: emoji shortcodes like `:white_check_mark:` in `Markdown`, and an `Avatar` component.
+
 ## 0.1.24 · 2026-10-13
 
 - Each project has a Project page: a table of facts, Markdown sections with tables, lists and pasted images, and live blocks from plugins. Open it from the project in the sidebar, the + menu or the command palette. What you kept in Project info moves into it the first time it opens.

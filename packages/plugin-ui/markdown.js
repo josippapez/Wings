@@ -2,7 +2,10 @@
 // it, and the only URLs it lets through are https links and https or small data:image images.
 //
 // Blocks: headings, paragraphs, lists (flat, with an indent depth, and task items), fenced code, quotes, rules and
-// GFM tables. Inline: code, bold, italics, strikethrough, links, images and bare https URLs.
+// GFM tables. Inline: code, bold, italics, strikethrough, links, images, bare https URLs and emoji shortcodes
+// (`:white_check_mark:`), which stay literal inside code and when the name is unknown.
+
+import { EMOJI } from "./emoji.js";
 
 /** A data: image longer than this, in characters, is shown as its alt text. */
 export const MAX_DATA_IMAGE = 8000;
@@ -142,7 +145,11 @@ export function parseBlocks(src) {
 // Every scan is bounded and stops at a newline, so a long run of brackets or markers costs a bounded step per start
 // rather than a pass over the rest of the text.
 const inlinePattern =
-  /\[!\[([^\[\]\n]{0,200})\]\(([^)\s]{0,2000})\)\]\(([^)\s]{1,2000})\)|!\[([^\[\]\n]{0,200})\]\(([^)\s]{0,2000})\)|\[([^\[\]\n]{1,200})\]\(([^)\s]{1,2000})\)|`([^`\n]{1,2000})`|\*\*([^*\n]{1,2000})\*\*|~~([^~\n]{1,2000})~~|\*([^*\s][^*\n]{0,2000})\*|(https:\/\/[^\s<>"'`)\]]{1,2000})/gi;
+  /\[!\[([^\[\]\n]{0,200})\]\(([^)\s]{0,2000})\)\]\(([^)\s]{1,2000})\)|!\[([^\[\]\n]{0,200})\]\(([^)\s]{0,2000})\)|\[([^\[\]\n]{1,200})\]\(([^)\s]{1,2000})\)|`([^`\n]{1,2000})`|\*\*([^*\n]{1,2000})\*\*|~~([^~\n]{1,2000})~~|\*([^*\s][^*\n]{0,2000})\*|(https:\/\/[^\s<>"'`)\]]{1,2000})|:([a-z0-9_+-]{1,40}):/gi;
+
+/** `text` with its known `:shortcodes:` as emoji, for spans that are plain text, like a bold or a link's text. */
+export const emojify = (text) =>
+  text.includes(":") ? text.replace(/:([a-z0-9_+-]{1,40}):/gi, (all, name) => (Object.hasOwn(EMOJI, name.toLowerCase()) ? EMOJI[name.toLowerCase()] : all)) : text;
 
 const sentenceEnd = ".,;:!?";
 
@@ -172,7 +179,10 @@ export function parseInline(src) {
     else if (m[9] !== undefined) out.push({ kind: "strong", text: m[9] });
     else if (m[10] !== undefined) out.push({ kind: "del", text: m[10] });
     else if (m[11] !== undefined) out.push({ kind: "em", text: m[11] });
-    else {
+    else if (m[13] !== undefined) {
+      const emoji = Object.hasOwn(EMOJI, m[13].toLowerCase()) ? EMOJI[m[13].toLowerCase()] : null;
+      out.push({ kind: "text", text: emoji ?? m[0] });
+    } else {
       // A bare URL, without the punctuation that ends a sentence.
       let end = m[12].length;
       while (end > 0 && sentenceEnd.includes(m[12][end - 1])) end--;
