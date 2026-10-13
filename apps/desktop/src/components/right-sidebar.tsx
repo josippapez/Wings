@@ -104,7 +104,7 @@ export function RightSidebar(props: {
   const page = current ? sidebarOf(current) : undefined;
   const title = page?.title;
   return (
-    <aside aria-hidden={!showing} aria-label={title}>
+    <aside className="h-full" aria-hidden={!showing} aria-label={title}>
       {!docked && props.mounted.length > 0 && <PeekStrip side="right" events={peek.stripEvents} />}
       <motion.div
         ref={peek.panel}
