@@ -59,6 +59,9 @@ The PR list and the PR tab can start inside the PR tracker plugin, which already
 
 ## Order
 
+All seven shipped: 1 and 2 in Wings 0.1.22, 3 and 4 in 0.1.22 and 0.1.23, 5 and 6 in 0.1.23, 7 in 0.1.24.
+
+
 1. The + menu and `newTab` (small, uses existing view tabs).
 2. `wings.project()` / `onProject` and per-tab state.
 3. Full-tab layouts in `wings-plugin-ui`.
@@ -108,5 +111,5 @@ Each block is a frame, so a page holds at most 8 blocks. A block loads when it s
 ## Open questions
 
 - Should a plugin page be able to replace the terminal as the first tab of a new project?
-- Project notes: file in the repo or Wings storage?
-- Do tab pages unload when hidden, like sidebars do after 5 minutes, or stay loaded? Tasks and notes are cheap to keep. A board that polls should pause while hidden.
+- Project notes: settled. They live in Wings' app data as the Project page, and agents reach them through Wings' MCP tools.
+- Do tab pages unload when hidden, like sidebars do after 5 minutes? Blocks do (5 minutes out of view, and unfocused while hidden). Tab pages still follow the view tab rule.
