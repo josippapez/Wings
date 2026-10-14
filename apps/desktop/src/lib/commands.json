@@ -1,6 +1,8 @@
 {
-  "_": "The commands every surface shares: the shortcuts (lib/commands.ts), the command palette, and the Tab, Pane and View menus (src-tauri/src/menu.rs reads this file). key is the character typed; also lists others that count; extra is Shift on macOS and Alt elsewhere, where Ctrl+Shift is already the modifier (absent: either); alt always needs Alt (arrows); native means the menu owns the key, so the window doesn't match it; plain means ⌘ or plain Ctrl, as in CmdOrCtrl; menu names the menu bar menu; hotkey.default is the global shortcut that brings Wings forward; gap puts a separator above the item.",
+  "_": "The commands every surface shares: the shortcuts (lib/commands.ts), the command palette, and the Tab, Pane and View menus (src-tauri/src/menu.rs reads this file). key is the character typed; also lists others that count; extra is Shift on macOS and Alt elsewhere, where Ctrl+Shift is already the modifier (absent: either); alt always needs Alt (arrows, and the bracket keys, written as their KeyboardEvent.code); native means the menu owns the key, so the window doesn't match it; plain means ⌘ or plain Ctrl, as in CmdOrCtrl; menu names the menu bar menu; hotkey.default is the global shortcut that brings Wings forward; gap puts a separator above the item.",
   "commands": [
+    { "id": "go-back", "title": "Go Back", "group": "View", "key": "BracketLeft", "alt": true },
+    { "id": "go-forward", "title": "Go Forward", "group": "View", "key": "BracketRight", "alt": true },
     { "id": "new-tab", "title": "New Tab", "group": "Tab", "menu": "Tab", "key": "t" },
     { "id": "close-tab", "title": "Close Tab", "group": "Tab", "menu": "Tab" },
     { "id": "next-tab", "title": "Next Tab", "group": "Tab", "menu": "Tab", "gap": true, "key": "]", "also": ["}"] },

@@ -107,3 +107,33 @@ test("a remote https image renders as a button that loads it on click, a data im
   assert.match(remote, /<button[^>]*class="w-md-image-load"[^>]*>Load image from attacker.example<\/button>/);
   assert.match(html("![dot](data:image/png;base64,iVBORw0KGgo=)"), /<img[^>]*src="data:image\/png/);
 });
+
+test("link reference definitions are hidden, as Markdown hides them", () => {
+  const blocks = parseBlocks("A finding.\n\n[ISSUE_KEY]: AbC-1\n[PROJECT_KEY]: acme_web\n\nNext");
+  assert.deepEqual(blocks.map((b) => b.text), ["A finding.", "Next"]);
+  // A task item or a link at the start of a line isn't one.
+  assert.equal(parseBlocks("- [x] done")[0].kind, "list");
+  assert.equal(parseBlocks("[docs](https://example.com): read them")[0].kind, "paragraph");
+});
+
+test("<details> folds its blocks under its <summary>, and nothing of the HTML shows", () => {
+  const src = "Logs the raw error.\n<details>\n<summary>Context & sources</summary>\n\n**Why:** it leaks.\n\n- docs/a.md\n</details>\n\nAfter";
+  const blocks = parseBlocks(src);
+  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "details", "paragraph"]);
+  assert.equal(blocks[1].summary, "Context & sources");
+  assert.deepEqual(blocks[1].blocks.map((b) => b.kind), ["paragraph", "list"]);
+  const out = html(src);
+  assert.match(out, /<details class="w-md-details"><summary class="w-md-summary">Context &amp; sources<\/summary>/);
+  assert.doesNotMatch(out, /&lt;\/?(details|summary)/);
+  // The tag can follow text on the same line, as some bots write it; inside inline code it stays text.
+  const sameLine = parseBlocks("Logs the raw error. <details> <summary>Context</summary>\n\n**Why:** it leaks.\n\n</details>");
+  assert.deepEqual(sameLine.map((b) => b.kind), ["paragraph", "details"]);
+  assert.equal(sameLine[0].text, "Logs the raw error.");
+  assert.equal(sameLine[1].summary, "Context");
+  assert.equal(parseBlocks("Use `<details>` for folds")[0].kind, "paragraph");
+  // Without a summary it reads "Details"; one left open runs to the end; folds nest.
+  assert.equal(parseBlocks("<details>\ntext")[0].summary, "Details");
+  const nested = parseBlocks("<details><summary>a</summary>\n<details><summary>b</summary>\nin\n</details>\nout\n</details>");
+  assert.deepEqual(nested[0].blocks.map((b) => b.kind), ["details", "paragraph"]);
+  assert.equal(nested[0].blocks[0].blocks[0].text, "in");
+});

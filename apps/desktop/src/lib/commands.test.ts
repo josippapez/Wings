@@ -59,6 +59,14 @@ test("tab switching takes ] and [ with or without Shift", () => {
   assert.equal(mac({ key: "{", code: "BracketLeft", shiftKey: true }), "previous-tab");
 });
 
+test("back and forward take the bracket keys with Alt, which tab switching leaves to them", () => {
+  assert.equal(mac({ key: "“", code: "BracketLeft", altKey: true }), "go-back");
+  assert.equal(mac({ key: "‘", code: "BracketRight", altKey: true }), "go-forward");
+  assert.equal(other({ key: "[", code: "BracketLeft", altKey: true }), "go-back");
+  assert.equal(shortcutText(COMMAND_META.find((c) => c.id === "go-back")!, true), "⌥⌘[");
+  assert.equal(shortcutText(COMMAND_META.find((c) => c.id === "go-forward")!, false), "Ctrl+Shift+Alt+]");
+});
+
 test("reload is for development builds only, and not with the extra key", () => {
   assert.equal(commandForKey(key({ metaKey: true, key: "r", code: "KeyR" }), true, false), null);
   assert.equal(mac({ key: "R", code: "KeyR", shiftKey: true }), null);
@@ -97,21 +105,31 @@ test("shortcuts read the way the platform writes them", () => {
 test("a command is enabled when the app can do it now", () => {
   const run = Object.fromEntries(COMMAND_META.map((c) => [c.id, () => {}]));
   const by = (ctx: Parameters<typeof createCommands>[0]) => Object.fromEntries(createCommands(ctx).map((c) => [c.id, c.enabled]));
-  const empty = by({ project: false, terminalTab: false, tabs: 0, dev: false, run });
+  const empty = by({ project: false, terminalTab: false, tabs: 0, canGoBack: false, canGoForward: false, dev: false, run });
   assert.equal(empty["new-tab"], false);
   assert.equal(empty["split-right"], false);
   assert.equal(empty["toggle-sidebar"], true);
   assert.equal(empty.reload, false);
-  const one = by({ project: true, terminalTab: true, tabs: 1, dev: true, run });
+  const one = by({ project: true, terminalTab: true, tabs: 1, canGoBack: false, canGoForward: false, dev: true, run });
   assert.equal(one["new-tab"], true);
   assert.equal(one["split-right"], true);
   assert.equal(one["next-tab"], false);
   assert.equal(one.reload, true);
-  assert.equal(by({ project: true, terminalTab: true, tabs: 2, dev: false, run })["next-tab"], true);
+  assert.equal(by({ project: true, terminalTab: true, tabs: 2, canGoBack: false, canGoForward: false, dev: false, run })["next-tab"], true);
+});
+
+test("back and forward are enabled only with somewhere to go", () => {
+  const run = Object.fromEntries(COMMAND_META.map((c) => [c.id, () => {}]));
+  const by = (canGoBack: boolean, canGoForward: boolean) => Object.fromEntries(createCommands({ project: true, terminalTab: true, tabs: 1, canGoBack, canGoForward, dev: false, run }).map((c) => [c.id, c.enabled]));
+  assert.equal(by(false, false)["go-back"], false);
+  assert.equal(by(false, false)["go-forward"], false);
+  assert.equal(by(true, false)["go-back"], true);
+  assert.equal(by(true, false)["go-forward"], false);
+  assert.equal(by(false, true)["go-forward"], true);
 });
 
 test("a command with no handler is disabled", () => {
-  const all = createCommands({ project: true, terminalTab: true, tabs: 3, dev: true, run: {} });
+  const all = createCommands({ project: true, terminalTab: true, tabs: 3, canGoBack: false, canGoForward: false, dev: true, run: {} });
   assert.ok(all.every((c) => !c.enabled));
 });
 

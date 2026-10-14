@@ -1,8 +1,9 @@
 // A small, safe Markdown parser for plugin pages, as data. It never produces HTML: text stays text, so React escapes
 // it, and the only URLs it lets through are https links and https or small data:image images.
 //
-// Blocks: headings, paragraphs, lists (flat, with an indent depth, and task items), fenced code, quotes, rules and
-// GFM tables. Inline: code, bold, italics, strikethrough, links, images, bare https URLs and emoji shortcodes
+// Blocks: headings, paragraphs, lists (flat, with an indent depth, and task items), fenced code, quotes, rules,
+// GFM tables, and `<details>` with its `<summary>` as a fold. Link reference definitions (`[KEY]: value`) are hidden,
+// as Markdown hides them; bots keep tracking keys in them. Inline: code, bold, italics, strikethrough, links, images, bare https URLs and emoji shortcodes
 // (`:white_check_mark:`), which stay literal inside code and when the name is unknown.
 
 import { EMOJI } from "./emoji.js";
@@ -26,6 +27,10 @@ const numbered = /^(\s*)\d+[.)]\s+(.*)$/;
 const fence = /^\s*(```|~~~)\s*([\w+-]*)/;
 const rule = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const delimiterCell = /^:?-+:?$/;
+const refDefinition = /^\s{0,3}\[[^\]\n]{1,200}\]:\s*\S/;
+const detailsOpen = /^\s*<details(?:\s[^>]*)?>/i;
+/** Folds inside folds are parsed this deep; a deeper one shows its text as a paragraph. */
+const MAX_DETAILS_DEPTH = 3;
 
 /** The cells of a table row: split on `|` that isn't escaped as `\|`, outer pipes dropped. */
 export function splitRow(line) {
@@ -74,7 +79,7 @@ function headingText(text) {
  * `{ kind: "list", ordered, items: { text, depth 0-3, checked: boolean | null }[] }`, `{ kind: "code", lang, text }`,
  * `{ kind: "quote", text }`, `{ kind: "rule" }` and `{ kind: "table", align, head, rows }`.
  */
-export function parseBlocks(src) {
+export function parseBlocks(src, depth = 0) {
   const blocks = [];
   const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
   let paragraph = [];
@@ -94,6 +99,36 @@ export function parseBlocks(src) {
     }
     if (!line.trim()) {
       flush();
+      continue;
+    }
+    if (refDefinition.test(line)) {
+      flush();
+      continue;
+    }
+    // A `<details>` after text on the same line ("…requirement. <details>"): the text stays in the paragraph and the
+    // fold starts at the tag. Not inside inline code (an odd number of backticks before it).
+    const tagAt = depth < MAX_DETAILS_DEPTH ? line.search(/<details(?:\s[^>]*)?>/i) : -1;
+    if (tagAt > 0 && line.slice(0, tagAt).trim() && (line.slice(0, tagAt).match(/`/g)?.length ?? 0) % 2 === 0) {
+      paragraph.push(line.slice(0, tagAt).trim());
+      lines[i] = line.slice(tagAt);
+      i--;
+      continue;
+    }
+    // `<details>` up to its matching `</details>` (or the end), with the first `<summary>` as the fold's title.
+    if (depth < MAX_DETAILS_DEPTH && detailsOpen.test(line)) {
+      flush();
+      const body = [line.replace(detailsOpen, "")];
+      let open = 1 + (body[0].match(/<details(?:\s[^>]*)?>/gi)?.length ?? 0) - (body[0].match(/<\/details>/gi)?.length ?? 0);
+      while (open > 0 && ++i < lines.length) {
+        body.push(lines[i]);
+        open += (lines[i].match(/<details(?:\s[^>]*)?>/gi)?.length ?? 0) - (lines[i].match(/<\/details>/gi)?.length ?? 0);
+      }
+      let inner = body.join("\n");
+      const close = inner.toLowerCase().lastIndexOf("</details>");
+      if (open <= 0 && close >= 0) inner = inner.slice(0, close);
+      const summary = /<summary(?:\s[^>]*)?>([\s\S]{0,500}?)<\/summary>/i.exec(inner);
+      if (summary) inner = inner.slice(0, summary.index) + inner.slice(summary.index + summary[0].length);
+      blocks.push({ kind: "details", summary: summary ? summary[1].replace(/\s+/g, " ").trim() || "Details" : "Details", blocks: parseBlocks(inner, depth + 1) });
       continue;
     }
     // A table: a header row with a pipe, then a delimiter row with as many cells.

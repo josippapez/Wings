@@ -37,6 +37,9 @@ export const kindOf = ({ root }: Thread): Kind => (root.thread?.state === "resol
 export function oneLine(body: string, max = 140): string {
   const text = body
     .replace(/```[\s\S]*?```/g, " code ")
+    // Hidden in the full comment too: link reference definitions and HTML tags like <details>.
+    .replace(/^\s{0,3}\[[^\]\n]{1,200}\]:.*$/gm, " ")
+    .replace(/<\/?[a-z][^>\n]{0,200}>/gi, " ")
     .replace(/^[\s|:-]+$/gm, " ")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/[`*_~>#|]/g, "")

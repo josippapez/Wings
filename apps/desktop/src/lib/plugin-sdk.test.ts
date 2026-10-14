@@ -11,13 +11,14 @@ type Sdk = {
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame(init?: unknown) {
   const handlers: ((event: { source: unknown; data: unknown }) => void)[] = [];
+  const mouse: Record<string, (event: Record<string, unknown>) => void> = {};
   const posts: { id: number; method: string; params: unknown }[] = [];
   const parent = { postMessage: (m: { id: number; method: string; params: unknown }) => posts.push(m) };
   const context: Record<string, unknown> = {
     parent,
     __wingsNonce: "n",
     __wingsInit: init,
-    addEventListener: (type: string, fn: (event: { source: unknown; data: unknown }) => void) => type === "message" && handlers.push(fn),
+    addEventListener: (type: string, fn: (event: { source: unknown; data: unknown }) => void) => (type === "message" ? handlers.push(fn) : void (mouse[type] = fn as never)),
     getSelection: () => null,
     console,
     queueMicrotask,
@@ -28,7 +29,7 @@ function frame(init?: unknown) {
   const send = (event: string, data: unknown) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, event, data } }));
   const calls = (method: string) => posts.filter((m) => m.method === method);
   const reply = (id: number, error?: string, result: unknown = null) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, id, result, error } }));
-  return { wings: context.wings as Sdk, send, calls, reply };
+  return { wings: context.wings as Sdk, send, calls, reply, mouse };
 }
 
 test("an on* listener stops getting events once it's removed", () => {
@@ -174,4 +175,27 @@ test("outside a block, blockState is null and setBlockState and setHeight fail w
   await assert.rejects(wings.setBlockState({}), /shown as a block/);
   assert.throws(() => wings.setHeight(200), /shown as a block/);
   assert.equal(calls("blockState").length + calls("setBlockState").length + calls("setHeight").length, 0);
+});
+
+test("a real mouse back or forward press over the page asks Wings to go back or forward", () => {
+  const { mouse, calls } = frame();
+  const press = (type: string, button: number, isTrusted = true) => {
+    const seen = { prevented: false };
+    mouse[type]({ type, button, isTrusted, preventDefault: () => (seen.prevented = true), stopPropagation() {} });
+    return seen.prevented;
+  };
+  assert.equal(press("mouseup", 3), true);
+  assert.equal(press("mouseup", 4), true);
+  assert.deepEqual(calls("navigate").map((c) => JSON.parse(JSON.stringify(c.params))), [{ direction: "back" }, { direction: "forward" }]);
+  // The press and the click that follows are swallowed, but only the release navigates.
+  assert.equal(press("mousedown", 3), true);
+  assert.equal(press("auxclick", 4), true);
+  assert.equal(calls("navigate").length, 2);
+});
+
+test("a script's own mouse events, and the other buttons, never navigate", () => {
+  const { mouse, calls } = frame();
+  mouse.mouseup({ type: "mouseup", button: 3, isTrusted: false, preventDefault() {}, stopPropagation() {} });
+  for (const button of [0, 1, 2]) mouse.mouseup({ type: "mouseup", button, isTrusted: true, preventDefault() {}, stopPropagation() {} });
+  assert.equal(calls("navigate").length, 0);
 });

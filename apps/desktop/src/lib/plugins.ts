@@ -121,6 +121,8 @@ type Callbacks = {
    * For a tab, `multiple` always opens a new one and `args` is what the page reads with `viewArgs`.
    */
   showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab", tab?: { multiple: boolean; args?: unknown }) => void;
+  /** Back or forward in the places the user has been, as the mouse's side buttons do. */
+  navigate: (direction: "back" | "forward") => void;
   /** The project with this id, with its branch as it is now. */
   projectOf: (spaceId: string | null) => PluginProject | null;
   /** Every project, with its branch as it is now. */
@@ -789,6 +791,13 @@ export class PluginHost {
         else this.callbacks.showView(pluginId, page.id, place, place === "tab" ? { multiple: page.multiple === true, args } : undefined);
         return null;
       }
+      case "navigate":
+        // A page in the main window sends this when the user presses a mouse side button over it, since the window
+        // never sees a press inside a frame. A view window has no history of its own to move.
+        if (plugin.kind === "window") throw new Error("A view window has no back or forward");
+        if (p.direction !== "back" && p.direction !== "forward") throw new Error('navigate takes "back" or "forward"');
+        this.callbacks.navigate(p.direction);
+        return null;
       case "project": {
         const project = this.projectFor(plugin);
         plugin.lastProject = JSON.stringify(project);

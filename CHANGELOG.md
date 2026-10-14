@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.34 · 2026-10-14
+
+- Back and forward: arrow buttons next to the sidebar toggle, your mouse's back and forward buttons (also over plugin pages), and ⌥⌘[ / ⌥⌘]. They go between the projects and tabs you visited.
+- HUD 0.5.1 colours the line under Claude panes: green while there's room, amber from 75% (70% for context), red from 90% (85%).
+- Comments read like they do on the web: a `<details>` section folds under its summary, and `[KEY]: value` lines that bots leave for tracking are hidden. `wings-plugin-ui` 0.8.1; every plugin is rebuilt with it.
+
 ## 0.1.33 · 2026-10-14
 
 - Comments read newest first: the PR tab's conversation (every host), the work item's discussion and the diff viewer's discussion. A thread moves to the top when someone replies; replies inside a thread still read top to bottom. PR tracker 0.13.3, Work item 0.7.1.

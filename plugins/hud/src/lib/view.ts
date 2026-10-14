@@ -62,8 +62,9 @@ export function paneStatus(s: Session, now = Date.now()): WingsPaneStatus {
   const signIn = all.filter((x) => x.state === "sign-in").length;
   const skills = [...s.skills];
   const cache = ctx && cacheText(ctx.cache, now);
-  const contextTone: Tone | undefined = !ctx ? undefined : ctx.percent >= CONTEXT_CRITICAL ? "danger" : ctx.percent >= CONTEXT_WARN ? "warning" : undefined;
-  const limitTone = (l: Limit | null): Tone | undefined => (!l ? undefined : l.percent >= LIMIT_CRITICAL ? "danger" : l.percent >= LIMIT_WARN ? "warning" : undefined);
+  // Green while there's room, then amber and red, so the line reads at a glance.
+  const contextTone: Tone | undefined = !ctx ? undefined : ctx.percent >= CONTEXT_CRITICAL ? "danger" : ctx.percent >= CONTEXT_WARN ? "warning" : "success";
+  const limitTone = (l: Limit | null): Tone | undefined => (!l ? undefined : l.percent >= LIMIT_CRITICAL ? "danger" : l.percent >= LIMIT_WARN ? "warning" : "success");
   // `8% · 4h19m`: usage, then the time until that limit resets. A dash until Claude Code has reported the limit.
   const limitItem = (label: string, l: Limit | null): WingsStatusItem =>
     l ? { label, value: `${l.percent}%${l.left ? ` · ${l.left}` : ""}`, percent: Math.min(100, l.percent), tone: limitTone(l) } : { label, value: "–" };

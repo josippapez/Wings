@@ -61,6 +61,8 @@ export const shortcutLabel = {
   find: shortcutOf("find", isMac),
   palette: shortcutOf("palette", isMac),
   settings: shortcutOf("settings", isMac),
+  goBack: shortcutOf("go-back", isMac),
+  goForward: shortcutOf("go-forward", isMac),
 };
 
 export const DEFAULT_FONT_SIZE = 13;

@@ -1655,6 +1655,21 @@ span.w-md {
   border-left: 2px solid var(--wings-hairline-strong);
   color: var(--wings-muted);
 }
+.w-md-details {
+  padding: 6px 10px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: 8px;
+}
+.w-md-summary {
+  color: var(--wings-muted);
+  cursor: pointer;
+}
+.w-md-summary:hover {
+  color: var(--wings-fg);
+}
+.w-md-details-body {
+  margin-top: 8px;
+}
 .w-md-rule {
   width: 100%;
   border: 0;

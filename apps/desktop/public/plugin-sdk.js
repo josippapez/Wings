@@ -69,6 +69,17 @@
     e.preventDefault();
   });
 
+  // A mouse's back and forward buttons (3 and 4) pressed over this page: the window around it never sees them, so ask
+  // it to go back or forward. Only a real press counts: `isTrusted` is false for a script's `dispatchEvent`. The
+  // press is swallowed like the window does, so the page doesn't also treat it as a click.
+  const sideButton = (e) => {
+    if (!e.isTrusted || (e.button !== 3 && e.button !== 4)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "mouseup") call("navigate", { direction: e.button === 3 ? "back" : "forward" }).catch(() => {});
+  };
+  for (const type of ["mousedown", "mouseup", "auxclick"]) addEventListener(type, sideButton, true);
+
   addEventListener("message", (event) => {
     if (event.source !== parent || event.data?.wings !== 1) return;
     const message = event.data;

@@ -59,7 +59,7 @@ const delay = Math.min(base * 2 ** attempt, 30_000) * (0.5 + Math.random() / 2);
 };
 
 export const comments: Comment[] = [
-  { id: 1, replyTo: null, path: "src/sync/client.ts", line: 88, side: "additions", author: "Alan Turing", body: "Should the jitter be full or equal? Full jitter spreads the load better.", createdAt: ago(60 * 20), url: "https://github.com/acme/web/pull/482#c1", canReply: true, thread: { state: "active", label: "Active" } },
+  { id: 1, replyTo: null, path: "src/sync/client.ts", line: 88, side: "additions", author: "Alan Turing", body: "Should the jitter be full or equal? Full jitter spreads the load better.\n<details>\n<summary>Context & sources</summary>\n\n**Why:** a fixed floor lets every client retry in step.\n\n- docs/standards/retries.md\n</details>\n\n[ISSUE_KEY]: AbC-123\n[PROJECT_KEY]: acme_web", createdAt: ago(60 * 20), url: "https://github.com/acme/web/pull/482#c1", canReply: true, thread: { state: "active", label: "Active" } },
   { id: 2, replyTo: 1, path: "src/sync/client.ts", line: 88, side: "additions", author: "Ada Lovelace", body: "Equal jitter keeps a floor on the delay, which I wanted. Happy to switch if you disagree.", createdAt: ago(60 * 19), url: "https://github.com/acme/web/pull/482#c2" },
   { id: 3, replyTo: null, path: "src/sync/client.test.ts", line: 14, side: "additions", author: "Grace Hopper", body: "Nit: name this `retries on 503`.", createdAt: ago(60 * 18), url: "https://github.com/acme/web/pull/482#c3", canReply: true, thread: { state: "resolved", label: "Resolved" } },
   { id: 4, replyTo: null, path: null, line: null, side: "additions", author: "ci-bot[bot]", body: "Coverage is 91.2%, down 0.1% from main.", createdAt: ago(60 * 5), url: "https://github.com/acme/web/pull/482#c4" },

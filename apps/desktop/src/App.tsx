@@ -43,6 +43,7 @@ import { tabTitles } from "@/lib/tab-names";
 import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
 import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
+import { canGoBack, canGoForward, EMPTY_NAV, goBack, goForward, visit, type NavState, type Place } from "@/lib/nav-history";
 import { defaultEditor, openInEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import { DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
 import type { PaletteItem } from "@/lib/palette";
@@ -512,6 +513,32 @@ const leftPanel = usePanelRef();
     setActiveSpaceId(spaceId);
   }, []);
 
+  // Back and forward. Every change of project or tab, whatever caused it, arrives here as the place on screen, so
+  // nothing that navigates has to know about the history. Going back sets the place, which then visits itself: no change.
+  const navRef = useRef<NavState>(EMPTY_NAV);
+  const [nav, setNav] = useState<NavState>(EMPTY_NAV);
+  const placeExists = useCallback((p: Place) => tabsRef.current.some((t) => t.id === p.tab && t.spaceId === p.space), []);
+  useEffect(() => {
+    const next = visit(navRef.current, activeSpaceId && activeTabId ? { space: activeSpaceId, tab: activeTabId } : null);
+    if (next === navRef.current) return;
+    navRef.current = next;
+    setNav(next);
+  }, [activeSpaceId, activeTabId]);
+  const navigate = useCallback(
+    (go: typeof goBack) => {
+      const next = go(navRef.current, placeExists);
+      if (next === navRef.current) return;
+      navRef.current = next;
+      setNav(next);
+      if (!next.current) return;
+      setActiveTabBySpace((m) => ({ ...m, [next.current!.space]: next.current!.tab }));
+      setActiveSpaceId(next.current.space);
+    },
+    [placeExists],
+  );
+  const canBack = canGoBack(nav, placeExists);
+  const canForward = canGoForward(nav, placeExists);
+
   // A view tab goes once its plugin is off or removed, or its view stops opening as a tab, as on restore.
   useEffect(() => {
     if (pluginsLoaded) closeTabs(staleViewTabs(tabs, plugins));
@@ -818,6 +845,23 @@ const leftPanel = usePanelRef();
     return () => window.removeEventListener("keydown", onKey);
   }, [runCommand]);
 
+  // The mouse's back and forward buttons are buttons 3 and 4 (WebKit maps NSEvent buttonNumber 3 and 4 to them).
+  // Capture phase on the window, so a terminal can't take them, and the press is swallowed too: a program with
+  // mouse reporting on would get a stray button otherwise.
+  useEffect(() => {
+    const side = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === "mouseup") runCommand(e.button === 3 ? "go-back" : "go-forward");
+    };
+    const types = ["mousedown", "mouseup", "auxclick"] as const;
+    for (const type of types) window.addEventListener(type, side, true);
+    return () => {
+      for (const type of types) window.removeEventListener(type, side, true);
+    };
+  }, [runCommand]);
+
   // The menu owns ⌘W (so it never closes the window), and its Tab, Pane and View items are the commands of
   // `commands.json`; it forwards them here.
   useEffect(() => {
@@ -952,6 +996,7 @@ const leftPanel = usePanelRef();
         setEpochs((all) => ({ ...all, [pluginId]: (all[pluginId] ?? 0) + 1 }));
         setModal((key) => (key?.startsWith(`${pluginId}:`) ? null : key));
       },
+      navigate: (direction) => runCommand(direction === "back" ? "go-back" : "go-forward"),
       showView: (pluginId, viewId, place, options) => {
         const key = `${pluginId}:${viewId}`;
         if (place === "modal") return setModal(key);
@@ -1399,8 +1444,12 @@ const leftPanel = usePanelRef();
     terminalTab: activeTab !== null,
     projectPage: shownTab !== null && isProjectTab(shownTab),
     tabs: spaceTabs.length,
+    canGoBack: canBack,
+    canGoForward: canForward,
     dev: import.meta.env.DEV,
     run: {
+      "go-back": () => navigate(goBack),
+      "go-forward": () => navigate(goForward),
       "new-tab": () => activeSpaceId && openTab(activeSpaceId),
       "close-tab": () => activeTabId && closeTab(activeTabId),
       "next-tab": () => stepTab(1),
@@ -1543,6 +1592,10 @@ const leftPanel = usePanelRef();
             activeTabId={activeTabId}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((o) => !o)}
+            canGoBack={canBack}
+            canGoForward={canForward}
+            onGoBack={() => navigate(goBack)}
+            onGoForward={() => navigate(goForward)}
             onSelect={(id) => activeSpace && setActiveTabBySpace((m) => ({ ...m, [activeSpace.id]: id }))}
             onClose={closeTab}
             onRename={renameTab}

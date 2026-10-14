@@ -57,7 +57,7 @@ export function commandForKey(e: KeyInput, mac: boolean, dev: boolean, commands:
   return null;
 }
 
-const ARROWS: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓" };
+const ARROWS: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓", BracketLeft: "[", BracketRight: "]" };
 
 /** The shortcut as the platform writes it: "⇧⌘D" on macOS, "Ctrl+Shift+Alt+D" elsewhere. Empty if it has none. */
 export function shortcutText(c: CommandMeta, mac: boolean): string {
@@ -84,6 +84,9 @@ export type CommandContext = {
   projectPage?: boolean;
   /** More than one tab in the project on screen. */
   tabs: number;
+  /** There is a place to go back or forward to. */
+  canGoBack: boolean;
+  canGoForward: boolean;
   dev: boolean;
   run: Record<string, () => void>;
 };
@@ -99,6 +102,8 @@ export function createCommands(ctx: CommandContext, commands: CommandMeta[] = CO
     "split-down": ctx.terminalTab,
     "move-tab-left": ctx.tabs > 1,
     "move-tab-right": ctx.tabs > 1,
+    "go-back": ctx.canGoBack,
+    "go-forward": ctx.canGoForward,
     "worktree-agent": ctx.project,
     "open-in-editor": ctx.project,
     "close-pane": ctx.tabs > 0,

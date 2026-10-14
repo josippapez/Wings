@@ -145,6 +145,11 @@ export function TitleBar(props: {
   activeTabId: string | null;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  /** Back and forward through the places visited; a button is disabled when there is nowhere to go. */
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onGoBack: () => void;
+  onGoForward: () => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   /** An empty name goes back to the automatic one. */
@@ -241,6 +246,12 @@ export function TitleBar(props: {
       <div className={cn("flex h-full shrink-0 items-center gap-1 pl-[84px]", props.sidebarOpen ? "min-w-[calc(var(--main-l,0px)+0.75rem)]" : "pr-1")}>
         <IconButton label={props.sidebarOpen ? "Hide sidebar" : "Show sidebar"} shortcut={shortcutLabel.toggleSidebar} onClick={props.onToggleSidebar}>
           <PanelLeftIcon />
+        </IconButton>
+        <IconButton label="Back" shortcut={shortcutLabel.goBack} disabled={!props.canGoBack} onClick={props.onGoBack}>
+          <ArrowLeftIcon />
+        </IconButton>
+        <IconButton label="Forward" shortcut={shortcutLabel.goForward} disabled={!props.canGoForward} onClick={props.onGoForward}>
+          <ArrowRightIcon />
         </IconButton>
       </div>
 

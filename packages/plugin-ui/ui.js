@@ -860,11 +860,19 @@ function blocksOf(source) {
  */
 export const Markdown = memo(function Markdown({ source, inline, className, ...rest }) {
   if (inline) return h("span", { ...rest, className: cx("w-md", className) }, h(MdInline, { text: source }));
-  return h(
-    "div",
-    { ...rest, className: cx("w-md", className) },
-    blocksOf(source).map((b, i) => {
+  return h("div", { ...rest, className: cx("w-md", className) }, mdBlocks(blocksOf(source)));
+});
+
+function mdBlocks(blocks) {
+  return blocks.map((b, i) => {
       switch (b.kind) {
+        case "details":
+          return h(
+            "details",
+            { key: i, className: "w-md-details" },
+            h("summary", { className: "w-md-summary" }, h(MdInline, { text: b.summary })),
+            h("div", { className: "w-md w-md-details-body" }, mdBlocks(b.blocks)),
+          );
         case "heading":
           return h(`h${Math.min(b.level + 2, 6)}`, { key: i, className: "w-md-heading", "data-level": Math.min(b.level, 4) }, h(MdInline, { text: b.text }));
         case "list":
@@ -900,9 +908,8 @@ export const Markdown = memo(function Markdown({ source, inline, className, ...r
         default:
           return h("p", { key: i }, h(MdInline, { text: b.text }));
       }
-    }),
-  );
-});
+  });
+}
 
 // ---------- activity: times, a summary row, skeletons and a timeline ----------
 

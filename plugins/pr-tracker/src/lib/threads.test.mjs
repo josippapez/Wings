@@ -34,6 +34,7 @@ test("a collapsed thread's summary is one plain line", () => {
   assert.equal(oneLine("```js\nlong\n```\nafter"), "code after");
   assert.equal(oneLine("## Report\n\n| File | Lines |\n|---|---|\n| a.ts | 9% |"), "Report File Lines a.ts 9%");
   assert.equal(oneLine("a".repeat(200), 10), "aaaaaaaaa…");
+  assert.equal(oneLine("Logs the raw error.\n<details>\n<summary>Context</summary>\nWhy\n</details>\n\n[ISSUE_KEY]: AbC-1"), "Logs the raw error. Context Why");
 });
 
 test("relative times", () => {
