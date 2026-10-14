@@ -1,7 +1,7 @@
-// The Tasks block while loading.
+// The Issues block while the list loads.
 import { BlockView } from "../src/lib/block-view";
 import "../src/tasks.css";
 import { project } from "./_data";
 
 export const place = "view";
-export default <BlockView project={project} tasks={null} error={null} hideDone={false} onHideDone={() => {}} apply={() => Promise.resolve()} onMove={() => {}} onOpen={() => {}} />;
+export default <BlockView project={project} issues={null} error={null} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;

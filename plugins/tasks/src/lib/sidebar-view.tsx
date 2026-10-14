@@ -1,44 +1,38 @@
-// The Tasks sidebar without its data: the short list for a project.
+// The Issues sidebar without its data: the open issues of a project.
 
-import { Button, Checkbox, Empty, Heading, List, ListItem, Loading, Stack, Text } from "wings-plugin-ui";
-import { AddTask } from "./AddTask";
+import { Button, Empty, Heading, List, ListButton, ListItem, Loading, Stack, Text } from "wings-plugin-ui";
+import { AddIssue } from "./AddIssue";
+import { openIssues, type Issue, type Op } from "./issues";
 import { StatusDot } from "./parts";
-import { openTasks, type Op, type Task } from "./tasks";
 
-export function SidebarView({ project, tasks, apply, board }: { project: WingsProject; tasks: Task[] | null; apply: (op: Op) => Promise<void>; board: (taskId?: string) => void }) {
-  const open = tasks ? openTasks(tasks) : [];
-  const done = tasks ? tasks.length - open.length : 0;
+export function SidebarView({ project, issues, apply, openBoard, openIssue }: { project: WingsProject; issues: Issue[] | null; apply: (op: Op) => Promise<void>; openBoard: () => void; openIssue: (issue: Issue) => void }) {
+  const open = issues ? openIssues(issues) : [];
+  const done = issues ? issues.length - open.length : 0;
 
   return (
     <Stack gap="m" className="tk-side">
-      <Heading actions={<Button size="xs" variant="outline" onClick={() => board()}>Open board</Button>}>
-        Tasks {tasks ? <span className="tk-count">{open.length}</span> : null}
+      <Heading actions={<Button size="xs" variant="outline" onClick={openBoard}>Open board</Button>}>
+        Issues {issues ? <span className="tk-count">{open.length}</span> : null}
       </Heading>
-      <AddTask apply={apply} branch={project.branch} />
-      {!tasks ? (
-        <Loading>Loading tasks</Loading>
+      <AddIssue apply={apply} />
+      {!issues ? (
+        <Loading>Loading issues</Loading>
       ) : open.length === 0 ? (
-        <Empty title="All clear" description={done > 0 ? `Every task for ${project.name} is done.` : `Nothing open for ${project.name}. Add a task above, or ask Claude to keep a follow-up here.`} />
+        <Empty title="All clear" description={done > 0 ? `Every issue for ${project.name} is closed.` : `Nothing open for ${project.name}. Add an issue above, or ask Claude to keep track of its work here.`} />
       ) : (
-        <List compact className="tk-list" aria-label={`Open tasks for ${project.name}`}>
-          {open.map((t) => (
-            <ListItem key={t.id} className="tk-item">
-              <Checkbox aria-label={`Mark "${t.title}" done`} checked={false} onChange={() => void apply({ kind: "update", id: t.id, status: "done" }).catch(console.error)} />
-              <button type="button" className="tk-open" onClick={() => board(t.id)} aria-label={`Open task: ${t.title}`}>
-                <span className="tk-item-title">{t.title}</span>
-                {t.status === "doing" || t.links?.branch ? (
-                  <span className="tk-item-meta">
-                    {t.status === "doing" ? <span className="tk-doing"><StatusDot status="doing" /> Doing</span> : null}
-                    {t.links?.branch ? <span className="tk-branch" title={t.links.branch}>{t.links.branch}</span> : null}
-                  </span>
-                ) : null}
-              </button>
+        <List compact aria-label={`Open issues for ${project.name}`}>
+          {open.map((i) => (
+            <ListItem key={i.key}>
+              <ListButton onClick={() => openIssue(i)} aria-label={`Open ${i.key}: ${i.title}`}>
+                <StatusDot status={i.status} />
+                <span className="tk-key">{i.key}</span>
+                <Text as="span" grow truncate title={i.title}>{i.title}</Text>
+              </ListButton>
             </ListItem>
           ))}
         </List>
       )}
-      {done > 0 && open.length > 0 ? <Text tone="muted" size="small" className="tk-done-note">{done} done</Text> : null}
+      {done > 0 && open.length > 0 ? <Text tone="muted" size="small" className="tk-done-note">{done} closed</Text> : null}
     </Stack>
   );
 }
-

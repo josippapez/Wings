@@ -1144,6 +1144,13 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>) -> Result<Option<Strin
     if let Some(flag) = words[1..].iter().find(|w| is_unsafe_flag(program, w)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
+    // Claude's flags set its permissions, tools and config (--dangerously-skip-permissions, --permission-mode,
+    // --mcp-config, --settings), so a plugin passes only the ones its entry names.
+    if program == "claude" {
+        if let Some(flag) = words[entry.len()..].iter().find(|w| w.starts_with('-')) {
+            return Err(format!("{id} may not pass {flag} to claude"));
+        }
+    }
     let extra = words[entry.len()..].iter().map(|w| format!("'{w}'"));
     Ok(Some(entry.iter().map(|w| w.to_string()).chain(extra).collect::<Vec<_>>().join(" ")))
 }
@@ -2216,6 +2223,13 @@ mod tests {
         assert!(input(Some(&format!("lazygit {}", "a".repeat(1100)))).is_err());
         // The same flags `exec` refuses.
         assert!(input(Some("git log -ccore.pager=sh")).unwrap_err().contains("may not pass"));
+        // Claude takes only the flags the entry names; a prompt word is fine.
+        let claude = with_panes(Some(&["claude", "claude --resume"]));
+        assert_eq!(pane_input(&claude, Some("claude Continue-issue-A-1")).unwrap().as_deref(), Some("claude 'Continue-issue-A-1'"));
+        assert_eq!(pane_input(&claude, Some(&format!("claude --resume {id}"))).unwrap(), Some(format!("claude --resume '{id}'")));
+        for flag in ["claude --dangerously-skip-permissions", "claude --permission-mode=bypassPermissions", "claude x --mcp-config=a.json", "claude --resume x --settings=s.json", "claude -p x"] {
+            assert!(pane_input(&claude, Some(flag)).unwrap_err().contains("may not pass"), "{flag}");
+        }
 
         // `[]` allows plain shells only; no `panes` allows nothing, not even focus.
         let shells = with_panes(Some(&[]));

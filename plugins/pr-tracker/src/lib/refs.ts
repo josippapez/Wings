@@ -1,10 +1,12 @@
 /** A PR's ref to and from the args of its tab, and what the tab shows of it. */
-import { azureComments, azureFailure, azureLink, azureOverview, azureReply, azureShow, azureVote } from "./azure";
+import { azureComments, azureFileAt, azurePushes, azureFailure, azureLink, azureOverview, azureReply, azureShow, azureVote } from "./azure";
 import { bitbucketApprove, bitbucketComments, bitbucketOverview, bitbucketReply } from "./bitbucket";
 import { plainFailure } from "./forges";
 import { giteaApprove, giteaComments, giteaOverview, giteaReply } from "./gitea";
 import { githubApprove, githubComments, githubFailure, githubOverview, githubReply } from "./github";
 import { gitlabApprove, gitlabComments, gitlabFailure, gitlabOverview, gitlabReply } from "./gitlab";
+import { snippetOf, type SnippetLine } from "./snippet";
+import type { Push } from "./pushes";
 import type { AzureVote } from "./vote";
 import type { AzureLink, AzureRemote, BitbucketLink, BitbucketRemote, Comment, FailureDetail, Failing, GiteaLink, GiteaRemote, GitlabLink, GitlabRemote, Link, PrArgs, Provider, Reviewer, Status } from "./types";
 
@@ -38,7 +40,20 @@ export function overviewOf(link: Link): Promise<Overview> {
   return { github: githubOverview, azure: (l: Link) => azureOverview(l as AzureLink), gitlab: (l: Link) => gitlabOverview(l as GitlabLink), bitbucket: (l: Link) => bitbucketOverview(l as BitbucketLink), gitea: (l: Link) => giteaOverview(l as GiteaLink) }[link.provider](link as never);
 }
 
-/** The PR's comments for the tab, with GitLab's system notes, which the diff viewer leaves out. Azure's own notes ("The reference … was updated") stay out, as on Azure DevOps. */
+/** The PR's pushes with their commits. Only Azure DevOps lists them; its "The reference … was updated" notes are these pushes, so they are not comments. */
+export const pushesFor = (link: Link): Promise<Push[]> => (link.provider === "azure" ? azurePushes(link) : Promise.resolve([]));
+
+/** The lines around a code thread's comment, from the commit it was written on. Null where they can't be had. */
+export async function snippetFor(link: Link, root: Comment, pushes: Push[], head: string | null): Promise<SnippetLine[] | null> {
+  if (link.provider !== "azure" || !root.path || !root.range) return null;
+  const push = pushes.find((p) => p.id === root.range!.iteration);
+  const sha = root.side === "deletions" ? push?.base : (push?.head ?? head);
+  const text = sha ? await azureFileAt(link, sha, root.path) : null;
+  const lines = text === null ? [] : snippetOf(text, root.range.start, root.range.end);
+  return lines.length ? lines : null;
+}
+
+/** The PR's comments for the tab, with GitLab's system notes, which the diff viewer leaves out. Azure's own notes ("The reference … was updated") are not comments; `pushesOf` draws them. */
 export function commentsOf(link: Link): Promise<Comment[]> {
   return { github: githubComments, azure: (l: Link) => azureComments(l as AzureLink), gitlab: (l: Link) => gitlabComments(l as GitlabLink, true), bitbucket: bitbucketComments, gitea: giteaComments }[link.provider](link as never);
 }

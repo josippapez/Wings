@@ -1,7 +1,7 @@
-// The Tasks sidebar with open tasks.
+// The Issues sidebar with open issues.
 import { SidebarView } from "../src/lib/sidebar-view";
 import "../src/tasks.css";
-import { project, tasks } from "./_data";
+import { issues, project } from "./_data";
 
 export const place = "sidebar";
-export default <SidebarView project={project} tasks={tasks} apply={() => Promise.resolve()} board={() => {}} />;
+export default <SidebarView project={project} issues={issues} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;

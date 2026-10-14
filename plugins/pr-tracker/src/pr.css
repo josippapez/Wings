@@ -252,7 +252,7 @@ button.pr-chip {
   min-width: 0;
 }
 .pr-body-clip[data-clamped] {
-  max-height: 11em;
+  max-height: 26em;
   overflow: hidden;
   mask-image: linear-gradient(to bottom, #000 70%, transparent);
 }
@@ -274,10 +274,6 @@ button.pr-chip {
   min-width: 0;
   content-visibility: auto;
   contain-intrinsic-size: auto 96px;
-}
-.pr-thread[data-kind="automated"] > .pr-card {
-  background: transparent;
-  font-size: 12px;
 }
 .pr-thread[data-kind="resolved"] > .pr-card {
   border-style: dashed;
@@ -311,16 +307,129 @@ button.pr-chip {
 .pr-chevron {
   color: var(--wings-muted);
 }
-.pr-where {
+/* A code thread: the file it is on, the lines around the comment, then the conversation. */
+.pr-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.pr-file-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pr-file-name {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.pr-file-id .pr-path {
+  color: var(--wings-muted);
+  font-size: 11px;
+}
+.pr-snippet {
+  margin: 0 -14px;
+  padding: 6px 0;
+  overflow-x: auto;
+  border-block: 1px solid var(--wings-hairline);
+  background: rgb(255 255 255 / 0.025);
+  font: 12px/1.6 var(--wings-mono);
+}
+.pr-snippet-line {
+  display: flex;
+  min-width: max-content;
+  padding-right: 14px;
+  font: inherit;
+  white-space: pre;
+}
+.pr-snippet-line[data-hit] {
+  background: color-mix(in srgb, var(--wings-info) 16%, transparent);
+  box-shadow: inset 2px 0 var(--wings-info);
+}
+.pr-ln {
+  flex: none;
+  width: 44px;
+  padding-right: 12px;
+  color: var(--wings-muted);
+  opacity: 0.7;
+  text-align: right;
+  user-select: none;
+}
+.pr-line-no {
+  opacity: 0.8;
+}
+
+/* A push: quieter than a comment, a number on the line, the commits in muted text. */
+.pr-push {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 2px 2px 0;
+  color: var(--wings-muted);
+  font-size: 12px;
+}
+.pr-iteration {
+  flex: none;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 6px;
+  font: 11px/18px var(--wings-mono);
+  text-align: center;
+}
+.pr-push-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.pr-push-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  gap: 2px 8px;
+  line-height: 20px;
+}
+.pr-push-head strong {
+  color: var(--wings-fg);
+  font-weight: 600;
+}
+.pr-commits {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  margin: 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--wings-hairline);
+  list-style: none;
+}
+.pr-commits > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 4px 8px;
-  padding: 4px 4px 4px 10px;
-  border: 1px solid var(--wings-hairline);
-  border-radius: 8px;
-  background: rgb(255 255 255 / 0.03);
+  gap: 0 12px;
+  min-width: 0;
+  padding: 3px 0;
+}
+.pr-commit-msg {
+  flex: 1 1 18em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--wings-fg);
+}
+.pr-commit-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  font-size: 11px;
+}
+.pr-commit-meta code {
+  font: 11px var(--wings-mono);
 }
 .pr-path {
   min-width: 0;

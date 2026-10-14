@@ -10,7 +10,7 @@ export interface Thread {
 export const isAutomated = (c: Comment) => Boolean(c.system) || /\[bot\]$|\bbot$|build service|^github-actions|^azure pipelines/i.test(c.author.trim());
 
 /** When a thread last had a comment: its newest reply, else its first comment. */
-const lastActivity = (t: Thread) => Date.parse((t.replies.at(-1) ?? t.root).createdAt);
+export const lastActivity = (t: Thread) => Date.parse((t.replies.at(-1) ?? t.root).createdAt);
 
 /** Comments grouped under their thread's first comment. The thread with the newest comment comes first; replies read oldest first. */
 export function threadsOf(comments: Comment[]): Thread[] {
@@ -30,7 +30,7 @@ export function focusOf(root: Comment): WingsDiffFocus | undefined {
 
 export type Kind = "open" | "resolved" | "automated";
 
-/** How a thread shows: a thread a person wrote and that is still open reads in full, the rest start collapsed. */
+/** How a thread shows: resolved ones start collapsed; every other thread, a bot's too, reads in full. `automated` only marks it. */
 export const kindOf = ({ root }: Thread): Kind => (root.thread?.state === "resolved" ? "resolved" : isAutomated(root) ? "automated" : "open");
 
 /** A comment's text on one line, without Markdown marks, for a collapsed thread's summary. */

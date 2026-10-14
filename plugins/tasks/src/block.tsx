@@ -1,11 +1,11 @@
-// The Board block of a Project page: the project's tasks as to do, doing and done, compact. Add a task on the
-// line above, move one with its buttons or Alt+Left and Alt+Right, open the board tab for the rest.
+// The Issues block of a Project page: counts and the project's open issues, compact. Add an issue on the line above,
+// open one to read it, or open the board tab for the rest.
 
 import { useEffect, useRef, useState } from "react";
 import { Empty, Loading, showView } from "wings-plugin-ui";
 import { BlockView } from "./lib/block-view";
-import { cleanBlockState, STATUSES, type BoardBlockState, type Op, type Task } from "./lib/tasks";
-import { useTasks } from "./lib/useTasks";
+import type { Issue } from "./lib/issues";
+import { useIssues } from "./lib/useIssues";
 import "./tasks.css";
 
 /** Tells Wings how tall the content is, so the block fits it. */
@@ -21,44 +21,28 @@ function useFit(ref: React.RefObject<HTMLElement | null>) {
 
 function BlockPage() {
   const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
-  const [state, setState] = useState<BoardBlockState | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    void wings.project().then(setProject);
-    void Promise.resolve(wings.blockState()).then((raw) => setState(cleanBlockState(raw)));
-  }, []);
+  useEffect(() => void wings.project().then(setProject), []);
   useFit(root);
-
-  const setHideDone = (hideDone: boolean) => {
-    const next = hideDone ? { hideDone } : {};
-    setState(next);
-    void wings.setBlockState(next);
-  };
-
   let body;
-  if (project === undefined || !state) body = <Loading>Loading tasks</Loading>;
-  else if (!project) body = <Empty title="No project" description="Open a project to see its tasks." />;
-  else body = <ProjectBlock key={project.id} project={project} hideDone={state.hideDone === true} onHideDone={setHideDone} />;
+  if (project === undefined) body = <Loading>Loading issues</Loading>;
+  else if (!project) body = <Empty title="No project" description="Open a project to see its issues." />;
+  else body = <ProjectBlock key={project.id} project={project} />;
   return <div ref={root}>{body}</div>;
 }
 
-function ProjectBlock({ project, hideDone, onHideDone }: { project: WingsProject; hideDone: boolean; onHideDone: (hide: boolean) => void }) {
-  const { tasks, apply } = useTasks(project.id);
-  const [error, setError] = useState<string | null>(null);
-
-  const move = (t: Task, by: 1 | -1) => {
-    const next = STATUSES[STATUSES.indexOf(t.status) + by];
-    if (!next) return;
-    apply({ kind: "update", id: t.id, status: next } satisfies Op).then(
-      () => {
-        setError(null);
-        document.getElementById(`block-task-${t.id}`)?.focus();
-      },
-      (e) => setError(e instanceof Error ? e.message : String(e)),
-    );
-  };
-
-  return <BlockView project={project} tasks={tasks} error={error} hideDone={hideDone} onHideDone={onHideDone} apply={apply} onMove={move} onOpen={(t) => void wings.openView("board", { as: "tab", args: { taskId: t.id } })} />;
+function ProjectBlock({ project }: { project: WingsProject }) {
+  const { store, apply } = useIssues(project.id, project.name);
+  return (
+    <BlockView
+      project={project}
+      issues={store?.issues ?? null}
+      error={null}
+      apply={apply}
+      openBoard={() => void wings.openView("board", { as: "tab" })}
+      openIssue={(issue: Issue) => void wings.openView("issue", { as: "tab", args: { key: issue.key, projectId: project.id } })}
+    />
+  );
 }
 
 showView(<BlockPage />);

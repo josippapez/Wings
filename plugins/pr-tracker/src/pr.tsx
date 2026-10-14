@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
 import { Empty, Loading, Page, showTab } from "wings-plugin-ui";
-import { approveWith, canApprove, commentsOf, failureOf, linkOf, overviewOf, replyWith, voteWith, type Overview } from "./lib/refs";
+import { approveWith, canApprove, commentsOf, failureOf, linkOf, overviewOf, pushesFor, replyWith, snippetFor, voteWith, type Overview } from "./lib/refs";
+import type { Push } from "./lib/pushes";
+import type { SnippetLine } from "./lib/snippet";
 import type { Comment, Failing, Link, PrArgs } from "./lib/types";
 import type { AzureVote } from "./lib/vote";
 import "./pr.css";
@@ -43,6 +45,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const [link, setLink] = useState<Link | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
+  const [pushes, setPushes] = useState<Push[]>([]);
+  const snippets = useRef(new Map<number, Promise<SnippetLine[] | null>>());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,6 +61,7 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       const [o, c] = await Promise.all([
         overviewOf(l).then((o) => (setOverview(o), o)),
         commentsOf(l).then((c) => (setComments(c), c)),
+        pushesFor(l).then(setPushes),
       ]);
       setError(null);
       return { o, c };
@@ -105,6 +110,18 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
     await load();
   }, [link, load]);
 
+  /** Each code thread's lines are read once, when its card is opened. */
+  const onSnippet = useCallback(
+    (root: Comment) => {
+      const hit = snippets.current.get(root.id);
+      if (hit) return hit;
+      const lines = snippetFor(link!, root, pushes, overview?.status.headCommit ?? null);
+      snippets.current.set(root.id, lines);
+      return lines;
+    },
+    [link, pushes, overview],
+  );
+
   const onLoadFailure = useCallback((f: Failing) => failureOf(link!, f), [link]);
 
   return (
@@ -112,6 +129,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       args={args}
       overview={overview}
       comments={comments}
+      pushes={pushes}
+      onSnippet={link?.provider === "azure" ? onSnippet : undefined}
       error={error}
       notice={notice}
       busy={busy}

@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.36 · 2026-10-14
+
+- Tasks is now Issues (0.4.0). Each issue has a key like `WEB-12`, a status (to do, in progress, in review, done, canceled), a Markdown description, links to its branch, PR and commits, the Claude sessions that worked on it, and an activity log of who did what and when. An issue opens as a tab with Resume (continues its last session) and Start agent. Claude gets `tasks__list`, `get`, `create`, `update` and `log`, and its entries are stamped with its session. Your tasks are moved over on first start.
+- PR tracker 0.14.0: the Overview reads like Azure DevOps': every comment in one timeline (bots too, tagged), pushes as cards listing their commits, and comments on code with the file and the lines around them.
+- A plugin can't start `claude` with flags its manifest doesn't name, so no plugin can open Claude with `--dangerously-skip-permissions` or its own settings.
+
 ## 0.1.35 · 2026-10-14
 
 - Pull requests in the sidebar show a pull request icon (draft, open, merged, closed) in their status colour instead of a dot. Plugins can set `icon` on a section row; `wings-plugin-sdk` 0.13.0.

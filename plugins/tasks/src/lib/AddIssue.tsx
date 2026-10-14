@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Button, Row, Text, TextInput } from "wings-plugin-ui";
-import { LIMITS, type Op } from "./tasks";
+import { LIMITS, type Op } from "./issues";
 
 /** A line to type a title in. Enter or Add sends it to main; the input clears when main accepts it. */
-export function AddTask({ apply, branch }: { apply: (op: Op) => Promise<void>; branch?: string | null }) {
+export function AddIssue({ apply }: { apply: (op: Op) => Promise<void> }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function AddTask({ apply, branch }: { apply: (op: Op) => Promise<void>; b
     setBusy(true);
     setError(null);
     try {
-      await apply({ kind: "add", title, branch: branch ?? undefined });
+      await apply({ kind: "create", title });
       setTitle("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -24,7 +24,7 @@ export function AddTask({ apply, branch }: { apply: (op: Op) => Promise<void>; b
 
   return (
     <Row as="form" gap="s" className="tk-add" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
-      <TextInput label="New task" placeholder="Add a task" value={title} maxLength={LIMITS.title} onChange={(e) => setTitle(e.currentTarget.value)} />
+      <TextInput label="New issue" placeholder="Add an issue" value={title} maxLength={LIMITS.title} onChange={(e) => setTitle(e.currentTarget.value)} />
       <Button type="submit" busy={busy} disabled={!title.trim()}>Add</Button>
       {error ? <Text tone="danger" role="alert" size="small">{error}</Text> : null}
     </Row>

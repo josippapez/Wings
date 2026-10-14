@@ -1,8 +1,7 @@
-// The Tasks block with a mix of tasks.
+// The Issues block with a mix of issues.
 import { BlockView } from "../src/lib/block-view";
 import "../src/tasks.css";
-import { project, tasks } from "./_data";
+import { issues, project } from "./_data";
 
-void tasks;
 export const place = "view";
-export default <BlockView project={project} tasks={tasks} error={null} hideDone={false} onHideDone={() => {}} apply={() => Promise.resolve()} onMove={() => {}} onOpen={() => {}} />;
+export default <BlockView project={project} issues={issues} error={null} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;

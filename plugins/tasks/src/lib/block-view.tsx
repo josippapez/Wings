@@ -1,44 +1,64 @@
-// The Board block without its data: the compact board for a list of tasks.
+// The Issues block of a Project page without its data: counts and a compact list of the open issues.
 
-import { Board, BoardColumn, Chip, Empty, Loading, Row, Stack, Text } from "wings-plugin-ui";
-import { AddTask } from "./AddTask";
-import { boardColumns, STATUS_LABEL, type Op, type Task } from "./tasks";
-import { StatusDot, TaskCard } from "./parts";
+import { Button, Empty, List, ListButton, ListItem, Loading, Row, Stack, Summary, SummaryChip, Text } from "wings-plugin-ui";
+import { AddIssue } from "./AddIssue";
+import { openIssues, STATUS_LABEL, type Issue, type Op } from "./issues";
+import { SessionMarker, StatusDot } from "./parts";
+
+/** The block lists this many open issues; the board has the rest. */
+export const BLOCK_ROWS = 8;
 
 export interface BlockViewProps {
   project: WingsProject;
-  tasks: Task[] | null;
+  issues: Issue[] | null;
   error: string | null;
-  hideDone: boolean;
-  onHideDone: (hide: boolean) => void;
   apply: (op: Op) => Promise<void>;
-  onMove: (t: Task, by: 1 | -1) => void;
-  onOpen: (t: Task) => void;
+  openBoard: () => void;
+  openIssue: (issue: Issue) => void;
 }
 
-export function BlockView({ project, tasks, error, hideDone, onHideDone, apply, onMove, onOpen }: BlockViewProps) {
+export function BlockView({ project, issues, error, apply, openBoard, openIssue }: BlockViewProps) {
+  const count = (status: Issue["status"]) => issues?.filter((i) => i.status === status).length ?? 0;
+  const open = issues ? openIssues(issues) : [];
   return (
     <Stack gap="s">
-      <Row gap="m" justify="between">
-        <AddTask apply={apply} branch={project.branch} />
-        <Chip pressed={hideDone} onClick={() => onHideDone(!hideDone)}>Hide done</Chip>
+      <Row gap="m" justify="between" wrap>
+        <AddIssue apply={apply} />
+        <Button variant="outline" size="sm" onClick={openBoard}>Open board</Button>
       </Row>
       {error ? <Text tone="danger" role="alert" size="small">{error}</Text> : null}
-      {!tasks ? (
-        <Loading>Loading tasks</Loading>
-      ) : tasks.length === 0 ? (
-        <Empty title="No tasks yet" description="Add one above." />
+      {!issues ? (
+        <Loading>Loading issues</Loading>
+      ) : issues.length === 0 ? (
+        <Empty title="No issues yet" description="Add one above, or ask Claude to keep track of its work here." />
       ) : (
-        <Board className="tasks-block-board" label={`Tasks for ${project.name}`}>
-          {boardColumns(tasks, hideDone).map(({ status, tasks: column }) => (
-            <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
-              {column.length === 0 ? <p className="tk-column-empty">Nothing here</p> : null}
-              {column.map((t) => <TaskCard key={t.id} task={t} id={`block-task-${t.id}`} compact onMove={(by) => onMove(t, by)} onOpen={() => onOpen(t)} />)}
-            </BoardColumn>
-          ))}
-        </Board>
+        <>
+          <Summary aria-label="Issue counts">
+            <SummaryChip>{count("todo")} to do</SummaryChip>
+            <SummaryChip tone="info">{count("in_progress")} in progress</SummaryChip>
+            <SummaryChip tone="warn">{count("in_review")} in review</SummaryChip>
+            <SummaryChip tone="success">{count("done")} done</SummaryChip>
+          </Summary>
+          {open.length === 0 ? (
+            <Text tone="muted" size="small">Nothing open for {project.name}.</Text>
+          ) : (
+            <List compact aria-label={`Open issues for ${project.name}`}>
+              {open.slice(0, BLOCK_ROWS).map((i) => (
+                <ListItem key={i.key}>
+                  <ListButton onClick={() => openIssue(i)} aria-label={`Open ${i.key}: ${i.title}`}>
+                    <StatusDot status={i.status} />
+                    <span className="tk-key">{i.key}</span>
+                    <Text as="span" grow truncate>{i.title}</Text>
+                    {i.status === "todo" ? null : <Text as="span" tone="muted" size="tiny">{STATUS_LABEL[i.status]}</Text>}
+                    <SessionMarker issue={i} />
+                  </ListButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
+          {open.length > BLOCK_ROWS ? <Text tone="muted" size="small">{open.length - BLOCK_ROWS} more on the board</Text> : null}
+        </>
       )}
     </Stack>
   );
 }
-

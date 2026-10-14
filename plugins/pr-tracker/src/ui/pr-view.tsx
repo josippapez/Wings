@@ -1,12 +1,14 @@
 // The PR tab's page, drawn from what it's given: no loading and no talking to Wings in here, so the same component can be
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text, Toolbar } from "wings-plugin-ui";
 import type { Overview } from "../lib/refs";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS } from "../lib/state";
 import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
+import { dayTime, timelineOf, type Push } from "../lib/pushes";
+import type { SnippetLine } from "../lib/snippet";
 import type { Comment, FailureDetail, Failing, PrArgs, Reviewer, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
 
@@ -17,6 +19,10 @@ export interface PrViewProps {
   args: PrArgs;
   overview: Overview | null;
   comments: Comment[] | null;
+  /** Pushes to the branch with their commits, where the provider lists them (Azure DevOps). */
+  pushes?: Push[];
+  /** The lines around a code thread's comment; absent where they can't be read. */
+  onSnippet?: (root: Comment) => Promise<SnippetLine[] | null>;
   error: string | null;
   notice: string | null;
   busy: string | null;
@@ -68,8 +74,8 @@ export function PrView(props: PrViewProps) {
   const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
   /** Open comment threads, which a comment requirement counts. Null until the conversation has loaded. */
-  /** Comments people wrote: the Overview tab's count, which leaves out bots like the conversation does. */
-  const people = useMemo(() => comments?.filter((c) => !isAutomated(c)).length ?? 0, [comments]);
+  /** Every comment, a bot's too: the Overview tab's count. Pushes are not comments. */
+  const people = comments?.length ?? 0;
   const unresolved = useMemo(() => (comments ? comments.filter((c) => c.replyTo === null && !c.system && c.thread?.state === "active").length : null), [comments]);
   const [menu, setMenu] = useState(false);
   /** What the user picked and has yet to confirm. */
@@ -284,14 +290,12 @@ function Skeleton() {
 
 // ---------- overview: description and conversation ----------
 
-function OverviewTab({ overview, comments, error, canReply, onReply, onRun }: PrViewProps & { overview: Overview }) {
-  const all = useMemo(() => (comments ? threadsOf(comments) : null), [comments]);
-  // People's threads make the conversation; bots' and build services' go in one folded group under it.
-  const threads = useMemo(() => all?.filter((t) => !isAutomated(t.root)) ?? null, [all]);
-  const bots = useMemo(() => all?.filter((t) => isAutomated(t.root)) ?? [], [all]);
+function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, onReply, onRun, onSnippet }: PrViewProps & { overview: Overview }) {
+  // Pushes and threads share one timeline, the newest first, as Azure DevOps lists them.
+  const entries = useMemo(() => (comments ? timelineOf(threadsOf(comments), pushes) : null), [comments, pushes]);
   const [showResolved, setShowResolved] = useState(false);
-  const [showBots, setShowBots] = useState(false);
-  const resolved = threads?.filter((t) => kindOf(t) === "resolved").length ?? 0;
+  const resolved = entries?.filter((e) => e.kind === "thread" && kindOf(e.thread) === "resolved").length ?? 0;
+  const threads = entries?.filter((e) => e.kind === "thread").length ?? 0;
   const diff = useMemo(() => (focus?: WingsDiffFocus) => onRun("diff", focus), [onRun]);
 
   return (
@@ -302,62 +306,85 @@ function OverviewTab({ overview, comments, error, canReply, onReply, onRun }: Pr
       </article>
 
       <Heading level={3} actions={resolved ? <Chip pressed={showResolved} onClick={() => setShowResolved((s) => !s)}>{showResolved ? "Collapse" : "Expand"} {resolved} resolved</Chip> : undefined}>
-        Conversation{threads ? ` · ${threads.length}` : ""}
+        Conversation{entries ? ` · ${threads}` : ""}
       </Heading>
 
-      {!threads ? (
+      {!entries ? (
         error ? null : <div className="pr-skeleton" role="status" aria-busy="true" aria-label="Loading conversation"><div className="pr-skel" style={{ height: 80 }} /><div className="pr-skel" style={{ height: 80 }} /></div>
-      ) : threads.length === 0 && bots.length === 0 ? (
+      ) : entries.length === 0 ? (
         <Empty title="No comments yet" description="Review threads and comments on the pull request show up here." />
       ) : (
-        <>
-          {threads.length ? (
-            <ol className="pr-timeline" aria-label="Conversation" data-testid="pr-conversation">
-              {threads.map((t) => {
-                const kind = kindOf(t);
-                return (
-                  <ThreadCard
-                    key={`${t.root.id}${kind === "resolved" && showResolved ? "-open" : ""}`}
-                    thread={t}
-                    kind={kind}
-                    defaultOpen={kind === "open" || (kind === "resolved" && showResolved)}
-                    prAuthor={overview.author}
-                    canReply={canReply}
-                    onReply={onReply}
-                    onDiff={diff}
-                  />
-                );
-              })}
-            </ol>
-          ) : (
-            <Text tone="muted">No comments from people yet.</Text>
-          )}
-          {bots.length ? (
-            <>
-              <Heading level={3} actions={<Chip pressed={showBots} onClick={() => setShowBots((s) => !s)} data-testid="pr-bots-toggle">{showBots ? "Hide" : "Show"}</Chip>}>
-                Automated · {bots.length}
-              </Heading>
-              {showBots ? (
-                <ol className="pr-timeline" aria-label="Automated comments" data-testid="pr-bots">
-                  {bots.map((t) => (
-                    <ThreadCard key={t.root.id} thread={t} kind={kindOf(t)} defaultOpen={false} prAuthor={overview.author} canReply={canReply} onReply={onReply} onDiff={diff} />
-                  ))}
-                </ol>
-              ) : null}
-            </>
-          ) : null}
-        </>
+        <ol className="pr-timeline" aria-label="Conversation" data-testid="pr-conversation">
+          {entries.map((e) => {
+            if (e.kind === "push") return <PushCard key={`push-${e.push.id}`} push={e.push} />;
+            const t = e.thread;
+            const kind = kindOf(t);
+            return (
+              <ThreadCard
+                key={`${t.root.id}${kind === "resolved" && showResolved ? "-open" : ""}`}
+                thread={t}
+                kind={kind}
+                defaultOpen={kind !== "resolved" || showResolved}
+                prAuthor={overview.author}
+                canReply={canReply}
+                onReply={onReply}
+                onDiff={diff}
+                onSnippet={onSnippet}
+              />
+            );
+          })}
+        </ol>
       )}
     </div>
   );
 }
 
-function CommentHead({ author, iso, suffix, isAuthor, children }: { author: string; iso?: string; suffix?: string; isAuthor?: boolean; children?: ReactNode }) {
+const NO_PUSHES: Push[] = [];
+
+/** How many commits a push lists before "Show all". */
+const COMMITS_SHOWN = 5;
+
+/** A push: one quiet line, then its commits in muted text. Comments are what people read, so this stays small. */
+function PushCard({ push }: { push: Push }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? push.commits : push.commits.slice(0, COMMITS_SHOWN);
+  const count = `${push.commits.length}${push.more ? "+" : ""}`;
+  return (
+    <li className="pr-push" data-testid="pr-push">
+      <span className="pr-iteration" title={`Update ${push.id}`}>{push.id}</span>
+      <div className="pr-push-body">
+        <div className="pr-push-head">
+          <Avatar name={push.author} size="small" />
+          <span><strong>{push.author}</strong> pushed {count} {push.commits.length === 1 && !push.more ? "commit" : "commits"}</span>
+          <Text tone="muted" size="small" as="span"><When iso={push.at} /></Text>
+        </div>
+        <ul className="pr-commits" aria-label={`Commits in update ${push.id}`}>
+          {shown.map((c) => (
+            <li key={c.sha}>
+              <span className="pr-commit-msg" title={c.message}>{c.message || "No message"}</span>
+              <span className="pr-commit-meta">
+                <code>{c.sha.slice(0, 7)}</code>
+                <span>{c.author}</span>
+                <time dateTime={c.at} title={when(c.at)}>{dayTime(c.at)}</time>
+              </span>
+            </li>
+          ))}
+        </ul>
+        {push.commits.length > COMMITS_SHOWN ? (
+          <Button size="sm" variant="ghost" aria-expanded={all} onClick={() => setAll((a) => !a)}>{all ? "Show fewer commits" : `Show all ${count} commits`}</Button>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+function CommentHead({ author, iso, suffix, isAuthor, bot, children }: { author: string; iso?: string; suffix?: string; isAuthor?: boolean; bot?: boolean; children?: ReactNode }) {
   return (
     <div className="pr-comment-head">
       <Avatar name={author} />
       <strong className="pr-comment-author">{author}</strong>
       {isAuthor ? <span className="pr-tag">Author</span> : null}
+      {bot ? <span className="pr-tag">Bot</span> : null}
       <Text tone="muted" size="small" as="span">
         {suffix ? `${suffix} ` : null}
         {iso ? <When iso={iso} /> : null}
@@ -375,9 +402,10 @@ interface ThreadProps {
   canReply: boolean;
   onReply: (root: Comment, body: string) => Promise<void>;
   onDiff: (focus?: WingsDiffFocus) => void;
+  onSnippet?: (root: Comment) => Promise<SnippetLine[] | null>;
 }
 
-const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAuthor, canReply, onReply, onDiff }: ThreadProps) {
+const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAuthor, canReply, onReply, onDiff, onSnippet }: ThreadProps) {
   const { root, replies } = thread;
   const [open, setOpen] = useState(defaultOpen);
   const where = root.path ? `${root.path}${root.line ? `:${root.line}` : ""}` : null;
@@ -399,25 +427,33 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
     );
   }
 
+  const slash = root.path ? root.path.lastIndexOf("/") : -1;
+  const file = root.path ? { name: root.path.slice(slash + 1), dir: root.path } : null;
   return (
     <li className="pr-thread" data-kind={kind}>
       <article className="pr-card" aria-label={`Thread by ${root.author}`}>
-        <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor}>
-          {status}
-          {kind !== "open" ? <Button size="sm" variant="ghost" aria-expanded onClick={() => setOpen(false)}>Collapse</Button> : null}
-        </CommentHead>
-        {where ? (
-          <div className="pr-where">
-            <code className="pr-path">{where}</code>
-            <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
-          </div>
+        {file ? (
+          <>
+            <div className="pr-file-head">
+              <div className="pr-file-id">
+                <strong className="pr-file-name">{file.name}</strong>
+                <code className="pr-path" title={where ?? undefined}>{file.dir}{root.line ? <span className="pr-line-no">:{root.line}</span> : null}</code>
+              </div>
+              <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
+            </div>
+            {onSnippet ? <Snippet root={root} onSnippet={onSnippet} /> : null}
+          </>
         ) : null}
+        <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor} bot={isAutomated(root)}>
+          {status}
+          {kind === "resolved" ? <Button size="sm" variant="ghost" aria-expanded onClick={() => setOpen(false)}>Collapse</Button> : null}
+        </CommentHead>
         <Body source={root.body} clamp={kind === "automated"} />
         {replies.length ? (
           <ol className="pr-replies" aria-label="Replies">
             {replies.map((r) => (
               <li key={r.id} className="pr-reply">
-                <CommentHead author={r.author} iso={r.createdAt} isAuthor={r.author === prAuthor} />
+                <CommentHead author={r.author} iso={r.createdAt} isAuthor={r.author === prAuthor} bot={isAutomated(r)} />
                 <Body source={r.body} clamp={kind === "automated"} />
               </li>
             ))}
@@ -429,10 +465,33 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
   );
 });
 
+/** The lines around the commented ones, read when the card shows: mono, line numbers muted, the commented lines marked. */
+function Snippet({ root, onSnippet }: { root: Comment; onSnippet: (root: Comment) => Promise<SnippetLine[] | null> }) {
+  const [lines, setLines] = useState<SnippetLine[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    void onSnippet(root).then((l) => live && setLines(l));
+    return () => {
+      live = false;
+    };
+  }, [root, onSnippet]);
+  if (!lines) return null;
+  return (
+    <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} data-testid="pr-snippet">
+      {lines.map((l) => (
+        <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined}>
+          <span className="pr-ln" aria-hidden="true">{l.n}</span>
+          <span className="pr-code">{l.text || " "}</span>
+        </code>
+      ))}
+    </pre>
+  );
+}
+
 /** A comment's text; a long bot comment shows its first lines until asked for the rest. */
 function Body({ source, clamp }: { source: string; clamp: boolean }) {
   const [more, setMore] = useState(false);
-  const long = clamp && (source.length > 320 || source.split("\n").length > 7);
+  const long = clamp && (source.length > 1600 || source.split("\n").length > 24);
   return (
     <div className="pr-body-box">
       <div className="pr-body-clip" data-clamped={long && !more ? "" : undefined}>

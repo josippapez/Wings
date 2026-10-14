@@ -215,6 +215,8 @@ export interface Comment extends WingsComment {
   discussion?: string;
   /** On a thread's first comment, where the provider keeps thread states: open ("active") or done ("resolved"), with its own word for it. */
   thread?: { state: "active" | "resolved"; label: string };
+  /** On a code thread's first comment, the commented lines and the PR iteration they were written on, where the provider says. */
+  range?: { start: number; end: number; iteration?: number };
   /** Written by the provider itself (a policy update, a status change) rather than a person. Only the PR tab asks for these. */
   system?: boolean;
 }

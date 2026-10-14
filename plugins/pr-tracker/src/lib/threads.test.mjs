@@ -22,6 +22,7 @@ test("a thread is resolved, automated or open", () => {
   assert.equal(kindOf(t({ thread: { state: "active", label: "Active" } })), "open");
   assert.equal(kindOf(t({ thread: { state: "resolved", label: "Resolved" } })), "resolved");
   assert.equal(kindOf(t({ system: true })), "automated");
+  // Automated threads start open like anyone's: the page opens every kind but "resolved".
   assert.equal(kindOf(t({ author: "release-helper[bot]" })), "automated");
   assert.equal(kindOf(t({ author: "Project Collection Build Service (Acme)" })), "automated");
   // Resolved wins over automated, so a resolved bot thread is a resolved thread.

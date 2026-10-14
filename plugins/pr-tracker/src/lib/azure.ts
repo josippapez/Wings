@@ -3,6 +3,7 @@ import { cleanLog, counts, detail } from "./checks";
 import { azureItems } from "./checklist";
 import { azWho } from "./who";
 import { cli, git, post } from "./cli";
+import { pushesOf, type AzureIteration, type Push } from "./pushes";
 import { problems, status } from "./state";
 import { voteArgs, type AzureVote } from "./vote";
 import type { AzureLink, AzurePolicy, AzurePr, AzureRemote, Comment, Counts, FailureDetail, Failing, Icon, Link, ListedPr, Result, Reviewer, Status } from "./types";
@@ -12,7 +13,8 @@ interface AzureThread {
   id: number;
   isDeleted?: boolean;
   status?: string;
-  threadContext?: { filePath?: string; rightFileStart?: { line?: number }; leftFileStart?: { line?: number } } | null;
+  threadContext?: { filePath?: string; rightFileStart?: { line?: number }; rightFileEnd?: { line?: number }; leftFileStart?: { line?: number }; leftFileEnd?: { line?: number } } | null;
+  pullRequestThreadContext?: { iterationContext?: { secondComparingIteration?: number } } | null;
   comments?: AzureComment[];
 }
 
@@ -243,12 +245,42 @@ export async function azureComments(link: AzureLink, system = false): Promise<Co
         createdAt: c.publishedDate,
         url: link.url,
         canReply: i === 0 && c.commentType === "text",
+        ...(i === 0 && (right ?? left) ? { range: { start: (right ?? left)!, end: (right ? ctx?.rightFileEnd?.line : ctx?.leftFileEnd?.line) ?? (right ?? left)!, iteration: t.pullRequestThreadContext?.iterationContext?.secondComparingIteration } } : {}),
         ...(i === 0 && t.status && THREAD_STATES[t.status] ? { thread: THREAD_STATES[t.status] } : {}),
         ...(c.commentType === "system" ? { system: true } : {}),
       }),
     );
   }
   return comments;
+}
+
+// ---------- pushes and snippets ----------
+
+/** The PR's pushes with their commits: every iteration and its commits in one call, not one call per push. */
+export async function azurePushes(link: AzureLink): Promise<Push[]> {
+  const out = await cli(link.remote.org, "az", [
+    "devops", "invoke", "--area", "git", "--resource", "pullRequestIterations",
+    "--route-parameters", `project=${link.remote.project}`, `repositoryId=${link.remote.repo}`, `pullRequestId=${link.number}`,
+    "--query-parameters", "includeCommits=true",
+    "--organization", link.remote.org, "--api-version", "7.1", "-o", "json",
+  ]);
+  return out.code === 0 ? pushesOf((JSON.parse(out.stdout) as { value?: AzureIteration[] }).value ?? []) : [];
+}
+
+/** A file as it was at a commit, from the project's own clone; a commit it doesn't have is fetched once. Null when neither works. */
+export async function azureFileAt(link: AzureLink, sha: string, path: string): Promise<string | null> {
+  if (!/^[0-9a-f]{40}$/.test(sha)) return null;
+  const show = () => git(link.cwd, ["show", `${sha}:${path}`]);
+  try {
+    return await show();
+  } catch {
+    try {
+      await git(link.cwd, ["fetch", "--quiet", "--end-of-options", "origin", sha]);
+      return await show();
+    } catch {
+      return null;
+    }
+  }
 }
 
 // ---------- replies ----------
