@@ -155,3 +155,8 @@ export function restoreTabs<T extends object>(panes: T[], viewTabs: SavedViewTab
   for (const { at, ...tab } of others.sort((a, b) => a.at - b.at)) tabs.splice(Math.min(at, tabs.length), 0, tab);
   return tabs;
 }
+
+/** A plugin may draw a kind of UI only when its manifest lists it in `contributes.ui`. */
+export function requireUi(pluginId: string, ui: string[], kind: string) {
+  if (!ui.includes(kind)) throw new Error(`${pluginId} must declare "${kind}" in contributes.ui`);
+}

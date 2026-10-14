@@ -127,7 +127,7 @@ Pages use `wings-plugin-ui`: a page calls `showSidebar(<Page />)` (or `showView`
 
 | Field | Means |
 |---|---|
-| `ui` | `badges` for pane header badges, `diff` for the diff viewer. Wings refuses `setBadge` and `openDiff` without them |
+| `ui` | `badges` for pane header badges, `status` for the strip under a pane's terminal, `diff` for the diff viewer. Wings refuses `setBadge`, `setPaneStatus` and `openDiff` without them. `status` needs Wings 0.1.32: set `"minWingsVersion": "0.1.32"`, since older Wings refuse the unknown `ui` value |
 | `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
 | `sidebars` | Up to 3 `{ id, title, icon?, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden. A sidebar may add `popover: { page, width, height }`, a smaller page shown under its button when you point at it or focus it, 240 to 480 wide and 160 to 640 high; see [Popovers](#popovers) |
 | `views` | Up to 3 `{ id, title, icon?, page, opens?, width?, height?, newTab?, multiple? }`: pages like `sidebars` that can also open in a modal over Wings, in a window of their own or as a tab. `opens` lists where, from `sidebar`, `modal`, `window` and `tab`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. `newTab: true` lists a view that opens as a tab in the + menu and the command palette (see Tabs). `multiple: true` lets it open several tabs per project. Both need `tab` in `opens`, or Wings refuses the plugin. Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
@@ -157,6 +157,7 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.statusline()` | Resolves `{ rateLimits, sessions }`, what Claude Code last told `wings statusline`. `rateLimits` is `{ fiveHour, sevenDay, at }`, each window `{ usedPercentage, resetsAt }` with `resetsAt` in epoch seconds, or `null` until a session has reported them (only Pro and Max plans get them). `sessions` has, by session id, `{ model, contextWindowSize, usedPercentage, totalInputTokens, totalOutputTokens, currentUsage, promptCache, at }`, Claude Code's own numbers from the last response. `at` is when Wings got it, in ms |
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
 | `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
+| `wings.setPaneStatus(paneId, status)` | Shows a status strip under the pane's terminal; `null` removes it. Needs `status` in `contributes.ui`. See [Pane status](#pane-status) |
 | `wings.openUrl(url)` | Opens the URL in the browser |
 | `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every 15 s at most, and only while focused |
 | `wings.openPane({ command?, cwd?, placement? })` | Opens a terminal and resolves `{ paneId }` once it's in `onPanes`. `placement` is `tab` (the default), or `right` or `down` for a split beside the focused pane, which has to be in the project on screen. Without `cwd` it opens at the root of the project on screen. The new pane gets the keyboard |
@@ -199,7 +200,29 @@ A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, a
 
 A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url, canReply }`, where `side` is `additions` or `deletions`, and `canReply` on a thread's first comment shows a reply box under it. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
 
-Wings drops a pane's badges when the pane closes. When several plugins add to the same place, the extra pane badges fold into a "+N" button and title bar buttons past the first three into a menu.
+Wings drops a pane's badges when the pane closes.
+
+### Pane status
+
+A status is a slim strip under a pane's terminal, for figures you want in view all the time, like usage. A badge is something to act on; a status is something to glance at. The strip shows only while at least one plugin has set a status for the pane, and its height stays fixed while the items update.
+
+```js
+await wings.setPaneStatus(paneId, {
+  items: [
+    { label: "5h", value: "8% · 4h19m", percent: 8, tone: "success" },
+    { label: "ctx", value: "62%", percent: 62, tone: "warning" },
+  ],
+  rows: [{ label: "Model", value: "Opus" }],
+  open: "hud",
+});
+```
+
+- `items` are 1 to 4 figures, left to right: `label` (muted, up to 16 characters), `value` (up to 32), `percent` (0 to 100, draws a small meter) and `tone`, which colours the meter and the value.
+- `rows` are up to 12 `{ label, value, tone? }` lines in the card shown when you point at the strip.
+- `open` is the id of one of the plugin's sidebars or views. Clicking the strip opens it, in the first place its `opens` lists.
+- One status per plugin per pane; `null` removes it. With several plugins, each plugin's items sit in plugin order, separated by a dot.
+- Wings rejects a call that breaks a limit, with the reason, instead of cutting the text like a badge does. Sending what the frame sent last does nothing, so you can call it on every poll.
+- Wings drops a status when its pane closes or the plugin stops. When several plugins add to the same place, the extra pane badges fold into a "+N" button and title bar buttons past the first three into a menu.
 
 Plugin tools reach Claude through one MCP server, `wings`, which you add once from the Plugins sheet with Connect. It runs `wings --mcp` at user scope, so every Claude Code session gets the tools of the plugins that are on, and the list updates as you turn plugins on and off. The tools only work while Wings is open.
 

@@ -1,4 +1,4 @@
-import { clock, gb, names, tokens, until } from "./format";
+import { clock, names, text, tokens, until } from "./format";
 import { servers, sessions, type Session } from "./session";
 import type { Limit, Overview, Snapshot } from "./types";
 
@@ -45,33 +45,50 @@ function cacheText(cache: Cache, now = Date.now()) {
   return cache.warm && cache.expiresAt && cache.expiresAt * 1000 > now ? `Warm until ${clock(cache.expiresAt * 1000)}` : "Expired";
 }
 
-/** The pane badge, only when something needs a look: a context running full or an MCP server that failed or needs sign-in. The HUD sidebar shows the rest. */
-export function badge(s: Session): WingsBadge | null {
+/** Wings cuts nothing from a status, it rejects one over its limits, so row text is cut here. */
+const ROW_VALUE = 200;
+
+/**
+ * The strip under a Claude session's terminal, always shown: both usage limits (percent used, then time to reset), the
+ * session's context, and a failed MCP server when there is one. The card on hover has the details, a click opens the sidebar.
+ */
+export function paneStatus(s: Session, now = Date.now()): WingsPaneStatus {
   const ctx = context(s);
+  const o = overview(now);
   const all = servers(s);
   const failed = all.filter((x) => x.state === "failed");
   const lastFailed = all.filter((x) => x.lastFailed);
   const on = all.filter((x) => x.state === "connected");
-  const label = [ctx ? `Context ${ctx.percent}%` : "Context", failed.length ? `${failed.length} MCP failed` : null].filter(Boolean).join(" · ");
-  const contextTone: Tone | undefined = !ctx ? undefined : ctx.percent >= CONTEXT_CRITICAL ? "danger" : ctx.percent >= CONTEXT_WARN ? "warning" : undefined;
   const signIn = all.filter((x) => x.state === "sign-in").length;
-  if (!contextTone && !failed.length && !signIn) return null;
   const skills = [...s.skills];
-  const cache = ctx && cacheText(ctx.cache);
+  const cache = ctx && cacheText(ctx.cache, now);
+  const contextTone: Tone | undefined = !ctx ? undefined : ctx.percent >= CONTEXT_CRITICAL ? "danger" : ctx.percent >= CONTEXT_WARN ? "warning" : undefined;
+  const limitTone = (l: Limit | null): Tone | undefined => (!l ? undefined : l.percent >= LIMIT_CRITICAL ? "danger" : l.percent >= LIMIT_WARN ? "warning" : undefined);
+  // `8% · 4h19m`: usage, then the time until that limit resets. A dash until Claude Code has reported the limit.
+  const limitItem = (label: string, l: Limit | null): WingsStatusItem =>
+    l ? { label, value: `${l.percent}%${l.left ? ` · ${l.left}` : ""}`, percent: Math.min(100, l.percent), tone: limitTone(l) } : { label, value: "–" };
+  const limitRow = (label: string, l: Limit | null) => (l ? [{ label, value: `${l.percent}% used${l.resets ? `, resets in ${l.resets}` : ""}`, tone: limitTone(l) }] : []);
+  const rows = [
+    ...limitRow("5-hour limit", o.fiveHour),
+    ...limitRow("Weekly limit", o.sevenDay),
+    ...(!o.statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
+    { label: "Context", value: ctx ? `${tokens(ctx.tokens)} of ${tokens(ctx.window)} tokens (${ctx.percent}%)` : "No reply yet", tone: contextTone },
+    ...(cache ? [{ label: "Prompt cache", value: cache }] : []),
+    { label: "MCP servers", value: [`${on.length} connected`, failed.length && `${failed.length} failed`, signIn && `${signIn} need sign-in`].filter(Boolean).join(", ") },
+    ...failed.slice(0, 3).map((x) => ({ label: "Failed", value: x.error ? `${x.name}: ${x.error}` : x.name, tone: "danger" as const })),
+    ...(lastFailed.length ? [{ label: "Last call failed", value: names(lastFailed.map((x) => x.name), 3), tone: "warning" as const }] : []),
+    ...(on.some((x) => x.used) ? [{ label: "MCP used", value: names(on.filter((x) => x.used).map((x) => x.name)) }] : []),
+    { label: `Skills (${skills.length})`, value: skills.length ? names(skills) : "None used yet" },
+  ];
   return {
-    label,
-    tone: contextTone ?? (failed.length ? "warning" : "neutral"),
-    title: "Context and tools",
-    subtitle: s.name ?? undefined,
-    rows: [
-      { label: "Context", value: ctx ? `${tokens(ctx.tokens)} of ${tokens(ctx.window)} tokens (${ctx.percent}%)` : "No reply yet", tone: contextTone },
-      ...(cache ? [{ label: "Prompt cache", value: cache }] : []),
-      { label: "MCP servers", value: [`${on.length} connected`, failed.length && `${failed.length} failed`, signIn && `${signIn} need sign-in`].filter(Boolean).join(", ") },
-      ...failed.slice(0, 3).map((x) => ({ label: "Failed", value: x.error ? `${x.name}: ${x.error}` : x.name, tone: "danger" as const })),
-      ...(lastFailed.length ? [{ label: "Last call failed", value: names(lastFailed.map((x) => x.name), 3), tone: "warning" as const }] : []),
-      ...(on.some((x) => x.used) ? [{ label: "MCP used", value: names(on.filter((x) => x.used).map((x) => x.name)) }] : []),
-      { label: `Skills (${skills.length})`, value: skills.length ? names(skills) : "None used yet" },
+    items: [
+      limitItem("5h", o.fiveHour),
+      limitItem("wk", o.sevenDay),
+      ctx ? { label: "ctx", value: `${ctx.percent}%`, percent: Math.min(100, ctx.percent), tone: contextTone } : { label: "ctx", value: "–" },
+      ...(failed.length ? [{ label: "MCP", value: `${failed.length} failed`, tone: "danger" as const }] : []),
     ],
+    rows: rows.slice(0, 12).map((r) => ({ ...r, value: text(r.value, ROW_VALUE) })),
+    open: "hud",
   };
 }
 
@@ -86,24 +103,6 @@ export function overview(now = Date.now()): Overview {
     statusline: reported !== null && (limits != null || Object.keys(reported.sessions).length > 0),
     memory: memory && { used: memory.used, total: memory.total, percent: Math.round((memory.used / memory.total) * 100) },
   };
-}
-
-export function titleLabel() {
-  const o = overview();
-  // `5h 3% (2h14m) · wk 83% (3d5h)`: usage, then the time until that limit resets. The once-a-minute refresh keeps it current.
-  // Always both, so the state shows at a glance: "–" until Claude Code has reported a limit.
-  const pill = (name: string, l: Limit | null) => (l ? `${name} ${l.percent}%${l.left ? ` (${l.left})` : ""}` : `${name} –`);
-  const parts = [pill("5h", o.fiveHour), pill("wk", o.sevenDay)];
-  const rows = [
-    ...(o.fiveHour ? [{ label: "5-hour limit", value: `${o.fiveHour.percent}% used${o.fiveHour.resets ? `, resets in ${o.fiveHour.resets}` : ""}` }] : []),
-    ...(o.sevenDay ? [{ label: "Weekly limit", value: `${o.sevenDay.percent}% used${o.sevenDay.resets ? `, resets in ${o.sevenDay.resets}` : ""}` }] : []),
-    ...(!o.statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
-    ...(o.memory ? [{ label: "Memory", value: `${gb(o.memory.used)} of ${gb(o.memory.total)} (${o.memory.percent}%)` }] : []),
-  ];
-  const label = parts.join(" · ");
-  const highest = Math.max(o.fiveHour?.percent ?? 0, o.sevenDay?.percent ?? 0);
-  const tone = highest >= LIMIT_CRITICAL ? ("danger" as const) : highest >= LIMIT_WARN ? ("warning" as const) : undefined;
-  return { label, rows, tone };
 }
 
 /** What the sidebar shows, kept well under the 64 KB a broadcast may carry. */

@@ -15,6 +15,9 @@ import {
   GitBranchIcon,
   GitBranchPlusIcon,
   GitForkIcon,
+  RotateCcwClockIcon,
+  SearchIcon,
+  SettingsIcon,
   PlusIcon,
   RefreshCwIcon,
   SquareTerminalIcon,
@@ -33,10 +36,13 @@ import {
 } from "@/components/ui/context-menu";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Item } from "@/components/ui/item";
+import { NotificationBell } from "@/components/notification-bell";
+import { RowHint, SidebarNavRow } from "@/components/sidebar-nav-row";
 import { OpenInEditorItems } from "@/components/editor-menu";
 import { GitCounts } from "@/components/git-counts";
 import { agentLabel, PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
+import type { NotificationEvent } from "@/lib/notifications";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -117,6 +123,12 @@ export function Sidebar(props: {
   onRemoveSpace: (id: string) => void;
   /** Moves a project to a place among the projects listed at the top level (worktrees follow their project). */
   onMoveSpace: (id: string, index: number) => void;
+  /** The command palette. */
+  onSearch: () => void;
+  onHistory: () => void;
+  onSettings: () => void;
+  /** The Inbox row's popover: agent events, newest first. */
+  notifications: { events: NotificationEvent[]; onOpen: () => void; onClear: () => void; onGoToPane: (paneId: string) => void };
 }) {
   const { spaces, agents } = props;
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? id;
@@ -197,6 +209,13 @@ export function Sidebar(props: {
     <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open}>
       {/* At least the narrowest width, so closing clips the list rather than squeezing it. */}
       <div className="flex h-full min-w-[200px] flex-col pb-2">
+        <nav aria-label="Wings" className="flex shrink-0 flex-col gap-px px-2 pb-2">
+          <SidebarNavRow icon={<SearchIcon />} label="Search" trailing={<RowHint>{shortcutLabel.palette}</RowHint>} onClick={props.onSearch} />
+          {/* Only the docked copy listens for the show-notifications command, so the peeking copy doesn't open a second popover. */}
+          <NotificationBell {...props.notifications} listen={!props.floating} />
+          <SidebarNavRow icon={<RotateCcwClockIcon />} label="Past sessions" onClick={props.onHistory} disabled={props.activeSpaceId === null} />
+        </nav>
+
         <div className="flex h-8 items-center justify-between pr-2 pl-4">
           <h2 className="text-[12px] font-medium text-muted-foreground">Projects</h2>
           <span className="flex items-center">
@@ -482,6 +501,9 @@ export function Sidebar(props: {
             </ul>
           </ScrollArea>
         </section>
+        <div className="mx-2 mt-1 shrink-0">
+          <SidebarNavRow icon={<SettingsIcon />} label="Settings" trailing={<RowHint>{shortcutLabel.settings}</RowHint>} onClick={props.onSettings} />
+        </div>
       </div>
     </aside>
   );

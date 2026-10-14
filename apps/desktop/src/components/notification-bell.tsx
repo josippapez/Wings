@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { BellIcon, PuzzleIcon } from "lucide-react";
+import { InboxIcon, PuzzleIcon } from "lucide-react";
 
-import { IconButton } from "@/components/icon-button";
+import { SidebarNavRow } from "@/components/sidebar-nav-row";
 import { StatusDot } from "@/components/status-dot";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -21,18 +21,21 @@ function ago(at: number) {
   return relative.format(-Math.floor(s / 86_400), "day");
 }
 
-/** The title bar's bell: unread count on it, the last agent events in a popover, newest first. */
+/** The sidebar's Inbox row: unread count on it, the last agent events in a popover beside it, newest first. */
 export function NotificationBell({
   events,
   onOpen,
   onClear,
   onGoToPane,
+  listen = true,
 }: {
   events: NotificationEvent[];
   /** Called when the list opens: the app marks everything read. */
   onOpen: () => void;
   onClear: () => void;
   onGoToPane: (paneId: string) => void;
+  /** Opens on the show-notifications command. Only one of the sidebar's two copies (docked, peeking) listens. */
+  listen?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   /** What was unread when the list opened, so those rows stay marked while you look at them. */
@@ -47,6 +50,7 @@ export function NotificationBell({
     setOpen(next);
   };
   useEffect(() => {
+    if (!listen) return;
     const listener = () => show(true);
     window.addEventListener(OPEN_NOTIFICATIONS, listener);
     return () => window.removeEventListener(OPEN_NOTIFICATIONS, listener);
@@ -56,17 +60,21 @@ export function NotificationBell({
     <Popover open={open} onOpenChange={show}>
       <PopoverTrigger
         render={
-          <IconButton label={unread ? `Notifications, ${unread} unread` : "Notifications"} className="relative">
-            <BellIcon />
-            {unread > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-blocked px-1 text-[9px] leading-none font-semibold text-white tabular-nums" aria-hidden>
-                {unread > 99 ? "99+" : unread}
-              </span>
-            )}
-          </IconButton>
+          <SidebarNavRow
+            icon={<InboxIcon />}
+            label="Inbox"
+            aria-label={unread ? `Inbox, ${unread} unread` : "Inbox"}
+            trailing={
+              unread > 0 && (
+                <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.1] px-1 text-[10px] leading-none font-medium text-foreground tabular-nums" aria-hidden>
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              )
+            }
+          />
         }
       />
-      <PopoverContent align="end" className="w-96 gap-0 p-0">
+      <PopoverContent side="right" align="start" className="w-96 gap-0 p-0">
         <div className="flex items-center justify-between border-b border-hairline py-2 pr-2 pl-3.5">
           <h2 className="text-[13px] font-semibold">Notifications</h2>
           <Button variant="ghost" size="xs" disabled={events.length === 0} onClick={onClear} className="text-muted-foreground">

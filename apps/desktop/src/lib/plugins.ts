@@ -4,7 +4,8 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
-import { boundedJson, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { boundedJson, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
 import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
@@ -22,6 +23,8 @@ import pluginUiCss from "wings-plugin-ui/plugin-ui.css?raw";
 export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "merged";
 export type BadgeIcon = "pr-open" | "pr-merged" | "pr-closed" | "pr-draft";
 export type CountIcon = "changed" | "push" | "pull";
+
+export type { PaneStatus, StatusItem } from "@/lib/pane-status";
 
 export type Badge = {
   label: string;
@@ -99,6 +102,8 @@ export type PanePlan = { spaceId: string; cwd: string | null; input: string | nu
 
 type Callbacks = {
   setBadge: (pluginId: string, paneId: string, badge: Badge | null) => void;
+  /** The strip a plugin shows under a pane's terminal; null removes it. */
+  setPaneStatus: (pluginId: string, paneId: string, status: PaneStatus | null) => void;
   openDiff: (view: DiffView) => void;
   updateDiff: (pluginId: string, id: string, update: Partial<DiffView>) => void;
   /** A plugin stopped: drop everything it showed. */
@@ -510,6 +515,16 @@ export class PluginHost {
     }
   }
 
+  /** A click on a plugin's pane status: shows the page it named (`open`) the way `openView` does, in the page's first place. */
+  async openStatusTarget(pluginId: string, viewId: string) {
+    const plugin = [...this.frames.values()].find((f) => f.id === pluginId && f.kind === "main");
+    const page = plugin && pagesOf(plugin.plugin).find((v) => v.id === viewId);
+    if (!plugin || !page) return;
+    const place = page.opens[0];
+    if (place === "window") await this.openWindow(plugin.plugin, page.id);
+    else this.callbacks.showView(pluginId, page.id, place, place === "tab" ? { multiple: page.multiple === true } : undefined);
+  }
+
   publishPanes(panes: PluginPane[]) {
     this.panes = panes;
     for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "panes", data: panes });
@@ -625,7 +640,7 @@ export class PluginHost {
     const pluginId = plugin.id;
     // The manager lists what a plugin adds from its manifest, so it can't draw anything it didn't declare.
     const needs = (kind: string) => {
-      if (!plugin.ui.includes(kind)) throw new Error(`${pluginId} must declare "${kind}" in contributes.ui`);
+      requireUi(pluginId, plugin.ui, kind);
     };
     switch (method) {
       case "ready":
@@ -840,6 +855,13 @@ export class PluginHost {
         const paneId = String(p.paneId);
         if (!this.panes.some((s) => s.paneId === paneId)) throw new Error(`no pane ${paneId}`);
         this.callbacks.setBadge(pluginId, paneId, p.badge === null ? null : cleanBadge(p.badge));
+        return null;
+      }
+      case "setPaneStatus": {
+        needs("status");
+        const paneId = String(p.paneId);
+        if (!this.panes.some((s) => s.paneId === paneId)) throw new Error(`no pane ${paneId}`);
+        this.callbacks.setPaneStatus(pluginId, paneId, p.status === null ? null : cleanPaneStatus(p.status, pagesOf(plugin.plugin).map((v) => v.id)));
         return null;
       }
       case "actionDone":

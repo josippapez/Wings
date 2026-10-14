@@ -57,7 +57,7 @@ pub struct Permissions {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Contributes {
-    /// UI it draws: `badges` on pane headers, the `diff` viewer.
+    /// UI it draws: `badges` on pane headers, `status` under a pane's terminal, the `diff` viewer.
     pub ui: Vec<String>,
     /// Tools it offers Claude through the Wings MCP server.
     pub mcp_tools: Vec<McpTool>,
@@ -205,7 +205,7 @@ fn empty_schema() -> Value {
     serde_json::json!({ "type": "object" })
 }
 
-const UI_KINDS: [&str; 2] = ["badges", "diff"];
+const UI_KINDS: [&str; 3] = ["badges", "diff", "status"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1255,6 +1255,20 @@ mod tests {
         assert_eq!(load(&dir).err().unwrap(), "main.js is missing");
         fs::write(dir.join("main.js"), "").unwrap();
         assert!(load(&dir).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ui_accepts_status_next_to_badges_and_refuses_unknown_kinds() {
+        let dir = std::env::temp_dir().join(format!("wings-ui-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |ui: &str| format!(r#"{{ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": {{ "ui": [{ui}] }} }}"#);
+        fs::write(dir.join("wings-plugin.json"), manifest(r#""badges", "status""#)).unwrap();
+        assert_eq!(load(&dir).unwrap().manifest.contributes.ui, ["badges", "status"]);
+        fs::write(dir.join("wings-plugin.json"), manifest(r#""strip""#)).unwrap();
+        assert!(load(&dir).err().unwrap().contains("unknown ui \"strip\""));
         let _ = fs::remove_dir_all(&dir);
     }
 

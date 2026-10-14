@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
@@ -7,12 +7,12 @@ import {
   ChevronDownIcon,
   EllipsisIcon,
   FileTextIcon,
+  ChevronRightIcon,
   RotateCcwClockIcon,
   PanelLeftIcon,
   PencilIcon,
   PlusIcon,
   XIcon,
-  SettingsIcon,
   TerminalIcon,
 } from "lucide-react";
 
@@ -408,14 +408,15 @@ export function TitleBar(props: {
   );
 }
 
-/** The slim bar under the tabs, inside the main area: the project on the left, plugin buttons and the app's own on the right. */
+/** The tone dot before a plugin label: green with no tone, amber or red when the plugin needs attention. Pulses only for live labels like a timer. */
+function ToneDot({ tone }: { tone: PluginButton["tone"] }) {
+  return <span className={cn("size-1.5 shrink-0 rounded-full", tone === "warning" ? "bg-working" : tone === "danger" ? "bg-blocked" : "bg-done motion-safe:animate-pulse")} aria-hidden />;
+}
+
+/** The slim bar under the tabs, inside the main area: project › branch on the left, plugin buttons on the right. */
 export function ProjectBar(props: {
   space: Space | null;
   git?: GitStatus | null;
-  onHistory: () => void;
-  onSettings: () => void;
-  /** The notification bell, shown before Past sessions. */
-  bell?: ReactNode;
   /** Sidebar and panel buttons from plugins that are on. Pinned ones and the first few show, the rest go in a menu. */
   pluginButtons: PluginButton[];
   /** Keys of the buttons you pinned to the bar, in the order you pinned them. */
@@ -434,9 +435,14 @@ export function ProjectBar(props: {
   return (
     <div role="toolbar" aria-label="Project" data-testid="project-bar" className="flex h-9 shrink-0 items-center gap-1 border-b border-hairline pr-2 pl-3">
       {space && (
-        <div className="mr-2 flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden" title={space.path}>
-          <span className="shrink-0 truncate text-[13px] font-semibold">{space.name}</span>
-          {space.branch && <span className="min-w-0 shrink truncate text-[11px] text-muted-foreground">{space.branch}</span>}
+        <div className="mr-2 flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" title={space.path}>
+          <span className="min-w-0 shrink truncate text-[13px] font-semibold">{space.name}</span>
+          {space.branch && (
+            <>
+              <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/60" aria-hidden />
+              <span className="min-w-0 shrink-[2] truncate text-[12px] text-muted-foreground">{space.branch}</span>
+            </>
+          )}
           {git && (
             <GitCounts
               tinted
@@ -447,11 +453,9 @@ export function ProjectBar(props: {
               ].filter((c) => c.value > 0)}
             />
           )}
-          <span className="hidden min-w-0 truncate text-[11px] text-muted-foreground/70 xl:inline">{space.path}</span>
         </div>
       )}
       {!space && <div className="flex-1" />}
-      {/* Plugin buttons sit left of a hairline, the app's own buttons right of it. */}
       {inline.map((button) => {
         const icon = (
           <IconButton
@@ -477,25 +481,14 @@ export function ProjectBar(props: {
             aria-pressed={button.kind === "sidebar" || button.kind === "modal" || button.kind === "tab" ? button.active : undefined}
             onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
             className={cn(
-              // A label means something is live, like a running timer, so it shows as a green pill like a pane badge.
-              button.label && "h-6 w-auto gap-1.5 rounded-full px-2.5 ring-1 ring-inset",
-              button.label && !button.tone && "bg-done/12 text-done ring-done/25 hover:bg-done/20 hover:text-done",
-              button.label && button.tone === "warning" && "bg-working/12 text-working ring-working/25 hover:bg-working/20 hover:text-working",
-              button.label && button.tone === "danger" && "bg-blocked/12 text-blocked ring-blocked/30 hover:bg-blocked/20 hover:text-blocked",
-              button.active && !button.label && "bg-white/[0.08] text-foreground",
-              button.active && button.label && !button.tone && "bg-done/20",
-              button.active && button.tone === "warning" && "bg-working/20",
-              button.active && button.tone === "danger" && "bg-blocked/20",
+              // A label means something is live, like a running timer: small text after the icon, behind a tone dot.
+              button.label && "w-auto gap-1.5 px-2",
+              button.active && "bg-white/[0.08] text-foreground",
             )}
           >
-            {button.label && (
-              <span
-                className={cn("size-1.5 shrink-0 rounded-full motion-safe:animate-pulse", button.tone === "warning" ? "bg-working" : button.tone === "danger" ? "bg-blocked" : "bg-done")}
-                aria-hidden
-              />
-            )}
             <PluginGlyph name={button.icon} svg={button.iconSvg} />
-            {button.label && <span className="max-w-72 truncate text-[12px] font-medium tabular-nums">{button.label}</span>}
+            {button.label && <ToneDot tone={button.tone} />}
+            {button.label && <span className="max-w-[200px] truncate text-[12px] tabular-nums">{button.label}</span>}
           </IconButton>
         );
         return button.popover ? (
@@ -526,13 +519,9 @@ export function ProjectBar(props: {
                   <PluginGlyph name={button.icon} svg={button.iconSvg} />
                   <span className="flex-1 whitespace-nowrap">{button.title}</span>
                   {button.label && (
-                    <span
-                      className={cn(
-                        "ml-3 max-w-56 truncate whitespace-nowrap tabular-nums",
-                        button.tone === "warning" ? "text-working" : button.tone === "danger" ? "text-blocked" : "text-done",
-                      )}
-                    >
-                      {button.label}
+                    <span className="ml-3 flex max-w-[200px] items-center gap-1.5 text-[12px] whitespace-nowrap text-muted-foreground tabular-nums">
+                      <ToneDot tone={button.tone} />
+                      <span className="truncate">{button.label}</span>
                     </span>
                   )}
                 </DropdownMenuItem>
@@ -550,14 +539,6 @@ export function ProjectBar(props: {
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {(inline.length > 0 || overflow.length > 0 || pinned.length > 0) && <span className="mx-1 h-4 w-px shrink-0 bg-hairline" aria-hidden />}
-      {props.bell}
-      <IconButton label="Past sessions" onClick={props.onHistory} disabled={!props.space}>
-        <RotateCcwClockIcon />
-      </IconButton>
-      <IconButton label="Settings" onClick={props.onSettings}>
-        <SettingsIcon />
-      </IconButton>
     </div>
   );
 }

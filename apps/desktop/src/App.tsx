@@ -6,7 +6,6 @@ import { MotionConfig } from "motion/react";
 
 import { CommandPalette } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
-import { NotificationBell } from "@/components/notification-bell";
 import { notificationsReducer } from "@/lib/notifications";
 import { reviewTargets, sendToPane } from "@/lib/review";
 import { HistorySheet } from "@/components/history-sheet";
@@ -14,6 +13,7 @@ import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Welcome } from "@/components/welcome";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
+import type { PaneStatusEntry } from "@/components/pane-status";
 import { agentLabel, paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
 import { SidebarPeek } from "@/components/sidebar-peek";
@@ -35,7 +35,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
-import { PluginHost, type Badge, type DiffView, type SidebarLabel } from "@/lib/plugins";
+import { PluginHost, type Badge, type DiffView, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
 import { findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
@@ -294,6 +294,8 @@ const leftPanel = usePanelRef();
   const pluginUpdates = usePluginUpdates(plugins, openPlugins);
   /** Plugin badges by Rust pane id, then plugin id. */
   const [badges, setBadges] = useState<Record<string, Record<string, Badge>>>({});
+  /** Plugin pane statuses (the strip under a terminal) by Rust pane id, then plugin id. */
+  const [statuses, setStatuses] = useState<Record<string, Record<string, PaneStatus>>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
   const pluginHost = useRef<PluginHost | null>(null);
   const tabsRef = useRef(tabs);
@@ -935,8 +937,12 @@ const leftPanel = usePanelRef();
   useEffect(() => {
     const host = new PluginHost({
       setBadge: (pluginId, paneId, badge) => setBadges((all) => withBadge(all, paneId, pluginId, badge)),
+      setPaneStatus: (pluginId, paneId, status) => setStatuses((all) => withBadge(all, paneId, pluginId, status)),
       openDiff: setDiff,
       clearPlugin: (pluginId) => {
+        setStatuses((all) =>
+          Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
+        );
         setBadges((all) =>
           Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
         );
@@ -1067,6 +1073,10 @@ const leftPanel = usePanelRef();
       const kept = Object.fromEntries(Object.entries(all).filter(([paneId]) => live.has(paneId)));
       return Object.keys(kept).length === Object.keys(all).length ? all : kept;
     });
+    setStatuses((all) => {
+      const kept = Object.fromEntries(Object.entries(all).filter(([paneId]) => live.has(paneId)));
+      return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+    });
   }, [panes, agentsByPane, paneInfo, spaces, focusedPaneId]);
 
   const paneBadges = useMemo(() => {
@@ -1079,6 +1089,19 @@ const leftPanel = usePanelRef();
     }
     return out;
   }, [panes, badges]);
+
+  const paneStatuses = useMemo(() => {
+    const out: Record<string, PaneStatusEntry[]> = {};
+    for (const [key, meta] of Object.entries(panes)) {
+      const byPlugin = meta.paneId ? statuses[meta.paneId] : undefined;
+      // Plugin order, the order the Plugins list shows them in.
+      const entries = byPlugin ? activePlugins.flatMap((p) => (byPlugin[p.id] ? [{ pluginId: p.id, status: byPlugin[p.id] }] : [])) : [];
+      if (entries.length) out[key] = entries;
+    }
+    return out;
+  }, [panes, statuses, activePlugins]);
+
+  const onOpenStatus = useCallback((pluginId: string, page: string) => void pluginHost.current?.openStatusTarget(pluginId, page).catch((e) => toast.error(String(e))), []);
 
   const onBadgeAction = useCallback(async (pluginId: string, paneKey: string, actionId: string) => {
     const paneId = panesRef.current[paneKey]?.paneId;
@@ -1324,6 +1347,19 @@ const leftPanel = usePanelRef();
     onCloseAgent: closeAgent,
     onAddSpace: (path) => void addSpace(path),
     onRemoveSpace: (id) => void removeSpace(id),
+    onSearch: () => setPaletteOpen(true),
+    onHistory: () => setHistoryOpen(true),
+    onSettings: () => setSettingsOpen(true),
+    notifications: {
+      events: notifications,
+      onOpen: () => notify({ type: "readAll" }),
+      onClear: () => notify({ type: "clear" }),
+      onGoToPane: (paneId) => {
+        const agent = agentsRef.current.find((a) => a.paneId === paneId);
+        if (agent) selectAgent(agent);
+        else toast("That pane has closed", { duration: 2000 });
+      },
+    },
     onMoveSpace: (id, index) =>
       setSpaces((list) => {
         // `index` counts the projects listed at the top level; take the place of the one there now.
@@ -1561,20 +1597,6 @@ const leftPanel = usePanelRef();
               <ProjectBar
                 space={activeSpace}
                 git={activeSpace ? git[activeSpace.id] : null}
-            onHistory={() => setHistoryOpen(true)}
-            onSettings={() => setSettingsOpen(true)}
-            bell={
-              <NotificationBell
-                events={notifications}
-                onOpen={() => notify({ type: "readAll" })}
-                onClear={() => notify({ type: "clear" })}
-                onGoToPane={(paneId) => {
-                  const agent = agentsRef.current.find((a) => a.paneId === paneId);
-                  if (agent) selectAgent(agent);
-                  else toast("That pane has closed", { duration: 2000 });
-                }}
-              />
-            }
             pluginButtons={pluginButtons}
             pinned={pinnedButtons}
             onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
@@ -1621,6 +1643,8 @@ const leftPanel = usePanelRef();
                     initialInputs={initialInputs}
                     badges={paneBadges}
                     onBadgeAction={onBadgeAction}
+                    statuses={paneStatuses}
+                    onOpenStatus={onOpenStatus}
                     actions={actions}
                   />
                   ),
@@ -1657,12 +1681,6 @@ const leftPanel = usePanelRef();
                 mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
                 unloaded={unloadedSidebars}
                 host={pluginHost.current}
-                onSelect={setRightSidebar}
-                onCloseTab={(id) => {
-                  const rest = openedSidebars.filter((k) => k !== id);
-                  setOpenedSidebars(rest);
-                  if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
-                }}
                 onClose={() => setRightSidebar(null)}
                 onPopOut={(entry) => {
                   void pluginHost.current?.openWindow(entry.plugin, entry.sidebarId).catch((e) => toast.error(String(e)));

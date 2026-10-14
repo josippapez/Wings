@@ -7,6 +7,7 @@ import { IconButton } from "@/components/icon-button";
 import { InlineName } from "@/components/inline-name";
 import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
+import { PaneStatusStrip, type PaneStatusEntry } from "@/components/pane-status";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -43,6 +44,9 @@ type GridProps = {
   initialInputs: Record<string, string | null>;
   badges: Record<string, { pluginId: string; badge: Badge }[]>;
   onBadgeAction: (pluginId: string, paneKey: string, actionId: string) => Promise<void>;
+  /** What plugins show under each pane's terminal, and what a click on it opens. */
+  statuses: Record<string, PaneStatusEntry[]>;
+  onOpenStatus: (pluginId: string, page: string) => void;
   actions: PaneActions;
 };
 
@@ -301,6 +305,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
       </ContextMenuContent>
       </ContextMenu>
       <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
+      {!!props.statuses[paneKey]?.length && <PaneStatusStrip entries={props.statuses[paneKey]} onOpen={props.onOpenStatus} />}
       {session && <FindBar session={session} />}
     </motion.section>
   );

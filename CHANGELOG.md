@@ -4,6 +4,13 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.32 · 2026-10-14
+
+- A calmer top: Search, Inbox and Past sessions sit at the top of the left sidebar and Settings at its bottom. The project bar shows project › branch with its git counts, and plugin buttons as plain icons with a small status dot and text.
+- The right sidebar drops its tab strip: the plugin buttons switch between open pages.
+- Plugins can show a status line under a pane's terminal with `wings.setPaneStatus` (`contributes.ui: ["status"]`). `wings-plugin-sdk` 0.12.0.
+- HUD 0.5.0 shows your 5-hour and weekly usage, context and failed MCP servers in that line under every Claude pane, always visible. Its pane badge and title bar text are gone; click the line for the HUD sidebar.
+
 ## 0.1.31 · 2026-10-13
 
 - A plugin may show up to 20 desktop notifications a minute, up from 3. `wings-plugin-sdk` 0.11.1 says so in its types.

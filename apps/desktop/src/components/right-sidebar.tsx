@@ -1,11 +1,9 @@
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { AppWindowIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import { PeekStrip, usePeek } from "@/components/sidebar-peek";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { pagesOf, type PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
 import { PluginGlyph } from "@/components/plugin-glyph";
@@ -50,16 +48,15 @@ const panelClass = (docked: boolean, peeking: boolean) =>
   );
 
 /**
- * What the sidebar shows and whether it floats. Docked, the open page. Closed, the page opened last, or the tab
- * picked in the peek (picking one there doesn't dock it). `onPeek` tells App which page the peek shows, so it stays loaded.
+ * What the sidebar shows and whether it floats. Docked, the open page. Closed, the page opened last. `onPeek` tells
+ * App which page the peek shows, so it stays loaded.
  */
 function useSidebarPeek(open: SidebarRef | null, mounted: SidebarRef[], onPeek: (id: string | null) => void) {
   const docked = open !== null;
   const peek = usePeek(!docked && mounted.length > 0);
-  const [peekId, setPeekId] = useState<string | null>(null);
   const last = useRef<string | null>(null);
   if (open) last.current = open.id;
-  const current = open ?? mounted.find((e) => e.id === peekId) ?? mounted.find((e) => e.id === last.current) ?? mounted.at(-1) ?? null;
+  const current = open ?? mounted.find((e) => e.id === last.current) ?? mounted.at(-1) ?? null;
   const currentId = current?.id ?? null;
   useEffect(() => {
     onPeek(peek.shown ? currentId : null);
@@ -69,7 +66,6 @@ function useSidebarPeek(open: SidebarRef | null, mounted: SidebarRef[], onPeek: 
     showing: docked || peek.shown,
     peek,
     current,
-    selectTab: (id: string, dock: (id: string) => void) => (docked ? dock(id) : setPeekId(id)),
   };
 }
 
@@ -88,9 +84,6 @@ export function RightSidebar(props: {
   /** Ids of the mounted pages that were hidden long enough to unload. */
   unloaded: ReadonlySet<string>;
   host: PluginHost | null;
-  onSelect: (id: string) => void;
-  /** Closes one plugin's page; the last one closes the sidebar. */
-  onCloseTab: (id: string) => void;
   onClose: () => void;
   /** Moves the open page to a window of its own. Offered for pages whose manifest allows it. */
   onPopOut: (entry: SidebarRef) => void;
@@ -99,8 +92,7 @@ export function RightSidebar(props: {
   /** The page a peek shows, or null when it's hidden, so App keeps it loaded. */
   onPeek: (id: string | null) => void;
 }) {
-  const { docked, showing, peek, current, selectTab } = useSidebarPeek(props.open, props.mounted, props.onPeek);
-  const currentId = current?.id ?? null;
+  const { docked, showing, peek, current } = useSidebarPeek(props.open, props.mounted, props.onPeek);
   const page = current ? sidebarOf(current) : undefined;
   const title = page?.title;
   return (
@@ -118,36 +110,11 @@ export function RightSidebar(props: {
         {...peek.panelEvents}
       >
         <div className="flex h-8 shrink-0 items-center gap-1 pr-2 pl-1">
-          {props.mounted.length > 1 ? (
-            // Several plugins' pages are open: one tab each, scrolling sideways if they don't fit. Only the
-            // tab strip comes from Tabs; the pages stay mounted below so hidden ones keep running.
-            <Tabs value={currentId} onValueChange={(id) => selectTab(String(id), props.onSelect)} className="min-w-0 flex-1 gap-0 data-horizontal:flex-row">
-              <TabsList aria-label="Plugin sidebars" className="h-7 w-full justify-start overflow-x-auto bg-transparent p-0 [scrollbar-width:none]">
-                {props.mounted.map((entry) => {
-                  const sidebar = sidebarOf(entry);
-                  return (
-                    <div key={entry.id} className="group/tab relative flex h-full shrink-0 items-center">
-                      <TabsTrigger value={entry.id} className="h-6 flex-none pr-6 pl-2 text-[12px] data-active:bg-white/[0.08]">
-                        <PluginGlyph name={sidebar?.icon ?? ""} svg={sidebar?.iconSvg} className="size-3.5" />
-                        {sidebar?.title}
-                      </TabsTrigger>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Close ${sidebar?.title}`}
-                        onClick={() => props.onCloseTab(entry.id)}
-                        className="absolute right-0.5 size-5 text-muted-foreground opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"
-                      >
-                        <XIcon aria-hidden />
-                      </Button>
-                    </div>
-                  );
-                })}
-              </TabsList>
-            </Tabs>
-          ) : (
-            <h2 className="min-w-0 flex-1 truncate pl-2 text-[12px] font-medium text-muted-foreground">{title}</h2>
-          )}
+          {/* Which page this is; the title bar's plugin buttons switch between the open ones. */}
+          <h2 className="flex min-w-0 flex-1 items-center gap-2 pl-2 text-[12px] font-medium text-muted-foreground">
+            <PluginGlyph name={page?.icon ?? ""} svg={page?.iconSvg} className="size-3.5 shrink-0" />
+            <span className="truncate">{title}</span>
+          </h2>
           {current && page?.opens.includes("window") && (
             <IconButton label="Open in a window" side="left" onClick={() => props.onPopOut(current)} className="size-6 shrink-0 [&_svg]:size-3.5">
               <AppWindowIcon />

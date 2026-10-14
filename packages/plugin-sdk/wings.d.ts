@@ -41,6 +41,28 @@ interface WingsBadge {
   actions?: { id: string; label: string; primary?: boolean }[];
 }
 
+/** One figure in a pane's status strip. */
+interface WingsStatusItem {
+  /** Muted text before the value. Up to 16 characters. */
+  label?: string;
+  /** Up to 32 characters. */
+  value: string;
+  /** 0 to 100. Draws a small meter between the label and the value. */
+  percent?: number;
+  /** Colours the meter and the value. */
+  tone?: Tone;
+}
+
+/** What a plugin shows under a pane's terminal. */
+interface WingsPaneStatus {
+  /** One to 4 figures, left to right. */
+  items: WingsStatusItem[];
+  /** Up to 12 lines in the card shown when you point at the strip. */
+  rows?: { label: string; value: string; tone?: Tone }[];
+  /** The id of one of the plugin's sidebars or views. Clicking the strip opens it. */
+  open?: string;
+}
+
 /** Where the diff viewer scrolls to and highlights once the patch is shown. A path or line the patch doesn't have just opens the diff. */
 interface WingsDiffFocus {
   path: string;
@@ -170,6 +192,13 @@ interface Wings {
   onTranscript(listener: (event: WingsTranscriptEvent) => void): () => void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
+  /**
+   * Needs `"status"` in `contributes.ui`. Shows a slim strip under the pane's terminal, or removes it with `null`.
+   * One status per plugin per pane; Wings removes it when the pane closes or the plugin stops. Rejects a status over
+   * the limits (4 items, 16-character labels, 32-character values, 12 rows), a `percent` outside 0 to 100, or an
+   * `open` that isn't one of the plugin's sidebars or views. Sending what this frame last sent for the pane does nothing.
+   */
+  setPaneStatus(paneId: string, status: WingsPaneStatus | null): Promise<void>;
   /**
    * Needs `permissions.ports`. The local TCP ports the programs in your panes listen on, that `localhost`
    * reaches. About 20 ms a call, so poll slowly.

@@ -3,7 +3,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-const menuOpen = () => document.querySelector('[data-slot="context-menu-content"]') !== null;
+const MENU = '[data-slot="context-menu-content"], [data-slot="popover-content"]';
+/** A context menu or a popover (the inbox) is open: they live outside the panel, so the pointer leaving it for them mustn't hide it. */
+const menuOpen = () => document.querySelector(MENU) !== null;
 
 export type Side = "left" | "right";
 
@@ -34,7 +36,7 @@ export function usePeek(enabled = true) {
     if (!shown) return;
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element;
-      if (!panel.current?.contains(target) && !target.closest('[data-slot="context-menu-content"]')) setOpen(false);
+      if (!panel.current?.contains(target) && !target.closest(MENU)) setOpen(false);
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);

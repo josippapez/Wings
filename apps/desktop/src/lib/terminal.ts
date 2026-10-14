@@ -59,6 +59,8 @@ export const shortcutLabel = {
   closePane: shortcutOf("close-pane", isMac),
   nextAgent: shortcutOf("next-agent", isMac),
   find: shortcutOf("find", isMac),
+  palette: shortcutOf("palette", isMac),
+  settings: shortcutOf("settings", isMac),
 };
 
 export const DEFAULT_FONT_SIZE = 13;

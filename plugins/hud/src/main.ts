@@ -1,5 +1,5 @@
-// What a terminal status line like claude-hud shows, in Wings instead: your usage limits and memory next to the
-// HUD title bar button, and a badge on a Claude session's pane when its context runs full or an MCP server fails.
+// What a terminal status line like claude-hud shows, in Wings instead: a strip under each Claude session's terminal with
+// your 5-hour and weekly limits, its context and any failed MCP server, and the HUD sidebar with the rest.
 //
 // The usage limits, and the context and cache Claude Code itself reports, come from `wings.statusline()`, once
 // `wings statusline` is Claude Code's status line. Without it the context is worked out from the transcript the
@@ -7,7 +7,7 @@
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { ingest, resetRun, session, sessions, type Entry, type Session } from "./lib/session";
-import { badge, LIMIT_CRITICAL, LIMIT_WARN, overview, snapshot, state, titleLabel } from "./lib/view";
+import { LIMIT_CRITICAL, LIMIT_WARN, overview, paneStatus, snapshot, state } from "./lib/view";
 
 /** Claude's replies hold the skills and MCP tools it used. */
 const REPLIES = 500;
@@ -19,7 +19,7 @@ const MINUTE = 60_000;
 let panes = new Map<string, Session>();
 let totalMemory: number | null = null;
 
-// Changes come in bursts while Claude works, so the badges and sidebar update at most every 300 ms.
+// Changes come in bursts while Claude works, so the pane strips and sidebar update at most every 300 ms.
 let pending = new Set<string>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 function changed(s: Session | null) {
@@ -30,14 +30,12 @@ function flush() {
   timer = null;
   for (const id of pending) {
     const s = sessions.get(id);
-    if (s?.paneId) void wings.setBadge(s.paneId, badge(s)).catch(() => {});
+    if (s?.paneId) void wings.setPaneStatus(s.paneId, paneStatus(s)).catch(console.error);
   }
   pending = new Set();
-  const { label, rows, tone } = titleLabel();
-  void wings.setSidebarLabel("hud", label, { rows, tone }).catch(() => {});
   void wings.broadcast(snapshot()).catch(() => {});
 }
-/** Every badge, for numbers that changed for all of them, like the status line's. */
+/** Every strip, for numbers that changed for all of them, like the status line's. */
 function changedAll() {
   for (const s of panes.values()) pending.add(s.id);
   changed(null);
@@ -99,7 +97,7 @@ wings.onPanes(async (list) => {
   for (const [paneId, s] of panes) {
     if (next.get(paneId)?.session?.sessionId !== s.id) {
       s.paneId = null;
-      if (open.has(paneId)) void wings.setBadge(paneId, null).catch(() => {});
+      if (open.has(paneId)) void wings.setPaneStatus(paneId, null).catch(() => {});
     }
   }
   const current = new Map<string, Session>();

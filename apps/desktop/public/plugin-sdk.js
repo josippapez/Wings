@@ -44,6 +44,7 @@
   // Plugins resend on every poll. Wings clears a plugin's badges and labels only when its main frame stops (a new frame
   // starts with an empty memory) and drops a badge when its pane leaves the list, which `forgetPanes` mirrors.
   const sentBadges = new Map();
+  const sentStatuses = new Map();
   const sentLabels = new Map();
   // Sends only when `value` differs from the last one sent under `key`. A call that fails is forgotten, so the next one retries.
   const sendChanged = (sent, key, value, method, params) => {
@@ -58,6 +59,7 @@
   const forgetPanes = (panes) => {
     const live = new Set(Array.isArray(panes) ? panes.map((p) => p?.paneId) : []);
     for (const paneId of sentBadges.keys()) if (!live.has(paneId)) sentBadges.delete(paneId);
+    for (const paneId of sentStatuses.keys()) if (!live.has(paneId)) sentStatuses.delete(paneId);
   };
 
   // The webview's own menu offers only "Reload", which would reload this frame. Keep it for fields and a selection (Copy).
@@ -191,6 +193,14 @@
     ports: () => call("ports", {}),
     /** Shows a badge in a pane's header, or removes it with `null`. Sending what this frame last sent for the pane does nothing. */
     setBadge: (paneId, badge) => sendChanged(sentBadges, paneId, badge, "setBadge", { paneId, badge }),
+    /**
+     * Shows a slim status strip under a pane's terminal, or removes it with `null`. Needs `"status"` in `contributes.ui`.
+     * `{ items, rows?, open? }`: up to 4 `items` of `{ label?, value, percent?, tone? }` (label up to 16 characters, value up to 32,
+     * `percent` 0 to 100 draws a small meter), `rows` of `{ label, value, tone? }` for the card shown on hover, and `open`, the id of
+     * one of the plugin's sidebars or views, which a click opens. One status per plugin per pane. Rejects a status that breaks a limit.
+     * Sending what this frame last sent for the pane does nothing.
+     */
+    setPaneStatus: (paneId, status) => sendChanged(sentStatuses, paneId, status, "setPaneStatus", { paneId, status }),
     /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**
