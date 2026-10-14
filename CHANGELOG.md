@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.38 · 2026-10-14
+
+- Updating several plugins that ask for new access reviews them one by one: the dialog says "1 of 3" and moves to the next after Turn on or Not now. Before, only the first one was asked about.
+
 ## 0.1.37 · 2026-10-14
 
 - Issues 0.4.1: the issue page reads like an issue: a large title you edit in place, the description under it, the properties (status, branch, pull request, commits, sessions) in a column on the right, and the activity below. Start agent opens Claude with a plain sentence as its prompt. The right sidebar is gone: the board and the project's Issues section list the same.

@@ -18,6 +18,7 @@ import { PluginNeeds } from "@/components/tool-install";
 import { api, type McpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { iconMaskStyle } from "@/lib/plugin-icon-mask";
+import { advance, enqueue } from "@/lib/review-queue";
 import { cn } from "@/lib/utils";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -131,13 +132,18 @@ function Permissions({ plugin }: { plugin: PluginView }) {
   );
 }
 
-function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: () => void; onApprove: () => void }) {
+/** One plugin's access to review; `step` counts the plugins waiting, so a run of updates goes one by one. */
+function Approve(props: { plugin: PluginView | null; step: { at: number; of: number }; busy: boolean; onCancel: () => void; onApprove: () => void }) {
   const p = props.plugin;
+  const more = props.step.of > 1;
   return (
     <Dialog open={p !== null} onOpenChange={(open) => !open && props.onCancel()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Turn on {p?.name}?</DialogTitle>
+          <DialogTitle className="flex items-baseline justify-between gap-3">
+            <span>Turn on {p?.name}?</span>
+            {more && <span className="shrink-0 text-[12px] font-normal tabular-nums text-muted-foreground">1 of {props.step.of}</span>}
+          </DialogTitle>
           <DialogDescription>
             {p?.approved === false && p.enabled ? "This version asks for different access than you approved before." : "Here's what it will be able to do."}
           </DialogDescription>
@@ -150,7 +156,7 @@ function Approve(props: { plugin: PluginView | null; busy: boolean; onCancel: ()
         <p className="text-[12px] text-muted-foreground">Commands run as you, so only turn on plugins you trust.</p>
         <DialogFooter>
           <Button variant="ghost" onClick={props.onCancel}>
-            Cancel
+            {more ? "Not now" : "Cancel"}
           </Button>
           <Button onClick={props.onApprove} disabled={props.busy}>
             {props.busy && <Spinner />}
@@ -251,7 +257,10 @@ export function PluginsSection(props: {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [rowError, setRowError] = useState<Record<string, string>>({});
-  const [approving, setApproving] = useState<PluginView | null>(null);
+  /** Plugins waiting for you to review their access; the dialog shows the first and steps through the rest. */
+  const [reviews, setReviews] = useState<PluginView[]>([]);
+  const approving = reviews[0] ?? null;
+  const queueReview = (...plugins: PluginView[]) => setReviews((q) => enqueue(q, ...plugins));
   const [readme, setReadme] = useState<{ id: string; version: string; text: string | null } | null>(null);
 
   const current = props.plugins.find((p) => p.id === props.selected) ?? props.plugins[0] ?? null;
@@ -284,7 +293,7 @@ export function PluginsSection(props: {
       props.onSelect(plugin.id);
       if (kind === "link") setLink("");
       // A new plugin, or one whose update asks for more, waits for you to approve it.
-      if (!plugin.approved || !plugin.enabled) setApproving(plugin);
+      if (!plugin.approved || !plugin.enabled) queueReview(plugin);
     } catch (e) {
       setError(message(e));
     } finally {
@@ -310,7 +319,7 @@ export function PluginsSection(props: {
     if (!plugin) return;
     onReviewHandled();
     props.onSelect(plugin.id);
-    setApproving(plugin);
+    queueReview(plugin);
   }, [review, props.plugins]);
 
   // The README comes from the plugin's folder, so it's read again when the version changes.
@@ -329,7 +338,7 @@ export function PluginsSection(props: {
   }, [shownId, shownVersion]);
 
   function toggle(plugin: PluginView, on: boolean) {
-    if (on && !plugin.approved) return setApproving(plugin);
+    if (on && !plugin.approved) return queueReview(plugin);
     void work(plugin.id, async () => {
       await api.pluginSetEnabled(plugin, on);
       await refresh();
@@ -340,21 +349,21 @@ export function PluginsSection(props: {
     work(p.id, async () => {
       const next = await api.pluginUpdate(p.id);
       await refresh(p.id);
-      if (!next.approved) setApproving(next);
+      if (!next.approved) queueReview(next);
     });
 
   const updatable = props.plugins.filter((p) => updateOf(p));
-  // One at a time, like pressing each Update. A plugin that now asks for more access is left off until you review it.
+  // One at a time, like pressing each Update. Every plugin that now asks for more access waits for your review, in turn.
   async function updateAll() {
-    let review: PluginView | null = null;
+    const asking: PluginView[] = [];
     for (const p of updatable) {
       await work(p.id, async () => {
         const next = await api.pluginUpdate(p.id);
         await refresh(p.id);
-        if (!next.approved) review ??= next;
+        if (!next.approved) asking.push(next);
       });
     }
-    if (review) setApproving(review);
+    if (asking.length) queueReview(...asking);
   }
 
   async function approve() {
@@ -364,7 +373,7 @@ export function PluginsSection(props: {
       await api.pluginSetEnabled(shown, true);
       await refresh(shown.id);
     });
-    setApproving(null);
+    setReviews(advance);
   }
 
   const hasGithub = props.plugins.some((p) => p.source?.kind === "github");
@@ -528,7 +537,7 @@ export function PluginsSection(props: {
               {current.description && <p className="text-[13px] leading-relaxed">{current.description}</p>}
 
               {!current.approved && (
-                <Button variant="outline" size="sm" onClick={() => setApproving(current)} className="w-fit text-working">
+                <Button variant="outline" size="sm" onClick={() => queueReview(current)} className="w-fit text-working">
                   Review access to turn it on
                 </Button>
               )}
@@ -595,7 +604,13 @@ export function PluginsSection(props: {
           )}
         </ScrollArea>
       </div>
-      <Approve plugin={approving} busy={approving ? busy.has(approving.id) : false} onCancel={() => setApproving(null)} onApprove={() => void approve()} />
+      <Approve
+        plugin={approving}
+        step={{ at: 1, of: reviews.length }}
+        busy={approving ? busy.has(approving.id) : false}
+        onCancel={() => setReviews(advance)}
+        onApprove={() => void approve()}
+      />
     </div>
   );
 }
