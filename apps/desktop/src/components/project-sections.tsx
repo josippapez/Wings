@@ -1,7 +1,7 @@
 import { ChevronRightIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
-import { toneClass } from "@/components/pane-badge";
+import { iconFor, toneClass } from "@/components/pane-badge";
 import type { PluginView } from "@/lib/api";
 import { collapseKey, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow } from "@/lib/project-sections";
 import { cn } from "@/lib/utils";
@@ -76,6 +76,7 @@ export const ProjectSections = memo(function ProjectSections({
                   const t = row.badge?.tone ?? "neutral";
                   const tone = toneClass[t].text;
                   const filled = t === "success" || t === "danger" || t === "merged";
+                  const Icon = row.icon ? iconFor[row.icon] : null;
                   return (
                     <li key={row.id}>
                       <button
@@ -86,7 +87,11 @@ export const ProjectSections = memo(function ProjectSections({
                         data-testid="section-row"
                         className="group/row flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
                       >
-                        <span className={cn("size-1.5 shrink-0 rounded-full border border-current", tone, filled && "bg-current")} aria-hidden />
+                        {Icon ? (
+                          <Icon className={cn("size-3.5 shrink-0", tone)} aria-hidden />
+                        ) : (
+                          <span className={cn("size-1.5 shrink-0 rounded-full border border-current", tone, filled && "bg-current")} aria-hidden />
+                        )}
                         <span className="min-w-0 flex-1 overflow-hidden text-[12.5px] whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]">{rowTitle(row.label)}</span>
                         {ref && <span className="hidden shrink-0 text-[10px] tabular-nums text-muted-foreground group-hover/row:block group-focus-visible/row:block">{ref}</span>}
                       </button>

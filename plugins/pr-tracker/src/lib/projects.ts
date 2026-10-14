@@ -75,7 +75,7 @@ function row(item: ListedPr, cwd: string) {
     agent && (agent.session!.state === "working" ? "agent working" : "agent here"),
   ].filter(Boolean).join(" · ");
   // The host caps an id at 64 characters, and a URL can be longer.
-  return { id: `${link.provider}:${link.number}`, label: item.title.slice(0, 120), detail: detail.slice(0, 120), badge: { text: st.label, tone: st.tone }, open: { view: "pr", args: argsOf(link, item.title, cwd) } };
+  return { id: `${link.provider}:${link.number}`, label: item.title.slice(0, 120), detail: detail.slice(0, 120), badge: { text: st.label, tone: st.tone }, icon: st.icon, open: { view: "pr", args: argsOf(link, item.title, cwd) } };
 }
 
 let running = false;

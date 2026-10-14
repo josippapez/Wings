@@ -1,6 +1,6 @@
 import type { PluginView } from "./api.ts";
 import { boundedJson, VIEW_ARGS_MAX } from "./plugin-pages.ts";
-import type { Tone } from "./plugins.ts";
+import type { BadgeIcon, Tone } from "./plugins.ts";
 
 /** One line of a plugin's section under a project in the sidebar. Clicking it opens `open.view` as a tab in that project. */
 export type ProjectSectionRow = {
@@ -8,12 +8,15 @@ export type ProjectSectionRow = {
   label: string;
   detail?: string;
   badge?: { text: string; tone: Tone };
+  /** Drawn in the badge's tone in place of the plain dot. */
+  icon?: BadgeIcon;
   open: { view: string; args?: unknown };
 };
 
 export const SECTION_ROWS_MAX = 50;
 
 const tones: Record<Tone, true> = { neutral: true, info: true, success: true, warning: true, danger: true, merged: true };
+const icons: Record<BadgeIcon, true> = { "pr-open": true, "pr-merged": true, "pr-closed": true, "pr-draft": true };
 
 const text = (v: unknown, max: number) => (typeof v === "string" && v ? v.slice(0, max) : undefined);
 
@@ -45,6 +48,7 @@ export function cleanSectionRows(rows: unknown, tabViews: string[]): ProjectSect
       label,
       ...(text(r.detail, 120) ? { detail: text(r.detail, 120) } : {}),
       ...(badgeText ? { badge: { text: badgeText, tone: Object.hasOwn(tones, String(b?.tone)) ? (b?.tone as Tone) : "neutral" } } : {}),
+      ...(Object.hasOwn(icons, String(r.icon)) ? { icon: r.icon as BadgeIcon } : {}),
       open: { view: open.view, ...(hasArgs ? { args: JSON.parse(boundedJson(open.args, VIEW_ARGS_MAX, "Row args")) } : {}) },
     });
   }

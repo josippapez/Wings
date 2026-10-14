@@ -6,7 +6,7 @@ import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text
 import type { Overview } from "../lib/refs";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS } from "../lib/state";
-import { ago, focusOf, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
+import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import type { Comment, FailureDetail, Failing, PrArgs, Reviewer, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
 
@@ -68,6 +68,8 @@ export function PrView(props: PrViewProps) {
   const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
   /** Open comment threads, which a comment requirement counts. Null until the conversation has loaded. */
+  /** Comments people wrote: the Overview tab's count, which leaves out bots like the conversation does. */
+  const people = useMemo(() => comments?.filter((c) => !isAutomated(c)).length ?? 0, [comments]);
   const unresolved = useMemo(() => (comments ? comments.filter((c) => c.replyTo === null && !c.system && c.thread?.state === "active").length : null), [comments]);
   const [menu, setMenu] = useState(false);
   /** What the user picked and has yet to confirm. */
@@ -187,7 +189,7 @@ export function PrView(props: PrViewProps) {
               value={tab}
               onChange={setTab}
               items={[
-                { value: "overview", label: `Overview${comments?.length ? ` ${comments.length}` : ""}` },
+                { value: "overview", label: `Overview${people ? ` ${people}` : ""}` },
                 { value: "checks", label: `Checks${checkTotal ? ` ${st.checks.passed}/${checkTotal}` : ""}` },
                 { value: "files", label: "Files" },
               ]}
@@ -283,8 +285,12 @@ function Skeleton() {
 // ---------- overview: description and conversation ----------
 
 function OverviewTab({ overview, comments, error, canReply, onReply, onRun }: PrViewProps & { overview: Overview }) {
-  const threads = useMemo(() => (comments ? threadsOf(comments) : null), [comments]);
+  const all = useMemo(() => (comments ? threadsOf(comments) : null), [comments]);
+  // People's threads make the conversation; bots' and build services' go in one folded group under it.
+  const threads = useMemo(() => all?.filter((t) => !isAutomated(t.root)) ?? null, [all]);
+  const bots = useMemo(() => all?.filter((t) => isAutomated(t.root)) ?? [], [all]);
   const [showResolved, setShowResolved] = useState(false);
+  const [showBots, setShowBots] = useState(false);
   const resolved = threads?.filter((t) => kindOf(t) === "resolved").length ?? 0;
   const diff = useMemo(() => (focus?: WingsDiffFocus) => onRun("diff", focus), [onRun]);
 
@@ -301,26 +307,46 @@ function OverviewTab({ overview, comments, error, canReply, onReply, onRun }: Pr
 
       {!threads ? (
         error ? null : <div className="pr-skeleton" role="status" aria-busy="true" aria-label="Loading conversation"><div className="pr-skel" style={{ height: 80 }} /><div className="pr-skel" style={{ height: 80 }} /></div>
-      ) : threads.length === 0 ? (
+      ) : threads.length === 0 && bots.length === 0 ? (
         <Empty title="No comments yet" description="Review threads and comments on the pull request show up here." />
       ) : (
-        <ol className="pr-timeline" aria-label="Conversation" data-testid="pr-conversation">
-          {threads.map((t) => {
-            const kind = kindOf(t);
-            return (
-              <ThreadCard
-                key={`${t.root.id}${kind === "resolved" && showResolved ? "-open" : ""}`}
-                thread={t}
-                kind={kind}
-                defaultOpen={kind === "open" || (kind === "resolved" && showResolved)}
-                prAuthor={overview.author}
-                canReply={canReply}
-                onReply={onReply}
-                onDiff={diff}
-              />
-            );
-          })}
-        </ol>
+        <>
+          {threads.length ? (
+            <ol className="pr-timeline" aria-label="Conversation" data-testid="pr-conversation">
+              {threads.map((t) => {
+                const kind = kindOf(t);
+                return (
+                  <ThreadCard
+                    key={`${t.root.id}${kind === "resolved" && showResolved ? "-open" : ""}`}
+                    thread={t}
+                    kind={kind}
+                    defaultOpen={kind === "open" || (kind === "resolved" && showResolved)}
+                    prAuthor={overview.author}
+                    canReply={canReply}
+                    onReply={onReply}
+                    onDiff={diff}
+                  />
+                );
+              })}
+            </ol>
+          ) : (
+            <Text tone="muted">No comments from people yet.</Text>
+          )}
+          {bots.length ? (
+            <>
+              <Heading level={3} actions={<Chip pressed={showBots} onClick={() => setShowBots((s) => !s)} data-testid="pr-bots-toggle">{showBots ? "Hide" : "Show"}</Chip>}>
+                Automated · {bots.length}
+              </Heading>
+              {showBots ? (
+                <ol className="pr-timeline" aria-label="Automated comments" data-testid="pr-bots">
+                  {bots.map((t) => (
+                    <ThreadCard key={t.root.id} thread={t} kind={kindOf(t)} defaultOpen={false} prAuthor={overview.author} canReply={canReply} onReply={onReply} onDiff={diff} />
+                  ))}
+                </ol>
+              ) : null}
+            </>
+          ) : null}
+        </>
       )}
     </div>
   );

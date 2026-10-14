@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.35 · 2026-10-14
+
+- Pull requests in the sidebar show a pull request icon (draft, open, merged, closed) in their status colour instead of a dot. Plugins can set `icon` on a section row; `wings-plugin-sdk` 0.13.0.
+- PR tracker 0.13.5: an Azure DevOps pull request's conversation leaves out Azure's own notes, like "The reference … was updated", as Azure DevOps does. Comments from bots and build services fold into an "Automated" group under the conversation, and the Overview count is people's comments.
+
 ## 0.1.34 · 2026-10-14
 
 - Back and forward: arrow buttons next to the sidebar toggle, your mouse's back and forward buttons (also over plugin pages), and ⌥⌘[ / ⌥⌘]. They go between the projects and tabs you visited.

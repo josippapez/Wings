@@ -25,7 +25,7 @@ export const toneClass: Record<Tone, { pill: string; text: string; dot: string }
   merged: { pill: "bg-[#b392f0]/14 text-[#c9b2f7] ring-[#b392f0]/30", text: "text-[#c9b2f7]", dot: "bg-[#b392f0]" },
 };
 
-const iconFor: Record<BadgeIcon, typeof GitPullRequestIcon> = {
+export const iconFor: Record<BadgeIcon, typeof GitPullRequestIcon> = {
   "pr-open": GitPullRequestIcon,
   "pr-merged": GitMergeIcon,
   "pr-closed": GitPullRequestClosedIcon,

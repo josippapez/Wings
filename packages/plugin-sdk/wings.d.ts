@@ -148,6 +148,8 @@ interface WingsProjectSectionRow {
   detail?: string;
   /** A small pill after the label. `text` is up to 24 characters. */
   badge?: { text: string; tone?: Tone };
+  /** A pull request icon in place of the row's dot, in the badge's tone. Needs Wings 0.1.35. */
+  icon?: "pr-open" | "pr-merged" | "pr-closed" | "pr-draft";
   /** Clicking the row opens `view`, one of the plugin's `contributes.views` that lists `tab` in `opens`, as a tab in the row's project, with `args` (JSON, up to 16 KB) as `viewArgs()`. */
   open: { view: string; args?: unknown };
 }

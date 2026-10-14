@@ -10,13 +10,15 @@ const row = (extra: Record<string, unknown> = {}) => ({ id: "a", label: "A", ope
 
 test("rows keep known fields, and bad ones are left out", () => {
   const rows = cleanSectionRows(
-    [row({ detail: "d", badge: { text: "Open", tone: "success", extra: 1 }, extra: 1 }), row({ id: "" }), row({ id: "b", label: "" }), null, "x", row({ id: "c", badge: { text: "" } }), row({ id: "d", badge: { text: "t", tone: "loud" } })],
+    [row({ detail: "d", badge: { text: "Open", tone: "success", extra: 1 }, extra: 1 }), row({ id: "" }), row({ id: "b", label: "" }), null, "x", row({ id: "c", badge: { text: "" } }), row({ id: "d", badge: { text: "t", tone: "loud" } }), row({ id: "e", icon: "pr-draft" }), row({ id: "f", icon: "rocket" })],
     views,
   );
   assert.deepEqual(rows, [
     { id: "a", label: "A", detail: "d", badge: { text: "Open", tone: "success" }, open: { view: "board" } },
     { id: "c", label: "A", open: { view: "board" } },
     { id: "d", label: "A", badge: { text: "t", tone: "neutral" }, open: { view: "board" } },
+    { id: "e", label: "A", icon: "pr-draft", open: { view: "board" } },
+    { id: "f", label: "A", open: { view: "board" } },
   ]);
 });
 
