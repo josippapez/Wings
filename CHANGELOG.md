@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.37 · 2026-10-14
+
+- Issues 0.4.1: the issue page reads like an issue: a large title you edit in place, the description under it, the properties (status, branch, pull request, commits, sessions) in a column on the right, and the activity below. Start agent opens Claude with a plain sentence as its prompt. The right sidebar is gone: the board and the project's Issues section list the same.
+- The plugin menu in the title bar leaves out pages that show one item, like a single issue or work item. Plugins mark them with `button: false`.
+- Plugins can pass values with spaces to a new pane with `openPane({ command, args })`, each quoted as one word, like a prompt for Claude. `wings-plugin-sdk` 0.14.0.
+
 ## 0.1.36 · 2026-10-14
 
 - Tasks is now Issues (0.4.0). Each issue has a key like `WEB-12`, a status (to do, in progress, in review, done, canceled), a Markdown description, links to its branch, PR and commits, the Claude sessions that worked on it, and an activity log of who did what and when. An issue opens as a tab with Resume (continues its last session) and Start agent. Claude gets `tasks__list`, `get`, `create`, `update` and `log`, and its entries are stamped with its session. Your tasks are moved over on first start.

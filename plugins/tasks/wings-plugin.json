@@ -1,8 +1,8 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.4.0",
-  "minWingsVersion": "0.1.27",
+  "version": "0.4.1",
+  "minWingsVersion": "0.1.37",
   "icon": "icon.svg",
   "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a Markdown spec, a status, links, the Claude sessions that worked on it and an activity log of who did what and when. Keep the open ones in the sidebar and under the project, see them on a board in a tab, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update and tasks__log.",
   "api": 1,
@@ -17,14 +17,6 @@
     ]
   },
   "contributes": {
-    "sidebars": [
-      {
-        "id": "tasks",
-        "title": "Issues",
-        "icon": "todo",
-        "page": "sidebar.html"
-      }
-    ],
     "views": [
       {
         "id": "board",
@@ -39,6 +31,7 @@
       {
         "id": "issue",
         "title": "Issue",
+        "button": false,
         "page": "issue.html",
         "opens": [
           "tab"

@@ -694,10 +694,12 @@ export class PluginHost {
           if (typeof value !== "string") throw new Error(`openPane ${key} must be a string`);
           return value;
         };
-        // Rust checks the command and folder; the pane is then opened here, where tabs and splits live.
+        const args = p.args ?? [];
+        if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) throw new Error("openPane args must be a list of strings");
+        // Rust checks the command, args and folder; the pane is then opened here, where tabs and splits live.
         const plan = await invoke<Omit<PanePlan, "placement">>("plugin_open_pane", {
           pluginId,
-          request: { command: text("command"), cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
+          request: { command: text("command"), args, cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
         });
         const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement });
         await this.listed(paneId);

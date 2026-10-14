@@ -930,6 +930,9 @@ fn plugin_post(state: State<AppState>, plugin_id: String, request: plugins::Post
 #[serde(rename_all = "camelCase")]
 struct OpenPaneRequest {
     command: Option<String>,
+    /// Values after the command, each one shell word even with spaces in it.
+    #[serde(default)]
+    args: Vec<String>,
     cwd: Option<String>,
     /// The project on screen, where a pane without a `cwd` opens.
     space_id: Option<String>,
@@ -949,7 +952,7 @@ struct PanePlan {
 #[tauri::command(async)]
 fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPaneRequest) -> Res<PanePlan> {
     let plugin = plugin(&state, &plugin_id)?;
-    let input = plugins::pane_input(&plugin, request.command.as_deref())?;
+    let input = plugins::pane_input(&plugin, request.command.as_deref(), &request.args)?;
     let spaces = state.spaces.lock().unwrap().spaces.clone();
     let current = request.space_id.and_then(|id| spaces.iter().position(|s| s.id == id));
     let (project, cwd) = match request.cwd {

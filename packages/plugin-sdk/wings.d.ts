@@ -214,7 +214,13 @@ interface Wings {
    * an entry of `permissions.panes`. `cwd` must be inside one of your projects; without it the pane opens at the
    * root of the project on screen.
    */
-  openPane(options?: { command?: string; cwd?: string; placement?: "tab" | "right" | "down" }): Promise<{ paneId: string }>;
+  openPane(options?: {
+    command?: string;
+    /** Values after `command`, one shell word each even with spaces, like a prompt for `claude`. Up to 4 KB together; none may start with `-` or hold a newline or other control character. Needs Wings 0.1.37. */
+    args?: string[];
+    cwd?: string;
+    placement?: "tab" | "right" | "down";
+  }): Promise<{ paneId: string }>;
   /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
   focusPane(paneId: string): Promise<void>;
   /**

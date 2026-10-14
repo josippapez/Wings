@@ -323,7 +323,7 @@ const leftPanel = usePanelRef();
   const shownView = shownTab && isViewTab(shownTab) ? `${shownTab.view.pluginId}:${shownTab.view.viewId}` : null;
   const pluginButtons: PluginButton[] = activePlugins.flatMap((p) => [
     // A sidebar or view button opens its page in the first place its manifest lists.
-    ...pagesOf(p).map((s) => ({
+    ...pagesOf(p).filter((s) => s.button !== false).map((s) => ({
       key: `${p.id}:${s.id}`,
       pluginId: p.id,
       kind: s.opens[0],

@@ -6,8 +6,7 @@ An issue has a key (`WIN-12`: up to three letters of the project's name, or `ISS
 
 The log is append-only: entries are `created`, `status`, `note` and `link`, each with who (you, or a Claude session with its name) and when. Status and link changes log themselves. Nothing edits or deletes an entry; deleting the whole issue is the only way one goes.
 
-- **Sidebar.** The Issues button in the title bar lists the open issues of the project on screen (in progress first, one line each with the key). Type a title and press Enter to add one. Click a line to open the issue.
-- **Board.** **Issues** in the + menu, or **Open board** in the sidebar, opens a tab with To do, In progress, In review and Done columns. Canceled is behind "Show canceled". A card shows the key, title, when it last changed and the session that touched it last. Click it to open the issue. Move a card with its arrow buttons, or Alt+Left and Alt+Right while it has focus.
+- **Board.** **Issues** in the title bar or the + menu opens a tab with To do, In progress, In review and Done columns. Canceled is behind "Show canceled". A card shows the key, title, when it last changed and the session that touched it last. Click it to open the issue. Move a card with its arrow buttons, or Alt+Left and Alt+Right while it has focus.
 - **Issue page.** Opens as a tab, one per issue. Edit the title (Enter or leaving the field saves), the status, the description (Edit, then Save), the branch and the pull request. Add a note to the log. The activity is a timeline, newest first. **Resume** opens a terminal in the project running `claude --resume <latest session id>`. **Start agent** opens one running `claude` with a prompt to read the issue with `tasks__get` and continue it. Both need `permissions.panes`.
 - **Project section and block.** Under a project in the sidebar, the open issues (up to 50) with a status badge. The Project page block shows counts and the first eight open issues.
 - **Tools for Claude.** `tasks__list` (optional `status`), `tasks__get` (`key`), `tasks__create` (`title`, `description`, `status`), `tasks__update` (`key` and any of `title`, `description`, `status`, `branch`, `pr`, `commit`) and `tasks__log` (`key`, `text`). Titles are up to 200 characters, descriptions 20,000 and notes 4,000. Issue text is your data, and the tool results say to read it as data.
@@ -26,4 +25,4 @@ Version 0.4.0 moves the old Tasks entries (`tasks:<projectId>`) into issues once
 
 ## Permissions
 
-`panes: ["claude"]` for Resume and Start agent, and `openUrl: ["https://"]` for the pull request link and links in Markdown. Wings types a pane command into the shell as plain words and only the first argument after `claude` is its prompt, so the prompt is a single hyphen-joined word built from the issue key, which is checked first.
+`panes: ["claude", "claude --resume"]` for Start agent and Resume, and `openUrl: ["https://"]` for the pull request link and links in Markdown. Start agent passes its prompt as one `openPane` arg, which Wings quotes; it's built from the issue key, which is checked first. Needs Wings 0.1.37.

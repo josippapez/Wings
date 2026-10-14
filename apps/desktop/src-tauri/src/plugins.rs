@@ -152,6 +152,14 @@ pub struct View {
     /// Opening it as a tab always opens a new tab, instead of showing the project's existing one. Needs `tab` in `opens`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multiple: bool,
+    /// `false` leaves it out of the title bar's plugin buttons: a page that shows one item, opened from a row
+    /// with its args, is empty from a button.
+    #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
+    pub button: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A section a plugin may add under each project in the sidebar.
@@ -1119,16 +1127,26 @@ pub fn may_use_panes(plugin: &Plugin) -> bool {
 }
 
 const PANE_COMMAND_MAX: usize = 1024;
+/// `openPane` `args` together: room for a prompt that names an issue and says what to do with it.
+const PANE_ARGS_MAX: usize = 4096;
+
+/// One `args` value as a single shell word: single-quoted, a `'` inside written as `'\''`.
+fn shell_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
 
 /// The line to type into a new pane's shell for `command`, or `None` for a plain shell. Like `exec`, an entry
 /// in `permissions.panes` is a program and the words the command must start with. Words past the entry
-/// come from the plugin, so they're single-quoted.
-pub fn pane_input(plugin: &Plugin, command: Option<&str>) -> Result<Option<String>, String> {
+/// come from the plugin, so they're single-quoted. `args` go after them as one quoted word each, so a value
+/// can hold spaces, like a prompt; one that starts with `-` is refused, since it would read as a flag.
+pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Result<Option<String>, String> {
     let id = &plugin.manifest.id;
     let Some(declared) = &plugin.manifest.permissions.panes else {
         return Err(format!("{id} may not open panes"));
     };
-    let Some(command) = command else { return Ok(None) };
+    let Some(command) = command else {
+        return if args.is_empty() { Ok(None) } else { Err("openPane args need a command".into()) };
+    };
     // Split on spaces only, so a tab or newline is refused rather than read as a word break.
     let words: Vec<&str> = command.split(' ').filter(|w| !w.is_empty()).collect();
     if words.is_empty() || command.len() > PANE_COMMAND_MAX || !words.iter().all(|w| plain_word(w)) {
@@ -1151,7 +1169,14 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>) -> Result<Option<Strin
             return Err(format!("{id} may not pass {flag} to claude"));
         }
     }
-    let extra = words[entry.len()..].iter().map(|w| format!("'{w}'"));
+    if args.iter().map(String::len).sum::<usize>() > PANE_ARGS_MAX {
+        return Err(format!("openPane args are up to {} KB together", PANE_ARGS_MAX / 1024));
+    }
+    // Typed into an interactive shell: a newline would run what follows, and other control characters edit the line.
+    if let Some(arg) = args.iter().find(|a| a.is_empty() || a.starts_with('-') || a.chars().any(char::is_control)) {
+        return Err(format!("openPane args must be non-empty, not start with -, and have no control characters, not {arg:?}"));
+    }
+    let extra = words[entry.len()..].iter().map(|w| format!("'{w}'")).chain(args.iter().map(|a| shell_quote(a)));
     Ok(Some(entry.iter().map(|w| w.to_string()).chain(extra).collect::<Vec<_>>().join(" ")))
 }
 
@@ -2201,7 +2226,7 @@ mod tests {
     #[test]
     fn pane_commands_must_be_declared() {
         let p = with_panes(Some(&["lazygit", "npm run dev", "claude --resume", "git log"]));
-        let input = |command: Option<&str>| pane_input(&p, command);
+        let input = |command: Option<&str>| pane_input(&p, command, &[]);
         assert_eq!(input(None).unwrap(), None);
         assert_eq!(input(Some("lazygit")).unwrap().as_deref(), Some("lazygit"));
         assert_eq!(input(Some("  npm   run dev ")).unwrap().as_deref(), Some("npm run dev"));
@@ -2225,19 +2250,30 @@ mod tests {
         assert!(input(Some("git log -ccore.pager=sh")).unwrap_err().contains("may not pass"));
         // Claude takes only the flags the entry names; a prompt word is fine.
         let claude = with_panes(Some(&["claude", "claude --resume"]));
-        assert_eq!(pane_input(&claude, Some("claude Continue-issue-A-1")).unwrap().as_deref(), Some("claude 'Continue-issue-A-1'"));
-        assert_eq!(pane_input(&claude, Some(&format!("claude --resume {id}"))).unwrap(), Some(format!("claude --resume '{id}'")));
+        assert_eq!(pane_input(&claude, Some("claude Continue-issue-A-1"), &[]).unwrap().as_deref(), Some("claude 'Continue-issue-A-1'"));
+        assert_eq!(pane_input(&claude, Some(&format!("claude --resume {id}")), &[]).unwrap(), Some(format!("claude --resume '{id}'")));
+        // `args` keep their spaces as one quoted word, a quote inside escaped; flags and control characters are refused.
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            pane_input(&claude, Some("claude"), &args(&["Continue issue A-1. It's in review"])).unwrap().as_deref(),
+            Some("claude 'Continue issue A-1. It'\\''s in review'")
+        );
+        for bad in [&["--dangerously-skip-permissions"][..], &["line\nrm -rf ~"], &["tab\there"], &[""]] {
+            assert!(pane_input(&claude, Some("claude"), &args(bad)).is_err(), "{bad:?}");
+        }
+        assert!(pane_input(&claude, None, &args(&["x"])).is_err());
+        assert!(pane_input(&claude, Some("claude"), &args(&[&"a".repeat(5000)])).is_err());
         for flag in ["claude --dangerously-skip-permissions", "claude --permission-mode=bypassPermissions", "claude x --mcp-config=a.json", "claude --resume x --settings=s.json", "claude -p x"] {
-            assert!(pane_input(&claude, Some(flag)).unwrap_err().contains("may not pass"), "{flag}");
+            assert!(pane_input(&claude, Some(flag), &[]).unwrap_err().contains("may not pass"), "{flag}");
         }
 
         // `[]` allows plain shells only; no `panes` allows nothing, not even focus.
         let shells = with_panes(Some(&[]));
-        assert_eq!(pane_input(&shells, None).unwrap(), None);
-        assert!(pane_input(&shells, Some("lazygit")).unwrap_err().contains("may not start"));
+        assert_eq!(pane_input(&shells, None, &[]).unwrap(), None);
+        assert!(pane_input(&shells, Some("lazygit"), &[]).unwrap_err().contains("may not start"));
         assert!(may_use_panes(&shells));
         let none = with_panes(None);
-        assert!(pane_input(&none, None).unwrap_err().contains("may not open panes"));
+        assert!(pane_input(&none, None, &[]).unwrap_err().contains("may not open panes"));
         assert!(!may_use_panes(&none));
     }
 
@@ -2387,7 +2423,12 @@ mod tests {
         let plain = manifest(serde_json::json!({}), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
         assert!(!plain.new_tab && !plain.multiple);
         let json = serde_json::to_value(&plain).unwrap();
-        assert!(json.get("newTab").is_none() && json.get("multiple").is_none());
+        assert!(json.get("newTab").is_none() && json.get("multiple").is_none() && json.get("button").is_none());
+        assert!(plain.button);
+        // `button: false` keeps a one-item page out of the title bar, and is kept when saved.
+        let item = manifest(serde_json::json!({ "multiple": true, "button": false }), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
+        assert!(!item.button);
+        assert_eq!(serde_json::to_value(&item).unwrap()["button"], false);
         let _ = fs::remove_dir_all(&dir);
     }
 

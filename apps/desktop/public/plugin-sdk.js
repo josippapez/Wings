@@ -220,7 +220,7 @@
      * by `permissions.panes`. `cwd` must be inside one of your projects; without it the pane opens at the root
      * of the project on screen.
      */
-    openPane: ({ command = null, cwd = null, placement = "tab" } = {}) => call("openPane", { command, cwd, placement }),
+    openPane: ({ command = null, args = [], cwd = null, placement = "tab" } = {}) => call("openPane", { command, args, cwd, placement }),
     /** Shows an open pane and moves the keyboard to it. Needs `permissions.panes`. */
     focusPane: (paneId) => call("focusPane", { paneId }),
     /**

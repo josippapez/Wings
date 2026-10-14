@@ -25,7 +25,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
   const send = (op: Op) => apply(op).then(() => setError(null), fail);
   const issue = store ? findIssue(store, issueKey) : undefined;
 
-  const open = (command: string) => wings.openPane({ command, cwd: project.path }).then(() => setError(null), fail);
+  const open = (command: string, args?: string[]) => wings.openPane({ command, args, cwd: project.path }).then(() => setError(null), fail);
   return (
     <IssueView
       project={project}
@@ -38,7 +38,14 @@ function ProjectIssue({ project }: { project: WingsProject }) {
         const last = issue && lastSession(issue);
         if (last) void Promise.resolve().then(() => open(resumeCommand(last.id))).catch(fail);
       }}
-      onStart={() => void Promise.resolve().then(() => open(agentCommand(issueKey))).catch(fail)}
+      onStart={() =>
+        void Promise.resolve()
+          .then(() => {
+            const { command, args } = agentCommand(issueKey);
+            return open(command, args);
+          })
+          .catch(fail)
+      }
       onOpenUrl={(url) => void wings.openUrl(url).catch(fail)}
     />
   );

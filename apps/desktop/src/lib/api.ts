@@ -79,6 +79,8 @@ export type PluginPage = { id: string; title: string; icon: string; page: string
   newTab?: boolean;
   /** Opening it as a tab always opens a new one, instead of showing the project's existing tab. */
   multiple?: boolean;
+  /** `false`: no title bar button, for a page that shows one item opened from a row. */
+  button?: boolean;
 };
 /** A list a plugin shows under each project in the sidebar, filled with `wings.setProjectSection`. An empty `icon` means the plugin's own. */
 /** `all` is a view that opens as a tab and lists everything: the section's All button opens it. */
