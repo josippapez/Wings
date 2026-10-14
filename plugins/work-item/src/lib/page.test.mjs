@@ -104,13 +104,13 @@ test("revisionsOf of nothing is nothing", () => {
   assert.deepEqual(revisionsOf([]), []);
 });
 
-test("discussionOf merges comments with state, assignee and sprint changes in time order; other field changes stay in History", () => {
+test("discussionOf merges comments with state, assignee and sprint changes, newest first; other field changes stay in History", () => {
   const comments = [{ id: 3, author: "Grace Hopper", at: "2026-10-03T10:00:00Z", html: "<div>Fixed it</div>" }, { id: 4, author: "Ada Lovelace", at: "2026-10-04T10:00:00Z", html: "<div>Thanks</div>" }];
   const feed = discussionOf(comments, revisionsOf(updates));
-  assert.deepEqual(feed.map((a) => a.key), ["r1", "r2", "c3", "r3", "c4", "r5"]);
-  const created = feed[0];
+  assert.deepEqual(feed.map((a) => a.key), ["r5", "c4", "r3", "c3", "r2", "r1"]);
+  const created = feed.at(-1);
   assert.equal(created.kind === "change" && created.created, true);
-  const second = feed[1];
+  const second = feed.at(-2);
   assert.deepEqual(second.kind === "change" && second.changes.map((c) => c.label), ["State", "Assigned to", "Sprint"]);
 });
 

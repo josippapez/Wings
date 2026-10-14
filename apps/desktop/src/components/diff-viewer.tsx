@@ -375,7 +375,10 @@ export function DiffViewer({
   }, [diff?.focus, diff?.patch, files]);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
   // Comments on the whole PR, then ones on code that has changed since, which have no line to sit on.
-  const discussion = [...(threads.get(null) ?? []), ...[...threads].flatMap(([path, list]) => (path === null ? [] : list.filter((t) => t.root.line === null)))];
+  // The thread with the newest comment first, like the PR tab.
+  const discussion = [...(threads.get(null) ?? []), ...[...threads].flatMap(([path, list]) => (path === null ? [] : list.filter((t) => t.root.line === null)))].sort((a, b) =>
+    (b.replies.at(-1) ?? b.root).createdAt.localeCompare((a.replies.at(-1) ?? a.root).createdAt),
+  );
   const discussionCount = discussion.reduce((n, t) => n + 1 + t.replies.length, 0);
   const totals = files.reduce((t, e) => ({ added: t.added + e.added, removed: t.removed + e.removed }), { added: 0, removed: 0 });
   const commentCount = diff?.comments?.length ?? 0;

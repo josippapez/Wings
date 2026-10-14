@@ -9,14 +9,17 @@ export interface Thread {
 /** Written by a bot or by the provider itself: an app's `[bot]` login, a build service, a policy or system note. */
 export const isAutomated = (c: Comment) => Boolean(c.system) || /\[bot\]$|\bbot$|build service|^github-actions|^azure pipelines/i.test(c.author.trim());
 
-/** Comments grouped under their thread's first comment, oldest thread first. */
+/** When a thread last had a comment: its newest reply, else its first comment. */
+const lastActivity = (t: Thread) => Date.parse((t.replies.at(-1) ?? t.root).createdAt);
+
+/** Comments grouped under their thread's first comment. The thread with the newest comment comes first; replies read oldest first. */
 export function threadsOf(comments: Comment[]): Thread[] {
   const replies = new Map<number, Comment[]>();
   for (const c of comments) if (c.replyTo !== null) replies.set(c.replyTo, [...(replies.get(c.replyTo) ?? []), c]);
   return comments
     .filter((c) => c.replyTo === null)
     .map((root) => ({ root, replies: (replies.get(root.id) ?? []).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)) }))
-    .sort((a, b) => Date.parse(a.root.createdAt) - Date.parse(b.root.createdAt));
+    .sort((a, b) => lastActivity(b) - lastActivity(a));
 }
 
 /** Where the diff viewer should look for a thread: its file, and its line on the side it was written on. */

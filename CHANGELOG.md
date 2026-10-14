@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.33 · 2026-10-14
+
+- Comments read newest first: the PR tab's conversation (every host), the work item's discussion and the diff viewer's discussion. A thread moves to the top when someone replies; replies inside a thread still read top to bottom. PR tracker 0.13.3, Work item 0.7.1.
+
 ## 0.1.32 · 2026-10-14
 
 - A calmer top: Search, Inbox and Past sessions sit at the top of the left sidebar and Settings at its bottom. The project bar shows project › branch with its git counts, and plugin buttons as plain icons with a small status dot and text.

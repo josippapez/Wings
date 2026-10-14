@@ -4,9 +4,16 @@ import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf } from "./threads
 
 const c = (id, replyTo, createdAt, extra = {}) => ({ id, replyTo, path: null, line: null, side: "additions", author: "Ada", body: "x", createdAt, url: "", ...extra });
 
-test("replies go under their first comment, and threads are oldest first", () => {
-  const threads = threadsOf([c(2, null, "2026-01-02T00:00:00Z"), c(3, 1, "2026-01-03T00:00:00Z"), c(1, null, "2026-01-01T00:00:00Z"), c(4, 1, "2026-01-02T12:00:00Z")]);
-  assert.deepEqual(threads.map((t) => [t.root.id, t.replies.map((r) => r.id)]), [[1, [4, 3]], [2, []]]);
+test("replies go under their first comment and read oldest first; the thread with the newest comment comes first", () => {
+  const threads = threadsOf([
+    c(2, null, "2026-01-02T00:00:00Z"),
+    c(3, 1, "2026-01-03T00:00:00Z"),
+    c(1, null, "2026-01-01T00:00:00Z"),
+    c(4, 1, "2026-01-02T12:00:00Z"),
+    c(5, null, "2026-01-02T18:00:00Z"),
+  ]);
+  // Thread 1 started first but its reply on the 3rd is the newest comment, so a reply brings a thread back to the top.
+  assert.deepEqual(threads.map((t) => [t.root.id, t.replies.map((r) => r.id)]), [[1, [4, 3]], [5, []], [2, []]]);
 });
 
 test("a thread is resolved, automated or open", () => {

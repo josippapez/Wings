@@ -257,12 +257,12 @@ export type Activity =
 /** The fields whose changes read as part of the conversation; the History tab has all of them. */
 const CONVERSATION = new Set(["State", "Assigned to", "Sprint"]);
 
-/** Comments and the changes that matter to a conversation (state, assignee, sprint, and its creation) in time order, a comment before a change made in the same revision. */
+/** Comments and the changes that matter to a conversation (state, assignee, sprint, and its creation), newest first. In time order a comment comes before a change made in the same revision, so newest first puts it after. */
 export function discussionOf(comments: Comment[], revisions: Revision[]): Activity[] {
   const out: Activity[] = comments.map((c) => ({ kind: "comment" as const, key: `c${c.id}`, author: c.author, at: c.at, html: c.html }));
   for (const r of revisions) {
     const changes = r.created ? [] : r.changes.filter((c) => CONVERSATION.has(c.label));
     if (changes.length || r.created) out.push({ kind: "change", key: `r${r.id}`, author: r.by, at: r.at, created: r.created, changes });
   }
-  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.kind === b.kind ? 0 : a.kind === "comment" ? -1 : 1));
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.kind === b.kind ? 0 : a.kind === "comment" ? -1 : 1)).reverse();
 }
