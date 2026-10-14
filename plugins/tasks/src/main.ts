@@ -27,6 +27,9 @@ const notify = (message: IssuesMessage) => wings.broadcast(message).catch(consol
 /** What the project section last got, per project, so an unchanged list sends nothing. */
 const pushed = new Map<string, string>();
 
+/** The sidebar row's status icon, which Wings draws in the badge's tone. */
+const SECTION_ICON = { todo: "todo", in_progress: "in-progress", in_review: "in-review", done: "done", canceled: "canceled" } as const;
+
 /** A muted line under a row for what isn't a plain task: its type, and an epic's or feature's progress. */
 function detail(issues: Issue[], i: Issue): string {
   if (i.type === "task") return "";
@@ -42,6 +45,7 @@ function pushSection(projectId: string, issues: Issue[]): Promise<void> {
       label: `${i.key} ${i.title}`.slice(0, 120),
       ...(detail(issues, i) ? { detail: detail(issues, i) } : {}),
       ...(i.status === "todo" ? {} : { badge: { text: STATUS_LABEL[i.status], tone: i.status === "in_progress" ? ("info" as const) : ("warning" as const) } }),
+      icon: SECTION_ICON[i.status],
       open: { view: "issue", args: { key: i.key, projectId } },
     }));
   const signature = JSON.stringify(rows);

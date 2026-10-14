@@ -1,10 +1,10 @@
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, CircleCheckIcon, CircleDotDashedIcon, CircleDotIcon, CircleIcon, CircleXIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { iconFor, toneClass } from "@/components/pane-badge";
 import type { PluginView } from "@/lib/api";
 import { wantsNewTab } from "@/lib/plugin-pages";
-import { collapseKey, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow } from "@/lib/project-sections";
+import { collapseKey, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow, type SectionIcon } from "@/lib/project-sections";
 import { cn } from "@/lib/utils";
 
 export type OpenSectionRow = (projectId: string, pluginId: string, open: ProjectSectionRow["open"], newTab?: boolean) => void;
@@ -14,6 +14,16 @@ export type OpenSectionRow = (projectId: string, pluginId: string, open: Project
  * the label, the short reference). The badge text and detail are in the tooltip and the accessible name. Memoized per project,
  * so a pane-info tick, which re-renders the sidebar, doesn't touch a project whose sections, plugins and collapsed list are the same.
  */
+/** A row's icon: a pull request's state, or a work status (to do, in progress, in review, done, canceled). */
+const rowIcon: Record<SectionIcon, typeof CircleIcon> = {
+  ...iconFor,
+  todo: CircleIcon,
+  "in-progress": CircleDotDashedIcon,
+  "in-review": CircleDotIcon,
+  done: CircleCheckIcon,
+  canceled: CircleXIcon,
+};
+
 export const ProjectSections = memo(function ProjectSections({
   projectId,
   sections,
@@ -82,7 +92,7 @@ export const ProjectSections = memo(function ProjectSections({
                   const t = row.badge?.tone ?? "neutral";
                   const tone = toneClass[t].text;
                   const filled = t === "success" || t === "danger" || t === "merged";
-                  const Icon = row.icon ? iconFor[row.icon] : null;
+                  const Icon = row.icon ? rowIcon[row.icon] : null;
                   return (
                     <li key={row.id}>
                       <button

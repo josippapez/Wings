@@ -10,7 +10,7 @@ const row = (extra: Record<string, unknown> = {}) => ({ id: "a", label: "A", ope
 
 test("rows keep known fields, and bad ones are left out", () => {
   const rows = cleanSectionRows(
-    [row({ detail: "d", badge: { text: "Open", tone: "success", extra: 1 }, extra: 1 }), row({ id: "" }), row({ id: "b", label: "" }), null, "x", row({ id: "c", badge: { text: "" } }), row({ id: "d", badge: { text: "t", tone: "loud" } }), row({ id: "e", icon: "pr-draft" }), row({ id: "f", icon: "rocket" })],
+    [row({ detail: "d", badge: { text: "Open", tone: "success", extra: 1 }, extra: 1 }), row({ id: "" }), row({ id: "b", label: "" }), null, "x", row({ id: "c", badge: { text: "" } }), row({ id: "d", badge: { text: "t", tone: "loud" } }), row({ id: "e", icon: "pr-draft" }), row({ id: "f", icon: "rocket" }), row({ id: "g", icon: "in-review" })],
     views,
   );
   assert.deepEqual(rows, [
@@ -19,6 +19,7 @@ test("rows keep known fields, and bad ones are left out", () => {
     { id: "d", label: "A", badge: { text: "t", tone: "neutral" }, open: { view: "board" } },
     { id: "e", label: "A", icon: "pr-draft", open: { view: "board" } },
     { id: "f", label: "A", open: { view: "board" } },
+    { id: "g", label: "A", icon: "in-review", open: { view: "board" } },
   ]);
 });
 

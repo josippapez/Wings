@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.40 · 2026-10-14
+
+- The sidebar's Issues section has an All button that opens the board, like Pull requests. Its rows show the issue's status as an icon, the way Linear does: an empty circle to do, a dashed one in progress, a dotted one in review. Plugins can use these icons on section rows (`todo`, `in-progress`, `in-review`, `done`, `canceled`); `wings-plugin-sdk` 0.16.0. Issues 0.5.1.
+
 ## 0.1.39 · 2026-10-14
 
 - A plugin page opens in its open tab; a middle-click or Cmd+click on a plugin's title bar button, + menu entry or section row opens a new tab. Plugins can do the same with `openView(id, { as: "tab", newTab: true })`. `wings-plugin-sdk` 0.15.0.

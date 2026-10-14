@@ -9,14 +9,19 @@ export type ProjectSectionRow = {
   detail?: string;
   badge?: { text: string; tone: Tone };
   /** Drawn in the badge's tone in place of the plain dot. */
-  icon?: BadgeIcon;
+  icon?: SectionIcon;
   open: { view: string; args?: unknown };
 };
 
 export const SECTION_ROWS_MAX = 50;
 
 const tones: Record<Tone, true> = { neutral: true, info: true, success: true, warning: true, danger: true, merged: true };
-const icons: Record<BadgeIcon, true> = { "pr-open": true, "pr-merged": true, "pr-closed": true, "pr-draft": true };
+/** A row's icon: a pull request's, or a work status drawn like Linear's (an empty circle to a checked one). */
+export type SectionIcon = BadgeIcon | "todo" | "in-progress" | "in-review" | "done" | "canceled";
+const icons: Record<SectionIcon, true> = {
+  "pr-open": true, "pr-merged": true, "pr-closed": true, "pr-draft": true,
+  todo: true, "in-progress": true, "in-review": true, done: true, canceled: true,
+};
 
 const text = (v: unknown, max: number) => (typeof v === "string" && v ? v.slice(0, max) : undefined);
 
@@ -48,7 +53,7 @@ export function cleanSectionRows(rows: unknown, tabViews: string[]): ProjectSect
       label,
       ...(text(r.detail, 120) ? { detail: text(r.detail, 120) } : {}),
       ...(badgeText ? { badge: { text: badgeText, tone: Object.hasOwn(tones, String(b?.tone)) ? (b?.tone as Tone) : "neutral" } } : {}),
-      ...(Object.hasOwn(icons, String(r.icon)) ? { icon: r.icon as BadgeIcon } : {}),
+      ...(Object.hasOwn(icons, String(r.icon)) ? { icon: r.icon as SectionIcon } : {}),
       open: { view: open.view, ...(hasArgs ? { args: JSON.parse(boundedJson(open.args, VIEW_ARGS_MAX, "Row args")) } : {}) },
     });
   }
