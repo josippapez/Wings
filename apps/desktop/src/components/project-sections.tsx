@@ -3,10 +3,11 @@ import { memo, useMemo, useState } from "react";
 
 import { iconFor, toneClass } from "@/components/pane-badge";
 import type { PluginView } from "@/lib/api";
+import { wantsNewTab } from "@/lib/plugin-pages";
 import { collapseKey, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow } from "@/lib/project-sections";
 import { cn } from "@/lib/utils";
 
-export type OpenSectionRow = (projectId: string, pluginId: string, open: ProjectSectionRow["open"]) => void;
+export type OpenSectionRow = (projectId: string, pluginId: string, open: ProjectSectionRow["open"], newTab?: boolean) => void;
 
 /**
  * What plugins list under a project: one collapsible section each, with a one-line row per item (a dot in the badge's tone,
@@ -59,7 +60,12 @@ export const ProjectSections = memo(function ProjectSections({
             {group.all && (
               <button
                 type="button"
-                onClick={() => onOpen(projectId, group.pluginId, { view: group.all! })}
+                onClick={(e) => onOpen(projectId, group.pluginId, { view: group.all! }, wantsNewTab(e))}
+                onAuxClick={(e) => {
+                  if (e.button !== 1) return;
+                  e.preventDefault();
+                  onOpen(projectId, group.pluginId, { view: group.all! }, true);
+                }}
                 title={`All ${group.title.toLowerCase()}`}
                 aria-label={`All ${group.title.toLowerCase()}`}
                 className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -81,7 +87,12 @@ export const ProjectSections = memo(function ProjectSections({
                     <li key={row.id}>
                       <button
                         type="button"
-                        onClick={() => onOpen(projectId, group.pluginId, row.open)}
+                        onClick={(e) => onOpen(projectId, group.pluginId, row.open, wantsNewTab(e))}
+                        onAuxClick={(e) => {
+                          if (e.button !== 1) return;
+                          e.preventDefault();
+                          onOpen(projectId, group.pluginId, row.open, true);
+                        }}
                         title={name}
                         aria-label={name}
                         data-testid="section-row"

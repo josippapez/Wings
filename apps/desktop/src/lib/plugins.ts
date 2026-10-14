@@ -4,7 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
-import { boundedJson, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
 import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
@@ -118,9 +118,9 @@ type Callbacks = {
   focusPane: (paneId: string) => void;
   /**
    * Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself.
-   * For a tab, `multiple` always opens a new one and `args` is what the page reads with `viewArgs`.
+   * For a tab, `multiple` always opens a new one, `newTab` does so for any view, and `args` is what the page reads with `viewArgs`.
    */
-  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab", tab?: { multiple: boolean; args?: unknown }) => void;
+  showView: (pluginId: string, viewId: string, place: "sidebar" | "modal" | "tab", tab?: { multiple: boolean; args?: unknown; newTab?: boolean }) => void;
   /** Back or forward in the places the user has been, as the mouse's side buttons do. */
   navigate: (direction: "back" | "forward") => void;
   /** The project with this id, with its branch as it is now. */
@@ -788,9 +788,10 @@ export class PluginHost {
         // Args are JSON stored on the tab, so only a tab has them.
         const hasArgs = p.args !== undefined && p.args !== null;
         if (hasArgs && place !== "tab") throw new Error('openView args only work with as: "tab"');
+        const newTab = cleanNewTab(p.newTab, place);
         const args = hasArgs ? JSON.parse(boundedJson(p.args, VIEW_ARGS_MAX, "openView args")) : undefined;
         if (place === "window") await this.openWindow(plugin.plugin, page.id);
-        else this.callbacks.showView(pluginId, page.id, place, place === "tab" ? { multiple: page.multiple === true, args } : undefined);
+        else this.callbacks.showView(pluginId, page.id, place, place === "tab" ? { multiple: page.multiple === true, args, ...(newTab ? { newTab } : {}) } : undefined);
         return null;
       }
       case "navigate":

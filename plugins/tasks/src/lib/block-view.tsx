@@ -3,7 +3,7 @@
 import { Button, Empty, List, ListButton, ListItem, Loading, Row, Stack, Summary, SummaryChip, Text } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { openIssues, STATUS_LABEL, type Issue, type Op } from "./issues";
-import { SessionMarker, StatusDot } from "./parts";
+import { SessionMarker, StatusDot, TypeIcon } from "./parts";
 
 /** The block lists this many open issues; the board has the rest. */
 export const BLOCK_ROWS = 8;
@@ -47,6 +47,7 @@ export function BlockView({ project, issues, error, apply, openBoard, openIssue 
                 <ListItem key={i.key}>
                   <ListButton onClick={() => openIssue(i)} aria-label={`Open ${i.key}: ${i.title}`}>
                     <StatusDot status={i.status} />
+                    <TypeIcon type={i.type} />
                     <span className="tk-key">{i.key}</span>
                     <Text as="span" grow truncate>{i.title}</Text>
                     {i.status === "todo" ? null : <Text as="span" tone="muted" size="tiny">{STATUS_LABEL[i.status]}</Text>}

@@ -272,7 +272,7 @@
      * `args` (JSON, up to 16 KB, only with `as: "tab"`) is what the tab's page reads with `viewArgs`. A tab that's
      * already open with other args takes the new ones and reloads; a view with `multiple` opens a new tab unless one in that project already has the same args.
      */
-    openView: (id, { as, args } = {}) => call("openView", { id, as, args }),
+    openView: (id, { as, args, newTab } = {}) => call("openView", { id, as, args, newTab: newTab === true }),
     /** Where this page shows: "sidebar", "tab", "modal", "window" or "block". `null` in the plugin's main script. */
     placement: () => init.placement ?? null,
     /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once, as a copy. */

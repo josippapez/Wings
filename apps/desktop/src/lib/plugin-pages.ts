@@ -71,6 +71,14 @@ export function boundedJson(value: unknown, max: number, what: string) {
   return text;
 }
 
+/** `openView`'s `newTab`: true or false, and only for a tab. Anything else throws. */
+export function cleanNewTab(value: unknown, place: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new Error("openView newTab must be true or false");
+  if (value && place !== "tab") throw new Error('openView newTab only works with as: "tab"');
+  return value;
+}
+
 export const isViewTab = <T extends object>(tab: T | ViewTab): tab is ViewTab => "view" in tab;
 
 /** JSON text with object keys sorted, so equal values compare equal whatever order their keys came in. */
@@ -80,21 +88,22 @@ const canonicalJson = (value: unknown) => JSON.stringify(value, (_, v) => (v && 
  * Adds the view's tab to the project, or finds the one already there: one tab per view per project, unless `multiple`, which opens a new one unless a tab of it already has the same `args`.
  * `args` is what the page reads with `viewArgs`. Opening the existing tab with args that differ from its own replaces
  * them, drops its `state` and bumps its `rev`, which reloads the page; without args the tab stays as it is.
+ * `newTab` (a middle click, or the plugin asking) always adds a new tab, whatever the view and its args.
  */
 export function openViewTab<T extends { id: string; spaceId: string }>(
   tabs: (T | ViewTab)[],
   spaceId: string,
   view: ViewTab["view"],
   newId: string,
-  { multiple = false, args }: { multiple?: boolean; args?: unknown } = {},
+  { multiple = false, args, newTab = false }: { multiple?: boolean; args?: unknown; newTab?: boolean } = {},
 ) {
   const sameView = (t: T | ViewTab): t is ViewTab => isViewTab(t) && t.spaceId === spaceId && t.view.pluginId === view.pluginId && t.view.viewId === view.viewId;
   // A `multiple` view opens a new tab each time, except for args a tab of it already has: that one is shown.
-  if (multiple && args !== undefined) {
+  if (!newTab && multiple && args !== undefined) {
     const same = tabs.find((t): t is ViewTab => sameView(t) && t.args !== undefined && canonicalJson(t.args) === canonicalJson(args));
     if (same) return { tabs, id: same.id };
   }
-  const open = multiple ? undefined : tabs.find(sameView);
+  const open = multiple || newTab ? undefined : tabs.find(sameView);
   if (open) {
     if (args === undefined || JSON.stringify(open.args) === JSON.stringify(args)) return { tabs, id: open.id };
     // The saved state belonged to the old args, so it goes.
@@ -104,6 +113,9 @@ export function openViewTab<T extends { id: string; spaceId: string }>(
   const tab: ViewTab = { id: newId, spaceId, view, ...(args === undefined ? {} : { args }) };
   return { tabs: [...tabs, tab], id: newId };
 }
+
+/** A click that asks for a new tab instead of the open one: the middle button, or Cmd/Ctrl held, as in a browser. */
+export const wantsNewTab = (e: { button: number; metaKey: boolean; ctrlKey: boolean }) => e.button === 1 || e.metaKey || e.ctrlKey;
 
 /** The ids of view tabs whose plugin is off or gone, or whose view no longer opens as a tab. */
 export function staleViewTabs<T extends object>(tabs: (T | ViewTab)[], plugins: PluginView[]) {

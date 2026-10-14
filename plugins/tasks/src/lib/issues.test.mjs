@@ -16,7 +16,7 @@ test("migration: tasks become issues, oldest first, notes and doing mapped, bran
     ],
     "Web Shop",
   );
-  assert.equal(store.v, 2);
+  assert.equal(store.v, 3);
   assert.equal(store.prefix, "WEB");
   assert.equal(store.next, 4);
   assert.deepEqual(store.issues.map((i) => [i.key, i.title, i.status]), [["WEB-1", "First", "todo"], ["WEB-2", "Second", "in_progress"], ["WEB-3", "Third", "done"]]);
@@ -130,7 +130,7 @@ test("tool input validation bounds every field and rejects strays", () => {
   assert.throws(() => parseTool("update", { key: "WEB-1" }), /at least one of/);
   assert.throws(() => parseTool("list", { status: "x" }), /status must be one of/);
   assert.throws(() => parseTool("get", null), /must be an object/);
-  assert.deepEqual(parseTool("update", { key: "web-1", status: "done", commit: "abc1234" }).op, { kind: "update", key: "WEB-1", title: undefined, description: undefined, status: "done", branch: undefined, pr: undefined, commit: "abc1234" });
+  assert.deepEqual(parseTool("update", { key: "web-1", status: "done", commit: "abc1234" }).op, { kind: "update", key: "WEB-1", title: undefined, description: undefined, status: "done", branch: undefined, pr: undefined, commit: "abc1234", type: undefined, parent: undefined, relatedAdd: undefined, relatedRemove: undefined, blockedByAdd: undefined, blockedByRemove: undefined });
 });
 
 test("a tool-created issue gets the agent's session, and get shows description, links, sessions and log", () => {
@@ -139,7 +139,7 @@ test("a tool-created issue gets the agent's session, and get shows description, 
   let s = applyOp(fresh(), op, sess, 5).store;
   s = applyOp(s, parseTool("log", { key: "WEB-1", text: "next: tests" }).op, sess, 6).store;
   const text = formatIssue(s.issues[0]);
-  for (const part of ["WEB-1 [in_progress] Do it", "Goal", "sess-1", "agent one", "agent one note: next: tests"]) assert.ok(text.includes(part), part);
+  for (const part of ["WEB-1 [in_progress] (task) Do it", "Goal", "sess-1", "agent one", "agent one note: next: tests"]) assert.ok(text.includes(part), part);
 });
 
 test("board columns and the open list: to do by key, others by activity, canceled only on request", () => {

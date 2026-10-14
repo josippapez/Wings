@@ -16,12 +16,13 @@ const longLog: LogEntry[] = [
   entry(ago(52), "you", "created", "Created"),
   entry(ago(51), "you", "status", "To do → In progress"),
   entry(ago(50), s1, "note", "Read the cart code. The summary is built in `CartSummary.tsx` from `useCart()`. Plan: one card with items, shipping, tax and a total, no new data fetching."),
-  entry(ago(49), s1, "link", "Branch: feature/checkout-summary"),
+  entry(ago(49), "git", "link", "Branch: feature/checkout-summary"),
+  entry(ago(49), s1, "link", "Parent: WEB-10"),
   entry(ago(46), s1, "note", "Card renders with items and total. Shipping and tax still hard-coded.\n\nNext: read the rates from the order response."),
-  entry(ago(44), s1, "link", "Commit: 3fa91c2"),
+  entry(ago(44), "git", "link", "Commit 3fa91c2: WEB-4 Checkout summary card"),
   entry(ago(40), "you", "note", "Collapse it under 640px, like the delivery card does."),
   entry(ago(36), s2, "note", "Picked this up. The tax line rounds per item, so a basket of three can be a cent off the total. Switching to rounding once on the sum."),
-  entry(ago(35), s2, "link", "Commit: 8b27de0"),
+  entry(ago(35), "git", "link", "Commit 8b27de0: WEB-4 Round the totals once, on the sum"),
   entry(ago(30), s2, "note", "Totals match the order response for the 12 baskets in the fixtures.\n\n- Rounding done once on the sum\n- Test added for the three-item case\n\nNext: the narrow layout."),
   entry(ago(26), s3, "note", "Narrow layout done: items fold into a list under 640px. Screenshots in the PR."),
   entry(ago(25), s3, "link", "PR: https://example.com/acme/web/pull/412"),
@@ -29,13 +30,14 @@ const longLog: LogEntry[] = [
   entry(ago(20), "you", "note", "Review: the empty cart still shows a zero total. Please hide the card then."),
   entry(ago(19), "you", "status", "In review → In progress"),
   entry(ago(14), s3, "note", "Empty cart now hides the card. Added a test."),
-  entry(ago(13), s3, "link", "Commit: c41d5e9"),
+  entry(ago(13), "git", "link", "Commit c41d5e9: Hide the summary for an empty cart (web-4)"),
   entry(ago(9), s3, "status", "In progress → In review"),
   entry(ago(5), "you", "note", "Approved. Waiting on the release branch."),
   entry(ago(2), s3, "note", "Waiting for review on the release branch, nothing else to do here. If it comes back, the open point is the focus order of the promo field."),
 ];
 
-export const issues: Issue[] = [
+type Base = Omit<Issue, "type">;
+const base: Base[] = [
   { key: "WEB-1", title: "Show the delivery estimate under the cart total", description: "## Goal\nShow when the order arrives, under the total.\n\n## Scope\n- Use the postcode from the saved address\n- Fall back to the shop default when there is none\n\n## Done when\n- [ ] The estimate shows for a saved address\n- [ ] A cart with no address shows the default", status: "todo", sessions: [], log: [entry(ago(30), "you", "created", "Created")], createdAt: ago(30), updatedAt: ago(30) },
   { key: "WEB-2", title: "Fix the focus ring on the promo code field", status: "todo", links: { branch: "fix/promo-focus" }, sessions: [], log: [entry(ago(28), "you", "created", "Created")], createdAt: ago(28), updatedAt: ago(26) },
   { key: "WEB-3", title: "Write a migration that backfills order totals for rows created before the currency column existed", description: "Run it in batches of 500.", status: "todo", sessions: [{ id: s3.id, seen: ago(18) }], log: [entry(ago(20), "you", "created", "Created")], createdAt: ago(20), updatedAt: ago(20) },
@@ -47,6 +49,22 @@ export const issues: Issue[] = [
   { key: "WEB-9", title: "Dark mode for the invoice PDF", status: "canceled", sessions: [], log: [entry(ago(200), "you", "created", "Created"), entry(ago(150), "you", "status", "To do → Canceled")], createdAt: ago(200), updatedAt: ago(150) },
 ];
 
-export const emptyIssue: Issue = { key: "WEB-10", title: "Look into the slow product list", status: "todo", sessions: [], log: [entry(ago(1), "you", "created", "Created")], createdAt: ago(1), updatedAt: ago(1) };
+const extra: Record<string, Partial<Issue>> = {
+  "WEB-1": { type: "feature", parent: "WEB-10" },
+  "WEB-2": { type: "bug", parent: "WEB-10", blockedBy: ["WEB-5"], related: ["WEB-4"] },
+  "WEB-3": { parent: "WEB-10", status: "done" },
+  "WEB-4": { type: "feature", parent: "WEB-10", related: ["WEB-2", "WEB-6"] },
+  "WEB-5": { parent: "WEB-10" },
+  "WEB-6": { related: ["WEB-4"] },
+  "WEB-7": { parent: "WEB-10" },
+  "WEB-8": { parent: "WEB-10" },
+  "WEB-9": { type: "bug" },
+};
+const epic: Base = { key: "WEB-10", title: "Checkout redesign", description: "## Goal\nA checkout that fits on one screen and shows the total early.\n\n## Scope\n- The summary card, the delivery estimate and the promo field\n- Payment webhooks keep working throughout\n\n## Done when\n- [ ] Every child issue is done\n- [ ] The checkout passes the keyboard walk-through\n\n## Validation", status: "in_progress", sessions: [], log: [entry(ago(80), "you", "created", "Created"), entry(ago(52), "you", "link", "Child: WEB-4"), entry(ago(28), s2, "link", "Child: WEB-2")], createdAt: ago(80), updatedAt: ago(5) };
+export const issues: Issue[] = [...base, epic].map((i) => ({ type: "task" as const, ...i, ...(i.key === "WEB-10" ? { type: "epic" as const } : {}), ...extra[i.key] }));
+
+export const emptyIssue: Issue = { key: "WEB-11", type: "task", title: "Look into the slow product list", status: "todo", sessions: [], log: [entry(ago(1), "you", "created", "Created")], createdAt: ago(1), updatedAt: ago(1) };
 export const longIssue = issues[3];
 export const shortIssue = issues[0];
+export const epicIssue = issues[9];
+export const bugIssue = issues[1];

@@ -11,7 +11,9 @@
 export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 4_000, branch: 200, pr: 500, log: 300 } as const;
 /** The most one project's entry may take, in bytes of JSON. */
 export const BUDGET = 700_000;
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
+/** Links one issue keeps to others, of each kind. */
+export const MAX_LINKS = 20;
 
 export type Status = "todo" | "in_progress" | "in_review" | "done" | "canceled";
 export const STATUSES: Status[] = ["todo", "in_progress", "in_review", "done", "canceled"];
@@ -19,9 +21,19 @@ export const STATUSES: Status[] = ["todo", "in_progress", "in_review", "done", "
 export const FLOW: Status[] = ["todo", "in_progress", "in_review", "done"];
 export const STATUS_LABEL: Record<Status, string> = { todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done", canceled: "Canceled" };
 
-/** Who wrote a log entry: the user in the UI, or the Claude session an agent's tool call came from. */
-export type Actor = "you" | { id: string; name?: string };
-export type LogKind = "created" | "status" | "note" | "link";
+export type IssueType = "task" | "bug" | "feature" | "epic";
+export const TYPES: IssueType[] = ["task", "bug", "feature", "epic"];
+export const TYPE_LABEL: Record<IssueType, string> = { task: "Task", bug: "Bug", feature: "Feature", epic: "Epic" };
+/** Only these can be somebody's parent. */
+export const canParent = (type: IssueType): boolean => type === "epic" || type === "feature";
+
+/**
+ * Who wrote a log entry: the user in the UI, "git" for what the plugin found in the repository by itself (a commit or
+ * branch with the issue's key), or the Claude session an agent's tool call came from. "git" is its own kind rather than
+ * "you" so the log never claims the user did something they didn't do.
+ */
+export type Actor = "you" | "git" | { id: string; name?: string };
+export type LogKind = "created" | "status" | "note" | "link" | "type";
 export interface LogEntry {
   at: number;
   by: Actor;
@@ -41,6 +53,13 @@ export interface Issue {
   /** Markdown: goal, scope, acceptance criteria. */
   description?: string;
   status: Status;
+  type: IssueType;
+  /** The epic or feature this belongs to. Same project, never itself or one of its own children. */
+  parent?: string;
+  /** Symmetric: if A lists B, B lists A. */
+  related?: string[];
+  /** The issues that have to finish first. Their `blocks` is worked out from this, not stored. */
+  blockedBy?: string[];
   links?: { branch?: string; pr?: string; commits?: string[] };
   /** Append-only and deduped by id. */
   sessions: SessionRef[];
@@ -58,9 +77,20 @@ export interface Store {
 }
 
 /** What a page or a tool asks main to do. For `update`, `branch` and `pr` "" clear the link. */
+export interface Relations {
+  type?: IssueType;
+  /** A key, or "" to clear. */
+  parent?: string;
+  relatedAdd?: string[];
+  relatedRemove?: string[];
+  blockedByAdd?: string[];
+  blockedByRemove?: string[];
+}
 export type Op =
-  | { kind: "create"; title: string; description?: string; status?: Status; branch?: string }
-  | { kind: "update"; key: string; title?: string; description?: string; status?: Status; branch?: string; pr?: string; commit?: string }
+  | ({ kind: "create"; title: string; description?: string; status?: Status; branch?: string } & Relations)
+  | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; branch?: string; pr?: string; commit?: string } & Relations)
+  /** What the plugin found in the repository: commits whose message names the issue, and a branch that does. */
+  | { kind: "autolink"; key: string; commits?: { sha: string; subject: string }[]; branch?: string }
   | { kind: "note"; key: string; text: string }
   | { kind: "remove"; key: string };
 
@@ -80,6 +110,22 @@ export interface IssuesMessage {
   error?: string;
 }
 
+/** What an empty description starts as when it is first edited on the issue page. */
+export const DESCRIPTION_TEMPLATE = "## Goal\n\n## Scope\n\n## Done when\n- [ ] \n\n## Validation\n";
+
+/**
+ * The description without its empty sections: a `## heading` whose body is blank or only empty checklist items (`- [ ]`)
+ * is dropped, and text before the first heading stays. The untouched template comes out as "".
+ */
+export function visibleDescription(description: string | undefined): string {
+  const parts = (description ?? "").split(/^(?=## )/m);
+  const body = (part: string) => part.replace(/^## .*$/m, "").replace(/^\s*[-*]\s*\[ \]\s*$/gm, "").trim();
+  return parts.filter((part) => (part.startsWith("## ") ? body(part) : part.trim())).join("").trim();
+}
+/** Whether a description says anything beyond the template's headings and empty checklist items. */
+export const hasContent = (description: string | undefined): boolean => visibleDescription(description) !== "";
+
+export const isType = (v: unknown): v is IssueType => typeof v === "string" && (TYPES as string[]).includes(v);
 export const isStatus = (v: unknown): v is Status => typeof v === "string" && (STATUSES as string[]).includes(v);
 
 // ---------- keys ----------
@@ -100,7 +146,15 @@ export const emptyStore = (projectName: string): Store => ({ v: FORMAT_VERSION, 
 const key = (projectId: string) => `issues:${projectId}`;
 const legacyKey = (projectId: string) => `tasks:${projectId}`;
 
-const isStore = (v: unknown): v is Store => !!v && typeof v === "object" && (v as Store).v === FORMAT_VERSION && Array.isArray((v as Store).issues) && typeof (v as Store).prefix === "string" && typeof (v as Store).next === "number";
+const isShape = (v: unknown, version: number): boolean => !!v && typeof v === "object" && (v as { v?: unknown }).v === version && Array.isArray((v as Store).issues) && typeof (v as Store).prefix === "string" && typeof (v as Store).next === "number";
+const isStore = (v: unknown): v is Store => isShape(v, FORMAT_VERSION);
+
+/** Format 2, before types and relations: every issue is a task. */
+export function migrateV2(value: unknown): Store | null {
+  if (!isShape(value, 2)) return null;
+  const old = value as Omit<Store, "v">;
+  return { v: FORMAT_VERSION, prefix: old.prefix, next: old.next, issues: old.issues.map((i) => ({ ...i, type: "task" as const })) };
+}
 
 /** The old Tasks format, one project's list: {id, title, notes?, status todo|doing|done, links?.branch, createdAt, updatedAt}. */
 export interface LegacyTask {
@@ -130,6 +184,7 @@ export function migrateTasks(value: unknown, projectName: string): Store {
       key: `${store.prefix}-${store.next++}`,
       title: (t.title as string).slice(0, LIMITS.title),
       status,
+      type: "task",
       sessions: [],
       log: [{ at, by: "you", kind: "created", text: "Imported from Tasks" }],
       createdAt: at,
@@ -146,6 +201,8 @@ export function migrateTasks(value: unknown, projectName: string): Store {
 export async function readStore(projectId: string, projectName: string): Promise<Store> {
   const value = await wings.storage.get(key(projectId));
   if (isStore(value)) return value;
+  const v2 = migrateV2(value);
+  if (v2) return v2;
   return migrateTasks(await wings.storage.get(legacyKey(projectId)), projectName);
 }
 
@@ -158,9 +215,15 @@ export async function writeStore(projectId: string, store: Store): Promise<void>
   await wings.storage.set(key(projectId), store);
 }
 
-/** Once per project: saves old tasks as issues, then drops the old entry. A no-op when there is nothing old or the store exists. */
+/** Once per project: saves a format 2 store as format 3, or old tasks as issues (then drops the old entry). A no-op when the store is current. */
 export async function migrateLegacy(projectId: string, projectName: string): Promise<boolean> {
-  if (isStore(await wings.storage.get(key(projectId)))) return false;
+  const current = await wings.storage.get(key(projectId));
+  if (isStore(current)) return false;
+  const v2 = migrateV2(current);
+  if (v2) {
+    await writeStore(projectId, v2);
+    return true;
+  }
   const old = await wings.storage.get(legacyKey(projectId));
   if (!Array.isArray(old)) return false;
   await writeStore(projectId, migrateTasks(old, projectName));
@@ -185,7 +248,9 @@ export function resolvePane(panes: PaneLike[], paneId: string | null): { project
   return { projectId: pane.projectId, projectName: pane.project, actor };
 }
 
-export const actorName = (by: Actor): string => (by === "you" ? "You" : by.name || "Claude");
+export const actorName = (by: Actor): string => (by === "you" ? "You" : by === "git" ? "Git" : by.name || "Claude");
+/** The Claude session of an entry's author, or null for you and git. */
+export const isClaude = (by: Actor): by is { id: string; name?: string } => by !== "you" && by !== "git";
 
 // ---------- operations ----------
 
@@ -198,7 +263,7 @@ function text(value: unknown, field: string, max: number): string {
 /** Records that `actor`'s session worked on `issue`: adds it, or refreshes its name and time. Users aren't sessions. */
 function touch(issue: Issue, actor: Actor, now: number): void {
   issue.updatedAt = now;
-  if (actor === "you" || !actor.id) return;
+  if (!isClaude(actor) || !actor.id) return;
   const known = issue.sessions.some((s) => s.id === actor.id);
   issue.sessions = known
     ? issue.sessions.map((s) => (s.id === actor.id ? { ...s, seen: now, ...(actor.name ? { name: actor.name } : {}) } : s))
@@ -261,6 +326,151 @@ export interface Applied {
   changed: boolean;
 }
 
+/** Like `append`, but drops what doesn't fit instead of throwing: for entries the plugin writes on its own. */
+function appendLoose(issue: Issue, entries: LogEntry[]): void {
+  issue.log = [...issue.log, ...entries.slice(0, Math.max(0, LIMITS.log - issue.log.length))];
+}
+
+function keyList(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) throw new Error(`${field} must be a list of issue keys.`);
+  return [...new Set((value as string[]).map(normalizeKey))].filter(Boolean);
+}
+
+/** The issues whose parent is `key`. */
+export const childrenOf = (issues: Issue[], key: string): Issue[] => issues.filter((i) => i.parent === key);
+/** The issues `key` is blocking: the ones that list it as blocking them. */
+export const blocksOf = (issues: Issue[], key: string): Issue[] => issues.filter((i) => i.blockedBy?.includes(key));
+/** Done out of all, not counting canceled ones: "3 of 7 done". */
+export function progress(children: Issue[]): { done: number; total: number } {
+  const live = children.filter((c) => c.status !== "canceled");
+  return { done: live.filter((c) => c.status === "done").length, total: live.length };
+}
+/** The epics and features `issue` may sit under: not itself, and not one of its own children, grandchildren and so on. */
+export function parentChoices(issues: Issue[], issue: Issue): Issue[] {
+  const below = new Set<string>([issue.key]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const i of issues) if (i.parent && below.has(i.parent) && !below.has(i.key)) (below.add(i.key), (grew = true));
+  }
+  return issues.filter((i) => canParent(i.type) && !below.has(i.key)).sort((a, b) => keyNumber(a.key) - keyNumber(b.key));
+}
+
+/**
+ * Applies the type and link changes of an op to `self`, a copy in `map`, and to the other issues it touches, which are
+ * copies in `map` too. Every change writes an entry on both issues. Returns whether anything changed.
+ */
+function relate(map: Map<string, Issue>, self: Issue, op: Relations, by: Actor, now: number): boolean {
+  let changed = false;
+  const log = (issue: Issue | undefined, kind: LogKind, text: string) => {
+    if (!issue) return;
+    append(issue, [{ at: now, by, kind, text }]);
+    if (issue !== self) issue.updatedAt = now;
+  };
+  const other = (raw: string): Issue => {
+    if (!KEY_PATTERN.test(raw)) throw new Error(`${raw} isn't an issue key, like WIN-12.`);
+    if (raw === self.key) throw new Error(`${self.key} can't link to itself.`);
+    const found = map.get(raw);
+    if (!found) throw new Error(`No issue ${raw} in this project. Use list to see the keys.`);
+    return found;
+  };
+  const without = (list: string[] | undefined, key: string) => {
+    const rest = (list ?? []).filter((k) => k !== key);
+    return rest.length ? rest : undefined;
+  };
+  const set = (issue: Issue, field: "related" | "blockedBy", list: string[] | undefined) => {
+    if (list) issue[field] = list;
+    else delete issue[field];
+  };
+
+  if (op.type !== undefined) {
+    if (!isType(op.type)) throw new Error(`type must be one of ${TYPES.join(", ")}.`);
+    if (op.type !== self.type) {
+      if (!canParent(op.type) && [...map.values()].some((i) => i.parent === self.key)) throw new Error(`${self.key} has child issues, so it has to stay an epic or a feature. Move them to another parent first.`);
+      log(self, "type", `Type: ${TYPE_LABEL[self.type]} → ${TYPE_LABEL[op.type]}`);
+      self.type = op.type;
+      changed = true;
+    }
+  }
+
+  if (op.parent !== undefined) {
+    if (typeof op.parent !== "string") throw new Error("parent must be an issue key, or an empty string to clear it.");
+    const wanted = normalizeKey(op.parent);
+    if (!wanted) {
+      if (self.parent) {
+        log(self, "link", `Parent removed (was ${self.parent})`);
+        log(map.get(self.parent), "link", `Child removed: ${self.key}`);
+        delete self.parent;
+        changed = true;
+      }
+    } else if (wanted !== self.parent) {
+      const parent = other(wanted);
+      if (!canParent(parent.type)) throw new Error(`${parent.key} is a ${TYPE_LABEL[parent.type].toLowerCase()}. Only an epic or a feature can be a parent: change its type first.`);
+      const seen = new Set<string>();
+      for (let up: Issue | undefined = parent; up && !seen.has(up.key); up = up.parent ? map.get(up.parent) : undefined) {
+        if (up.key === self.key) throw new Error(`${parent.key} is under ${self.key} already, so ${self.key} can't go under it.`);
+        seen.add(up.key);
+      }
+      if (self.parent) log(map.get(self.parent), "link", `Child removed: ${self.key}`);
+      log(self, "link", `Parent: ${parent.key}`);
+      log(parent, "link", `Child: ${self.key}`);
+      self.parent = parent.key;
+      changed = true;
+    }
+  }
+
+  for (const raw of keyList(op.relatedAdd, "related_add")) {
+    const peer = other(raw);
+    if (self.related?.includes(raw)) continue;
+    if ((self.related?.length ?? 0) >= MAX_LINKS) throw new Error(`${self.key} already has ${MAX_LINKS} related issues, the most one keeps.`);
+    if ((peer.related?.length ?? 0) >= MAX_LINKS) throw new Error(`${peer.key} already has ${MAX_LINKS} related issues, the most one keeps.`);
+    self.related = [...(self.related ?? []), raw];
+    peer.related = [...(peer.related ?? []), self.key];
+    log(self, "link", `Linked to ${raw} as related`);
+    log(peer, "link", `Linked to ${self.key} as related`);
+    changed = true;
+  }
+  for (const raw of keyList(op.relatedRemove, "related_remove")) {
+    if (!self.related?.includes(raw)) continue;
+    set(self, "related", without(self.related, raw));
+    const peer = map.get(raw);
+    if (peer) set(peer, "related", without(peer.related, self.key));
+    log(self, "link", `Unlinked from ${raw} (related)`);
+    log(peer, "link", `Unlinked from ${self.key} (related)`);
+    changed = true;
+  }
+
+  for (const raw of keyList(op.blockedByAdd, "blocked_by_add")) {
+    const blocker = other(raw);
+    if (self.blockedBy?.includes(raw)) continue;
+    if ((self.blockedBy?.length ?? 0) >= MAX_LINKS) throw new Error(`${self.key} is already blocked by ${MAX_LINKS} issues, the most one keeps.`);
+    // A blocker that waits on this issue, however far down the chain, would leave both stuck.
+    const seen = new Set<string>();
+    const stack = [blocker];
+    for (let next = stack.pop(); next; next = stack.pop()) {
+      if (seen.has(next.key)) continue;
+      seen.add(next.key);
+      if (next.key === self.key) throw new Error(`${raw} is waiting on ${self.key} already, so ${self.key} can't wait on it: they would block each other.`);
+      for (const k of next.blockedBy ?? []) if (map.has(k)) stack.push(map.get(k)!);
+    }
+    self.blockedBy = [...(self.blockedBy ?? []), raw];
+    log(self, "link", `Blocked by ${raw}`);
+    log(blocker, "link", `Blocks ${self.key}`);
+    changed = true;
+  }
+  for (const raw of keyList(op.blockedByRemove, "blocked_by_remove")) {
+    if (!self.blockedBy?.includes(raw)) continue;
+    set(self, "blockedBy", without(self.blockedBy, raw));
+    log(self, "link", `No longer blocked by ${raw}`);
+    log(map.get(raw), "link", `No longer blocks ${self.key}`);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Whether an op carries a link or type change, so the cheap path can skip copying every issue. */
+const hasRelations = (op: Relations): boolean => [op.type, op.parent, op.relatedAdd, op.relatedRemove, op.blockedByAdd, op.blockedByRemove].some((v) => v !== undefined);
+
 /** `store` with `op` applied by `by`, as a new store. Throws an Error that says what was wrong. */
 export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now()): Applied {
   if (op.kind === "create") {
@@ -268,24 +478,79 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
     if (!title) throw new Error("title is required.");
     const description = op.description === undefined ? "" : text(op.description, "description", LIMITS.description);
     if (op.status !== undefined && !isStatus(op.status)) throw new Error(`status must be one of ${STATUSES.join(", ")}.`);
+    if (op.type !== undefined && !isType(op.type)) throw new Error(`type must be one of ${TYPES.join(", ")}.`);
     if (store.issues.length >= LIMITS.issues) throw new Error(`A project holds up to ${LIMITS.issues} issues. Remove one first.`);
-    const issue: Issue = { key: `${store.prefix}-${store.next}`, title, status: op.status ?? "todo", sessions: [], log: [{ at: now, by, kind: "created", text: "Created" }], createdAt: now, updatedAt: now };
-    if (description) issue.description = description;
+    const issue: Issue = { key: `${store.prefix}-${store.next}`, title, status: op.status ?? "todo", type: op.type ?? "task", sessions: [], log: [{ at: now, by, kind: "created", text: "Created" }], createdAt: now, updatedAt: now };
+    if (hasContent(description)) issue.description = description;
     touch(issue, by, now);
     if (op.branch !== undefined) append(issue, applyLinks(issue, { kind: "update", key: issue.key, branch: op.branch }, by, now));
-    return { store: { ...store, next: store.next + 1, issues: [...store.issues, issue] }, issue, changed: true };
+    let issues = store.issues;
+    if (hasRelations({ ...op, type: undefined })) {
+      const map = new Map(store.issues.map((i) => [i.key, { ...i }]));
+      map.set(issue.key, issue);
+      relate(map, issue, { ...op, type: undefined }, by, now);
+      issues = store.issues.map((i) => map.get(i.key)!);
+    }
+    return { store: { ...store, next: store.next + 1, issues: [...issues, issue] }, issue, changed: true };
   }
 
   const wanted = normalizeKey(op.key);
   const index = store.issues.findIndex((i) => i.key === wanted);
   if (index < 0) throw new Error(`No issue ${String(op.key)} in this project. Use list to see the keys.`);
   const current = store.issues[index];
-  // The counter stays where it is, so a removed key is never handed out again.
-  if (op.kind === "remove") return { store: { ...store, issues: store.issues.filter((_, i) => i !== index) }, issue: current, changed: true };
+  if (op.kind === "remove") {
+    // Whatever pointed at it lets go, and says why in its log. The counter stays where it is, so the key is never handed out again.
+    const issues = store.issues
+      .filter((_, i) => i !== index)
+      .map((i) => {
+        const notes: string[] = [];
+        let next = i;
+        const edit = () => (next === i ? (next = { ...i }) : next);
+        if (i.parent === wanted) (delete edit().parent, notes.push(`Parent ${wanted} was deleted`));
+        for (const [field, note] of [["related", "unlinked (related)"], ["blockedBy", "no longer blocking"]] as const) {
+          if (!i[field]?.includes(wanted)) continue;
+          const rest = i[field].filter((k) => k !== wanted);
+          if (rest.length) edit()[field] = rest;
+          else delete edit()[field];
+          notes.push(`${wanted} was deleted: ${note}`);
+        }
+        if (next === i) return i;
+        appendLoose(next, notes.map((t) => ({ at: now, by, kind: "link" as const, text: t })));
+        next.updatedAt = now;
+        return next;
+      });
+    return { store: { ...store, issues }, issue: current, changed: true };
+  }
+
+  if (op.kind === "autolink") {
+    const next: Issue = { ...current };
+    const entries: LogEntry[] = [];
+    const links = { ...next.links };
+    for (const c of op.commits ?? []) {
+      const sha = String(c.sha).toLowerCase();
+      if (!SHA.test(sha)) continue;
+      const short = sha.slice(0, 7);
+      if ((links.commits ?? []).some((known) => known.startsWith(short) || short.startsWith(known))) continue;
+      links.commits = [...(links.commits ?? []), short];
+      entries.push({ at: now, by: "git", kind: "link", text: `Commit ${short}: ${String(c.subject).trim().slice(0, 200)}` });
+    }
+    if (op.branch && !links.branch && !/\s/.test(op.branch) && op.branch.length <= LIMITS.branch) {
+      links.branch = op.branch;
+      entries.push({ at: now, by: "git", kind: "link", text: `Branch: ${op.branch}` });
+    }
+    if (!entries.length) return { store, issue: current, changed: false };
+    next.links = links;
+    appendLoose(next, entries);
+    next.updatedAt = now;
+    const issues = store.issues.slice();
+    issues[index] = next;
+    return { store: { ...store, issues }, issue: next, changed: true };
+  }
 
   const next: Issue = { ...current };
   let entries: LogEntry[] = [];
   let changed = false;
+  let others: Issue[] | null = null;
   if (op.kind === "note") {
     const note = text(op.text, "text", LIMITS.note);
     if (!note) throw new Error("text is required.");
@@ -298,7 +563,8 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
       if (title !== next.title) ((next.title = title), (changed = true));
     }
     if (op.description !== undefined) {
-      const description = text(op.description, "description", LIMITS.description);
+      const typed = text(op.description, "description", LIMITS.description);
+      const description = hasContent(typed) ? typed : "";
       if (description !== (next.description ?? "")) {
         if (description) next.description = description;
         else delete next.description;
@@ -316,12 +582,21 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
     const linkEntries = applyLinks(next, op, by, now);
     entries.push(...linkEntries);
     if (linkEntries.length) changed = true;
+    if (hasRelations(op)) {
+      // The other issues are copies too, so a failure half way leaves the store as it was.
+      const map = new Map(store.issues.map((i) => [i.key, { ...i }]));
+      map.set(next.key, next);
+      if (relate(map, next, op, by, now)) {
+        changed = true;
+        others = store.issues.map((i) => map.get(i.key)!);
+      }
+    }
   }
   if (!changed) return { store, issue: current, changed: false };
   append(next, entries);
   touch(next, by, now);
-  const issues = store.issues.slice();
-  issues[index] = next;
+  const issues = others ?? store.issues.slice();
+  if (!others) issues[index] = next;
   return { store: { ...store, issues }, issue: next, changed: true };
 }
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { PluginView } from "./api.ts";
-import { boundedJson, firstTabFor, newTabAction, parseNewProjectOpens, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type ViewTab } from "./plugin-pages.ts";
+import { boundedJson, cleanNewTab, wantsNewTab, firstTabFor, newTabAction, parseNewProjectOpens, newTabEntries, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type ViewTab } from "./plugin-pages.ts";
 
 const plugin = (id: string, name: string, extra: Partial<PluginView> & { settings?: boolean } = {}): PluginView => {
   const { settings, ...rest } = extra;
@@ -60,6 +60,38 @@ test("a view opens one tab per project, and opening it again finds that tab", ()
   // Another project gets its own; another view of the same plugin too.
   assert.equal(openViewTab(first.tabs, "s2", board, "v3").id, "v3");
   assert.equal(openViewTab(first.tabs, "s1", { pluginId: "demo", viewId: "graph" }, "v4").id, "v4");
+});
+
+test("newTab always opens another tab, for a single view, an equal-args multiple view, and keeps its args", () => {
+  const first = openViewTab<PaneTab>([], "s1", board, "v1");
+  const second = openViewTab(first.tabs, "s1", board, "v2", { newTab: true, args: { q: 1 } });
+  assert.equal(second.id, "v2");
+  assert.deepEqual(second.tabs.map((t) => t.id), ["v1", "v2"]);
+  assert.deepEqual((second.tabs[1] as ViewTab).args, { q: 1 });
+  // The first tab was left as it was, and a plain open still finds the first one.
+  assert.equal(second.tabs[0], first.tabs[0]);
+  assert.equal(openViewTab(second.tabs, "s1", board, "v3").id, "v1");
+  const item = { pluginId: "demo", viewId: "item" };
+  const a = openViewTab<PaneTab>([], "s1", item, "i1", { multiple: true, args: { n: 1 } });
+  assert.equal(openViewTab(a.tabs, "s1", item, "i2", { multiple: true, args: { n: 1 } }).id, "i1");
+  const forced = openViewTab(a.tabs, "s1", item, "i2", { multiple: true, args: { n: 1 }, newTab: true });
+  assert.deepEqual(forced.tabs.map((t) => t.id), ["i1", "i2"]);
+});
+
+test("a click wants a new tab with the middle button or Cmd/Ctrl", () => {
+  const click = { button: 0, metaKey: false, ctrlKey: false };
+  assert.equal(wantsNewTab(click), false);
+  assert.equal(wantsNewTab({ ...click, button: 1 }), true);
+  assert.equal(wantsNewTab({ ...click, metaKey: true }), true);
+  assert.equal(wantsNewTab({ ...click, ctrlKey: true }), true);
+});
+
+test("openView's newTab is a boolean and only for a tab", () => {
+  assert.equal(cleanNewTab(undefined, "modal"), false);
+  assert.equal(cleanNewTab(true, "tab"), true);
+  assert.equal(cleanNewTab(false, "sidebar"), false);
+  assert.throws(() => cleanNewTab("yes", "tab"), /true or false/);
+  assert.throws(() => cleanNewTab(true, "modal"), /as: "tab"/);
 });
 
 test("view tabs are saved apart from terminal tabs and come back at their place", () => {

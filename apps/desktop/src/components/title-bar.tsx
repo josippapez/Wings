@@ -30,7 +30,7 @@ import type { AgentState, GitStatus, Space } from "@/lib/api";
 import { GitCounts } from "@/components/git-counts";
 import type { LayoutNode } from "@/lib/layout";
 import { POPOVER_UNLOAD_MS } from "@/lib/idle-unload";
-import type { NewTabEntry } from "@/lib/plugin-pages";
+import { wantsNewTab, type NewTabEntry } from "@/lib/plugin-pages";
 import { trackDrag } from "@/lib/pointer-drag";
 import { isMac, shortcutLabel } from "@/lib/terminal";
 import { PluginGlyph } from "@/components/plugin-glyph";
@@ -163,7 +163,7 @@ export function TitleBar(props: {
   /** Plugin pages the + menu offers after Terminal; the chevron shows only when there are some. */
   newTabEntries: NewTabEntry[];
   onNewTerminal: () => void;
-  onNewPage: (entry: NewTabEntry) => void;
+  onNewPage: (entry: NewTabEntry, newTab?: boolean) => void;
   onNewProjectPage: () => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
@@ -405,7 +405,15 @@ export function TitleBar(props: {
                 <span className="flex-1 whitespace-nowrap">Project page</span>
               </DropdownMenuItem>
               {props.newTabEntries.map((entry) => (
-                <DropdownMenuItem key={entry.key} onClick={() => props.onNewPage(entry)}>
+                <DropdownMenuItem
+                  key={entry.key}
+                  onClick={(e) => props.onNewPage(entry, wantsNewTab(e))}
+                  onAuxClick={(e) => {
+                    if (e.button !== 1) return;
+                    e.preventDefault();
+                    props.onNewPage(entry, true);
+                  }}
+                >
                   <PluginGlyph name={entry.icon} svg={entry.iconSvg} />
                   <span className="flex-1 whitespace-nowrap">{entry.title}</span>
                 </DropdownMenuItem>
@@ -433,7 +441,7 @@ export function ProjectBar(props: {
   /** Keys of the buttons you pinned to the bar, in the order you pinned them. */
   pinned: string[];
   onTogglePin: (key: string) => void;
-  onPluginButton: (button: PluginButton, rect: DOMRect) => void;
+  onPluginButton: (button: PluginButton, rect: DOMRect, newTab?: boolean) => void;
   onMountPopover: MountPopover;
 }) {
   const pinned = props.pinned.flatMap((key) => props.pluginButtons.filter((b) => b.key === key));
@@ -490,7 +498,13 @@ export function ProjectBar(props: {
               ) : undefined
             }
             aria-pressed={button.kind === "sidebar" || button.kind === "modal" || button.kind === "tab" ? button.active : undefined}
-            onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect())}
+            onClick={(e) => props.onPluginButton(button, e.currentTarget.getBoundingClientRect(), wantsNewTab(e))}
+            // A middle click opens a tab view in a new tab; preventDefault stops autoscroll.
+            onAuxClick={(e) => {
+              if (e.button !== 1 || button.kind !== "tab") return;
+              e.preventDefault();
+              props.onPluginButton(button, e.currentTarget.getBoundingClientRect(), true);
+            }}
             className={cn(
               // A label means something is live, like a running timer: small text after the icon, behind a tone dot.
               button.label && "w-auto gap-1.5 px-2",
@@ -525,7 +539,12 @@ export function ProjectBar(props: {
               return (
                 <DropdownMenuItem
                   key={button.key}
-                  onClick={() => props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect())}
+                  onClick={(e) => props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect(), wantsNewTab(e))}
+                  onAuxClick={(e) => {
+                    if (e.button !== 1 || button.kind !== "tab") return;
+                    e.preventDefault();
+                    props.onPluginButton(button, more.current?.getBoundingClientRect() ?? new DOMRect(), true);
+                  }}
                 >
                   <PluginGlyph name={button.icon} svg={button.iconSvg} />
                   <span className="flex-1 whitespace-nowrap">{button.title}</span>

@@ -30,6 +30,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
     <IssueView
       project={project}
       issue={issue}
+      issues={store?.issues ?? []}
       issueKey={issueKey}
       error={error}
       send={send}
@@ -47,6 +48,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
           .catch(fail)
       }
       onOpenUrl={(url) => void wings.openUrl(url).catch(fail)}
+      onOpenIssue={(key, newTab) => void wings.openView("issue", { as: "tab", args: { key, projectId: args?.projectId ?? project.id }, newTab }).catch(fail)}
     />
   );
 }

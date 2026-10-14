@@ -7,4 +7,4 @@ void issues;
 void longIssue;
 const none = () => Promise.resolve();
 export const fill = true;
-export default <IssueView project={project} issue={issues[0]} issueKey="WEB-1" error={null} send={none} onBack={() => {}} onResume={() => {}} onStart={() => {}} onOpenUrl={() => {}} />;
+export default <IssueView project={project} issues={issues} issue={issues[0]} issueKey="WEB-1" error={null} send={none} onBack={() => {}} onResume={() => {}} onStart={() => {}} onOpenUrl={() => {}} onOpenIssue={() => {}} />;

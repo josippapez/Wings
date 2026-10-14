@@ -1,7 +1,7 @@
 // Small pieces the Issues pages share.
 
 import { Badge, Button, Card, Dot, Row, Text, Time } from "wings-plugin-ui";
-import { FLOW, lastSession, STATUS_LABEL, type Issue, type Status } from "./issues";
+import { FLOW, lastSession, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Status } from "./issues";
 
 const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: undefined, canceled: "muted" } as const;
 
@@ -9,6 +9,33 @@ const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: unde
 export function StatusDot({ status }: { status: Status }) {
   return <Dot tone={TONE[status]} />;
 }
+
+const TYPE_PATH: Record<IssueType, React.ReactNode> = {
+  task: <><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" /><path d="m5.5 8.2 1.8 1.8 3.2-3.6" /></>,
+  bug: <><ellipse cx="8" cy="9" rx="3" ry="4" /><path d="M5 9H2.5M11 9h2.5M5.5 5.5 4 4M10.5 5.5 12 4M5.5 12.5 4 14M10.5 12.5 12 14M6 5a2 2 0 0 1 4 0" /></>,
+  feature: <path d="M8 2.2 9.6 6.4 13.8 8 9.6 9.6 8 13.8 6.4 9.6 2.2 8 6.4 6.4Z" />,
+  epic: <path d="M9 1.8 3.5 9H8l-1 5.2L12.5 7H8Z" />,
+};
+
+/** A small icon for an issue's type, coloured by it. Decoration unless `label`: the card or page names the type in text too. */
+export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) {
+  return (
+    <svg className="tk-type" data-type={type} viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...(label ? { role: "img", "aria-label": TYPE_LABEL[type] } : { "aria-hidden": true })}>
+      <title>{TYPE_LABEL[type]}</title>
+      {TYPE_PATH[type]}
+    </svg>
+  );
+}
+
+/** Click props that open something here, or in a new tab on a middle-click or Cmd/Ctrl+click. */
+export const openProps = (open: (newTab: boolean) => void) => ({
+  onClick: (e: React.MouseEvent) => open(e.metaKey || e.ctrlKey),
+  onAuxClick: (e: React.MouseEvent) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    open(true);
+  },
+});
 
 /** Marks an issue an agent has worked on, with the name of the session that touched it last. Nothing for one only you have touched. */
 export function SessionMarker({ issue }: { issue: Issue }) {
@@ -21,21 +48,25 @@ export function SessionMarker({ issue }: { issue: Issue }) {
  * An issue as a card: key and the session marker, the title (a button that opens the issue), when it last changed and
  * buttons to move it a column. Alt+Left and Alt+Right on the title move it too.
  */
-export function IssueCard({ issue, id, compact, onOpen, onMove }: { issue: Issue; id: string; compact?: boolean; onOpen: () => void; onMove: (by: 1 | -1) => void }) {
+export function IssueCard({ issue, id, compact, onOpen, onMove }: { issue: Issue; id: string; compact?: boolean; onOpen: (newTab: boolean) => void; onMove: (by: 1 | -1) => void }) {
   const index = FLOW.indexOf(issue.status);
   const target = (by: 1 | -1) => STATUS_LABEL[FLOW[index + by] ?? issue.status];
   const movable = index >= 0;
   return (
     <Card compact={compact} className="tk-card" data-status={issue.status}>
       <Row gap="s" justify="between" className="tk-card-top">
-        <Text as="span" mono tone="muted" size="tiny">{issue.key}</Text>
+        <Row gap="xs" className="tk-card-key">
+          <TypeIcon type={issue.type} />
+          <Text as="span" mono tone="muted" size="tiny">{issue.key}</Text>
+          {issue.parent ? <Text as="span" mono tone="muted" size="tiny" className="tk-card-parent" title={`In ${issue.parent}`}>· {issue.parent}</Text> : null}
+        </Row>
         <SessionMarker issue={issue} />
       </Row>
       <Button
         id={id}
         variant="ghost"
         className="tk-card-title"
-        onClick={onOpen}
+        {...openProps(onOpen)}
         onKeyDown={(e) => {
           if (!movable || !e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
           e.preventDefault();

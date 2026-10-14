@@ -13,7 +13,7 @@ export interface BoardViewProps {
   onShowCanceled: (show: boolean) => void;
   apply: (op: Op) => Promise<void>;
   send: (op: Op) => Promise<void>;
-  onOpen: (issue: Issue) => void;
+  onOpen: (issue: Issue, newTab: boolean) => void;
 }
 
 const EMPTY: Record<string, string> = { todo: "Nothing waiting", in_progress: "Nothing in progress", in_review: "Nothing in review", done: "Nothing finished yet", canceled: "Nothing canceled" };
@@ -54,7 +54,7 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
           {boardColumns(issues, showCanceled).map(({ status, issues: column }) => (
             <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
               {column.length === 0 ? <p className="tk-column-empty">{EMPTY[status]}</p> : null}
-              {column.map((i) => <IssueCard key={i.key} issue={i} id={`issue-${i.key}`} onOpen={() => onOpen(i)} onMove={(by) => move(i, by)} />)}
+              {column.map((i) => <IssueCard key={i.key} issue={i} id={`issue-${i.key}`} onOpen={(newTab) => onOpen(i, newTab)} onMove={(by) => move(i, by)} />)}
             </BoardColumn>
           ))}
         </Board>

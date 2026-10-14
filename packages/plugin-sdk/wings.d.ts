@@ -292,7 +292,15 @@ interface Wings {
    * already open with other args takes the new ones, drops its saved tab state and reloads; a view with `"multiple": true` opens a new tab,
    * unless a tab of it in that project already has the same `args`: that one is shown. Needs Wings 0.1.22.
    */
-  openView(id: string, options?: { as?: "sidebar" | "modal" | "window" | "tab"; args?: unknown }): Promise<void>;
+  openView(
+    id: string,
+    options?: {
+      as?: "sidebar" | "modal" | "window" | "tab";
+      args?: unknown;
+      /** With `as: "tab"`: always a new tab, even when one of this view is open, like a middle-click. Needs Wings 0.1.39. */
+      newTab?: boolean;
+    },
+  ): Promise<void>;
   /** Where this page shows. `null` in the plugin's main script. Needs Wings 0.1.22. */
   placement(): "sidebar" | "tab" | "modal" | "window" | "block" | null;
   /** What `openView` passed as `args` when it opened this tab, or `null`. Available at once. Needs Wings 0.1.22. */

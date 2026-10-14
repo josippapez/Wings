@@ -498,7 +498,7 @@ const leftPanel = usePanelRef();
   const closeTab = useCallback((tabId: string) => closeTabs([tabId]), [closeTabs]);
 
   /** Shows a plugin view's tab in a project, opening it if it isn't there yet. */
-  const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string, options?: { multiple: boolean; args?: unknown }) => {
+  const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string, options?: { multiple: boolean; args?: unknown; newTab?: boolean }) => {
     const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID(), options);
     if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
     setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
@@ -1362,9 +1362,9 @@ const leftPanel = usePanelRef();
   const toggleSection = useCallback((projectId: string, key: string) => setCollapsedSections((all) => toggleCollapsed(all, collapseKey(projectId, key))), []);
   /** A row under a project in the sidebar was clicked: its page opens as a tab in that project. */
   const openSectionRow = useCallback(
-    (projectId: string, pluginId: string, open: { view: string; args?: unknown }) => {
+    (projectId: string, pluginId: string, open: { view: string; args?: unknown }, newTab?: boolean) => {
       const view = pluginsRef.current.find((p) => p.id === pluginId)?.contributes.views.find((v) => v.id === open.view && v.opens.includes("tab"));
-      if (view) showViewTab(projectId, pluginId, view.id, { multiple: view.multiple === true, args: open.args });
+      if (view) showViewTab(projectId, pluginId, view.id, { multiple: view.multiple === true, args: open.args, newTab });
     },
     [showViewTab],
   );
@@ -1489,9 +1489,9 @@ const leftPanel = usePanelRef();
 
   /** The pages the + menu offers besides a terminal, and opening one (or a terminal for null) in the project on screen. */
   const newTabs = useMemo(() => newTabEntries(plugins), [plugins]);
-  const openNewTab = (entry: NewTabEntry | null) => {
+  const openNewTab = (entry: NewTabEntry | null, newTab?: boolean) => {
     if (!activeSpace) return;
-    if (entry) showViewTab(activeSpace.id, entry.pluginId, entry.viewId, { multiple: entry.multiple });
+    if (entry) showViewTab(activeSpace.id, entry.pluginId, entry.viewId, { multiple: entry.multiple, newTab });
     else openTab(activeSpace.id);
   };
 
@@ -1567,13 +1567,13 @@ const leftPanel = usePanelRef();
   }, []);
 
   /** What a plugin button on the title bar does; `rect` is the button, which a panel opens under. */
-  const pressPluginButton = (button: PluginButton, rect: { right: number; bottom: number }) => {
+  const pressPluginButton = (button: PluginButton, rect: { right: number; bottom: number }, newTab?: boolean) => {
     if (button.kind === "panel") {
       void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
       return;
     }
     if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
-    if (button.kind === "tab") return void (activeSpace && showViewTab(activeSpace.id, button.pluginId, button.id));
+    if (button.kind === "tab") return void (activeSpace && showViewTab(activeSpace.id, button.pluginId, button.id, newTab ? { multiple: false, newTab } : undefined));
     if (button.kind === "window") {
       const plugin = activePlugins.find((p) => p.id === button.pluginId);
       if (plugin) void pluginHost.current?.openWindow(plugin, button.id).catch((e) => toast.error(String(e)));
@@ -1608,7 +1608,7 @@ const leftPanel = usePanelRef();
               else openNewTab(action.kind === "page" ? action.entry : null);
             }}
             onNewTerminal={() => openNewTab(null)}
-            onNewPage={openNewTab}
+            onNewPage={(entry, newTab) => openNewTab(entry, newTab)}
             onNewProjectPage={() => activeSpace && showProjectPage(activeSpace.id)}
           />
           {/* The peek sits on the row, not in the panes, so it starts at the window's edge, left of the closed sidebar's handle. */}

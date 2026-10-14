@@ -21,7 +21,7 @@ function ProjectBoard({ project }: { project: WingsProject }) {
   const [showCanceled, setShowCanceled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const send = (op: Op) => apply(op).then(() => setError(null), (e) => setError(e instanceof Error ? e.message : String(e)));
-  const open = (issue: Issue) => void wings.openView("issue", { as: "tab", args: { key: issue.key, projectId: project.id } });
+  const open = (issue: Issue, newTab: boolean) => void wings.openView("issue", { as: "tab", args: { key: issue.key, projectId: project.id }, newTab });
   return <BoardView project={project} issues={store?.issues ?? null} error={error} showCanceled={showCanceled} onShowCanceled={setShowCanceled} apply={apply} send={send} onOpen={open} />;
 }
 

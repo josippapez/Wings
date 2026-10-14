@@ -4,6 +4,15 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.39 · 2026-10-14
+
+- A plugin page opens in its open tab; a middle-click or Cmd+click on a plugin's title bar button, + menu entry or section row opens a new tab. Plugins can do the same with `openView(id, { as: "tab", newTab: true })`. `wings-plugin-sdk` 0.15.0.
+- Issues 0.5.0:
+  - Types (task, bug, feature, epic), a parent epic or feature, related issues (shown on both) and blocked by / blocks. An epic or feature lists its child issues with progress.
+  - Commits whose message names an issue key, and branches whose name has one, link to the issue on their own.
+  - A new description starts from a template: Goal, Scope, Done when, Validation. Empty sections don't show.
+  - Clicking issues reuses one issue tab; a middle-click or Cmd+click opens another.
+
 ## 0.1.38 · 2026-10-14
 
 - Updating several plugins that ask for new access reviews them one by one: the dialog says "1 of 3" and moves to the next after Turn on or Not now. Before, only the first one was asked about.
