@@ -1,4 +1,6 @@
-import { clock, names, text, tokens, until } from "./format";
+import { clock, tokens } from "wings-plugin-sdk/format";
+
+import { names, text, until } from "./format";
 import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "./levels";
 import { servers, type Session } from "./session";
 import type { Limit, Overview, Snapshot } from "./types";

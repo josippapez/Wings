@@ -20,3 +20,9 @@ export const basename = (path) => path.split("/").filter(Boolean).at(-1) ?? path
 
 /** `text` cut to `max` characters, ending in "…" when it was longer. */
 export const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** A token count in k and M: `999`, `116k`, `1.2M`. Thousands are whole, and millions have one decimal unless it is 0: `1M`. */
+export const tokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+
+/** The time of day of `ms`, in the user's locale: `09:41` or `09:41 AM`. */
+export const clock = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });

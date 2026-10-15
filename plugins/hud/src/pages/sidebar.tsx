@@ -2,10 +2,11 @@
 // main script keeps the state and shares it here.
 
 import { useState } from "react";
+import { tokens } from "wings-plugin-sdk/format";
 import { useShared } from "wings-plugin-sdk/react";
 import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text } from "wings-plugin-ui";
 
-import { gb, tokens } from "../lib/format";
+import { gb } from "../lib/format";
 import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "../lib/levels";
 import { ch } from "../lib/messages";
 import "./sidebar.css";

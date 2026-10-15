@@ -1,4 +1,6 @@
-import { modelName, tokens } from "./format";
+import { tokens } from "wings-plugin-sdk/format";
+
+import { modelName } from "./format";
 import { checklist, type Session } from "./session";
 import type { Item, ItemView, SessionView } from "./types";
 

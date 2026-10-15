@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
+import { clock } from "wings-plugin-sdk/format";
 import { Badge, Chips, Dot, Heading, List, ListButton, ListItem, Spinner, Text } from "wings-plugin-ui";
 
 import type { ItemView } from "../lib/types";
 import { Card } from "./Card";
-import { clock, took } from "./format";
+import { took } from "./format";
 
 /** Badges Wings colours itself; git ones get the plugin's own colour from sidebar.css. */
 const tones: Record<string, "info" | "success" | "danger"> = { push: "info", ok: "success", danger: "danger" };

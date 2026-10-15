@@ -9,3 +9,9 @@ export function basename(path: string): string;
 
 /** `text` cut to `max` characters, ending in "…" when it was longer. */
 export function truncate(text: string, max: number): string;
+
+/** A token count in k and M: `999`, `116k`, `1.2M`. Thousands are whole, and millions have one decimal unless it is 0: `1M`. */
+export function tokens(n: number): string;
+
+/** The time of day of `ms`, in the user's locale: `09:41` or `09:41 AM`. */
+export function clock(ms: number): string;
