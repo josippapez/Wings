@@ -24,8 +24,97 @@ interface WingsTranscriptEvent {
   /** The pane the session runs in. */
   paneId: string;
   /** The entry as Claude Code wrote it. Its `type` is one of `permissions.transcript`. */
-  entry: { type: string } & Record<string, unknown>;
+  entry: TranscriptEntry;
 }
+
+/** One block of a message's `content`. Which fields it has depends on `type`: `text` has `text`, `tool_use` has `id`, `name` and `input`, `tool_result` has `tool_use_id`, `content` and `is_error`. */
+interface TranscriptBlock {
+  type: string;
+  id?: string;
+  /** The tool called, like `Bash`, or `mcp__<server>__<tool>` for an MCP tool. */
+  name?: string;
+  /** What Claude passed the tool. */
+  input?: Record<string, unknown> | null;
+  tool_use_id?: string;
+  is_error?: boolean;
+  /** A tool result's output: text, or a list of blocks. */
+  content?: unknown;
+  text?: string;
+  [field: string]: unknown;
+}
+
+/** The `message` of an `assistant` or `user` entry. */
+interface TranscriptMessage {
+  /** Claude Code writes one assistant message as several entries, and each has the message's `id`. */
+  id?: string;
+  /** On an assistant message. */
+  model?: string;
+  /** On an assistant message: the tokens of the API response it came from. */
+  usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
+  /** What you typed is a string. Claude's reply, and the tool results in a `user` entry, are lists of blocks. */
+  content?: string | TranscriptBlock[];
+}
+
+interface TranscriptEntryBase {
+  /** Identifies the entry. Assistant, user and attachment entries have one. */
+  uuid?: string;
+  /** When Claude Code wrote it, an ISO 8601 string. */
+  timestamp?: string;
+  /** True on an entry from a subagent's conversation, not the session's own. */
+  isSidechain?: boolean;
+  /** True on a `user` entry that Claude Code wrote itself, like a caveat before a command's output, not something you typed. */
+  isMeta?: boolean;
+  /** Claude Code owns the rest of the entry, and it changes between versions. */
+  [field: string]: unknown;
+}
+
+/** Claude's reply, one block per entry. */
+interface TranscriptAssistantEntry extends TranscriptEntryBase {
+  type: "assistant";
+  message?: TranscriptMessage;
+}
+
+/** What you sent, or the results of Claude's tool calls. */
+interface TranscriptUserEntry extends TranscriptEntryBase {
+  type: "user";
+  message?: TranscriptMessage;
+}
+
+interface TranscriptAttachmentEntry extends TranscriptEntryBase {
+  type: "attachment";
+  /** `type` is the kind, which `permissions.transcript` names as `attachment:<kind>`. The other fields depend on it: these are the ones the bundled plugins read. */
+  attachment?: {
+    type?: string;
+    /** `model`: `modelId` is like `claude-opus-5-5`, with `[1m]` after it for the 1M-token window. */
+    identity?: { modelId?: string };
+    /** `deferred_tools_delta`: the tools added and removed since the last one, like `mcp__<server>__<tool>`. */
+    addedNames?: string[];
+    removedNames?: string[];
+    /** `deferred_tools_delta`: every MCP server that has failed to connect, or is still connecting, not only what changed. */
+    failedMcpServers?: { name?: string; errorCode?: string; error?: string }[];
+    pendingMcpServers?: string[];
+    /** `invoked_skills`. */
+    skills?: { name?: string }[];
+    /** `queued_command`, a message sent while Claude works: `humanTurn` is true when you typed it, and `prompt` is a string or a list of blocks. */
+    humanTurn?: boolean;
+    prompt?: unknown;
+    [field: string]: unknown;
+  };
+}
+
+/** The pull request Claude Code recorded for the session. */
+interface TranscriptPrLinkEntry extends TranscriptEntryBase {
+  type: "pr-link";
+  prUrl?: string;
+  prNumber: number;
+  prRepository: string;
+}
+
+/**
+ * A transcript entry, of the types plugins read so far. Claude Code writes more, and owns what is in them: to read
+ * another type, compare it as a plain `string`, and take its fields from the index signature.
+ */
+type TranscriptEntry = TranscriptAssistantEntry | TranscriptUserEntry | TranscriptAttachmentEntry | TranscriptPrLinkEntry;
 
 interface WingsBadge {
   label: string;
@@ -189,11 +278,12 @@ interface Wings {
    */
   statusline(): Promise<WingsStatusline>;
   /** Claude Code transcript entries of types in `permissions.transcript`, oldest first. */
-  transcript(sessionId: string, types: string[], options?: { last?: number }): Promise<Record<string, unknown>[]>;
+  transcript(sessionId: string, types: string[], options?: { last?: number }): Promise<TranscriptEntry[]>;
   /**
    * Each transcript entry Claude Code writes while it runs in a pane, for the types in `permissions.transcript`.
    * Only entries written after the plugin started, or after the session started in the pane; `transcript` reads
-   * earlier ones. Entries over 256 KB are skipped.
+   * earlier ones, and any written since, which `onTranscript` sends too. Entries over 256 KB are skipped.
+   * To follow the sessions in panes, use `followSessions` from `wings-plugin-sdk/sessions`: it does both, once each.
    */
   onTranscript(listener: (event: WingsTranscriptEvent) => void): () => void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */

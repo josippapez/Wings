@@ -33,6 +33,10 @@
       "types": "./settings.d.ts",
       "default": "./settings.js"
     },
+    "./sessions": {
+      "types": "./sessions.d.ts",
+      "default": "./sessions.js"
+    },
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
@@ -60,6 +64,8 @@
     "messages.d.ts",
     "settings.js",
     "settings.d.ts",
+    "sessions.js",
+    "sessions.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",
