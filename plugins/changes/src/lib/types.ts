@@ -1,49 +1,31 @@
-/** What the main script and the pages send each other. */
+/** What the main script answers the pages with, and what they show. */
 
 export type Mode = "uncommitted" | "branch";
-export type Tab = "changes" | "history";
 
-/** A changed file in a broadcast: `[status, path, added, removed, oldPath]`. */
+/** A changed file in an answer: `[status, path, added, removed, oldPath]`. */
 export type FileRow = [status: string, path: string, added: number | null, removed: number | null, oldPath: string | null];
-/** A commit in a broadcast: `[hash, subject, author, at, refs]`, refs as `kind:name`. */
+/** A commit in an answer: `[hash, subject, author, at, refs]`, refs as `kind:name`. */
 export type CommitRow = [hash: string, subject: string, author: string, at: number, refs: string[]];
 
 export interface Repo {
   root: string;
   name: string;
-  branch?: string;
+  branch: string;
 }
 
-/** The Changes tab: the files of one repo and mode. */
-export interface StateMessage {
-  type: "state";
-  mode: Mode;
-  loading?: boolean;
-  repo: Repo | null;
-  against?: string;
-  files?: FileRow[];
-  total?: number;
-  added?: number;
-  removed?: number;
-  partial?: boolean;
-  error?: string;
-}
+/** The Changes tab: the files of one repo and mode, or `repo: null` when no pane is in a repo. */
+export type ChangesAnswer =
+  | { repo: null }
+  | { repo: Repo; against: string; files: FileRow[]; total: number; added: number; removed: number; partial: boolean };
 
-/** The History tab: a page of commits for one search and scope. */
-export interface HistoryMessage {
-  type: "history";
-  query: string;
-  all: boolean;
-  skip: number;
-  repo: Repo | null;
-  rows?: CommitRow[];
-  more?: boolean;
-  error?: string;
-}
+/** One page of the History tab for one search and scope, or `repo: null` when no pane is in a repo. */
+export type HistoryAnswer = { repo: null } | { repo: Repo; rows: CommitRow[]; more: boolean };
 
-/** The repo the graph view shows. */
-export interface GraphRepoMessage {
-  type: "graph-repo";
-  root: string | null;
-  name: string | null;
+/** What the History list or the graph already shows of a commit, so the viewer opens with a title before git answers. */
+export interface CommitRef {
+  root: string;
+  hash: string;
+  subject: string;
+  author: string;
+  at: number;
 }

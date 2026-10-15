@@ -1,7 +1,7 @@
-import { changes, type Changes } from "./changes";
-import { rootOf } from "./git";
-import { plural } from "./format";
-import { panes } from "./panes";
+import { plural } from "wings-plugin-sdk/format";
+import { repoRoot } from "wings-plugin-sdk/git";
+
+import { changes, type Changes } from "../lib/changes";
 
 const lines = (c: Changes) => `+${c.added} −${c.removed}`;
 
@@ -32,9 +32,8 @@ function badgeFor(c: Changes): WingsBadge {
 }
 
 /** Looks up each repo once, then badges every pane in it. */
-export async function refreshBadges(options?: { fresh?: boolean }) {
-  const list = panes;
-  const byPane = await Promise.all(list.map(async (p) => [p, await rootOf(p.cwd).catch(() => null)] as const));
+export async function refreshBadges(panes: WingsPane[], options?: { fresh?: boolean }) {
+  const byPane = await Promise.all(panes.map(async (p) => [p, await repoRoot(p.cwd)] as const));
   const results = new Map<string, Changes | null>();
   for (const root of new Set(byPane.map(([, r]) => r).filter((r): r is string => Boolean(r)))) {
     results.set(root, await changes(root, "uncommitted", options).catch((error) => (console.error(error), null)));

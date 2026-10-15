@@ -3,7 +3,7 @@
  * `--decorate=full` so a `log.decorate` setting can't change the ref names, and local, remote and tag refs tell apart.
  */
 export const LOG = ["-z", "--no-color", "--decorate=full", "--format=%H%x00%P%x00%an%x00%at%x00%ct%x00%D%x00%s"];
-export const LOG_FIELDS = 7;
+const LOG_FIELDS = 7;
 
 /**
  * `refs` are `kind:name`, where kind is `H` (HEAD, on that branch if it has a name), `b` local branch, `r` remote branch, `t` tag or `s` stash.
@@ -19,7 +19,7 @@ export interface Commit {
 }
 
 /** `%D` with `--decorate=full`, as short `kind:name` refs. `origin/HEAD` and the like are left out. */
-export function parseRefs(decoration: string) {
+function parseRefs(decoration: string) {
   const out: string[] = [];
   for (let ref of decoration ? decoration.split(", ") : []) {
     if (ref === "HEAD") {
@@ -35,6 +35,21 @@ export function parseRefs(decoration: string) {
     else if (ref === "refs/stash") out.push("s:stash");
   }
   return out;
+}
+
+const REF_KIND: Record<string, string> = { H: "HEAD", b: "Branch", r: "Remote branch", t: "Tag", s: "Stash" };
+const REF_TONE: Record<string, "info" | "success" | "warn" | undefined> = { H: "info", b: "success", t: "warn" };
+
+/** How a `kind:name` ref shows as a pill, in the History list and in the graph. */
+export function describeRef(ref: string) {
+  const kind = ref[0];
+  const name = ref.slice(2);
+  return {
+    head: kind === "H",
+    label: kind === "t" ? `◆ ${name}` : name,
+    title: kind === "H" && name !== "HEAD" ? `HEAD, on ${name}` : `${REF_KIND[kind] ?? "Ref"} ${name}`,
+    tone: REF_TONE[kind],
+  };
 }
 
 /** @param out `git log` output with `LOG`. */

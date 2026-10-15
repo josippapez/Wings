@@ -1,5 +1,9 @@
-import { basename, COLOR, defaultBranch, EMPTY_TREE, git, gitOk, literal } from "./git";
-import type { Mode } from "./types";
+import { cached } from "wings-plugin-sdk/async";
+import { basename } from "wings-plugin-sdk/format";
+import { branchLabel, defaultBranch, git, gitOk, gitRun } from "wings-plugin-sdk/git";
+
+import { COLOR, EMPTY_TREE, literal } from "./git";
+import type { FileRow, Mode } from "./types";
 
 /** A result this fresh is reused, so the badge poll and the sidebar's refresh don't run git twice. */
 const FRESH_MS = 3_000;
@@ -24,17 +28,16 @@ export interface Changes {
   branch: string;
   mode: Mode;
   base: string;
-  baseLabel: string;
+  /** What the files are against, like "Working tree against HEAD". */
+  against: string;
   files: FileChange[];
   added: number;
   removed: number;
   partial: boolean;
-  at: number;
 }
 
-/** Changes by `${root}\0${mode}`, and the lookups still running. */
-const cache = new Map<string, Changes>();
-const running = new Map<string, Promise<Changes>>();
+/** A file as the sidebar's answer holds it. */
+export const fileRow = (f: FileChange): FileRow => [f.status, f.path, f.added, f.removed, f.oldPath ?? null];
 
 /** Splits `git diff --numstat -z` and `--name-status -z` into one entry per file. */
 function parseDiff(numstat: string, names: string) {
@@ -64,7 +67,7 @@ function parseDiff(numstat: string, names: string) {
 async function lineCounts(root: string, paths: string[]) {
   const counts = new Map<string, number>();
   if (paths.length === 0) return counts;
-  const r = await wings.exec("git", ["grep", "--untracked", "-I", "-z", "--count", "--no-color", "-e", "", "--", ...literal(paths)], { cwd: root });
+  const r = await gitRun(root, ["grep", "--untracked", "-I", "-z", "--count", "--no-color", "-e", "", "--", ...literal(paths)]);
   // 1 is "no match": every file was empty or binary.
   if (r.code !== null && r.code > 1) throw new Error(r.stderr.trim() || "git grep failed");
   for (const line of r.stdout.split("\n")) {
@@ -75,21 +78,21 @@ async function lineCounts(root: string, paths: string[]) {
 }
 
 /** The changed files of a repo: against HEAD, or against where this branch left the default branch. */
-async function load(root: string, mode: Mode): Promise<Changes> {
+async function load({ root, mode }: { root: string; mode: Mode }): Promise<Changes> {
   const [branch, head] = await Promise.all([gitOk(root, ["branch", "--show-current"]), gitOk(root, ["rev-parse", "--verify", "--quiet", "HEAD"])]);
   let base = head ?? EMPTY_TREE;
-  let baseLabel = head ? "HEAD" : "an empty repo";
+  let against = "Working tree against HEAD";
   if (mode === "branch") {
     const ref = await defaultBranch(root);
     if (!ref) throw new Error("No default branch found (origin/HEAD, main or master).");
     if (!head) throw new Error("This repo has no commits yet.");
-    base = (await git(root, ["merge-base", "HEAD", ref])).trim();
-    baseLabel = `${ref} at ${base.slice(0, 7)}`;
+    base = await git(root, ["merge-base", "HEAD", ref]);
+    against = `Since ${ref} at ${base.slice(0, 7)}`;
   }
   const [numstat, names, others] = await Promise.all([
-    git(root, ["diff", base, "--numstat", "-z", "-M", ...COLOR]),
-    git(root, ["diff", base, "--name-status", "-z", "-M", ...COLOR]),
-    git(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    git(root, ["diff", base, "--numstat", "-z", "-M", ...COLOR], { raw: true }),
+    git(root, ["diff", base, "--name-status", "-z", "-M", ...COLOR], { raw: true }),
+    git(root, ["ls-files", "--others", "--exclude-standard", "-z"], { raw: true }),
   ]);
   const files = parseDiff(numstat, names);
   const untracked = others.split("\0").filter(Boolean);
@@ -99,32 +102,18 @@ async function load(root: string, mode: Mode): Promise<Changes> {
   return {
     root,
     name: basename(root),
-    branch: branch || (head ? `detached at ${head.slice(0, 7)}` : "no commits"),
+    branch: branchLabel(branch, head),
     mode,
     base,
-    baseLabel,
+    against,
     files,
     added: files.reduce((n, f) => n + (f.added ?? 0), 0),
     removed: files.reduce((n, f) => n + (f.removed ?? 0), 0),
     partial: untracked.length > MAX_UNTRACKED_READ,
-    at: Date.now(),
   };
 }
 
+const kept = cached(load, { ttlMs: FRESH_MS, key: ({ root, mode }) => `${root}\0${mode}` });
+
 /** Cached for a moment, and one lookup at a time per repo and mode. */
-export function changes(root: string, mode: Mode, { fresh = false }: { fresh?: boolean } = {}) {
-  const key = `${root}\0${mode}`;
-  const hit = cache.get(key);
-  if (!fresh && hit && Date.now() - hit.at < FRESH_MS) return Promise.resolve(hit);
-  if (running.has(key)) return running.get(key)!;
-  const p = load(root, mode).then(
-    (c) => (cache.set(key, c), c),
-    (error) => {
-      cache.delete(key);
-      throw error;
-    },
-  );
-  running.set(key, p);
-  void p.finally(() => running.delete(key)).catch(() => {});
-  return p;
-}
+export const changes = (root: string, mode: Mode, { fresh = false }: { fresh?: boolean } = {}) => kept.get({ root, mode }, { fresh });

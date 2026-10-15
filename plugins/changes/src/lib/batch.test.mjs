@@ -41,6 +41,19 @@ test("other errors are not retried", async () => {
   await assert.rejects(batched(["a", "b"], async () => Promise.reject(new Error("git diff failed")), String), /git diff failed/);
 });
 
+test("after one batch fails, no later batch starts", async () => {
+  const started = [];
+  const run = async (p) => {
+    started.push(p[0]);
+    if (p[0] === 2) throw new Error("git diff failed");
+    await new Promise((r) => setTimeout(r, 10));
+    return String(p[0]);
+  };
+  await assert.rejects(batched([1, 2, 3, 4, 5, 6], run, String, { size: 1, parallel: 2 }), /git diff failed/);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(started, [1, 2]);
+});
+
 test("fitPatch turns a file over the limit into a Too large entry and keeps the others", () => {
   const out = fitPatch(file("a.ts") + file("bundle.js", "y".repeat(3000)) + file("c.ts"), { file: 1000, total: 1e9 });
   assert.match(out, /diff --git a\/bundle\.js b\/bundle\.js\nindex 1\.\.2 100644\n--- a\/bundle\.js\n\+\+\+ b\/bundle\.js\n@@ -1 \+1 @@\n Too large to show \(0\.0 MB\)\n/);

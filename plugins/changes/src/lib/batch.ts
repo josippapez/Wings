@@ -1,13 +1,13 @@
-/** No imports, so node's test runner can load it. */
+import { errorMessage, mapLimit } from "wings-plugin-sdk/async";
 
 /** The message Wings rejects `wings.exec` with when a program prints more than 8 MB. */
 export const OUTPUT_TOO_LARGE = "Output is larger than 8 MB";
-export const isTooLarge = (error: unknown) => String((error as Error)?.message ?? error).includes(OUTPUT_TOO_LARGE);
+const isTooLarge = (error: unknown) => errorMessage(error).includes(OUTPUT_TOO_LARGE);
 
 /** Files per git call. */
-export const BATCH_FILES = 40;
+const BATCH_FILES = 40;
 /** A file whose own patch is bigger than this shows as "Too large to show" and the rest of the diff stays. */
-export const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_FILE_BYTES = 1024 * 1024;
 
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
@@ -34,17 +34,7 @@ export async function batched<T>(
   };
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
-  const out: string[] = new Array(chunks.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(parallel, chunks.length) }, async () => {
-      while (next < chunks.length) {
-        const at = next++;
-        out[at] = await fetch(chunks[at]);
-      }
-    }),
-  );
-  return out.join("");
+  return (await mapLimit(chunks, parallel, fetch)).join("");
 }
 
 /** A file entry in git's own format that says why there is no diff. */
