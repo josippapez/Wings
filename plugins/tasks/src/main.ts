@@ -2,8 +2,6 @@
 // ones, one at a time, each against what storage holds at that moment. After each change it refreshes the project's
 // section in the sidebar. Which session wrote a tool call's entry comes from the pane the call was made in.
 
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { scanProject } from "./lib/autolink";
 import { applyOp, canParent, childrenOf, migrateLegacy, openIssues, progress, readStore, resolvePane, STATUS_LABEL, TYPE_LABEL, writeStore, type Actor, type Issue, type IssuesMessage, type Op, type OpMessage } from "./lib/issues";
 import { formatIssue, formatList, parseTool } from "./lib/tools";
 
@@ -57,65 +55,10 @@ function pushSection(projectId: string, issues: Issue[]): Promise<void> {
   });
 }
 
-/** The first look for links goes back this far, for a project never scanned. */
-const FIRST_SCAN_MS = 14 * 24 * 3_600_000;
-/** Each scan starts this much before the last one ended, so a clock a little off loses no commit. Commits already linked are skipped. */
-const OVERLAP_MS = 10 * 60_000;
-const SCAN_MS = 60_000;
-
-let projects: WingsProject[] = [];
-let scanning = false;
-
-/**
- * Finds commits and branches that name an issue's key, in each project's repository, and links them. The last scan time
- * of each project is kept in storage, so a restart picks up where it stopped. Runs on start and every minute while Wings is focused.
- */
-async function scan(): Promise<void> {
-  if (scanning) return;
-  scanning = true;
-  try {
-    for (const project of projects) {
-      try {
-        const started = Date.now();
-        const store = await readStore(project.id, project.name);
-        const last = await wings.storage.get(`scan:${project.id}`);
-        const since = (typeof last === "number" ? last : started - FIRST_SCAN_MS) - OVERLAP_MS;
-        const { ops, calls } = await scanProject((program, args, options) => wings.exec(program, args, options), project, panes.filter((p) => p.projectId === project.id).map((p) => p.cwd), store, since);
-        if (calls) console.log(`[tasks] ${project.name}: ${calls} git ${calls === 1 ? "call" : "calls"}, ${ops.length} links found`);
-        if (ops.length) {
-          await serial(async () => {
-            let fresh = await readStore(project.id, project.name);
-            let changed = false;
-            for (const op of ops) {
-              try {
-                const applied = applyOp(fresh, op, "git");
-                if (applied.changed) ((fresh = applied.store), (changed = true));
-              } catch (error) {
-                console.error(error);
-              }
-            }
-            if (!changed) return;
-            await writeStore(project.id, fresh);
-            await notify({ type: "issues", projectId: project.id });
-            await pushSection(project.id, fresh.issues);
-          });
-        }
-        await wings.storage.set(`scan:${project.id}`, started);
-      } catch (error) {
-        // Not a git repository, git missing or a folder gone: the next scan tries again.
-        console.error(error);
-      }
-    }
-  } finally {
-    scanning = false;
-  }
-}
-pollWhileFocused(() => void scan(), SCAN_MS);
+const cleaned = new Set<string>();
 
 /** Moves old tasks into issues, once per project, and fills every project's section, as soon as Wings tells us which exist. */
 wings.onProjects((list) => {
-  const first = projects.length === 0;
-  projects = list;
   for (const { id, name } of list) {
     void serial(async () => {
       try {
@@ -123,11 +66,14 @@ wings.onProjects((list) => {
       } catch (error) {
         console.error(error);
       }
+      // The old commit and branch scan kept its place here, which nothing reads now.
+      if (!cleaned.has(id)) {
+        cleaned.add(id);
+        await wings.storage.delete(`scan:${id}`).catch(() => {});
+      }
       await pushSection(id, (await readStore(id, name)).issues);
     });
   }
-  // Once on start, after the stores are migrated.
-  if (first && list.length) void serial(async () => {}).then(scan);
 });
 
 /** Applies `op` as `by` to a project's issues, saves, and tells the pages. */

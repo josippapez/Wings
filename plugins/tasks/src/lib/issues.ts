@@ -89,8 +89,6 @@ export interface Relations {
 export type Op =
   | ({ kind: "create"; title: string; description?: string; status?: Status; branch?: string } & Relations)
   | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; branch?: string; pr?: string; commit?: string } & Relations)
-  /** What the plugin found in the repository: commits whose message names the issue, and a branch that does. */
-  | { kind: "autolink"; key: string; commits?: { sha: string; subject: string }[]; branch?: string }
   | { kind: "note"; key: string; text: string }
   | { kind: "remove"; key: string };
 
@@ -520,31 +518,6 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
         return next;
       });
     return { store: { ...store, issues }, issue: current, changed: true };
-  }
-
-  if (op.kind === "autolink") {
-    const next: Issue = { ...current };
-    const entries: LogEntry[] = [];
-    const links = { ...next.links };
-    for (const c of op.commits ?? []) {
-      const sha = String(c.sha).toLowerCase();
-      if (!SHA.test(sha)) continue;
-      const short = sha.slice(0, 7);
-      if ((links.commits ?? []).some((known) => known.startsWith(short) || short.startsWith(known))) continue;
-      links.commits = [...(links.commits ?? []), short];
-      entries.push({ at: now, by: "git", kind: "link", text: `Commit ${short}: ${String(c.subject).trim().slice(0, 200)}` });
-    }
-    if (op.branch && !links.branch && !/\s/.test(op.branch) && op.branch.length <= LIMITS.branch) {
-      links.branch = op.branch;
-      entries.push({ at: now, by: "git", kind: "link", text: `Branch: ${op.branch}` });
-    }
-    if (!entries.length) return { store, issue: current, changed: false };
-    next.links = links;
-    appendLoose(next, entries);
-    next.updatedAt = now;
-    const issues = store.issues.slice();
-    issues[index] = next;
-    return { store: { ...store, issues }, issue: next, changed: true };
   }
 
   const next: Issue = { ...current };

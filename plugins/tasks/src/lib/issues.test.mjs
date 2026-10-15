@@ -179,3 +179,15 @@ test("size: 200 issues with 10 log entries each fit well inside the budget, and 
   assert.ok(bytes < 1_000_000 / 2, "leaves room for other projects in the 1 MB");
   assert.equal(estimateBytes({ ...fresh(), prefix: "é" }), new TextEncoder().encode(JSON.stringify({ ...fresh(), prefix: "é" })).length);
 });
+
+test("the manifest: tools tell agents to link by hand and keep keys out of git, and nothing reads git or transcripts", async () => {
+  const { readFileSync } = await import("node:fs");
+  const m = JSON.parse(readFileSync(new URL("../../wings-plugin.json", import.meta.url), "utf8"));
+  const text = Object.fromEntries(m.contributes.mcpTools.map((t) => [t.name, t.description]));
+  for (const name of ["create", "update", "log"]) assert.match(text[name], /Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions/);
+  assert.match(text.update, /after each commit you make for this issue, call update with its hash \(commit\)/);
+  assert.match(text.update, /set pr to its URL/);
+  assert.match(text.update, /set branch when you start on a branch/);
+  for (const t of m.contributes.mcpTools) assert.doesNotMatch(t.description, /link themselves|put the key in your commit/);
+  assert.deepEqual(Object.keys(m.permissions).sort(), ["openUrl", "panes"]);
+});
