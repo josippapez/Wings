@@ -1,17 +1,27 @@
 // `pnpm shot [filter...] [--width 1000,640] [--height 900] [--out <dir>]`: screenshots plugin pages in headless Chrome, so a
-// page is looked at before it ships. Every plugins/<plugin>/preview/<name>.tsx is a fixture: a module that renders a page
-// component with made-up data. Chrome comes from CHROME=/path/to/chrome, else the usual macOS and Linux locations.
+// page is looked at before it ships. Every plugins/<plugin>/preview/<file>.tsx is a fixture: a module that renders a page
+// component with made-up data, in one state or in several. A filter is a substring of "<plugin>/<file>", which picks every
+// state of those files, or "<plugin>/<file>/<state>", or the start of it, for some. Chrome comes from CHROME=/path/to/chrome,
+// else the usual macOS and Linux locations.
 //
 // A fixture's exports:
 //   default   a React element, or a component, to show
+//   props     what a component `default` is shown with
+//   element   a React element to show in place of `default`
+//   page      { place, fill } as a page declares them, so that `export { default, page } from "../src/pages/x"` is that page
+//   place     "tab" (default), "view", "block", "settings", "sidebar" or "popover": which `show*` mounts it. Wins over `page`
 //   fill      true for a page that fills the tab (`showTab(..., { fill: true })`): the frame is as tall as --height.
-//             Without it the PNG is as tall as the page.
-//   place     "tab" (default), "view", "settings", "sidebar" or "popover": which `show*` mounts it
+//             Without it the PNG is as tall as the page. Wins over `page`
 //   project   what `wings.project()` answers (default: a project "web"; null for none)
 //   args      what `wings.viewArgs()` answers (default: null)
+//   storage   { key: value }: what `wings.storage` holds at the start, and keeps what the page sets
+//   answers   { name: (request) => response }: what main answers an `ask` or `useAsk` with
+//   shared    { name: state }: what main shares, which a `watch` hears
 //   respond   (message) => answer | undefined: what main answers a broadcast with, delivered to `onBroadcast`
+//   states    { name: { ...fields } }: one screenshot per state. Each shows the file's fields with its own over them.
+//             The PNGs are <plugin>-<file>-<state>-<width>.png; a file without states makes <plugin>-<file>-<width>.png
 // The page gets plugin-ui.css from packages/plugin-ui and the CSS its imports bring, in the app's dark theme, with a
-// stub `window.wings` (shot-stub.js). Exits 1 when a fixture throws or logs a console error, 2 without Chrome.
+// stub `window.wings` (shot-stub.js). Exits 1 when a fixture throws or logs a console error, 2 without Chrome or a match.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,13 +51,15 @@ if (!chrome) {
   process.exit(2);
 }
 
-// The fixtures: plugins/<plugin>/preview/<name>.tsx (a file starting with _ is shared data, not one), picked by a filter that is a substring of "<plugin>/<name>".
+// The fixtures: plugins/<plugin>/preview/<file>.tsx (a file starting with _ is shared data, not one). A state is "<plugin>/<file>/<state>".
+// The states a file has are known once its page has loaded, so a filter that names one picks its file here and the state there.
+const wanted = (id) => !filters.length || filters.some((s) => id.includes(s));
 const fixtures = readdirSync(root, { withFileTypes: true })
   .filter((d) => d.isDirectory() && existsSync(join(root, d.name, "preview")))
   .flatMap((d) => readdirSync(join(root, d.name, "preview")).filter((f) => /^[^_].*\.(tsx?|jsx?)$/.test(f)).map((f) => ({ id: `${d.name}/${parse(f).name}`, file: join(root, d.name, "preview", f) })))
-  .filter((f) => !filters.length || filters.some((s) => f.id.includes(s)));
+  .filter((f) => wanted(f.id) || filters.some((s) => s.startsWith(`${f.id}/`)));
 if (!fixtures.length) {
-  console.error(`No fixture matches ${filters.join(" ") || "anything"}. They are plugins/<plugin>/preview/<name>.tsx.`);
+  console.error(`No fixture matches ${filters.join(" ") || "anything"}. They are plugins/<plugin>/preview/<file>.tsx.`);
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -66,13 +78,20 @@ async function pageOf(fixture) {
       loader: "js",
       contents: `
         import { installWings } from ${JSON.stringify(join(root, "shot-stub.js"))};
-        import * as fx from ${JSON.stringify(fixture.file)};
+        import * as file from ${JSON.stringify(fixture.file)};
         import { createElement } from "react";
-        import { showTab, showView, showSidebar, showPopover, showSettings } from "wings-plugin-ui";
+        import { showTab, showView, showBlock, showSidebar, showPopover, showSettings } from "wings-plugin-ui";
+        // The page shows one state, the one ?state= names or else the file's first, and says which there are.
+        const names = Object.keys(file.states ?? {});
+        window.fixtureStates = names;
+        const fx = names.length ? { ...file, ...file.states[new URLSearchParams(location.search).get("state") ?? names[0]] } : file;
+        const place = fx.place ?? fx.page?.place ?? "tab";
+        const show = { tab: showTab, view: showView, block: showBlock, sidebar: showSidebar, popover: showPopover, settings: showSettings }[place];
+        if (!show) throw new Error("place is tab, view, block, settings, sidebar or popover, not " + place);
+        const element = fx.element ?? (typeof fx.default === "function" ? createElement(fx.default, fx.props) : fx.default);
+        if (element == null) throw new Error("A fixture shows its default export, or a state its element: this one has neither.");
         installWings(fx);
-        const show = { tab: showTab, view: showView, sidebar: showSidebar, popover: showPopover, settings: showSettings }[fx.place ?? "tab"];
-        if (!show) throw new Error("place is tab, view, settings, sidebar or popover, not " + fx.place);
-        show(typeof fx.default === "function" ? createElement(fx.default) : fx.default, { fill: Boolean(fx.fill) });
+        show(element, { fill: Boolean(fx.fill ?? fx.page?.fill) });
       `,
     },
     outdir: join(work, fixture.id.replace("/", "-")),
@@ -134,8 +153,22 @@ const send = (method, params = {}, sessionId) =>
   });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Opens the page, waits for it to draw, and shoots it at each width. Resolves the console errors it logged. */
-async function shoot(fixture, url) {
+/** The names of a fixture file's states, which its page says as it loads: none for a file without states. */
+async function statesOf(url) {
+  const { targetId } = await send("Target.createTarget", { url });
+  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+  let names;
+  for (let i = 0; i < 100 && !names; i++) {
+    names = (await send("Runtime.evaluate", { expression: "window.fixtureStates", returnByValue: true }, sessionId)).result.value;
+    if (!names) await sleep(100);
+  }
+  await send("Target.closeTarget", { targetId });
+  // A page that threw before it said is shot as one state, so its errors are reported.
+  return names ?? [];
+}
+
+/** Opens the page for `id`, waits for it to draw, and shoots it at each width. Resolves the console errors it logged. */
+async function shoot(id, url) {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   const call = (method, params) => send(method, params, sessionId);
@@ -167,7 +200,7 @@ async function shoot(fixture, url) {
     const shot = { format: "png" };
     if (full > height) Object.assign(shot, { captureBeyondViewport: true, clip: { x: 0, y: 0, width, height: full, scale: 1 } });
     const { data } = await call("Page.captureScreenshot", shot);
-    const file = join(out, `${fixture.id.replace("/", "-")}-${width}.png`);
+    const file = join(out, `${id.replaceAll("/", "-")}-${width}.png`);
     writeFileSync(file, Buffer.from(data, "base64"));
     files.push(file);
   }
@@ -178,18 +211,30 @@ async function shoot(fixture, url) {
 
 console.error(`Screenshots go to ${out}`);
 let failed = 0;
+let shot = 0;
 for (const fixture of fixtures) {
   try {
-    const { files, errors } = await shoot(fixture, await pageOf(fixture));
-    for (const f of files) console.log(f);
-    if (errors.length) {
-      failed++;
-      console.error(`${fixture.id} logged ${errors.length} console error(s):`);
-      for (const e of errors) console.error(`  ${e.split("\n").slice(0, 4).join("\n  ")}`);
+    const url = await pageOf(fixture);
+    const states = await statesOf(url);
+    for (const state of states.length ? states : [null]) {
+      const id = state === null ? fixture.id : `${fixture.id}/${state}`;
+      if (!wanted(id)) continue;
+      const { files, errors } = await shoot(id, state === null ? url : `${url}?state=${encodeURIComponent(state)}`);
+      shot++;
+      for (const f of files) console.log(f);
+      if (errors.length) {
+        failed++;
+        console.error(`${id} logged ${errors.length} console error(s):`);
+        for (const e of errors) console.error(`  ${e.split("\n").slice(0, 4).join("\n  ")}`);
+      }
     }
   } catch (e) {
     failed++;
     console.error(`${fixture.id} failed: ${e.message ?? e}`);
   }
+}
+if (!shot && !failed) {
+  console.error(`No state matches ${filters.join(" ")}. A state is <plugin>/<file>/<state>.`);
+  process.exit(2);
 }
 process.exit(failed ? 1 : 0);

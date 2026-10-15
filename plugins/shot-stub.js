@@ -1,6 +1,6 @@
 // A stand-in for `window.wings` in `pnpm shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
-// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `respond`,
-// and `answers` and `shared` for pages that use wings-plugin-sdk/messages.
+// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `storage`,
+// `respond`, and `answers` and `shared` for pages that use wings-plugin-sdk/messages.
 
 import { channel } from "wings-plugin-sdk/messages";
 
@@ -24,6 +24,8 @@ export function installWings(fx) {
   });
   for (const [name, answer] of Object.entries(fx.answers ?? {})) mainCh.answer(name, answer);
   for (const [name, shared] of Object.entries(fx.shared ?? {})) mainCh.share(name, () => shared);
+  // What `wings.storage` holds: the fixture's `storage` to start with, then whatever the page sets.
+  const stored = new Map(Object.entries(fx.storage ?? {}));
   const known = {
     project: () => Promise.resolve(fx.project === undefined ? { id: "p1", name: "web", path: "/work/acme/web", branch: "main" } : fx.project),
     projects: () => Promise.resolve([]),
@@ -50,7 +52,12 @@ export function installWings(fx) {
     openView: ok,
     closeView: ok,
     exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
-    storage: { get: () => Promise.resolve(undefined), set: ok, delete: ok, keys: () => Promise.resolve([]) },
+    storage: {
+      get: (key) => Promise.resolve(copy(stored.get(key))),
+      set: (key, value) => (stored.set(key, copy(value)), ok()),
+      delete: (key) => (stored.delete(key), ok()),
+      keys: () => Promise.resolve([...stored.keys()].sort()),
+    },
     secrets: { has: () => Promise.resolve(false), set: ok, delete: ok },
   };
   // Anything else a page calls answers with a resolved promise, so a missing stub is a quiet no-op, not a thrown page.
