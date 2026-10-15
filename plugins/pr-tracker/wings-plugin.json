@@ -1,7 +1,7 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "minWingsVersion": "0.1.27",
   "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, every check and policy and why it failed, the diff and review comments. Lists each project's pull requests in the sidebar (yours and the ones waiting for your review), can notify you when a new one opens, and, in a tab or a block on the Project page, every open one with filters, and opens one as a tab to read, reply to and send to an agent.",
@@ -57,6 +57,7 @@
     ]
   },
   "contributes": {
+    "mcpInstructions": "PRs (pr-tracker__*): when the pull request for this session's branch has failing checks, or the user asks why CI failed, use pr-tracker__failing_checks to read each failed step and the end of its log instead of fetching logs with gh or az.",
     "ui": [
       "badges",
       "diff"

@@ -1,7 +1,7 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "minWingsVersion": "0.1.20",
   "icon": "icon.svg",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
@@ -20,6 +20,7 @@
     ]
   },
   "contributes": {
+    "mcpInstructions": "Git changes (changes__*): for what changed in this repo, use changes__changed_files (changed files with status and line counts, uncommitted or since the branch left the default branch), and for the latest commits use changes__recent_commits, instead of running git status or git log. Both take the repo folder as cwd.",
     "ui": [
       "badges",
       "diff"
