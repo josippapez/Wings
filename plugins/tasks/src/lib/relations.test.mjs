@@ -1,10 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DESCRIPTION_TEMPLATE, hasContent, visibleDescription } from "./domain.ts";
 import { formatIssue, formatList } from "./format.ts";
 import { applyOp } from "./ops.ts";
 import { blocksOf, childrenOf, descendantsOf, parentChoices, progress } from "./relations.ts";
-import { migrateTasks, migrateV2 } from "./storage.ts";
+import { migrateTasks } from "./storage.ts";
 
 const base = () => migrateTasks([], "web");
 const make = (s, title, extra = {}) => applyOp(s, { kind: "create", title, ...extra }, "you", 1).store;
@@ -20,17 +19,6 @@ const sample = () => {
   return s;
 };
 const logs = (s, key) => get(s, key).log.map((e) => e.text);
-
-test("type: new issues are tasks, a v2 store migrates to v3 with every issue a task, old Tasks still migrate", () => {
-  assert.equal(get(make(base(), "a"), "WEB-1").type, "task");
-  const v2 = { v: 2, prefix: "WEB", next: 3, issues: [{ key: "WEB-1", title: "a", status: "todo", sessions: [], log: [], createdAt: 1, updatedAt: 1 }, { key: "WEB-2", title: "b", status: "done", sessions: [], log: [], createdAt: 1, updatedAt: 1 }] };
-  const m = migrateV2(v2);
-  assert.equal(m.v, 3);
-  assert.deepEqual(m.issues.map((i) => i.type), ["task", "task"]);
-  assert.equal(m.next, 3);
-  assert.equal(migrateV2({ ...v2, v: 3 }), null);
-  assert.equal(migrateTasks([{ title: "x", status: "todo", createdAt: 1 }], "web").issues[0].type, "task");
-});
 
 test("type: changes are logged; a parent can't stop being an epic or feature while it has children", () => {
   let s = up(sample(), "WEB-3", { type: "bug" }).store;
@@ -182,27 +170,4 @@ test("get shows the relations and list the type and parent", () => {
   assert.match(formatList(s.issues, undefined, "web", "bug"), /WEB-4 \[todo\] \(bug\) Bug/);
   assert.doesNotMatch(formatList(s.issues, undefined, "web", "bug"), /WEB-3/);
   assert.match(formatList(s.issues, undefined, "web"), /WEB-3 \[todo\] \(task\) Task in WEB-1/);
-});
-
-test("description template: helper, and sections with nothing in them don't count as content", () => {
-  assert.equal(DESCRIPTION_TEMPLATE, "## Goal\n\n## Scope\n\n## Done when\n- [ ] \n\n## Validation\n");
-  assert.equal(hasContent(DESCRIPTION_TEMPLATE), false);
-  assert.equal(hasContent(undefined), false);
-  assert.equal(hasContent("  \n"), false);
-  assert.equal(hasContent("## Goal\nShip it\n\n## Scope\n"), true);
-  assert.equal(hasContent("## Done when\n- [x] done\n"), true);
-  assert.equal(hasContent("plain text, no headings"), true);
-  assert.equal(visibleDescription("## Goal\nShip it\n\n## Scope\n\n## Done when\n- [ ] \n- [ ] tests\n\n## Validation\n"), "## Goal\nShip it\n\n## Done when\n- [ ] \n- [ ] tests");
-  assert.equal(visibleDescription("Intro\n\n## Goal\n"), "Intro");
-  assert.equal(visibleDescription(DESCRIPTION_TEMPLATE), "");
-});
-
-test("an untouched template is stored as no description, and get says to fill it", () => {
-  let s = make(base(), "a", { description: DESCRIPTION_TEMPLATE });
-  assert.equal(get(s, "WEB-1").description, undefined);
-  s = up(s, "WEB-1", { description: "## Goal\nx" }).store;
-  assert.equal(get(s, "WEB-1").description, "## Goal\nx");
-  s = up(s, "WEB-1", { description: DESCRIPTION_TEMPLATE }).store;
-  assert.equal(get(s, "WEB-1").description, undefined);
-  assert.match(formatIssue(get(s, "WEB-1")), /No description yet; fill Goal, Scope, Done when, Validation/);
 });

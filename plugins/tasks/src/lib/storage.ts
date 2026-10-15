@@ -1,6 +1,6 @@
 // Issues live in wings.storage, one entry per project id (`issues:<projectId>`). Only the main script writes them: pages ask it to
 // apply operations and the tools run the same ones, so a page and an agent never overwrite each other. This is the only module that
-// reads and writes the storage.
+// reads and writes the issues.
 
 import { BUDGET, FORMAT_VERSION, LIMITS, prefixFor, type Issue, type Status, type Store } from "./domain";
 

@@ -1,6 +1,6 @@
 // The five tools Claude calls. The build writes these descriptions and schemas into the manifest's mcpTools, and each call is
-// checked against its schema before a handler runs, so a handler only sees what the schema allows. The build runs this file
-// in Node, so what it imports can't need Wings.
+// checked against its schema before a handler runs, so a handler only sees what the schema allows. The build loads this file
+// in Node with a wings that does nothing: what it imports may register listeners, but can't wait for an answer.
 
 import { s, tool } from "wings-plugin-sdk/tools";
 import { LIMITS, MAX_LINKS, normalizeKey, PRIORITIES, STATUSES, TYPES, type IssueType, type Op, type Relations } from "./lib/domain";
