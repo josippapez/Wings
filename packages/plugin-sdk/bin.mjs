@@ -13,7 +13,7 @@ if (command !== "build" && command !== "pack") {
 }
 const dir = process.cwd();
 if (!entries(dir).length) {
-  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/.`);
+  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/main.ts and src/pages/.`);
   process.exit(1);
 }
 if (command === "pack") {

@@ -49,7 +49,7 @@ Plugins start and stop as you turn them on and off, with no restart. Installed p
 
 ## Packaging
 
-A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. A plugin written in TypeScript makes one with `wings-plugin pack` from `wings-plugin-sdk`, which builds `src/` and packs the built files with the manifest, HTML and CSS. A plain JavaScript plugin can zip its git repo:
+A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. A plugin written in TypeScript makes one with `wings-plugin pack` from `wings-plugin-sdk`, which builds `src/` and packs the built files in `dist/` with the manifest and the files the plugin ships. A plain JavaScript plugin can zip its git repo:
 
 ```sh
 npx wings-plugin pack                                          # TypeScript: writes <id>.wings-plugin
@@ -64,16 +64,17 @@ Wings runs plain JavaScript: `main` and each page's `<script>`. To write a plugi
 
 Every `wings.on*` call returns a function that removes the listener, so a React effect can return it as its cleanup.
 
-The plugins in this folder do that. Their code is in `<id>/src/`, and every file at the top of `src/` builds to the file of the same name next to `wings-plugin.json`, so `src/main.ts` becomes `main.js` and `src/sidebar.tsx` becomes `sidebar.js`. Folders inside `src/` hold the modules. The built files are committed, because Wings installs a plugin folder straight from `main`.
+The plugins in this folder do that. Their code is in `<id>/src/`, and the entries are `src/main.ts` and each file in `src/pages/`. They build into `<id>/dist/`, so `src/main.ts` becomes `dist/main.js` and `src/pages/sidebar.tsx` becomes `dist/sidebar.js`, and the manifest's `main` and each `page` point into `dist/`. `src/ui/` holds the React components, `src/lib/` the logic with no UI and its tests, and `src/main/` the modules a large main script splits into. A plugin's folder has only its manifest, `icon.svg`, README, `src/`, `preview/` and `dist/`. `dist/` is committed, because Wings installs a plugin folder straight from `main`.
 
 ```sh
 cd plugins
 pnpm install
-pnpm build   # writes each plugin's built files
-pnpm check   # type-checks, and fails if a committed built file is out of date
+pnpm build   # writes each plugin's dist/
+pnpm check   # type-checks, and fails if a committed file in dist/ is out of date
+pnpm test    # runs the tests in every plugin's src/, which can import any module there
 ```
 
-Pages use `wings-plugin-ui`: a page calls `showSidebar(<Page />)` (or `showView`, `showPopover`, `showTab`, `showSettings`) and builds from its components, and Wings' `plugin-ui.css` styles them, so the build writes the page's HTML and a Wings update restyles every plugin. A page can still bring its own components and CSS (`import "./sidebar.css"`). See its [README](../packages/plugin-ui/README.md) for the components, the `w-*` class contract and the `--wings-*` variables.
+Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its component and says where it shows with `export const page = { place: "sidebar" }` (`place` is `sidebar`, `popover`, `view`, `block`, `tab` or `settings`, and `fill: true` lays the page out edge to edge), and builds from the components. The build writes the mount that calls the matching `showSidebar`, `showView` or other function, and the page's HTML, and Wings' `plugin-ui.css` styles the components, so a Wings update restyles every plugin. A fixture in `preview/` imports the page without it mounting. A page can still bring its own components and CSS (`import "./sidebar.css"`, next to the page). See the [README](../packages/plugin-ui/README.md) of `wings-plugin-ui` for the components, the `w-*` class contract and the `--wings-*` variables.
 
 ## Manifest
 
