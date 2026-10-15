@@ -2,6 +2,7 @@
 // badge with buttons to open it in the browser. The badge goes when the port closes.
 // Wings finds the ports (`wings.ports`, one process-tree walk and one `lsof`, about 20 ms), so this only polls.
 
+import { errorMessage, singleFlight } from "wings-plugin-sdk/async";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { address, badgeFor, MAX_ACTION_PORTS, type Port } from "./lib/badge";
 
@@ -10,11 +11,13 @@ const POLL_MS = 15_000;
 const SETTLE_MS = 4_000;
 
 let panes: { paneId: string }[] = [];
-/** paneId → the ports its badge has buttons for now, and its serialized badge to skip identical updates. */
-const shown = new Map<string, { ports: number[]; signature: string }>();
-let checking = false;
+/** paneId → the ports its badge has buttons for, as of the last look. */
+let buttons = new Map<string, number[]>();
 let lastCheck = 0;
 let settle: ReturnType<typeof setTimeout> | undefined;
+
+/** Looks at the ports. A call while a look is running makes it look once more when it is done. */
+const refresh = singleFlight(look);
 
 wings.onPanes((list) => {
   panes = list;
@@ -28,35 +31,29 @@ pollWhileFocused(() => {
   if (panes.length > 0) void refresh();
 }, POLL_MS);
 
-async function refresh() {
-  if (checking) return;
-  checking = true;
+/**
+ * Sets the badge of every open pane: the ones that listen get one, the others lose theirs. Wings skips a badge a pane
+ * already shows and drops the badges of panes that close, so each look sends them all.
+ */
+async function look() {
   lastCheck = Date.now();
-  try {
-    await update(await wings.ports(), Date.now());
-  } catch {
-    // Wings couldn't read ports this time (no lsof): keep what's shown and try again on the next tick.
-  } finally {
-    checking = false;
-  }
-}
-
-/** Sets the badge of every pane that listens, and clears the others. */
-async function update(ports: Port[], now: number) {
-  const open = new Set(panes.map((p) => p.paneId));
-  const byPane = groupByPane(ports.filter((p) => open.has(p.paneId)));
-  for (const paneId of [...shown.keys()]) {
-    if (byPane.has(paneId)) continue;
-    shown.delete(paneId);
-    await wings.setBadge(paneId, null).catch(() => {});
-  }
-  for (const [paneId, list] of byPane) {
-    const badge = badgeFor(list, now);
-    const signature = JSON.stringify(badge);
-    if (shown.get(paneId)?.signature === signature) continue;
-    shown.set(paneId, { ports: list.slice(0, MAX_ACTION_PORTS).map((p) => p.port), signature });
-    await wings.setBadge(paneId, badge).catch(() => {});
-  }
+  const ports = await wings.ports().catch((error) => {
+    // Wings couldn't read ports this time (no lsof): keep the badges as they are and look again on the next tick.
+    console.warn("[dev-servers] couldn't read ports:", errorMessage(error));
+  });
+  if (!ports) return;
+  const now = Date.now();
+  const byPane = groupByPane(ports);
+  buttons = new Map();
+  await Promise.all(
+    panes.map(({ paneId }) => {
+      const list = byPane.get(paneId);
+      if (list) buttons.set(paneId, list.slice(0, MAX_ACTION_PORTS).map((p) => p.port));
+      return wings.setBadge(paneId, list ? badgeFor(list, now) : null).catch((error) => {
+        console.warn(`[dev-servers] couldn't set the badge of pane ${paneId}:`, errorMessage(error));
+      });
+    }),
+  );
 }
 
 function groupByPane(ports: Port[]) {
@@ -70,9 +67,8 @@ wings.onAction(async ({ paneId, actionId }) => {
   if (actionId === "refresh") return refresh();
   const [kind, text] = actionId.split(":");
   const port = Number(text);
-  const known = shown.get(paneId)?.ports ?? [];
   // A click can come from a badge a few seconds old: only open a port that had a button at the last look.
-  if (!Number.isInteger(port) || !known.includes(port)) throw new Error("That port isn't open any more.");
+  if (!Number.isInteger(port) || !buttons.get(paneId)?.includes(port)) throw new Error("That port isn't open any more.");
   if (kind === "browser") return wings.openUrl(address(port));
   throw new Error("Unknown action");
 });
