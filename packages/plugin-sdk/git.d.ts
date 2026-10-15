@@ -46,8 +46,16 @@ export type Remote =
   | { kind: "none"; host?: string };
 
 /**
- * Which forge a remote URL points at, from its form: Azure DevOps (ssh, dev.azure.com and visualstudio.com), github.com,
- * gitlab.com and hosts with "gitlab" in their name, Bitbucket Cloud and Codeberg. Any other host is `unknown`, and
- * what isn't a remote URL is `none`.
+ * Which forge a remote URL points at, from its form: Azure DevOps (ssh.dev.azure.com, dev.azure.com, `{org}.visualstudio.com`
+ * and vs-ssh.visualstudio.com, the older ssh host that still works), github.com, gitlab.com and hosts with "gitlab" in
+ * their name, Bitbucket Cloud and Codeberg. Any other host is `unknown`, and what isn't a remote URL is `none`.
  */
 export function parseRemote(url: string): Remote;
+
+/**
+ * An Azure DevOps organization at its dev.azure.com address, for a call that must name that host, like a `post` entry
+ * in the manifest: an `az` entry can't hold a `*` in its host, so it can't name every `{org}.visualstudio.com`. An
+ * organization's REST APIs accept both forms (learn.microsoft.com/en-us/azure/devops/extend/develop/work-with-urls).
+ * Takes the `org` of a parsed Azure remote.
+ */
+export function azureApiOrg(org: string): string;

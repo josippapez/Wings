@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { branchLabel, defaultBranch, git, gitOk, gitRun, parseRemote, repoRoot } from "./git.js";
+import { azureApiOrg, branchLabel, defaultBranch, git, gitOk, gitRun, parseRemote, repoRoot } from "./git.js";
 
 const ok = (stdout) => ({ code: 0, stdout, stderr: "" });
 const failed = (stderr = "fatal: no", code = 128) => ({ code, stdout: "", stderr });
@@ -89,6 +89,8 @@ test("parseRemote names the forge, and reads every Azure form", () => {
   assert.deepEqual(parseRemote("git@ssh.dev.azure.com:v3/acme/My%20Project/app"), azure);
   assert.deepEqual(parseRemote("https://acme@dev.azure.com/acme/My%20Project/_git/app\n"), azure);
   assert.deepEqual(parseRemote("https://acme.visualstudio.com/DefaultCollection/proj/_git/app"), { kind: "azure", org: "https://acme.visualstudio.com", project: "proj", repo: "app" });
+  // The older ssh host, which Microsoft's docs give as a repository's `sshUrl` like this, and say still works.
+  assert.deepEqual(parseRemote("acme@vs-ssh.visualstudio.com:v3/acme/My%20Project/app"), azure);
   for (const url of ["https://github.com/o/r.git", "git@github.com:o/r.git", "ssh://git@ssh.github.com:443/o/r"]) {
     assert.deepEqual(parseRemote(url), { kind: "github", host: "github.com", path: "o/r" }, url);
   }
@@ -98,4 +100,10 @@ test("parseRemote names the forge, and reads every Azure form", () => {
   assert.deepEqual(parseRemote("git@git.corp.example:org/repo.git"), { kind: "unknown", host: "git.corp.example", path: "org/repo" });
   assert.deepEqual(parseRemote("https://bitbucket.org/ws"), { kind: "none", host: "bitbucket.org" });
   for (const url of ["/Users/me/repo", "file:///a/b", ""]) assert.deepEqual(parseRemote(url), { kind: "none" }, url);
+});
+
+test("azureApiOrg gives an organization its dev.azure.com address, whichever form its remote had", () => {
+  for (const url of ["git@ssh.dev.azure.com:v3/acme/proj/app", "acme@vs-ssh.visualstudio.com:v3/acme/proj/app", "https://acme@dev.azure.com/acme/proj/_git/app", "https://acme.visualstudio.com/DefaultCollection/proj/_git/app", "https://acme@acme.visualstudio.com/proj/_git/app"]) {
+    assert.equal(azureApiOrg(parseRemote(url).org), "https://dev.azure.com/acme", url);
+  }
 });
