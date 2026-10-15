@@ -24,6 +24,10 @@ const INSTRUCTIONS: &str = "Tools from Wings, the terminal app this session may 
 find and read past Claude Code sessions on this computer. list_sessions, read_pane, open_pane and notify see and use \
 Wings' open terminal panes. Tools from the plugins turned on in Wings are named \
 <plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
+/// Claude Code cuts a server's instructions at this many characters.
+const MAX_INSTRUCTIONS: usize = 4096;
+/// How long `initialize` waits for Wings to hand over its plugins' lines before answering with the static text.
+const INSTRUCTIONS_WAIT: Duration = Duration::from_secs(2);
 
 struct Bridge {
     stdout: Mutex<std::io::Stdout>,
@@ -59,6 +63,20 @@ impl Bridge {
     }
 }
 
+/// The static text, then each plugin's line while it still fits under Claude Code's cap. A line that
+/// doesn't fit whole is dropped rather than cut mid-sentence.
+fn instructions(plugin_lines: &[&str]) -> String {
+    let mut text = INSTRUCTIONS.to_string();
+    for line in plugin_lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+        if text.chars().count() + 1 + line.chars().count() > MAX_INSTRUCTIONS {
+            continue;
+        }
+        text.push('\n');
+        text.push_str(line);
+    }
+    text
+}
+
 pub fn run(socket: Option<String>) -> i32 {
     let Some(socket) = socket.map(PathBuf::from) else {
         eprintln!("usage: wings --mcp <socket>");
@@ -72,10 +90,17 @@ pub fn run(socket: Option<String>) -> i32 {
         initialized: AtomicBool::new(false),
     });
 
+    // One connect before reading stdin, so `initialize` (Claude's first message) finds Wings already linked
+    // instead of racing the thread below. With Wings closed this fails at once.
+    let mut first = UnixStream::connect(&socket).ok();
+    if let Some(app) = first.as_ref().and_then(|s| s.try_clone().ok()) {
+        *bridge.app.lock().unwrap() = Some(app);
+    }
+
     // Keeps a connection to Wings, and reconnects after Wings quits or restarts.
     let link = bridge.clone();
     thread::spawn(move || loop {
-        if let Ok(stream) = UnixStream::connect(&socket) {
+        if let Some(stream) = first.take().or_else(|| UnixStream::connect(&socket).ok()) {
             if let Ok(reader) = stream.try_clone() {
                 *link.app.lock().unwrap() = Some(stream);
                 link.tools_changed();
@@ -118,11 +143,14 @@ fn handle(bridge: &Bridge, message: Value) {
         "initialize" => {
             let asked = message["params"]["protocolVersion"].as_str().unwrap_or_default();
             let version = PROTOCOLS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOLS[0]);
+            // Wings closed or slow: the static text alone.
+            let reply = bridge.ask(json!({ "op": "list" }), INSTRUCTIONS_WAIT);
+            let lines: Vec<&str> = reply.as_ref().and_then(|r| r["instructions"].as_array()).map_or_else(Vec::new, |a| a.iter().filter_map(Value::as_str).collect());
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "wings", "title": "Wings", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": INSTRUCTIONS,
+                "instructions": instructions(&lines),
             }))
         }
         "ping" => Ok(json!({})),
@@ -151,4 +179,26 @@ fn handle(bridge: &Bridge, message: Value) {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_lines_follow_the_static_text() {
+        assert_eq!(instructions(&[]), INSTRUCTIONS);
+        let text = instructions(&["Issues (tasks__*): file issues.", "  ", "Timers (cyclops__*): track time."]);
+        assert_eq!(text, format!("{INSTRUCTIONS}\nIssues (tasks__*): file issues.\nTimers (cyclops__*): track time."));
+    }
+
+    #[test]
+    fn instructions_stay_under_the_cap_and_drop_whole_lines() {
+        let long = "é".repeat(500);
+        let lines = vec![long.as_str(); 12];
+        let text = instructions(&lines);
+        assert!(text.chars().count() <= MAX_INSTRUCTIONS);
+        assert!(text.ends_with(&long));
+        assert!(text.matches(&long).count() < 12);
+    }
 }

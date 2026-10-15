@@ -106,7 +106,7 @@ wings.onTool("list", async (input, { paneId }) => {
   const call = parseTool("list", input);
   const project = resolve(paneId);
   const store = await readStore(project.projectId, project.projectName);
-  return call.tool === "list" ? formatList(store.issues, call.status, project.projectName, call.type) : "";
+  return call.tool === "list" ? formatList(store.issues, call.status, project.projectName, call.type, call.query) : "";
 });
 
 wings.onTool("get", async (input, { paneId }) => {

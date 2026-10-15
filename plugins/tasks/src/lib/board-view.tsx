@@ -1,9 +1,9 @@
 // The Issues tab without its data: the board for a list of issues. The tab page feeds it from storage, a fixture from made-up data.
 
 import { useState } from "react";
-import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
+import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, SearchField, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
-import { boardColumns, boardLanes, canParent, childrenOf, FLOW, issueTree, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
+import { boardColumns, boardLanes, canParent, childrenOf, FLOW, issueTree, matchesQuery, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
 import { ChildProgress, DeleteConfirm, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, TrashIcon, TypeIcon } from "./parts";
 
 export interface BoardViewProps {
@@ -21,6 +21,9 @@ export interface BoardViewProps {
   /** The rows folded shut: their parent's key, "" for the issues with no parent, or `status:<status>` for a list group. */
   folded: string[];
   onFold: (lane: string, open: boolean) => void;
+  /** Words an issue's key, title, description or log must all contain to be shown. */
+  query: string;
+  onQuery: (query: string) => void;
   apply: (op: Op) => Promise<void>;
   send: (op: Op) => Promise<void>;
   onOpen: (issue: Issue, newTab: boolean) => void;
@@ -35,9 +38,14 @@ const LIST_ORDER: Issue["status"][] = ["in_review", "in_progress", "todo", "done
 
 const EMPTY: Record<string, string> = { todo: "Nothing waiting", in_progress: "Nothing in progress", in_review: "Nothing in review", done: "Nothing finished yet", canceled: "Nothing canceled" };
 
-export function BoardView({ project, issues, error, showCanceled, onShowCanceled, layout, onLayout, byParent, onByParent, folded, onFold, apply, send, onOpen, deleting: asking }: BoardViewProps) {
-  const count = (status: Issue["status"]) => issues?.filter((i) => i.status === status).length ?? 0;
-  const hasParents = !!issues?.some((i) => i.parent);
+export function BoardView({ project, issues: all, error, showCanceled, onShowCanceled, layout, onLayout, byParent, onByParent, folded, onFold, query, onQuery, apply, send, onOpen, deleting: asking }: BoardViewProps) {
+  // Summary counts and the Group by parent chip stay on every issue; what's below the toolbar is what matches. Each
+  // issue's text is lowercased once (see `matchesQuery`), so a keystroke is a substring test per issue.
+  const searching = !!query.trim();
+  const issues = all && searching ? all.filter((i) => matchesQuery(i, query)) : all;
+  const count = (status: Issue["status"]) => all?.filter((i) => i.status === status).length ?? 0;
+  const shownCount = (status: Issue["status"]) => issues?.filter((i) => i.status === status).length ?? 0;
+  const hasParents = !!all?.some((i) => i.parent);
   const lanes = issues && hasParents && byParent && layout === "board" ? boardLanes(issues, showCanceled) : null;
   const [deleting, setDeleting] = useState<string | null>(asking ?? null);
   const doomed = deleting ? issues?.find((i) => i.key === deleting) : undefined;
@@ -73,6 +81,7 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
                 <SummaryChip tone="warn">{count("in_review")} in review</SummaryChip>
                 <SummaryChip tone="success">{count("done")} done</SummaryChip>
               </Summary>
+              <SearchField className="tk-search" label="Search issues" placeholder="Search issues" value={query} onChange={(e) => onQuery(e.target.value)} />
               <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
               {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
               <Chip pressed={showCanceled} onClick={() => onShowCanceled(!showCanceled)}>Show canceled ({count("canceled")})</Chip>
@@ -89,13 +98,15 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
       ) : null}
       {!issues ? (
         <Loading>Loading issues</Loading>
+      ) : searching && issues.length === 0 ? (
+        <div className="tk-confirm-wrap" data-layout={layout}><Text tone="muted" role="status">No issues match "{query.trim()}".</Text></div>
       ) : layout === "list" ? (
         <IssueList project={project} issues={issues} byParent={hasParents && byParent} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} onDelete={(i) => setDeleting(i.key)} />
       ) : lanes ? (
         <BoardLanes
           className="tk-lanes"
           label={`Issues for ${project.name}, by parent`}
-          columns={(showCanceled ? STATUSES : FLOW).map((status) => ({ id: status, title: <span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>, count: count(status) }))}
+          columns={(showCanceled ? STATUSES : FLOW).map((status) => ({ id: status, title: <span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>, count: shownCount(status) }))}
         >
           {lanes.map((lane) => (
             <ParentLane key={lane.parent?.key ?? ""} lane={lane} issues={issues} open={!folded.includes(lane.parent?.key ?? "")} onOpenChange={(open) => onFold(lane.parent?.key ?? "", open)} onOpen={onOpen} card={(i) => card(i, true)} />

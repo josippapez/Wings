@@ -61,6 +61,11 @@ pub struct Contributes {
     pub ui: Vec<String>,
     /// Tools it offers Claude through the Wings MCP server.
     pub mcp_tools: Vec<McpTool>,
+    /// A line for Claude on when to reach for those tools. Claude defers tool descriptions behind tool search
+    /// and sees only tool names and the server's instructions at session start, so this is what makes it
+    /// use them unprompted. Up to `MAX_MCP_INSTRUCTIONS` characters.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mcp_instructions: String,
     /// Web pages it shows in a popover from a title bar button.
     pub panels: Vec<Panel>,
     /// Its own pages shown in the right sidebar from a title bar button.
@@ -93,6 +98,7 @@ pub struct Block {
     pub min_height: Option<u32>,
 }
 
+pub const MAX_MCP_INSTRUCTIONS: usize = 500;
 pub const BLOCK_MIN_HEIGHT: (u32, u32) = (80, 800);
 pub const BLOCK_MIN_HEIGHT_DEFAULT: u32 = 160;
 pub const MAX_BLOCKS: usize = 8;
@@ -361,6 +367,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| t.input_schema.get("type").and_then(Value::as_str) != Some("object")) {
         return Err(format!("MCP tool {:?} needs an inputSchema with \"type\": \"object\"", tool.name));
+    }
+    if manifest.contributes.mcp_instructions.chars().count() > MAX_MCP_INSTRUCTIONS {
+        return Err(format!("mcpInstructions is up to {MAX_MCP_INSTRUCTIONS} characters"));
     }
     if manifest.contributes.panels.len() > 3 {
         return Err("at most 3 panels".into());
@@ -1301,6 +1310,20 @@ mod tests {
         assert_eq!(load(&dir).unwrap().manifest.contributes.ui, ["badges", "status"]);
         fs::write(dir.join("wings-plugin.json"), manifest(r#""strip""#)).unwrap();
         assert!(load(&dir).err().unwrap().contains("unknown ui \"strip\""));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mcp_instructions_are_capped() {
+        let dir = std::env::temp_dir().join(format!("wings-instr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |text: &str| format!(r#"{{ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": {{ "mcpInstructions": "{text}" }} }}"#);
+        fs::write(dir.join("wings-plugin.json"), manifest(&"a".repeat(MAX_MCP_INSTRUCTIONS))).unwrap();
+        assert_eq!(load(&dir).unwrap().manifest.contributes.mcp_instructions.len(), MAX_MCP_INSTRUCTIONS);
+        fs::write(dir.join("wings-plugin.json"), manifest(&"a".repeat(MAX_MCP_INSTRUCTIONS + 1))).unwrap();
+        assert!(load(&dir).err().unwrap().contains("mcpInstructions"));
         let _ = fs::remove_dir_all(&dir);
     }
 

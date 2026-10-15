@@ -176,7 +176,8 @@ interface Wings {
    */
   onAction(listener: (action: { paneId: string; actionId: string }) => unknown): () => void;
   /**
-   * Handles Claude's calls to a tool in `contributes.mcpTools`. Return a string or a JSON value; a thrown error
+   * Handles Claude's calls to a tool in `contributes.mcpTools`. Claude doesn't read tool descriptions until it
+   * searches for a tool, so add `contributes.mcpInstructions`, a line on when to use them. Return a string or a JSON value; a thrown error
    * is sent back as a failed call. `paneId` is the Wings pane Claude runs in, or `null`. Register it in `main`.
    */
   onTool(name: string, handler: (input: Record<string, unknown>, context: { paneId: string | null }) => unknown): void;

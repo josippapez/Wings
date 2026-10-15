@@ -91,6 +91,8 @@ export type PluginBlock = { id: string; title: string; icon: string; page: strin
 export type PluginContributes = {
   ui: string[];
   mcpTools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
+  /** A line telling Claude when to use `mcpTools`, added to the Wings MCP server's instructions; absent when none. */
+  mcpInstructions?: string;
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
   views: PluginPage[];

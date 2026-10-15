@@ -497,6 +497,36 @@ fn mcp_connect(app: AppHandle) -> Res<()> {
     Ok(())
 }
 
+/// Claude Code's user-scope config, where `mcpServers` lives. Read only: every write goes through `claude mcp`.
+fn claude_user_config() -> std::path::PathBuf {
+    match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir).join(".claude.json"),
+        None => std::env::home_dir().unwrap_or_default().join(".claude.json"),
+    }
+}
+
+/// The JSON for re-adding the Wings server with the fields you set on it kept, or `None` when there are none
+/// and a plain `claude mcp add` will do. Wings owns `type`, `command`, `args` and `env`.
+fn mcp_add_json(existing: Option<&serde_json::Value>, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
+    let mut entry = existing?.as_object()?.clone();
+    for owned in ["type", "command", "args", "env"] {
+        entry.remove(owned);
+    }
+    if entry.is_empty() {
+        return None;
+    }
+    entry.insert("type".into(), "stdio".into());
+    entry.insert("command".into(), exe.to_string_lossy().into());
+    entry.insert("args".into(), serde_json::json!(["--mcp", socket.to_string_lossy()]));
+    entry.insert("env".into(), serde_json::json!({}));
+    Some(entry.into())
+}
+
+fn kept_mcp_fields(config: &std::path::Path, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
+    mcp_add_json(config.pointer("/mcpServers/wings"), exe, socket)
+}
+
 /// Registers `wings --mcp` with Claude Code at user scope, so every session gets the plugin tools, and puts
 /// `wings statusline` in front of your status line. The server is removed first so a moved app is repointed
 /// rather than left dangling.
@@ -511,15 +541,15 @@ fn connect_claude(app: &AppHandle) -> Res<()> {
         let claude = plugins::find_program("claude").ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
         let exe = std::env::current_exe().map_err(err)?;
         let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
+        // Read before the remove, which drops the entry: what you set on it yourself (`alwaysLoad`, say) goes back on.
+        let kept = kept_mcp_fields(&claude_user_config(), &exe, &socket);
         let _ = claude_mcp(&claude, &["remove", "--scope", "user", "wings"]);
-        let out = std::process::Command::new(&claude)
-            .args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"])
-            .arg(&exe)
-            .arg("--mcp")
-            .arg(&socket)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(err)?;
+        let mut add = std::process::Command::new(&claude);
+        match &kept {
+            Some(entry) => add.args(["mcp", "add-json", "--scope", "user", "wings", &entry.to_string()]),
+            None => add.args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"]).arg(&exe).arg("--mcp").arg(&socket),
+        };
+        let out = add.stdin(std::process::Stdio::null()).output().map_err(err)?;
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
         }
@@ -1479,6 +1509,21 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn re_registering_keeps_what_you_set_on_the_server() {
+        use serde_json::json;
+        let (exe, socket) = (std::path::Path::new("/Apps/Wings"), std::path::Path::new("/data/mcp.sock"));
+        let old = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {}, "alwaysLoad": true });
+        assert_eq!(
+            super::mcp_add_json(Some(&old), exe, socket),
+            Some(json!({ "type": "stdio", "command": "/Apps/Wings", "args": ["--mcp", "/data/mcp.sock"], "env": {}, "alwaysLoad": true }))
+        );
+        // Nothing of yours on it, or no entry at all: the plain `claude mcp add`.
+        let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {} });
+        assert_eq!(super::mcp_add_json(Some(&plain), exe, socket), None);
+        assert_eq!(super::mcp_add_json(None, exe, socket), None);
+    }
+
     #[test]
     fn readme_is_found_in_any_case_and_capped_and_kept_inside_the_folder() {
         let root = std::env::temp_dir().join(format!("wings-readme-test-{}", std::process::id()));

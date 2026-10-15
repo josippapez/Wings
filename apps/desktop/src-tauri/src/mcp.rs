@@ -82,7 +82,7 @@ fn serve(app: &AppHandle, stream: UnixStream) {
         let Ok(request) = serde_json::from_str::<Value>(&line) else { continue };
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let reply = match request.get("op").and_then(Value::as_str) {
-            Some("list") => json!({ "id": id, "tools": tools(app) }),
+            Some("list") => json!({ "id": id, "tools": tools(app), "instructions": plugin_instructions(app) }),
             Some("call") => {
                 let name = request.get("name").and_then(Value::as_str).unwrap_or_default();
                 let arguments = request.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -126,6 +126,14 @@ fn tools(app: &AppHandle) -> Vec<Value> {
             })
         });
     crate::history::mcp_tools().into_iter().chain(crate::mcp_panes::tools()).chain(crate::project_info::mcp_tools()).chain(plugin_tools).collect()
+}
+
+/// The `mcpInstructions` line of every plugin that's on and approved, for the bridge to add to the server's
+/// instructions: Claude sees only those and tool names until it searches for a tool.
+fn plugin_instructions(app: &AppHandle) -> Vec<String> {
+    let state = app.state::<AppState>();
+    let store = state.plugins.lock().unwrap();
+    store.list().into_iter().filter(|p| p.enabled && p.approved).map(|p| p.manifest.contributes.mcp_instructions).filter(|l| !l.is_empty()).collect()
 }
 
 /// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.

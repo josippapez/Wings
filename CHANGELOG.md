@@ -4,6 +4,12 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.48 · 2026-10-15
+
+- Plugins can give Claude a line on when to use their tools (`contributes.mcpInstructions`), which Claude sees at session start before it has loaded any of them. Issues uses it, so Claude files and looks up issues in Wings without being told to.
+- Reconnecting Claude Code keeps what you set on the `wings` server yourself, like `alwaysLoad`.
+- Issues 0.10.0: search issues by key, title, description and log notes, with `tasks__list` (`query`) and a search box on the board. Pick the view the board opens in (Board, Rows or List) on its Settings page.
+
 ## 0.1.47 · 2026-10-15
 
 - The right sidebar shows a tab for each open plugin page again when more than one is open, with a close button on each. With one open it shows just its title.

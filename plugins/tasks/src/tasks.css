@@ -469,6 +469,13 @@
   row-gap: 6px;
 }
 
+/* The search box is a fixed-width field, not a flex child that takes the toolbar's whole line. */
+.tk-search {
+  flex: none;
+  width: 200px;
+  max-width: 100%;
+}
+
 /* ---------- Rows by parent ---------- */
 .tk-lane-title {
   display: flex;
