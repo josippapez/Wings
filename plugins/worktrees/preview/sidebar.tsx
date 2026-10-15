@@ -4,7 +4,6 @@ import { rowsOf, type Repo } from "../src/lib/git";
 import { parseWorktrees } from "../src/lib/worktrees";
 import { RepoSection } from "../src/ui/RepoSection";
 import type { Confirm } from "../src/ui/ConfirmCard";
-import "../src/pages/sidebar.css";
 
 const sha = (c: string) => c.repeat(40);
 const daysAgo = (n: number) => Math.floor(Date.now() / 1000) - n * 86_400;
@@ -87,7 +86,7 @@ const section = (repo: Repo, ask: Confirm | null) => (
   <RepoSection repo={repo} rows={rowsOf(repo, inPane)} asked={ask} working={false} deleteBranch={false} onDeleteBranch={noop} onAsk={noop} onConfirm={noop} onCancel={noop} onOpen={noop} />
 );
 
-export const place = "sidebar";
+export { page } from "../src/pages/sidebar";
 export default (
   <>
     {section(web, null)}

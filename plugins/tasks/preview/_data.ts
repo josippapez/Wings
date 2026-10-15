@@ -95,8 +95,5 @@ export const defaults: BoardViewProps = {
   onOpen: () => {},
 };
 
-/** For a fixture of a whole page: the page reads its issues from storage, so the stub's storage holds these for the project. */
-export function seedStorage() {
-  const stored = JSON.stringify({ v: 3, prefix: "WEB", next: 15, issues });
-  wings.storage.get = async (key) => (key === `issues:${project.id}` ? JSON.parse(stored) : null);
-}
+/** For a state of a whole page: the page reads its issues from storage, so the stub's storage holds these for the project. */
+export const storage = { [`issues:${project.id}`]: { v: 3, prefix: "WEB", next: 15, issues } };

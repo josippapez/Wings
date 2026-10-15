@@ -1,4 +1,1 @@
-import IssuesSettings from "../src/pages/settings";
-
-export const place = "settings";
-export default IssuesSettings;
+export { default, page } from "../src/pages/settings";

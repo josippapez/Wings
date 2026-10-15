@@ -1,7 +1,18 @@
-// The Issues block with a mix of issues.
+// The Issues block of a Project page: with a mix of issues, none, while they load, and as the page runs it.
+import BlockPage, { page } from "../src/pages/block";
 import { BlockView } from "../src/ui/block-view";
-import "../src/pages/tasks.css";
-import { issues, project } from "./_data";
+import { issues, project, storage } from "./_data";
 
-export const place = "view";
-export default <BlockView project={project} issues={issues} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;
+export { page };
+
+const noop = () => {};
+const view = { project, apply: () => Promise.resolve(), openBoard: noop, openIssue: noop };
+
+export const states = {
+  mixed: { element: <BlockView {...view} issues={issues} /> },
+  empty: { element: <BlockView {...view} issues={[]} /> },
+  // While the list loads.
+  loading: { element: <BlockView {...view} issues={null} /> },
+  // As the page runs it, with its issues read from storage.
+  page: { element: <BlockPage />, project, storage },
+};
