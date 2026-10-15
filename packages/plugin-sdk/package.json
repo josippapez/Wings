@@ -37,6 +37,14 @@
       "types": "./sessions.d.ts",
       "default": "./sessions.js"
     },
+    "./async": {
+      "types": "./async.d.ts",
+      "default": "./async.js"
+    },
+    "./format": {
+      "types": "./format.d.ts",
+      "default": "./format.js"
+    },
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
@@ -66,6 +74,10 @@
     "settings.d.ts",
     "sessions.js",
     "sessions.d.ts",
+    "async.js",
+    "async.d.ts",
+    "format.js",
+    "format.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",
