@@ -1,14 +1,20 @@
 // The HUD sidebar page: usage limits and memory, then one session's context, MCP servers and skills. The plugin's
-// main script keeps the state and broadcasts it here.
+// main script keeps the state and shares it here.
 
 import { useState } from "react";
-import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text, useMainState } from "wings-plugin-ui";
+import { useShared } from "wings-plugin-sdk/react";
+import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text } from "wings-plugin-ui";
 
 import { gb, tokens } from "../lib/format";
+import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "../lib/levels";
+import { ch } from "../lib/messages";
 import "./sidebar.css";
-import type { Server, ServerState, Snapshot } from "../lib/types";
+import type { Server, ServerState } from "../lib/types";
 
 export const page = { place: "sidebar" };
+
+const limitLevels: [number, number] = [LIMIT_WARN, LIMIT_CRITICAL];
+const contextLevels: [number, number] = [CONTEXT_WARN, CONTEXT_CRITICAL];
 
 const states = { connected: "Connected", failed: "Failed", connecting: "Connecting", "sign-in": "Needs sign-in" };
 const dots: Record<ServerState, "danger" | "muted" | undefined> = { connected: undefined, failed: "danger", connecting: "muted", "sign-in": "muted" };
@@ -41,7 +47,7 @@ function ServerRow({ server }: { server: Server }) {
 }
 
 export default function Hud() {
-  const hud = useMainState<Snapshot>("hud");
+  const hud = useShared(ch, "hud");
   /** The session you picked; otherwise the first. */
   const [picked, setPicked] = useState<string | null>(null);
 
@@ -51,14 +57,14 @@ export default function Hud() {
     <>
       <Heading>Usage</Heading>
       <Card>
-        {o.fiveHour && <Gauge label="5-hour limit" percent={o.fiveHour.percent} note={o.fiveHour.resets && `Resets in ${o.fiveHour.resets}`} levels={[75, 90]} />}
-        {o.sevenDay && <Gauge label="Weekly limit" percent={o.sevenDay.percent} note={o.sevenDay.resets && `Resets in ${o.sevenDay.resets}`} levels={[75, 90]} />}
+        {o.fiveHour && <Gauge label="5-hour limit" percent={o.fiveHour.percent} note={o.fiveHour.resets && `Resets in ${o.fiveHour.resets}`} levels={limitLevels} />}
+        {o.sevenDay && <Gauge label="Weekly limit" percent={o.sevenDay.percent} note={o.sevenDay.resets && `Resets in ${o.sevenDay.resets}`} levels={limitLevels} />}
         {!o.statusline && (
           <Text as="p" tone="muted">
             Your 5-hour and weekly limits show after Claude Code's next reply, on Pro and Max plans. If they don't, connect Claude Code in Plugins.
           </Text>
         )}
-        {o.memory && <Gauge label="Memory" percent={o.memory.percent} note={`${gb(o.memory.used)} of ${gb(o.memory.total)} in use`} levels={[75, 90]} />}
+        {o.memory && <Gauge label="Memory" percent={o.memory.percent} note={`${gb(o.memory.used)} of ${gb(o.memory.total)} in use`} levels={limitLevels} />}
       </Card>
     </>
   );
@@ -85,7 +91,7 @@ export default function Hud() {
             label="Context window"
             percent={s.context.percent}
             note={[`${tokens(s.context.tokens)} of ${tokens(s.context.window)} tokens`, s.context.cache && `prompt cache ${s.context.cache.toLowerCase()}`].filter(Boolean).join(" · ")}
-            levels={[70, 85]}
+            levels={contextLevels}
           />
         ) : (
           <Text as="p" tone="muted">

@@ -3,5 +3,5 @@ import Hud from "../src/pages/sidebar";
 import { session, snapshot } from "./_data";
 
 export const place = "sidebar";
-export const respond = (m: unknown) => ((m as { type: string }).type === "hello" ? snapshot({}, [session({ context: null, servers: [], skills: [] })]) : undefined);
+export const shared = { hud: snapshot({}, [session({ context: null, servers: [], skills: [] })]) };
 export default <Hud />;

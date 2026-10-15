@@ -6,40 +6,65 @@
 // same way Claude Code does. MCP servers come from the tool lists Claude Code records as it connects to them.
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { ingest, resetRun, session, sessions, type Entry, type Session } from "./lib/session";
-import { LIMIT_CRITICAL, LIMIT_WARN, overview, paneStatus, snapshot, state } from "./lib/view";
+import { followSessions } from "wings-plugin-sdk/sessions";
+import { MINUTE } from "./lib/format";
+import { LIMIT_CRITICAL, LIMIT_WARN } from "./lib/levels";
+import { ch } from "./lib/messages";
+import { ingest, session, startRun } from "./lib/session";
+import { overview, paneStatus, snapshot, state } from "./lib/view";
 
 /** Claude's replies hold the skills and MCP tools it used. */
 const REPLIES = 500;
 /** Tool results are most of a transcript, and only the newest show whether an MCP server's calls fail. */
 const RESULTS = 100;
-const MINUTE = 60_000;
 
-/** The sessions panes run now, by pane id. */
-let panes = new Map<string, Session>();
 let totalMemory: number | null = null;
 
-// Changes come in bursts while Claude works, so the pane strips and sidebar update at most every 300 ms.
-let pending = new Set<string>();
-let timer: ReturnType<typeof setTimeout> | null = null;
-function changed(s: Session | null) {
-  if (s) pending.add(s.id);
-  timer ??= setTimeout(flush, 300);
+const sidebar = ch.share("hud", () => snapshot(follow.sessions()));
+
+// Changes come in bursts while Claude works, so the strips are drawn at most every 300 ms, which also leaves a new
+// session's backlog time to load. Wings skips a strip that is unchanged, so each pass can go through every session.
+let strips: ReturnType<typeof setTimeout> | undefined;
+function changed() {
+  sidebar.changed();
+  strips ??= setTimeout(drawStrips, 300);
 }
-function flush() {
-  timer = null;
-  for (const id of pending) {
-    const s = sessions.get(id);
-    if (s?.paneId) void wings.setPaneStatus(s.paneId, paneStatus(s)).catch(console.error);
-  }
-  pending = new Set();
-  void wings.broadcast(snapshot()).catch(() => {});
+function drawStrips() {
+  strips = undefined;
+  for (const s of follow.sessions()) void wings.setPaneStatus(s.paneId, paneStatus(s)).catch(console.error);
 }
-/** Every strip, for numbers that changed for all of them, like the status line's. */
-function changedAll() {
-  for (const s of panes.values()) pending.add(s.id);
-  changed(null);
-}
+
+// The status line runs right after each reply, so look for its numbers just after the reply lands.
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+
+const follow = followSessions({
+  create: session,
+  pane: (s, pane) => void Object.assign(s, { paneId: pane.paneId, project: pane.project, name: pane.session.name }),
+  startRun: (s, run) => startRun(s, run.startedAt),
+  async backlog(s) {
+    // These attachment kinds are about 340 KB of a 44 MB transcript and tell what this run connected to,
+    // so all of them; the conversation only from its end.
+    const [attachments, replies, results] = await Promise.all([
+      wings.transcript(s.id, ["attachment:model", "attachment:deferred_tools_delta", "attachment:invoked_skills"]),
+      wings.transcript(s.id, ["assistant"], { last: REPLIES }),
+      wings.transcript(s.id, ["user"], { last: RESULTS }),
+    ]);
+    // Replies before results, so each tool result finds the call it answers.
+    return [...attachments, ...replies, ...results];
+  },
+  entry(s, entry, { live, thisRun }) {
+    ingest(s, entry, thisRun);
+    if (live && entry.type === "assistant") {
+      clearTimeout(statusTimer);
+      statusTimer = setTimeout(refreshStatus, 1500);
+    }
+  },
+  gone(_s, paneId, stillOpen) {
+    // A closed pane's strip goes with it; one that runs something else now is cleared here.
+    if (stillOpen) void wings.setPaneStatus(paneId, null).catch(() => {});
+  },
+  changed,
+});
 
 /** The highest level each limit window has alerted at, so a refresh doesn't repeat it. A new resetsAt is a new window. */
 const alerted = { fiveHour: { resetsAt: null as number | null, level: 0 }, sevenDay: { resetsAt: null as number | null, level: 0 } };
@@ -71,7 +96,7 @@ async function refreshStatus() {
     console.error(error);
   }
   alertLimits();
-  changedAll();
+  changed();
 }
 
 /** Active and wired pages, as claude-hud counts them: what macOS can't hand to another app right away. */
@@ -88,65 +113,8 @@ async function refreshMemory() {
     state.memory = null;
     console.error(error);
   }
-  changed(null);
+  sidebar.changed();
 }
-
-wings.onPanes(async (list) => {
-  const open = new Set(list.map((p) => p.paneId));
-  const next = new Map(list.filter((p) => p.session).map((p) => [p.paneId, p]));
-  for (const [paneId, s] of panes) {
-    if (next.get(paneId)?.session?.sessionId !== s.id) {
-      s.paneId = null;
-      if (open.has(paneId)) void wings.setPaneStatus(paneId, null).catch(() => {});
-    }
-  }
-  const current = new Map<string, Session>();
-  for (const [paneId, pane] of next) {
-    const run = pane.session!;
-    const s = session(run.sessionId);
-    const isNew = !s.loaded || s.startedAt !== run.startedAt;
-    Object.assign(s, { paneId, project: pane.project, name: run.name });
-    current.set(paneId, s);
-    if (isNew) {
-      resetRun(s);
-      Object.assign(s, { loaded: true, startedAt: run.startedAt });
-      try {
-        // These attachment kinds are about 340 KB of a 44 MB transcript and tell what this run connected to,
-        // so all of them; the conversation only from its end.
-        const [attachments, replies, results] = await Promise.all([
-          wings.transcript(s.id, ["attachment:model", "attachment:deferred_tools_delta", "attachment:invoked_skills"]),
-          wings.transcript(s.id, ["assistant"], { last: REPLIES }),
-          wings.transcript(s.id, ["user"], { last: RESULTS }),
-        ]);
-        // Replies before results, so each tool result finds the call it answers.
-        for (const entry of [...attachments, ...replies, ...results]) ingest(s, entry as unknown as Entry);
-      } catch (error) {
-        console.error(error);
-      }
-    }
-    changed(s);
-  }
-  panes = current;
-  changed(null);
-});
-
-// The status line runs right after each reply, so look for its numbers just after the reply lands.
-let statusTimer: ReturnType<typeof setTimeout> | undefined;
-wings.onTranscript(({ sessionId, entry }) => {
-  const s = sessions.get(sessionId);
-  if (!s?.loaded) return;
-  ingest(s, entry as Entry);
-  changed(s);
-  if (entry.type === "assistant") {
-    clearTimeout(statusTimer);
-    statusTimer = setTimeout(refreshStatus, 1500);
-  }
-});
-
-// A sidebar that just opened asks for the current state.
-wings.onBroadcast((message) => {
-  if ((message as { type?: string } | null)?.type === "hello") void wings.broadcast(snapshot());
-});
 
 // Limits reset on their own and memory moves, so both are checked once a minute. Each check is a few ms.
 void wings.storage
@@ -154,7 +122,7 @@ void wings.storage
   .then(
     (limits) => {
       state.savedLimits ??= limits as typeof state.savedLimits;
-      changedAll();
+      changed();
     },
     () => {},
   )

@@ -1,4 +1,4 @@
-/** What the main script broadcasts to the sidebar. */
+/** What the main script shares with the sidebar. */
 
 export type ServerState = "connected" | "failed" | "connecting" | "sign-in";
 
@@ -35,7 +35,6 @@ export interface SessionView {
 }
 
 export interface Snapshot {
-  type: "hud";
   overview: Overview;
   sessions: SessionView[];
 }

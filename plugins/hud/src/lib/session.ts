@@ -24,44 +24,13 @@ interface Run {
 
 export interface Session extends Run {
   id: string;
-  paneId: string | null;
+  /** The pane that runs it, which shows its strip. */
+  paneId: string;
   project: string;
   name: string | null;
+  /** When this run's `claude` started, in ms. What Claude Code reported before that isn't this run's. */
   startedAt: number;
-  loaded: boolean;
 }
-
-/** The parts of a Claude Code transcript entry the HUD reads. */
-export interface Entry {
-  type: string;
-  isSidechain?: boolean;
-  timestamp?: string;
-  attachment?: {
-    type?: string;
-    identity?: { modelId?: string };
-    addedNames?: string[];
-    removedNames?: string[];
-    failedMcpServers?: { name?: string; errorCode?: string; error?: string }[];
-    pendingMcpServers?: string[];
-    skills?: { name?: string }[];
-  };
-  message?: {
-    usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
-    content?: unknown;
-  };
-}
-
-interface Block {
-  type?: string;
-  id?: string;
-  name?: string;
-  input?: { skill?: string };
-  tool_use_id?: string;
-  is_error?: boolean;
-}
-
-/** By session id. */
-export const sessions = new Map<string, Session>();
 
 const newRun = (): Run => ({
   tokens: null,
@@ -75,18 +44,13 @@ const newRun = (): Run => ({
   skills: new Set(),
 });
 
-export function session(id: string): Session {
-  let s = sessions.get(id);
-  if (!s) {
-    s = { id, paneId: null, project: "", name: null, startedAt: 0, loaded: false, ...newRun() };
-    sessions.set(id, s);
-  }
-  return s;
-}
+export const session = (id: string): Session => ({ id, paneId: "", project: "", name: null, startedAt: 0, ...newRun() });
 
-export function resetRun(s: Session) {
-  Object.assign(s, newRun());
-}
+/** A new `claude` process runs the session, so what the last one knew is dropped. */
+export const startRun = (s: Session, startedAt: number) => void Object.assign(s, newRun(), { startedAt });
+
+/** A message's content blocks. A transcript can hold a null among them, so each is checked. */
+const blocksOf = (message: TranscriptMessage | undefined): (TranscriptBlock | null)[] => (Array.isArray(message?.content) ? message.content : []);
 
 /** `mcp__plugin_dev-core_chrome-devtools__click` is server `plugin_dev-core_chrome-devtools`, tool `click`. */
 function mcpTool(name: unknown) {
@@ -94,11 +58,8 @@ function mcpTool(name: unknown) {
   return m ? { server: m[1], tool: m[2] } : null;
 }
 
-export function ingest(s: Session, entry: Entry) {
-  if (entry.isSidechain) return;
-  const at = Date.parse(entry.timestamp ?? "") || Date.now();
-  // A couple of seconds of slack, since the process start time is only to the second.
-  const thisRun = !s.startedAt || at >= s.startedAt - 2000;
+/** `thisRun` is false for an entry from before this `claude` started, which a resumed session's transcript also holds. */
+export function ingest(s: Session, entry: TranscriptEntry, thisRun: boolean) {
   if (entry.type === "attachment") {
     const a = entry.attachment ?? {};
     if (a.type === "model") {
@@ -123,13 +84,11 @@ export function ingest(s: Session, entry: Entry) {
     }
     return;
   }
-  const message = entry.message ?? {};
-  const blocks: (Block | null)[] = Array.isArray(message.content) ? message.content : [];
   if (entry.type === "assistant") {
-    const u = message.usage;
+    const u = entry.message?.usage;
     // What Claude Code counts as context: everything sent in, cached or not.
     if (u) s.tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    for (const block of blocks) {
+    for (const block of blocksOf(entry.message)) {
       if (block?.type !== "tool_use") continue;
       if (block.name === "Skill" && block.input?.skill) s.skills.add(text(block.input.skill, 64));
       const t = mcpTool(block.name);
@@ -139,7 +98,7 @@ export function ingest(s: Session, entry: Entry) {
       }
     }
   } else if (entry.type === "user") {
-    for (const block of blocks) {
+    for (const block of blocksOf(entry.message)) {
       const server = block?.type === "tool_result" ? s.calls.get(block.tool_use_id!) : undefined;
       if (!server) continue;
       s.lastFailed.set(server, block!.is_error === true);

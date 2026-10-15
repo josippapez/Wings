@@ -1,13 +1,7 @@
 import { clock, names, text, tokens, until } from "./format";
-import { servers, sessions, type Session } from "./session";
+import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "./levels";
+import { servers, type Session } from "./session";
 import type { Limit, Overview, Snapshot } from "./types";
-
-/** Context and limit colours, as claude-hud has them. */
-const CONTEXT_WARN = 70;
-const CONTEXT_CRITICAL = 85;
-/** Usage percentages where the title bar pill turns amber then red and Wings notifies once, as the sidebar gauges do. */
-export const LIMIT_WARN = 75;
-export const LIMIT_CRITICAL = 90;
 
 type Limits = NonNullable<WingsStatusline["rateLimits"]>;
 type Cache = WingsStatusline["sessions"][string]["promptCache"];
@@ -106,11 +100,10 @@ export function overview(now = Date.now()): Overview {
   };
 }
 
-/** What the sidebar shows, kept well under the 64 KB a broadcast may carry. */
-export function snapshot(): Snapshot {
-  const shown = [...sessions.values()].filter((s) => s.paneId).sort((a, b) => a.project.localeCompare(b.project));
+/** What the sidebar shows for the sessions that run in panes, kept well under the 64 KB a broadcast may carry. */
+export function snapshot(sessions: Session[]): Snapshot {
+  const shown = [...sessions].sort((a, b) => a.project.localeCompare(b.project));
   return {
-    type: "hud",
     overview: overview(),
     sessions: shown.slice(0, 8).map((s) => {
       const ctx = context(s);

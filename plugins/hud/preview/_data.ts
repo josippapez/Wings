@@ -28,4 +28,4 @@ export const session = (s: Partial<SessionView> = {}): SessionView => ({
   ...s,
 });
 
-export const snapshot = (o: Partial<Overview> = {}, sessions: SessionView[] = [session()]): Snapshot => ({ type: "hud", overview: overview(o), sessions });
+export const snapshot = (o: Partial<Overview> = {}, sessions: SessionView[] = [session()]): Snapshot => ({ overview: overview(o), sessions });
