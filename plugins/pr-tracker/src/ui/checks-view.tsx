@@ -2,9 +2,8 @@
 // failed check's log is asked for (`onLoadFailure`) only when the row is opened, and shown as plain text.
 
 import { useMemo, useRef, useState } from "react";
-import { Button, Text } from "wings-plugin-ui";
+import { ago, Button, Text } from "wings-plugin-ui";
 import { groupChecks, durationText, hasLog, logTail, withUnresolved, type Group, type GroupId } from "../lib/checklist";
-import { ago } from "../lib/threads";
 import type { CheckItem, CheckState, FailureDetail, Failing, Status } from "../lib/types";
 
 const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };

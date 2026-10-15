@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf } from "./threads.ts";
+import { focusOf, isAutomated, kindOf, oneLine, threadsOf } from "./threads.ts";
 
 const c = (id, replyTo, createdAt, extra = {}) => ({ id, replyTo, path: null, line: null, side: "additions", author: "Ada", body: "x", createdAt, url: "", ...extra });
 
@@ -36,15 +36,6 @@ test("a collapsed thread's summary is one plain line", () => {
   assert.equal(oneLine("## Report\n\n| File | Lines |\n|---|---|\n| a.ts | 9% |"), "Report File Lines a.ts 9%");
   assert.equal(oneLine("a".repeat(200), 10), "aaaaaaaaa…");
   assert.equal(oneLine("Logs the raw error.\n<details>\n<summary>Context</summary>\nWhy\n</details>\n\n[ISSUE_KEY]: AbC-1"), "Logs the raw error. Context Why");
-});
-
-test("relative times", () => {
-  const now = Date.parse("2026-03-01T12:00:00Z");
-  assert.equal(ago("2026-03-01T11:59:50Z", now), "just now");
-  assert.equal(ago("2026-03-01T11:55:00Z", now), "5 min ago");
-  assert.equal(ago("2026-03-01T09:00:00Z", now), "3 h ago");
-  assert.equal(ago("2026-02-27T12:00:00Z", now), "2 d ago");
-  assert.equal(ago("nonsense", now), "");
 });
 
 test("View in diff points at the thread's file and the line on its side", () => {

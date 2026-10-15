@@ -2,12 +2,11 @@
 // your review or drafts. The Pull requests block of a Project page shows it, and so does a "pr" tab opened with no pull
 // request. The main script owns the lists and their cache; this asks it, only while Wings is in front and the list is on screen.
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useAsk } from "wings-plugin-sdk/react";
-import { Avatar, Button, Chips, Empty, Row, Stack, Text, useAction } from "wings-plugin-ui";
+import { Avatar, Button, Chips, Empty, Row, Skeleton, Skeletons, Stack, Text, Time, useAction, useBlockState, useTabState } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 import { countPulls, filterOf, filterPulls, splitTitle, type Filter, type PullRow } from "../lib/pulls";
-import { ago } from "../lib/threads";
 import "./pulls-list.css";
 import type { PrArgs } from "../lib/types";
 
@@ -29,17 +28,15 @@ const EMPTY: Record<Filter, string> = {
   drafts: "No draft pull requests",
 };
 
-/** The chosen filter, kept with the tab or the block so it is there when it opens again. */
+const ALL: { filter: Filter } = { filter: "all" };
+const savedFilter = (saved: unknown) => ({ filter: filterOf(saved) });
+
+/** The chosen filter, kept with the tab or the block so it is there when it opens again. Only the state of this place holds anything: the other reads nothing. */
 function useFilter(store: "tab" | "block"): [Filter, (f: Filter) => void] {
-  const [filter, setFilter] = useState<Filter>("all");
-  useEffect(() => {
-    void (store === "tab" ? wings.tabState() : wings.blockState()).then((saved) => setFilter(filterOf(saved))).catch(() => {});
-  }, [store]);
-  const pick = (f: Filter) => {
-    setFilter(f);
-    void (store === "tab" ? wings.setTabState({ filter: f }) : wings.setBlockState({ filter: f })).catch(() => {});
-  };
-  return [filter, pick];
+  const tab = useTabState(ALL, savedFilter);
+  const block = useBlockState(ALL, savedFilter);
+  const [saved, save] = store === "tab" ? tab : block;
+  return [saved?.filter ?? "all", (filter) => save({ filter })];
 }
 
 interface ListProps {
@@ -130,9 +127,9 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
 
 function ListSkeleton() {
   return (
-    <div className="pl-skeleton" role="status" aria-busy="true" aria-label="Loading pull requests">
-      {[0, 1, 2].map((i) => <div key={i} className="pl-skel" />)}
-    </div>
+    <Skeletons className="pl-skeleton" label="Loading pull requests">
+      {[0, 1, 2].map((i) => <Skeleton key={i} height={58} />)}
+    </Skeletons>
   );
 }
 
@@ -145,7 +142,6 @@ function PullItem({ row, showScope, onOpen }: { row: PullRow; showScope: boolean
   const { failed, running, passed } = row.checks;
   const checks = failed ? `${failed} failing` : running ? `${running} running` : passed ? `${passed} passed` : null;
   const checksTone = failed ? "danger" : running ? "warn" : "success";
-  const when = ago(row.updated);
   return (
     <li className="pl-item" data-scope={row.scope}>
       <button type="button" className="pl-row" onClick={() => onOpen(row.args)} data-testid="pulls-row">
@@ -174,7 +170,7 @@ function PullItem({ row, showScope, onOpen }: { row: PullRow; showScope: boolean
             <span>{row.badge.text}</span>
             {row.review ? <span>{row.review}</span> : null}
             {checks ? <span className="pl-checks" data-tone={checksTone}>{checks}</span> : null}
-            {when ? <time dateTime={row.updated} title={new Date(row.updated).toLocaleString()}>{when}</time> : null}
+            <Time iso={row.updated} />
           </span>
         </span>
       </button>

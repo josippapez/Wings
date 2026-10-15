@@ -116,48 +116,15 @@
   color: var(--wings-fg);
 }
 
-/* Summary chips */
-.pr-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
+/* Summary chips: what the Badges in the row share with them is kept inside the frame. */
 .pr-summary > * {
   max-width: 100%;
   min-width: 0;
 }
-.pr-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--wings-hairline-strong);
-  border-radius: 999px;
-  background: var(--wings-surface);
-  font-size: 12px;
-  font-weight: 500;
-}
-.pr-chip[data-tone="success"] {
-  border-color: color-mix(in srgb, var(--wings-success) 40%, transparent);
-  color: var(--wings-success);
-}
-.pr-chip[data-tone="warn"] {
-  border-color: color-mix(in srgb, var(--wings-warning) 40%, transparent);
-  color: var(--wings-warning);
-}
-.pr-chip[data-tone="danger"] {
-  border-color: color-mix(in srgb, var(--wings-danger) 40%, transparent);
-  color: var(--wings-danger);
-}
-button.pr-chip {
-  cursor: pointer;
-}
 .pr-reviewers {
   display: inline-flex;
   gap: 6px;
-  margin: 0 -2px 0 2px;
+  margin: 0 -2px 0 4px;
 }
 .pr-reviewer {
   position: relative;
@@ -257,18 +224,11 @@ button.pr-chip {
   mask-image: linear-gradient(to bottom, #000 70%, transparent);
 }
 
-/* The conversation: a line through the threads, resolved and automated ones as quiet rows */
-.pr-timeline,
+/* The conversation: resolved and automated threads as quiet rows */
 .pr-replies {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-.pr-timeline {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 .pr-thread {
   min-width: 0;
@@ -668,31 +628,8 @@ button.pr-check-main {
   align-items: flex-start;
 }
 
-/* Loading */
-.pr-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.pr-skel {
-  border-radius: var(--wings-radius);
-  background: linear-gradient(90deg, var(--wings-surface), var(--wings-hover), var(--wings-surface)) 0 0 / 200% 100%;
-  animation: pr-shimmer 1.4s ease-in-out infinite;
-}
-@keyframes pr-shimmer {
-  to {
-    background-position: -200% 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .pr-skel {
-    animation: none;
-  }
-}
-
 /* Focus a keyboard user can see */
 .pr-thread-summary:focus-visible,
-.pr-chip:focus-visible,
 .pr-icon-button:focus-visible,
 .pr-reply-box textarea:focus-visible {
   outline: 2px solid var(--wings-ring);

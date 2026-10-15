@@ -3,9 +3,8 @@
 // so this page only shows whether one is saved.
 
 import { useEffect, useState } from "react";
-import { errorMessage } from "wings-plugin-sdk/async";
 import { useSetting } from "wings-plugin-sdk/react";
-import { Button, Heading, Row, Select, Stack, Text, TextInput } from "wings-plugin-ui";
+import { Button, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
 
@@ -33,28 +32,20 @@ const HOSTS: Host[] = [
 function TokenField({ host }: { host: Host }) {
   const [saved, setSaved] = useState<boolean | null>(null);
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { run, busy, error } = useAction();
 
   useEffect(() => {
     void wings.secrets.has(host.secret).then(setSaved);
   }, [host.secret]);
 
-  const change = async (save: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
+  const change = (save: boolean) =>
+    run(async () => {
       await (save ? wings.secrets.set(host.secret, value.trim()) : wings.secrets.delete(host.secret));
       setSaved(save);
       setValue("");
       // The main script asks again with the new token.
       await ch.tell("tokens-changed");
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <Stack gap="s">

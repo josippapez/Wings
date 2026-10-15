@@ -3,8 +3,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { Empty, Loading, Page } from "wings-plugin-ui";
+import { Page, ProjectGate, useAction, usePoll, useViewArgs } from "wings-plugin-ui";
+import { readArgs } from "../lib/args";
 import { forgeOf, linkOf } from "../lib/forges/registry";
 import { ch } from "../lib/messages";
 import type { Push } from "../lib/pushes";
@@ -26,8 +26,9 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const [pushes, setPushes] = useState<Push[]>([]);
   const snippets = useRef(new Map<number, Promise<SnippetLine[] | null>>());
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  /** Which button waits on main: the action's own flag is for all of them. */
+  const [busy, setBusy] = useState<"diff" | "agent" | null>(null);
+  const action = useAction();
   const resolved = useRef<Promise<Link> | null>(null);
 
   const load = useCallback(async () => {
@@ -49,23 +50,19 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
     }
   }, [args]);
 
+  usePoll(load, REFRESH_MS);
   useEffect(() => {
-    void load();
     void ch.ask("pr", { op: "seen", args }).catch(() => {});
-    return pollWhileFocused(() => void load(), REFRESH_MS);
-  }, [args, load]);
-
-  const run = useCallback(async (op: "diff" | "agent", focus?: WingsDiffFocus) => {
-    setBusy(op);
-    setNotice(null);
-    try {
-      await ch.ask("pr", { op, args, focus });
-    } catch (e) {
-      setNotice(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
   }, [args]);
+
+  const { run: act } = action;
+  const run = useCallback(
+    (op: "diff" | "agent", focus?: WingsDiffFocus) => {
+      setBusy(op);
+      return act(() => ch.ask("pr", { op, args, focus })).finally(() => setBusy(null));
+    },
+    [args, act],
+  );
 
   const onReply = useCallback(
     async (root: Comment, body: string) => {
@@ -107,7 +104,7 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       pushes={pushes}
       onSnippet={link && forgeOf(link).snippet ? onSnippet : undefined}
       error={error}
-      notice={notice}
+      notice={action.error}
       busy={busy}
       canReply={Boolean(link)}
       onRefresh={() => void load()}
@@ -121,18 +118,10 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   );
 }
 
-/** A tab opened with no pull request (from its title bar button) lists the project's open ones; picking one opens it here, so the tab stays one tab. */
-function Home() {
-  const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
+/** The project's list, and the pull request picked from it, which the tab shows in its place. The pick is in here so the gate above it isn't shown again when the tab goes back. */
+function Picker({ project }: { project: WingsProject }) {
   const [picked, setPicked] = useState<PrArgs | null>(null);
-  useEffect(() => {
-    void wings.project().then(setProject);
-  }, []);
-  if (picked) {
-    return <Pr key={picked.url} args={picked} onBack={() => setPicked(null)} />;
-  }
-  if (project === undefined) return <Loading>Loading pull requests</Loading>;
-  if (!project) return <Empty title="No pull request" description="Open one from a project's Pull requests list." />;
+  if (picked) return <Pr key={picked.url} args={picked} onBack={() => setPicked(null)} />;
   return (
     <Page className="pr-page">
       <ProjectPulls path={project.path} name={project.name} store="tab" onOpen={setPicked} />
@@ -141,7 +130,12 @@ function Home() {
 }
 
 export default function PrPage() {
-  // viewArgs gives a new copy on every call, and Pr reloads when its args change, so read them once.
-  const [args] = useState(() => wings.viewArgs<PrArgs>());
-  return args ? <Pr args={args} /> : <Home />;
+  const args = useViewArgs(readArgs);
+  if (args) return <Pr args={args} />;
+  // A tab opened with no pull request (from its title bar button) lists the project's open ones; picking one opens it here, so the tab stays one tab.
+  return (
+    <ProjectGate loading="Loading pull requests" empty={{ title: "No pull request", description: "Open one from a project's Pull requests list." }}>
+      {(project) => <Picker project={project} />}
+    </ProjectGate>
+  );
 }

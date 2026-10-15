@@ -196,15 +196,9 @@
   border-radius: var(--wings-radius);
   background: var(--wings-surface);
 }
+/* The list's loading rows sit as close as its rows do. */
 .pl-skeleton {
-  display: flex;
-  flex-direction: column;
   gap: 6px;
-}
-.pl-skel {
-  height: 58px;
-  border-radius: var(--wings-radius);
-  background: var(--wings-secondary);
 }
 @media (max-width: 560px) {
   .pl-row {

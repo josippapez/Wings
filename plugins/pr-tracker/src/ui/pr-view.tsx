@@ -2,10 +2,10 @@
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text, Toolbar } from "wings-plugin-ui";
+import { Avatar, Badge, Button, Chip, copyText, Empty, Heading, Markdown, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
-import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
+import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
 import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Status } from "../lib/types";
@@ -42,30 +42,6 @@ export interface PrViewProps {
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
-
-function When({ iso, prefix }: { iso: string; prefix?: string }) {
-  const text = ago(iso);
-  return text ? (
-    <time dateTime={iso} title={when(iso)}>
-      {prefix}
-      {text}
-    </time>
-  ) : null;
-}
-
-/** The clipboard in a sandboxed frame is the browser's choice, so fall back to the old way if it says no. */
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const box = document.createElement("textarea");
-    box.value = text;
-    document.body.append(box);
-    box.select();
-    document.execCommand("copy");
-    box.remove();
-  }
-}
 
 export function PrView(props: PrViewProps) {
   const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
@@ -144,10 +120,10 @@ export function PrView(props: PrViewProps) {
               <span className="pr-author">
                 <Avatar name={overview.author} size="small" />
                 <strong>{overview.author}</strong>
-                {overview.createdAt ? <Text tone="muted" as="span"><When iso={overview.createdAt} prefix="opened " /></Text> : null}
+                {overview.createdAt ? <Text tone="muted" as="span"><Time iso={overview.createdAt} prefix="opened " /></Text> : null}
               </span>
             ) : null}
-            {st?.updated ? <Text tone="muted" size="small" as="span"><When iso={st.updated} prefix="updated " /></Text> : null}
+            {st?.updated ? <Text tone="muted" size="small" as="span"><Time iso={st.updated} prefix="updated " /></Text> : null}
           </div>
           {notice ? <Text tone="danger" role="alert">{notice}</Text> : null}
           {menu && onVote ? (
@@ -176,17 +152,17 @@ export function PrView(props: PrViewProps) {
             <Button size="sm" variant="outline" onClick={onRefresh}>Try again</Button>
           </div>
         ) : !overview || !st ? (
-          <Skeleton />
+          <PrSkeleton />
         ) : (
           <>
             {error ? <Text tone="danger" role="alert">{error}</Text> : null}
-            <div className="pr-summary" data-testid="pr-summary">
+            <Summary className="pr-summary" data-testid="pr-summary">
               <ReviewChip overview={overview} />
               {checkTotal ? <ChecksChip status={st} onOpen={() => setTab("checks")} /> : <Badge variant="outline">No checks</Badge>}
               {st.label === "Conflicts" ? <Badge tone="danger" variant="outline">Conflicts</Badge> : null}
               {st.merge ? <Badge variant="outline" title={`Merge strategy: ${st.merge}`}>{st.merge}</Badge> : null}
               {st.changes ? <Badge variant="outline">{st.changes}</Badge> : null}
-            </div>
+            </Summary>
 
             <Tabs
               label="Pull request"
@@ -250,7 +226,7 @@ function ReviewChip({ overview }: { overview: Overview }) {
   const { status, reviewers = [] } = overview;
   const tone = reviewers.some((r) => r.vote === "changes" || r.vote === "waiting") || /changes|rejected|waiting for author/i.test(status.review) ? "danger" : /approved/i.test(status.review) ? "success" : undefined;
   return (
-    <span className="pr-chip" data-tone={tone} data-testid="pr-review">
+    <SummaryChip tone={tone} data-testid="pr-review">
       <span>{status.review}</span>
       {reviewers.length ? (
         <span className="pr-reviewers">
@@ -261,7 +237,7 @@ function ReviewChip({ overview }: { overview: Overview }) {
           ))}
         </span>
       ) : null}
-    </span>
+    </SummaryChip>
   );
 }
 
@@ -269,21 +245,21 @@ function ChecksChip({ status, onOpen }: { status: Status; onOpen: () => void }) 
   const { passed, failed, running } = status.checks;
   const parts = [failed && `${failed} failed`, running && `${running} running`, passed && `${passed} passed`].filter(Boolean).join(" · ");
   return (
-    <Chip className="pr-chip" data-tone={failed ? "danger" : running ? "warn" : "success"} aria-label={`${parts}. Show the checks`} onClick={onOpen} data-testid="pr-checks">
+    <SummaryChip tone={failed ? "danger" : running ? "warn" : "success"} aria-label={`${parts}. Show the checks`} onClick={onOpen} data-testid="pr-checks">
       {parts}
       <span aria-hidden="true">›</span>
-    </Chip>
+    </SummaryChip>
   );
 }
 
-function Skeleton() {
+function PrSkeleton() {
   return (
-    <div className="pr-skeleton" role="status" aria-busy="true" aria-label="Loading pull request" data-testid="pr-skeleton">
-      <div className="pr-skel" style={{ width: "40%", height: 14 }} />
-      <div className="pr-skel" style={{ width: "100%", height: 90 }} />
-      <div className="pr-skel" style={{ width: "100%", height: 120 }} />
-      <div className="pr-skel" style={{ width: "100%", height: 70 }} />
-    </div>
+    <Skeletons label="Loading pull request" data-testid="pr-skeleton">
+      <Skeleton width="40%" height={14} />
+      <Skeleton height={90} />
+      <Skeleton height={120} />
+      <Skeleton height={70} />
+    </Skeletons>
   );
 }
 
@@ -309,11 +285,11 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
       </Heading>
 
       {!entries ? (
-        error ? null : <div className="pr-skeleton" role="status" aria-busy="true" aria-label="Loading conversation"><div className="pr-skel" style={{ height: 80 }} /><div className="pr-skel" style={{ height: 80 }} /></div>
+        error ? null : <Skeletons label="Loading conversation"><Skeleton height={80} /><Skeleton height={80} /></Skeletons>
       ) : entries.length === 0 ? (
         <Empty title="No comments yet" description="Review threads and comments on the pull request show up here." />
       ) : (
-        <ol className="pr-timeline" aria-label="Conversation" data-testid="pr-conversation">
+        <Timeline label="Conversation" data-testid="pr-conversation">
           {entries.map((e) => {
             if (e.kind === "push") return <PushCard key={`push-${e.push.id}`} push={e.push} />;
             const t = e.thread;
@@ -332,7 +308,7 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
               />
             );
           })}
-        </ol>
+        </Timeline>
       )}
     </div>
   );
@@ -355,7 +331,7 @@ function PushCard({ push }: { push: Push }) {
         <div className="pr-push-head">
           <Avatar name={push.author} size="small" />
           <span><strong>{push.author}</strong> pushed {count} {push.commits.length === 1 && !push.more ? "commit" : "commits"}</span>
-          <Text tone="muted" size="small" as="span"><When iso={push.at} /></Text>
+          <Text tone="muted" size="small" as="span"><Time iso={push.at} /></Text>
         </div>
         <ul className="pr-commits" aria-label={`Commits in update ${push.id}`}>
           {shown.map((c) => (
@@ -386,7 +362,7 @@ function CommentHead({ author, iso, suffix, isAuthor, bot, children }: { author:
       {bot ? <span className="pr-tag">Bot</span> : null}
       <Text tone="muted" size="small" as="span">
         {suffix ? `${suffix} ` : null}
-        {iso ? <When iso={iso} /> : null}
+        {iso ? <Time iso={iso} /> : null}
       </Text>
       {children ? <span className="pr-comment-head-end">{children}</span> : null}
     </div>

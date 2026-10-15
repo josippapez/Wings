@@ -1,4 +1,5 @@
 /** The PR tab's conversation: comments grouped into threads, and what each thread is (a person's, resolved, a bot's). */
+import { truncate } from "wings-plugin-sdk/format";
 import type { Comment } from "./types";
 
 export interface Thread {
@@ -45,17 +46,5 @@ export function oneLine(body: string, max = 140): string {
     .replace(/[`*_~>#|]/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date. */
-export function ago(iso: string, now = Date.now()): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const minutes = Math.max(0, Math.round((now - t) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 1440) return `${Math.round(minutes / 60)} h ago`;
-  if (minutes < 43_200) return `${Math.round(minutes / 1440)} d ago`;
-  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return truncate(text, max);
 }
