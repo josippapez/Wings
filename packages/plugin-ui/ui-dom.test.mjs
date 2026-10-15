@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardColumn, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput, TimelineCard } = await import("./ui.js");
+const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput, TimelineCard } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -597,6 +597,39 @@ test("Board is a focusable region, and a BoardColumn is named by its title and c
   assert.equal(document.getElementById(column.getAttribute("aria-labelledby")).textContent, "Doing");
   assert.equal(column.querySelector(".w-board-column-count").textContent, "2");
   await unmount();
+});
+
+test("BoardLanes heads the columns once, and a BoardLane folds its cells with a button that says whether it's open", async () => {
+  const lane = (props) => h(BoardLane, { label: "WEB-10 Checkout", count: 2, ...props }, h(BoardCell, { label: "To do" }, h("p", null, "Card")), h(BoardCell, { label: "Done" }));
+  const { host, unmount } = await mount(h(BoardLanes, { label: "Issues by parent", columns: [{ id: "todo", title: "To do", count: 2 }, { id: "done", title: "Done" }] }, lane({})));
+  const lanes = host.querySelector(".w-board-lanes");
+  assert.equal(lanes.style.getPropertyValue("--w-board-columns"), "2");
+  assert.deepEqual([...host.querySelectorAll(".w-board-lanes-column-title")].map((c) => c.textContent), ["To do", "Done"]);
+  const region = host.querySelector("[role=region]");
+  assert.equal(region.getAttribute("aria-label"), "Issues by parent");
+  assert.equal(region.getAttribute("tabindex"), "0");
+  const section = region.querySelector("section");
+  assert.equal(document.getElementById(section.getAttribute("aria-labelledby")).textContent, "WEB-10 Checkout");
+  assert.deepEqual([...section.querySelectorAll("[role=group]")].map((g) => g.getAttribute("aria-label")), ["To do", "Done"]);
+  const toggle = section.querySelector(".w-board-lane-toggle");
+  const body = document.getElementById(toggle.getAttribute("aria-controls"));
+  assert.equal(toggle.getAttribute("aria-label"), "WEB-10 Checkout");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(body.hidden, false);
+  await click(toggle);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(body.hidden, true);
+  assert.equal(section.hasAttribute("data-open"), false);
+  await unmount();
+
+  // Controlled: it shows what `open` says and asks `onOpenChange` to change it.
+  const asked = [];
+  const controlled = await mount(h(BoardLanes, { label: "Lanes", columns: [] }, lane({ open: false, onOpenChange: (open) => asked.push(open) })));
+  const button = controlled.host.querySelector(".w-board-lane-toggle");
+  await click(button);
+  assert.deepEqual(asked, [true]);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  await controlled.unmount();
 });
 
 test("Markdown loads a remote image only after its button is clicked", async () => {

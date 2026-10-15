@@ -589,6 +589,34 @@ export function boardColumns(issues: Issue[], showCanceled = false): { status: S
   }));
 }
 
+/** A row of the board grouped by parent: an epic or feature and its children, or `parent` null for the issues with none. */
+export interface Lane {
+  parent: Issue | null;
+  columns: { status: Status; issues: Issue[] }[];
+  count: number;
+}
+
+/**
+ * The board in rows, one per parent, like Linear's sub-grouping by parent issue: each issue is a card once, in the row
+ * of the epic or feature it sits under. Open parents come first (in progress, in review, to do, then done and canceled),
+ * each oldest key first, and the issues with no parent last.
+ */
+export function boardLanes(issues: Issue[], showCanceled = false): Lane[] {
+  const byKey = new Map(issues.map((i) => [i.key, i]));
+  const groups = new Map<string, Issue[]>();
+  for (const i of issues) {
+    if (i.status === "canceled" && !showCanceled) continue;
+    const parent = i.parent && byKey.has(i.parent) ? i.parent : "";
+    groups.set(parent, [...(groups.get(parent) ?? []), i]);
+  }
+  const order: Record<Status, number> = { in_progress: 0, in_review: 1, todo: 2, done: 3, canceled: 4 };
+  const lane = (parent: Issue | null, members: Issue[]): Lane => ({ parent, columns: boardColumns(members, showCanceled), count: members.length });
+  const parents = [...groups.keys()].filter(Boolean).map((k) => byKey.get(k)!);
+  parents.sort((a, b) => order[a.status] - order[b.status] || keyNumber(a.key) - keyNumber(b.key));
+  const lanes = parents.map((p) => lane(p, groups.get(p.key)!));
+  return groups.has("") ? [...lanes, lane(null, groups.get("")!)] : lanes;
+}
+
 export const findIssue = (store: Store | null, issueKey: string): Issue | null => store?.issues.find((i) => i.key === normalizeKey(issueKey)) ?? null;
 
 /** The session that touched the issue last, or null. Resume picks this one. */

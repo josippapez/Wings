@@ -387,7 +387,7 @@ textarea::placeholder {
   padding: 0;
   overflow: hidden;
 }
-.w-page-body[data-flush] > :is(.w-list-detail, .w-split, .w-board) {
+.w-page-body[data-flush] > :is(.w-list-detail, .w-split, .w-board, .w-board-lanes) {
   flex: 1;
 }
 .w-toolbar {
@@ -524,6 +524,116 @@ textarea::placeholder {
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* A board in rows. The page is see-through, so the column header can't stick over the cards: it sits outside the lanes,
+   which scroll down on their own, and both scroll sideways together in the outer box. Columns are at least 220px. */
+.w-board-lanes {
+  --w-board-lanes-width: calc(var(--w-board-columns) * 220px + (var(--w-board-columns) - 1) * 10px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.w-board-lanes-head,
+.w-board-lanes-body {
+  display: grid;
+  grid-template-columns: repeat(var(--w-board-columns), minmax(0, 1fr));
+  column-gap: 10px;
+  min-width: var(--w-board-lanes-width);
+  /* The same gutter on both, so the columns line up where scrollbars take room. */
+  scrollbar-gutter: stable;
+}
+.w-board-lanes-head {
+  flex: none;
+  overflow: hidden;
+}
+.w-board-lanes-body {
+  flex: 1;
+  align-content: start;
+  min-height: 0;
+  padding-bottom: 14px;
+  overflow-y: auto;
+}
+.w-board-lanes-body:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: -2px;
+}
+.w-board-lanes-column {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 9px 8px;
+}
+.w-board-lanes-column-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-board-lane,
+.w-board-lane-body {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+.w-board-lane + .w-board-lane {
+  margin-top: 6px;
+}
+.w-board-lane-header {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 6px 0;
+}
+.w-board-lane-lead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.w-board-lane-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 150ms;
+}
+.w-board-lane:not([data-open]) .w-board-lane-toggle svg {
+  transform: rotate(-90deg);
+}
+.w-board-lane-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w-board-lane-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.w-board-lane-body[hidden] {
+  display: none;
+}
+.w-board-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
 }
 
 /* A split: --w-split-size is the start pane's size, changed while you drag the handle. */

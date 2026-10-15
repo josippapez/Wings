@@ -113,6 +113,28 @@ export function ListDetail(
 export function Board(props: Omit<Props<"div">, "role"> & { label: string }): ReactElement;
 /** A column of a `Board`: a `title` with the `count` of its cards and `actions`, over `children`, usually `Card`s, that scroll. */
 export function BoardColumn(props: Omit<Props<"section">, "title"> & { title: ReactNode; count?: number; actions?: ReactNode }): ReactElement;
+/** A column of `BoardLanes`: its header text and the count of its cards across every lane. */
+export interface BoardLanesColumn {
+  id: string;
+  title: ReactNode;
+  count?: number;
+}
+/**
+ * A board in rows, like Linear's sub-grouping: the `columns` head it once, and each child is a `BoardLane`. The lanes
+ * scroll down under the column header, and the whole board scrolls sideways when the columns don't fit. The lanes are a
+ * region named `label` that takes keyboard focus, so the arrow keys scroll it.
+ */
+export function BoardLanes(props: Omit<Props<"div">, "role"> & { label: string; columns: BoardLanesColumn[] }): ReactElement;
+/**
+ * A row of `BoardLanes`: a header with a button that folds the row, its `title` (`label` when there's none), the `count`
+ * of its cards and `actions`, over one `BoardCell` per column, in the columns' order. `open` is controlled: give it
+ * `onOpenChange`, or use `defaultOpen` (open unless false).
+ */
+export function BoardLane(
+  props: Omit<Props<"section">, "title"> & { label: string; title?: ReactNode; count?: number; actions?: ReactNode; open?: boolean; defaultOpen?: boolean; onOpenChange?: (open: boolean) => void },
+): ReactElement;
+/** A lane's cell under one column, a stack of `children`, usually `Card`s. `label` names it for a screen reader, like the column's title. */
+export function BoardCell(props: Omit<Props<"div">, "role"> & { label: string }): ReactElement;
 /**
  * Two panes, `start` and `end`, with a handle between them. Drag the handle, or focus it and press the arrow keys
  * (Shift for bigger steps), Home or End. A drag changes a CSS variable only and commits on release, so nothing renders

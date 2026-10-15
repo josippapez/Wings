@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentCommand, applyOp, boardColumns, BUDGET, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
+import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
 import { formatIssue, parseTool } from "./tools.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
@@ -150,6 +150,32 @@ test("board columns and the open list: to do by key, others by activity, cancele
   assert.deepEqual(cols.map((c) => c.issues.map((i) => i.key)), [["WEB-1", "WEB-2"], ["WEB-4", "WEB-3"], ["WEB-7"], ["WEB-5"]]);
   assert.equal(boardColumns(issues, true).at(-1).status, "canceled");
   assert.deepEqual(openIssues(issues).map((i) => i.key), ["WEB-3", "WEB-4", "WEB-7", "WEB-1", "WEB-2"]);
+});
+
+test("board lanes: one row per parent, open parents first, each issue once, no-parent row last", () => {
+  const mk = (n, status, extra = {}) => ({ key: `WEB-${n}`, title: `t${n}`, type: "task", status, sessions: [], log: [], createdAt: 0, updatedAt: n, ...extra });
+  const issues = [
+    mk(1, "done", { type: "epic" }),
+    mk(2, "in_progress", { type: "epic" }),
+    mk(3, "todo", { parent: "WEB-1" }),
+    mk(4, "in_review", { parent: "WEB-2", type: "feature" }),
+    mk(5, "todo", { parent: "WEB-4" }),
+    mk(6, "canceled", { parent: "WEB-2" }),
+    mk(7, "todo", { parent: "WEB-99" }),
+    mk(8, "canceled", { type: "feature" }),
+    mk(9, "todo", { parent: "WEB-8" }),
+  ];
+  const lanes = boardLanes(issues);
+  // A canceled parent still heads its children's row; a parent that isn't in the project leaves its child with no parent.
+  assert.deepEqual(lanes.map((l) => l.parent?.key ?? null), ["WEB-2", "WEB-4", "WEB-1", "WEB-8", null]);
+  const keys = (l) => l.columns.flatMap((c) => c.issues.map((i) => i.key));
+  assert.deepEqual(lanes.map(keys), [["WEB-4"], ["WEB-5"], ["WEB-3"], ["WEB-9"], ["WEB-7", "WEB-2", "WEB-1"]]);
+  assert.deepEqual(lanes.map((l) => l.count), [1, 1, 1, 1, 3]);
+  assert.deepEqual(lanes[0].columns.map((c) => c.status), ["todo", "in_progress", "in_review", "done"]);
+  const shown = boardLanes(issues, true);
+  assert.deepEqual(shown.map(keys)[0], ["WEB-4", "WEB-6"]);
+  assert.deepEqual(keys(shown.at(-1)), ["WEB-7", "WEB-2", "WEB-1", "WEB-8"]);
+  assert.deepEqual(boardLanes([]), []);
 });
 
 test("resume and start commands are plain words Wings accepts, and refuse anything else", () => {

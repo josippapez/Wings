@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.42 · 2026-10-15
+
+- Issues 0.7.0: the board groups issues in rows by their parent epic or feature, like Linear's sub-grouping. Each row has the parent's status, title (click to open it) and how many of its children are done, and folds shut; the issues with no parent come last. Group by parent turns it off, and the tab keeps both choices. Epic and feature cards show their children's progress too.
+- Plugin pages can show a board in rows with `BoardLanes`, `BoardLane` and `BoardCell`; `wings-plugin-ui` 0.9.0, every plugin rebuilt.
+
 ## 0.1.41 · 2026-10-15
 
 - Issues 0.6.0 keeps issues local to Wings: it no longer links commits or branches by an issue key in git, and its tools tell agents never to put keys in commit messages, branch names or pull requests. Agents link a commit, branch or pull request to an issue themselves with `update`. Issues no longer needs to run git.

@@ -181,6 +181,61 @@ export function BoardColumn({ title, count, actions, children, className, ...res
   );
 }
 
+/** A board in rows: `columns` head it once, each child is a `BoardLane`. The lanes scroll down, the whole board sideways. */
+export function BoardLanes({ label, columns, children, className, style, ...rest }) {
+  return h(
+    "div",
+    { ...rest, className: cx("w-board-lanes", className), style: { ...style, "--w-board-columns": columns.length } },
+    h(
+      "div",
+      { className: "w-board-lanes-head" },
+      columns.map((c) =>
+        h(
+          "div",
+          { key: c.id, className: "w-board-lanes-column" },
+          h("span", { className: "w-board-lanes-column-title" }, c.title),
+          c.count === undefined ? null : h(Badge, { variant: "secondary", className: "w-board-column-count" }, c.count),
+        ),
+      ),
+    ),
+    // The lanes are what scrolls down, so they are the region that takes focus for the arrow keys.
+    h("div", { tabIndex: 0, role: "region", "aria-label": label, className: "w-board-lanes-body" }, children),
+  );
+}
+
+/** A row of `BoardLanes`: a header that folds it, with its title, count and actions, over one `BoardCell` per column. */
+export function BoardLane({ label, title, count, actions, open, defaultOpen = true, onOpenChange, children, className, ...rest }) {
+  const id = useId();
+  const [own, setOwn] = useState(defaultOpen);
+  const shown = open ?? own;
+  const toggle = () => {
+    if (open === undefined) setOwn(!shown);
+    onOpenChange?.(!shown);
+  };
+  return h(
+    "section",
+    { ...rest, className: cx("w-board-lane", className), "aria-labelledby": `${id}t`, "data-open": flag(shown) },
+    h(
+      "header",
+      { className: "w-board-lane-header" },
+      h(
+        "div",
+        { className: "w-board-lane-lead" },
+        h(Button, { variant: "ghost", size: "icon-xs", className: "w-board-lane-toggle", "aria-label": label, "aria-expanded": shown, "aria-controls": `${id}b`, onClick: toggle }, icon(CHEVRON_DOWN)),
+        h("h2", { id: `${id}t`, className: "w-board-lane-title" }, title ?? label),
+        count === undefined ? null : h(Badge, { variant: "secondary", className: "w-board-column-count" }, count),
+        actions ? h("div", { className: "w-board-lane-actions" }, actions) : null,
+      ),
+    ),
+    h("div", { id: `${id}b`, className: "w-board-lane-body", hidden: !shown }, children),
+  );
+}
+
+/** A lane's cell under one column: a stack of cards, named `label` for a screen reader. */
+export function BoardCell({ label, className, ...rest }) {
+  return h("div", { role: "group", "aria-label": label, ...rest, className: cx("w-board-cell", className) });
+}
+
 const SPLIT_STEP = 16;
 const SPLIT_STEP_LARGE = 64;
 const SPLIT_HANDLE = 9;

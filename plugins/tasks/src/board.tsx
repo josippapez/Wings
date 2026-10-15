@@ -1,5 +1,6 @@
-// The Issues tab: a board of to do, in progress, in review and done, with canceled behind a toggle. Click a card to open
-// the issue. Alt+Left and Alt+Right on a card move it between columns, and so do its buttons.
+// The Issues tab: a board of to do, in progress, in review and done, with canceled behind a toggle, in rows by parent
+// epic or feature unless that's turned off. Click a card to open the issue. Alt+Left and Alt+Right on a card move it
+// between columns, and so do its buttons. The rows choice and the folded rows are kept with the tab.
 
 import { useEffect, useState } from "react";
 import { Empty, Loading, showTab } from "wings-plugin-ui";
@@ -19,10 +20,48 @@ function BoardPage() {
 function ProjectBoard({ project }: { project: WingsProject }) {
   const { store, apply } = useIssues(project.id, project.name);
   const [showCanceled, setShowCanceled] = useState(false);
+  const [view, setView] = useBoardView();
   const [error, setError] = useState<string | null>(null);
   const send = (op: Op) => apply(op).then(() => setError(null), (e) => setError(e instanceof Error ? e.message : String(e)));
   const open = (issue: Issue, newTab: boolean) => void wings.openView("issue", { as: "tab", args: { key: issue.key, projectId: project.id }, newTab });
-  return <BoardView project={project} issues={store?.issues ?? null} error={error} showCanceled={showCanceled} onShowCanceled={setShowCanceled} apply={apply} send={send} onOpen={open} />;
+  const fold = (lane: string, isOpen: boolean) => setView({ ...view, folded: isOpen ? view.folded.filter((k) => k !== lane) : [...view.folded, lane] });
+  return (
+    <BoardView
+      project={project}
+      issues={store?.issues ?? null}
+      error={error}
+      showCanceled={showCanceled}
+      onShowCanceled={setShowCanceled}
+      byParent={view.byParent}
+      onByParent={(byParent) => setView({ ...view, byParent })}
+      folded={view.folded}
+      onFold={fold}
+      apply={apply}
+      send={send}
+      onOpen={open}
+    />
+  );
+}
+
+interface View {
+  byParent: boolean;
+  folded: string[];
+}
+
+/** Rows by parent (on until turned off) and the folded rows, kept with the tab so they are there when it opens again. */
+function useBoardView(): [View, (v: View) => void] {
+  const [view, setView] = useState<View>({ byParent: true, folded: [] });
+  useEffect(() => {
+    void wings
+      .tabState<Partial<View>>()
+      .then((saved) => setView({ byParent: saved?.byParent !== false, folded: Array.isArray(saved?.folded) ? saved.folded.filter((k) => typeof k === "string") : [] }))
+      .catch(() => {});
+  }, []);
+  const save = (v: View) => {
+    setView(v);
+    void wings.setTabState(v).catch(() => {});
+  };
+  return [view, save];
 }
 
 showTab(<BoardPage />, { fill: true });

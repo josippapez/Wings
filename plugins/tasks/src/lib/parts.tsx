@@ -44,11 +44,25 @@ export function SessionMarker({ issue }: { issue: Issue }) {
   return <Badge variant="outline" title={`Claude session ${last.name ?? last.id}`}>{last.name ? (last.name.length > 14 ? `${last.name.slice(0, 13)}…` : last.name) : "Claude"}</Badge>;
 }
 
+/** How many of an epic's or feature's children are done, as a short bar and "3/7". */
+export function ChildProgress({ done, total }: { done: number; total: number }) {
+  return (
+    <span className="tk-child-progress" title={`${done} of ${total} child issues done`}>
+      <span className="tk-progress" aria-hidden>
+        <span style={{ width: `${(done / total) * 100}%` }} />
+      </span>
+      <span aria-hidden>{done}/{total}</span>
+      <span className="w-visually-hidden">{done} of {total} child issues done</span>
+    </span>
+  );
+}
+
 /**
  * An issue as a card: key and the session marker, the title (a button that opens the issue), when it last changed and
- * buttons to move it a column. Alt+Left and Alt+Right on the title move it too.
+ * buttons to move it a column. Alt+Left and Alt+Right on the title move it too. `progress` is an epic's or feature's
+ * children done; `hideParent` leaves out the parent's key in a row that already names it.
  */
-export function IssueCard({ issue, id, compact, onOpen, onMove }: { issue: Issue; id: string; compact?: boolean; onOpen: (newTab: boolean) => void; onMove: (by: 1 | -1) => void }) {
+export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, onMove }: { issue: Issue; id: string; compact?: boolean; progress?: { done: number; total: number }; hideParent?: boolean; onOpen: (newTab: boolean) => void; onMove: (by: 1 | -1) => void }) {
   const index = FLOW.indexOf(issue.status);
   const target = (by: 1 | -1) => STATUS_LABEL[FLOW[index + by] ?? issue.status];
   const movable = index >= 0;
@@ -58,7 +72,7 @@ export function IssueCard({ issue, id, compact, onOpen, onMove }: { issue: Issue
         <Row gap="xs" className="tk-card-key">
           <TypeIcon type={issue.type} />
           <Text as="span" mono tone="muted" size="tiny">{issue.key}</Text>
-          {issue.parent ? <Text as="span" mono tone="muted" size="tiny" className="tk-card-parent" title={`In ${issue.parent}`}>· {issue.parent}</Text> : null}
+          {issue.parent && !hideParent ? <Text as="span" mono tone="muted" size="tiny" className="tk-card-parent" title={`In ${issue.parent}`}>· {issue.parent}</Text> : null}
         </Row>
         <SessionMarker issue={issue} />
       </Row>
@@ -75,6 +89,7 @@ export function IssueCard({ issue, id, compact, onOpen, onMove }: { issue: Issue
       >
         <Text as="span" clamp>{issue.title}</Text>
       </Button>
+      {progress?.total ? <ChildProgress {...progress} /> : null}
       <div className="tk-card-foot">
         <Time iso={new Date(issue.updatedAt).toISOString()} prefix={issue.status === "done" ? "Done " : "Updated "} />
         {movable ? (

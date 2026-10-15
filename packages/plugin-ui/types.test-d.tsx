@@ -1,7 +1,7 @@
 // Checked by `tsc` in `pnpm test`, never run: `as` types a layout component's props for the element it renders.
 import type { FormEvent, MouseEvent } from "react";
 
-import { Badge, Board, BoardColumn, Button, Card, Combobox, Empty, ListDetail, Menu, Page, Row, Select, Split, Stack, Tabs, Toolbar } from "./ui";
+import { Badge, Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Card, Combobox, Empty, ListDetail, Menu, Page, Row, Select, Split, Stack, Tabs, Toolbar } from "./ui";
 
 const submit = (e: FormEvent<HTMLFormElement>) => e.currentTarget.requestSubmit();
 
@@ -80,11 +80,20 @@ export const pages = [
     <Board label="Board">
       <BoardColumn title="Todo" count={3} actions={<Button />} />
     </Board>
+    <BoardLanes label="Lanes" columns={[{ id: "todo", title: "Todo", count: 3 }]}>
+      <BoardLane label="Epic" title={<Button />} count={2} actions={<Button />} open onOpenChange={(open: boolean) => open}>
+        <BoardCell label="Todo" />
+      </BoardLane>
+    </BoardLanes>
   </Page>,
   // @ts-expect-error a Split needs both panes
   <Split start={<Stack />} />,
   // @ts-expect-error a Board needs a label
   <Board />,
+  // @ts-expect-error BoardLanes need their columns
+  <BoardLanes label="Lanes" />,
+  // @ts-expect-error a BoardLane needs a label
+  <BoardLane />,
   // @ts-expect-error direction is horizontal or vertical
   <Split start={<Stack />} end={<Stack />} direction="diagonal" />,
 ];
