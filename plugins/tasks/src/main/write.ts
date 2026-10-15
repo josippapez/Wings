@@ -1,20 +1,12 @@
 // The only writer of the issues. Pages ask for operations and tools run the same ones, one at a time, each against what
-// storage holds at that moment. After a change it tells the pages and refreshes the project's section in the sidebar. Which
-// session wrote a tool call's entry comes from the pane the call was made in.
+// storage holds at that moment. After a change it tells the pages and refreshes the project's section in the sidebar.
 
 import { serial } from "wings-plugin-sdk/async";
-import { resolvePane } from "../lib/actor";
 import type { Actor, Issue, Op } from "../lib/domain";
 import { ch } from "../lib/messages";
 import { applyOp } from "../lib/ops";
 import { migrateLegacy, readStore, writeStore } from "../lib/storage";
 import { pushSection } from "./section";
-
-let panes: WingsPane[] = [];
-wings.onPanes((list) => (panes = list));
-
-/** The project and the Claude session a tool call came from, by the pane it was made in. */
-export const callerOf = (paneId: string | null) => resolvePane(panes, paneId);
 
 /** Writes run one after another, so a read-then-write never interleaves with another. */
 const queue = serial();

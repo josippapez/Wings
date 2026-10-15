@@ -17,7 +17,6 @@ globalThis.wings = {
   broadcast: async (message) => send("page", message),
   onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
   onTool: (name, handler) => handlers.set(name, handler),
-  onPanes: (listener) => listener([{ paneId: "p1", project: "web", projectId: "proj1", session: { sessionId: "s-1", name: "agent one" } }]),
   onProjects: (listener) => (projects = listener),
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
 };
@@ -26,7 +25,7 @@ await import("./main.ts");
 const page = channel({ wings: { broadcast: async (message) => send("main", message), onBroadcast: (listener) => (listeners.page.add(listener), () => listeners.page.delete(listener)) } });
 const told = [];
 page.on("issues", (m) => told.push(m));
-const call = async (name, input) => handlers.get(name)(input, { paneId: "p1" });
+const call = async (name, input) => handlers.get(name)(input, { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } });
 const ask = (op) => page.ask("op", { projectId: "proj1", projectName: "web", op });
 
 test("a tool's input is checked against its schema first, and the error names the field and what it allows", async () => {
