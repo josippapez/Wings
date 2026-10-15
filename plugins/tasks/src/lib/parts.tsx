@@ -1,7 +1,7 @@
 // Small pieces the Issues pages share.
 
 import { Badge, Button, Card, Dot, Row, Text, Time } from "wings-plugin-ui";
-import { FLOW, lastSession, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Status } from "./issues";
+import { FLOW, lastSession, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Priority, type Status } from "./issues";
 
 const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: undefined, canceled: "muted" } as const;
 
@@ -23,6 +23,29 @@ export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) 
     <svg className="tk-type" data-type={type} viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...(label ? { role: "img", "aria-label": TYPE_LABEL[type] } : { "aria-hidden": true })}>
       <title>{TYPE_LABEL[type]}</title>
       {TYPE_PATH[type]}
+    </svg>
+  );
+}
+
+/**
+ * Linear's priority icon: three bars filled by level, an exclamation mark in a square for urgent, a dash for none. Named
+ * for a screen reader with `label`, otherwise decoration next to text that says it.
+ */
+export function PriorityIcon({ priority = "none", label }: { priority?: Priority; label?: boolean }) {
+  const filled = { urgent: 3, high: 3, medium: 2, low: 1, none: 0 }[priority];
+  return (
+    <svg className="tk-priority" data-priority={priority} viewBox="0 0 16 16" width="14" height="14" {...(label ? { role: "img", "aria-label": PRIORITY_LABEL[priority] } : { "aria-hidden": true })}>
+      <title>{PRIORITY_LABEL[priority]}</title>
+      {priority === "urgent" ? (
+        <>
+          <rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="currentColor" />
+          <path d="M8 4.5v4.5M8 11.2v.3" stroke="var(--wings-primary-fg)" strokeWidth="1.8" strokeLinecap="round" />
+        </>
+      ) : priority === "none" ? (
+        <path d="M3 8h2M7 8h2M11 8h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      ) : (
+        [0, 1, 2].map((i) => <rect key={i} x={2 + i * 4.5} y={10 - i * 3.5} width="3" height={4 + i * 3.5} rx="1" fill="currentColor" opacity={i < filled ? 1 : 0.3} />)
+      )}
     </svg>
   );
 }
@@ -70,6 +93,7 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
     <Card compact={compact} className="tk-card" data-status={issue.status}>
       <Row gap="s" justify="between" className="tk-card-top">
         <Row gap="xs" className="tk-card-key">
+          {issue.priority ? <PriorityIcon priority={issue.priority} label /> : null}
           <TypeIcon type={issue.type} />
           <Text as="span" mono tone="muted" size="tiny">{issue.key}</Text>
           {issue.parent && !hideParent ? <Text as="span" mono tone="muted" size="tiny" className="tk-card-parent" title={`In ${issue.parent}`}>· {issue.parent}</Text> : null}

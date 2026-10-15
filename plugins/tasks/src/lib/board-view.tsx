@@ -3,7 +3,7 @@
 import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { boardColumns, boardLanes, canParent, childrenOf, FLOW, issueTree, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
-import { ChildProgress, IssueCard, openProps, SessionMarker, StatusDot, TypeIcon } from "./parts";
+import { ChildProgress, IssueCard, openProps, PriorityIcon, SessionMarker, StatusDot, TypeIcon } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -163,6 +163,7 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
               </Button>
               <ListButton className="tk-row tk-tree-root" data-status={root.status} {...openProps((newTab) => onOpen(root, newTab))} aria-label={`Open ${root.key}: ${root.title}`}>
+                <PriorityIcon priority={root.priority} label />
                 <TypeIcon type={root.type} label />
                 <span className="tk-key">{root.key}</span>
                 <Text as="span" grow truncate className="tk-row-title">{root.title}</Text>
@@ -213,6 +214,7 @@ function IssueRow({ issue: i, issues, parent, depth, onOpen }: { issue: Issue; i
     <ListItem>
       <ListButton className="tk-row" data-status={i.status} style={depth ? { paddingLeft: `${36 + (depth - 1) * 24}px` } : undefined} {...openProps((newTab) => onOpen(i, newTab))} aria-label={`Open ${i.key}: ${i.title}`}>
         {depth && depth > 1 ? <span className="tk-tree-elbow" aria-hidden>└</span> : null}
+        <PriorityIcon priority={i.priority} label />
         <span className="tk-key">{i.key}</span>
         <TypeIcon type={i.type} />
         <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>

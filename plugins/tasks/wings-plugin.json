@@ -1,10 +1,10 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "minWingsVersion": "0.1.42",
   "icon": "icon.svg",
-  "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the Claude sessions that worked on it and an activity log of who did what and when. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update and tasks__log.",
+  "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the Claude sessions that worked on it and an activity log of who did what and when. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update and tasks__log.",
   "api": 1,
   "main": "main.js",
   "permissions": {
@@ -128,6 +128,17 @@
               ],
               "description": "Defaults to todo. Use in_progress when you start on it now."
             },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "urgent",
+                "high",
+                "medium",
+                "low",
+                "none"
+              ],
+              "description": "How urgent it is: urgent, high, medium, low, or none. Defaults to none."
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -183,7 +194,7 @@
       },
       {
         "name": "update",
-        "description": "Changes an issue: its title, description (replaces it), status, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: after each commit you make for this issue, call update with its hash (commit); when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
+        "description": "Changes an issue: its title, description (replaces it), status, priority, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: after each commit you make for this issue, call update with its hash (commit); when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -208,6 +219,17 @@
                 "done",
                 "canceled"
               ]
+            },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "urgent",
+                "high",
+                "medium",
+                "low",
+                "none"
+              ],
+              "description": "How urgent it is: urgent, high, medium, low, or none. none clears it."
             },
             "branch": {
               "type": "string",

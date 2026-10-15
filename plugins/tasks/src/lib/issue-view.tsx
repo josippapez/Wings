@@ -3,8 +3,8 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Combobox, Empty, Heading, List, ListButton, ListItem, Loading, Markdown, Menu, Page, Row, Select, Stack, Text, TextInput, Time, Timeline, TimelineCard, TimelineNote, Title, Toolbar } from "wings-plugin-ui";
-import { openProps, StatusDot, TypeIcon } from "./parts";
-import { actorName, blocksOf, canParent, childrenOf, DESCRIPTION_TEMPLATE, isClaude, LIMITS, parentChoices, progress, visibleDescription, lastSession, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type LogEntry, type Op, type Status } from "./issues";
+import { openProps, PriorityIcon, StatusDot, TypeIcon } from "./parts";
+import { actorName, blocksOf, canParent, childrenOf, DESCRIPTION_TEMPLATE, isClaude, LIMITS, parentChoices, PRIORITIES, PRIORITY_LABEL, progress, visibleDescription, lastSession, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type LogEntry, type Op, type Priority, type Status } from "./issues";
 
 export interface IssueViewProps {
   project: WingsProject;
@@ -29,6 +29,7 @@ export interface IssueViewProps {
 }
 
 const STATUS_OPTIONS = STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }));
+const PRIORITY_OPTIONS = PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }));
 const TYPE_OPTIONS = TYPES.map((value) => ({ value, label: TYPE_LABEL[value] }));
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -322,6 +323,12 @@ function Properties({ issue, issues, project, send, onOpenUrl, onOpenIssue }: { 
         <Row gap="s" className="tk-status">
           <StatusDot status={issue.status} />
           <Select label="Status" className="tk-status-select" options={STATUS_OPTIONS} value={issue.status} onChange={(status: Status) => void send({ kind: "update", key: issue.key, status })} />
+        </Row>
+      </Prop>
+      <Prop label="Priority">
+        <Row gap="s" className="tk-status">
+          <PriorityIcon priority={issue.priority} />
+          <Select label="Priority" className="tk-status-select" options={PRIORITY_OPTIONS} value={issue.priority ?? "none"} onChange={(priority: Priority) => void send({ kind: "update", key: issue.key, priority })} />
         </Row>
       </Prop>
       <Prop label="Type">

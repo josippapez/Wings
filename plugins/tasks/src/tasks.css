@@ -588,3 +588,15 @@
   margin-right: -4px;
   color: var(--wings-hairline-strong);
 }
+
+/* ---------- Priority ---------- */
+.tk-priority {
+  flex: none;
+  color: var(--wings-muted);
+}
+.tk-priority[data-priority="urgent"] {
+  color: var(--wings-warning);
+}
+.tk-priority[data-priority="high"] {
+  color: var(--wings-fg);
+}

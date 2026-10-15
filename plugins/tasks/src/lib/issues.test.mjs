@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, issueTree, trailTo, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
+import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, priorityRank, issueTree, trailTo, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
 import { formatIssue, parseTool } from "./tools.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
@@ -130,7 +130,7 @@ test("tool input validation bounds every field and rejects strays", () => {
   assert.throws(() => parseTool("update", { key: "WEB-1" }), /at least one of/);
   assert.throws(() => parseTool("list", { status: "x" }), /status must be one of/);
   assert.throws(() => parseTool("get", null), /must be an object/);
-  assert.deepEqual(parseTool("update", { key: "web-1", status: "done", commit: "abc1234" }).op, { kind: "update", key: "WEB-1", title: undefined, description: undefined, status: "done", branch: undefined, pr: undefined, commit: "abc1234", type: undefined, parent: undefined, relatedAdd: undefined, relatedRemove: undefined, blockedByAdd: undefined, blockedByRemove: undefined });
+  assert.deepEqual(parseTool("update", { key: "web-1", status: "done", commit: "abc1234" }).op, { kind: "update", key: "WEB-1", title: undefined, description: undefined, status: "done", priority: undefined, branch: undefined, pr: undefined, commit: "abc1234", type: undefined, parent: undefined, relatedAdd: undefined, relatedRemove: undefined, blockedByAdd: undefined, blockedByRemove: undefined });
 });
 
 test("a tool-created issue gets the agent's session, and get shows description, links, sessions and log", () => {
@@ -195,6 +195,26 @@ test("the list by parent: a group per top-level parent, children indented in tre
   // An epic with nothing under it is just a row, like any issue with no parent.
   assert.deepEqual(loose.map((i) => i.key), ["WEB-5", "WEB-7"]);
   assert.deepEqual(issueTree(issues, true).groups[0].rows.map((r) => r.issue.key), ["WEB-4", "WEB-2", "WEB-3", "WEB-6"]);
+});
+
+test("priority: set on create, changed and cleared with a log entry, refused when unknown, and sorts urgent first", () => {
+  let s = create(fresh(), "Fix it", { priority: "high" }).store;
+  assert.equal(s.issues[0].priority, "high");
+  assert.equal(create(fresh(), "Plain").store.issues[0].priority, undefined);
+  assert.equal(create(fresh(), "None", { priority: "none" }).store.issues[0].priority, undefined);
+  s = applyOp(s, { kind: "update", key: "WEB-1", priority: "urgent" }, "you", 2).store;
+  assert.equal(s.issues[0].priority, "urgent");
+  assert.equal(s.issues[0].log.at(-1).text, "Priority: High → Urgent");
+  s = applyOp(s, { kind: "update", key: "WEB-1", priority: "none" }, "you", 3).store;
+  assert.equal("priority" in s.issues[0], false);
+  assert.equal(applyOp(s, { kind: "update", key: "WEB-1", priority: "none" }).changed, false);
+  assert.throws(() => applyOp(s, { kind: "update", key: "WEB-1", priority: "p1" }), /priority must be one of/);
+  assert.throws(() => parseTool("create", { title: "t", priority: "asap" }), /priority must be one of/);
+  assert.equal(parseTool("update", { key: "web-1", priority: "low" }).op.priority, "low");
+  const mk = (n, priority) => ({ key: `WEB-${n}`, title: `t${n}`, type: "task", status: "todo", priority, sessions: [], log: [], createdAt: 0, updatedAt: 0 });
+  const col = boardColumns([mk(1), mk(2, "low"), mk(3, "urgent"), mk(4, "high")])[0];
+  assert.deepEqual(col.issues.map((i) => i.key), ["WEB-3", "WEB-4", "WEB-2", "WEB-1"]);
+  assert.ok(priorityRank({}) > priorityRank({ priority: "low" }));
 });
 
 test("the breadcrumb trail adds the issue you leave, goes back to one already on it, and keeps the last eight", () => {

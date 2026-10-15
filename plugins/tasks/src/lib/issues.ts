@@ -24,6 +24,12 @@ export const STATUS_LABEL: Record<Status, string> = { todo: "To do", in_progress
 export type IssueType = "task" | "bug" | "feature" | "epic";
 export const TYPES: IssueType[] = ["task", "bug", "feature", "epic"];
 export const TYPE_LABEL: Record<IssueType, string> = { task: "Task", bug: "Bug", feature: "Feature", epic: "Epic" };
+/** Linear's priorities. "none" is an issue without one: it isn't stored. */
+export type Priority = "urgent" | "high" | "medium" | "low" | "none";
+export const PRIORITIES: Priority[] = ["urgent", "high", "medium", "low", "none"];
+export const PRIORITY_LABEL: Record<Priority, string> = { urgent: "Urgent", high: "High", medium: "Medium", low: "Low", none: "No priority" };
+/** Sorts urgent first and no priority last. */
+export const priorityRank = (issue: { priority?: Priority }): number => PRIORITIES.indexOf(issue.priority ?? "none");
 /** Only these can be somebody's parent. */
 export const canParent = (type: IssueType): boolean => type === "epic" || type === "feature";
 
@@ -33,7 +39,7 @@ export const canParent = (type: IssueType): boolean => type === "epic" || type =
  * "you" so the log never claims the user did something they didn't do.
  */
 export type Actor = "you" | "git" | { id: string; name?: string };
-export type LogKind = "created" | "status" | "note" | "link" | "type";
+export type LogKind = "created" | "status" | "note" | "link" | "type" | "priority";
 export interface LogEntry {
   at: number;
   by: Actor;
@@ -54,6 +60,8 @@ export interface Issue {
   description?: string;
   status: Status;
   type: IssueType;
+  /** Absent for no priority. */
+  priority?: Exclude<Priority, "none">;
   /** The epic or feature this belongs to. Same project, never itself or one of its own children. */
   parent?: string;
   /** Symmetric: if A lists B, B lists A. */
@@ -87,8 +95,8 @@ export interface Relations {
   blockedByRemove?: string[];
 }
 export type Op =
-  | ({ kind: "create"; title: string; description?: string; status?: Status; branch?: string } & Relations)
-  | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; branch?: string; pr?: string; commit?: string } & Relations)
+  | ({ kind: "create"; title: string; description?: string; status?: Status; priority?: Priority; branch?: string } & Relations)
+  | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; priority?: Priority; branch?: string; pr?: string; commit?: string } & Relations)
   | { kind: "note"; key: string; text: string }
   | { kind: "remove"; key: string };
 
@@ -124,6 +132,7 @@ export function visibleDescription(description: string | undefined): string {
 export const hasContent = (description: string | undefined): boolean => visibleDescription(description) !== "";
 
 export const isType = (v: unknown): v is IssueType => typeof v === "string" && (TYPES as string[]).includes(v);
+export const isPriority = (v: unknown): v is Priority => typeof v === "string" && (PRIORITIES as string[]).includes(v);
 export const isStatus = (v: unknown): v is Status => typeof v === "string" && (STATUSES as string[]).includes(v);
 
 // ---------- keys ----------
@@ -477,9 +486,11 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
     const description = op.description === undefined ? "" : text(op.description, "description", LIMITS.description);
     if (op.status !== undefined && !isStatus(op.status)) throw new Error(`status must be one of ${STATUSES.join(", ")}.`);
     if (op.type !== undefined && !isType(op.type)) throw new Error(`type must be one of ${TYPES.join(", ")}.`);
+    if (op.priority !== undefined && !isPriority(op.priority)) throw new Error(`priority must be one of ${PRIORITIES.join(", ")}.`);
     if (store.issues.length >= LIMITS.issues) throw new Error(`A project holds up to ${LIMITS.issues} issues. Remove one first.`);
     const issue: Issue = { key: `${store.prefix}-${store.next}`, title, status: op.status ?? "todo", type: op.type ?? "task", sessions: [], log: [{ at: now, by, kind: "created", text: "Created" }], createdAt: now, updatedAt: now };
     if (hasContent(description)) issue.description = description;
+    if (op.priority && op.priority !== "none") issue.priority = op.priority;
     touch(issue, by, now);
     if (op.branch !== undefined) append(issue, applyLinks(issue, { kind: "update", key: issue.key, branch: op.branch }, by, now));
     let issues = store.issues;
@@ -552,6 +563,15 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
         changed = true;
       }
     }
+    if (op.priority !== undefined) {
+      if (!isPriority(op.priority)) throw new Error(`priority must be one of ${PRIORITIES.join(", ")}.`);
+      if (op.priority !== (next.priority ?? "none")) {
+        entries.push({ at: now, by, kind: "priority", text: `Priority: ${PRIORITY_LABEL[next.priority ?? "none"]} → ${PRIORITY_LABEL[op.priority]}` });
+        if (op.priority === "none") delete next.priority;
+        else next.priority = op.priority;
+        changed = true;
+      }
+    }
     const linkEntries = applyLinks(next, op, by, now);
     entries.push(...linkEntries);
     if (linkEntries.length) changed = true;
@@ -581,11 +601,11 @@ export function openIssues(issues: Issue[]): Issue[] {
   return issues.filter((i) => i.status !== "done" && i.status !== "canceled").sort((a, b) => order[a.status] - order[b.status] || keyNumber(a.key) - keyNumber(b.key));
 }
 
-/** The board's columns: to do by key, the rest by latest activity. Canceled only when asked for. */
+/** The board's columns: highest priority first, then to do by key and the rest by latest activity. Canceled only when asked for. */
 export function boardColumns(issues: Issue[], showCanceled = false): { status: Status; issues: Issue[] }[] {
   return (showCanceled ? STATUSES : FLOW).map((status) => ({
     status,
-    issues: issues.filter((i) => i.status === status).sort((a, b) => (status === "todo" ? keyNumber(a.key) - keyNumber(b.key) : b.updatedAt - a.updatedAt)),
+    issues: issues.filter((i) => i.status === status).sort((a, b) => priorityRank(a) - priorityRank(b) || (status === "todo" ? keyNumber(a.key) - keyNumber(b.key) : b.updatedAt - a.updatedAt)),
   }));
 }
 
@@ -625,14 +645,14 @@ export interface TreeGroup {
 
 /**
  * The list grouped by parent, like Linear's sub-issues: one group per top-level issue that has children, with every
- * issue below it in tree order and indented by `depth` (1 for a child), siblings by status (closest to done first) then
+ * issue below it in tree order and indented by `depth` (1 for a child), siblings by status (closest to done first), priority, then
  * key. `loose` is the top-level issues with no children. Canceled ones only when asked for.
  */
 export function issueTree(issues: Issue[], showCanceled = false): { groups: TreeGroup[]; loose: Issue[] } {
   const shown = issues.filter((i) => showCanceled || i.status !== "canceled");
   const keys = new Set(shown.map((i) => i.key));
   const order: Record<Status, number> = { in_review: 0, in_progress: 1, todo: 2, done: 3, canceled: 4 };
-  const sort = (list: Issue[]) => list.sort((a, b) => order[a.status] - order[b.status] || keyNumber(a.key) - keyNumber(b.key));
+  const sort = (list: Issue[]) => list.sort((a, b) => order[a.status] - order[b.status] || priorityRank(a) - priorityRank(b) || keyNumber(a.key) - keyNumber(b.key));
   const kids = (key: string) => sort(shown.filter((i) => i.parent === key));
   const below = (key: string, depth: number): TreeGroup["rows"] => kids(key).flatMap((issue) => [{ issue, depth }, ...below(issue.key, depth + 1)]);
   const roots = sort(shown.filter((i) => !i.parent || !keys.has(i.parent)));

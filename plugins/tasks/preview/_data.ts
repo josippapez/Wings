@@ -50,11 +50,11 @@ const base: Base[] = [
 ];
 
 const extra: Record<string, Partial<Issue>> = {
-  "WEB-1": { type: "feature", parent: "WEB-10" },
-  "WEB-2": { type: "bug", parent: "WEB-10", blockedBy: ["WEB-5"], related: ["WEB-4"] },
+  "WEB-1": { type: "feature", parent: "WEB-10", priority: "medium" },
+  "WEB-2": { type: "bug", parent: "WEB-10", priority: "urgent", blockedBy: ["WEB-5"], related: ["WEB-4"] },
   "WEB-3": { parent: "WEB-10", status: "done" },
-  "WEB-4": { type: "feature", parent: "WEB-10", related: ["WEB-2", "WEB-6"] },
-  "WEB-5": { parent: "WEB-10" },
+  "WEB-4": { type: "feature", parent: "WEB-10", priority: "high", related: ["WEB-2", "WEB-6"] },
+  "WEB-5": { parent: "WEB-10", priority: "high" },
   "WEB-6": { related: ["WEB-4"], parent: "WEB-13" },
   "WEB-7": { parent: "WEB-10" },
   "WEB-8": { parent: "WEB-10" },
@@ -62,7 +62,7 @@ const extra: Record<string, Partial<Issue>> = {
 };
 const epic: Base = { key: "WEB-10", title: "Checkout redesign", description: "## Goal\nA checkout that fits on one screen and shows the total early.\n\n## Scope\n- The summary card, the delivery estimate and the promo field\n- Payment webhooks keep working throughout\n\n## Done when\n- [ ] Every child issue is done\n- [ ] The checkout passes the keyboard walk-through\n\n## Validation", status: "in_progress", sessions: [], log: [entry(ago(80), "you", "created", "Created"), entry(ago(52), "you", "link", "Child: WEB-4"), entry(ago(28), s2, "link", "Child: WEB-2")], createdAt: ago(80), updatedAt: ago(5) };
 const more: Issue[] = [
-  { key: "WEB-12", type: "task", parent: "WEB-4", title: "Hide the summary card for an empty cart", status: "todo", sessions: [], log: [entry(ago(20), "you", "created", "Created")], createdAt: ago(20), updatedAt: ago(20) },
+  { key: "WEB-12", type: "task", parent: "WEB-4", priority: "low", title: "Hide the summary card for an empty cart", status: "todo", sessions: [], log: [entry(ago(20), "you", "created", "Created")], createdAt: ago(20), updatedAt: ago(20) },
   { key: "WEB-13", type: "epic", title: "Faster product pages", status: "todo", sessions: [], log: [entry(ago(70), "you", "created", "Created")], createdAt: ago(70), updatedAt: ago(8) },
   { key: "WEB-14", type: "task", title: "Update the README for the new checkout", status: "todo", sessions: [], log: [entry(ago(3), "you", "created", "Created")], createdAt: ago(3), updatedAt: ago(3) },
 ];
