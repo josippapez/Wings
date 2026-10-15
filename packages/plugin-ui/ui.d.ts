@@ -80,8 +80,8 @@ export interface ActionState {
 /** Runs the page's async actions and keeps what its buttons and error card show: `busy` while one is going, and the message of the last one that threw as `error`. */
 export function useAction(): ActionState;
 /**
- * Calls `load` when the component mounts and each time `load` changes, then every `ms` while Wings is focused, and once
- * when Wings is focused again. Wrap `load` in `useCallback` with what it reads, so it changes only when that does.
+ * Calls `load` when the component mounts and each time `load` changes, if Wings is focused, then every `ms` while it is,
+ * and once when Wings is focused again, so a block out of view asks for nothing. Wrap `load` in `useCallback` with what it reads, so it changes only when that does.
  */
 export function usePoll(load: () => unknown, ms: number): void;
 /** Puts `text` on the clipboard. A sandboxed frame may refuse the clipboard API, so then it uses a hidden textarea. */

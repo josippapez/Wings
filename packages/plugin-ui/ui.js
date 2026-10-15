@@ -21,6 +21,8 @@ import { MAX_DATA_IMAGE, emojify, parseBlocks, parseInline } from "./markdown.js
 
 export { MAX_DATA_IMAGE };
 
+import { errorMessage } from "wings-plugin-sdk/async";
+import { ago } from "wings-plugin-sdk/format";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { mountShell } from "wings-plugin-sdk/shell";
 
@@ -140,8 +142,6 @@ export function useViewArgs(check) {
   return args;
 }
 
-const errorText = (e) => String(e?.message ?? e);
-
 /**
  * Runs the page's async actions and keeps what its buttons and error card show: `busy` while any `run` is going, and
  * the message of the last one that threw as `error`. Starting a `run` clears the error; `clear` does it by hand.
@@ -155,7 +155,7 @@ export function useAction() {
     try {
       await fn();
     } catch (e) {
-      setError(errorText(e));
+      setError(errorMessage(e));
     } finally {
       setRunning((n) => n - 1);
     }
@@ -165,14 +165,11 @@ export function useAction() {
 }
 
 /**
- * Calls `load` when the component mounts and each time `load` changes, then every `ms` while Wings is focused, and once
- * when Wings is focused again. Wrap `load` in `useCallback` with what it reads, so it changes only when that does.
+ * Calls `load` when the component mounts and each time `load` changes, if Wings is focused, then every `ms` while it is,
+ * and once when Wings is focused again, so a block out of view asks for nothing. Wrap `load` in `useCallback` with what it reads, so it changes only when that does.
  */
 export function usePoll(load, ms) {
-  useEffect(() => {
-    load();
-    return pollWhileFocused(load, ms);
-  }, [load, ms]);
+  useEffect(() => pollWhileFocused(load, ms, { immediate: true }), [load, ms]);
 }
 
 /** Puts `text` on the clipboard. A sandboxed frame may refuse the clipboard API, so then it uses a hidden textarea. */
@@ -1092,17 +1089,7 @@ function mdBlocks(blocks) {
 
 // ---------- activity: times, a summary row, skeletons and a timeline ----------
 
-/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. */
-export function ago(iso, now = Date.now()) {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const minutes = Math.max(0, Math.round((now - t) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 1440) return `${Math.round(minutes / 60)} h ago`;
-  if (minutes < 43_200) return `${Math.round(minutes / 1440)} d ago`;
-  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
+export { ago };
 
 /** A moment as a `time` element: how long ago, with the exact date and time on hover. Nothing when `iso` isn't a date. */
 export function Time({ iso, prefix, now, className, ...rest }) {
