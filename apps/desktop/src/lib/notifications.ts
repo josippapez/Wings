@@ -31,7 +31,8 @@ export type NotificationAction =
   | { type: "add"; event: NotificationEvent }
   | { type: "read"; id: string }
   | { type: "readAll" }
-  | { type: "clear" };
+  | { type: "clear" }
+  | { type: "restore"; list: NotificationEvent[] };
 
 export const MAX_NOTIFICATIONS = 100;
 
@@ -46,6 +47,8 @@ export function notificationsReducer(list: NotificationEvent[], action: Notifica
       return list.some((e) => !e.read) ? list.map((e) => (e.read ? e : { ...e, read: true })) : list;
     case "clear":
       return list.length ? [] : list;
+    case "restore":
+      return action.list;
   }
 }
 
@@ -74,4 +77,19 @@ export function cleanButtons(buttons: unknown, tabViews: string[]): Notification
     const hasArgs = open.args !== undefined && open.args !== null;
     return { label, open: { view: open.view, ...(hasArgs ? { args: JSON.parse(boundedJson(open.args, VIEW_ARGS_MAX, "notify action args")) } : {}) } };
   });
+}
+
+const kinds: Record<NotificationEvent["kind"], true> = { blocked: true, done: true, plugin: true };
+
+/**
+ * The saved list, as the last run left it, keeping only well-formed entries. Pane ids count up from p1 on each start,
+ * so an old entry keeps its Go to pane only while its pane still runs (`live`, after a webview reload).
+ */
+export function restoreNotifications(saved: unknown, live: ReadonlySet<string>): NotificationEvent[] {
+  if (!Array.isArray(saved)) return [];
+  return saved
+    .filter((e): e is NotificationEvent =>
+      !!e && typeof e === "object" && typeof e.id === "string" && typeof e.at === "number" && Object.hasOwn(kinds, String(e.kind)) && typeof e.title === "string" && typeof e.project === "string" && typeof e.detail === "string")
+    .slice(0, MAX_NOTIFICATIONS)
+    .map((e) => ({ ...e, read: e.read === true, paneId: typeof e.paneId === "string" && live.has(e.paneId) ? e.paneId : null }));
 }

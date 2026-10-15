@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanButtons, MAX_NOTIFICATIONS, notificationsReducer, unreadCount, type NotificationEvent } from "./notifications.ts";
+import { cleanButtons, MAX_NOTIFICATIONS, notificationsReducer, restoreNotifications, unreadCount, type NotificationEvent } from "./notifications.ts";
 
 const event = (id: string, over: Partial<NotificationEvent> = {}): NotificationEvent => ({
   id, at: Number(id) || 0, kind: "done", title: "Claude finished", project: "p", detail: "", paneId: "pane", read: false, ...over,
@@ -69,4 +69,12 @@ test("a button that opens something the plugin can't is refused", () => {
   assert.throws(() => cleanButtons([{ label: "Go", url: "http://a.b" }], views), /https link/);
   assert.throws(() => cleanButtons([{ label: "Go", open: { view: "settings" } }], views), /isn't one of the plugin's views/);
   assert.throws(() => cleanButtons([{ label: "Go", open: { view: "pr", args: "x".repeat(20_000) } }], views), /16 KB|too big|over/);
+});
+
+test("the saved list comes back, and Go to pane only for a pane that still runs", () => {
+  const saved = [event("2", { paneId: "p1" }), event("1", { paneId: "p7", read: true }), { id: "bad" }, null];
+  const list = restoreNotifications(JSON.parse(JSON.stringify(saved)), new Set(["p7"]));
+  assert.deepEqual(list.map((e) => [e.id, e.paneId, e.read]), [["2", null, false], ["1", "p7", true]]);
+  assert.deepEqual(restoreNotifications(undefined, new Set()), []);
+  assert.deepEqual(restoreNotifications("x", new Set()), []);
 });

@@ -6,7 +6,7 @@ import { MotionConfig } from "motion/react";
 
 import { CommandPalette } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
-import { notificationsReducer } from "@/lib/notifications";
+import { notificationsReducer, restoreNotifications, type NotificationEvent } from "@/lib/notifications";
 import { reviewTargets, sendToPane } from "@/lib/review";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginModal, type ModalRef } from "@/components/plugin-modal";
@@ -100,6 +100,8 @@ type SavedWorkspace = {
   newProjectOpens?: NewProjectOpens;
   /** Plugin sections folded shut under a project, as `collapseKey` makes them. Absent in older files. */
   collapsedSections?: string[];
+  /** The Inbox. Absent in older files. */
+  notifications?: NotificationEvent[];
   sessions: Record<string, string | null>;
   /** Which agent each session in `sessions` belongs to. Absent in older files, which held Claude sessions only. */
   sessionKinds?: Record<string, SessionKind>;
@@ -229,6 +231,8 @@ const leftPanel = usePanelRef();
   /** What plugins show under each project in the sidebar, and which of those you folded shut. */
   const [projectSections, setProjectSections] = useState<ProjectSections>({});
   const [collapsedSections, setCollapsedSections] = useState<string[]>([]);
+  /** The Inbox, newest first; saved with the workspace so it outlasts a restart or an update. */
+  const [notifications, notify] = useReducer(notificationsReducer, []);
   const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
   /** The plugin page shown in a modal, as `pluginId:viewId`. */
   const [modal, setModal] = useState<string | null>(null);
@@ -655,6 +659,7 @@ const leftPanel = usePanelRef();
       if (saved.newTabPage) setNewTabPage(saved.newTabPage);
       setNewProjectOpens(parseNewProjectOpens(saved.newProjectOpens));
       setCollapsedSections(restoreCollapsed(saved.collapsedSections, list.map((s) => s.id)));
+      notify({ type: "restore", list: restoreNotifications(saved.notifications, new Set(running.values())) });
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
@@ -776,6 +781,7 @@ const leftPanel = usePanelRef();
       newTabPage,
       newProjectOpens,
       collapsedSections,
+      notifications,
       sessionArgs,
       cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
@@ -787,7 +793,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, newProjectOpens, collapsedSections, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -895,7 +901,6 @@ const leftPanel = usePanelRef();
   // Wings sends a system notification only while it's in the background (`notify_transitions` in lib.rs).
   // In front, it's a toast instead, unless you're already looking at that pane.
   const agentStates = useRef(new Map<string, AgentState>());
-  const [notifications, notify] = useReducer(notificationsReducer, []);
   const selectAgentRef = useRef(selectAgent);
   selectAgentRef.current = selectAgent;
   const agentsRef = useRef(agents);

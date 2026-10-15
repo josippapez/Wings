@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.46 · 2026-10-15
+
+- The Inbox keeps its last 100 notifications across restarts and updates. After a restart, an agent's entry no longer offers Go to pane, since its pane is gone.
+
 ## 0.1.45 · 2026-10-15
 
 - Plugin notifications in the Inbox can have up to three buttons, which open one of the plugin's tabs in the notification's project or a link (`wings.notify({ actions, projectId })`).
