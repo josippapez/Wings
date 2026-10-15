@@ -1,6 +1,9 @@
 // Everything that runs git for the Worktrees page. The only commands that change anything are
 // `git worktree remove`, `git worktree prune` and `git branch -d`, and none is ever given a force flag.
 
+import { errorMessage, mapLimit } from "wings-plugin-sdk/async";
+import { defaultBranch, git, gitOk, gitRun, repoRoot } from "wings-plugin-sdk/git";
+
 import { describe, goneBranches, lines, parseWorktrees, type Facts, type Probe, type Row, type Worktree } from "./worktrees";
 
 /** One repo: its worktrees and what we know about each. */
@@ -10,55 +13,6 @@ export interface Repo {
   list: Worktree[];
   facts: Facts;
   probes: Map<string, Probe>;
-}
-
-const run = (cwd: string, args: string[]) => wings.exec("git", args, { cwd });
-/** Stdout, or git's own message when it failed. */
-async function git(cwd: string, args: string[]): Promise<string> {
-  const r = await run(cwd, args);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || `git ${args.slice(0, 2).join(" ")} failed`);
-  return r.stdout;
-}
-const gitOk = (cwd: string, args: string[]) => run(cwd, args).then((r) => (r.code === 0 ? r.stdout.trim() : null), () => null);
-
-/** Runs `fn` over `items`, a few at a time, so a repo with many worktrees doesn't start them all at once. */
-async function pool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(size, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i]);
-      }
-    }),
-  );
-  return out;
-}
-
-/**
- * The checkout a folder is in; null outside a repo. Only found checkouts are cached, since a pane's folder rarely
- * changes repo: a failed check (git refused, the plugin not approved yet) is asked again next time.
- */
-const tops = new Map<string, Promise<string | null>>();
-export const topOf = (cwd: string) => {
-  if (!tops.has(cwd)) {
-    const top = gitOk(cwd, ["rev-parse", "--show-toplevel"]).then((r) => r || null);
-    tops.set(cwd, top);
-    void top.then((r) => r === null && tops.delete(cwd));
-  }
-  return tops.get(cwd)!;
-};
-
-/** `origin/HEAD` as the remote set it, else the usual names. */
-async function defaultBranch(root: string): Promise<string | null> {
-  let ref = await gitOk(root, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
-  if (!ref || ref === "origin/HEAD") ref = null;
-  for (const name of ["origin/main", "origin/master", "main", "master"]) {
-    if (ref) break;
-    if (await gitOk(root, ["rev-parse", "--verify", "--quiet", `${name}^{commit}`])) ref = name;
-  }
-  return ref;
 }
 
 async function probe(wt: Worktree): Promise<Probe> {
@@ -76,7 +30,8 @@ export async function loadRepo(from: string): Promise<Repo> {
     def ? gitOk(root, ["rev-parse", "--verify", "--quiet", `${def}^{commit}`]) : null,
     def ? gitOk(root, ["branch", "--list", `--merged=${def}`, "--format=%(refname:short)"]) : null,
     gitOk(root, ["branch", "--list", "--format=%(refname:short)%09%(upstream:track)"]),
-    pool(list, 6, probe),
+    // A few at a time, so a repo with many worktrees doesn't start them all at once.
+    mapLimit(list, 6, probe),
   ]);
   return {
     root,
@@ -90,7 +45,7 @@ export const rowsOf = (repo: Repo, paneCwds: readonly string[]): Row[] => descri
 
 /** The repos holding these folders, one each however many of their worktrees are open. A folder git can't read is skipped. */
 export async function loadRepos(cwds: readonly string[]): Promise<{ repos: Repo[]; errors: string[] }> {
-  const tops = [...new Set((await Promise.all(cwds.map(topOf))).filter((t): t is string => t !== null))];
+  const tops = [...new Set((await Promise.all(cwds.map(repoRoot))).filter((t): t is string => t !== null))];
   const repos = new Map<string, Repo>();
   const errors: string[] = [];
   await Promise.all(
@@ -99,7 +54,7 @@ export async function loadRepos(cwds: readonly string[]): Promise<{ repos: Repo[
         const repo = await loadRepo(top);
         repos.set(repo.root, repo);
       } catch (e) {
-        errors.push(`${top}: ${(e as Error).message}`);
+        errors.push(`${top}: ${errorMessage(e)}`);
       }
     }),
   );
@@ -131,15 +86,19 @@ export async function removeWorktrees(root: string, paths: string[], opts: { del
       out.failed.push({ path, error: row.why ?? "It is no longer merged." });
       continue;
     }
-    const r = await run(fresh.root, ["worktree", "remove", "--", path]).catch((e: Error) => ({ code: 1, stdout: "", stderr: e.message }));
-    if (r.code !== 0) {
-      out.failed.push({ path, error: r.stderr.trim() || "git worktree remove failed" });
+    try {
+      await git(fresh.root, ["worktree", "remove", "--", path]);
+    } catch (e) {
+      out.failed.push({ path, error: errorMessage(e) });
       continue;
     }
     out.removed.push(path);
     if (opts.deleteBranch && row.wt.branch) {
-      const b = await run(fresh.root, ["branch", "-d", row.wt.branch]).catch((e: Error) => ({ code: 1, stdout: "", stderr: e.message }));
-      if (b.code !== 0) out.branchErrors.push({ branch: row.wt.branch, error: b.stderr.trim() || "git branch -d failed" });
+      try {
+        await git(fresh.root, ["branch", "-d", row.wt.branch]);
+      } catch (e) {
+        out.branchErrors.push({ branch: row.wt.branch, error: errorMessage(e) });
+      }
     }
   }
   return out;
@@ -147,7 +106,7 @@ export async function removeWorktrees(root: string, paths: string[], opts: { del
 
 /** Forgets the worktrees whose folders are gone. */
 export async function prune(root: string): Promise<string> {
-  const r = await run(root, ["worktree", "prune", "--verbose"]);
+  const r = await gitRun(root, ["worktree", "prune", "--verbose"]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "git worktree prune failed");
   return (r.stderr + r.stdout).trim();
 }

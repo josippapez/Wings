@@ -2,20 +2,23 @@
 // It runs git from this page (see lib/git.ts) and only offers what git itself would remove without --force.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Checkbox, Empty, Heading, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
+import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
+import { plural } from "wings-plugin-sdk/format";
+import { repoRoot } from "wings-plugin-sdk/git";
+import { Button, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
-import { loadRepos, prune, removeWorktrees, rowsOf, topOf, type Outcome, type Repo } from "../lib/git";
-import { age, shortenPath, type Row as WorktreeRow } from "../lib/worktrees";
+import { loadRepos, prune, removeWorktrees, rowsOf, type Outcome, type Repo } from "../lib/git";
+import { shortenPath } from "../lib/worktrees";
+import type { Confirm } from "../ui/ConfirmCard";
+import { RepoSection } from "../ui/RepoSection";
 import "./sidebar.css";
 
 export const page = { place: "sidebar" };
 
-/** What the user is being asked to confirm, inside the page. */
-type Confirm = { kind: "remove" | "bulk" | "prune"; root: string; paths: string[] };
 type Note = { tone: "success" | "danger"; text: string };
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-const name = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
+/** Starts a refresh. Its `stale()` is true once a later refresh has started, so the earlier one drops what it found. */
+const begin = latestOnly();
 
 export default function Worktrees() {
   const [repos, setRepos] = useState<Repo[] | null>(null);
@@ -29,20 +32,19 @@ export default function Worktrees() {
 
   const cwdsRef = useRef<string[]>([]);
   cwdsRef.current = cwds;
-  const seq = useRef(0);
   // null until the first look, so a first look that finds no repo still loads (and shows) the empty state.
   const knownRepos = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const mine = ++seq.current;
+    const stale = begin();
     setLoading(true);
     try {
       const result = await loadRepos(cwdsRef.current);
-      if (mine !== seq.current) return;
+      if (stale()) return;
       setRepos(result.repos);
       setErrors(result.errors);
     } finally {
-      if (mine === seq.current) setLoading(false);
+      if (!stale()) setLoading(false);
     }
   }, []);
 
@@ -53,7 +55,7 @@ export default function Worktrees() {
       if (next.join("\0") === cwdsRef.current.join("\0")) return;
       cwdsRef.current = next;
       setCwds(next);
-      void Promise.all(next.map(topOf)).then((tops) => {
+      void Promise.all(next.map(repoRoot)).then((tops) => {
         const key = [...new Set(tops)].sort().join("\0");
         if (key === knownRepos.current) return;
         knownRepos.current = key;
@@ -82,7 +84,7 @@ export default function Worktrees() {
     try {
       setNotes(await work());
     } catch (e) {
-      setNotes([{ tone: "danger", text: (e as Error).message }]);
+      setNotes([{ tone: "danger", text: errorMessage(e) }]);
     } finally {
       setConfirm(null);
       setBusy(null);
@@ -104,10 +106,11 @@ export default function Worktrees() {
   };
 
   const openPane = (path: string) =>
-    void wings.openPane({ cwd: path }).catch((e: Error) => setNotes([{ tone: "danger", text: e.message }]));
+    void wings.openPane({ cwd: path }).catch((e) => setNotes([{ tone: "danger", text: errorMessage(e) }]));
 
   if (!repos) return <Loading />;
-  const removable = repos.reduce((n, r) => n + rowsOf(r, cwds).filter((row) => row.bulk).length, 0);
+  const sections = repos.map((repo) => ({ repo, rows: rowsOf(repo, cwds) }));
+  const removable = sections.reduce((n, s) => n + s.rows.filter((row) => row.bulk).length, 0);
 
   return (
     <>
@@ -136,163 +139,21 @@ export default function Worktrees() {
         </Text>
       ))}
       {repos.length === 0 ? <Empty title="No git repo in your panes." description="Open a terminal in a repo and its worktrees show here." /> : null}
-      {repos.map((repo) => {
-        const rows = rowsOf(repo, cwds);
-        const bulk = rows.filter((r) => r.bulk);
-        const missing = rows.filter((r) => r.missing && !r.locked);
-        const asked = confirm?.root === repo.root ? confirm : null;
-        const working = busy?.endsWith(`:${repo.root}`) ?? false;
-        return (
-          <section key={repo.root} aria-label={name(repo.root)}>
-            <Heading level={3}>
-              {name(repo.root)}
-            </Heading>
-            <Text as="div" tone="muted" truncate className="repo-path" title={repo.root}>
-              {shortenPath(repo.root)}
-              {repo.facts.defaultBranch ? ` · default ${repo.facts.defaultBranch}` : ""}
-            </Text>
-            {rows.length > 1 && (missing.length > 0 || bulk.length > 0) ? (
-              <Row wrap gap="s" className="repo-actions">
-                {missing.length > 0 ? (
-                  <Button variant="outline" size="xs" disabled={working} onClick={() => ask({ kind: "prune", root: repo.root, paths: missing.map((r) => r.wt.path) })}>
-                    {`Prune ${missing.length} missing`}
-                  </Button>
-                ) : null}
-                {bulk.length > 0 ? (
-                  <Button variant="outline" size="xs" disabled={working} onClick={() => ask({ kind: "bulk", root: repo.root, paths: bulk.map((r) => r.wt.path) })}>
-                    {`Remove ${bulk.length} merged & clean`}
-                  </Button>
-                ) : null}
-              </Row>
-            ) : null}
-            {asked && asked.kind !== "remove" ? (
-              <Card compact className="confirm" role="group" aria-label="Confirm">
-                <Text as="div" weight="strong">
-                  {asked.kind === "prune" ? `Forget ${plural(asked.paths.length, "worktree record")} whose folder is gone?` : `Remove ${plural(asked.paths.length, "worktree")}?`}
-                </Text>
-                <ul className="confirm-list">
-                  {asked.paths.map((p) => (
-                    <li key={p}>
-                      <Text mono size="small">
-                        {shortenPath(p)}
-                      </Text>
-                    </li>
-                  ))}
-                </ul>
-                {asked.kind === "bulk" ? <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>Also delete their branches (git branch -d)</Checkbox> : null}
-                <Row gap="s">
-                  <Button variant="destructive" size="sm" busy={working} onClick={() => doConfirm(repo)}>
-                    {asked.kind === "prune" ? "Prune" : "Remove"}
-                  </Button>
-                  <Button variant="ghost" size="sm" disabled={working} onClick={() => setConfirm(null)}>
-                    Cancel
-                  </Button>
-                </Row>
-              </Card>
-            ) : null}
-            <Stack gap="s" as="ul" className="rows">
-              {rows.map((row) => (
-                <Item
-                  key={row.wt.path}
-                  row={row}
-                  asked={asked?.kind === "remove" && asked.paths[0] === row.wt.path}
-                  working={working}
-                  deleteBranch={deleteBranch}
-                  setDeleteBranch={setDeleteBranch}
-                  onOpen={() => openPane(row.wt.path)}
-                  onAsk={() => ask({ kind: "remove", root: repo.root, paths: [row.wt.path] })}
-                  onConfirm={() => doConfirm(repo)}
-                  onCancel={() => setConfirm(null)}
-                />
-              ))}
-            </Stack>
-          </section>
-        );
-      })}
+      {sections.map(({ repo, rows }) => (
+        <RepoSection
+          key={repo.root}
+          repo={repo}
+          rows={rows}
+          asked={confirm?.root === repo.root ? confirm : null}
+          working={busy?.endsWith(`:${repo.root}`) ?? false}
+          deleteBranch={deleteBranch}
+          onDeleteBranch={setDeleteBranch}
+          onAsk={ask}
+          onConfirm={() => doConfirm(repo)}
+          onCancel={() => setConfirm(null)}
+          onOpen={openPane}
+        />
+      ))}
     </>
-  );
-}
-
-function Item(p: {
-  row: WorktreeRow;
-  asked: boolean;
-  working: boolean;
-  deleteBranch: boolean;
-  setDeleteBranch: (v: boolean) => void;
-  onOpen: () => void;
-  onAsk: () => void;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const { row } = p;
-  const { wt } = row;
-  const flags: { label: string; tone?: "success" | "warn" | "danger" | "info"; title?: string }[] = [];
-  if (wt.main) flags.push({ label: "main", tone: "info" });
-  if (row.missing) flags.push({ label: "folder missing", tone: "danger", title: wt.prunable ?? undefined });
-  if (row.merged) flags.push({ label: "merged", tone: "success" });
-  if (row.atDefault) flags.push({ label: "no commits of its own", title: "Its branch is at the default branch's commit" });
-  if (row.gone) flags.push({ label: "upstream gone", tone: "warn" });
-  if (row.dirty) flags.push({ label: "uncommitted", tone: "warn" });
-  if (row.locked) flags.push({ label: "locked", tone: "warn", title: wt.locked || undefined });
-  if (row.inPane) flags.push({ label: "open in a pane", tone: "info" });
-  const when = age(row.lastCommit, Date.now());
-  return (
-    <li className="wt" data-removable={row.removable}>
-      <Row>
-        <Text weight="strong" truncate grow title={wt.branch ?? undefined}>
-          {wt.branch ?? (wt.bare ? "(bare)" : wt.head ? `detached ${wt.head.slice(0, 7)}` : "(no branch)")}
-        </Text>
-        {when ? (
-          <Text tone="muted" size="small">
-            {when}
-          </Text>
-        ) : null}
-      </Row>
-      <Text as="div" tone="muted" size="small" mono truncate title={wt.path}>
-        {shortenPath(wt.path)}
-      </Text>
-      {flags.length ? (
-        <Row wrap gap="xs" className="flags">
-          {flags.map((f) => (
-            <Badge key={f.label} variant={f.tone ? undefined : "outline"} tone={f.tone} title={f.title}>
-              {f.label}
-            </Badge>
-          ))}
-        </Row>
-      ) : null}
-      {p.asked ? (
-        <Card compact className="confirm" role="group" aria-label="Confirm">
-          <Text as="div" weight="strong">
-            {`Remove ${shortenPath(wt.path)}?`}
-          </Text>
-          {wt.branch ? <Checkbox checked={p.deleteBranch} onChange={p.setDeleteBranch}>{`Also delete branch ${wt.branch} (git branch -d)`}</Checkbox> : null}
-          <Row gap="s">
-            <Button variant="destructive" size="sm" busy={p.working} onClick={p.onConfirm}>
-              Remove
-            </Button>
-            <Button variant="ghost" size="sm" disabled={p.working} onClick={p.onCancel}>
-              Cancel
-            </Button>
-          </Row>
-        </Card>
-      ) : (
-        <Row gap="s" className="item-actions">
-          {!row.missing ? (
-            <Button variant="ghost" size="xs" onClick={p.onOpen}>
-              Open in new pane
-            </Button>
-          ) : null}
-          {row.removable ? (
-            <Button variant="outline" size="xs" disabled={p.working} onClick={p.onAsk}>
-              Remove
-            </Button>
-          ) : (
-            <Text tone="muted" size="tiny">
-              {row.why}
-            </Text>
-          )}
-        </Row>
-      )}
-    </li>
   );
 }
