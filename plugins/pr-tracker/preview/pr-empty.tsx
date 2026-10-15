@@ -1,6 +1,6 @@
 // The PR page for a pull request with no description, checks or comments yet.
 import { PrView } from "../src/ui/pr-view";
-import "../src/pr.css";
+import "../src/pages/pr.css";
 import { props } from "./_data";
 
 export const fill = true;

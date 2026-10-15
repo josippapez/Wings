@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, every check and policy and why it failed, the diff and review comments. Lists each project's pull requests in the sidebar (yours and the ones waiting for your review), can notify you when a new one opens, and, in a tab or a block on the Project page, every open one with filters, and opens one as a tab to read, reply to and send to an agent.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "git remote get-url",
@@ -78,7 +78,7 @@
         "id": "pr",
         "title": "Pull request",
         "icon": "git-compare",
-        "page": "pr.html",
+        "page": "dist/pr.html",
         "opens": [
           "tab"
         ],
@@ -90,7 +90,7 @@
         "id": "pulls",
         "title": "Pull requests",
         "icon": "git-compare",
-        "page": "pulls.html",
+        "page": "dist/pulls.html",
         "minHeight": 120
       }
     ],
@@ -103,7 +103,7 @@
       }
     ],
     "settings": {
-      "page": "settings.html"
+      "page": "dist/settings.html"
     }
   }
 }

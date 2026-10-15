@@ -13,7 +13,7 @@ You also need the local code-signing certificate from [signing.md](signing.md) a
 ## Steps
 
 1. Bump `version` in `apps/desktop/src-tauri/tauri.conf.json` (and `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml` to match). Commit and merge it.
-2. `cd apps/desktop && pnpm release:mac "What changed, one line"`. It builds the signed app and writes, in `apps/desktop/src-tauri/target/release/bundle/macos/`, `Wings.app.tar.gz`, `Wings.app.tar.gz.sig` and `latest.json`. It also packs each folder in `plugins/` into `<id>.wings-plugin` there, from the committed files (`scripts/pack-plugins.sh`).
+2. `cd apps/desktop && pnpm release:mac "What changed, one line"`. It builds the signed app and writes, in `apps/desktop/src-tauri/target/release/bundle/macos/`, `Wings.app.tar.gz`, `Wings.app.tar.gz.sig` and `latest.json`. It also packs each folder in `plugins/` into `<id>.wings-plugin` there with `wings-plugin pack`, which builds `src/` and leaves the source and fixtures out (`scripts/pack-plugins.sh`).
 3. Run the `gh release create vX.Y.Z ...` command it prints. That uploads the files and publishes the release; running copies find it through `https://github.com/josippapez/Wings/releases/latest/download/latest.json`, The `<id>.wings-plugin` files are for installing a plugin from a file.
 
 Plugins don't need a release. Wings installs and updates `github.com/josippapez/Wings/plugins/<id>` from `main`, and offers an update when the plugin's `version` in `wings-plugin.json` goes up. To ship a plugin change, bump that version and push. If the change needs something only a newer Wings has, also set `minWingsVersion` to that Wings version, so older apps don't install it.

@@ -1,7 +1,7 @@
 // The Pull requests block of a Project page.
 import type { PullsRequest, PullsResponse } from "../src/lib/pulls";
 import { ProjectPulls } from "../src/ui/pulls-list";
-import "../src/pr.css";
+import "../src/pages/pr.css";
 import { rows } from "./_data";
 
 export const place = "view";

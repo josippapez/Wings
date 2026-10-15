@@ -1,6 +1,6 @@
 // The Checks view's data: every check or policy of a PR as one list, however its provider words it, and the groups it
 // shows in. No `wings`, no I/O, so node tests drive it.
-import type { AzurePolicy, AzurePr, CheckItem, CheckState, Failing } from "./types.ts";
+import type { AzurePolicy, AzurePr, CheckItem, CheckState, Failing } from "./types";
 
 // ---------- grouping ----------
 

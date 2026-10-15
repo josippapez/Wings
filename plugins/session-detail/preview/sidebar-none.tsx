@@ -1,6 +1,5 @@
 // No Claude session in the panes.
-import { Sidebar } from "../src/components/Sidebar";
-import "../src/sidebar.css";
+import Sidebar from "../src/pages/sidebar";
 import { sessions } from "./_data";
 
 export const place = "sidebar";

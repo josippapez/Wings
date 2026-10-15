@@ -1,6 +1,6 @@
 // The tools Claude calls: what each accepts, checked before anything runs, and how an issue reads back as text.
 
-import { blocksOf, hasContent, canParent, childrenOf, isPriority, isStatus, isType, keyNumber, LIMITS, matchesQuery, MAX_LINKS, normalizeKey, progress, STATUS_LABEL, PRIORITIES, PRIORITY_LABEL, STATUSES, TYPES, type Actor, type Issue, type IssueType, type Op, type Priority, type Status } from "./issues.ts";
+import { blocksOf, hasContent, canParent, childrenOf, isPriority, isStatus, isType, keyNumber, LIMITS, matchesQuery, MAX_LINKS, normalizeKey, progress, STATUS_LABEL, PRIORITIES, PRIORITY_LABEL, STATUSES, TYPES, type Actor, type Issue, type IssueType, type Op, type Priority, type Status } from "./issues";
 
 export type ToolCall = { tool: "list"; status?: Status; type?: IssueType; query?: string } | { tool: "get"; key: string } | { tool: "write"; op: Op };
 

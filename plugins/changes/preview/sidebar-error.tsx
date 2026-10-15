@@ -1,7 +1,6 @@
 // A git error (an index.lock during a commit) after the list arrived: the list stays, the error is a notice above it.
 import { useEffect } from "react";
-import { Sidebar } from "../src/components/Sidebar";
-import "../src/sidebar.css";
+import Sidebar from "../src/pages/sidebar";
 import { repo, state } from "./_data";
 
 export const place = "sidebar";

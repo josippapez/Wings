@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// wings-plugin build           builds the plugin in this folder
-// wings-plugin build --check   fails if a built file is older than its source
+// wings-plugin build           builds the plugin in this folder into dist/
+// wings-plugin build --check   fails if a file in dist/ is older than its source
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
 //                              writing built files into the folder
 import { relative } from "node:path";
@@ -13,7 +13,7 @@ if (command !== "build" && command !== "pack") {
 }
 const dir = process.cwd();
 if (!entries(dir).length) {
-  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/.`);
+  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/main.ts and src/pages/.`);
   process.exit(1);
 }
 if (command === "pack") {

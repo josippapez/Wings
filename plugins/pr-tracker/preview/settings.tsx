@@ -1,4 +1,4 @@
-import { PrTrackerSettings } from "../src/ui/settings-page";
+import PrTrackerSettings from "../src/pages/settings";
 
 export const place = "settings";
 export default PrTrackerSettings;

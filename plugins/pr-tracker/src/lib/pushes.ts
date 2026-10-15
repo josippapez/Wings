@@ -1,5 +1,5 @@
 /** The PR's pushes and how they sit among its threads. No `wings`, no I/O, so node tests drive it. */
-import { lastActivity, type Thread } from "./threads.ts";
+import { lastActivity, type Thread } from "./threads";
 
 export interface PushCommit {
   sha: string;

@@ -1,6 +1,6 @@
 // The Issue page for a new issue: no links, no sessions, one log entry.
-import { IssueView } from "../src/lib/issue-view";
-import "../src/tasks.css";
+import { IssueView } from "../src/ui/issue-view";
+import "../src/pages/tasks.css";
 import { issues, longIssue, project } from "./_data";
 
 void issues;

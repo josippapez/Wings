@@ -1,7 +1,7 @@
 // The pure half of the per-project "Work items" section: which iterations are running now, the query for the work
 // items assigned to you in them, and the rows. No `wings`, no I/O, so node tests drive it.
-import { DATE_OR_VERSION } from "./branch.ts";
-import { itemTabArgs } from "./item.ts";
+import { DATE_OR_VERSION } from "./branch";
+import { itemTabArgs } from "./item";
 
 export const SECTION_ID = "work-items";
 /** The most rows Wings takes for a section. */

@@ -1,5 +1,5 @@
 // A new session: no context yet, no servers, no skills.
-import { Hud } from "../src/components/Hud";
+import Hud from "../src/pages/sidebar";
 import { session, snapshot } from "./_data";
 
 export const place = "sidebar";

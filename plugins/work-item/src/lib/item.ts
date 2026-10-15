@@ -1,8 +1,8 @@
 // The pure half of the work item tab: reading what `az boards work-item show --expand relations` and the work item's
 // updates return. No `wings`, no I/O, so node tests drive it.
 
-import type { QueryRow } from "./sections.ts";
-import { updateTime, type WorkItemUpdate } from "./urls.ts";
+import type { QueryRow } from "./sections";
+import { updateTime, type WorkItemUpdate } from "./urls";
 
 /** What the "item" view is opened with. The page learns the project from the work item. */
 export interface ItemArgs {

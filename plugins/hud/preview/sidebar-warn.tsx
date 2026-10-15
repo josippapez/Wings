@@ -1,5 +1,5 @@
 // Limits near and over the warn thresholds, and the context almost full.
-import { Hud } from "../src/components/Hud";
+import Hud from "../src/pages/sidebar";
 import { session, snapshot } from "./_data";
 
 export const place = "sidebar";

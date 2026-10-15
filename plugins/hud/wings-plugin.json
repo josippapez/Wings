@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Your Claude usage limits and each session's context and failed MCP servers in a strip under its terminal, and memory, MCP servers and skills in a sidebar, so you can turn off a terminal status line like claude-hud.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "vm_stat",
@@ -30,7 +30,7 @@
       {
         "id": "hud",
         "title": "HUD",
-        "page": "sidebar.html"
+        "page": "dist/sidebar.html"
       }
     ]
   }

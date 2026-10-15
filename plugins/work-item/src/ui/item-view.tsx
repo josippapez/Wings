@@ -4,8 +4,8 @@
 import { useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Dot, Empty, Heading, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, TimelineCard, TimelineNote, Toolbar } from "wings-plugin-ui";
 
-import { Html } from "../lib/Html";
-import { TypeIcon } from "../lib/TypeIcon";
+import { Html } from "./Html";
+import { TypeIcon } from "./TypeIcon";
 import { allLinkIds, lastSegment, linkIds, prStatus, summaryOf, tagsOf, type Activity, type Change, type Comment, type Fields, type ItemArgs, type LinkedItem, type PrLink, type Relation, type Revision } from "../lib/item";
 import { stateTone } from "../lib/sections";
 import { nextStates, type TypeState } from "../lib/view";

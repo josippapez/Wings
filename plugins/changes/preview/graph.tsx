@@ -27,7 +27,7 @@ export default function Fixture() {
   // The graph builds its own DOM into the page, as it does when Wings loads graph.js; its git log is the made-up one.
   useEffect(() => {
     (window as unknown as { wings: { exec: unknown } }).wings.exec = () => Promise.resolve({ code: 0, stdout: out, stderr: "" });
-    void import("../src/graph");
+    void import("../src/pages/graph");
   }, []);
   return null;
 }

@@ -1,6 +1,6 @@
 // The Issue page for an issue with nothing filled in: no description, links or sessions, one log entry.
-import { IssueView } from "../src/lib/issue-view";
-import "../src/tasks.css";
+import { IssueView } from "../src/ui/issue-view";
+import "../src/pages/tasks.css";
 import { emptyIssue, issues, project } from "./_data";
 
 const none = () => Promise.resolve();
