@@ -92,6 +92,7 @@
     "git.d.ts",
     "build.mjs",
     "build.d.ts",
+    "manifest-check.mjs",
     "bin.mjs",
     "README.md",
     "LICENSE"

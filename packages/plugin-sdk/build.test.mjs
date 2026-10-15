@@ -9,8 +9,11 @@ import { unzipSync } from "fflate";
 
 import { buildPlugin, pack } from "./build.mjs";
 
-/** A plugin folder with this package installed, like `npm link wings-plugin-sdk` makes it. A file set to null is left out. */
-function plugin(files) {
+const boxBlocks = [{ id: "box", title: "Box", page: "dist/box.html" }];
+const ping = { name: "ping", description: "Pings.", inputSchema: { type: "object" } };
+
+/** A plugin folder with this package installed, like `npm link wings-plugin-sdk` makes it. A file set to null is left out, and `patch` changes the manifest. */
+function plugin(files, patch = {}) {
   const dir = mkdtempSync(join(tmpdir(), "wings-plugin-test-"));
   mkdirSync(join(dir, "node_modules"));
   symlinkSync(import.meta.dirname, join(dir, "node_modules", "wings-plugin-sdk"));
@@ -20,9 +23,9 @@ function plugin(files) {
     version: "0.1.0",
     api: 1,
     main: "dist/main.js",
-    contributes: { sidebars: [{ id: "demo", title: "Demo <1>", icon: "list", page: "dist/sidebar.html" }], blocks: [{ id: "box", title: "Box", page: "dist/box.html" }] },
+    contributes: { sidebars: [{ id: "demo", title: "Demo <1>", icon: "list", page: "dist/sidebar.html" }] },
   };
-  files = { "wings-plugin.json": JSON.stringify(manifest), "src/main.ts": "wings.onPanes(() => {});", "src/pages/sidebar.ts": 'import { mountShell } from "wings-plugin-sdk/shell";\nimport "./sidebar.css";\nmountShell("sidebar").textContent = "hi";', "src/pages/sidebar.css": ".mine { color: red; }", ...files };
+  files = { "wings-plugin.json": JSON.stringify({ ...manifest, ...patch, contributes: { ...manifest.contributes, ...patch.contributes } }), "src/main.ts": "wings.onPanes(() => {});", "src/pages/sidebar.ts": 'import { mountShell } from "wings-plugin-sdk/shell";\nimport "./sidebar.css";\nmountShell("sidebar").textContent = "hi";', "src/pages/sidebar.css": ".mine { color: red; }", ...files };
   for (const [name, text] of Object.entries(files)) {
     if (text === null) continue;
     mkdirSync(join(dir, name, ".."), { recursive: true });
@@ -59,7 +62,7 @@ test("a React page is mounted from its default export in the place its page expo
     "src/pages/sidebar.css": null,
     "src/pages/sidebar.tsx": 'export const page = { place: "sidebar" };\nexport default function Sidebar() { return <p>hi</p>; }',
     "src/pages/box.tsx": 'export const page = { place: "block", fill: true };\nexport default function Box() { return <p>box</p>; }',
-  });
+  }, { contributes: { blocks: boxBlocks } });
   t.after(() => rmSync(dir, { recursive: true }));
   // A wings-plugin-ui that records what a page shows, and the React this package was installed with.
   const ui = join(dir, "node_modules", "wings-plugin-ui");
@@ -96,7 +99,7 @@ test("a plugin without src/main.ts gets an empty dist/main.js", async (t) => {
 });
 
 test("a block page is titled by its manifest entry", async (t) => {
-  const dir = plugin({ "src/pages/box.ts": 'import { mountShell } from "wings-plugin-sdk/shell";\nmountShell("view");' });
+  const dir = plugin({ "src/pages/box.ts": 'import { mountShell } from "wings-plugin-sdk/shell";\nmountShell("view");' }, { contributes: { blocks: boxBlocks } });
   t.after(() => rmSync(dir, { recursive: true }));
   await buildPlugin(dir);
   assert.match(readFileSync(join(dir, "dist", "box.html"), "utf8"), /<title>Box<\/title>/);
@@ -138,7 +141,7 @@ test("pack zips what the plugin ships with the build in dist/, the manifest at t
 
 test("a plugin with src/tools.ts gets its manifest's tools written by build, checked by check, and packed without touching the folder", async (t) => {
   const tools = 'import { s, tool } from "wings-plugin-sdk/tools";\nexport const tools = { ping: tool({ description: "Pings.", input: s.object({ n: s.integer({ minimum: 1 }) }), run: () => "pong" }) };';
-  const dir = plugin({ "src/tools.ts": tools });
+  const dir = plugin({ "src/tools.ts": tools, "src/main.ts": 'import { registerTools } from "wings-plugin-sdk/tools";\nimport { tools } from "./tools";\nregisterTools(tools);' });
   t.after(() => rmSync(dir, { recursive: true }));
   const manifest = () => JSON.parse(readFileSync(join(dir, "wings-plugin.json"), "utf8"));
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale.map((f) => f.slice(dir.length + 1)).filter((f) => !f.startsWith("dist/")), ["wings-plugin.json"]);
@@ -149,4 +152,31 @@ test("a plugin with src/tools.ts gets its manifest's tools written by build, che
   await buildPlugin(dir);
   assert.deepEqual(manifest().contributes.mcpTools, [{ name: "ping", description: "Pings.", inputSchema: { type: "object", properties: { n: { type: "integer", minimum: 1 } }, required: ["n"], additionalProperties: false } }]);
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
+});
+
+test("a manifest that disagrees with the code fails build, check and pack, naming the file and the field", async (t) => {
+  const sidebar = { id: "demo", title: "Demo", icon: "list", page: "dist/sidbar.html" };
+  const cases = [
+    [{ main: "mian.js" }, {}, /wings-plugin\.json: main is "mian\.js", but the build writes the main script to dist\/main\.js/],
+    [{ contributes: { sidebars: [sidebar] } }, {}, /contributes\.sidebars\[0\]\.page is "dist\/sidbar\.html".* It writes dist\/sidebar\.html/],
+    [{ contributes: { mcpTools: [ping] } }, { "src/main.ts": 'wings.onTool("pong", () => "pong");' }, /dist\/main\.js answers "pong".*\(it has ping\).*contributes\.mcpTools lists "ping"/s],
+    [{}, { "src/main.ts": 'wings.setBadge("p", null);' }, /dist\/main\.js calls wings\.setBadge, so contributes\.ui must list "badges"/],
+    [{}, { "src/main.ts": 'wings.openView("sidbar");' }, /dist\/main\.js calls wings\.openView\("sidbar"\).*\(they have demo\)/],
+  ];
+  for (const [patch, files, message] of cases) {
+    const dir = plugin(files, patch);
+    t.after(() => rmSync(dir, { recursive: true }));
+    await assert.rejects(buildPlugin(dir), message);
+    await assert.rejects(buildPlugin(dir, { check: true }), message);
+    await assert.rejects(pack(dir), message);
+  }
+});
+
+test("a manifest that agrees with the code builds, and a name the code computes is left alone", async (t) => {
+  const main = 'const id = String(Date.now());\nwings.onTool("ping", () => "pong");\nwings.onTool(id, () => "x");\nwings.setBadge("p", null);\nwings.openView("demo");\nwings.openView(id);';
+  const dir = plugin({ "src/main.ts": main }, { contributes: { ui: ["badges"], mcpTools: [ping, { ...ping, name: "other" }] } });
+  t.after(() => rmSync(dir, { recursive: true }));
+  await buildPlugin(dir);
+  assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
+  await pack(dir);
 });

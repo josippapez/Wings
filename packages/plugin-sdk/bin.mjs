@@ -3,6 +3,7 @@
 // wings-plugin build --check   fails if a file in dist/ is older than its source
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
 //                              writing built files into the folder
+// Each of them fails with a line for every place wings-plugin.json and the built code disagree.
 import { relative } from "node:path";
 import { buildPlugin, entries, pack } from "./build.mjs";
 
@@ -16,12 +17,16 @@ if (!entries(dir).length) {
   console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/main.ts and src/pages/.`);
   process.exit(1);
 }
+const fail = (error) => {
+  console.error(error.message);
+  process.exit(1);
+};
 if (command === "pack") {
-  console.log(relative(dir, await pack(dir)));
+  console.log(relative(dir, await pack(dir).catch(fail)));
   process.exit(0);
 }
 const check = flags.includes("--check");
-const { built, stale } = await buildPlugin(dir, { check });
+const { built, stale } = await buildPlugin(dir, { check }).catch(fail);
 for (const { file, bytes } of built) console.log(`${relative(dir, file)}  ${(bytes / 1024).toFixed(1)} KB`);
 for (const file of stale) console.error(`${relative(dir, file)} is out of date. Run wings-plugin build and commit it.`);
 if (stale.length) process.exit(1);

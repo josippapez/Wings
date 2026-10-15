@@ -6,12 +6,14 @@
 // wings-plugin-ui. The CSS a page imports, like `import "./sidebar.css"`, becomes dist/<name>.css, and a page that
 // mounts with wings-plugin-ui or wings-plugin-sdk/shell gets a dist/<name>.html written for it unless the plugin
 // has its own. A plugin with no src/main.ts gets an empty dist/main.js, since Wings needs a main. A plugin with a
-// src/tools.ts gets its manifest's contributes.mcpTools written from it.
+// src/tools.ts gets its manifest's contributes.mcpTools written from it. Last, the manifest is checked against what
+// was built, and the build fails where they disagree, so a typo doesn't wait for Wings to load the plugin.
 import * as esbuild from "esbuild";
 import { zipSync } from "fflate";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, relative } from "node:path";
+import { manifestProblems } from "./manifest-check.mjs";
 import { syncTools } from "./tools-manifest.mjs";
 
 const BANNER = "// Built from src/ by wings-plugin build. Edit src/, not this file.";
@@ -110,7 +112,8 @@ function oneReact(dir) {
  * Builds the plugin in `dir` into its `dist/` folder. With `check`, writes nothing and returns the outputs that
  * differ from what's on disk instead, so a release can refuse built files older than their source. With `outDir`,
  * writes the outputs there instead; a page's own HTML or CSS already in `outDir` still wins over a generated one.
- * The manifest with the tools from src/tools.ts goes to `manifestDir`, the plugin folder by default.
+ * The manifest with the tools from src/tools.ts goes to `manifestDir`, the plugin folder by default. Throws a line for
+ * each place that manifest and the built code disagree.
  */
 export async function buildPlugin(dir, { check = false, banner = BANNER, outDir = join(dir, OUT), manifestDir = dir } = {}) {
   const built = [];
@@ -155,6 +158,9 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
     }
   }
   const tools = await syncTools(dir, { check, outDir: manifestDir });
+  const manifest = JSON.parse(readFileSync(join(manifestDir, "wings-plugin.json"), "utf8"));
+  const problems = manifestProblems(manifest, { root: manifestDir, built: files.map(({ name, text }) => ({ file: `${OUT}/${name}`, text })), main: `${OUT}/main.js` });
+  if (problems.length) throw new Error(problems.map((problem) => `${relative(process.cwd(), join(dir, "wings-plugin.json"))}: ${problem}`).join("\n"));
   return { built: [...built, ...tools.built], stale: [...stale, ...tools.stale] };
 }
 

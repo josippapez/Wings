@@ -10,6 +10,12 @@ export function entries(dir: string): { src: string; out: string }[];
  * no `src/main.ts` gets an empty `dist/main.js`. With `check`, writes nothing and lists in `stale` the outputs
  * that differ from what's on disk. With `outDir`, writes there instead of `dist/`. A plugin with a `src/tools.ts`
  * gets `contributes.mcpTools` in its manifest written from it, in `manifestDir` (the plugin folder by default).
+ *
+ * Rejects with a line for each place the manifest and the built code disagree: a `main` that isn't `dist/main.js`, a
+ * page that isn't a file the build writes or the plugin folder has, a `wings.onTool("name")` and a `contributes.mcpTools`
+ * entry that don't match, a call of `wings.setBadge`, `setPaneStatus`, `openDiff` or `updateDiff` without `badges`,
+ * `status` or `diff` in `contributes.ui`, and a `wings.openView("id")` for an id that no sidebar or view has. A name the
+ * code computes, like `wings.openView(id)`, is skipped.
  */
 export function buildPlugin(
   dir: string,
@@ -20,6 +26,6 @@ export function buildPlugin(
  * Builds the plugin in `dir` with the files it ships into `<id>.wings-plugin` in `out` (`dir` by default), the
  * file Wings installs, leaving no built files in `dir`. The package has the same `dist/` layout the manifest
  * points into. Leaves out `src/`, `preview/`, `node_modules`, package and lock files, `tsconfig*.json`,
- * `HANDOVER*`, dotfiles and other `.wings-plugin` files. Resolves its path.
+ * `HANDOVER*`, dotfiles and other `.wings-plugin` files. Resolves its path, or rejects like `buildPlugin` does.
  */
 export function pack(dir: string, options?: { out?: string }): Promise<string>;
