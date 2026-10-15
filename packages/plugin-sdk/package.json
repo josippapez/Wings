@@ -45,6 +45,10 @@
       "types": "./format.d.ts",
       "default": "./format.js"
     },
+    "./cli": {
+      "types": "./cli.d.ts",
+      "default": "./cli.js"
+    },
     "./git": {
       "types": "./git.d.ts",
       "default": "./git.js"
@@ -82,6 +86,8 @@
     "async.d.ts",
     "format.js",
     "format.d.ts",
+    "cli.js",
+    "cli.d.ts",
     "git.js",
     "git.d.ts",
     "build.mjs",
