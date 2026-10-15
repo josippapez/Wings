@@ -419,6 +419,8 @@ struct McpStatus {
     connected: bool,
     /// Claude Code's status line goes through Wings, in front of yours.
     statusline: bool,
+    /// The server's tools load at session start instead of waiting behind Claude's tool search.
+    always_load: bool,
 }
 
 /// You disconnected Claude Code in the Plugins sheet, so Wings doesn't connect it again when it starts.
@@ -481,9 +483,10 @@ fn mcp_status() -> McpStatus {
     let statusline = claude_settings::connected(&claude_settings::settings_path());
     #[cfg(not(unix))]
     let statusline = false;
-    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false, statusline } };
+    let always_load = wings_mcp_entry(&claude_user_config()).is_some_and(|e| e["alwaysLoad"] == true);
+    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false, statusline, always_load } };
     let connected = claude_mcp(&claude, &["get", "wings"]).is_ok_and(|out| out.status.success());
-    McpStatus { claude: true, connected, statusline }
+    McpStatus { claude: true, connected, statusline, always_load }
 }
 
 fn claude_mcp(claude: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -492,9 +495,16 @@ fn claude_mcp(claude: &std::path::Path, args: &[&str]) -> std::io::Result<std::p
 
 #[tauri::command(async)]
 fn mcp_connect(app: AppHandle) -> Res<()> {
-    connect_claude(&app)?;
+    connect_claude(&app, None)?;
     let _ = std::fs::remove_file(app.path().app_data_dir().map_err(err)?.join(CLAUDE_DISCONNECTED));
     Ok(())
+}
+
+/// Re-registers the server with `alwaysLoad` on or off. Claude Code defers MCP tools behind tool search, so
+/// without it Claude only reaches for a Wings tool when something tells it to look.
+#[tauri::command(async)]
+fn mcp_set_always_load(app: AppHandle, on: bool) -> Res<()> {
+    connect_claude(&app, Some(on))
 }
 
 /// Claude Code's user-scope config, where `mcpServers` lives. Read only: every write goes through `claude mcp`.
@@ -505,12 +515,17 @@ fn claude_user_config() -> std::path::PathBuf {
     }
 }
 
-/// The JSON for re-adding the Wings server with the fields you set on it kept, or `None` when there are none
-/// and a plain `claude mcp add` will do. Wings owns `type`, `command`, `args` and `env`.
-fn mcp_add_json(existing: Option<&serde_json::Value>, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
-    let mut entry = existing?.as_object()?.clone();
+/// The JSON for re-adding the Wings server with the fields you set on it kept, and `alwaysLoad` set when given,
+/// or `None` when there are none and a plain `claude mcp add` will do. Wings owns `type`, `command`, `args` and `env`.
+fn mcp_add_json(existing: Option<&serde_json::Value>, always_load: Option<bool>, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
+    let mut entry = existing.and_then(|e| e.as_object()).cloned().unwrap_or_default();
     for owned in ["type", "command", "args", "env"] {
         entry.remove(owned);
+    }
+    match always_load {
+        Some(true) => _ = entry.insert("alwaysLoad".into(), true.into()),
+        Some(false) => _ = entry.remove("alwaysLoad"),
+        None => {}
     }
     if entry.is_empty() {
         return None;
@@ -522,18 +537,18 @@ fn mcp_add_json(existing: Option<&serde_json::Value>, exe: &std::path::Path, soc
     Some(entry.into())
 }
 
-fn kept_mcp_fields(config: &std::path::Path, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
+fn wings_mcp_entry(config: &std::path::Path) -> Option<serde_json::Value> {
     let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
-    mcp_add_json(config.pointer("/mcpServers/wings"), exe, socket)
+    config.pointer("/mcpServers/wings").cloned()
 }
 
 /// Registers `wings --mcp` with Claude Code at user scope, so every session gets the plugin tools, and puts
 /// `wings statusline` in front of your status line. The server is removed first so a moved app is repointed
 /// rather than left dangling.
-fn connect_claude(app: &AppHandle) -> Res<()> {
+fn connect_claude(app: &AppHandle, always_load: Option<bool>) -> Res<()> {
     #[cfg(not(unix))]
     {
-        let _ = app;
+        let _ = (app, always_load);
         return Err("Plugin tools aren't available on Windows yet".into());
     }
     #[cfg(unix)]
@@ -542,7 +557,7 @@ fn connect_claude(app: &AppHandle) -> Res<()> {
         let exe = std::env::current_exe().map_err(err)?;
         let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
         // Read before the remove, which drops the entry: what you set on it yourself (`alwaysLoad`, say) goes back on.
-        let kept = kept_mcp_fields(&claude_user_config(), &exe, &socket);
+        let kept = mcp_add_json(wings_mcp_entry(&claude_user_config()).as_ref(), always_load, &exe, &socket);
         let _ = claude_mcp(&claude, &["remove", "--scope", "user", "wings"]);
         let mut add = std::process::Command::new(&claude);
         match &kept {
@@ -604,7 +619,7 @@ fn connect_claude_on_start(app: AppHandle) {
         let (Some(claude), Ok(exe)) = (plugins::find_program("claude"), std::env::current_exe()) else { return };
         let registered = claude_mcp(&claude, &["get", "wings"])
             .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
-        let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app) };
+        let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app, None) };
         if let Err(e) = result {
             eprintln!("[claude] couldn't connect Claude Code: {e}");
         }
@@ -1471,6 +1486,7 @@ pub fn run() {
             mcp_tool_result,
             mcp_status,
             mcp_connect,
+            mcp_set_always_load,
             mcp_disconnect,
             privacy_open_settings,
             privacy_check,
@@ -1515,13 +1531,27 @@ mod tests {
         let (exe, socket) = (std::path::Path::new("/Apps/Wings"), std::path::Path::new("/data/mcp.sock"));
         let old = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {}, "alwaysLoad": true });
         assert_eq!(
-            super::mcp_add_json(Some(&old), exe, socket),
+            super::mcp_add_json(Some(&old), None, exe, socket),
             Some(json!({ "type": "stdio", "command": "/Apps/Wings", "args": ["--mcp", "/data/mcp.sock"], "env": {}, "alwaysLoad": true }))
         );
         // Nothing of yours on it, or no entry at all: the plain `claude mcp add`.
         let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {} });
-        assert_eq!(super::mcp_add_json(Some(&plain), exe, socket), None);
-        assert_eq!(super::mcp_add_json(None, exe, socket), None);
+        assert_eq!(super::mcp_add_json(Some(&plain), None, exe, socket), None);
+        assert_eq!(super::mcp_add_json(None, None, exe, socket), None);
+    }
+
+    #[test]
+    fn the_always_load_switch_sets_or_clears_only_that_field() {
+        use serde_json::json;
+        let (exe, socket) = (std::path::Path::new("/Apps/Wings"), std::path::Path::new("/data/mcp.sock"));
+        let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {}, "timeout": 9 });
+        assert_eq!(
+            super::mcp_add_json(Some(&plain), Some(true), exe, socket),
+            Some(json!({ "type": "stdio", "command": "/Apps/Wings", "args": ["--mcp", "/data/mcp.sock"], "env": {}, "timeout": 9, "alwaysLoad": true }))
+        );
+        assert_eq!(super::mcp_add_json(None, Some(true), exe, socket).unwrap()["alwaysLoad"], true);
+        let on = json!({ "type": "stdio", "command": "/Old/Wings", "args": [], "env": {}, "alwaysLoad": true });
+        assert_eq!(super::mcp_add_json(Some(&on), Some(false), exe, socket), None);
     }
 
     #[test]

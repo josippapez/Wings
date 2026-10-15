@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.49 · 2026-10-15
+
+- Settings › Plugins › Claude Code has a "Load Wings tools at session start" switch. It sets `alwaysLoad` on the Wings server, so Claude sees plugin tools from the first message instead of only when something tells it to look. It takes effect in new sessions.
+
 ## 0.1.48 · 2026-10-15
 
 - Plugins can give Claude a line on when to use their tools (`contributes.mcpInstructions`), which Claude sees at session start before it has loaded any of them. Issues uses it, so Claude files and looks up issues in Wings without being told to.

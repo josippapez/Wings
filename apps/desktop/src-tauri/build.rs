@@ -50,7 +50,7 @@ const COMMANDS: &[&str] = &[
     "plugin_fetch",
     "mcp_tool_result",
     "mcp_status",
-    "mcp_connect",
+    "mcp_connect", "mcp_set_always_load",
     "mcp_disconnect",
     "privacy_open_settings",
     "privacy_check",

@@ -80,6 +80,7 @@
     "allow-mcp-tool-result",
     "allow-mcp-status",
     "allow-mcp-connect",
+    "allow-mcp-set-always-load",
     "allow-mcp-disconnect",
     "allow-privacy-open-settings",
     "allow-privacy-check",

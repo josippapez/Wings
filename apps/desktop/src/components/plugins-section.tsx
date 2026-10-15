@@ -171,18 +171,18 @@ function Approve(props: { plugin: PluginView | null; step: { at: number; of: num
 /** Wings adds itself to Claude Code when it starts: plugin tools for its sessions, and its status line for plugins. */
 function ClaudeConnect({ open }: { open: boolean }) {
   const [status, setStatus] = useState<McpStatus | null>(null);
-  const [connecting, setConnecting] = useState<"connect" | "disconnect" | null>(null);
+  const [connecting, setConnecting] = useState<"connect" | "disconnect" | "alwaysLoad" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) void api.mcpStatus().then(setStatus, () => {});
   }, [open]);
 
-  async function run(action: "connect" | "disconnect") {
+  async function run(action: "connect" | "disconnect" | "alwaysLoad", on = false) {
     setConnecting(action);
     setError(null);
     try {
-      await (action === "connect" ? api.mcpConnect() : api.mcpDisconnect());
+      await (action === "connect" ? api.mcpConnect() : action === "disconnect" ? api.mcpDisconnect() : api.mcpSetAlwaysLoad(on));
       setStatus(await api.mcpStatus());
     } catch (e) {
       setError(message(e));
@@ -222,6 +222,18 @@ function ClaudeConnect({ open }: { open: boolean }) {
           </Button>
         )}
       </div>
+      {status.connected && (
+        <div className="flex items-start gap-3 pt-1">
+          <label htmlFor="mcp-always-load" className="min-w-0 flex-1">
+            <span className="block text-[13px]">Load Wings tools at session start</span>
+            <span className="block text-[12px] leading-snug text-muted-foreground">
+              Claude sees every plugin tool from the first message, instead of only when something tells it to look. Takes more of its context. New sessions only.
+            </span>
+          </label>
+          {connecting === "alwaysLoad" && <Spinner className="mt-1 size-3.5 text-muted-foreground" aria-label="Working" />}
+          <Switch id="mcp-always-load" checked={status.alwaysLoad} disabled={connecting !== null} onCheckedChange={(on) => void run("alwaysLoad", on)} className="mt-1" />
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-[12px] text-blocked">
           {error}

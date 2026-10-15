@@ -117,7 +117,7 @@ export const pagesOf = (plugin: PluginView): (PluginPage & { iconSvg: string | n
 export type ToolStatus = { program: string; name: string; installed: boolean; command: string | null; needsHomebrew: boolean; docs: string };
 /** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
 export type PrivacyBlocked = { folder: string; name: string; program: string };
-export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean };
+export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean; alwaysLoad: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
 export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
@@ -204,6 +204,8 @@ export const api = {
   /** Registers the Wings MCP server with Claude Code, for every project. */
   mcpConnect: () => invoke<void>("mcp_connect"),
   mcpDisconnect: () => invoke<void>("mcp_disconnect"),
+  /** Re-registers the Wings MCP server so its tools load at session start, or back behind tool search. */
+  mcpSetAlwaysLoad: (on: boolean) => invoke<void>("mcp_set_always_load", { on }),
   privacyOpenSettings: () => invoke<void>("privacy_open_settings"),
   privacyCheck: (folder: string) => invoke<boolean>("privacy_check", { folder }),
   onPrivacyBlocked: (cb: (blocked: PrivacyBlocked) => void): Promise<UnlistenFn> =>
