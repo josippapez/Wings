@@ -64,7 +64,9 @@ function ProjectIssue({ project }: { project: WingsProject }) {
         const last = issue && lastSession(issue);
         if (last) void action.run(() => wings.openPane({ command: resumeCommand(last.id), cwd: project.path }));
       }}
-      onStart={() => void action.run(() => wings.openPane({ ...agentCommand(issueKey), cwd: project.path }))}
+      onStart={() => {
+        if (issue) void action.run(() => wings.openPane({ ...agentCommand(issue), cwd: project.path }));
+      }}
       onOpenUrl={(url) => void action.run(() => wings.openUrl(url))}
       onOpenIssue={(key, newTab) => openIssue(key, trailTo(trail, issueKey, key), newTab)}
     />

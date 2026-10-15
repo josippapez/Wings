@@ -1,6 +1,6 @@
 // The commands that start Claude in a pane.
 
-import { KEY_PATTERN } from "./domain";
+import { KEY_PATTERN, type Issue } from "./domain";
 
 /**
  * Pane commands are typed into the user's shell: Wings takes command words of letters, digits and -_./:=@%+, and
@@ -12,9 +12,12 @@ export function resumeCommand(sessionId: string): string {
   if (!/^[0-9A-Za-z-]{8,64}$/.test(sessionId)) throw new Error("That isn't a Claude session id.");
   return `claude --resume ${sessionId}`;
 }
-/** `claude` with its first prompt, as `openPane`'s `command` and `args`. */
-export function agentCommand(issueKey: string): { command: string; args: string[] } {
-  if (!KEY_PATTERN.test(issueKey)) throw new Error("That isn't an issue key.");
-  const prompt = `Continue issue ${issueKey}. Read it with tasks__get, do the work, and log progress with tasks__log and the status with tasks__update as you go.`;
+/**
+ * `claude` with its first prompt for `issue`, as `openPane`'s `command` and `args`. It takes the issue, not a key: a tab
+ * can be opened with another spelling of the key, and the prompt must carry the one the issue has.
+ */
+export function agentCommand(issue: Pick<Issue, "key">): { command: string; args: string[] } {
+  if (!KEY_PATTERN.test(issue.key)) throw new Error("That isn't an issue key.");
+  const prompt = `Continue issue ${issue.key}. Read it with tasks__get, do the work, and log progress with tasks__log and the status with tasks__update as you go.`;
   return { command: "claude", args: [prompt] };
 }
