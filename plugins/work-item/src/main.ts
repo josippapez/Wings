@@ -5,7 +5,7 @@ import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
 import { workItemUrl } from "./lib/urls";
 import { assignedQuery, blockItems, isFinished, isFresh, currentIterations, repoLinksOf, repoRows, SECTION_ID, stateCategories, sprintQuery, type RepoRef, type StateCategories, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
-import { badgeFor, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
+import { badgeFor, dropClosed, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
 
 const BRANCH_POLL_MS = 15_000;
 const ITEM_POLL_MS = 60_000;
@@ -84,6 +84,7 @@ async function refreshRefs() {
       if (!items.has(key)) void refreshItem(key);
     }),
   );
+  dropClosed(refs, items, panes.map((p) => p.paneId));
   render();
 }
 

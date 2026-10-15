@@ -32,6 +32,14 @@ export type Item =
   | { missing: true; error?: undefined; title?: undefined; url?: undefined; states?: undefined }
   | { error: string; missing?: undefined; title?: undefined; url?: undefined; states?: undefined };
 
+/** Forgets the panes that are gone: their refs, and the items no ref points at, so a closed pane's work item isn't looked up again. */
+export function dropClosed(refs: Map<string, Ref>, items: Map<string, Item>, open: Iterable<string>) {
+  const panes = new Set(open);
+  for (const paneId of refs.keys()) if (!panes.has(paneId)) refs.delete(paneId);
+  const keys = new Set([...refs.values()].map((r) => r.key));
+  for (const key of items.keys()) if (!keys.has(key)) items.delete(key);
+}
+
 /** Process categories: Proposed, InProgress, Resolved, Completed, Removed. Review and QA states wait on someone else. */
 function toneOf(item: WorkItem): Tone {
   if (item.category === "InProgress") return /review|qa|test/i.test(item.state) ? "warning" : "info";
