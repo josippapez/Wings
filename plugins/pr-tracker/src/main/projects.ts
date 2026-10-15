@@ -4,7 +4,8 @@ import { plural } from "wings-plugin-sdk/format";
 import { argsOf } from "../lib/args";
 import { forgeFor, isKnown } from "../lib/forges/registry";
 import { refOf } from "../lib/providers";
-import { BLOCK_ROWS, fitPulls, orderPulls, type PullRow, type PullsResponse } from "../lib/pulls";
+import type { PullsAnswer } from "../lib/messages";
+import { BLOCK_ROWS, fitPulls, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
 import { newPulls, notesFor } from "../lib/watch";
 import { answered, explains, problemOf } from "./problems";
@@ -164,7 +165,7 @@ export function markSeen(url: string) {
  * The open pull requests of one project's repo for a Pull requests block. It shares the cache of the sidebar section,
  * so a block and a section cost one list per repo. A block asks only while visible and focused, so it never serves a list older than the TTL.
  */
-export async function pullsFor(path: string): Promise<Omit<PullsResponse, "type" | "rid">> {
+export async function pullsFor(path: string): Promise<PullsAnswer> {
   await loadSeen();
   const remote = await remoteFor(path);
   if (!isKnown(remote)) return { none: true, host: remote.host };

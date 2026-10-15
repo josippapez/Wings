@@ -3,8 +3,11 @@
 // so this page only shows whether one is saved.
 
 import { useEffect, useState } from "react";
+import { errorMessage } from "wings-plugin-sdk/async";
+import { useSetting } from "wings-plugin-sdk/react";
 import { Button, Heading, Row, Select, Stack, Text, TextInput } from "wings-plugin-ui";
-import { WATCH_KEY, WATCH_MINUTES, watchOf, type WatchMinutes } from "../lib/watch";
+import { ch } from "../lib/messages";
+import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
 
 export const page = { place: "settings" };
 
@@ -45,9 +48,9 @@ function TokenField({ host }: { host: Host }) {
       setSaved(save);
       setValue("");
       // The main script asks again with the new token.
-      wings.broadcast({ settingsChanged: true });
+      await ch.tell("tokens-changed");
     } catch (e) {
-      setError(String((e as Error).message ?? e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -71,24 +74,15 @@ function TokenField({ host }: { host: Host }) {
 const WATCH_OPTIONS = WATCH_MINUTES.map((m) => ({ value: String(m) as `${WatchMinutes}`, label: m ? `Every ${m} minutes` : "Off" }));
 
 function WatchField() {
-  const [minutes, setMinutes] = useState<WatchMinutes | null>(null);
+  const [minutes, setMinutes] = useSetting(watchMinutes);
 
-  useEffect(() => {
-    void wings.storage.get(WATCH_KEY).then((saved) => setMinutes(watchOf(saved)));
-  }, []);
-
-  const change = async (value: string) => {
-    const next = watchOf(Number(value));
-    setMinutes(next);
-    await wings.storage.set(WATCH_KEY, next);
-    wings.broadcast({ watchChanged: true });
-  };
+  const change = (value: string) => void setMinutes(watchOf(Number(value)) ?? 0);
 
   return (
     <Stack gap="s">
       <Heading>New pull requests</Heading>
       <Text tone="muted">Get a notification when someone opens a pull request in one of your projects. While Wings is in front it checks every minute. In the background it checks this often.</Text>
-      {minutes === null ? null : <Select label="Check in the background" options={WATCH_OPTIONS} value={String(minutes) as `${WatchMinutes}`} onChange={(v) => void change(v)} />}
+      {minutes === null ? null : <Select label="Check in the background" options={WATCH_OPTIONS} value={String(minutes) as `${WatchMinutes}`} onChange={change} />}
     </Stack>
   );
 }

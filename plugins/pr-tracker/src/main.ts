@@ -9,9 +9,9 @@
 import { errorMessage } from "wings-plugin-sdk/async";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { linkOf } from "./lib/forges/registry";
-import type { PullsAction, PullsChanged, PullsRequest, PullsResponse } from "./lib/pulls";
-import type { Link, PrArgs } from "./lib/types";
-import { WATCH_KEY, watchOf } from "./lib/watch";
+import { ch } from "./lib/messages";
+import type { Link } from "./lib/types";
+import { watchMinutes, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
 import { failingChecks } from "./main/failing";
 import { refreshLinks } from "./main/links";
@@ -50,13 +50,13 @@ pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
 
 // New pull requests: with an interval set in Settings, the lists are also checked while Wings is in the background.
 let watchTimer: ReturnType<typeof setInterval> | undefined;
-async function loadWatch() {
-  const minutes = watchOf(await wings.storage.get(WATCH_KEY));
+function watchEvery(minutes: WatchMinutes) {
   setWatching(minutes > 0);
   clearInterval(watchTimer);
   if (minutes) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), minutes * 60_000);
 }
-void loadWatch();
+void watchMinutes.get().then(watchEvery);
+watchMinutes.onChange(watchEvery);
 
 wings.onTool("failing_checks", (_input, { paneId }) => failingChecks(paneId));
 
@@ -81,9 +81,7 @@ wings.onAction(async ({ paneId, actionId }) => {
 // ---------- the PR tab ----------
 
 /** What a "pr" tab asks of this script, since only it can open the diff viewer that takes replies and knows the agent panes. */
-type PrRequest = { type: "pr-request"; rid: string; op: "diff" | "agent" | "seen"; args: PrArgs; focus?: WingsDiffFocus };
-
-async function handleRequest({ op, args, focus }: PrRequest) {
+ch.answer("pr", async ({ op, args, focus }) => {
   if (op === "seen") return markSeen(args.url);
   let link: Link | undefined = [...links.values()].find((l) => l.url === args.url);
   if (!link) {
@@ -97,49 +95,28 @@ async function handleRequest({ op, args, focus }: PrRequest) {
   const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === args.url);
   if (!agent) throw new Error("No agent is working on this branch. Start Claude in a terminal on it, then try again.");
   return openDiffFor(link, { title: args.title, cwd: agent.cwd, focus });
-}
-
-wings.onBroadcast(async (message) => {
-  const request = message as PrRequest | null;
-  if (request?.type !== "pr-request") return;
-  let error: string | undefined;
-  try {
-    await handleRequest(request);
-  } catch (e) {
-    error = errorMessage(e);
-  }
-  await wings.broadcast({ type: "pr-response", rid: request.rid, error });
 });
 
 // ---------- the Pull requests block ----------
 
 /** A block on a Project page asks for its project's open pull requests, from the same cache as the sidebar section. */
-wings.onBroadcast(async (message) => {
-  const request = message as PullsRequest | null;
-  if (request?.type !== "pulls-request" || typeof request.path !== "string") return;
-  let response: Omit<PullsResponse, "type" | "rid">;
+ch.answer("pulls", async ({ path }) => {
   try {
-    response = await pullsFor(request.path);
+    return await pullsFor(path);
   } catch (e) {
-    response = { error: errorMessage(e).slice(0, 300) };
+    throw new Error(errorMessage(e).slice(0, 300));
   }
-  await wings.broadcast({ type: "pulls-response", rid: request.rid, ...response } satisfies PullsResponse);
 });
 
 /** The block's button: what the pane badge's Sign in, Add token or Install does for this project's host. */
-wings.onBroadcast(async (message) => {
-  const request = message as PullsAction | null;
-  if (request?.type !== "pulls-action" || typeof request.path !== "string") return;
-  const remote = await remoteFor(request.path);
+ch.answer("pulls-action", async ({ path }) => {
+  const remote = await remoteFor(path);
   // A host no CLI knew: look at the CLIs' hosts again.
   if (remote.kind === "none") await retry();
   else if (problemOf(remote)?.kind === "missing") await install(remote);
   else await signIn(remote);
-  await wings.broadcast({ type: "pulls-changed" } satisfies PullsChanged);
+  await ch.tell("pulls-changed");
 });
 
-// Settings saved a token: ask again with it. Or it changed how often to check for new PRs.
-wings.onBroadcast((message) => {
-  if ((message as { settingsChanged?: boolean } | null)?.settingsChanged) void retry().then(() => refreshProjects(true));
-  if ((message as { watchChanged?: boolean } | null)?.watchChanged) void loadWatch();
-});
+// Settings saved or removed a token: ask again with it.
+ch.on("tokens-changed", () => void retry().then(() => refreshProjects(true)));

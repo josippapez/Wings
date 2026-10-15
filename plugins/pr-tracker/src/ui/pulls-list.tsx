@@ -2,56 +2,18 @@
 // your review or drafts. The Pull requests block of a Project page shows it, and so does a "pr" tab opened with no pull
 // request. The main script owns the lists and their cache; this asks it, only while Wings is in front and the list is on screen.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { Avatar, Button, Chips, Empty, Row, Stack, Text } from "wings-plugin-ui";
-import { countPulls, filterOf, filterPulls, splitTitle, type Filter, type PullRow, type PullsAction, type PullsRequest, type PullsResponse } from "../lib/pulls";
+import { useEffect, useState } from "react";
+import { useAsk } from "wings-plugin-sdk/react";
+import { Avatar, Button, Chips, Empty, Row, Stack, Text, useAction } from "wings-plugin-ui";
+import { ch } from "../lib/messages";
+import { countPulls, filterOf, filterPulls, splitTitle, type Filter, type PullRow } from "../lib/pulls";
 import { ago } from "../lib/threads";
 import "./pulls-list.css";
 import type { PrArgs } from "../lib/types";
 
 const POLL_MS = 60_000;
-
-type Answer = Omit<PullsResponse, "type" | "rid">;
-
-/** The project's list: once at the start, then on each poll while Wings is focused. A hidden block asks for nothing. `ask` is Refresh. */
-function usePulls(path: string): { answer: Answer | null; ask: () => void; busy: boolean } {
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [busy, setBusy] = useState(false);
-  const asker = useRef<() => void>(() => {});
-  useEffect(() => {
-    let pending = "";
-    const ask = () => {
-      if (document.visibilityState === "hidden") return;
-      pending = crypto.randomUUID();
-      setBusy(true);
-      wings.broadcast({ type: "pulls-request", rid: pending, path } satisfies PullsRequest).catch((e: Error) => {
-        setBusy(false);
-        setAnswer({ error: e.message });
-      });
-    };
-    asker.current = ask;
-    const off = wings.onBroadcast((message) => {
-      const m = message as PullsResponse | null;
-      if (m?.type === "pulls-response" && m.rid === pending) {
-        setBusy(false);
-        setAnswer({ rows: m.rows, none: m.none, host: m.host, problem: m.problem, error: m.error });
-      }
-      // A sign-in, token or install finished in main.
-      if ((message as { type?: string } | null)?.type === "pulls-changed") ask();
-    });
-    const shown = () => ask();
-    document.addEventListener("visibilitychange", shown);
-    ask();
-    const stop = pollWhileFocused(ask, POLL_MS);
-    return () => {
-      off();
-      stop();
-      document.removeEventListener("visibilitychange", shown);
-    };
-  }, [path]);
-  return { answer, ask: useCallback(() => asker.current(), []), busy };
-}
+/** A sign-in waits for the browser for up to 5 minutes, and main answers when it is done. */
+const ACTION_TIMEOUT_MS = 330_000;
 
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "all", label: "All open" },
@@ -90,37 +52,44 @@ interface ListProps {
 }
 
 export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
-  const { answer, ask, busy } = usePulls(path);
+  // The project's list: once at the start, then on each poll while Wings is focused. `refresh` is Refresh.
+  const { data, error, loading, refresh } = useAsk(ch, "pulls", { path }, { pollMs: POLL_MS });
+  // A sign-in, token or install finished in main.
+  useEffect(() => ch.on("pulls-changed", refresh), [refresh]);
   const [filter, setFilter] = useFilter(store);
-  const rows = answer?.rows ?? [];
+  const sign = useAction();
+  const rows = data?.rows ?? [];
   const counts = countPulls(rows);
   const shown = filterPulls(rows, filter);
-  const action = () => void wings.broadcast({ type: "pulls-action", path } satisfies PullsAction);
+  const action = () => void sign.run(() => ch.ask("pulls-action", { path }, { timeoutMs: ACTION_TIMEOUT_MS }));
+  const failed = sign.error ? <Text tone="danger" role="alert">{sign.error}</Text> : null;
 
   let body;
-  if (!answer) body = <ListSkeleton />;
-  else if (answer.none) {
-    body = answer.host ? (
+  if (error) {
+    body = (
+      <div className="pl-error" role="alert" data-testid="pulls-error">
+        <Text tone="danger">{error.message}</Text>
+        <Button size="sm" variant="outline" onClick={refresh}>Try again</Button>
+      </div>
+    );
+  } else if (!data) body = <ListSkeleton />;
+  else if (data.none) {
+    body = data.host ? (
       <Stack gap="s">
-        <Text tone="muted">No pull request provider found for {answer.host}. For GitHub Enterprise or self-managed GitLab, sign in to it with gh or glab in a terminal, then check again.</Text>
-        <Row><Button size="sm" onClick={action}>Check again</Button></Row>
+        <Text tone="muted">No pull request provider found for {data.host}. For GitHub Enterprise or self-managed GitLab, sign in to it with gh or glab in a terminal, then check again.</Text>
+        <Row><Button size="sm" busy={sign.busy} onClick={action}>Check again</Button></Row>
+        {failed}
       </Stack>
     ) : (
       <Text tone="muted">No GitHub, GitLab, Azure DevOps, Bitbucket or Codeberg remote for this project.</Text>
     );
-  } else if (answer.problem) {
+  } else if (data.problem) {
     body = (
       <Stack gap="s">
-        <Text tone="muted">{answer.problem.message}</Text>
-        <Row><Button size="sm" onClick={action}>{answer.problem.action}</Button></Row>
+        <Text tone="muted">{data.problem.message}</Text>
+        <Row><Button size="sm" busy={sign.busy} onClick={action}>{data.problem.action}</Button></Row>
+        {failed}
       </Stack>
-    );
-  } else if (answer.error) {
-    body = (
-      <div className="pl-error" role="alert" data-testid="pulls-error">
-        <Text tone="danger">{answer.error}</Text>
-        <Button size="sm" variant="outline" onClick={ask}>Try again</Button>
-      </div>
     );
   } else if (!shown.length) body = <Empty title={EMPTY[filter]} description={filter !== "all" && rows.length ? `${rows.length} open in all.` : undefined} />;
   else {
@@ -131,7 +100,7 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
     );
   }
 
-  const ready = Boolean(answer?.rows);
+  const ready = !error && Boolean(data?.rows);
   return (
     <div className="pl-wrap" data-store={store} data-testid="pulls">
       <header className="pl-head">
@@ -143,7 +112,7 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
           ) : (
             <Text tone="muted" size="small">{ready ? `${counts.all} open` : ""}</Text>
           )}
-          <Button size="sm" variant="outline" busy={busy} onClick={ask} data-testid="pulls-refresh">Refresh</Button>
+          <Button size="sm" variant="outline" busy={loading} onClick={refresh} data-testid="pulls-refresh">Refresh</Button>
         </Row>
         {ready ? (
           <Chips

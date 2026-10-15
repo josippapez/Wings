@@ -39,8 +39,8 @@ test("a list too big for a broadcast is cut at the last row that fits, a normal 
   const one = { id: "azure:12345", title: "x".repeat(160), number: "#12345", author: "A Person With A Long Name", branch: `feature/${"y".repeat(60)} → main`, scope: "other", draft: false, badge: { text: "Checks failing", tone: "danger" }, review: "1 approved, 1 waiting for author", checks: { passed: 4, failed: 1, running: 2 }, updated: "2026-10-13T10:00:00.000Z", unread: 3, agent: "working", args };
   const long = fitPulls(Array.from({ length: BLOCK_ROWS }, () => one));
   assert.ok(long.length > 40 && long.length < BLOCK_ROWS);
-  // Wings refuses a broadcast over 64,000 characters, the message around the rows counted.
-  assert.ok(JSON.stringify({ type: "pulls-response", rid: crypto.randomUUID(), rows: long }).length <= 64_000);
+  // Wings refuses a broadcast over 64,000 characters, counted with the envelope the messages module puts around an answer.
+  assert.ok(JSON.stringify({ "wings:sdk": 1, kind: "answer", id: `${Math.random().toString(36).slice(2)}:123456`, response: { rows: long } }).length <= 64_000);
   assert.equal(fitPulls(Array.from({ length: 50 }, () => ({ ...one, title: "short", args: { ...args, title: "short" } }))).length, 50);
   assert.deepEqual(fitPulls([]), []);
 });

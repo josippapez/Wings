@@ -1,11 +1,12 @@
 // The PR tab: one pull request with its status, description and review threads. The diff viewer and Send to agent
-// belong to the main script, which asks for them by broadcast; everything shown here loads after the page does.
+// belong to the main script, which is asked for them; everything shown here loads after the page does.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { errorMessage } from "wings-plugin-sdk/async";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { useBroadcast } from "wings-plugin-sdk/react";
 import { Empty, Loading, Page } from "wings-plugin-ui";
 import { forgeOf, linkOf } from "../lib/forges/registry";
+import { ch } from "../lib/messages";
 import type { Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
 import type { Comment, Failing, Link, Overview, PrArgs } from "../lib/types";
@@ -17,31 +18,6 @@ import { ProjectPulls } from "../ui/pulls-list";
 export const page = { place: "tab", fill: true };
 
 const REFRESH_MS = 120_000;
-/** Longer than this and main isn't going to answer, so the button stops waiting. */
-const REQUEST_TIMEOUT_MS = 30_000;
-
-/** Asks the main script to do something and waits for its answer. Every tab hears every answer, so the id is unique across tabs. */
-function askMain(op: "diff" | "agent" | "seen", args: PrArgs, focus?: WingsDiffFocus) {
-  const rid = crypto.randomUUID();
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      off();
-      reject(new Error("Wings didn't answer. Try again."));
-    }, REQUEST_TIMEOUT_MS);
-    const off = wings.onBroadcast((message) => {
-      const m = message as { type?: string; rid?: string; error?: string } | null;
-      if (m?.type !== "pr-response" || m.rid !== rid) return;
-      clearTimeout(timer);
-      off();
-      m.error ? reject(new Error(m.error)) : resolve();
-    });
-    wings.broadcast({ type: "pr-request", rid, op, args, focus }).catch((e: Error) => {
-      clearTimeout(timer);
-      off();
-      reject(e);
-    });
-  });
-}
 
 function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const [link, setLink] = useState<Link | null>(null);
@@ -69,26 +45,23 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       return { o, c };
     } catch (e) {
       resolved.current = null;
-      setError(String((e as Error).message ?? e));
+      setError(errorMessage(e));
     }
   }, [args]);
 
   useEffect(() => {
     void load();
-    void askMain("seen", args).catch(() => {});
+    void ch.ask("pr", { op: "seen", args }).catch(() => {});
     return pollWhileFocused(() => void load(), REFRESH_MS);
   }, [args, load]);
-
-  // Another tab's reply, or the diff viewer's, shows here at the next refresh; this one's own is added at once.
-  useBroadcast(() => {});
 
   const run = useCallback(async (op: "diff" | "agent", focus?: WingsDiffFocus) => {
     setBusy(op);
     setNotice(null);
     try {
-      await askMain(op, args, focus);
+      await ch.ask("pr", { op, args, focus });
     } catch (e) {
-      setNotice(String((e as Error).message ?? e));
+      setNotice(errorMessage(e));
     } finally {
       setBusy(null);
     }

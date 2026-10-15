@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_SINGLE, newPulls, notesFor, watchOf } from "./watch.ts";
+import { MAX_SINGLE, newPulls, notesFor, watchMinutes, watchOf } from "./watch.ts";
 
 const pr = (url, mine = false) => ({ link: { url }, mine });
 
@@ -25,10 +25,26 @@ test("each new PR gets its own notification with its buttons, and a burst gets o
   assert.deepEqual(notesFor("web", burst), [{ title: `${MAX_SINGLE + 1} new pull requests in web`, body: burst.map((i) => i.title).join("\n"), actions: [all] }]);
 });
 
-test("a saved interval that isn't one of the choices is off", () => {
+test("a saved interval that isn't one of the choices is not accepted", () => {
   assert.equal(watchOf(10), 10);
   assert.equal(watchOf(0), 0);
-  assert.equal(watchOf(7), 0);
-  assert.equal(watchOf("10"), 0);
-  assert.equal(watchOf(null), 0);
+  assert.equal(watchOf(7), undefined);
+  assert.equal(watchOf("10"), undefined);
+  assert.equal(watchOf(null), undefined);
+});
+
+test("the background check is off until a valid interval is saved, and a change reaches the main script", async (t) => {
+  const stored = new Map();
+  globalThis.wings = { storage: { get: async (key) => stored.get(key) ?? null, set: async (key, value) => void stored.set(key, value) }, broadcast: async () => {}, onBroadcast: () => () => {} };
+  t.after(() => delete globalThis.wings);
+  assert.equal(await watchMinutes.get(), 0);
+  stored.set("watch-minutes", 7);
+  assert.equal(await watchMinutes.get(), 0);
+  stored.set("watch-minutes", 15);
+  assert.equal(await watchMinutes.get(), 15);
+  const heard = [];
+  watchMinutes.onChange((minutes) => heard.push(minutes));
+  await watchMinutes.set(30);
+  assert.deepEqual(heard, [30]);
+  assert.equal(stored.get("watch-minutes"), 30, "saved under the key Settings always used");
 });
