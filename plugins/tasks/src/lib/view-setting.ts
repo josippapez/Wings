@@ -5,7 +5,7 @@ export const DEFAULT_VIEW_KEY = "defaultView";
 export type DefaultView = "board" | "rows" | "list";
 export const DEFAULT_VIEWS: { value: DefaultView; label: string }[] = [
   { value: "board", label: "Board" },
-  { value: "rows", label: "Rows, grouped by parent" },
+  { value: "rows", label: "Board by epic" },
   { value: "list", label: "List" },
 ];
 

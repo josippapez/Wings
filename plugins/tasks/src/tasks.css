@@ -658,3 +658,44 @@
 .tk-priority[data-priority="high"] {
   color: var(--wings-fg);
 }
+
+/* The Default view picker on the settings page: a drawing of each view over its name. */
+.tk-views {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tk-views .w-chip {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 160px;
+  height: auto;
+  padding: 8px 8px 10px;
+  border: 1px solid var(--wings-hairline);
+  text-align: left;
+}
+.tk-views .w-chip[aria-pressed="true"] {
+  border-color: var(--wings-ring);
+}
+.tk-view-pic {
+  width: 100%;
+  margin-bottom: 6px;
+  border-radius: var(--wings-radius-sm);
+  background: var(--wings-surface);
+}
+.tk-view-head {
+  fill: var(--wings-muted);
+  opacity: 0.6;
+}
+.tk-view-card {
+  fill: var(--wings-muted);
+  opacity: 0.3;
+}
+.tk-view-band {
+  fill: var(--wings-muted);
+  opacity: 0.1;
+}
+.tk-view-hint {
+  color: var(--wings-muted);
+  font-weight: 400;
+}
