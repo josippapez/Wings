@@ -1,7 +1,7 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "minWingsVersion": "0.1.20",
   "icon": "icon.svg",
   "description": "Shows what each Claude session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
@@ -15,7 +15,7 @@
     "transcript": [
       "assistant",
       "user",
-      "attachment"
+      "attachment:queued_command"
     ]
   },
   "contributes": {

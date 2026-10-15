@@ -1,5 +1,5 @@
 // Made-up sessions for the Session sidebar.
-import type { ItemView, SessionView } from "../src/lib/types";
+import type { Item, ItemView, SessionView } from "../src/lib/types";
 
 const now = Date.now();
 const at = (minutesAgo: number) => now - minutesAgo * 60_000;
@@ -18,9 +18,27 @@ const items: ItemView[] = [
   { kind: "tool", key: "t9", name: "Edit", summary: "src/routes/cart.tsx", at: at(1), done: false },
 ];
 
+/** What some of the rows open to. */
+const opens: Item[] = [
+  { ...items[0], text: "Rework the checkout page so the coupon field sits under the order summary, and keep the totals in sync with the cart. The discount comes from useCoupon: don't change its API." },
+  { ...items[3], input: [["file_path", "src/features/checkout/CheckoutSummary.tsx"], ["old_string", "<Total value={subtotal} />"], ["new_string", "<Total value={subtotal - discount} />"]], result: "The file src/features/checkout/CheckoutSummary.tsx has been updated." },
+  {
+    ...items[7],
+    input: [["command", "pnpm test -- checkout"]],
+    result: "FAIL src/features/checkout/CheckoutSummary.test.tsx\n  ● coupon › keeps the totals in sync\n\n    expect(received).toBe(expected)\n    Expected: 41.2\n    Received: 45",
+  },
+  { ...items[10], input: [["file_path", "src/routes/cart.tsx"], ["old_string", "<Total value={subtotal} />"], ["new_string", "<Total value={subtotal - discount} />"]], result: null },
+];
+
+/** What main answers a row's detail request with. */
+export const detail = ({ key }: { sessionId: string; key: string }) => {
+  const item = opens.find((i) => i.key === key);
+  if (!item) throw new Error("That row isn't kept any more.");
+  return item;
+};
+
 export const working: SessionView = {
   id: "s1",
-  paneId: "pane1",
   project: "web",
   name: "checkout redesign",
   state: "working",
@@ -48,5 +66,3 @@ export const working: SessionView = {
 };
 
 export const idle: SessionView = { ...working, id: "s2", name: null, project: "api", state: "idle", running: [], todos: [], files: [], items: items.slice(0, 3), tokens: "12k in · 1k out" };
-
-export const sessions = (list: SessionView[]) => ({ type: "sessions", sessions: list });

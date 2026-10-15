@@ -1,14 +1,23 @@
+import { useEffect } from "react";
+import { useAsk } from "wings-plugin-sdk/react";
 import { Text } from "wings-plugin-ui";
 
-import type { Detail, ItemView } from "../lib/types";
+import { ch } from "../lib/messages";
+import type { ItemView } from "../lib/types";
 import { took } from "./format";
 
 /** What a row opens to: the prompt in full, or a tool call's inputs, timing and the start of its result. */
-export function Card({ item, detail: d }: { item: ItemView; detail: Detail | undefined }) {
+export function Card({ sessionId, item }: { sessionId: string; item: ItemView }) {
+  const { data: d, error, refresh } = useAsk(ch, "detail", { sessionId, key: item.key });
+  // A call that was still running when the row opened has its result by now.
+  const finished = item.done === true && d?.done === false;
+  useEffect(() => {
+    if (finished) refresh();
+  }, [finished, refresh]);
   if (!d)
     return (
       <div className="detail">
-        <Text tone="muted">Loading…</Text>
+        <Text tone={error ? "danger" : "muted"}>{error ? error.message : "Loading…"}</Text>
       </div>
     );
   const pre = (part: string, text: string, cls = "") => (

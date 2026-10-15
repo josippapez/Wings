@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Badge, Chips, Dot, Heading, List, ListButton, ListItem, Spinner, Text } from "wings-plugin-ui";
 
-import type { Detail, ItemView } from "../lib/types";
+import type { ItemView } from "../lib/types";
 import { Card } from "./Card";
 import { clock, took } from "./format";
 
@@ -9,7 +9,7 @@ import { clock, took } from "./format";
 const tones: Record<string, "info" | "success" | "danger"> = { push: "info", ok: "success", danger: "danger" };
 
 /** One row of the timeline: a button that opens its card. */
-function Row({ item, open, detail, toggle }: { item: ItemView; open: boolean; detail: Detail | undefined; toggle: () => void }) {
+function Row({ sessionId, item, open, toggle }: { sessionId: string; item: ItemView; open: boolean; toggle: () => void }) {
   const button = (align: "baseline" | undefined, children: ReactNode) => (
     <ListButton align={align} id={`item-${item.key}`} aria-expanded={open} onClick={toggle}>
       {children}
@@ -31,7 +31,7 @@ function Row({ item, open, detail, toggle }: { item: ItemView; open: boolean; de
           </Text>
         </>,
       )}
-      {open ? <Card item={item} detail={detail} /> : null}
+      {open ? <Card sessionId={sessionId} item={item} /> : null}
     </ListItem>
   ) : (
     <ListItem>
@@ -56,25 +56,25 @@ function Row({ item, open, detail, toggle }: { item: ItemView; open: boolean; de
           <Text tone="muted">{item.error ? "failed" : took(item.ms)}</Text>
         </>,
       )}
-      {open ? <Card item={item} detail={detail} /> : null}
+      {open ? <Card sessionId={sessionId} item={item} /> : null}
     </ListItem>
   );
 }
 
 /** Recent activity, all of it or only your messages, highlighted commands and failures. */
 export function Activity({
+  sessionId,
   items,
   highlightsOnly,
   setHighlightsOnly,
   isOpen,
-  detailOf,
   toggle,
 }: {
+  sessionId: string;
   items: ItemView[];
   highlightsOnly: boolean;
   setHighlightsOnly: (on: boolean) => void;
   isOpen: (key: string) => boolean;
-  detailOf: (key: string) => Detail | undefined;
   toggle: (key: string) => void;
 }) {
   const shown = highlightsOnly ? items.filter((i) => i.kind === "prompt" || i.tags || i.error) : items;
@@ -95,7 +95,7 @@ export function Activity({
       {shown.length ? (
         <List ordered>
           {shown.map((item) => (
-            <Row key={item.key} item={item} open={isOpen(item.key)} detail={detailOf(item.key)} toggle={() => toggle(item.key)} />
+            <Row key={item.key} sessionId={sessionId} item={item} open={isOpen(item.key)} toggle={() => toggle(item.key)} />
           ))}
         </List>
       ) : (

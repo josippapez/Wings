@@ -1,10 +1,6 @@
-export const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+import { truncate } from "wings-plugin-sdk/format";
 
-export const basename = (path: unknown) => String(path ?? "").split("/").filter(Boolean).at(-1) ?? "";
-export const oneLine = (text: unknown, max = 90) => {
-  const line = String(text ?? "").replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-};
+export const oneLine = (text: unknown, max = 90) => truncate(String(text ?? "").replace(/\s+/g, " ").trim(), max);
 
 export const modelName = (model: string | null) => {
   const m = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(model ?? "");
