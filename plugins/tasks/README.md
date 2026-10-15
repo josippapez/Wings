@@ -53,7 +53,7 @@ The Issue view is no longer `multiple`: clicking an issue reuses the one issue t
 
 ## Which project, and who wrote it
 
-The project of the terminal Claude runs in. There is no `project` argument. If the call can't be tied to a terminal in Wings, the tool returns an error; it never falls back to the project on screen. The entry's author is the Claude session in that terminal (from `wings.onPanes`), and the session is added to the issue's sessions. Entries made on a page are "you".
+The project of the terminal Claude runs in. There is no `project` argument. If the call can't be tied to a terminal in Wings, the tool returns an error; it never falls back to the project on screen. The entry's author is the Claude session in that terminal, which Wings passes with the tool call, and the session is added to the issue's sessions. Entries made on a page are "you".
 
 ## Where issues live
 
