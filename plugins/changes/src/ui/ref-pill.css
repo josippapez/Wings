@@ -1,0 +1,5 @@
+/* The branch HEAD is on stands out among a commit's refs, in the History list and in the graph. */
+.w-badge.ref-head {
+  border-color: color-mix(in srgb, var(--wings-info) 55%, transparent);
+  font-weight: 600;
+}

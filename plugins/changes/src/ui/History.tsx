@@ -1,58 +1,37 @@
 import { useCallback } from "react";
 import { Badge, Button, Checkbox, Empty, List, ListButton, ListItem, Row, SearchField, Stack, Text } from "wings-plugin-ui";
 
-import type { CommitRow, Repo } from "../lib/types";
+import { ago, dateTimeOf } from "../lib/dates";
+import { describeRef } from "../lib/log";
+import type { CommitRow } from "../lib/types";
+import "./ref-pill.css";
 
 /** What the History tab shows. */
-export interface HistoryView {
-  loading?: boolean;
-  loadingMore?: boolean;
-  repo?: Repo | null;
+interface HistoryView {
   rows: CommitRow[];
-  more?: boolean;
-  error?: string;
-  /** The repo, search and scope the rows are of, so a first page for the same list keeps the rows after it. */
-  source?: string;
-}
-
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["year", 31_557_600],
-  ["month", 2_629_800],
-  ["week", 604_800],
-  ["day", 86_400],
-  ["hour", 3_600],
-  ["minute", 60],
-];
-/** Like "3 hours ago". @param at Unix seconds. */
-function ago(at: number) {
-  const s = at - Date.now() / 1000;
-  const unit = UNITS.find(([, size]) => Math.abs(s) >= size);
-  return unit ? relative.format(Math.round(s / unit[1]), unit[0]) : "just now";
+  more: boolean;
+  /** The first page is on its way. */
+  loading: boolean;
+  loadingMore: boolean;
 }
 
 /** Refs shown under a commit; the rest are a count, with their names in its tooltip. */
 const MAX_REFS = 3;
-const REF_KIND = { H: "HEAD", b: "Branch", r: "Remote branch", t: "Tag", s: "Stash" };
-const REF_TONE = { H: "info", b: "success", t: "warn" } as const;
 /** A small tag for a branch or tag. `value` is `kind:name`. */
 function RefPill({ value }: { value: string }) {
-  const kind = value[0];
-  const name = value.slice(2);
-  const what = REF_KIND[kind as keyof typeof REF_KIND] ?? "Ref";
+  const { head, label, title, tone } = describeRef(value);
   return (
-    <Badge variant="outline" tone={REF_TONE[kind as keyof typeof REF_TONE]} className={kind === "H" ? "head" : undefined} title={kind === "H" && name !== "HEAD" ? `HEAD, on ${name}` : `${what} ${name}`}>
-      {kind === "t" ? `◆ ${name}` : name}
+    <Badge variant="outline" tone={tone} className={head ? "ref-head" : undefined} title={title}>
+      {label}
     </Badge>
   );
 }
 
 function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => void }) {
   const [hash, subject, author, at, refs] = row;
-  const date = new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   return (
     <ListItem>
-      <ListButton id={`c:${hash}`} className="commit" title={`${subject}\n${hash}\n${author}, ${date}`} onClick={() => onOpen(row)}>
+      <ListButton className="commit" title={`${subject}\n${hash}\n${author}, ${dateTimeOf(at)}`} onClick={() => onOpen(row)}>
         <Text truncate className="subject">
           {subject}
         </Text>
@@ -112,13 +91,7 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
     // Only when it mounts: after that the box holds what you type.
   }, []);
   let body = null;
-  if (view?.error) {
-    body = (
-      <Text as="p" tone="warn">
-        {view.error}
-      </Text>
-    );
-  } else if (view && view.rows.length === 0 && !view.loading) {
+  if (view && view.rows.length === 0 && !view.loading) {
     body = <Empty title={query ? "No commits match." : "No commits yet."} description={query ? `Searched messages, authors and hashes for “${query}”.` : undefined} />;
   } else if (view) {
     const k = keys(view.rows);
@@ -130,7 +103,7 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
           ))}
         </List>
         {view.more ? (
-          <Button id="more" variant="ghost" disabled={Boolean(view.loadingMore)} onClick={onMore}>
+          <Button id="more" variant="ghost" disabled={view.loadingMore} onClick={onMore}>
             {view.loadingMore ? "Loading…" : "Load more"}
           </Button>
         ) : null}

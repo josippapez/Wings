@@ -58,10 +58,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.commit .w-badge.head {
-  border-color: color-mix(in srgb, var(--wings-info) 55%, transparent);
-  font-weight: 600;
-}
 .commit .w-row {
   min-width: 0;
 }

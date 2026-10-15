@@ -1,5 +1,5 @@
 // No git repo in any pane.
 import Sidebar from "../src/pages/sidebar";
 export const place = "sidebar";
-export const respond = (m: unknown) => ((m as { type: string }).type === "hello" ? { type: "state", mode: "uncommitted", repo: null } : undefined);
+export const answers = { changes: () => ({ repo: null }) };
 export default <Sidebar />;

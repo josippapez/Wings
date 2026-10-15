@@ -1,5 +1,5 @@
 // Made-up data the Changes fixtures share.
-import type { CommitRow, FileRow, HistoryMessage, StateMessage } from "../src/lib/types";
+import type { ChangesAnswer, CommitRow, FileRow, HistoryAnswer } from "../src/lib/types";
 
 export const repo = { root: "/work/acme/web", name: "web", branch: "feature/checkout-redesign" };
 
@@ -48,15 +48,14 @@ export const files: FileRow[] = [
   f("M", "src/features/orders/OrderList.tsx", 26, 18),
 ];
 
-export const state = (extra: Partial<StateMessage> = {}): StateMessage => ({
-  type: "state",
-  mode: "uncommitted",
+export const changes = (extra: Partial<Extract<ChangesAnswer, { files: FileRow[] }>> = {}): ChangesAnswer => ({
   repo,
   against: "against HEAD (a1b2c3d)",
   files,
   total: files.length,
   added: files.reduce((n, r) => n + (r[2] ?? 0), 0),
   removed: files.reduce((n, r) => n + (r[3] ?? 0), 0),
+  partial: false,
   ...extra,
 });
 
@@ -75,4 +74,4 @@ export const commits: CommitRow[] = [
   c("3d4e5f6a1b2c", "Initial commit", "Ada Lovelace", 200 * 86_400, ["t:v0.1.0"]),
 ];
 
-export const history = (extra: Partial<HistoryMessage> = {}): HistoryMessage => ({ type: "history", query: "", all: false, skip: 0, repo, rows: commits, more: true, ...extra });
+export const history = (extra: Partial<Extract<HistoryAnswer, { rows: CommitRow[] }>> = {}): HistoryAnswer => ({ repo, rows: commits, more: true, ...extra });

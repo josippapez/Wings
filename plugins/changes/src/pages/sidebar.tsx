@@ -1,156 +1,92 @@
 // The Changes sidebar page: the changed files of the focused pane's repo as a folder tree, and its commit history. The
-// plugin's main script runs git and broadcasts the files and commits here; a click asks it to open the diff viewer.
+// plugin's main script runs git and answers what this page asks for; a click asks it to open the diff viewer.
 
-import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
+import { useEffect, useRef, useState } from "react";
+import { plural } from "wings-plugin-sdk/format";
+import { useAsk } from "wings-plugin-sdk/react";
 import { Button, Card, Chips, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { FileTree } from "../ui/FileTree";
-import { History, type HistoryView } from "../ui/History";
-import { plural } from "../lib/format";
-import { withFirstPage } from "../lib/history-rows";
-import { type ChangesView, mergeState } from "../lib/state-merge";
-import type { CommitRow, HistoryMessage, Mode, StateMessage, Tab } from "../lib/types";
+import { History } from "../ui/History";
+import { useHistory } from "../ui/useHistory";
+import { ch, POLL_MS } from "../lib/messages";
+import type { CommitRow, Mode, Repo } from "../lib/types";
 import "./sidebar.css";
 
 export const page = { place: "sidebar" };
 
-const POLL_MS = 15_000;
 /** How long the search waits after the last key before it asks git. */
 const SEARCH_MS = 250;
 
-/**
- * Everything the page shows, kept across renders and changed in place. It renders when something on screen
- * changed, like the old page did, so a broadcast for the tab you don't see doesn't render.
- */
-interface Ui {
-  state: ChangesView | null;
-  /** Folders you collapsed, by path. */
-  collapsed: Set<string>;
-  tab: Tab;
-  /** The History tab's commits. */
-  historyTab: HistoryView | null;
-  /** The search and scope the History tab asked for; replies for others are stale. */
-  query: string;
-  all: boolean;
-  /** What the search box holds, and its timer. */
-  searchText: string;
-  searchTimer: ReturnType<typeof setTimeout> | undefined;
-}
+/** What the chips choose between: the two lists of changes, and the commit history. */
+type View = Mode | "history";
 
-export default function Sidebar({ tab: firstTab = "changes" }: { tab?: Tab }) {
-  const ui = useRef<Ui>({ state: null, collapsed: new Set(), tab: firstTab, historyTab: null, query: "", all: false, searchText: "", searchTimer: undefined }).current;
-  const [, render] = useReducer((n: number) => n + 1, 0);
+export default function Sidebar() {
+  const [view, setView] = useState<View>("uncommitted");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
+  const [all, setAll] = useState(false);
+  /** What the search box holds, which becomes the query after a pause. */
+  const typed = useRef("");
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** The repo the header showed last, for the moment after a switch when the new answer isn't here yet. */
+  const known = useRef<Repo | null>(null);
 
-  // A render puts focus back on the element that had it, by id, like the old page that rebuilt every row.
-  const focused = document.activeElement?.id;
-  useLayoutEffect(() => {
-    if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
-  });
+  const onHistory = view === "history";
+  const mode: Mode = view === "branch" ? "branch" : "uncommitted";
+  const changes = useAsk(ch, "changes", { mode }, { pollMs: POLL_MS, skip: onHistory });
+  const history = useHistory({ query, all, skip: !onHistory });
 
-  useEffect(() => {
-    const off = wings.onBroadcast((message) => {
-      const m = message as HistoryMessage | StateMessage | null;
-      if (m?.type === "history") {
-        if (m.query !== ui.query || m.all !== ui.all) return;
-        const rowsOf = m.rows ?? [];
-        const historyTab = ui.historyTab;
-        const source = JSON.stringify([m.repo?.root, m.query, m.all]);
-        // A next page appends, unless the repo changed under it. A first page replaces the list, or for the list on
-        // screen (a poll, a refresh) only its top, so the pages Load more added stay.
-        if (m.skip > 0 && historyTab && historyTab.repo?.root === m.repo?.root && m.skip === historyTab.rows.length) ui.historyTab = { ...historyTab, rows: [...historyTab.rows, ...rowsOf], more: m.more, loadingMore: false };
-        else if (m.skip === 0) {
-          const rows = historyTab?.source === source && !m.error ? withFirstPage(historyTab.rows, rowsOf) : rowsOf;
-          ui.historyTab = { repo: m.repo, rows, more: rows.length > rowsOf.length ? historyTab?.more : m.more, error: m.error, source };
-        } else return;
-        if (ui.tab === "history") render();
-        return;
-      }
-      if (m?.type !== "state") return;
-      ui.state = mergeState(ui.state, m);
-      if (ui.tab === "changes") render();
-    });
-    void wings.broadcast({ type: "hello" });
-    const stopPolling = pollWhileFocused(() => void wings.broadcast({ type: "refresh", tab: ui.tab }), POLL_MS);
-    return () => {
-      off();
-      stopPolling();
-    };
-  }, [ui]);
+  // Main says when the focused pane's repo may have changed.
+  useEffect(
+    () =>
+      ch.on("repo-changed", () => {
+        changes.refresh();
+        history.refresh();
+      }),
+    [changes.refresh, history.refresh],
+  );
 
-  const { state, historyTab, tab } = ui;
-  const openDiff = (path: string | null) => state?.repo && void wings.broadcast({ type: "open", root: state.repo.root, mode: state.mode, path });
+  /** What the tab on screen last answered: null before its first answer, and its `repo` is null when no pane is in one. */
+  const answered = onHistory ? history.shown : changes.data;
+  const loading = onHistory ? history.loading : changes.loading;
+  const error = onHistory ? history.error : changes.error?.message;
+  if (answered) known.current = answered.repo;
+  const repo = answered ? answered.repo : known.current;
+  if (!answered && !repo && !error) return <Loading />;
+  if (answered && !repo) return <Empty title="No git repo in your panes." description="Open a terminal in a repo and its changes show here." />;
+
+  const openDiff = (path: string | null) => repo && void ch.ask("open", { root: repo.root, mode, path });
   const refresh = () => {
-    if (ui.tab === "history" && ui.historyTab) ui.historyTab = { ...ui.historyTab, loading: true };
-    render();
-    void wings.broadcast({ type: "refresh", byUser: true, tab: ui.tab });
-  };
-  const setMode = (mode: Mode) => {
-    if (ui.tab === "changes" && ui.state && ui.state.mode === mode) return;
-    // A search still waiting would ask for history the Changes tab doesn't show; it runs when you come back.
-    clearTimeout(ui.searchTimer);
-    ui.tab = "changes";
-    ui.state = ui.state && { mode, repo: ui.state.repo, loading: true };
-    render();
-    void wings.broadcast({ type: "mode", mode });
-  };
-  /** Asks main for a page of commits: the first one for a new search, or the next. */
-  const loadHistory = (skip: number) => {
-    ui.historyTab = skip && ui.historyTab ? { ...ui.historyTab, loadingMore: true } : { rows: [], ...ui.historyTab, loading: true, error: undefined };
-    render();
-    void wings.broadcast({ type: "history", query: ui.query, all: ui.all, skip });
-  };
-  const showHistory = () => {
-    if (ui.tab === "history") return;
-    ui.tab = "history";
-    ui.query = ui.searchText.trim();
-    loadHistory(0);
+    changes.refresh();
+    history.refresh();
   };
   const onSearch = (text: string) => {
-    ui.searchText = text;
-    clearTimeout(ui.searchTimer);
-    ui.searchTimer = setTimeout(() => {
-      if (ui.searchText.trim() === ui.query) return;
-      ui.query = ui.searchText.trim();
-      loadHistory(0);
-    }, SEARCH_MS);
+    typed.current = text;
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setQuery(typed.current.trim()), SEARCH_MS);
   };
 
-  const view = tab === "history" ? historyTab : state;
-  const repo = view?.repo ?? (tab === "history" ? state?.repo : undefined);
-  if (!view && !repo) return <Loading />;
-  if (!repo) return <Empty title="No git repo in your panes." description="Open a terminal in a repo and its changes show here." />;
-  const mode = state?.mode ?? "uncommitted";
-
   let body = null;
-  if (tab === "history") {
+  if (onHistory) {
+    const shown = history.shown;
     body = (
       <History
-        view={historyTab}
-        query={ui.query}
-        all={ui.all}
-        searchText={ui.searchText}
+        view={shown?.repo ? { rows: shown.rows, more: shown.more, loading, loadingMore: history.loadingMore } : null}
+        query={query}
+        all={all}
+        searchText={typed.current}
         onSearch={onSearch}
-        onAll={(all) => {
-          ui.all = all;
-          loadHistory(0);
-        }}
-        onGraph={() => historyTab?.repo && void wings.broadcast({ type: "graph", root: historyTab.repo.root })}
-        onOpen={([hash, subject, author, at]: CommitRow) => historyTab?.repo && void wings.broadcast({ type: "commit", root: historyTab.repo.root, hash, subject, author, at })}
-        onMore={() => loadHistory(historyTab?.rows.length ?? 0)}
+        onAll={setAll}
+        onGraph={() => repo && void ch.ask("graph", { root: repo.root })}
+        onOpen={([hash, subject, author, at]: CommitRow) => repo && void ch.ask("commit", { root: repo.root, hash, subject, author, at })}
+        onMore={history.loadMore}
       />
     );
-  } else if (state?.error && !state.files) {
-    body = (
-      <Text as="p" tone="warn">
-        {state.error}
-      </Text>
-    );
-  } else if (state?.files) {
-    const files = state.files;
-    const total = state.total ?? files.length;
+  } else if (changes.data?.repo) {
+    const { files, total, added, removed, partial, against } = changes.data;
     if (total === 0) {
-      body = <Empty title={mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes."} description={state.against ?? ""} />;
+      body = <Empty title={mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes."} description={against} />;
     } else {
       body = (
         <>
@@ -160,13 +96,13 @@ export default function Sidebar({ tab: firstTab = "changes" }: { tab?: Tab }) {
                 <div>
                   {plural(total, "file")}
                   {" "}
-                  <Text tone="success" numeric>{`+${state.added}`}</Text>
+                  <Text tone="success" numeric>{`+${added}`}</Text>
                   {" "}
-                  <Text tone="danger" numeric>{`−${state.removed}`}</Text>
-                  {state.partial ? <Text tone="muted">{" (some new files not counted)"}</Text> : null}
+                  <Text tone="danger" numeric>{`−${removed}`}</Text>
+                  {partial ? <Text tone="muted">{" (some new files not counted)"}</Text> : null}
                 </div>
                 <Text as="div" tone="muted" truncate>
-                  {state.against ?? ""}
+                  {against}
                 </Text>
               </Stack>
               <Button variant="outline" onClick={() => openDiff(null)}>View all</Button>
@@ -174,12 +110,15 @@ export default function Sidebar({ tab: firstTab = "changes" }: { tab?: Tab }) {
           </Card>
           <FileTree
             files={files}
-            collapsed={ui.collapsed}
-            onToggle={(path, isOpen) => {
-              if (isOpen) ui.collapsed.add(path);
-              else ui.collapsed.delete(path);
-              render();
-            }}
+            collapsed={collapsed}
+            onToggle={(path, isOpen) =>
+              setCollapsed((prev) => {
+                const next = new Set(prev);
+                if (isOpen) next.add(path);
+                else next.delete(path);
+                return next;
+              })
+            }
             onOpen={openDiff}
           />
           {files.length < total ? <Text as="p" tone="muted">{`Too large to list: showing ${files.length} of ${total} files.`}</Text> : null}
@@ -188,30 +127,24 @@ export default function Sidebar({ tab: firstTab = "changes" }: { tab?: Tab }) {
     }
   }
 
-  // An error beside a list: the list stays, and this says why it may be out of date.
-  const notice =
-    tab === "changes" && state?.files && state.error ? (
-      <Text as="p" tone="warn" className="notice" role="alert">
-        {state.error}
-      </Text>
-    ) : null;
-
   return (
     <>
-      <Row>
-        <Stack gap="none" grow>
-          <Text as="div" weight="strong" truncate>
-            {repo.name}
-          </Text>
-          <Text as="div" tone="muted" truncate>
-            {repo.branch ?? ""}
-          </Text>
-        </Stack>
-        {view?.loading ? <Spinner label="Refreshing" /> : null}
-        <Button variant="outline" onClick={refresh} title="Refresh">
-          Refresh
-        </Button>
-      </Row>
+      {repo ? (
+        <Row>
+          <Stack gap="none" grow>
+            <Text as="div" weight="strong" truncate>
+              {repo.name}
+            </Text>
+            <Text as="div" tone="muted" truncate>
+              {repo.branch}
+            </Text>
+          </Stack>
+          {loading ? <Spinner label="Refreshing" /> : null}
+          <Button variant="outline" onClick={refresh} title="Refresh">
+            Refresh
+          </Button>
+        </Row>
+      ) : null}
       <Chips
         label="Show"
         options={[
@@ -219,10 +152,14 @@ export default function Sidebar({ tab: firstTab = "changes" }: { tab?: Tab }) {
           { value: "branch", label: "Branch" },
           { value: "history", label: "History" },
         ]}
-        value={tab === "history" ? "history" : mode}
-        onChange={(v) => (v === "history" ? showHistory() : setMode(v))}
+        value={view}
+        onChange={setView}
       />
-      {notice}
+      {error ? (
+        <Text as="p" tone="warn" className="notice" role="alert">
+          {error}
+        </Text>
+      ) : null}
       {body}
     </>
   );

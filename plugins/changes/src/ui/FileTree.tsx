@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { basename } from "wings-plugin-sdk/format";
 import { List, ListButton, ListItem, Text } from "wings-plugin-ui";
 
 import type { FileRow } from "../lib/types";
@@ -48,7 +49,7 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     const path = f.path;
     out.push(
       <ListItem key={`d:${path}`}>
-        <ListButton id={`d:${path}`} className="folder" style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
+        <ListButton className="folder" style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
           <span className={`chevron${isOpen ? " open" : ""}`} aria-hidden="true" />
           <Text grow truncate>
             {label}
@@ -59,11 +60,11 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     if (isOpen) out.push(...rows(f, depth + 1, props));
   }
   for (const [status, path, added, removed, oldPath] of folder.files) {
-    const name = path.split("/").at(-1) ?? path;
+    const name = basename(path);
     const what = STATUS[status as keyof typeof STATUS] ?? status;
     out.push(
       <ListItem key={`f:${path}`}>
-        <ListButton id={`f:${path}`} style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
+        <ListButton style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
           <span className={`status s-${status === "?" ? "new" : status}`} title={what} aria-label={what}>
             {status}
           </span>
