@@ -8,12 +8,12 @@
 
 import { errorMessage } from "wings-plugin-sdk/async";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
+import { registerTools } from "wings-plugin-sdk/tools";
 import { linkOf } from "./lib/forges/registry";
 import { ch } from "./lib/messages";
 import type { Link } from "./lib/types";
 import { watchMinutes, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
-import { failingChecks } from "./main/failing";
 import { refreshLinks } from "./main/links";
 import { problemOf } from "./main/problems";
 import { markSeen, pullsFor, refreshProjects, setWatching } from "./main/projects";
@@ -21,6 +21,7 @@ import { remoteFor, remotes } from "./main/remote";
 import { connectClis, install, retry, signIn } from "./main/retry";
 import { known, links, state, sync } from "./main/state";
 import { refreshStatus } from "./main/status";
+import { tools } from "./tools";
 
 const LINK_POLL_MS = 15_000;
 const STATUS_POLL_MS = 60_000;
@@ -58,7 +59,7 @@ function watchEvery(minutes: WatchMinutes) {
 void watchMinutes.get().then(watchEvery);
 watchMinutes.onChange(watchEvery);
 
-wings.onTool("failing_checks", (_input, { paneId }) => failingChecks(paneId));
+registerTools(tools);
 
 // ---------- replies ----------
 
