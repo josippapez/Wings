@@ -1,5 +1,6 @@
 // The pure half of the per-project "Work items" section: which iterations are running now, the query for the work
 // items assigned to you in them, and the rows. No `wings`, no I/O, so node tests drive it.
+import { DATE_OR_VERSION } from "./branch.ts";
 
 export const SECTION_ID = "work-items";
 /** The most rows Wings takes for a section. */
@@ -105,9 +106,6 @@ export function repoIdsOf(relations: { rel?: string; url?: string }[] | null | u
 export function repoLinksOf(list: { value?: { id: number; relations?: { rel?: string; url?: string }[] | null }[] } | null | undefined): Record<number, string[]> {
   return Object.fromEntries((list?.value ?? []).map((w) => [w.id, repoIdsOf(w.relations)]));
 }
-
-/** Dates and versions in a branch name (2026-10-13, 2026.10, v1.2.3): their numbers aren't work item ids. */
-const DATE_OR_VERSION = /\d{4}[-./]\d{1,2}(?:[-./]\d{1,2})?|v?\d+(?:\.\d+)+/gi;
 
 /** Whether a branch name carries the work item's id as a token of its own, at least 3 digits: `feature/1234-login` has 1234, `hotfix/2026-10-13` and `v1.2.3` have none. */
 export function branchHasId(branch: string, id: number): boolean {

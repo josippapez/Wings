@@ -126,7 +126,7 @@ test("typeStyle gives Azure's colours to the common types and a grey dot to the 
 
 // ---------- a repo's Work items section ----------
 import { branchHasId, isFinished, repoIdsOf, repoLinksOf, repoRows, stateCategories, NOT_LINKED } from "./sections.ts";
-import { parseRemote } from "./branch.ts";
+import { parseRemote, workItemId } from "./branch.ts";
 
 const TYPES = [
   { name: "Task", states: [{ name: "To Do", category: "Proposed" }, { name: "Done", category: "Completed" }, { name: "Removed", category: "Removed" }] },
@@ -171,6 +171,29 @@ test("branchHasId matches the id as a whole number", () => {
   assert.equal(branchHasId("release/2026.10", 2026), false);
   assert.equal(branchHasId("release/v1.200.3", 200), false);
   assert.equal(branchHasId("hotfix/2026-10-13-4521-fix", 4521), true);
+});
+
+// The badge reads a branch with workItemId and the section with branchHasId, and both have to name the same items.
+const BRANCH_IDS = [
+  ["feature/1234-login", "1234"],
+  ["bug/5678", "5678"],
+  ["origin/bugfix_1234", "1234"],
+  ["hotfix/2026-10-13-4521-fix", "4521"],
+  ["feature/1234-2-factor-auth", "1234"],
+  ["feature/12345-12-login", "12345"],
+  ["hotfix/2026-10-13", null],
+  ["release/2026.10", null],
+  ["release/v1.200.3", null],
+  ["v1.2.3", null],
+  ["main", null],
+];
+
+test("workItemId and branchHasId agree on which branches name a work item, and dates and versions name none", () => {
+  for (const [branch, id] of BRANCH_IDS) {
+    assert.equal(workItemId(branch), id, branch);
+    const named = (branch.match(/\d+/g) ?? []).map(Number).filter((n) => branchHasId(branch, n));
+    assert.deepEqual(named, id === null ? [] : [Number(id)], branch);
+  }
 });
 
 const row = (id, state = "Active", type = "Task") => ({ id, fields: { "System.Title": `Item ${id}`, "System.State": state, "System.WorkItemType": type } });
