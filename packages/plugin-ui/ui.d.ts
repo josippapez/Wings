@@ -25,15 +25,6 @@ export function showSettings(element: ReactElement, options?: ShellOptions): voi
  */
 export function showBlock(element: ReactElement): void;
 
-// ---------- talking to main ----------
-
-/**
- * The newest message of `type` the plugin's other pages broadcast, or null until one comes. Sends `hello`
- * (`{ type: "hello" }` by default) once when the component mounts, so main answers with its state; pass null to
- * send nothing.
- */
-export function useMainState<T extends { type: string }>(type: T["type"], hello?: unknown): T | null;
-
 // ---------- the page's project, state and actions ----------
 
 /** The project the page is about: `undefined` until Wings says, then the project, or `null` when none is open. Follows `wings.onProject`. */

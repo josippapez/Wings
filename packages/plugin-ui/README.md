@@ -14,15 +14,16 @@ your page follows without a release.
 
 ```tsx
 // src/pages/usage.tsx
-import { Card, Gauge, Heading, useMainState } from "wings-plugin-ui";
+import { useShared } from "wings-plugin-sdk/react";
+import { Card, Gauge, Heading } from "wings-plugin-ui";
+
+import { ch } from "../lib/messages"; // channel<{}, {}, { usage: { percent: number } }>()
 
 export const page = { place: "sidebar" };
 
-type Usage = { type: "usage"; percent: number };
-
 export default function Usage() {
-  // Says hello to your main script once, then shows the newest `usage` message it broadcasts.
-  const usage = useMainState<Usage>("usage");
+  // The `usage` state your main script shares on `ch`: null until main has sent it, then each change.
+  const usage = useShared(ch, "usage");
   if (!usage) return null;
   return (
     <>
@@ -54,9 +55,9 @@ from `mountShell(place, options)` in `wings-plugin-sdk/shell`, which returns the
 
 ## Talking to main
 
-`useMainState<T>(type, hello?)` returns the newest message of `type` your plugin's other pages broadcast, or
-`null` until one comes. It sends `hello` (`{ type: "hello" }` by default, `null` for none) once when the
-component mounts, so main answers with what it has. `useBroadcast(listener)` from `wings-plugin-sdk/react` gets every
+A page and your main script talk through a `channel` from `wings-plugin-sdk/messages`. Main shares state with
+`share`, and a page reads it with `useShared(ch, name)` from `wings-plugin-sdk/react`, which is `null` until main has
+sent it. `ask` and `useAsk` put a question to main, and `useBroadcast(listener)` gets every raw `wings.broadcast`
 message.
 
 ## Components

@@ -61,27 +61,6 @@ export function showBlock(element) {
   fit.observe(shell);
 }
 
-// ---------- talking to main ----------
-
-const HELLO = { type: "hello" };
-
-/**
- * The newest message of `type` the plugin's other pages broadcast, or null until one comes. Sends `hello` once
- * when the component mounts, so main answers with its state; pass null to send nothing.
- */
-export function useMainState(type, hello = HELLO) {
-  const [state, setState] = useState(null);
-  useEffect(() => {
-    const off = wings.onBroadcast((message) => {
-      if (message?.type === type) setState(message);
-    });
-    if (hello != null) void wings.broadcast(hello);
-    return off;
-    // `hello` is only sent when the component mounts.
-  }, [type]);
-  return state;
-}
-
 // ---------- the page's project, state and actions ----------
 
 /** The project the page is about: undefined until Wings says, then the project, or null when none is open. */
