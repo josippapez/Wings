@@ -42,3 +42,10 @@ export function parseRemote(url: string): Remote {
   if (host.includes("gitlab")) return { kind: "gitlab", host, path };
   return { kind: "unknown", host, path };
 }
+
+/**
+ * An Azure DevOps organization at the address a `post` goes to. Its REST APIs accept both forms, `{org}.visualstudio.com`
+ * and `https://dev.azure.com/{org}` (learn.microsoft.com/en-us/azure/devops/extend/develop/work-with-urls), and the
+ * manifest's `post` entry can only name the second: the host of an `az` entry can't hold a `*`.
+ */
+export const azureApiOrg = (org: string) => org.replace(/^https:\/\/([^./]+)\.visualstudio\.com$/, "https://dev.azure.com/$1");

@@ -3,6 +3,7 @@ import { cleanLog, counts, detail } from "./checks";
 import { azureItems } from "./checklist";
 import { azWho } from "./who";
 import { cli, git, post } from "./cli";
+import { azureApiOrg } from "./parse";
 import { pushesOf, type AzureIteration, type Push } from "./pushes";
 import { problems, status } from "./state";
 import { voteArgs, type AzureVote } from "./vote";
@@ -289,7 +290,7 @@ export async function azureFileAt(link: AzureLink, sha: string, path: string): P
 export async function azureReply(link: AzureLink, root: Comment, body: string): Promise<Comment> {
   const { org, project: name, repo } = link.remote;
   const thread = Math.floor(root.id / 10_000);
-  const url = `${org}/${encodeURIComponent(name)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullRequests/${link.number}/threads/${thread}/comments?api-version=7.1`;
+  const url = `${azureApiOrg(org)}/${encodeURIComponent(name)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullRequests/${link.number}/threads/${thread}/comments?api-version=7.1`;
   const c = (await post("az", url, { content: body, parentCommentId: root.id % 10_000, commentType: 1 })) as AzureComment;
   return { ...root, id: thread * 10_000 + c.id, replyTo: root.id, author: c.author?.displayName ?? "you", body: c.content ?? body, createdAt: c.publishedDate, canReply: false };
 }

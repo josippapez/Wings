@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseRemote, splitRemote } from "./parse.ts";
+import { azureApiOrg, parseRemote, splitRemote } from "./parse.ts";
 
 test("github.com in every URL shape", () => {
   const want = { kind: "github", host: "github.com", path: "o/r" };
@@ -28,6 +28,12 @@ test("Azure DevOps shapes still parse", () => {
   assert.deepEqual(parseRemote("git@ssh.dev.azure.com:v3/org/My%20Project/repo"), want);
   assert.deepEqual(parseRemote("https://org@dev.azure.com/org/My%20Project/_git/repo"), want);
   assert.deepEqual(parseRemote("https://org.visualstudio.com/DefaultCollection/proj/_git/repo"), { kind: "azure", org: "https://org.visualstudio.com", project: "proj", repo: "repo" });
+});
+
+test("a reply goes to the dev.azure.com address of the organization, whichever form its remote had", () => {
+  for (const url of ["git@ssh.dev.azure.com:v3/org/proj/repo", "https://org@dev.azure.com/org/proj/_git/repo", "https://org.visualstudio.com/DefaultCollection/proj/_git/repo", "https://org@org.visualstudio.com/proj/_git/repo"]) {
+    assert.equal(azureApiOrg(parseRemote(url).org), "https://dev.azure.com/org", url);
+  }
 });
 
 test("Bitbucket Cloud in https, ssh and scp-style, and only as workspace/repo", () => {

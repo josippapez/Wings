@@ -1579,6 +1579,19 @@ mod tests {
     }
 
     #[test]
+    fn pr_tracker_replies_on_azure_at_dev_azure_com_only() {
+        let p = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"))).unwrap();
+        let tail = "_apis/git/repositories/repo/pullRequests/7/threads/44590/comments?api-version=7.1";
+        let reply = |address: &str| post_args(&p, &post_request("az", &format!("{address}/{tail}"), None));
+        // An organization on {org}.visualstudio.com is reachable at dev.azure.com too, so the plugin posts there.
+        assert!(reply("https://dev.azure.com/org/proj").is_ok());
+        // The legacy address can't be covered: the host of an `az` entry has no `*`, and no organization is known in advance.
+        assert!(reply("https://org.visualstudio.com/proj").is_err());
+        assert!(reply("https://org.visualstudio.com/DefaultCollection/proj").is_err());
+        assert!(post_entry("az https://*.visualstudio.com/*/_apis/git/repositories/*/pullRequests/*/threads/*/comments?api-version=7.1").is_none());
+    }
+
+    #[test]
     fn changes_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/changes"));
         let p = load(dir).unwrap();
