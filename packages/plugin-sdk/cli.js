@@ -99,9 +99,9 @@ export function cli(program, { signedOut, signIn, sticky = false, wings: w = glo
       };
     },
     /**
-     * Runs the program's login, which opens the browser by itself, then `retry`. `onOutput` gets each line it prints. One
-     * runs at a time: a call while another runs does nothing. A badge for `key` shows "Signing in…" meanwhile, and for any
-     * key when there's none.
+     * Runs the program's login, for up to 5 minutes, then `retry`. `onOutput` gets each line it prints, for a login that
+     * prints a code to show. One runs at a time: a call while another runs does nothing. A badge for `key` shows
+     * "Signing in…" meanwhile, and for any key when there's none.
      */
     async signIn(key, { onOutput } = {}) {
       if (signing) return;

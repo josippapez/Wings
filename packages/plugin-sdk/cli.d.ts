@@ -67,9 +67,9 @@ export interface Cli {
    */
   problemBadge(key: string | undefined, text: CliBadgeText): WingsBadge | null;
   /**
-   * Runs the program's login, which opens the browser by itself, then `retry`. `onOutput` gets each line it prints. One
-   * runs at a time: a call while another runs does nothing. A badge for `key` shows "Signing in…" meanwhile, and for any
-   * key when there's none.
+   * Runs the program's login, for up to 5 minutes, then `retry`. `onOutput` gets each line it prints, for a login that
+   * prints a code to show. One runs at a time: a call while another runs does nothing. A badge for `key` shows
+   * "Signing in…" meanwhile, and for any key when there's none.
    */
   signIn(key?: string, options?: { onOutput?: (line: string) => void }): Promise<void>;
   /** Asks Wings to install the program. True once the install started or it's there, false if the user cancelled. */
