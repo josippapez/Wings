@@ -4,45 +4,55 @@
 // start from the Default view setting, and the folded rows are kept with the tab. The search box filters what's shown.
 
 import { useEffect, useState } from "react";
-import { Empty, Loading } from "wings-plugin-ui";
-import { BoardView, type Layout } from "../ui/board-view";
+import { Loading, ProjectGate, useAction, useTabState } from "wings-plugin-ui";
+import { BoardView } from "../ui/board-view";
 import type { Issue, Op } from "../lib/domain";
 import { useIssues } from "../ui/useIssues";
-import { DEFAULT_VIEW_KEY, defaultViewOf, startLayout } from "../lib/view-setting";
+import { defaultView, startLayout } from "../lib/view-setting";
 import "./tasks.css";
 
 export const page = { place: "tab", fill: true };
 
 export default function BoardPage() {
-  const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
-  useEffect(() => wings.onProject(setProject), []);
-  if (project === undefined) return <Loading>Loading issues</Loading>;
-  if (!project) return <Empty title="No project" description="Open a project to see its issues." />;
-  return <ProjectBoard key={project.id} project={project} />;
+  return (
+    <ProjectGate loading="Loading issues" empty={{ description: "Open a project to see its issues." }}>
+      {(project) => <ProjectBoard project={project} />}
+    </ProjectGate>
+  );
 }
+
+/** The rows folded shut, from what the tab saved. */
+const foldedOf = (saved: unknown) => {
+  const folded = (saved as { folded?: unknown }).folded;
+  return { folded: Array.isArray(folded) ? folded.filter((k): k is string => typeof k === "string") : [] };
+};
 
 function ProjectBoard({ project }: { project: WingsProject }) {
   const { store, apply } = useIssues(project.id, project.name);
   const [showCanceled, setShowCanceled] = useState(false);
-  const [view, setView] = useBoardView();
+  // The layout and rows choice start from the Default view setting each time the tab opens, and changing them lasts until
+  // it closes. The folded rows are kept with the tab.
+  const [view, setView] = useState<ReturnType<typeof startLayout> | null>(null);
+  useEffect(() => void defaultView.get().then((v) => setView(startLayout(v))), []);
+  const [tab, setTab] = useTabState({ folded: [] as string[] }, foldedOf);
   const [query, setQuery] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const send = (op: Op) => apply(op).then(() => setError(null), (e) => setError(e instanceof Error ? e.message : String(e)));
+  const action = useAction();
+  if (!view || !tab) return <Loading>Loading issues</Loading>;
+  const send = (op: Op) => action.run(() => apply(op));
   const open = (issue: Issue, newTab: boolean) => void wings.openView("issue", { as: "tab", args: { key: issue.key, projectId: project.id }, newTab });
-  if (!view) return <Loading>Loading issues</Loading>;
-  const fold = (lane: string, isOpen: boolean) => setView({ ...view, folded: isOpen ? view.folded.filter((k) => k !== lane) : [...view.folded, lane] });
+  const fold = (lane: string, isOpen: boolean) => setTab({ folded: isOpen ? tab.folded.filter((k) => k !== lane) : [...tab.folded, lane] });
   return (
     <BoardView
       project={project}
-      issues={view && store ? store.issues : null}
-      error={error}
+      issues={store?.issues ?? null}
+      error={action.error}
       showCanceled={showCanceled}
       onShowCanceled={setShowCanceled}
       layout={view.layout}
       onLayout={(layout) => setView({ ...view, layout })}
       byParent={view.byParent}
       onByParent={(byParent) => setView({ ...view, byParent })}
-      folded={view.folded}
+      folded={tab.folded}
       onFold={fold}
       query={query}
       onQuery={setQuery}
@@ -51,28 +61,4 @@ function ProjectBoard({ project }: { project: WingsProject }) {
       onOpen={open}
     />
   );
-}
-
-interface View {
-  layout: Layout;
-  byParent: boolean;
-  folded: string[];
-}
-
-/**
- * The layout and rows choice start from the Default view setting each time the tab opens, and changing them lasts until it
- * closes. The folded rows are kept with the tab. `null` until both are read.
- */
-function useBoardView(): [View | null, (v: View) => void] {
-  const [view, setView] = useState<View | null>(null);
-  useEffect(() => {
-    void Promise.all([wings.tabState<{ folded?: unknown }>().catch(() => null), wings.storage.get(DEFAULT_VIEW_KEY).catch(() => null)]).then(([saved, setting]) =>
-      setView({ ...startLayout(defaultViewOf(setting)), folded: Array.isArray(saved?.folded) ? saved.folded.filter((k): k is string => typeof k === "string") : [] }),
-    );
-  }, []);
-  const save = (v: View) => {
-    setView(v);
-    void wings.setTabState({ folded: v.folded }).catch(() => {});
-  };
-  return [view, save];
 }

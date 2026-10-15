@@ -1,5 +1,6 @@
 // Made-up issues for the fixtures.
 import type { Issue, LogEntry } from "../src/lib/domain";
+import type { BoardViewProps } from "../src/ui/board-view";
 
 const now = Date.now();
 const ago = (h: number) => now - h * 3_600_000;
@@ -73,3 +74,29 @@ export const longIssue = issues[3];
 export const shortIssue = issues[0];
 export const epicIssue = issues[9];
 export const bugIssue = issues[1];
+
+/** The Issues tab with nothing on, every issue shown and the actions doing nothing: a fixture says only what it is about. */
+export const defaults: BoardViewProps = {
+  project,
+  issues,
+  error: null,
+  showCanceled: false,
+  onShowCanceled: () => {},
+  layout: "board",
+  onLayout: () => {},
+  byParent: true,
+  onByParent: () => {},
+  folded: [],
+  onFold: () => {},
+  query: "",
+  onQuery: () => {},
+  apply: () => Promise.resolve(),
+  send: () => Promise.resolve(),
+  onOpen: () => {},
+};
+
+/** For a fixture of a whole page: the page reads its issues from storage, so the stub's storage holds these for the project. */
+export function seedStorage() {
+  const stored = JSON.stringify({ v: 3, prefix: "WEB", next: 15, issues });
+  wings.storage.get = async (key) => (key === `issues:${project.id}` ? JSON.parse(stored) : null);
+}

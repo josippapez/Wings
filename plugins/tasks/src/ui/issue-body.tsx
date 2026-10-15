@@ -1,29 +1,26 @@
 // The main column of the Issue page: the description, an epic's or feature's child issues, and the activity with its note box.
 
 import { useState } from "react";
-import { Badge, Button, Heading, List, ListButton, ListItem, Markdown, Row, Stack, Text, TextInput, Timeline, TimelineCard, TimelineNote } from "wings-plugin-ui";
+import { Badge, Button, Heading, List, ListButton, ListItem, Markdown, Row, Stack, Text, TextInput, Timeline, TimelineCard, TimelineNote, useAction } from "wings-plugin-ui";
 import { actorName, isClaude } from "../lib/actor";
-import { DESCRIPTION_TEMPLATE, LIMITS, STATUS_LABEL, visibleDescription, type Issue, type LogEntry } from "../lib/domain";
+import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type Issue, type LogEntry } from "../lib/domain";
+import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
-import { iso, openProps, StatusDot, TypeIcon, type Send } from "./parts";
+import { openProps, StatusDot, TypeIcon, type Send } from "./parts";
 
 export function Description({ issue, send }: { issue: Issue; send: Send }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { run, busy } = useAction();
   const edit = () => {
     setDraft(issue.description || DESCRIPTION_TEMPLATE);
     setEditing(true);
   };
-  const save = async () => {
-    setBusy(true);
-    try {
+  const save = () =>
+    run(async () => {
       await send({ kind: "update", key: issue.key, description: draft });
       setEditing(false);
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
   if (editing) {
     return (
       <Stack gap="s">
@@ -49,7 +46,7 @@ export function Description({ issue, send }: { issue: Issue; send: Send }) {
 
 /** An epic's or feature's children with how many are done. */
 export function Children({ issue, issues, onOpenIssue }: { issue: Issue; issues: Issue[]; onOpenIssue: (key: string, newTab: boolean) => void }) {
-  const children = childrenOf(issues, issue.key).sort((a, b) => keyOrder(a) - keyOrder(b));
+  const children = childrenOf(issues, issue.key).sort((a, b) => keyNumber(a.key) - keyNumber(b.key));
   const { done, total } = progress(children);
   return (
     <Stack gap="s" as="section" aria-label="Child issues">
@@ -75,27 +72,23 @@ export function Children({ issue, issues, onOpenIssue }: { issue: Issue; issues:
     </Stack>
   );
 }
-const keyOrder = (i: Issue) => Number(i.key.slice(i.key.lastIndexOf("-") + 1));
 
 /** A single line that grows into a note box when you focus it, with Add note once there is text. */
 function Composer({ issue, send }: { issue: Issue; send: Send }) {
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const submit = async () => {
+  const { run, busy } = useAction();
+  const submit = () => {
     if (!note.trim() || busy) return;
-    setBusy(true);
-    try {
+    void run(async () => {
       await send({ kind: "note", key: issue.key, text: note });
       setNote("");
       setOpen(false);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   const grown = open || note !== "";
   return (
-    <form className="tk-composer" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+    <form className="tk-composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       {grown ? (
         <textarea
           autoFocus
@@ -108,7 +101,7 @@ function Composer({ issue, send }: { issue: Issue; send: Send }) {
           onBlur={() => setOpen(false)}
           onKeyDown={(e) => {
             if (e.key === "Escape" && !note) setOpen(false);
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
           }}
           className="tk-textarea"
         />

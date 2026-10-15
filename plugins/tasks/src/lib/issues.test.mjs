@@ -8,7 +8,7 @@ import { applyOp } from "./ops.ts";
 import { boardColumns, boardLanes, issueTree, openIssues, trailTo } from "./orderings.ts";
 import { matchesQuery } from "./search.ts";
 import { estimateBytes, migrateTasks } from "./storage.ts";
-import { defaultViewOf, startLayout } from "./view-setting.ts";
+import { defaultView, startLayout } from "./view-setting.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
 const create = (store, title, extra = {}, by = "you", now = 1) => applyOp(store, { kind: "create", title, ...extra }, by, now);
@@ -282,10 +282,13 @@ test("list tool: query combines with status and type, and an empty result says w
   assert.equal(formatList(s.issues, undefined, "web", undefined, undefined).split("\n").length, 4);
 });
 
-test("default view: board unless the setting says rows or list, and each starts the tab in its layout", () => {
-  assert.equal(defaultViewOf(undefined), "board");
-  assert.equal(defaultViewOf("grid"), "board");
-  assert.equal(defaultViewOf("list"), "list");
+test("default view: board unless the setting says rows or list, and each starts the tab in its layout", async () => {
+  let stored;
+  globalThis.wings = { storage: { get: async () => stored ?? null } };
+  for (const [value, view] of [[undefined, "board"], ["grid", "board"], [5, "board"], ["rows", "rows"], ["list", "list"]]) {
+    stored = value;
+    assert.equal(await defaultView.get(), view, `${value}`);
+  }
   assert.deepEqual(startLayout("board"), { layout: "board", byParent: false });
   assert.deepEqual(startLayout("rows"), { layout: "board", byParent: true });
   assert.deepEqual(startLayout("list"), { layout: "list", byParent: false });

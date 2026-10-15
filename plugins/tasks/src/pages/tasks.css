@@ -20,20 +20,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- Sidebar ---------- */
-.tk-side {
-  min-width: 0;
-}
-.tk-side .w-heading {
-  margin-top: 0;
-}
 .tk-count {
   color: var(--wings-muted);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
-}
-.tk-done-note {
-  padding: 0 8px;
 }
 
 /* ---------- Board (tab) ---------- */
@@ -148,7 +138,7 @@
   display: block;
   overflow-x: hidden;
 }
-/* A plain block centred by auto margins: its width is the frame's, up to 860px, whatever its content measures. */
+/* A plain block centred by auto margins: its width is the frame's, up to 1040px, whatever its content measures. */
 .tk-wrap {
   max-width: 1040px;
   min-width: 0;

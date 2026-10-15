@@ -1,13 +1,14 @@
 // The Issues tab without its data: the board for a list of issues. The tab page feeds it from storage, a fixture from made-up data.
 
 import { useState } from "react";
-import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, SearchField, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
+import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, SearchField, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { canParent, FLOW, STATUS_LABEL, STATUSES, type Issue, type Op } from "../lib/domain";
+import { iso } from "../lib/format";
 import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings";
 import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
-import { ChildProgress, DeleteConfirm, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, TrashIcon, TypeIcon } from "./parts";
+import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TrashIcon, TypeIcon } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -76,14 +77,9 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
       flush={!!issues && layout === "board"}
       toolbar={
         <Toolbar className="tk-board-toolbar" title={`Issues, ${project.name}`} actions={<AddIssue apply={apply} />}>
-          {issues ? (
+          {all ? (
             <>
-              <Summary aria-label="Issue counts">
-                <SummaryChip>{count("todo")} to do</SummaryChip>
-                <SummaryChip tone="info">{count("in_progress")} in progress</SummaryChip>
-                <SummaryChip tone="warn">{count("in_review")} in review</SummaryChip>
-                <SummaryChip tone="success">{count("done")} done</SummaryChip>
-              </Summary>
+              <StatusSummary issues={all} />
               <SearchField className="tk-search" label="Search issues" placeholder="Search issues" value={query} onChange={(e) => onQuery(e.target.value)} />
               <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
               {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
@@ -93,7 +89,7 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
         </Toolbar>
       }
     >
-      {error ? <Text tone="danger" role="alert" className="tk-error">{error}</Text> : null}
+      {error ? <ErrorText className="tk-error">{error}</ErrorText> : null}
       {doomed && issues ? (
         <div className="tk-confirm-wrap" data-layout={layout}>
           <DeleteConfirm issue={doomed} issues={issues} onCancel={() => setDeleting(null)} onDelete={(children) => void send({ kind: "remove", key: doomed.key, children }).then(() => setDeleting(null))} />
@@ -107,7 +103,6 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
         <IssueList project={project} issues={issues} byParent={hasParents && byParent} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} onDelete={(i) => setDeleting(i.key)} />
       ) : lanes ? (
         <BoardLanes
-          className="tk-lanes"
           label={`Issues for ${project.name}, by parent`}
           columns={(showCanceled ? STATUSES : FLOW).map((status) => ({ id: status, title: <span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>, count: shownCount(status) }))}
         >
@@ -249,7 +244,7 @@ function IssueRow({ issue: i, issues, parent, depth, onOpen, onDelete }: { issue
         {done?.total ? <ChildProgress {...done} /> : null}
         <SessionMarker issue={i} />
         {depth !== undefined ? <span className="tk-row-status"><StatusDot status={i.status} />{STATUS_LABEL[i.status]}</span> : null}
-        <Time className="tk-row-time" iso={new Date(i.updatedAt).toISOString()} />
+        <Time className="tk-row-time" iso={iso(i.updatedAt)} />
       </ListButton>
       <DeleteButton issue={i} onDelete={onDelete} />
     </ListItem>

@@ -4,4 +4,4 @@ import "../src/pages/tasks.css";
 import { issues, project } from "./_data";
 
 export const place = "view";
-export default <BlockView project={project} issues={issues} error={null} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;
+export default <BlockView project={project} issues={issues} apply={() => Promise.resolve()} openBoard={() => {}} openIssue={() => {}} />;

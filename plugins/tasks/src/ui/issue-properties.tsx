@@ -2,30 +2,17 @@
 // the commits and sessions, and when it was made and last changed.
 
 import { useState } from "react";
-import { Badge, Button, Combobox, Row, Select, Text, Time } from "wings-plugin-ui";
+import { Badge, Button, Combobox, copyText, Row, Select, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type Priority, type Status } from "../lib/domain";
+import { iso } from "../lib/format";
 import { blocksOf, parentChoices } from "../lib/relations";
 import { InlineInput } from "./inline-input";
-import { iso, openProps, PriorityIcon, StatusDot, TypeIcon, type Send } from "./parts";
+import { openProps, PriorityIcon, StatusDot, TypeIcon, type Send } from "./parts";
 
 const STATUS_OPTIONS = STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }));
 const PRIORITY_OPTIONS = PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }));
 const TYPE_OPTIONS = TYPES.map((value) => ({ value, label: TYPE_LABEL[value] }));
-
-/** The clipboard in a sandboxed frame is the browser's choice, so fall back to the old way if it says no. */
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const box = document.createElement("textarea");
-    box.value = text;
-    document.body.append(box);
-    box.select();
-    document.execCommand("copy");
-    box.remove();
-  }
-}
 
 /** One property of the column: a small muted label over its value. */
 function Prop({ label, wide, empty, actions, children }: { label: string; wide?: boolean; empty?: boolean; actions?: React.ReactNode; children: React.ReactNode }) {

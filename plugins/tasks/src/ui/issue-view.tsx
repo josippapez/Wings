@@ -8,7 +8,7 @@ import { canParent, LIMITS, type Issue, type Op } from "../lib/domain";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { InlineInput } from "./inline-input";
-import { DeleteConfirm, TypeIcon, type Send } from "./parts";
+import { DeleteConfirm, ErrorText, TypeIcon, type Send } from "./parts";
 
 export interface IssueViewProps {
   project: WingsProject;
@@ -99,7 +99,7 @@ export function IssueView({ project, issue, issues, issueKey, error, send, onBac
       <div className="tk-wrap">
         {error || confirming ? (
           <Stack gap="m" className="tk-notices">
-            {error ? <Card className="tk-error-card"><Text tone="danger" role="alert">{error}</Text></Card> : null}
+            {error ? <Card><ErrorText>{error}</ErrorText></Card> : null}
             {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => void send({ kind: "remove", key: issue.key, children })} /> : null}
           </Stack>
         ) : null}

@@ -1,8 +1,9 @@
 // The Issues page in Wings Settings: which view the Issues tab opens in, picked from a small drawing of each.
 
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { useSetting } from "wings-plugin-sdk/react";
 import { Chips, Heading, Stack, Text } from "wings-plugin-ui";
-import { DEFAULT_VIEW_KEY, DEFAULT_VIEWS, defaultViewOf, type DefaultView } from "../lib/view-setting";
+import { DEFAULT_VIEWS, defaultView, type DefaultView } from "../lib/view-setting";
 import "./tasks.css";
 
 export const page = { place: "settings" };
@@ -61,14 +62,7 @@ const PICTURES: Record<DefaultView, { drawing: ReactNode; hint: string }> = {
 };
 
 export default function IssuesSettings() {
-  const [view, setView] = useState<DefaultView | null>(null);
-  useEffect(() => {
-    void wings.storage.get(DEFAULT_VIEW_KEY).then((saved) => setView(defaultViewOf(saved)));
-  }, []);
-  const change = (value: DefaultView) => {
-    setView(value);
-    void wings.storage.set(DEFAULT_VIEW_KEY, value);
-  };
+  const [view, setView] = useSetting(defaultView);
   return (
     <Stack gap="s">
       <Heading>Issues board</Heading>
@@ -78,7 +72,7 @@ export default function IssuesSettings() {
           label="Default view"
           className="tk-views"
           value={view}
-          onChange={change}
+          onChange={(value) => void setView(value)}
           options={DEFAULT_VIEWS.map(({ value, label }) => ({
             value,
             label: (
@@ -86,7 +80,7 @@ export default function IssuesSettings() {
                 <svg viewBox="0 0 120 62" className="tk-view-pic" aria-hidden="true">
                   {PICTURES[value].drawing}
                 </svg>
-                <span className="tk-view-label">{label}</span>
+                <span>{label}</span>
                 <span className="tk-view-hint">{PICTURES[value].hint}</span>
               </>
             ),

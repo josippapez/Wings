@@ -1,13 +1,32 @@
 // Small pieces the Issues pages share.
 
-import { Badge, Button, Card, Dot, Row, Text, Time } from "wings-plugin-ui";
+import type { ComponentProps } from "react";
+import { Badge, Button, Card, Dot, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
+import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
 
 /** Sends an operation to main. */
 export type Send = (op: Op) => Promise<void>;
-export const iso = (ms: number) => new Date(ms).toISOString();
+
+/** An error from the last change: in the danger colour, and announced to a screen reader. */
+export function ErrorText(props: Omit<ComponentProps<typeof Text>, "tone" | "role">) {
+  return <Text tone="danger" role="alert" {...props} />;
+}
+
+/** How many issues are to do, in progress, in review and done. */
+export function StatusSummary({ issues }: { issues: Issue[] }) {
+  const count = (status: Status) => issues.filter((i) => i.status === status).length;
+  return (
+    <Summary aria-label="Issue counts">
+      <SummaryChip>{count("todo")} to do</SummaryChip>
+      <SummaryChip tone="info">{count("in_progress")} in progress</SummaryChip>
+      <SummaryChip tone="warn">{count("in_review")} in review</SummaryChip>
+      <SummaryChip tone="success">{count("done")} done</SummaryChip>
+    </Summary>
+  );
+}
 
 const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: undefined, canceled: "muted" } as const;
 
@@ -77,7 +96,7 @@ export function DeleteConfirm({ issue, issues, onCancel, onDelete }: { issue: Is
   const below = descendantsOf(issues, issue.key).length;
   const children = below === 1 ? "1 child issue" : `${below} child issues`;
   return (
-    <Card className="tk-confirm" role="alertdialog" aria-label={`Delete ${issue.key}`} onKeyDown={(e) => e.key === "Escape" && (e.preventDefault(), onCancel())}>
+    <Card role="alertdialog" aria-label={`Delete ${issue.key}`} onKeyDown={(e) => e.key === "Escape" && (e.preventDefault(), onCancel())}>
       <Row gap="m" wrap justify="between">
         <Text size="small">
           Delete <strong>{issue.key}</strong> {issue.title}?{below ? ` It has ${children}.` : ""} This removes {below ? "what you delete" : "the issue"} and its log. Keys are never used again.
@@ -164,7 +183,7 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
       </Button>
       {progress?.total ? <ChildProgress {...progress} /> : null}
       <div className="tk-card-foot">
-        <Time iso={new Date(issue.updatedAt).toISOString()} prefix={issue.status === "done" ? "Done " : "Updated "} />
+        <Time iso={iso(issue.updatedAt)} prefix={issue.status === "done" ? "Done " : "Updated "} />
         {movable || onDelete ? (
           <span className="tk-moves">
             {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><TrashIcon /></Button> : null}
