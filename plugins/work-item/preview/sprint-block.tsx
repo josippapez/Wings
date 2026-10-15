@@ -1,11 +1,7 @@
-// The Sprint block of a Project page: the whole sprint, then it falls back to the empty cases through `respond`.
-import type { SprintRequest, SprintResponse } from "../src/lib/sections";
+// The Sprint block of a Project page with a sprint running, Mine first.
 import Sprint from "../src/pages/sprint";
 import { sprint } from "./_data";
 
 export const place = "view";
-export const respond = (m: unknown): SprintResponse | undefined => {
-  const { type, rid } = m as SprintRequest;
-  return type === "sprint-request" ? { ...sprint, rid } : undefined;
-};
+export const answers = { sprint: () => sprint };
 export default <Sprint />;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assignedQuery, blockItems, cleanBlockState, currentIterations, groupByState, isFresh, iterationPath, sectionRows, sprintQuery, stateTone } from "./sections.ts";
+import { assignedQuery, blockItems, cleanBlockState, currentIterations, groupByState, iterationPath, sectionRows, sprintQuery, stateTone } from "./sections.ts";
 import { commentsOf, itemArgs, itemTabArgs, pullRequestLinks } from "./item.ts";
 
 const NOW = Date.parse("2026-10-13T10:00:00Z");
@@ -109,10 +109,4 @@ test("cleanBlockState is yours unless it says otherwise", () => {
   assert.deepEqual(cleanBlockState(null), { mine: true });
   assert.deepEqual(cleanBlockState({ mine: false }), { mine: false });
   assert.deepEqual(cleanBlockState({ mine: "no" }), { mine: true });
-});
-
-test("isFresh: a read is good only inside the TTL", () => {
-  assert.equal(isFresh(1000, 1000 + 54_999, 55_000), true);
-  assert.equal(isFresh(1000, 1000 + 55_000, 55_000), false);
-  assert.equal(isFresh(0, 3 * 3_600_000, 55_000), false);
 });

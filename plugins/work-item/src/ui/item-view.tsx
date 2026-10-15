@@ -2,6 +2,7 @@
 // components can be rendered with made-up data. item.tsx owns the loading and the requests.
 
 import { useState, type ReactNode } from "react";
+import { plural } from "wings-plugin-sdk/format";
 import { Avatar, Badge, Button, Dot, Empty, Heading, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, TimelineCard, TimelineNote, Toolbar } from "wings-plugin-ui";
 
 import { Html } from "./Html";
@@ -59,7 +60,6 @@ const toneOf = (state: string): Tone => {
 };
 
 const hours = (n: number) => `${Number.isInteger(n) ? n : n.toFixed(1)} h`;
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function Toolbars({ id, type, onRefresh, url, onOpenUrl }: { id: number; type?: string; onRefresh?: () => void; url?: string; onOpenUrl?: (url: string) => void }) {
   return (

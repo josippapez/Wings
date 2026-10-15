@@ -1,5 +1,6 @@
 // The pure half of the per-project "Work items" section: which iterations are running now, the query for the work
 // items assigned to you in them, and the rows. No `wings`, no I/O, so node tests drive it.
+import { truncate } from "wings-plugin-sdk/format";
 import { DATE_OR_VERSION } from "./branch";
 import { itemTabArgs } from "./item";
 
@@ -155,16 +156,14 @@ export interface SectionRow {
 }
 
 /** The rows of a section: each opens the item tab for its work item. */
-const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
-
 export function sectionRows(org: string, rows: QueryRow[]): SectionRow[] {
   return rows.slice(0, ROWS_CAP).map((r) => {
     const state = r.fields["System.State"] ?? "";
     return {
       id: String(r.id),
-      label: cut(r.fields["System.Title"] || `#${r.id}`, 120),
+      label: truncate(r.fields["System.Title"] || `#${r.id}`, 120),
       detail: `${r.fields["System.WorkItemType"] ?? "Work item"} #${r.id}`,
-      ...(state ? { badge: { text: cut(state, 24), tone: stateTone(state) } } : {}),
+      ...(state ? { badge: { text: truncate(state, 24), tone: stateTone(state) } } : {}),
       open: { view: "item", args: itemTabArgs(r.id, org) },
     };
   });
@@ -185,9 +184,6 @@ export function cleanBlockState(raw: unknown): SprintBlockState {
   return { mine: (raw as Partial<SprintBlockState> | null)?.mine !== false };
 }
 
-/** A cached read taken at `at` is still good at `now`. */
-export const isFresh = (at: number, now: number, ttl: number) => now - at < ttl;
-
 export interface BlockItem {
   id: number;
   title: string;
@@ -196,37 +192,16 @@ export interface BlockItem {
   assignee?: string;
 }
 
-/** The block's page asks main for a project's sprint.  */
-export interface SprintRequest {
-  type: "sprint-request";
-  rid: string;
-  path: string;
-  mine: boolean;
-}
-
-/** `none` is a project that isn't on Azure DevOps; `items` is empty with no running sprint. `total` counts past the cap. */
-export interface SprintResponse {
-  type: "sprint-response";
-  rid: string;
-  none?: true;
-  org?: string;
-  project?: string;
-  sprints?: string[];
-  items?: BlockItem[];
-  total?: number;
-  error?: string;
-}
-
 export function blockItems(rows: QueryRow[]): BlockItem[] {
   return rows.slice(0, BLOCK_ITEMS_CAP).map((r) => {
     const who = r.fields["System.AssignedTo"];
     const assignee = typeof who === "string" ? who : who?.displayName;
     return {
       id: r.id,
-      title: cut(r.fields["System.Title"] || `#${r.id}`, 120),
-      type: cut(r.fields["System.WorkItemType"] ?? "Work item", 24),
-      state: cut(r.fields["System.State"] || "No state", 24),
-      ...(assignee ? { assignee: cut(assignee, 40) } : {}),
+      title: truncate(r.fields["System.Title"] || `#${r.id}`, 120),
+      type: truncate(r.fields["System.WorkItemType"] ?? "Work item", 24),
+      state: truncate(r.fields["System.State"] || "No state", 24),
+      ...(assignee ? { assignee: truncate(assignee, 40) } : {}),
     };
   });
 }

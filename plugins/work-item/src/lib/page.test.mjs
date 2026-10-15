@@ -126,7 +126,8 @@ test("typeStyle gives Azure's colours to the common types and a grey dot to the 
 
 // ---------- a repo's Work items section ----------
 import { branchHasId, isFinished, repoIdsOf, repoLinksOf, repoRows, stateCategories, NOT_LINKED } from "./sections.ts";
-import { parseRemote, workItemId } from "./branch.ts";
+import { parseRemote } from "wings-plugin-sdk/git";
+import { workItemId } from "./branch.ts";
 
 const TYPES = [
   { name: "Task", states: [{ name: "To Do", category: "Proposed" }, { name: "Done", category: "Completed" }, { name: "Removed", category: "Removed" }] },

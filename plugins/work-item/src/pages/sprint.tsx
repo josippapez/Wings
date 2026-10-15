@@ -1,12 +1,13 @@
 // The Sprint block of a Project page: the work items of the sprint running now in the project's Azure DevOps
-// project, a column per state. The main script runs the queries and caches them; this page asks it, only while
-// Wings is in front and the block is on screen, and a click opens the work item in a tab.
+// project, a column per state. The main script runs the queries and caches them (main/sprint.ts); this page asks it,
+// and a click opens the work item in a tab.
 
-import { useEffect, useState } from "react";
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, Row, Stack, Text } from "wings-plugin-ui";
+import { truncate } from "wings-plugin-sdk/format";
+import { useAsk } from "wings-plugin-sdk/react";
+import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, ProjectGate, Row, Stack, Text, useBlockState } from "wings-plugin-ui";
 import { itemTabArgs } from "../lib/item";
-import { cleanBlockState, groupByState, type BlockItem, type SprintBlockState, type SprintRequest, type SprintResponse } from "../lib/sections";
+import { ch } from "../lib/messages";
+import { cleanBlockState, groupByState, type BlockItem } from "../lib/sections";
 import { TypeIcon } from "../ui/TypeIcon";
 import "./sprint.css";
 
@@ -14,62 +15,19 @@ export const page = { place: "block" };
 
 const POLL_MS = 60_000;
 
-type Answer = Omit<SprintResponse, "type" | "rid">;
-
-/** The project's sprint: once at the start and when `mine` changes, then on each poll while Wings is focused. A hidden block asks for nothing. */
-function useSprint(path: string, mine: boolean): Answer | null {
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  useEffect(() => {
-    let pending = "";
-    const ask = () => {
-      if (document.visibilityState === "hidden") return;
-      pending = crypto.randomUUID();
-      wings.broadcast({ type: "sprint-request", rid: pending, path, mine } satisfies SprintRequest).catch((e: Error) => setAnswer({ error: e.message }));
-    };
-    const off = wings.onBroadcast((message) => {
-      const m = message as SprintResponse | null;
-      if (m?.type === "sprint-response" && m.rid === pending) setAnswer(m);
-    });
-    const shown = ask;
-    document.addEventListener("visibilitychange", shown);
-    setAnswer(null);
-    ask();
-    const stop = pollWhileFocused(ask, POLL_MS);
-    return () => {
-      off();
-      stop();
-      document.removeEventListener("visibilitychange", shown);
-    };
-  }, [path, mine]);
-  return answer;
-}
-
-
 export default function Sprint() {
-  const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
-  const [state, setState] = useState<SprintBlockState | null>(null);
-  useEffect(() => {
-    void wings.project().then(setProject);
-    void Promise.resolve(wings.blockState()).then((raw) => setState(cleanBlockState(raw)));
-  }, []);
-
-  const setMine = (mine: boolean) => {
-    const next = { mine };
-    setState(next);
-    void wings.setBlockState(next);
-  };
-
-  let body;
-  if (project === undefined || !state) body = <Loading>Loading sprint</Loading>;
-  else if (!project) body = <Text tone="muted">No project.</Text>;
-  else body = <ProjectSprint key={project.id} path={project.path} mine={state.mine} onMine={setMine} />;
-  return <div>{body}</div>;
+  const [state, setState] = useBlockState({ mine: true }, cleanBlockState);
+  return (
+    <ProjectGate loading="Loading sprint">
+      {(project) => (state ? <ProjectSprint path={project.path} mine={state.mine} onMine={(mine) => setState({ mine })} /> : <Loading>Loading sprint</Loading>)}
+    </ProjectGate>
+  );
 }
 
 function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; onMine: (mine: boolean) => void }) {
-  const answer = useSprint(path, mine);
+  const { data, error } = useAsk(ch, "sprint", { path, mine }, { pollMs: POLL_MS });
   // Not an Azure project: nothing to filter, so no chips.
-  if (answer?.none) return <Text tone="muted">Not an Azure DevOps project.</Text>;
+  if (data && "none" in data) return <Text tone="muted">Not an Azure DevOps project.</Text>;
 
   const filter = (
     <Chips
@@ -80,19 +38,19 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
     />
   );
   let body;
-  if (!answer) body = <Loading>Loading sprint</Loading>;
-  else if (answer.error) body = <div role="alert"><Empty title="Couldn't load the sprint" description={answer.error} /></div>;
-  else if (!answer.sprints?.length) body = <Empty title="No sprint running" />;
-  else if (!answer.items?.length) body = <Empty title={mine ? "Nothing assigned to you" : "No work items"} description={answer.sprints.join(", ")} />;
+  if (error) body = <div role="alert"><Empty title="Couldn't load the sprint" description={truncate(error.message, 300)} /></div>;
+  else if (!data) body = <Loading>Loading sprint</Loading>;
+  else if (!data.sprints.length) body = <Empty title="No sprint running" />;
+  else if (!data.items.length) body = <Empty title={mine ? "Nothing assigned to you" : "No work items"} description={data.sprints.join(", ")} />;
   else {
-    const columns = groupByState(answer.items);
-    const more = (answer.total ?? 0) - answer.items.length;
+    const columns = groupByState(data.items);
+    const more = data.total - data.items.length;
     body = (
       <Stack gap="s">
-        <Board className="sprint-board" label={`Work items in ${answer.sprints.join(", ")}`}>
+        <Board className="sprint-board" label={`Work items in ${data.sprints.join(", ")}`}>
           {columns.map((c) => (
             <BoardColumn key={c.state} title={c.state} count={c.items.length}>
-              {c.items.map((item) => <ItemCard key={item.id} item={item} org={answer.org!} showAssignee={!mine} />)}
+              {c.items.map((item) => <ItemCard key={item.id} item={item} org={data.org} showAssignee={!mine} />)}
             </BoardColumn>
           ))}
         </Board>
@@ -103,7 +61,7 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
   return (
     <Stack gap="s">
       <Row gap="s" justify="between">
-        <Text tone="muted" size="small" truncate>{answer?.sprints?.join(", ") ?? ""}</Text>
+        <Text tone="muted" size="small" truncate>{data && !error ? data.sprints.join(", ") : ""}</Text>
         {filter}
       </Row>
       {body}
@@ -131,4 +89,3 @@ function ItemCard({ item, org, showAssignee }: { item: BlockItem; org: string; s
     </Card>
   );
 }
-

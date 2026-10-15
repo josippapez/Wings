@@ -1,21 +1,3 @@
-export type Remote = { kind: "azure"; org: string; project: string; repo: string } | { kind: "none"; org?: undefined; project?: undefined; repo?: undefined };
-
-export async function git(cwd: string, args: string[]) {
-  const out = await wings.exec("git", args, { cwd });
-  if (out.code !== 0) throw new Error(out.stderr.trim() || `git ${args[0]} failed`);
-  return out.stdout.trim();
-}
-
-/** Azure remotes: ssh v3, https dev.azure.com, and the older {org}.visualstudio.com form. */
-export function parseRemote(url: string): Remote {
-  let m = url.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/);
-  if (!m) m = url.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/);
-  if (m) return { kind: "azure", org: `https://dev.azure.com/${m[1]}`, project: decodeURIComponent(m[2]), repo: decodeURIComponent(m[3]) };
-  m = url.match(/([^/.@]+)\.visualstudio\.com\/(?:DefaultCollection\/)?([^/]+)\/_git\/([^/]+?)(?:\.git)?$/);
-  if (m) return { kind: "azure", org: `https://${m[1]}.visualstudio.com`, project: decodeURIComponent(m[2]), repo: decodeURIComponent(m[3]) };
-  return { kind: "none" };
-}
-
 /** Dates and versions in a branch name (2026-10-13, 2026.10, v1.2.3): their numbers aren't work item ids. A date starts with a 19xx or 20xx year, so `feature/1234-2-login` keeps its id. */
 export const DATE_OR_VERSION = /(?:19|20)\d{2}[-./]\d{1,2}(?:[-./]\d{1,2})?|v?\d+(?:\.\d+)+/gi;
 

@@ -1,6 +1,6 @@
 // Made-up Azure Boards data for the fixtures in this folder, shaped like what item.tsx and sprint.tsx load.
 import { commentsOf, discussionOf, revisionsOf, type ItemArgs, type LinkedItem } from "../src/lib/item";
-import type { SprintResponse } from "../src/lib/sections";
+import type { Sprint } from "../src/lib/messages";
 import type { WorkItemUpdate } from "../src/lib/urls";
 import type { ItemViewProps, Shown } from "../src/ui/item-view";
 
@@ -84,9 +84,7 @@ export const props: ItemViewProps = {
   workItemUrl: "https://dev.azure.com/acme/Web/_workitems/edit/1432",
 };
 
-export const sprint: SprintResponse = {
-  type: "sprint-response",
-  rid: "",
+export const sprint: Sprint = {
   org: "https://dev.azure.com/acme",
   project: "Web",
   sprints: ["Sprint 14"],
