@@ -1,7 +1,7 @@
 // Checked by `tsc` in `pnpm test`, never run: `as` types a layout component's props for the element it renders.
 import type { FormEvent, MouseEvent } from "react";
 
-import { Badge, Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Card, Combobox, Empty, ListDetail, Menu, Page, Row, Select, Split, Stack, Tabs, Toolbar } from "./ui";
+import { Badge, Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Card, Combobox, Empty, ListDetail, Menu, Page, ProjectGate, Row, Select, Split, Stack, Tabs, Toolbar, useTabState, useViewArgs } from "./ui";
 
 const submit = (e: FormEvent<HTMLFormElement>) => e.currentTarget.requestSubmit();
 
@@ -97,3 +97,15 @@ export const pages = [
   // @ts-expect-error direction is horizontal or vertical
   <Split start={<Stack />} end={<Stack />} direction="diagonal" />,
 ];
+
+// Page hooks: `initial` and `check` give the saved value its type, null until it's read; a gate's children get the project.
+export function Hooks() {
+  const [view, saveView] = useTabState({ folded: [] as string[] }, (raw) => (Array.isArray(raw) ? { folded: raw.map(String) } : undefined));
+  const args = useViewArgs((raw) => (typeof raw === "string" ? { key: raw } : null));
+  saveView({ folded: view?.folded ?? [] });
+  // @ts-expect-error the value is what `initial` says
+  saveView({ folded: "x" });
+  return [args?.key.length, <ProjectGate>{(project) => project.name}</ProjectGate>];
+}
+// @ts-expect-error the children are a function of the project
+export const gate = <ProjectGate>{<Row />}</ProjectGate>;

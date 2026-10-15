@@ -15,9 +15,9 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // jsdom has no layout, so nothing to scroll or measure; browsers have both.
 dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
-const { act, createElement: h, useState } = await import("react");
+const { act, createElement: h, useCallback, useEffect, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, Select, Split, Tabs, TextInput, TimelineCard } = await import("./ui.js");
+const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -677,4 +677,126 @@ test("a clamped body makes what the cut hides inert until Show more", async () =
   await unmount();
   delete dom.window.HTMLElement.prototype.getBoundingClientRect;
   for (const key of Object.keys(sizes)) delete dom.window.HTMLElement.prototype[key];
+});
+
+// ---------- page hooks: each test stands in for `wings` with what the page asks of it ----------
+
+/** A promise that settles when the test says so. */
+const later = () => { let on; const promise = new Promise((resolve, reject) => (on = { resolve, reject })); return { promise, ...on }; };
+
+test("ProjectGate shows Loading, then the page keyed by the project's id, and an Empty when there is none", async () => {
+  let tell;
+  let mounts = 0;
+  globalThis.wings = { onProject: (listener) => ((tell = listener), () => {}) };
+  const Page = ({ project }) => (useEffect(() => void mounts++, []), h("p", null, project.branch));
+  const { host, unmount } = await mount(h(ProjectGate, { loading: "Loading issues", empty: { description: "Open one." } }, (project) => h(Page, { project })));
+  assert.equal(host.textContent, "Loading issues");
+  await act(() => tell({ id: "a", branch: "main" }));
+  await act(() => tell({ id: "a", branch: "dev" }));
+  assert.deepEqual([host.textContent, mounts], ["dev", 1], "a branch change keeps the page");
+  await act(() => tell({ id: "b", branch: "main" }));
+  assert.equal(mounts, 2, "another project starts the page over");
+  await act(() => tell(null));
+  assert.deepEqual([...host.querySelectorAll("p")].map((p) => p.textContent), ["No project", "Open one."]);
+  await unmount();
+});
+
+test("showBlock mounts the page in the view shell and tells Wings the shell's height, rounded up, as it changes", async () => {
+  const heights = [];
+  let notify;
+  let height = 200.4;
+  globalThis.wings = { setHeight: (px) => heights.push(px) };
+  globalThis.ResizeObserver = class { constructor(callback) { notify = callback; } observe() {} };
+  const shell = Object.assign(document.body.appendChild(document.createElement("main")), { id: "app", getBoundingClientRect: () => ({ height }) });
+  await act(() => showBlock(h("p", null, "Issues")));
+  assert.deepEqual([shell.dataset.place, shell.textContent], ["view", "Issues"]);
+  notify();
+  height = 310;
+  notify();
+  assert.deepEqual(heights, [201, 310]);
+  delete globalThis.ResizeObserver;
+  shell.remove();
+});
+
+/** A page that shows the `size` of its saved state, which a click sets to 300. */
+const sizePage = (hook) =>
+  function Page() {
+    const [state, set] = hook({ size: 280 }, (raw) => (typeof raw?.size === "number" ? raw : undefined));
+    return h("button", { onClick: () => set({ size: 300 }) }, state ? String(state.size) : "…");
+  };
+
+test("useTabState and useBlockState are null until the state is read, then what check makes of it or the initial one, and save what is set", async () => {
+  for (const [hook, get, put] of [[useTabState, "tabState", "setTabState"], [useBlockState, "blockState", "setBlockState"]]) {
+    for (const [answer, shown] of [[(r) => r.resolve({ size: 120 }), "120"], [(r) => r.resolve({ size: "wide" }), "280"], [(r) => r.reject(new Error("gone")), "280"]]) {
+      const [read, saved] = [later(), []];
+      globalThis.wings = { [get]: () => read.promise, [put]: (state) => (saved.push(state), Promise.reject(new Error("too big"))) };
+      const { host, unmount } = await mount(h(sizePage(hook)));
+      assert.equal(host.textContent, "…");
+      answer(read);
+      await settle();
+      assert.equal(host.textContent, shown);
+      await act(() => host.querySelector("button").click());
+      assert.deepEqual([host.textContent, saved], ["300", [{ size: 300 }]], "a save that is refused is kept");
+      await unmount();
+    }
+  }
+});
+
+test("useViewArgs gives the args as check reads them, or null, and reads them once per page", async () => {
+  let [seen, reads] = [undefined, 0];
+  const Page = () => ((seen = useViewArgs((raw) => (typeof raw.id === "number" ? { id: raw.id } : null))), null);
+  for (const [raw, expected] of [[{ id: 7, extra: 1 }, { id: 7 }], [{ id: "7" }, null], [null, null]]) {
+    globalThis.wings = { viewArgs: () => (reads++, raw) };
+    const { render, unmount } = await mount(h(Page));
+    await render(h(Page));
+    assert.deepEqual(seen, expected);
+    await unmount();
+  }
+  assert.equal(reads, 3);
+});
+
+test("copyText writes to the clipboard, and uses a textarea and execCommand when the clipboard refuses", async () => {
+  const [written, copies] = [[], []];
+  const clipboard = (writeText) => Object.defineProperty(dom.window.navigator, "clipboard", { configurable: true, value: { writeText } });
+  dom.window.document.execCommand = (command) => copies.push([command, document.querySelector("textarea").value]);
+  clipboard(async (text) => void written.push(text));
+  await copyText("fix/login");
+  clipboard(() => Promise.reject(new Error("denied")));
+  await copyText("fix/login");
+  assert.deepEqual([written, copies, document.querySelector("textarea")], [["fix/login"], [["copy", "fix/login"]], null]);
+  delete dom.window.navigator.clipboard;
+  delete dom.window.document.execCommand;
+});
+
+test("useAction is busy while any run is going, and keeps the message of the last one that threw until the next run starts", async () => {
+  let action;
+  const Page = () => ((action = useAction()), null);
+  const { unmount } = await mount(h(Page));
+  const [one, two, runs] = [later(), later(), []];
+  await act(async () => void runs.push(action.run(() => one.promise), action.run(() => two.promise)));
+  await act(async () => { one.resolve(); await runs[0]; });
+  assert.equal(action.busy, true, "another run is still going");
+  await act(async () => { two.reject(new Error("Disk full")); await runs[1]; });
+  assert.deepEqual([action.busy, action.error], [false, "Disk full"]);
+  await act(() => action.run(async () => {}));
+  assert.equal(action.error, null, "a new run clears it");
+  await unmount();
+});
+
+test("usePoll loads at once and when load changes, then every interval while Wings is focused, and stops on unmount", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let focus;
+  globalThis.wings = { focused: true, onFocus: (listener) => ((focus = listener), () => (focus = null)) };
+  const calls = [];
+  const Page = ({ name }) => (usePoll(useCallback(() => calls.push(name), [name]), 1000), null);
+  const { render, unmount } = await mount(h(Page, { name: "a" }));
+  t.mock.timers.tick(2000);
+  focus({ focused: false });
+  t.mock.timers.tick(5000);
+  focus({ focused: true });
+  await render(h(Page, { name: "b" }));
+  await unmount();
+  t.mock.timers.tick(5000);
+  assert.deepEqual(calls, ["a", "a", "a", "a", "b"], "at once, each interval, once Wings is back, and when load changes; not while away or after unmount");
+  assert.equal(focus, null, "the focus listener is removed");
 });

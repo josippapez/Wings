@@ -18,6 +18,12 @@ export function showTab(element: ReactElement, options?: ShellOptions): void;
 export function showPopover(element: ReactElement, options?: ShellOptions): void;
 /** Shows `element` as the plugin's page in Wings Settings. */
 export function showSettings(element: ReactElement, options?: ShellOptions): void;
+/**
+ * Shows `element` as the page of a block on a Project page, like `showView`, and keeps the block as tall as the page:
+ * each time the page's height changes it asks Wings for that height with `wings.setHeight`, which clamps it to the
+ * block's `minHeight` and 1200. A page in `contributes.blocks` uses this in place of `showView`.
+ */
+export function showBlock(element: ReactElement): void;
 
 // ---------- talking to main ----------
 
@@ -27,6 +33,59 @@ export function showSettings(element: ReactElement, options?: ShellOptions): voi
  * send nothing.
  */
 export function useMainState<T extends { type: string }>(type: T["type"], hello?: unknown): T | null;
+
+// ---------- the page's project, state and actions ----------
+
+/** The project the page is about: `undefined` until Wings says, then the project, or `null` when none is open. Follows `wings.onProject`. */
+export function useProject(): WingsProject | null | undefined;
+/**
+ * Shows `children(project)` once Wings has said which project the page is about, keyed by the project's id, so a page
+ * that holds state starts over for another project. Until then it shows `loading` ("Loading…" by default); with no
+ * project, an `Empty` titled "No project" unless `empty` says otherwise.
+ */
+export function ProjectGate(props: {
+  loading?: ReactNode;
+  empty?: { title?: ReactNode; description?: ReactNode };
+  children: (project: WingsProject) => ReactNode;
+}): ReactElement;
+
+/**
+ * Turns what a page was given or saved, which is any JSON, into the value it expects. Returns `null` or `undefined` for
+ * what isn't one, and is not called when there is nothing.
+ */
+export type Check<T> = (raw: unknown) => T | null | undefined;
+/**
+ * The state the tab saved with `wings.setTabState`, and a function that sets and saves it. The value is `null` until
+ * it's read, then what `check` returns for the saved state, or `initial` when there is none or `check` returns
+ * `null` or `undefined`. A save that fails, like one that is too big, leaves the page with the value it set.
+ */
+export function useTabState<T>(initial: T, check: Check<T>): [T | null, (next: T) => void];
+/** Like `useTabState`, for a block: the state saved with `wings.setBlockState`. */
+export function useBlockState<T>(initial: T, check: Check<T>): [T | null, (next: T) => void];
+/**
+ * What `wings.openView` opened this tab with, as `check` reads it, or `null` when there were no args or `check` returns
+ * `null` or `undefined` for them. Read once: a tab opened with other args reloads.
+ */
+export function useViewArgs<T>(check: Check<T>): T | null;
+
+export interface ActionState {
+  /** Runs `fn`. It never rejects: if `fn` throws, `error` is its message. Starting one clears the error. */
+  run(fn: () => unknown): Promise<void>;
+  /** True while any `run` is going. */
+  busy: boolean;
+  /** The message of the last `run` that threw, until the next `run` starts or `clear` is called. */
+  error: string | null;
+  clear(): void;
+}
+/** Runs the page's async actions and keeps what its buttons and error card show: `busy` while one is going, and the message of the last one that threw as `error`. */
+export function useAction(): ActionState;
+/**
+ * Calls `load` when the component mounts and each time `load` changes, then every `ms` while Wings is focused, and once
+ * when Wings is focused again. Wrap `load` in `useCallback` with what it reads, so it changes only when that does.
+ */
+export function usePoll(load: () => unknown, ms: number): void;
+/** Puts `text` on the clipboard. A sandboxed frame may refuse the clipboard API, so then it uses a hidden textarea. */
+export function copyText(text: string): Promise<void>;
 
 // ---------- shared ----------
 

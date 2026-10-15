@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, ProjectGate, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -69,6 +69,11 @@ test("Badge takes shadcn/ui's variants and Wings' tones", () => {
 test("Empty has a title and a description, and shows no description line without one", () => {
   assert.match(html(h(Empty, { title: "Nothing", description: "Try again" })), /<p class="w-empty-title">Nothing<\/p><p class="w-empty-description">Try again<\/p>/);
   assert.doesNotMatch(html(h(Empty, { title: "Nothing" })), /w-empty-description/);
+});
+
+test("ProjectGate says Loading… until it knows the project, unless it's told what to say", () => {
+  assert.equal(html(h(ProjectGate, null, () => null)), '<p class="w-loading">Loading…</p>');
+  assert.equal(html(h(ProjectGate, { loading: "Loading issues" }, () => null)), '<p class="w-loading">Loading issues</p>');
 });
 
 test("Page puts its toolbar over a body that is flush when it lays itself out", () => {
