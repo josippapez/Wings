@@ -1,8 +1,8 @@
 // The token-authenticated forges, Bitbucket Cloud and Gitea/Forgejo: how their API objects map onto the tracker's
 // status, rows and comments. No `wings`, no I/O, so node tests drive it.
-import { counts } from "./checks.ts";
-import { bbItem, gtItem } from "./checklist.ts";
-import type { Comment, FailureDetail, Failing, Icon, Link, ListedPr, Result, Status } from "./types.ts";
+import { counts } from "./checks";
+import { bbItem, gtItem } from "./checklist";
+import type { Comment, FailureDetail, Failing, Icon, Link, ListedPr, Result, Status } from "./types";
 
 /**
  * A value in a query string. `wings.fetch` takes only a URL already in normal form, which leaves `%XX` as written

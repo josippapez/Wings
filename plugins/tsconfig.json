@@ -8,8 +8,6 @@
     "strict": true,
     "noEmit": true,
     "isolatedModules": true,
-    // Lets a module imported by a node test say `./x.ts`, which node needs and esbuild accepts.
-    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -20,5 +18,5 @@
       "react/*": ["./node_modules/@types/react/*"]
     }
   },
-  "include": ["*/src", "*/preview", "shared"]
+  "include": ["*/src", "*/preview"]
 }
