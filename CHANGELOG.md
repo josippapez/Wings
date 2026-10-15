@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.44 · 2026-10-15
+
+- The diff viewer has a scrollbar pinned under each code column, so long lines scroll sideways with a mouse, and Shift with the wheel scrolls them too. A Wrap toggle wraps long lines instead, and Wings remembers the choice.
+- Issues 0.9.0: delete an issue from its card or row with the trash button or the Delete key. When it has child issues, choose to delete only it or it with all of them.
+
 ## 0.1.43 · 2026-10-15
 
 - Settings shows the running Wings version at the foot of its sidebar.

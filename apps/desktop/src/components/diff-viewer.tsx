@@ -17,6 +17,7 @@ import {
   ReplyIcon,
   Rows3Icon,
   SearchIcon,
+  TextWrapIcon,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -29,8 +30,10 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { DiffScrollbars } from "@/components/diff-scrollbars";
 import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
 import { LINE_HEIGHT, rowNumber, rowTop } from "@/lib/diff-scroll";
 import { resolveFocus, type ResolvedFocus } from "@/lib/diff-focus";
@@ -101,6 +104,27 @@ function treeRows(node: Folder, collapsed: Set<string>, depth = 0, rows: TreeRow
   const files = [...node.files].sort((a, b) => a.file.name.localeCompare(b.file.name));
   for (const entry of files) rows.push({ kind: "file", entry, depth });
   return rows;
+}
+
+const WRAP_KEY = "wings.diff.wrap";
+function savedWrap() {
+  try {
+    return localStorage.getItem(WRAP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shift and a mouse wheel scroll the code under the pointer sideways. Unwrapped code scrolls inside each of the library's code columns, whose
+ * scrollbar sits at the bottom of the file, out of reach. A wheel event that already moves sideways (a trackpad) is left to the browser.
+ */
+function onShiftWheel(e: WheelEvent) {
+  if (!e.shiftKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  const code = e.composedPath().find((el): el is HTMLElement => el instanceof HTMLElement && el.hasAttribute("data-code"));
+  if (!code || code.scrollWidth <= code.clientWidth) return;
+  e.preventDefault();
+  code.scrollLeft += e.deltaY;
 }
 
 const TREE_KEY = "wings.diff.tree";
@@ -340,6 +364,23 @@ export function DiffViewer({
   /** A file index, or null for the discussion. */
   const [selected, setSelected] = useState<number | null>(0);
   const [split, setSplit] = useState(true);
+  const [wrap, setWrap] = useState(savedWrap);
+  const chooseWrap = (value: boolean) => {
+    setWrap(value);
+    try {
+      localStorage.setItem(WRAP_KEY, value ? "1" : "0");
+    } catch {
+      // The choice just won't be remembered.
+    }
+  };
+  const wheelArea = useRef<HTMLDivElement>(null);
+  // Not React's onWheel: React listens passively, so it couldn't stop the page scrolling down as well.
+  useEffect(() => {
+    const el = wheelArea.current;
+    if (!el) return;
+    el.addEventListener("wheel", onShiftWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onShiftWheel);
+  });
   const [query, setQuery] = useState("");
   const [tree, setTree] = useState(savedTree);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -408,6 +449,7 @@ export function DiffViewer({
       theme: "pierre-dark",
       themeType: "dark",
       diffStyle: split ? "split" : "unified",
+      overflow: wrap ? "wrap" : "scroll",
       stickyHeader: true,
       // The + that shows beside a line number: click it for one line, drag it for several.
       enableGutterUtility: true,
@@ -415,7 +457,7 @@ export function DiffViewer({
         if (currentName !== undefined) setDraft({ path: currentName, range });
       },
     }),
-    [split, currentName],
+    [split, wrap, currentName],
   );
 
   const addReview = (path: string, range: SelectedLineRange, body: string) => {
@@ -541,6 +583,10 @@ export function DiffViewer({
               Unified
             </ToggleGroupItem>
           </ToggleGroup>
+          <Toggle size="sm" aria-label="Wrap long lines" title="Wrap long lines. Unwrapped, Shift and the mouse wheel scroll sideways." pressed={wrap} onPressedChange={chooseWrap} className="gap-1.5 text-[12px] aria-pressed:bg-white/[0.09]">
+            <TextWrapIcon aria-hidden />
+            Wrap
+          </Toggle>
           {loading && (
             <Progress value={null} aria-label="Loading changes" className="absolute inset-x-0 bottom-0 gap-0 [&_[data-slot=progress-track]]:h-px [&_[data-slot=progress-track]]:bg-transparent" />
           )}
@@ -642,6 +688,7 @@ export function DiffViewer({
                 </ScrollArea>
               </aside>
 
+              <div ref={wheelArea} className="relative flex min-w-0 flex-1">
               <Virtualizer className="min-w-0 flex-1 overflow-auto bg-[#141217]">
                 <ScrollToLine file={flash ? files.find((e) => e.file.name === flash.path)?.file : undefined} line={flash?.line} side={flash?.side ?? "additions"} />
                 {selected === null ? (
@@ -652,7 +699,7 @@ export function DiffViewer({
                   </div>
                 ) : current ? (
                   <FileDiff<Note>
-                    key={`${current.file.name}-${split}`}
+                    key={`${current.file.name}-${split}-${wrap}`}
                     fileDiff={current.file}
                     lineAnnotations={annotations}
                     // Undefined, not null, when nothing is flashing: a passed value makes the selection controlled, which would stop the gutter drag from highlighting.
@@ -682,6 +729,8 @@ export function DiffViewer({
                   </Empty>
                 )}
               </Virtualizer>
+              {!wrap && <DiffScrollbars area={wheelArea} watch={`${currentName}-${split}`} />}
+              </div>
               {reviewItems.length > 0 && (
                 <ReviewPanel
                   comments={reviewItems}

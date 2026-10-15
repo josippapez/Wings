@@ -110,12 +110,14 @@ await evaluate(`(() => {
   new MutationObserver((records) => (window.__touched += records.reduce((n, r) => n + r.addedNodes.length + r.removedNodes.length, 0)))
     .observe(document.querySelector("diffs-container").shadowRoot, { childList: true, subtree: true });
 })()`);
+// Wrapped lines get measured once they draw, which moves the scroll a little; compare against where it settled.
+const before = await evaluate(`(${scroller}).scrollTop`);
 for (let i = 0; i < 10; i++) {
   await evaluate("window.__check.rerender()");
   await sleep(150);
 }
 const touched = await evaluate("window.__touched");
 const top = await evaluate(`(${scroller}).scrollTop`);
-console.log(`10 re-renders: ${touched} row nodes added or removed, scrollTop 20000 -> ${top}`);
+console.log(`10 re-renders: ${touched} row nodes added or removed, scrollTop ${before} -> ${top}`);
 if (errors.length) console.error(errors.join("\n"));
-process.exit(touched === 0 && top === 20000 && !errors.length ? 0 : 1);
+process.exit(touched === 0 && top === before && !errors.length ? 0 : 1);
