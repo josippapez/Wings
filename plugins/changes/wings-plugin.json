@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
@@ -28,7 +28,7 @@
       {
         "id": "changes",
         "title": "Changes",
-        "page": "sidebar.html"
+        "page": "dist/sidebar.html"
       }
     ],
     "views": [
@@ -36,7 +36,7 @@
         "id": "graph",
         "title": "Commit graph",
         "icon": "git-graph",
-        "page": "graph.html",
+        "page": "dist/graph.html",
         "opens": ["window", "modal"],
         "width": 1100,
         "height": 760

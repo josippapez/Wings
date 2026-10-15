@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Puts a localhost:port badge on a pane when a program in it starts listening on a local port, with a button to open it in your browser. The badge goes when the port closes.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "ports": true,
     "openUrl": [

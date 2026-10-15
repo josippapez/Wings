@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// wings-plugin build           builds the plugin in this folder
-// wings-plugin build --check   fails if a built file is older than its source
+// wings-plugin build           builds the plugin in this folder into dist/
+// wings-plugin build --check   fails if a file in dist/ is older than its source
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
 //                              writing built files into the folder
 import { relative } from "node:path";

@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Lists the git worktrees of your open projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
@@ -25,7 +25,7 @@
       {
         "id": "worktrees",
         "title": "Worktrees",
-        "page": "sidebar.html"
+        "page": "dist/sidebar.html"
       }
     ]
   }

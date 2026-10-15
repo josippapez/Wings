@@ -6,7 +6,7 @@
   "icon": "icon.svg",
   "description": "Shows what each Claude session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "git diff [-- --no-color --no-ext-diff]",
@@ -26,7 +26,7 @@
       {
         "id": "activity",
         "title": "Session",
-        "page": "sidebar.html"
+        "page": "dist/sidebar.html"
       }
     ]
   }

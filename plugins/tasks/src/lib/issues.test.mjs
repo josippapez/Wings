@@ -320,6 +320,6 @@ test("the manifest: the instructions line sends Claude to the tools unprompted, 
   assert.ok(line.length <= 500);
   for (const name of ["create", "list", "get", "update", "log"]) assert.match(line, new RegExp(`tasks__${name}\\b`));
   assert.match(line, /create, file, track or note an issue/);
-  assert.equal(m.contributes.settings.page, "settings.html");
+  assert.equal(m.contributes.settings.page, "dist/settings.html");
   assert.ok(m.contributes.mcpTools.find((t) => t.name === "list").inputSchema.properties.query);
 });
