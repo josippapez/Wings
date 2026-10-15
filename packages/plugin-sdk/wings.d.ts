@@ -246,6 +246,16 @@ interface WingsProjectSectionRow {
   open: { view: string; args?: unknown };
 }
 
+/** What a tool's handler is told about who called it: the Wings pane Claude runs in, that pane's project and its Claude session. */
+interface WingsToolContext {
+  /** The Wings pane Claude runs in, or `null` when the call didn't come from a pane in Wings. */
+  paneId: string | null;
+  /** The project of that pane, or `null` when there is no pane. Needs Wings 0.1.50. */
+  project: { id: string; name: string; path: string } | null;
+  /** The Claude session running in that pane, or `null` when there is no pane or Claude hasn't started its session yet. Needs Wings 0.1.50. */
+  session: { id: string; name: string | null } | null;
+}
+
 interface Wings {
   // Every `on*` call returns a function that removes the listener, for cleaning up in a React effect.
   /** Every terminal pane, on every change. */
@@ -267,9 +277,10 @@ interface Wings {
   /**
    * Handles Claude's calls to a tool in `contributes.mcpTools`. Claude doesn't read tool descriptions until it
    * searches for a tool, so add `contributes.mcpInstructions`, a line on when to use them. Return a string or a JSON value; a thrown error
-   * is sent back as a failed call. `paneId` is the Wings pane Claude runs in, or `null`. Register it in `main`.
+   * is sent back as a failed call. `context` says who called: the Wings pane Claude runs in, that pane's project and the
+   * Claude session running there, so a tool can act on "this project" without tracking panes. Register it in `main`.
    */
-  onTool(name: string, handler: (input: Record<string, unknown>, context: { paneId: string | null }) => unknown): void;
+  onTool(name: string, handler: (input: Record<string, unknown>, context: WingsToolContext) => unknown): void;
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. Rejects with `Output is larger than 8 MB` (and kills the program) when stdout or stderr passes 8 MB. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**

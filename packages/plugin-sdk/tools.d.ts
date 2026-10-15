@@ -1,9 +1,6 @@
 /// <reference path="./wings.d.ts" />
-/** What a tool's handler is told besides its input. */
-export interface ToolContext {
-  /** The Wings pane Claude runs in, or `null`. */
-  paneId: string | null;
-}
+/** What a tool's handler is told besides its input: who called, as `wings.onTool` gives it. */
+export type ToolContext = WingsToolContext;
 
 /**
  * A schema built with `s`: plain JSON Schema in `schema`, and in `T` the type of a value that fits it. `R` is whether

@@ -588,7 +588,7 @@ export class PluginHost {
     if (!entry) return void api.mcpToolResult(call.callId, `${call.pluginId} is still starting in Wings. Try again in a moment.`, true);
     const token = crypto.randomUUID();
     this.tools.set(token, { pluginId: call.pluginId, callId: call.callId });
-    entry[1].post({ event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId } });
+    entry[1].post({ event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId, project: call.project, session: call.session } });
   }
 
   private settle(token: string, error: Error | null) {

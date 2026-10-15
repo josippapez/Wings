@@ -136,13 +136,13 @@
   }
 
   // Claude called one of the plugin's MCP tools. A thrown error goes back to Claude as a failed call.
-  async function runTool({ token, name, arguments: input, paneId }) {
+  async function runTool({ token, name, arguments: input, paneId, project, session }) {
     let text;
     let isError = false;
     try {
       const handler = tools.get(name);
       if (!handler) throw new Error(`The plugin has no handler for ${name}`);
-      const result = await handler(input ?? {}, { paneId: paneId ?? null });
+      const result = await handler(input ?? {}, { paneId: paneId ?? null, project: project ?? null, session: session ?? null });
       text = typeof result === "string" ? result : result === undefined ? "Done" : JSON.stringify(result, null, 2);
     } catch (e) {
       text = String(e?.message ?? e);
@@ -172,9 +172,10 @@
     /** A badge action was clicked: `{ paneId, actionId }`. */
     onAction: (listener) => subscribe(listeners.action, listener),
     /**
-     * Handles calls to one of the manifest's `contributes.mcpTools`, from the main script. `handler(input, { paneId })`
+     * Handles calls to one of the manifest's `contributes.mcpTools`, from the main script. `handler(input, { paneId, project, session })`
      * gets the arguments Claude sent and returns a string or a JSON value, or a promise of one. `paneId` is the
-     * Wings pane Claude runs in, or `null`.
+     * Wings pane Claude runs in, `project` that pane's `{ id, name, path }` and `session` the Claude session running
+     * in it, `{ id, name }`; each is `null` when there is none.
      */
     onTool: (name, handler) => void tools.set(name, handler),
     /**

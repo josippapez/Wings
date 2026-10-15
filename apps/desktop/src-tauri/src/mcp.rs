@@ -19,7 +19,11 @@ use std::{
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::AppState;
+use crate::{
+    detect::{Agent, AgentKind},
+    spaces::Space,
+    AppState,
+};
 
 /// Tool names are `<plugin id>__<tool>`, so Claude can tell which plugin a tool comes from.
 const SEPARATOR: &str = "__";
@@ -248,8 +252,27 @@ fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Res
         return Err(format!("{plugin_id} has no tool {tool}"));
     }
     let pane_id = ppid.and_then(|pid| pane_of(app, pid));
-    ask_webview(app, "mcp-call", json!({ "pluginId": plugin_id, "tool": tool, "arguments": arguments, "paneId": pane_id }))
+    let (project, session) = caller_of(app, pane_id.as_deref());
+    ask_webview(app, "mcp-call", json!({ "pluginId": plugin_id, "tool": tool, "arguments": arguments, "paneId": pane_id, "project": project, "session": session }))
         .map_err(|_| format!("{plugin_id} didn't answer in time"))
+}
+
+/// What a plugin's tool handler is told about who called, besides the pane: that pane's project and the Claude session
+/// running in it. Each is null when there is none: a call from outside Wings' panes has neither, and a pane that isn't
+/// running Claude Code, or whose session has no id yet, has no session.
+fn caller(space: Option<&Space>, agent: Option<&Agent>) -> (Value, Value) {
+    let project = space.map(|s| json!({ "id": s.id, "name": s.name, "path": s.path }));
+    let session = agent.filter(|a| a.kind == AgentKind::Claude).and_then(|a| a.session_id.as_ref().map(|id| json!({ "id": id, "name": a.name })));
+    (project.unwrap_or(Value::Null), session.unwrap_or(Value::Null))
+}
+
+/// `caller` for the pane a call came from, read where Wings keeps its panes, projects and agents.
+fn caller_of(app: &AppHandle, pane_id: Option<&str>) -> (Value, Value) {
+    let state = app.state::<AppState>();
+    let space_id = pane_id.and_then(|id| state.panes.lock().unwrap().get(id).map(|p| p.space_id.clone()));
+    let space = space_id.and_then(|id| state.spaces.lock().unwrap().get(&id).cloned());
+    let agent = pane_id.and_then(|id| state.agents.lock().unwrap().iter().find(|a| a.pane_id == id).cloned());
+    caller(space.as_ref(), agent.as_ref())
 }
 
 /// The webview hands back a plugin's answer.
@@ -284,6 +307,27 @@ fn pane_of(app: &AppHandle, pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detect::AgentState;
+
+    fn agent(kind: AgentKind, session_id: Option<&str>, name: Option<&str>) -> Agent {
+        let (session_id, name) = (session_id.map(String::from), name.map(String::from));
+        Agent { pane_id: "p1".into(), space_id: "s1".into(), pid: 1, kind, session_id, name, state: AgentState::Idle, waiting_for: None, args: vec![], started_at: 0, state_since: None, direct: true }
+    }
+
+    #[test]
+    fn a_tool_call_carries_the_project_of_its_pane_and_the_claude_session_running_there() {
+        let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None };
+        let claude = agent(AgentKind::Claude, Some("abc"), Some("fix totals"));
+        assert_eq!(caller(Some(&web), Some(&claude)), (json!({ "id": "s1", "name": "web", "path": "/work/web" }), json!({ "id": "abc", "name": "fix totals" })));
+        // A session without a name yet is still a session.
+        assert_eq!(caller(Some(&web), Some(&agent(AgentKind::Claude, Some("abc"), None))).1, json!({ "id": "abc", "name": null }));
+        // No session: Claude Code hasn't written its id yet, another agent runs in the pane, or none does.
+        for without_session in [Some(agent(AgentKind::Claude, None, None)), Some(agent(AgentKind::Opencode, Some("abc"), None)), None] {
+            assert_eq!(caller(Some(&web), without_session.as_ref()).1, Value::Null);
+        }
+        // A call from outside every pane has neither.
+        assert_eq!(caller(None, None), (Value::Null, Value::Null));
+    }
 
     #[test]
     fn connections_that_hung_up_are_let_go() {

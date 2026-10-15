@@ -120,7 +120,16 @@ export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean; alwaysLoad: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
-export type McpCall = { callId: number; pluginId: string; tool: string; arguments: Record<string, unknown>; paneId: string | null };
+/** A tool call from Claude, and who made it: the Wings pane it runs in, that pane's project and the Claude session there. Each is null when there is none. */
+export type McpCall = {
+  callId: number;
+  pluginId: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  paneId: string | null;
+  project: { id: string; name: string; path: string } | null;
+  session: { id: string; name: string | null } | null;
+};
 /** Claude asked Wings (the `open_pane` tool) for a new tab. Answer with `mcpToolResult`: the pane id, or the error. */
 export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */

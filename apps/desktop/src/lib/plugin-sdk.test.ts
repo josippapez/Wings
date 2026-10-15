@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame(init?: unknown) {
@@ -175,6 +175,20 @@ test("outside a block, blockState is null and setBlockState and setHeight fail w
   await assert.rejects(wings.setBlockState({}), /shown as a block/);
   assert.throws(() => wings.setHeight(200), /shown as a block/);
   assert.equal(calls("blockState").length + calls("setBlockState").length + calls("setHeight").length, 0);
+});
+
+test("a tool handler is told the pane Claude runs in, its project and its session, each null when there is none", async () => {
+  const { wings, send } = frame();
+  const contexts: unknown[] = [];
+  wings.onTool("x", (_input, context) => void contexts.push(context));
+  const project = { id: "s1", name: "web", path: "/work/web" };
+  const session = { id: "abc", name: null };
+  const none = { paneId: null, project: null, session: null };
+  send("tool", { token: "t1", name: "x", arguments: {}, paneId: "p1", project, session });
+  send("tool", { token: "t2", name: "x", arguments: {}, ...none });
+  send("tool", { token: "t3", name: "x", arguments: {} });
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(JSON.parse(JSON.stringify(contexts)), [{ paneId: "p1", project, session }, none, none]);
 });
 
 test("a real mouse back or forward press over the page asks Wings to go back or forward", () => {
