@@ -230,8 +230,11 @@
      * it's already installed), false if you cancelled. Only az, gh and glab, and only ones in `permissions.exec`.
      */
     installTool: (program) => call("installTool", { program }),
-    /** A desktop notification, with `permissions.notify`. Up to 20 a minute; there's no click action. */
-    notify: ({ title, body = "" } = {}) => call("notify", { title, body }),
+    /**
+     * A desktop notification, with `permissions.notify`. Up to 20 a minute. In the Inbox, `actions` are its buttons:
+     * `{ label, open: { view, args } }` opens a tab view in `projectId`'s project, `{ label, url }` opens a link.
+     */
+    notify: ({ title, body = "", projectId, actions } = {}) => call("notify", { title, body, projectId, actions }),
     /**
      * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
      * `POST <url with * segments> [{field=value}]` for one write with a JSON `body`. `bearer` names a secret that Wings

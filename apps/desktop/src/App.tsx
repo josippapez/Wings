@@ -1008,8 +1008,8 @@ const leftPanel = usePanelRef();
         setRightSidebar(key);
         setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
       },
-      notified: (pluginName, title, body) =>
-        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false } }),
+      notified: (pluginName, title, body, plugin) =>
+        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false, plugin } }),
       openSettings: (pluginId) => {
         setSettingsSection(pluginSettingsSection(pluginId));
         setSettingsOpen(true);
@@ -1403,6 +1403,12 @@ const leftPanel = usePanelRef();
         const agent = agentsRef.current.find((a) => a.paneId === paneId);
         if (agent) selectAgent(agent);
         else toast("That pane has closed", { duration: 2000 });
+      },
+      onButton: (plugin, button) => {
+        if ("url" in button) return void api.pluginOpenUrl(plugin.id, button.url).catch((e) => toast.error(String(e)));
+        const projectId = plugin.projectId ?? activeSpaceIdRef.current;
+        if (!projectId) return void toast("Open a project first", { duration: 2000 });
+        openSectionRow(projectId, plugin.id, button.open, true);
       },
     },
     onMoveSpace: (id, index) =>

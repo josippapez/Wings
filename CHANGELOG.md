@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.45 · 2026-10-15
+
+- Plugin notifications in the Inbox can have up to three buttons, which open one of the plugin's tabs in the notification's project or a link (`wings.notify({ actions, projectId })`).
+- PR tracker 0.15.0 and 0.16.0: set an interval on its Settings page to get a notification when someone opens a new pull request in one of your projects, with Open, Open in browser and All pull requests buttons in the Inbox.
+
 ## 0.1.44 · 2026-10-15
 
 - The diff viewer has a scrollbar pinned under each code column, so long lines scroll sideways with a mouse, and Shift with the wheel scrolls them too. A Wrap toggle wraps long lines instead, and Wings remembers the choice.

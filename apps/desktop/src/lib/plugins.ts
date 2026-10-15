@@ -7,6 +7,7 @@ import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type Bloc
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
 import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
+import { cleanButtons, type NotificationButton } from "@/lib/notifications";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
@@ -137,7 +138,7 @@ type Callbacks = {
   /** Opens Wings Settings at the plugin's own settings page. */
   openSettings: (pluginId: string) => void;
   /** A plugin's notification went out; the notification list keeps it. */
-  notified: (pluginName: string, title: string, body: string) => void;
+  notified: (pluginName: string, title: string, body: string, plugin: { id: string; projectId: string | null; buttons: NotificationButton[] }) => void;
 };
 
 type Running = {
@@ -719,9 +720,13 @@ export class PluginHost {
       case "notify": {
         const title = typeof p.title === "string" ? p.title : "";
         const body = typeof p.body === "string" ? p.body : "";
+        const tabViews = plugin.plugin.contributes.views.filter((v) => v.opens.includes("tab")).map((v) => v.id);
+        const buttons = cleanButtons(p.actions, tabViews);
+        const projectId = p.projectId === undefined || p.projectId === null ? null : String(p.projectId);
+        if (projectId !== null && !this.callbacks.projectOf(projectId)) throw new Error(`no project ${projectId}`);
         // Rust checks the permission first, so only a notification Wings allowed reaches the list.
         const sent = await invoke("plugin_notify", { pluginId, title, body });
-        this.callbacks.notified(plugin.plugin.name, title.slice(0, 200), body.slice(0, 300));
+        this.callbacks.notified(plugin.plugin.name, title.slice(0, 200), body.slice(0, 300), { id: pluginId, projectId, buttons });
         return sent;
       }
       case "fetch": {

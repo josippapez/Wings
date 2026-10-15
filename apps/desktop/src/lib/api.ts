@@ -177,6 +177,8 @@ export const api = {
   pluginInstallFile: (path: string) => invoke<PluginView>("plugin_install_file", { path }),
   pluginInstallGithub: (url: string) => invoke<PluginView>("plugin_install_github", { url }),
   pluginUpdate: (id: string) => invoke<PluginView>("plugin_update", { id }),
+  /** A plugin notification's link button; Rust checks it against the plugin's `openUrl` permission. */
+  pluginOpenUrl: (pluginId: string, url: string) => invoke<void>("plugin_open_url", { pluginId, url }),
   pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
   /** The command-line tools the plugin runs that Wings can install, and whether each is installed. */
   pluginTools: (id: string) => invoke<ToolStatus[]>("plugin_tools", { id }),

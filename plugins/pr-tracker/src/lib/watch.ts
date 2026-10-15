@@ -23,8 +23,18 @@ export function newPulls<T extends { link: { url: string }; mine: boolean }>(bef
   return items.filter((i) => !i.mine && !before.has(i.link.url));
 }
 
-/** The notifications for a project's new PRs: one each, or one for all of them when there are more than `MAX_SINGLE`. */
-export function notesFor(project: string, items: { title: string; author: string | null }[]): { title: string; body: string }[] {
-  if (items.length > MAX_SINGLE) return [{ title: `${items.length} new pull requests in ${project}`, body: items.map((i) => i.title).join("\n") }];
-  return items.map((i) => ({ title: `New pull request in ${project}`, body: i.author ? `${i.title} · ${i.author}` : i.title }));
+type Action = { label: string; open: { view: string; args?: unknown } } | { label: string; url: string };
+
+/**
+ * The notifications for a project's new PRs: one each, with buttons to open it in a tab or the browser, or one for all
+ * of them when there are more than `MAX_SINGLE`. Every one can open the project's list of open PRs.
+ */
+export function notesFor(project: string, items: { title: string; author: string | null; url: string; args: unknown }[]): { title: string; body: string; actions: Action[] }[] {
+  const all: Action = { label: "All pull requests", open: { view: "pr" } };
+  if (items.length > MAX_SINGLE) return [{ title: `${items.length} new pull requests in ${project}`, body: items.map((i) => i.title).join("\n"), actions: [all] }];
+  return items.map((i) => ({
+    title: `New pull request in ${project}`,
+    body: i.author ? `${i.title} · ${i.author}` : i.title,
+    actions: [{ label: "Open", open: { view: "pr", args: i.args } }, { label: "Open in browser", url: i.url }, all],
+  }));
 }

@@ -14,13 +14,15 @@ test("a PR that wasn't open on the last check is new, unless you wrote it", () =
   assert.deepEqual(newPulls(new Set(), [pr("a")]).map((i) => i.link.url), ["a"]);
 });
 
-test("each new PR gets its own notification, and a burst gets one", () => {
-  assert.deepEqual(notesFor("web", [{ title: "Fix login", author: "Ana" }, { title: "Docs", author: null }]), [
-    { title: "New pull request in web", body: "Fix login · Ana" },
-    { title: "New pull request in web", body: "Docs" },
+test("each new PR gets its own notification with its buttons, and a burst gets one", () => {
+  const all = { label: "All pull requests", open: { view: "pr" } };
+  const item = (title, author, n) => ({ title, author, url: `https://host/pr/${n}`, args: { n } });
+  assert.deepEqual(notesFor("web", [item("Fix login", "Ana", 1), item("Docs", null, 2)]), [
+    { title: "New pull request in web", body: "Fix login · Ana", actions: [{ label: "Open", open: { view: "pr", args: { n: 1 } } }, { label: "Open in browser", url: "https://host/pr/1" }, all] },
+    { title: "New pull request in web", body: "Docs", actions: [{ label: "Open", open: { view: "pr", args: { n: 2 } } }, { label: "Open in browser", url: "https://host/pr/2" }, all] },
   ]);
-  const burst = Array.from({ length: MAX_SINGLE + 1 }, (_, n) => ({ title: `PR ${n}`, author: null }));
-  assert.deepEqual(notesFor("web", burst), [{ title: `${MAX_SINGLE + 1} new pull requests in web`, body: burst.map((i) => i.title).join("\n") }]);
+  const burst = Array.from({ length: MAX_SINGLE + 1 }, (_, n) => item(`PR ${n}`, null, n));
+  assert.deepEqual(notesFor("web", burst), [{ title: `${MAX_SINGLE + 1} new pull requests in web`, body: burst.map((i) => i.title).join("\n"), actions: [all] }]);
 });
 
 test("a saved interval that isn't one of the choices is off", () => {

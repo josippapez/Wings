@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import {
   ArrowDownIcon,
@@ -42,7 +42,6 @@ import { OpenInEditorItems } from "@/components/editor-menu";
 import { GitCounts } from "@/components/git-counts";
 import { agentLabel, PaneIcon } from "@/components/pane-label";
 import { rollUp, StatusDot, stateLabel } from "@/components/status-dot";
-import type { NotificationEvent } from "@/lib/notifications";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -128,7 +127,7 @@ export function Sidebar(props: {
   onHistory: () => void;
   onSettings: () => void;
   /** The Inbox row's popover: agent events, newest first. */
-  notifications: { events: NotificationEvent[]; onOpen: () => void; onClear: () => void; onGoToPane: (paneId: string) => void };
+  notifications: Pick<ComponentProps<typeof NotificationBell>, "events" | "onOpen" | "onClear" | "onGoToPane" | "onButton">;
 }) {
   const { spaces, agents } = props;
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? id;

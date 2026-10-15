@@ -232,8 +232,18 @@ interface Wings {
    * Resolves true once the install started (or it's already installed), false if you cancelled.
    */
   installTool(program: "az" | "gh" | "glab"): Promise<boolean>;
-  /** Needs `permissions.notify`. A desktop notification, up to 20 a minute. The title is cut at 64 characters, the body at 256. */
-  notify(notification: { title: string; body?: string }): Promise<void>;
+  /**
+   * Needs `permissions.notify`. A desktop notification, up to 20 a minute. The title is cut at 64 characters, the body at 256.
+   * It's also kept in Wings' Inbox, where `actions` (up to 3) are buttons: `open` shows one of your views that opens as a
+   * tab, in `projectId`'s project or else the one on screen, and `url` opens a link your `openUrl` permission allows.
+   * Needs Wings 0.1.45.
+   */
+  notify(notification: {
+    title: string;
+    body?: string;
+    projectId?: string;
+    actions?: ({ label: string; open: { view: string; args?: unknown } } | { label: string; url: string })[];
+  }): Promise<void>;
   /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
   openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus }): Promise<{ id: string }>;
   /** Updates a viewer opened with `openDiff`; ignored once it's closed. `{ comments }` alone keeps the patch, like after a reply. */

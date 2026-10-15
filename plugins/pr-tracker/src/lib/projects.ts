@@ -105,7 +105,7 @@ export async function refreshProjects(fresh = false) {
           const remote = await remoteFor(project.path);
           const items = remote.kind === "none" ? [] : await listFor(project.path, remote, !fresh);
           remember(items);
-          if (remote.kind !== "none") announce(project.name, remote.origin!, items);
+          if (remote.kind !== "none") announce(project, remote.origin!, items);
           items.forEach((i) => live.add(i.link.url));
           // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
           for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
@@ -142,10 +142,10 @@ export function setWatching(on: boolean) {
 }
 
 /** Notifies about the PRs that weren't open on the last check. Tracked with notifications off too, so turning them on doesn't announce every open PR. */
-function announce(project: string, origin: string, items: ListedPr[]) {
-  const fresh = newPulls(opened.get(origin), items);
+function announce(project: WingsProject, origin: string, items: ListedPr[]) {
+  const fresh = newPulls(opened.get(origin), items).map((i) => ({ title: i.title, author: i.author, url: i.link.url, args: argsOf(i.link, i.title, project.path) }));
   opened.set(origin, new Set(items.map((i) => i.link.url)));
-  if (watching) for (const note of notesFor(project, fresh)) void wings.notify(note).catch(console.error);
+  if (watching) for (const note of notesFor(project.name, fresh)) void wings.notify({ ...note, projectId: project.id }).catch(console.error);
 }
 
 /** Sign-in or Try again: the lists that failed, or came back empty for lack of it, are fetched again. */

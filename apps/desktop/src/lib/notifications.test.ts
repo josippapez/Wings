@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MAX_NOTIFICATIONS, notificationsReducer, unreadCount, type NotificationEvent } from "./notifications.ts";
+import { cleanButtons, MAX_NOTIFICATIONS, notificationsReducer, unreadCount, type NotificationEvent } from "./notifications.ts";
 
 const event = (id: string, over: Partial<NotificationEvent> = {}): NotificationEvent => ({
   id, at: Number(id) || 0, kind: "done", title: "Claude finished", project: "p", detail: "", paneId: "pane", read: false, ...over,
@@ -50,4 +50,23 @@ test("mark all read keeps every event", () => {
 
 test("clear empties the list", () => {
   assert.deepEqual(notificationsReducer(add([], event("1")), { type: "clear" }), []);
+});
+
+test("a plugin's notification buttons open its tab views or an https link, three at most", () => {
+  const views = ["pr"];
+  assert.deepEqual(cleanButtons(undefined, views), []);
+  assert.deepEqual(
+    cleanButtons([{ label: " Open ", open: { view: "pr", args: { n: 1 } } }, { label: "Open in browser", url: "https://example.com/pr/1" }, { label: "All", open: { view: "pr" } }, { label: "Extra", url: "https://example.com" }], views),
+    [{ label: "Open", open: { view: "pr", args: { n: 1 } } }, { label: "Open in browser", url: "https://example.com/pr/1" }, { label: "All", open: { view: "pr" } }],
+  );
+  assert.equal(cleanButtons([{ label: "x".repeat(40), url: "https://a.b" }], views)[0].label.length, 32);
+});
+
+test("a button that opens something the plugin can't is refused", () => {
+  const views = ["pr"];
+  assert.throws(() => cleanButtons("open", views), /must be a list/);
+  assert.throws(() => cleanButtons([{ url: "https://a.b" }], views), /needs a label/);
+  assert.throws(() => cleanButtons([{ label: "Go", url: "http://a.b" }], views), /https link/);
+  assert.throws(() => cleanButtons([{ label: "Go", open: { view: "settings" } }], views), /isn't one of the plugin's views/);
+  assert.throws(() => cleanButtons([{ label: "Go", open: { view: "pr", args: "x".repeat(20_000) } }], views), /16 KB|too big|over/);
 });

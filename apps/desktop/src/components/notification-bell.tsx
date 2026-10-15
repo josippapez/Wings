@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { unreadCount, type NotificationEvent } from "@/lib/notifications";
+import { unreadCount, type NotificationButton, type NotificationEvent } from "@/lib/notifications";
 import { OPEN_NOTIFICATIONS } from "@/lib/ui-events";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,7 @@ export function NotificationBell({
   onOpen,
   onClear,
   onGoToPane,
+  onButton,
   listen = true,
 }: {
   events: NotificationEvent[];
@@ -34,6 +35,8 @@ export function NotificationBell({
   onOpen: () => void;
   onClear: () => void;
   onGoToPane: (paneId: string) => void;
+  /** A plugin notification's button was clicked. */
+  onButton: (plugin: NonNullable<NotificationEvent["plugin"]>, button: NotificationButton) => void;
   /** Opens on the show-notifications command. Only one of the sidebar's two copies (docked, peeking) listens. */
   listen?: boolean;
 }) {
@@ -118,6 +121,24 @@ export function NotificationBell({
                         Go to pane
                       </Button>
                     )}
+                    {e.plugin?.buttons.length ? (
+                      <div className="mt-1 -ml-2 flex flex-wrap gap-x-1">
+                        {e.plugin.buttons.map((b) => (
+                          <Button
+                            key={b.label}
+                            variant="ghost"
+                            size="xs"
+                            className="text-muted-foreground"
+                            onClick={() => {
+                              setOpen(false);
+                              onButton(e.plugin!, b);
+                            }}
+                          >
+                            {b.label}
+                          </Button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </li>
               ))}
