@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useRef, useState } from "react";
 import { BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
@@ -186,6 +187,14 @@ export type PluginsProps = {
 };
 
 /** Wings settings, in a window-sized dialog with a section list on the left, like a native app's Settings. */
+/** The running Wings version, at the foot of the settings sidebar. */
+function AppVersion() {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => void getVersion().then(setVersion, () => {}), []);
+  if (!version) return null;
+  return <p className="mt-auto px-2 text-[12px] text-muted-foreground tabular-nums">Wings {version}</p>;
+}
+
 export function SettingsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -252,6 +261,7 @@ export function SettingsDialog(props: {
                 </TabsTrigger>
               ))}
             </TabsList>
+            <AppVersion />
           </nav>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
             <TabsContent value="text" className="flex flex-col gap-3 p-6">

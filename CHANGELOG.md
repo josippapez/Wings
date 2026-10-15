@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.43 · 2026-10-15
+
+- Settings shows the running Wings version at the foot of its sidebar.
+
 ## 0.1.42 · 2026-10-15
 
 - Issues 0.7.0: the board groups issues in rows by their parent epic or feature, like Linear's sub-grouping. Each row has the parent's status, title (click to open it) and how many of its children are done, and folds shut; the issues with no parent come last. Group by parent turns it off, and the tab keeps both choices. Epic and feature cards show their children's progress too.
