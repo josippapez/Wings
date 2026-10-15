@@ -1745,6 +1745,12 @@ const leftPanel = usePanelRef();
                 mounted={openedSidebars.flatMap((key) => sidebarRef(key) ?? [])}
                 unloaded={unloadedSidebars}
                 host={pluginHost.current}
+                onSelect={setRightSidebar}
+                onCloseTab={(id) => {
+                  const rest = openedSidebars.filter((k) => k !== id);
+                  setOpenedSidebars(rest);
+                  if (rightSidebar === id) setRightSidebar(rest.at(-1) ?? null);
+                }}
                 onClose={() => setRightSidebar(null)}
                 onPopOut={(entry) => {
                   void pluginHost.current?.openWindow(entry.plugin, entry.sidebarId).catch((e) => toast.error(String(e)));
