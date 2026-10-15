@@ -135,3 +135,18 @@ test("pack zips what the plugin ships with the build in dist/, the manifest at t
   assert.equal(readFileSync(join(dir, "dist", "main.js"), "utf8"), "stale");
   assert.equal(existsSync(join(dir, "dist", "sidebar.html")), false);
 });
+
+test("a plugin with src/tools.ts gets its manifest's tools written by build, checked by check, and packed without touching the folder", async (t) => {
+  const tools = 'import { s, tool } from "wings-plugin-sdk/tools";\nexport const tools = { ping: tool({ description: "Pings.", input: s.object({ n: s.integer({ minimum: 1 }) }), run: () => "pong" }) };';
+  const dir = plugin({ "src/tools.ts": tools });
+  t.after(() => rmSync(dir, { recursive: true }));
+  const manifest = () => JSON.parse(readFileSync(join(dir, "wings-plugin.json"), "utf8"));
+  assert.deepEqual((await buildPlugin(dir, { check: true })).stale.map((f) => f.slice(dir.length + 1)).filter((f) => !f.startsWith("dist/")), ["wings-plugin.json"]);
+  const before = readFileSync(join(dir, "wings-plugin.json"), "utf8");
+  const zip = unzipSync(readFileSync(await pack(dir)));
+  assert.equal(JSON.parse(new TextDecoder().decode(zip["wings-plugin.json"])).contributes.mcpTools[0].name, "ping");
+  assert.equal(readFileSync(join(dir, "wings-plugin.json"), "utf8"), before);
+  await buildPlugin(dir);
+  assert.deepEqual(manifest().contributes.mcpTools, [{ name: "ping", description: "Pings.", inputSchema: { type: "object", properties: { n: { type: "integer", minimum: 1 } }, required: ["n"], additionalProperties: false } }]);
+  assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
+});

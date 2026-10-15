@@ -8,11 +8,12 @@ export function entries(dir: string): { src: string; out: string }[];
  * CSS a page imports becomes `dist/<name>.css`, and a page that mounts with `wings-plugin-ui` or
  * `wings-plugin-sdk/shell` gets a generated `dist/<name>.html` unless the plugin has its own there. A plugin with
  * no `src/main.ts` gets an empty `dist/main.js`. With `check`, writes nothing and lists in `stale` the outputs
- * that differ from what's on disk. With `outDir`, writes there instead of `dist/`.
+ * that differ from what's on disk. With `outDir`, writes there instead of `dist/`. A plugin with a `src/tools.ts`
+ * gets `contributes.mcpTools` in its manifest written from it, in `manifestDir` (the plugin folder by default).
  */
 export function buildPlugin(
   dir: string,
-  options?: { check?: boolean; banner?: string; outDir?: string },
+  options?: { check?: boolean; banner?: string; outDir?: string; manifestDir?: string },
 ): Promise<{ built: { file: string; bytes: number }[]; stale: string[] }>;
 
 /**

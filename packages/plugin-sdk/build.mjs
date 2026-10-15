@@ -5,12 +5,14 @@
 // `page` to say where it shows, and the build writes the mount that calls the matching show function of
 // wings-plugin-ui. The CSS a page imports, like `import "./sidebar.css"`, becomes dist/<name>.css, and a page that
 // mounts with wings-plugin-ui or wings-plugin-sdk/shell gets a dist/<name>.html written for it unless the plugin
-// has its own. A plugin with no src/main.ts gets an empty dist/main.js, since Wings needs a main.
+// has its own. A plugin with no src/main.ts gets an empty dist/main.js, since Wings needs a main. A plugin with a
+// src/tools.ts gets its manifest's contributes.mcpTools written from it.
 import * as esbuild from "esbuild";
 import { zipSync } from "fflate";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, relative } from "node:path";
+import { syncTools } from "./tools-manifest.mjs";
 
 const BANNER = "// Built from src/ by wings-plugin build. Edit src/, not this file.";
 /** Marks a page or a stylesheet this build wrote, so it may write it again. A file without it is the plugin's own. */
@@ -108,8 +110,9 @@ function oneReact(dir) {
  * Builds the plugin in `dir` into its `dist/` folder. With `check`, writes nothing and returns the outputs that
  * differ from what's on disk instead, so a release can refuse built files older than their source. With `outDir`,
  * writes the outputs there instead; a page's own HTML or CSS already in `outDir` still wins over a generated one.
+ * The manifest with the tools from src/tools.ts goes to `manifestDir`, the plugin folder by default.
  */
-export async function buildPlugin(dir, { check = false, banner = BANNER, outDir = join(dir, OUT) } = {}) {
+export async function buildPlugin(dir, { check = false, banner = BANNER, outDir = join(dir, OUT), manifestDir = dir } = {}) {
   const built = [];
   const stale = [];
   const files = [];
@@ -151,7 +154,8 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
       built.push({ file, bytes: text.length });
     }
   }
-  return { built, stale };
+  const tools = await syncTools(dir, { check, outDir: manifestDir });
+  return { built: [...built, ...tools.built], stale: [...stale, ...tools.stale] };
 }
 
 /** Files at the top of a plugin folder that are for building it, not for Wings. The README stays: Wings shows it in Settings. */
@@ -189,7 +193,7 @@ export async function pack(dir, { out = dir } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), "wings-plugin-"));
   try {
     copyShipped(dir, tmp);
-    await buildPlugin(dir, { outDir: join(tmp, OUT) });
+    await buildPlugin(dir, { outDir: join(tmp, OUT), manifestDir: tmp });
     const file = join(out, `${id}.wings-plugin`);
     writeFileSync(file, zipSync(filesIn(tmp), { level: 9 }));
     return file;
