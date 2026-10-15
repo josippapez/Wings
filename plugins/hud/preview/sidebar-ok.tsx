@@ -1,5 +1,5 @@
 // Limits comfortably under the thresholds, one session with servers and skills.
-import { Hud } from "../src/components/Hud";
+import Hud from "../src/pages/sidebar";
 import { snapshot } from "./_data";
 
 export const place = "sidebar";

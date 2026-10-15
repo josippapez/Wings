@@ -1,6 +1,6 @@
 // The Sprint block when Azure DevOps could not be read.
 import type { SprintRequest, SprintResponse } from "../src/lib/sections";
-import { Sprint } from "../src/ui/sprint-view";
+import Sprint from "../src/pages/sprint";
 
 export const place = "view";
 export const respond = (m: unknown): SprintResponse | undefined => {

@@ -1,5 +1,4 @@
-import { IssuesSettings } from "../src/lib/settings-page";
-import "../src/tasks.css";
+import IssuesSettings from "../src/pages/settings";
 
 export const place = "settings";
 export default IssuesSettings;

@@ -1,6 +1,6 @@
 // An epic: child issues with progress.
-import { IssueView } from "../src/lib/issue-view";
-import "../src/tasks.css";
+import { IssueView } from "../src/ui/issue-view";
+import "../src/pages/tasks.css";
 import { epicIssue, issues, project } from "./_data";
 
 const none = () => Promise.resolve();

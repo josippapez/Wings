@@ -1,6 +1,6 @@
 // The Issues block with no issues.
-import { BlockView } from "../src/lib/block-view";
-import "../src/tasks.css";
+import { BlockView } from "../src/ui/block-view";
+import "../src/pages/tasks.css";
 import { project } from "./_data";
 
 export const place = "view";

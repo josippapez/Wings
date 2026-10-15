@@ -1,7 +1,7 @@
 // The project's pull request list when the provider call failed.
 import type { PullsRequest, PullsResponse } from "../src/lib/pulls";
 import { ProjectPulls } from "../src/ui/pulls-list";
-import "../src/pr.css";
+import "../src/pages/pr.css";
 import { Page } from "wings-plugin-ui";
 
 export const fill = true;

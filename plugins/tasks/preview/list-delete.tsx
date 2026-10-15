@@ -1,6 +1,6 @@
 // The list asking to delete an issue with no children.
-import { BoardView } from "../src/lib/board-view";
-import "../src/tasks.css";
+import { BoardView } from "../src/ui/board-view";
+import "../src/pages/tasks.css";
 import { issues, project } from "./_data";
 
 const none = () => Promise.resolve();

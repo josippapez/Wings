@@ -1,7 +1,7 @@
 // The project's open pull requests as a tab shows them (a "pr" tab opened with no pull request).
 import type { PullsRequest, PullsResponse } from "../src/lib/pulls";
 import { ProjectPulls } from "../src/ui/pulls-list";
-import "../src/pr.css";
+import "../src/pages/pr.css";
 import { Page } from "wings-plugin-ui";
 import { rows } from "./_data";
 

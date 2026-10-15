@@ -1,6 +1,6 @@
 // The Issues tab while the list loads.
-import { BoardView } from "../src/lib/board-view";
-import "../src/tasks.css";
+import { BoardView } from "../src/ui/board-view";
+import "../src/pages/tasks.css";
 import { project } from "./_data";
 
 const none = () => Promise.resolve();
