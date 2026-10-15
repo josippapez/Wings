@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, Row, Stack, Text } from "wings-plugin-ui";
+import { itemTabArgs } from "../lib/item";
 import { cleanBlockState, groupByState, type BlockItem, type SprintBlockState, type SprintRequest, type SprintResponse } from "../lib/sections";
 import { TypeIcon } from "../lib/TypeIcon";
 import "../sprint.css";
@@ -101,7 +102,7 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
         <Board className="sprint-board" label={`Work items in ${answer.sprints.join(", ")}`}>
           {columns.map((c) => (
             <BoardColumn key={c.state} title={c.state} count={c.items.length}>
-              {c.items.map((item) => <ItemCard key={item.id} item={item} org={answer.org!} project={answer.project!} showAssignee={!mine} />)}
+              {c.items.map((item) => <ItemCard key={item.id} item={item} org={answer.org!} showAssignee={!mine} />)}
             </BoardColumn>
           ))}
         </Board>
@@ -120,12 +121,12 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
   );
 }
 
-function ItemCard({ item, org, project, showAssignee }: { item: BlockItem; org: string; project: string; showAssignee: boolean }) {
+function ItemCard({ item, org, showAssignee }: { item: BlockItem; org: string; showAssignee: boolean }) {
   return (
     <Card compact className="sprint-card">
       <Button
         variant="ghost"
-        onClick={() => void wings.openView("item", { as: "tab", args: { id: item.id, org, project } })}
+        onClick={() => void wings.openView("item", { as: "tab", args: itemTabArgs(item.id, org) })}
         aria-label={`Open ${item.type} ${item.id}: ${item.title}${showAssignee && item.assignee ? `, assigned to ${item.assignee}` : ""}`}
       >
         <Stack gap="xs">

@@ -4,18 +4,20 @@
 import type { QueryRow } from "./sections.ts";
 import { updateTime, type WorkItemUpdate } from "./urls.ts";
 
-/** What the "item" view is opened with. `project` is optional: the page learns it from the work item. */
+/** What the "item" view is opened with. The page learns the project from the work item. */
 export interface ItemArgs {
   id: number;
   org: string;
-  project?: string;
 }
+
+/** The args for opening a work item's tab, built here and nowhere else: the host shows an open tab only when the args are equal, so a click from anywhere has to give one work item the same ones. */
+export const itemTabArgs = (id: number | string, org: string): ItemArgs => ({ id: Number(id), org });
 
 /** An `args` value from `wings.viewArgs()` as an `ItemArgs`, or null when it isn't one. */
 export function itemArgs(raw: unknown): ItemArgs | null {
   const a = raw as Partial<ItemArgs> | null;
   if (!a || !Number.isInteger(a.id) || (a.id as number) <= 0 || typeof a.org !== "string" || !a.org.startsWith("https://")) return null;
-  return { id: a.id as number, org: a.org, ...(typeof a.project === "string" && a.project ? { project: a.project } : {}) };
+  return itemTabArgs(a.id as number, a.org);
 }
 
 export interface Relation {

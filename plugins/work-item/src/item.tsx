@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useBroadcast } from "wings-plugin-sdk/react";
 import { Empty, Page, Toolbar, showTab } from "wings-plugin-ui";
 
-import { allLinkIds, commentsOf, discussionOf, idsQuery, itemArgs, linkIds, linkedItems, pullRequestLinks, revisionsOf, type ItemArgs, type LinkedItem } from "./lib/item";
+import { allLinkIds, commentsOf, discussionOf, idsQuery, itemArgs, itemTabArgs, linkIds, linkedItems, pullRequestLinks, revisionsOf, type ItemArgs, type LinkedItem } from "./lib/item";
 import { prUrl, workItemUrl, type WorkItemUpdate } from "./lib/urls";
 import type { QueryRow } from "./lib/sections";
 import type { TypeState } from "./lib/view";
@@ -121,7 +121,7 @@ function Item({ args }: { args: ItemArgs }) {
       moveError={moveError}
       onMove={(to) => void move(to)}
       onRefresh={() => void load()}
-      onOpenItem={(target) => void wings.openView("item", { as: "tab", args: { id: target, org, project } })}
+      onOpenItem={(target) => void wings.openView("item", { as: "tab", args: itemTabArgs(target, org) })}
       onOpenUrl={(url) => void wings.openUrl(url)}
       prUrl={(p) => prUrl(org, project, p.repoId, p.id)}
       workItemUrl={workItemUrl(org, project, id)}

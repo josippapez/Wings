@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assignedQuery, blockItems, cleanBlockState, currentIterations, groupByState, isFresh, iterationPath, sectionRows, sprintQuery, stateTone } from "./sections.ts";
-import { commentsOf, itemArgs, pullRequestLinks } from "./item.ts";
+import { commentsOf, itemArgs, itemTabArgs, pullRequestLinks } from "./item.ts";
 
 const NOW = Date.parse("2026-10-13T10:00:00Z");
 const node = (name, start, finish, children = [], parent = "\\Proj\\Iteration") => ({
@@ -42,9 +42,21 @@ test("assignedQuery quotes names", () => {
 
 test("sectionRows: at most 50, state badge, opens the item view", () => {
   const rows = Array.from({ length: 60 }, (_, i) => ({ id: i + 1, fields: { "System.Title": `T${i}`, "System.State": "Active", "System.WorkItemType": "Task" } }));
-  const out = sectionRows("https://dev.azure.com/o", "P", rows);
+  const out = sectionRows("https://dev.azure.com/o", rows);
   assert.equal(out.length, 50);
-  assert.deepEqual(out[0], { id: "1", label: "T0", detail: "Task #1", badge: { text: "Active", tone: "info" }, open: { view: "item", args: { id: 1, org: "https://dev.azure.com/o", project: "P" } } });
+  assert.deepEqual(out[0], { id: "1", label: "T0", detail: "Task #1", badge: { text: "Active", tone: "info" }, open: { view: "item", args: { id: 1, org: "https://dev.azure.com/o" } } });
+});
+
+test("a work item's tab opens with the same args from the badge, a section row, the Sprint block and the item page", () => {
+  const org = "https://dev.azure.com/o";
+  // The badge has the id from the branch name, as text; the section rows, the Sprint block and the item page have a number.
+  const fromBadge = itemTabArgs("1234", org);
+  const fromSection = sectionRows(org, [{ id: 1234, fields: {} }])[0].open.args;
+  const fromBlock = itemTabArgs(1234, org);
+  assert.deepEqual(fromBadge, { id: 1234, org });
+  assert.equal(JSON.stringify(fromSection), JSON.stringify(fromBadge));
+  assert.equal(JSON.stringify(fromBlock), JSON.stringify(fromBadge));
+  assert.deepEqual(itemArgs(fromBadge), fromBadge);
 });
 
 test("stateTone", () => {
@@ -65,7 +77,8 @@ test("commentsOf keeps revisions with a History, oldest first", () => {
 });
 
 test("itemArgs accepts only an id and an https org", () => {
-  assert.deepEqual(itemArgs({ id: 5, org: "https://dev.azure.com/o", project: "P" }), { id: 5, org: "https://dev.azure.com/o", project: "P" });
+  assert.deepEqual(itemArgs({ id: 5, org: "https://dev.azure.com/o" }), { id: 5, org: "https://dev.azure.com/o" });
+  assert.deepEqual(itemArgs({ id: 5, org: "https://dev.azure.com/o", project: "P" }), { id: 5, org: "https://dev.azure.com/o" }, "a tab saved with a project still opens");
   for (const bad of [null, {}, { id: "5", org: "https://x" }, { id: 5, org: "--x" }, { id: 0, org: "https://x" }]) assert.equal(itemArgs(bad), null);
 });
 

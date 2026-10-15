@@ -201,21 +201,21 @@ const row = (id, state = "Active", type = "Task") => ({ id, fields: { "System.Ti
 test("repoRows: items linked to the repo or with a branch of it first, unlinked ones after under every repo, other repos' items left out", () => {
   const rows = [row(101), row(102), row(103), row(104), row(105)];
   const links = { 101: ["repo-a"], 102: ["repo-b"], 103: [], 104: ["repo-b"], 105: [] };
-  const a = repoRows("https://dev.azure.com/org", "P", rows, links, { id: "REPO-A", branches: ["main", "feature/104-thing"] });
+  const a = repoRows("https://dev.azure.com/org", rows, links, { id: "REPO-A", branches: ["main", "feature/104-thing"] });
   assert.deepEqual(a.map((r) => r.id), ["101", "104", "103", "105"]);
   assert.doesNotMatch(a[0].detail, /Not linked/);
   assert.match(a[2].detail, new RegExp(NOT_LINKED));
   assert.match(a[3].detail, /Task #105 · Not linked to a repo/);
-  const b = repoRows("https://dev.azure.com/org", "P", rows, links, { id: "repo-b", branches: [] });
+  const b = repoRows("https://dev.azure.com/org", rows, links, { id: "repo-b", branches: [] });
   assert.deepEqual(b.map((r) => r.id), ["102", "104", "103", "105"]);
 });
 
 test("repoRows without the repo's id matches by branch only, and keeps at most 50 rows", () => {
   const rows = Array.from({ length: 80 }, (_, i) => row(i + 101));
-  const out = repoRows("https://dev.azure.com/org", "P", rows, {}, { branches: ["feature/170-x"] });
+  const out = repoRows("https://dev.azure.com/org", rows, {}, { branches: ["feature/170-x"] });
   assert.equal(out.length, 50);
   assert.equal(out[0].id, "170");
-  assert.equal(repoRows("https://dev.azure.com/org", "P", [row(101)], { 101: ["other"] }, { branches: [] }).length, 0);
+  assert.equal(repoRows("https://dev.azure.com/org", [row(101)], { 101: ["other"] }, { branches: [] }).length, 0);
 });
 
 test("parseRemote keeps the repository name", () => {

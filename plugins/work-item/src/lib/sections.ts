@@ -1,6 +1,7 @@
 // The pure half of the per-project "Work items" section: which iterations are running now, the query for the work
 // items assigned to you in them, and the rows. No `wings`, no I/O, so node tests drive it.
 import { DATE_OR_VERSION } from "./branch.ts";
+import { itemTabArgs } from "./item.ts";
 
 export const SECTION_ID = "work-items";
 /** The most rows Wings takes for a section. */
@@ -128,7 +129,7 @@ export const NOT_LINKED = "Not linked to a repo";
  * repository at all follows, marked "Not linked to a repo", under every repository of the team project. An item linked
  * to other repositories only isn't shown.
  */
-export function repoRows(org: string, project: string, rows: QueryRow[], links: Record<number, string[]>, repo: RepoRef): SectionRow[] {
+export function repoRows(org: string, rows: QueryRow[], links: Record<number, string[]>, repo: RepoRef): SectionRow[] {
   const mine: QueryRow[] = [];
   const loose: QueryRow[] = [];
   for (const row of rows) {
@@ -136,7 +137,7 @@ export function repoRows(org: string, project: string, rows: QueryRow[], links: 
     if ((repo.id && repos.includes(repo.id.toLowerCase())) || repo.branches.some((b) => branchHasId(b, row.id))) mine.push(row);
     else if (repos.length === 0) loose.push(row);
   }
-  const out = sectionRows(org, project, [...mine, ...loose]);
+  const out = sectionRows(org, [...mine, ...loose]);
   return out.map((r, i) => (i >= mine.length ? { ...r, detail: `${r.detail} · ${NOT_LINKED}` } : r));
 }
 
@@ -156,7 +157,7 @@ export interface SectionRow {
 /** The rows of a section: each opens the item tab for its work item. */
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
-export function sectionRows(org: string, project: string, rows: QueryRow[]): SectionRow[] {
+export function sectionRows(org: string, rows: QueryRow[]): SectionRow[] {
   return rows.slice(0, ROWS_CAP).map((r) => {
     const state = r.fields["System.State"] ?? "";
     return {
@@ -164,7 +165,7 @@ export function sectionRows(org: string, project: string, rows: QueryRow[]): Sec
       label: cut(r.fields["System.Title"] || `#${r.id}`, 120),
       detail: `${r.fields["System.WorkItemType"] ?? "Work item"} #${r.id}`,
       ...(state ? { badge: { text: cut(state, 24), tone: stateTone(state) } } : {}),
-      open: { view: "item", args: { id: r.id, org, project } },
+      open: { view: "item", args: itemTabArgs(r.id, org) },
     };
   });
 }

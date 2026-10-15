@@ -7,7 +7,7 @@ import type { ItemViewProps, Shown } from "../src/ui/item-view";
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const who = (displayName: string) => ({ displayName });
 
-export const args: ItemArgs = { id: 1432, org: "https://dev.azure.com/acme", project: "Web" };
+export const args: ItemArgs = { id: 1432, org: "https://dev.azure.com/acme" };
 
 export const item: Shown = {
   id: 1432,

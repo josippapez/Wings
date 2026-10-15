@@ -3,6 +3,7 @@
 
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { git, parseRemote, workItemId, type Remote } from "./lib/branch";
+import { itemTabArgs } from "./lib/item";
 import { workItemUrl } from "./lib/urls";
 import { assignedQuery, blockItems, isFinished, isFresh, currentIterations, repoLinksOf, repoRows, SECTION_ID, stateCategories, sprintQuery, type RepoRef, type StateCategories, type IterationNode, type QueryRow, type SectionRow, type SprintRequest, type SprintResponse } from "./lib/sections";
 import { badgeFor, dropClosed, nextStates, type Item, type Ref, type TypeState, type WorkItem } from "./lib/view";
@@ -264,7 +265,7 @@ wings.onAction(async ({ paneId, actionId }) => {
   if (!ref) return;
   if (actionId === "refresh") return refreshItem(ref.key, { byUser: true });
   const item = items.get(ref.key);
-  if (actionId === "details") return wings.openView("item", { as: "tab", args: { id: Number(ref.id), org: ref.org } });
+  if (actionId === "details") return wings.openView("item", { as: "tab", args: itemTabArgs(ref.id, ref.org) });
   if (actionId === "open" && item?.url) return wings.openUrl(item.url);
   if (actionId.startsWith("move:")) {
     const state = actionId.slice("move:".length);
@@ -399,7 +400,7 @@ async function sectionRowsFor(remote: { org: string; project: string; repo: stri
   const { org, project, repo } = remote;
   const team = await teamItemsFor(org, project);
   const ref: RepoRef = { id: await repoIdFor(org, project, repo), branches: await branchesOf(cwd) };
-  return repoRows(org, project, team.rows, team.links, ref);
+  return repoRows(org, team.rows, team.links, ref);
 }
 
 /** One query per Azure project, whatever number of Wings projects point at it. Stale rows stay when a read fails. */
