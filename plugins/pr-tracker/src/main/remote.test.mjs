@@ -36,21 +36,41 @@ test("a host with no telling name is GitHub or GitLab once the CLI is signed in 
   assert.equal(remotes.get("/g").kind, "github", "kept, so a pane's badge can find its host's problems");
 });
 
-test("a host no CLI knows stays unresolved without asking the CLIs again, until they are forgotten", async (t) => {
+test("a host no CLI knows stays unresolved without asking the CLIs again for half an hour, or until they are forgotten", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const calls = fakeWings(t, { origins: { "/x": "git@nobody.example:o/r.git" } });
   assert.deepEqual(await remoteFor("/x"), { kind: "none", host: "nobody.example" });
   const asked = calls.length;
+  t.mock.timers.tick(5 * 60_000);
   assert.deepEqual(await remoteFor("/x"), { kind: "none", host: "nobody.example" });
-  assert.equal(calls.length, asked);
+  assert.equal(calls.length, asked, "five minutes on, still not asked");
   forgetHosts();
   await remoteFor("/x");
   assert.ok(calls.length > asked, "Try again looks at the CLIs' hosts once more");
+  const again = calls.length;
+  t.mock.timers.tick(31 * 60_000);
+  await remoteFor("/x");
+  assert.ok(calls.length > again, "half an hour on, they are asked again");
 });
 
 test("two clones of one unresolved repository share the answer, however the URL was written", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const calls = fakeWings(t, { origins: { "/1": "git@nobody.example:o/r.git", "/2": "https://nobody.example/o/r" } });
   await remoteFor("/1");
   const asked = calls.filter((p) => p !== "git").length;
+  t.mock.timers.tick(5 * 60_000);
   assert.deepEqual(await remoteFor("/2"), { kind: "none", host: "nobody.example" });
   assert.equal(calls.filter((p) => p !== "git").length, asked);
+});
+
+test("the CLIs' hosts are read once a minute, however many remotes ask", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const calls = fakeWings(t, { origins: { "/a": "git@a.example:o/r.git", "/b": "git@b.example:o/r.git", "/c": "git@c.example:o/r.git" } });
+  await remoteFor("/a");
+  t.mock.timers.tick(10_000);
+  await remoteFor("/b");
+  assert.equal(calls.filter((p) => p === "gh").length, 1);
+  t.mock.timers.tick(61_000);
+  await remoteFor("/c");
+  assert.equal(calls.filter((p) => p === "gh").length, 2);
 });

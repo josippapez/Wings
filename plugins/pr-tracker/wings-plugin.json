@@ -1,7 +1,7 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "minWingsVersion": "0.1.27",
   "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, every check and policy and why it failed, the diff and review comments. Lists each project's pull requests in the sidebar (yours and the ones waiting for your review), can notify you when a new one opens, and, in a tab or a block on the Project page, every open one with filters, and opens one as a tab to read, reply to and send to an agent.",

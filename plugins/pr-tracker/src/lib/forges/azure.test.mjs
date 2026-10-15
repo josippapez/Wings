@@ -108,8 +108,8 @@ test("Azure list marks the PRs you created or were asked to review, by unique na
 });
 
 test("an Azure link has the PR's web address, else one built from the organization", () => {
-  const link = azureLink(pr({ repository: { webUrl: "https://dev.azure.com/acme/My%20Project/_git/app" } }), remote, "/work/app");
-  assert.deepEqual([link.url, link.number, link.repo, link.cwd, link.provider], ["https://dev.azure.com/acme/My%20Project/_git/app/pullrequest/42", 42, "My Project/app", "/work/app", "azure"]);
+  const link = azureLink(pr({ repository: { webUrl: "https://acme.visualstudio.com/My%20Project/_git/app" } }), remote, "/work/app");
+  assert.deepEqual([link.url, link.number, link.repo, link.cwd, link.provider], ["https://acme.visualstudio.com/My%20Project/_git/app/pullrequest/42", 42, "My Project/app", "/work/app", "azure"]);
   assert.equal(azureLink(pr(), remote, "/w").url, `${org}/My%20Project/_git/app/pullrequest/42`);
 });
 

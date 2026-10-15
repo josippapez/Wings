@@ -33,6 +33,7 @@ test("a provider can word closed and changes its own way, and what an open PR wi
   assert.deepEqual(labelOf({ checks: idle, closed: true }, { closed: "Abandoned" }), ["Abandoned", "neutral", "pr-closed"]);
   assert.deepEqual(labelOf({ checks: idle, changes: true }, { changes: "Waiting for author" }), ["Waiting for author", "danger", "pr-open"]);
   assert.deepEqual(labelOf({ checks: idle }, { rest: "Open" }), ["Open", "info", "pr-open"]);
+  assert.deepEqual(labelOf({ checks: idle, reviewing: true }, { rest: "Open" }), ["In review", "info", "pr-open"]);
   assert.deepEqual(labelOf({ checks: idle, merged: true }), ["Merged", "merged", "pr-merged"]);
 });
 
@@ -60,6 +61,7 @@ test("a list that fills its page gets the second page too, and a short one doesn
 test("a failed check with no log has its summary and link, and Failed when nothing says why", async () => {
   assert.deepEqual(noLog("build", "Timed out", "https://ci/1"), [{ check: "build", summary: "Timed out", log: "", url: "https://ci/1" }]);
   assert.deepEqual(await plainFailure({}, { id: 1, name: "build", summary: null, url: "https://ci/1" }), [{ check: "build", summary: "Failed", log: "", url: "https://ci/1" }]);
+  assert.equal((await plainFailure({}, { id: 1, name: "build", summary: "Timed out" }))[0].summary, "Timed out");
 });
 
 test("a read that only adds to what is shown gives its fallback when the CLI ran and failed, and throws for a CLI that isn't there", async () => {
