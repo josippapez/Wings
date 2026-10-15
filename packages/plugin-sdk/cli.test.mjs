@@ -122,3 +122,12 @@ test("a sign-in that fails throws the program's message, and the badge offers Si
   assert.deepEqual(w.calls.at(-1).args, ["login", "org"]);
   assert.deepEqual([seen, az.problem("org").kind, reloads], [["Signing in…", "Sign in to Azure DevOps"], "signed-out", 0]);
 });
+
+test("a helper made before wings exists uses the wings there is when it runs", async (t) => {
+  const before = globalThis.wings;
+  t.after(() => (globalThis.wings = before));
+  delete globalThis.wings;
+  const az = cli("az", AZ);
+  globalThis.wings = fakeWings(() => done("ok"));
+  assert.equal(await az.run(["version"]), "ok");
+});

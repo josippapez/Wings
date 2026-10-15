@@ -29,7 +29,9 @@ export class CliError extends Error {
  * program's login, or a function of the key that gives them. `sticky` keeps a recorded problem until `retry`, even when
  * a later call works, for a host that answers some calls without sign-in. `wings` is for tests.
  */
-export function cli(program, { signedOut, signIn, sticky = false, wings: w = globalThis.wings }) {
+export function cli(program, { signedOut, signIn, sticky = false, wings }) {
+  // Looked up per call: a page may create its helper at import, before a test or screenshot stub installs `wings`.
+  const w = () => wings ?? globalThis.wings;
   /** key → { kind, message } */
   const problems = new Map();
   const changeListeners = new Set();
@@ -47,7 +49,7 @@ export function cli(program, { signedOut, signIn, sticky = false, wings: w = glo
   async function run(args, { key, cwd, timeoutMs, quiet = false } = {}) {
     let out;
     try {
-      out = await w.exec(program, args, { cwd, timeoutMs });
+      out = await w().exec(program, args, { cwd, timeoutMs });
     } catch (error) {
       const message = errorMessage(error);
       const missing = NOT_INSTALLED.test(message);
@@ -109,7 +111,7 @@ export function cli(program, { signedOut, signIn, sticky = false, wings: w = glo
       changed();
       try {
         const args = typeof signIn === "function" ? signIn(key) : signIn;
-        const out = await w.exec(program, args, { timeoutMs: SIGN_IN_TIMEOUT_MS, onOutput });
+        const out = await w().exec(program, args, { timeoutMs: SIGN_IN_TIMEOUT_MS, onOutput });
         if (out.code !== 0) throw new Error(lastLine(out.stderr) || "Sign-in failed");
       } catch (error) {
         signing = null;
@@ -120,7 +122,7 @@ export function cli(program, { signedOut, signIn, sticky = false, wings: w = glo
       return retry();
     },
     /** Asks Wings to install the program. True once the install started or it's there, false if the user cancelled. */
-    install: () => w.installTool(program),
+    install: () => w().installTool(program),
     retry,
     onRetry(listener) {
       retryListeners.add(listener);
