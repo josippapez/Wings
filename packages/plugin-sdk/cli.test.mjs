@@ -10,16 +10,13 @@ const fail = (stderr, code = 1) => ({ code, stdout: "", stderr });
 /** A `wings` whose `exec` answers from `handler(program, args)` (a result, an Error to reject with, or a promise of one). */
 function fakeWings(handler) {
   const calls = [];
-  return {
-    calls,
-    exec: async (program, args, options) => {
-      calls.push({ program, args, ...options });
-      const reply = await handler(program, args);
-      if (reply instanceof Error) throw reply;
-      return reply;
-    },
-    installTool: async (program) => (calls.push({ install: program }), true),
+  const exec = async (program, args, options) => {
+    calls.push({ program, args, ...options });
+    const reply = await handler(program, args);
+    if (reply instanceof Error) throw reply;
+    return reply;
   };
+  return { calls, exec, installTool: async (program) => (calls.push({ install: program }), true) };
 }
 
 const AZ = { signedOut: /login/i, signIn: ["login", "--allow-no-subscriptions", "--output", "none"] };
@@ -35,13 +32,8 @@ test("a program that isn't installed is a missing problem with an Install badge,
   assert.equal(az.problem("org"), null);
   await assert.rejects(az.json(["boards"], { key: "org" }), { kind: "missing" });
   assert.deepEqual(az.problem("org"), { kind: "missing", message: "az is not installed or not on PATH" });
-  assert.deepEqual(az.problemBadge("org", TEXT), {
-    tone: "warning",
-    title: "Azure DevOps",
-    label: "Install Azure CLI",
-    subtitle: "Needs az.",
-    actions: [{ id: "install", label: "Install", primary: true }, { id: "retry", label: "Try again" }],
-  });
+  const actions = [{ id: "install", label: "Install", primary: true }, { id: "retry", label: "Try again" }];
+  assert.deepEqual(az.problemBadge("org", TEXT), { tone: "warning", title: "Azure DevOps", label: "Install Azure CLI", subtitle: "Needs az.", actions });
   assert.equal(az.problem("other"), null);
   assert.equal(changes, 1);
   assert.equal(await az.install(), true);
@@ -60,17 +52,14 @@ test("a signed-out program is a problem under its key until a call works, and a 
   await assert.rejects(az.run(["boards"], { key: "org", quiet: true }), { kind: "signed-out" });
   assert.equal(az.problem("org"), null, "a quiet call records nothing");
   await assert.rejects(az.run(["boards"], { key: "org" }), { kind: "signed-out", message: "ERROR: Please run 'az login' to setup account.", stderr: reply.stderr });
-  assert.equal(labels(az, "org"), "Sign in to Azure DevOps");
-  assert.equal(az.problemBadge("org", TEXT).subtitle, "Sign in, please.");
-  assert.equal(az.problemBadge("org", TEXT).loading, false);
-  assert.equal(labels(az, "other"), undefined);
+  assert.deepEqual([labels(az, "org"), labels(az, "other")], ["Sign in to Azure DevOps", undefined]);
+  assert.deepEqual([az.problemBadge("org", TEXT).subtitle, az.problemBadge("org", TEXT).loading], ["Sign in, please.", false]);
 
   reply = fail("ERROR: TF401232: Work item 9 does not exist.\n");
   for (const key of ["org", "other"]) {
     await assert.rejects(az.run(["show"], { key }), (e) => e instanceof CliError && e.kind === "failed" && e.message === "ERROR: TF401232: Work item 9 does not exist.");
   }
-  assert.equal(az.problem("org").kind, "signed-out");
-  assert.equal(az.problem("other"), null);
+  assert.deepEqual([az.problem("org").kind, az.problem("other")], ["signed-out", null]);
   reply = done("{}");
   await az.run(["show"], { key: "org", quiet: true });
   assert.equal(az.problem("org").kind, "signed-out", "a quiet success clears nothing either");
@@ -80,18 +69,13 @@ test("a signed-out program is a problem under its key until a call works, and a 
 
 test("json parses what the program printed, and gives null for nothing", async () => {
   const az = cli("az", { ...AZ, wings: fakeWings((p, args) => done(args[0] === "empty" ? "\n" : '{"id":7}')) });
-  assert.deepEqual(await az.json(["show"]), { id: 7 });
-  assert.equal(await az.json(["empty"]), null);
+  assert.deepEqual([await az.json(["show"]), await az.json(["empty"])], [{ id: 7 }, null]);
 });
 
 test("signedOut can be a function for a signal that takes a second command to see, and sticky keeps the problem", async () => {
   const w = fakeWings((p, args) => (args[0] === "auth" ? fail("not logged in") : args[1] === "public" ? done("[]") : fail("glab: 404 Not Found")));
-  const glab = cli("glab", {
-    sticky: true,
-    signedOut: async (r, key) => /\b404\b/.test(r.stderr) && (await w.exec("glab", ["auth", "status", "--hostname", key])).code !== 0,
-    signIn: (key) => ["auth", "login", "--web", "--hostname", key],
-    wings: w,
-  });
+  const signedOut = async (r, key) => /\b404\b/.test(r.stderr) && (await w.exec("glab", ["auth", "status", "--hostname", key])).code !== 0;
+  const glab = cli("glab", { sticky: true, signedOut, signIn: (key) => ["auth", "login", "--web", "--hostname", key], wings: w });
   await assert.rejects(glab.run(["api", "private"], { key: "gitlab.example.com" }), { kind: "signed-out" });
   assert.deepEqual(w.calls.at(-1).args, ["auth", "status", "--hostname", "gitlab.example.com"]);
   await glab.run(["api", "public"], { key: "gitlab.example.com" });
@@ -114,19 +98,16 @@ test("signIn runs the login, shows Signing in… meanwhile, then retries: proble
   const lines = [];
   const signing = az.signIn(undefined, { onOutput: (line) => lines.push(line) });
   const login = w.calls.at(-1);
-  assert.deepEqual([login.program, login.args, login.timeoutMs], ["az", ["login", "--allow-no-subscriptions", "--output", "none"], 300_000]);
+  assert.deepEqual([login.program, login.args, login.timeoutMs], ["az", AZ.signIn, 300_000]);
   login.onOutput("code");
-  assert.deepEqual(lines, ["code"]);
-  assert.equal(az.problemBadge("org", TEXT).loading, true);
+  assert.deepEqual([lines, az.problemBadge("org", TEXT).loading], [["code"], true]);
   const calls = w.calls.length;
   assert.equal(await az.signIn(), undefined);
   assert.equal(w.calls.length, calls, "a second sign-in does nothing");
 
   finish(done());
   await signing;
-  assert.equal(reloads, 1);
-  assert.equal(az.problem("org"), null);
-  assert.deepEqual(seen, ["Signing in…", undefined]);
+  assert.deepEqual([reloads, az.problem("org"), seen], [1, null, ["Signing in…", undefined]]);
 });
 
 test("a sign-in that fails throws the program's message, and the badge offers Sign in again", async () => {
@@ -139,7 +120,5 @@ test("a sign-in that fails throws the program's message, and the badge offers Si
   az.onChange(() => seen.push(labels(az, "org")));
   await assert.rejects(az.signIn("org"), { message: "ERROR: Authentication cancelled" });
   assert.deepEqual(w.calls.at(-1).args, ["login", "org"]);
-  assert.deepEqual(seen, ["Signing in…", "Sign in to Azure DevOps"]);
-  assert.equal(az.problem("org").kind, "signed-out");
-  assert.equal(reloads, 0);
+  assert.deepEqual([seen, az.problem("org").kind, reloads], [["Signing in…", "Sign in to Azure DevOps"], "signed-out", 0]);
 });

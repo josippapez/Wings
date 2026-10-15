@@ -7,9 +7,10 @@ export const errorMessage = (error) => String(error?.message ?? error);
  * Loads a value per key and keeps it, so `load` runs once however many ask. `get(key)` gives the kept value, else the
  * load already running, else starts one. A value is kept for `ttlMs` after its load finished, for good when unset. A
  * failure isn't kept, so the next `get` tries again, unless `failTtlMs` is set: then `get` fails the same way for that
- * long without loading. `fresh` skips a kept value but still joins a load that is running. `peek` gives the last value
- * whatever its age and never loads. `delete` and `clear` forget keys, running loads included. `key` turns the argument
- * of `load` into a string when it isn't one.
+ * long without loading. `fresh` skips a kept value but still joins a load that is running. `peek` gives the value a
+ * finished load gave, whatever its age, and nothing while the key is loading, after a failure or once forgotten; it
+ * never loads. `delete` and `clear` forget keys, running loads included. `key` turns the argument of `load` into a
+ * string when it isn't one.
  */
 export function cached(load, { ttlMs = Infinity, failTtlMs = 0, key = String } = {}) {
   /** key → the load, and once it finished: when, whether it failed, and its value. */

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import { test } from "node:test";
 import { setImmediate as next, setTimeout as sleep } from "node:timers/promises";
 
 import { cached, errorMessage, fitJson, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
@@ -10,45 +10,37 @@ test("errorMessage takes the message of an Error or of anything with one, else t
   assert.equal(errorMessage("plain"), "plain");
 });
 
-test("cached shares a running load, keeps a value for the ttl, and loads again after it", async () => {
-  mock.timers.enable({ apis: ["Date"] });
-  try {
-    let loads = 0;
-    const c = cached(async (k) => `${k}${++loads}`, { ttlMs: 1000 });
-    assert.deepEqual(await Promise.all([c.get("a"), c.get("a")]), ["a1", "a1"]);
-    mock.timers.tick(999);
-    assert.equal(await c.get("a"), "a1");
-    mock.timers.tick(1);
-    assert.equal(c.peek("a"), "a1", "peek gives a value of any age");
-    assert.equal(await c.get("a"), "a2");
-    assert.equal(await c.get("a", { fresh: true }), "a3");
-    assert.equal(await c.get("b"), "b4", "keys are separate");
-  } finally {
-    mock.timers.reset();
-  }
+test("cached shares a running load, keeps a value for the ttl, and loads again after it", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  let loads = 0;
+  const c = cached(async (k) => `${k}${++loads}`, { ttlMs: 1000 });
+  assert.deepEqual(await Promise.all([c.get("a"), c.get("a")]), ["a1", "a1"]);
+  t.mock.timers.tick(999);
+  assert.equal(await c.get("a"), "a1");
+  t.mock.timers.tick(1);
+  assert.equal(c.peek("a"), "a1", "peek gives a value of any age");
+  assert.equal(await c.get("a"), "a2");
+  assert.equal(await c.get("a", { fresh: true }), "a3");
+  assert.equal(await c.get("b"), "b4", "keys are separate");
 });
 
-test("cached forgets a failure, unless failTtlMs asks to remember it for a while", async () => {
-  mock.timers.enable({ apis: ["Date"] });
-  try {
-    let n = 0;
-    const flaky = cached(async () => {
-      if (++n < 3) throw new Error(`fail ${n}`);
-      return "ok";
-    });
-    await assert.rejects(flaky.get("k"), /fail 1/);
-    await assert.rejects(flaky.get("k"), /fail 2/);
-    assert.equal(await flaky.get("k"), "ok");
+test("cached forgets a failure, unless failTtlMs asks to remember it for a while", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  let n = 0;
+  const flaky = cached(async () => {
+    if (++n < 3) throw new Error(`fail ${n}`);
+    return "ok";
+  });
+  await assert.rejects(flaky.get("k"), /fail 1/);
+  await assert.rejects(flaky.get("k"), /fail 2/);
+  assert.equal(await flaky.get("k"), "ok");
 
-    let m = 0;
-    const down = cached(async () => Promise.reject(new Error(`down ${++m}`)), { failTtlMs: 500 });
-    await assert.rejects(down.get("k"), /down 1/);
-    await assert.rejects(down.get("k"), /down 1/);
-    mock.timers.tick(500);
-    await assert.rejects(down.get("k"), /down 2/);
-  } finally {
-    mock.timers.reset();
-  }
+  let m = 0;
+  const down = cached(async () => Promise.reject(new Error(`down ${++m}`)), { failTtlMs: 500 });
+  await assert.rejects(down.get("k"), /down 1/);
+  await assert.rejects(down.get("k"), /down 1/);
+  t.mock.timers.tick(500);
+  await assert.rejects(down.get("k"), /down 2/);
 });
 
 test("cached takes an object key through key(), and delete and clear drop what was kept", async () => {
@@ -76,8 +68,7 @@ test("serial runs jobs one at a time in order, and a failed job doesn't stop the
   };
   const done = await Promise.allSettled([run(job("a", 20)), run(job("b", 0, true)), run(job("c", 0))]);
   assert.deepEqual(log, ["start a", "end a", "start b", "end b", "start c", "end c"]);
-  assert.deepEqual(done.map((r) => r.status), ["fulfilled", "rejected", "fulfilled"]);
-  assert.equal(done[2].value, "c");
+  assert.deepEqual(done.map((r) => r.value ?? r.reason.message), ["a", "b", "c"]);
 });
 
 test("singleFlight runs once at a time, and reruns exactly once for the calls that came meanwhile", async () => {
@@ -126,10 +117,8 @@ test("mapLimit keeps the order and the limit, and starts nothing new after a fai
 });
 
 test("latestOnly says a load is stale once a later one has started", () => {
-  const next = latestOnly();
-  const first = next();
-  assert.equal(first(), false);
-  const second = next();
+  const start = latestOnly();
+  const [first, second] = [start(), start()];
   assert.deepEqual([first(), second()], [true, false]);
 });
 
@@ -145,23 +134,20 @@ test("fitJson keeps the longest start of the rows whose JSON fits, wrapped or no
   assert.deepEqual(fitJson([], 5), []);
 });
 
-test("openDiffWhile opens the viewer before loading, then updates it with the result or the error message", async () => {
+test("openDiffWhile opens the viewer before loading, then updates it with the result or the error message", async (t) => {
   const calls = [];
   globalThis.wings = {
     openDiff: async (diff) => (calls.push(["open", diff]), { id: "v1" }),
     updateDiff: async (id, update) => void calls.push(["update", id, update]),
   };
-  try {
-    await openDiffWhile({ title: "T" }, async (id) => (calls.push(["load", id]), { patch: "p" }));
-    await openDiffWhile({ title: "U" }, async () => Promise.reject(new Error("git diff failed")));
-    assert.deepEqual(calls, [
-      ["open", { title: "T" }],
-      ["load", "v1"],
-      ["update", "v1", { patch: "p" }],
-      ["open", { title: "U" }],
-      ["update", "v1", { error: "git diff failed" }],
-    ]);
-  } finally {
-    delete globalThis.wings;
-  }
+  t.after(() => delete globalThis.wings);
+  await openDiffWhile({ title: "T" }, async (id) => (calls.push(["load", id]), { patch: "p" }));
+  await openDiffWhile({ title: "U" }, async () => Promise.reject(new Error("git diff failed")));
+  assert.deepEqual(calls, [
+    ["open", { title: "T" }],
+    ["load", "v1"],
+    ["update", "v1", { patch: "p" }],
+    ["open", { title: "U" }],
+    ["update", "v1", { error: "git diff failed" }],
+  ]);
 });

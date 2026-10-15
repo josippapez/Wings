@@ -79,9 +79,7 @@ test("defaultBranch is origin/HEAD, else the first of the usual names, kept once
 });
 
 test("branchLabel names a branch, a detached head or an empty repo", () => {
-  assert.equal(branchLabel("main", "abcdef1234"), "main");
-  assert.equal(branchLabel("", "abcdef1234"), "detached at abcdef1");
-  assert.equal(branchLabel("", null), "no commits");
+  assert.deepEqual([branchLabel("main", "abcdef1234"), branchLabel("", "abcdef1234"), branchLabel("", null)], ["main", "detached at abcdef1", "no commits"]);
 });
 
 test("parseRemote names the forge, and reads every Azure form", () => {
