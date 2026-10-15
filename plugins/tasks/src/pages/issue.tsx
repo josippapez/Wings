@@ -9,7 +9,7 @@ import { lastSession } from "../lib/actor";
 import { agentCommand, resumeCommand } from "../lib/commands";
 import type { Op } from "../lib/domain";
 import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
-import { useIssues } from "../lib/useIssues";
+import { useIssues } from "../ui/useIssues";
 import "./tasks.css";
 
 export const page = { place: "tab", fill: true };

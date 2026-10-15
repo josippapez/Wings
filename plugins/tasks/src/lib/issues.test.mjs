@@ -3,12 +3,11 @@ import assert from "node:assert/strict";
 import { lastSession, resolvePane } from "./actor.ts";
 import { agentCommand, PLAIN_WORD, resumeCommand } from "./commands.ts";
 import { BUDGET, LIMITS, prefixFor, priorityRank } from "./domain.ts";
-import { formatIssue, formatList } from "./format.ts";
+import { formatList } from "./format.ts";
 import { applyOp } from "./ops.ts";
 import { boardColumns, boardLanes, issueTree, openIssues, trailTo } from "./orderings.ts";
 import { matchesQuery } from "./search.ts";
 import { estimateBytes, migrateTasks } from "./storage.ts";
-import { parseTool } from "./tools.ts";
 import { defaultViewOf, startLayout } from "./view-setting.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
@@ -125,31 +124,6 @@ test("unknown keys, bad status and bad links are errors that say what is wrong",
   assert.throws(() => create(s, "   "), /required/);
 });
 
-test("tool input validation bounds every field and rejects strays", () => {
-  assert.deepEqual(parseTool("get", { key: " web-3 " }), { tool: "get", key: "WEB-3" });
-  assert.throws(() => parseTool("get", {}), /key is required/);
-  assert.throws(() => parseTool("get", { key: "A", extra: 1 }), /Unknown field: extra/);
-  assert.throws(() => parseTool("create", { title: "x".repeat(LIMITS.title + 1) }), /title is limited to 200/);
-  assert.throws(() => parseTool("create", { title: "ok", description: "x".repeat(LIMITS.description + 1) }), /description is limited to 20,000/);
-  assert.throws(() => parseTool("log", { key: "WEB-1", text: "x".repeat(LIMITS.note + 1) }), /text is limited to 4,000/);
-  assert.throws(() => parseTool("log", { key: "WEB-1", text: "  " }), /text is required/);
-  assert.throws(() => parseTool("create", { title: 5 }), /title must be text/);
-  assert.throws(() => parseTool("create", { title: "t", status: "wip" }), /status must be one of/);
-  assert.throws(() => parseTool("update", { key: "WEB-1" }), /at least one of/);
-  assert.throws(() => parseTool("list", { status: "x" }), /status must be one of/);
-  assert.throws(() => parseTool("get", null), /must be an object/);
-  assert.deepEqual(parseTool("update", { key: "web-1", status: "done", commit: "abc1234" }).op, { kind: "update", key: "WEB-1", title: undefined, description: undefined, status: "done", priority: undefined, branch: undefined, pr: undefined, commit: "abc1234", type: undefined, parent: undefined, relatedAdd: undefined, relatedRemove: undefined, blockedByAdd: undefined, blockedByRemove: undefined });
-});
-
-test("a tool-created issue gets the agent's session, and get shows description, links, sessions and log", () => {
-  const sess = { id: "sess-1", name: "agent one" };
-  const { op } = parseTool("create", { title: "Do it", description: "Goal", status: "in_progress" });
-  let s = applyOp(fresh(), op, sess, 5).store;
-  s = applyOp(s, parseTool("log", { key: "WEB-1", text: "next: tests" }).op, sess, 6).store;
-  const text = formatIssue(s.issues[0]);
-  for (const part of ["WEB-1 [in_progress] (task) Do it", "Goal", "sess-1", "agent one", "agent one note: next: tests"]) assert.ok(text.includes(part), part);
-});
-
 test("board columns and the open list: to do by key, others by activity, canceled only on request", () => {
   const mk = (n, status, updatedAt) => ({ key: `WEB-${n}`, title: `t${n}`, status, sessions: [], log: [], createdAt: 0, updatedAt });
   const issues = [mk(2, "todo", 5), mk(1, "todo", 9), mk(3, "in_progress", 1), mk(4, "in_progress", 8), mk(5, "done", 2), mk(6, "canceled", 3), mk(7, "in_review", 3)];
@@ -217,8 +191,6 @@ test("priority: set on create, changed and cleared with a log entry, refused whe
   assert.equal("priority" in s.issues[0], false);
   assert.equal(applyOp(s, { kind: "update", key: "WEB-1", priority: "none" }).changed, false);
   assert.throws(() => applyOp(s, { kind: "update", key: "WEB-1", priority: "p1" }), /priority must be one of/);
-  assert.throws(() => parseTool("create", { title: "t", priority: "asap" }), /priority must be one of/);
-  assert.equal(parseTool("update", { key: "web-1", priority: "low" }).op.priority, "low");
   const mk = (n, priority) => ({ key: `WEB-${n}`, title: `t${n}`, type: "task", status: "todo", priority, sessions: [], log: [], createdAt: 0, updatedAt: 0 });
   const col = boardColumns([mk(1), mk(2, "low"), mk(3, "urgent"), mk(4, "high")])[0];
   assert.deepEqual(col.issues.map((i) => i.key), ["WEB-3", "WEB-4", "WEB-2", "WEB-1"]);
@@ -297,10 +269,9 @@ test("list tool: query combines with status and type, and an empty result says w
   s = create(s, "Checkout summary", { type: "bug" }).store;
   s = create(s, "Checkout totals", { status: "in_progress" }).store;
   s = create(s, "Login", { description: "like checkout" }).store;
-  assert.deepEqual(parseTool("list", { query: "  checkout " }), { tool: "list", status: undefined, type: undefined, query: "checkout" });
-  assert.equal(parseTool("list", { query: "  " }).query, undefined);
-  assert.throws(() => parseTool("list", { query: 5 }), /query must be text/);
-  assert.throws(() => parseTool("list", { query: "x".repeat(201) }), /query is limited to 200/);
+  // The words a search is given, with spaces round them or all spaces, read the same as without.
+  assert.equal(formatList(s.issues, undefined, "web", undefined, "  checkout "), formatList(s.issues, undefined, "web", undefined, "checkout"));
+  assert.equal(formatList(s.issues, undefined, "web", undefined, "  "), formatList(s.issues, undefined, "web"));
   const keys = (text) => text.split("\n").slice(1).map((l) => l.split(" ")[0]);
   assert.deepEqual(keys(formatList(s.issues, undefined, "web", undefined, "checkout")), ["WEB-1", "WEB-2", "WEB-3"]);
   assert.deepEqual(keys(formatList(s.issues, "in_progress", "web", undefined, "checkout")), ["WEB-2"]);

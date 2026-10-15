@@ -1,0 +1,97 @@
+// main.ts end to end: Claude's tools and a page's operations, on a wings with its storage in memory and a relay that carries
+// broadcasts between the main frame and one page frame.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { channel } from "wings-plugin-sdk/messages";
+
+const storage = new Map();
+const handlers = new Map();
+const sections = [];
+const listeners = { main: new Set(), page: new Set() };
+const send = (to, message) => queueMicrotask(() => listeners[to].forEach((listener) => listener(JSON.parse(JSON.stringify(message)))));
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+let projects;
+
+globalThis.wings = {
+  storage: { get: async (key) => storage.get(key) ?? null, set: async (key, value) => void storage.set(key, JSON.parse(JSON.stringify(value))) },
+  broadcast: async (message) => send("page", message),
+  onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
+  onTool: (name, handler) => handlers.set(name, handler),
+  onPanes: (listener) => listener([{ paneId: "p1", project: "web", projectId: "proj1", session: { sessionId: "s-1", name: "agent one" } }]),
+  onProjects: (listener) => (projects = listener),
+  setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
+};
+await import("./main.ts");
+
+const page = channel({ wings: { broadcast: async (message) => send("main", message), onBroadcast: (listener) => (listeners.page.add(listener), () => listeners.page.delete(listener)) } });
+const told = [];
+page.on("issues", (m) => told.push(m));
+const call = async (name, input) => handlers.get(name)(input, { paneId: "p1" });
+const ask = (op) => page.ask("op", { projectId: "proj1", projectName: "web", op });
+
+test("a tool's input is checked against its schema first, and the error names the field and what it allows", async () => {
+  const wrong = [
+    ["get", {}, /key is required/],
+    ["get", { key: "" }, /key needs at least 1 character/],
+    ["get", { key: "A", extra: 1 }, /Unknown field: extra/],
+    ["get", { key: "W".repeat(21) }, /key is limited to 20 characters/],
+    ["get", null, /must be an object/],
+    ["create", { title: "" }, /title needs at least 1 character/],
+    ["create", { title: 5 }, /title must be text/],
+    ["create", { title: "x".repeat(201) }, /title is limited to 200 characters, this one has 201/],
+    ["create", { title: "ok", description: "x".repeat(20_001) }, /description is limited to 20,000/],
+    ["create", { title: "t", status: "wip" }, /status must be one of todo, in_progress, in_review, done, canceled/],
+    ["create", { title: "t", priority: "asap" }, /priority must be one of urgent, high, medium, low, none/],
+    ["create", { title: "t", type: "story" }, /type must be one of task, bug, feature, epic/],
+    ["update", { key: "WEB-1" }, /Pass at least one of title, description, .*, blocked_by_add or blocked_by_remove\./],
+    ["update", { key: "WEB-1", related_add: "WEB-2" }, /related_add must be a list/],
+    ["update", { key: "WEB-1", blocked_by_add: [3] }, /blocked_by_add\[0\] must be text/],
+    ["update", { key: "WEB-1", related_add: Array(21).fill("WEB-2") }, /related_add takes up to 20 items, this one has 21/],
+    ["update", { key: "WEB-1", parent: 4 }, /parent must be text/],
+    ["update", { key: "WEB-1", commit: "a".repeat(41) }, /commit is limited to 40 characters/],
+    ["log", { key: "WEB-1", text: "x".repeat(4_001) }, /text is limited to 4,000 characters/],
+    ["list", { status: "x" }, /status must be one of/],
+    ["list", { type: "x" }, /type must be one of/],
+    ["list", { query: 5 }, /query must be text/],
+    ["list", { query: "x".repeat(201) }, /query is limited to 200 characters/],
+  ];
+  for (const [name, input, message] of wrong) await assert.rejects(call(name, input), message, `${name} ${JSON.stringify(input)}`);
+  assert.equal(storage.size, 0, "nothing was written");
+});
+
+test("tools write as the Claude session in the calling pane, and say what they did", async () => {
+  assert.match(await call("create", { title: "Do it", description: "Goal", status: "in_progress" }), /^Created WEB-1 in web\./);
+  assert.equal(await call("log", { key: "web-1", text: "next: tests" }), "Logged on WEB-1.");
+  const got = await call("get", { key: " web-1 " });
+  for (const part of ["WEB-1 [in_progress] (task) Do it", "Goal", "s-1", "agent one", "agent one note: next: tests"]) assert.ok(got.includes(part), part);
+  assert.equal(await call("update", { key: "WEB-1", status: "done" }), "Updated WEB-1: Do it [done].");
+  assert.equal(await call("update", { key: "WEB-1", status: "done" }), "WEB-1 already has that. Nothing changed.");
+  assert.match(await call("list", { query: "  do " }), /^Issues for web matching "do"\./);
+  await assert.rejects(call("log", { key: "WEB-1", text: "  " }), /text is required/);
+  await assert.rejects(call("get", { key: "web-9" }), /No issue WEB-9 in web/);
+  await settle();
+  assert.equal(told.length, 3, "a change tells the pages, a change of nothing doesn't");
+});
+
+test("a page's operation is answered once it is saved: pages are told once, a change of nothing tells none, an error reaches the page", async () => {
+  const before = told.length;
+  await ask({ kind: "update", key: "WEB-1", title: "Done it" });
+  await settle();
+  assert.deepEqual(told.slice(before), [{ projectId: "proj1" }]);
+  assert.equal(storage.get("issues:proj1").issues[0].title, "Done it");
+  await ask({ kind: "update", key: "WEB-1", title: "Done it" });
+  await settle();
+  assert.equal(told.length, before + 1);
+  await assert.rejects(ask({ kind: "update", key: "WEB-1", status: "later" }), /status must be one of/);
+  assert.equal(told.length, before + 1);
+});
+
+test("the project's section shows its open issues after a change, and is filled when Wings lists the projects", async () => {
+  await ask({ kind: "create", title: "Second" });
+  const rows = [{ id: "WEB-2", label: "WEB-2 Second", icon: "todo", open: { view: "issue", args: { key: "WEB-2", projectId: "proj1" } } }];
+  assert.deepEqual(sections.at(-1), { id: "proj1", section: "tasks", rows });
+  projects([{ id: "proj1", name: "web" }, { id: "proj2", name: "api" }]);
+  await settle();
+  assert.deepEqual(sections.filter((s) => s.id === "proj1").at(-1).rows, rows);
+  assert.equal(sections.filter((s) => s.id === "proj2").at(-1).rows, null, "a project with no issues has no section");
+});

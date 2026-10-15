@@ -6,8 +6,9 @@
  * ten one-line log entries is about 2 KB of JSON (see `estimateBytes` and the test that measures it), so 300 of them are
  * about 600 KB. `BUDGET` stops one project well before the 1 MB wall, with a message instead of storage's own refusal.
  * A broadcast is limited to 64,000 characters, and none carries issue text from main to a page: it carries ids.
+ * `key`, `commit` and `query` only bound what a tool accepts: a key like WEB-12 is 13 characters at most, a commit hash 40.
  */
-export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 4_000, branch: 200, pr: 500, log: 300 } as const;
+export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 4_000, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200 } as const;
 /** The most one project's entry may take, in bytes of JSON. */
 export const BUDGET = 700_000;
 export const FORMAT_VERSION = 3;
@@ -99,22 +100,6 @@ export type Op =
   | { kind: "note"; key: string; text: string }
   /** With `children`, its child issues, theirs and so on go too. Otherwise they stay and lose their parent. */
   | { kind: "remove"; key: string; children?: boolean };
-
-/** A page asks main to apply `op` to a project's issues; `rid` names the request. `projectName` seeds the key prefix. */
-export interface OpMessage {
-  type: "op";
-  projectId: string;
-  projectName: string;
-  rid: string;
-  op: Op;
-}
-/** Main tells every page that a project's issues changed, so they read them again. `error` answers a failed `rid`. */
-export interface IssuesMessage {
-  type: "issues";
-  projectId: string;
-  rid?: string;
-  error?: string;
-}
 
 /** What an empty description starts as when it is first edited on the issue page. */
 export const DESCRIPTION_TEMPLATE = "## Goal\n\n## Scope\n\n## Done when\n- [ ] \n\n## Validation\n";

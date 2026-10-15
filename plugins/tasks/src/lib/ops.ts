@@ -42,7 +42,7 @@ function applyLinks(next: Issue, op: Extract<Op, { kind: "update" }>, by: Actor,
     }
   }
   if (op.commit !== undefined) {
-    const commit = text(op.commit, "commit", 40).toLowerCase();
+    const commit = text(op.commit, "commit", LIMITS.commit).toLowerCase();
     if (!SHA.test(commit)) throw new Error("commit must be a git commit hash of 7 to 40 hex digits.");
     const short = commit.slice(0, 7);
     if (!(links.commits ?? []).some((c) => c.startsWith(short) || short.startsWith(c))) {
@@ -57,7 +57,8 @@ function applyLinks(next: Issue, op: Extract<Op, { kind: "update" }>, by: Actor,
 
 export interface Applied {
   store: Store;
-  issue: Issue | null;
+  /** The issue the op made or changed: for a removal, the one that is gone. */
+  issue: Issue;
   /** False when the op asked for what was already so. Nothing is saved then. */
   changed: boolean;
 }
@@ -92,7 +93,7 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
 
   const wanted = normalizeKey(op.key);
   const index = store.issues.findIndex((i) => i.key === wanted);
-  if (index < 0) throw new Error(`No issue ${String(op.key)} in this project. Use list to see the keys.`);
+  if (index < 0) throw new Error(`No issue ${wanted} in this project. Use list to see the keys.`);
   const current = store.issues[index];
   if (op.kind === "remove") {
     // Whatever pointed at it lets go, and says why in its log. The counter stays where it is, so the key is never handed out again.

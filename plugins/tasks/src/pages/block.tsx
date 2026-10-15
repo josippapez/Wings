@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Empty, Loading } from "wings-plugin-ui";
 import { BlockView } from "../ui/block-view";
 import type { Issue } from "../lib/domain";
-import { useIssues } from "../lib/useIssues";
+import { useIssues } from "../ui/useIssues";
 import "./tasks.css";
 
 export const page = { place: "block" };

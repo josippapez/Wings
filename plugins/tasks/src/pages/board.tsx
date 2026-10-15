@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Empty, Loading } from "wings-plugin-ui";
 import { BoardView, type Layout } from "../ui/board-view";
 import type { Issue, Op } from "../lib/domain";
-import { useIssues } from "../lib/useIssues";
+import { useIssues } from "../ui/useIssues";
 import { DEFAULT_VIEW_KEY, defaultViewOf, startLayout } from "../lib/view-setting";
 import "./tasks.css";
 

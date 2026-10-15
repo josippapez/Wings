@@ -5,7 +5,6 @@ import { formatIssue, formatList } from "./format.ts";
 import { applyOp } from "./ops.ts";
 import { blocksOf, childrenOf, descendantsOf, parentChoices, progress } from "./relations.ts";
 import { migrateTasks, migrateV2 } from "./storage.ts";
-import { parseTool } from "./tools.ts";
 
 const base = () => migrateTasks([], "web");
 const make = (s, title, extra = {}) => applyOp(s, { kind: "create", title, ...extra }, "you", 1).store;
@@ -169,19 +168,7 @@ test("progress counts done of all children, canceled ones left out", () => {
   assert.deepEqual(progress([]), { done: 0, total: 0 });
 });
 
-test("tools: type, parent and the link lists are validated, update needs something, get shows the relations", () => {
-  assert.throws(() => parseTool("create", { title: "x", type: "story" }), /type must be one of/);
-  assert.throws(() => parseTool("update", { key: "WEB-1", related_add: "WEB-2" }), /list of issue keys/);
-  assert.throws(() => parseTool("update", { key: "WEB-1", blocked_by_add: [3] }), /list of issue keys/);
-  assert.throws(() => parseTool("update", { key: "WEB-1", related_add: Array(21).fill("WEB-2") }), /up to 20/);
-  assert.throws(() => parseTool("update", { key: "WEB-1", parent: 4 }), /parent must be text/);
-  assert.throws(() => parseTool("list", { type: "x" }), /type must be one of/);
-  assert.throws(() => parseTool("update", { key: "WEB-1" }), /at least one of/);
-  const op = parseTool("update", { key: "web-3", type: "bug", parent: "", related_add: ["web-4"], blocked_by_remove: ["WEB-1"] }).op;
-  assert.deepEqual([op.type, op.parent, op.relatedAdd, op.blockedByRemove, op.relatedRemove], ["bug", "", ["WEB-4"], ["WEB-1"], undefined]);
-  assert.equal(parseTool("update", { key: "WEB-3", parent: "WEB-1" }).op.type, undefined);
-  assert.equal(parseTool("list", { type: "epic" }).type, "epic");
-
+test("get shows the relations and list the type and parent", () => {
   let s = up(sample(), "WEB-3", { parent: "WEB-1", relatedAdd: ["WEB-4"] }).store;
   s = up(s, "WEB-4", { blockedByAdd: ["WEB-3"] }).store;
   const epic = formatIssue(get(s, "WEB-1"), s.issues);
