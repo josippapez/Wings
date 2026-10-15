@@ -72,7 +72,7 @@ export default function Sidebar() {
     const shown = history.shown;
     body = (
       <History
-        view={shown?.repo ? { rows: shown.rows, more: shown.more, loading, loadingMore: history.loadingMore } : null}
+        view={shown?.repo ? { rows: shown.rows, more: shown.more, pending: history.pending, loadingMore: history.loadingMore } : null}
         query={query}
         all={all}
         searchText={typed.current}

@@ -10,8 +10,8 @@ import "./ref-pill.css";
 interface HistoryView {
   rows: CommitRow[];
   more: boolean;
-  /** The first page is on its way. */
-  loading: boolean;
+  /** The first page for this search and scope is on its way, and `rows` may be of another. */
+  pending: boolean;
   loadingMore: boolean;
 }
 
@@ -91,7 +91,7 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
     // Only when it mounts: after that the box holds what you type.
   }, []);
   let body = null;
-  if (view && view.rows.length === 0 && !view.loading) {
+  if (view && view.rows.length === 0 && !view.pending) {
     body = <Empty title={query ? "No commits match." : "No commits yet."} description={query ? `Searched messages, authors and hashes for “${query}”.` : undefined} />;
   } else if (view) {
     const k = keys(view.rows);

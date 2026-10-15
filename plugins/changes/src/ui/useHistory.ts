@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
 import { useAsk } from "wings-plugin-sdk/react";
 
@@ -29,8 +29,9 @@ export function useHistory({ query, all, skip }: { query: string; all: boolean; 
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
 
-  // `first.data` is the answer to the request on screen: `useAsk` drops it when the request changes.
-  useEffect(() => {
+  // `first.data` is the answer to the request on screen: `useAsk` drops it when the request changes. A layout effect, so the
+  // rows on screen never lag the answer by a painted frame.
+  useLayoutEffect(() => {
     const page = first.data;
     if (!page) return;
     setMoreError(null);
@@ -61,5 +62,15 @@ export function useHistory({ query, all, skip }: { query: string; all: boolean; 
       .finally(() => setLoadingMore(false));
   };
 
-  return { shown, loading: first.loading, loadingMore, error: first.error?.message ?? moreError, refresh: first.refresh, loadMore };
+  return {
+    shown,
+    /** A first page is on its way, poll or not. */
+    loading: first.loading,
+    /** The first page of this search and scope isn't here yet, so `shown` may be of another. A poll isn't pending. */
+    pending: first.data === null,
+    loadingMore,
+    error: first.error?.message ?? moreError,
+    refresh: first.refresh,
+    loadMore,
+  };
 }
