@@ -21,6 +21,10 @@
       "types": "./poll.d.ts",
       "default": "./poll.js"
     },
+    "./tools": {
+      "types": "./tools.d.ts",
+      "default": "./tools.js"
+    },
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
@@ -40,6 +44,10 @@
     "shell.d.ts",
     "poll.js",
     "poll.d.ts",
+    "tools.js",
+    "tools.d.ts",
+    "tools-manifest.mjs",
+    "tools-manifest.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",
