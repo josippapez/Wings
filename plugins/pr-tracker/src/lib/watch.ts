@@ -6,7 +6,7 @@ import { setting } from "wings-plugin-sdk/settings";
 export const WATCH_MINUTES = [0, 5, 10, 15, 30] as const;
 export type WatchMinutes = (typeof WATCH_MINUTES)[number];
 /** The storage key the settings page saves the minutes under. */
-export const WATCH_KEY = "watch-minutes";
+const WATCH_KEY = "watch-minutes";
 /** More new PRs than this at once are one notification, so a burst stays under the host's 20 a minute. */
 export const MAX_SINGLE = 3;
 

@@ -17,7 +17,7 @@ const LABELS: Record<GroupId, string> = { failed: "Failed", active: "Running and
 const ORDER: GroupId[] = ["failed", "active", "passed", "other"];
 
 /** Where a check shows: what failed first, then what is still going, then what passed; optional passes and checks that didn't run last. */
-export function groupOf(c: CheckItem): GroupId {
+function groupOf(c: CheckItem): GroupId {
   if (c.state === "failed") return "failed";
   if (c.state === "running" || c.state === "queued") return "active";
   if (c.state === "skipped" || c.required === false) return "other";

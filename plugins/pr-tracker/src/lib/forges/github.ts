@@ -47,7 +47,7 @@ async function ghJson<T>(key: string, args: string[], cwd?: string): Promise<T> 
 // ---------- the CLI's shapes and how they map ----------
 
 /** The fields of `gh pr view --json` the tracker reads. */
-export interface GhPr {
+interface GhPr {
   number: number;
   url: string;
   title: string;
@@ -72,7 +72,7 @@ export interface GhPr {
 }
 
 /** A CheckRun or a StatusContext in `gh pr view --json statusCheckRollup`. */
-export interface GhCheck {
+interface GhCheck {
   __typename?: string;
   state?: string;
   status?: string;
@@ -88,7 +88,7 @@ export interface GhCheck {
 }
 
 /** A line comment from `gh api repos/.../pulls/N/comments`. */
-export interface GhComment {
+interface GhComment {
   id: number;
   in_reply_to_id?: number;
   path: string;
@@ -100,7 +100,7 @@ export interface GhComment {
   html_url: string;
 }
 
-export interface GhDiscussion {
+interface GhDiscussion {
   comments: { author?: { login?: string }; body: string; createdAt: string; url: string }[];
   reviews: { author?: { login?: string }; body: string; submittedAt: string }[];
 }

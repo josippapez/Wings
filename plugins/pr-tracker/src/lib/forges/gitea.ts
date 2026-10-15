@@ -19,13 +19,13 @@ const accountOf = (host: string): Account => ({
 
 // ---------- the API's shapes and how they map ----------
 
-export interface GtUser {
+interface GtUser {
   login?: string;
   full_name?: string;
 }
 
 /** The fields of a pull request the tracker reads, from `GET /api/v1/repos/{owner}/{repo}/pulls[/{index}]`. */
-export interface GtPr {
+interface GtPr {
   number: number;
   title: string;
   body?: string;
@@ -47,7 +47,7 @@ export interface GtPr {
 }
 
 /** A commit status from `.../commits/{sha}/status`: `success`, `failure`, `error`, `pending`, `warning` or `skipped`. */
-export interface GtCommitStatus {
+interface GtCommitStatus {
   status: string;
   context?: string;
   description?: string;
@@ -56,7 +56,7 @@ export interface GtCommitStatus {
   updated_at?: string;
 }
 
-export interface GtReview {
+interface GtReview {
   id: number;
   user?: GtUser;
   state: string;
@@ -66,7 +66,7 @@ export interface GtReview {
   html_url?: string;
 }
 
-export interface GtComment {
+interface GtComment {
   id: number;
   user?: GtUser;
   body?: string;
@@ -129,7 +129,7 @@ export function gtOwn(prs: GtPr[], fullName: string): GtPr[] {
 }
 
 /** Who a listed PR is for: written by `me`, or with `me` among the reviewers asked. */
-export function gtWho(pr: GtPr, me: string) {
+function gtWho(pr: GtPr, me: string) {
   const lower = me.toLowerCase();
   return { mine: pr.user?.login?.toLowerCase() === lower, reviewing: (pr.requested_reviewers ?? []).some((u) => u.login?.toLowerCase() === lower) };
 }

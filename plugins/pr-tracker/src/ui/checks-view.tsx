@@ -9,7 +9,7 @@ import type { CheckItem, CheckState, FailureDetail, Failing, Status } from "../l
 const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };
 const STATE_MARK: Record<CheckState, string> = { failed: "✕", running: "●", queued: "○", passed: "✓", skipped: "–" };
 
-export interface ChecksViewProps {
+interface ChecksViewProps {
   status: Status;
   /** Open comment threads, once they have loaded; a comment requirement says how many. */
   unresolved: number | null;

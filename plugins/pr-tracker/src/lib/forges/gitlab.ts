@@ -22,7 +22,7 @@ export const glab = cli("glab", {
 // ---------- the API's shapes and how they map ----------
 
 /** The fields of a merge request the tracker reads. */
-export interface GlMr {
+interface GlMr {
   iid: number;
   web_url: string;
   state: string;
@@ -43,7 +43,7 @@ export interface GlMr {
   updated_at: string;
 }
 
-export interface GlJob {
+interface GlJob {
   id: number;
   name: string;
   status: string;
@@ -55,13 +55,13 @@ export interface GlJob {
   duration?: number | null;
 }
 
-export interface GlApprovals {
+interface GlApprovals {
   approved?: boolean;
   approved_by?: { user?: { name?: string; username?: string } }[];
   approvals_left?: number;
 }
 
-export interface GlNote {
+interface GlNote {
   id: number;
   system?: boolean;
   type?: string | null;

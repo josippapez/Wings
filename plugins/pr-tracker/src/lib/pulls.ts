@@ -9,10 +9,10 @@ export const BLOCK_ROWS = 100;
  * A broadcast is limited to 64,000 characters of JSON, and an answer is wrapped in the messages envelope; a row is 0.5 to
  * 1 KB, so a long list of long titles is cut short rather than refused.
  */
-export const MAX_CHARS = 56_000;
+const MAX_CHARS = 56_000;
 
 /** Whose a pull request is: you wrote it, your review is asked for, or neither. */
-export type Scope = "mine" | "review" | "other";
+type Scope = "mine" | "review" | "other";
 
 /** What a list shows: every open PR, yours, the ones asked of you, or drafts. */
 export type Filter = "all" | "mine" | "review" | "drafts";

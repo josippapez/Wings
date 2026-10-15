@@ -22,14 +22,14 @@ const ACCOUNT: Account = {
 /** The list leaves out each PR's reviewers and participants as too costly, so they are asked for: `+` adds to the default fields and is sent as `%2B` (Bitbucket REST intro, "Partial responses"). */
 export const LIST_FIELDS = "fields=%2Bvalues.participants,%2Bvalues.reviewers";
 
-export interface BbUser {
+interface BbUser {
   uuid?: string;
   display_name?: string;
   nickname?: string;
 }
 
 /** The fields of a pull request the tracker reads, from `GET /2.0/repositories/{workspace}/{repo}/pullrequests[/{id}]`. */
-export interface BbPr {
+interface BbPr {
   id: number;
   title: string;
   description?: string;
@@ -46,7 +46,7 @@ export interface BbPr {
 }
 
 /** A build result from `.../pullrequests/{id}/statuses`. */
-export interface BbStatus {
+interface BbStatus {
   key: string;
   state: "FAILED" | "INPROGRESS" | "STOPPED" | "SUCCESSFUL";
   type?: string;
@@ -57,7 +57,7 @@ export interface BbStatus {
   updated_on?: string;
 }
 
-export interface BbComment {
+interface BbComment {
   id: number;
   created_on: string;
   content?: { raw?: string };

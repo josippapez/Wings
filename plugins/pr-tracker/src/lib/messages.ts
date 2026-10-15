@@ -4,7 +4,7 @@ import type { PullRow } from "./pulls";
 import type { PrArgs } from "./types";
 
 /** What a block shows when the project's host isn't set up, and the label of the button that sets it up. */
-export interface PullsProblem {
+interface PullsProblem {
   message: string;
   action: "Sign in" | "Add token" | "Install";
 }

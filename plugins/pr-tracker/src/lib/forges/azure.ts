@@ -20,7 +20,7 @@ export const az = cli("az", {
 // ---------- the CLI's shapes and how they map ----------
 
 /** A thread from the `pullRequestThreads` resource. */
-export interface AzureThread {
+interface AzureThread {
   id: number;
   isDeleted?: boolean;
   status?: string;
@@ -29,7 +29,7 @@ export interface AzureThread {
   comments?: AzureComment[];
 }
 
-export interface AzureComment {
+interface AzureComment {
   id: number;
   commentType?: string;
   isDeleted?: boolean;
@@ -47,7 +47,7 @@ interface TimelineRecord {
   log?: { id: number } | null;
 }
 
-export interface AzurePolicy {
+interface AzurePolicy {
   status: string;
   startedDate?: string;
   completedDate?: string;

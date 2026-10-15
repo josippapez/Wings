@@ -1,7 +1,7 @@
 /** The PR's pushes and how they sit among its threads. No `wings`, no I/O, so node tests drive it. */
 import { lastActivity, type Thread } from "./threads";
 
-export interface PushCommit {
+interface PushCommit {
   sha: string;
   /** The first line of the commit message. */
   message: string;
@@ -53,7 +53,7 @@ export function pushesOf(iterations: AzureIteration[]): Push[] {
   return pushes;
 }
 
-export type Entry = { kind: "push"; push: Push; at: number } | { kind: "thread"; thread: Thread; at: number };
+type Entry = { kind: "push"; push: Push; at: number } | { kind: "thread"; thread: Thread; at: number };
 
 /** Pushes and threads in one list, the newest activity first. */
 export function timelineOf(threads: Thread[], pushes: Push[]): Entry[] {

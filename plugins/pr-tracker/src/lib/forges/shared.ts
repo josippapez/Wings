@@ -17,7 +17,7 @@ export function ladder(steps: Step[], rest = "In review"): [string, Tone, Icon] 
   return hit ? [hit[1], hit[2], hit[3] ?? "pr-open"] : [rest, "info", "pr-open"];
 }
 
-export interface Facts {
+interface Facts {
   merged?: boolean;
   closed?: boolean;
   draft?: boolean;
@@ -35,7 +35,7 @@ export interface Facts {
 }
 
 /** What a provider calls the states it words its own way, and what an open PR with nothing to say is called. */
-export interface Words {
+interface Words {
   closed?: string;
   changes?: string;
   rest?: string;

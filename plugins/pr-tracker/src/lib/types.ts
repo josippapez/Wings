@@ -6,7 +6,7 @@ export type Provider = "github" | "azure" | "gitlab" | "bitbucket" | "gitea";
 export type Icon = NonNullable<WingsBadge["icon"]>;
 
 /** The remote of one provider. `host` is github.com or a GitHub Enterprise Server host `gh` is signed in to, and `path` is `owner/repo`. Gitea covers Gitea and Forgejo, like codeberg.org. */
-export type RemoteOf<K extends Provider> = Extract<Remote, { kind: K }>;
+type RemoteOf<K extends Provider> = Extract<Remote, { kind: K }>;
 export type GithubRemote = RemoteOf<"github">;
 export type AzureRemote = RemoteOf<"azure">;
 export type GitlabRemote = RemoteOf<"gitlab">;
@@ -161,7 +161,7 @@ export interface Status {
 }
 
 /** A status that failed to load, with none of a loaded status's fields. */
-export type StatusError = { error: string } & { [K in Exclude<keyof Status, "error">]?: undefined };
+type StatusError = { error: string } & { [K in Exclude<keyof Status, "error">]?: undefined };
 
 export type StatusEntry = Status | StatusError;
 
