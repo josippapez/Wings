@@ -1,14 +1,16 @@
 // The commit graph: every branch's commits with their lanes, like `git log --graph --all`. It runs git itself,
-// since the history is far larger than one broadcast, lays the lanes out once, and only draws the rows on screen.
+// since the history is far larger than one answer, lays the lanes out once, and only draws the rows on screen.
 
+import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
+import { git } from "wings-plugin-sdk/git";
 import { mountShell } from "wings-plugin-sdk/shell";
 
 import { h } from "../ui/graph-dom";
 import { draw, graphWidth, ROW } from "../ui/graph-draw";
-import { layout, parseLog, type Commit } from "../lib/graph-layout";
 import { fill, makeRow } from "../ui/graph-rows";
-import { LOG } from "../lib/log";
-import type { GraphRepoMessage } from "../lib/types";
+import { layout, type Placed } from "../lib/graph-layout";
+import { LOG, parseLog } from "../lib/log";
+import { ch } from "../lib/messages";
 import "./graph.css";
 
 /** Rows drawn above and below the screen, so a fast scroll doesn't show gaps. */
@@ -16,7 +18,7 @@ const OVERSCAN = 12;
 const LIMIT = 10_000;
 
 // Wings gives the page its frame; the graph lays itself out edge to edge inside it.
-const head = h("header", { id: "head", class: "row", "aria-live": "polite" });
+const head = h("header", { id: "head", class: "w-row", "aria-live": "polite" });
 const canvas = h("canvas", { id: "lanes", "aria-hidden": "true" }) as HTMLCanvasElement;
 const list = h("ul", { id: "rows", "aria-label": "Commits" });
 const view = h("div", { id: "window" }, canvas, list);
@@ -25,7 +27,7 @@ const scroller = h("div", { id: "scroller", tabindex: "-1" }, spacer);
 mountShell("view", { fill: true }).replaceChildren(head, scroller);
 const ctx = canvas.getContext("2d")!;
 
-let state: { root: string | null; name?: string; loading: boolean; error?: string; commits: Commit[]; lanes: number } = { root: null, loading: true, commits: [], lanes: 1 };
+let state: { root: string | null; name?: string; loading: boolean; error?: string; commits: Placed[]; lanes: number } = { root: null, loading: true, commits: [], lanes: 1 };
 let selected = -1;
 
 // ---------- drawing ----------
@@ -62,7 +64,7 @@ function openCommit(i: number) {
   if (!c || !state.root) return;
   selected = i;
   update(true);
-  void wings.broadcast({ type: "commit", root: state.root, hash: c.hash, subject: c.subject, author: c.author, at: c.at });
+  void ch.ask("commit", { root: state.root, hash: c.hash, subject: c.subject, author: c.author, at: c.at });
 }
 
 list.addEventListener("click", (e) => {
@@ -86,54 +88,76 @@ list.addEventListener("keydown", (e) => {
 
 function renderHead() {
   const n = state.commits.length;
-  const status = !state.root
-    ? state.loading
-      ? "Loading…"
-      : "No git repo in your panes."
-    : (state.error ?? (n === 0 ? (state.loading ? "Loading…" : "No commits yet.") : `${n.toLocaleString()} commits on every branch${n >= LIMIT ? `, the newest ${LIMIT.toLocaleString()}` : ""}`));
+  const status =
+    state.error ??
+    (!state.root
+      ? state.loading
+        ? "Loading…"
+        : "No git repo in your panes."
+      : n === 0
+        ? state.loading
+          ? "Loading…"
+          : "No commits yet."
+        : `${n.toLocaleString()} commits on every branch${n >= LIMIT ? `, the newest ${LIMIT.toLocaleString()}` : ""}`);
   head.replaceChildren(
-    h("div", { class: "grow" }, h("div", { class: "repo ellipsis" }, state.name ?? "Commit graph"), h("div", { class: `ellipsis ${state.error ? "warn" : "muted"}` }, status)),
-    state.loading ? h("span", { class: "spinner", "aria-label": "Loading" }) : "",
+    h(
+      "div",
+      { class: "w-stack", "data-gap": "none", "data-grow": true },
+      h("div", { class: "w-text", "data-weight": "strong", "data-truncate": true }, state.name ?? "Commit graph"),
+      h("div", { class: "w-text", "data-tone": state.error ? "warn" : "muted", "data-truncate": true }, status),
+    ),
+    state.loading ? h("span", { class: "w-spinner", role: "img", "aria-label": "Loading" }) : "",
     h("button", { onclick: () => void load(), disabled: !state.root || state.loading }, "Refresh"),
   );
 }
 
+const nextLoad = latestOnly();
+
 async function load() {
   const root = state.root;
+  const stale = nextLoad();
   state = { ...state, loading: Boolean(root), error: undefined };
   renderHead();
   if (!root) return;
   try {
-    const r = await wings.exec("git", ["log", "--all", "--topo-order", ...LOG, `--max-count=${LIMIT}`], { cwd: root });
-    if (root !== state.root) return;
-    if (r.code !== 0) throw new Error(r.stderr.trim().split("\n")[0] || "git log failed");
-    const commits = parseLog(r.stdout);
-    state = { ...state, loading: false, commits, lanes: layout(commits) };
-    selected = Math.min(selected, commits.length - 1);
-    spacer.style.height = `${commits.length * ROW}px`;
-    list.style.setProperty("--graph", `${graphWidth(state.lanes)}px`);
+    const out = await git(root, ["log", "--all", "--topo-order", ...LOG, `--max-count=${LIMIT}`], { raw: true });
+    if (stale()) return;
+    const { rows, lanes } = layout(parseLog(out));
+    state = { ...state, loading: false, commits: rows, lanes };
+    selected = Math.min(selected, rows.length - 1);
+    spacer.style.height = `${rows.length * ROW}px`;
+    list.style.setProperty("--graph", `${graphWidth(lanes)}px`);
     for (const b of pool) delete b.dataset.i;
     update(true);
   } catch (error) {
-    if (root !== state.root) return;
-    state = { ...state, loading: false, error: String((error as Error).message ?? error) };
+    if (stale()) return;
+    state = { ...state, loading: false, error: errorMessage(error) };
   }
   renderHead();
 }
 
-wings.onBroadcast((message) => {
-  const m = message as GraphRepoMessage | null;
+/** Asks main which repo to show, and loads it. */
+async function show() {
+  let repo;
+  try {
+    repo = await ch.ask("graph-repo");
+  } catch (error) {
+    state = { ...state, loading: false, error: errorMessage(error) };
+    return renderHead();
+  }
   // A second Graph click while it loads would only load it again.
-  if (m?.type !== "graph-repo" || (state.root && m.root === state.root && state.loading)) return;
-  if (m.root !== state.root) {
-    state = { root: m.root ?? null, name: m.name ?? undefined, loading: false, commits: [], lanes: 1 };
+  if (state.root && repo.root === state.root && state.loading) return;
+  if (repo.root !== state.root) {
+    state = { root: repo.root, name: repo.name ?? undefined, loading: false, commits: [], lanes: 1 };
     selected = -1;
     scroller.scrollTop = 0;
     spacer.style.height = "0px";
     update(true);
   }
   void load();
-});
+}
 
+// Main tells when the Graph button was clicked again, maybe for another repo.
+ch.on("graph-repo-changed", () => void show());
 renderHead();
-void wings.broadcast({ type: "graph-hello" });
+void show();

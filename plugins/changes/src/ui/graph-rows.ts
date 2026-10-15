@@ -1,34 +1,40 @@
+import { dateOf, dateTimeOf } from "../lib/dates";
+import type { Placed } from "../lib/graph-layout";
+import { describeRef } from "../lib/log";
 import { h } from "./graph-dom";
-import type { Commit } from "../lib/graph-layout";
+import "./ref-pill.css";
 
-const day = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-const REF_KIND = { H: "HEAD", b: "Branch", r: "Remote branch", t: "Tag", s: "Stash" };
-
-/** @param ref `kind:name` */
+/** A ref as plugin-ui's `Badge` draws it, built without React. @param ref `kind:name` */
 function refPill(ref: string) {
-  const kind = ref[0];
-  const name = ref.slice(2);
-  const what = REF_KIND[kind as keyof typeof REF_KIND] ?? "Ref";
-  return h("span", { class: `ref ref-${kind}`, title: kind === "H" && name !== "HEAD" ? `HEAD, on ${name}` : `${what} ${name}` }, kind === "t" ? `◆ ${name}` : name);
+  const { head, label, title, tone } = describeRef(ref);
+  return h("span", { class: head ? "w-badge ref-head" : "w-badge", "data-variant": "outline", "data-tone": tone, title }, label);
 }
 
 /** An empty row button, in its `li`. */
 export function makeRow() {
-  const b = h("button", {}, h("span", { class: "lane-gap" }), h("span", { class: "refs" }), h("span", { class: "grow ellipsis" }), h("span", { class: "hash muted" }), h("span", { class: "author ellipsis muted" }), h("span", { class: "date muted" })) as HTMLButtonElement;
+  const b = h(
+    "button",
+    {},
+    h("span", { class: "lane-gap" }),
+    h("span", { class: "refs" }),
+    h("span", { class: "w-text subject", "data-grow": true, "data-truncate": true }),
+    h("span", { class: "w-text hash", "data-tone": "muted", "data-mono": true, "data-size": "tiny" }),
+    h("span", { class: "w-text author", "data-tone": "muted", "data-truncate": true }),
+    h("span", { class: "w-text date", "data-tone": "muted", "data-numeric": true }),
+  ) as HTMLButtonElement;
   return { b, li: h("li", {}, b) };
 }
 
 /** Shows commit `i` in a row button, unless it already does. */
-export function fill(b: HTMLButtonElement, i: number, c: Commit, selected: number) {
+export function fill(b: HTMLButtonElement, i: number, c: Placed, selected: number) {
   b.classList.toggle("on", i === selected);
   if (b.dataset.i === String(i)) return;
   const [, refs, subject, hash, author, date] = [...b.children] as HTMLElement[];
   b.dataset.i = String(i);
-  b.title = `${c.subject}\n${c.hash}\n${c.author}, ${full.format(c.at * 1000)}`;
+  b.title = `${c.subject}\n${c.hash}\n${c.author}, ${dateTimeOf(c.at)}`;
   refs.replaceChildren(...c.refs.map(refPill));
   subject.textContent = c.subject;
   hash.textContent = c.hash.slice(0, 7);
   author.textContent = c.author;
-  date.textContent = day.format(c.at * 1000);
+  date.textContent = dateOf(c.at);
 }

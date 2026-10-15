@@ -21,7 +21,7 @@ const log: [string, string, string, number, string, string][] = [
 const id = (x: string) => x.padEnd(40, "0");
 const out = log.map(([h, p, a, hrs, d, s]) => [id(h), p.split(" ").filter(Boolean).map(id).join(" "), a, NOW - hrs * 3600, NOW - hrs * 3600, d, s].join("\0")).join("\0") + "\0";
 
-export const respond = (m: unknown) => ((m as { type: string }).type === "graph-hello" ? { type: "graph-repo", root: "/work/acme/web", name: "web" } : undefined);
+export const answers = { "graph-repo": () => ({ root: "/work/acme/web", name: "web" }) };
 
 export default function Fixture() {
   // The graph builds its own DOM into the page, as it does when Wings loads graph.js; its git log is the made-up one.

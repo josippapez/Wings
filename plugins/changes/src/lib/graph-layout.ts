@@ -1,4 +1,4 @@
-import { LOG_FIELDS, parseRefs } from "./log";
+import type { Commit } from "./log";
 
 /** Lanes past this are cut off; a repo rarely has this many branches side by side. */
 export const MAX_LANES = 24;
@@ -7,26 +7,7 @@ export const MAX_LANES = 24;
  * A commit and where the graph draws it. `lines` holds four numbers a line: from lane, to lane, part and colour,
  * where part 0 runs from the row's top into the dot, 1 from the dot to the row's bottom, and 2 straight through.
  */
-export interface Commit {
-  hash: string;
-  parents: string[];
-  author: string;
-  at: number;
-  refs: string[];
-  subject: string;
-  lane: number;
-  color: number;
-  lines: number[];
-}
-
-export function parseLog(out: string): Commit[] {
-  const f = out.split("\0");
-  const commits: Commit[] = [];
-  for (let i = 0; i + LOG_FIELDS <= f.length && f[i]; i += LOG_FIELDS) {
-    commits.push({ hash: f[i], parents: f[i + 1] ? f[i + 1].split(" ") : [], author: f[i + 2], at: Number(f[i + 3]), refs: parseRefs(f[i + 5]), subject: f[i + 6], lane: 0, color: 0, lines: [] });
-  }
-  return commits;
-}
+export type Placed = Commit & { lane: number; color: number; lines: number[] };
 
 /**
  * Gives each commit a lane, top to bottom in topological order. Each lane waits for one hash: a commit takes the
@@ -42,7 +23,7 @@ export function layout(commits: Commit[]) {
     const i = lanes.indexOf(null);
     return i < 0 ? lanes.length : i;
   };
-  for (const c of commits) {
+  const rows: Placed[] = commits.map((c) => {
     let lane = lanes.indexOf(c.hash);
     if (lane < 0) {
       // A branch tip: nothing above leads to it, so it starts in a free lane with a colour of its own.
@@ -68,10 +49,8 @@ export function layout(commits: Commit[]) {
       lines.push(lane, at, 1, colors[at]);
     });
     while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
-    c.lane = lane;
-    c.color = color;
-    c.lines = lines;
     widest = Math.max(widest, lane + 1, lanes.length);
-  }
-  return Math.min(widest, MAX_LANES);
+    return { ...c, lane, color, lines };
+  });
+  return { rows, lanes: Math.min(widest, MAX_LANES) };
 }

@@ -1,39 +1,9 @@
-/* The graph's own layout inside the page Wings gives it (mountShell with fill). Colours, buttons and inputs come
-   from Wings' plugin-ui.css. */
-.row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-#rows .grow {
-  min-width: 80px;
-}
-.ellipsis {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.muted {
-  color: var(--wings-muted);
-}
-.warn {
-  color: var(--wings-warning);
-}
+/* The graph's own layout inside the page Wings gives it (mountShell with fill). Text, badges, the spinner, colours,
+   buttons and inputs come from Wings' plugin-ui.css. */
 #head {
   flex: none;
   padding: 12px 16px;
   border-bottom: 1px solid var(--wings-hairline);
-}
-.repo {
-  font-weight: 600;
-}
-.message {
-  padding: 24px 16px;
 }
 
 /* Only the rows on screen exist: #spacer is as tall as every row, and #window moves to the first one drawn. */
@@ -111,6 +81,12 @@
 .refs:empty {
   display: none;
 }
+#rows .subject {
+  min-width: 80px;
+}
+#rows .w-badge {
+  max-width: 220px;
+}
 .author {
   flex: none;
   width: 160px;
@@ -125,55 +101,8 @@
   flex: none;
   width: 110px;
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 .hash {
   flex: none;
   width: 56px;
-  font: 11px var(--wings-mono);
-}
-.ref {
-  flex: none;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 6px;
-  border: 1px solid var(--wings-hairline-strong);
-  border-radius: 5px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--wings-muted);
-}
-.ref-H {
-  border-color: color-mix(in srgb, var(--wings-info) 55%, transparent);
-  color: var(--wings-info);
-  font-weight: 600;
-}
-.ref-b {
-  border-color: color-mix(in srgb, var(--wings-success) 45%, transparent);
-  color: var(--wings-success);
-}
-.ref-t {
-  border-color: color-mix(in srgb, var(--wings-warning) 45%, transparent);
-  color: var(--wings-warning);
-}
-.spinner {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--wings-hairline-strong);
-  border-top-color: var(--wings-fg);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
 }
