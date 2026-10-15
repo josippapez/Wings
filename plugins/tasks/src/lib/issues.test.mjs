@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
+import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, trailTo, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
 import { formatIssue, parseTool } from "./tools.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
@@ -176,6 +176,15 @@ test("board lanes: one row per parent, open parents first, each issue once, no-p
   assert.deepEqual(shown.map(keys)[0], ["WEB-4", "WEB-6"]);
   assert.deepEqual(keys(shown.at(-1)), ["WEB-7", "WEB-2", "WEB-1", "WEB-8"]);
   assert.deepEqual(boardLanes([]), []);
+});
+
+test("the breadcrumb trail adds the issue you leave, goes back to one already on it, and keeps the last eight", () => {
+  assert.deepEqual(trailTo([], "WIN-12", "WIN-15"), ["WIN-12"]);
+  assert.deepEqual(trailTo(["WIN-12"], "WIN-15", "WIN-20"), ["WIN-12", "WIN-15"]);
+  assert.deepEqual(trailTo(["WIN-12", "WIN-15"], "WIN-20", "WIN-12"), []);
+  assert.deepEqual(trailTo(["WIN-12", "WIN-15"], "WIN-20", "WIN-15"), ["WIN-12"]);
+  const long = Array.from({ length: 8 }, (_, i) => `WIN-${i + 1}`);
+  assert.deepEqual(trailTo(long, "WIN-9", "WIN-10"), [...long.slice(1), "WIN-9"]);
 });
 
 test("resume and start commands are plain words Wings accepts, and refuse anything else", () => {

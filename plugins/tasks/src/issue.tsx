@@ -1,10 +1,11 @@
-// The Issue tab: one issue of a project, opened with args { key, projectId }. Edit its title, status, description and
+// The Issue tab: one issue of a project, opened with args { key, projectId, trail }; trail is the issues opened before it
+// in this tab, for the breadcrumb back. Edit its title, status, description and
 // links, add a note, resume the last Claude session that worked on it, or start a new agent on it.
 
 import { useEffect, useState } from "react";
 import { Empty, Loading, showTab } from "wings-plugin-ui";
 import { IssueView } from "./lib/issue-view";
-import { agentCommand, findIssue, lastSession, resumeCommand, type Op } from "./lib/issues";
+import { agentCommand, findIssue, lastSession, resumeCommand, trailTo, TRAIL_LENGTH, type Op } from "./lib/issues";
 import { useIssues } from "./lib/useIssues";
 import "./tasks.css";
 
@@ -17,8 +18,11 @@ function IssuePage() {
 }
 
 function ProjectIssue({ project }: { project: WingsProject }) {
-  const args = wings.viewArgs<{ key?: string; projectId?: string }>();
+  const args = wings.viewArgs<{ key?: string; projectId?: string; trail?: unknown }>();
   const issueKey = args?.key ?? "";
+  const trail = Array.isArray(args?.trail) ? args.trail.filter((k): k is string => typeof k === "string").slice(-TRAIL_LENGTH) : [];
+  const projectId = args?.projectId ?? project.id;
+  const openIssue = (key: string, newTrail: string[], newTab = false) => void wings.openView("issue", { as: "tab", args: { key, projectId, trail: newTrail }, newTab }).catch(fail);
   const { store, apply } = useIssues(args?.projectId ?? project.id, project.name);
   const [error, setError] = useState<string | null>(null);
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
@@ -35,6 +39,8 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       error={error}
       send={send}
       onBack={() => void wings.openView("board", { as: "tab" })}
+      trail={trail}
+      onBackTo={(i) => openIssue(trail[i], trail.slice(0, i))}
       onResume={() => {
         const last = issue && lastSession(issue);
         if (last) void Promise.resolve().then(() => open(resumeCommand(last.id))).catch(fail);
@@ -48,7 +54,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
           .catch(fail)
       }
       onOpenUrl={(url) => void wings.openUrl(url).catch(fail)}
-      onOpenIssue={(key, newTab) => void wings.openView("issue", { as: "tab", args: { key, projectId: args?.projectId ?? project.id }, newTab }).catch(fail)}
+      onOpenIssue={(key, newTab) => openIssue(key, trailTo(trail, issueKey, key), newTab)}
     />
   );
 }

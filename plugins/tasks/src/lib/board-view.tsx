@@ -1,9 +1,9 @@
 // The Issues tab without its data: the board for a list of issues. The tab page feeds it from storage, a fixture from made-up data.
 
-import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Loading, Page, Summary, SummaryChip, Text, Toolbar } from "wings-plugin-ui";
+import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { boardColumns, boardLanes, canParent, childrenOf, FLOW, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
-import { ChildProgress, IssueCard, openProps, StatusDot, TypeIcon } from "./parts";
+import { ChildProgress, IssueCard, openProps, SessionMarker, StatusDot, TypeIcon } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -11,10 +11,13 @@ export interface BoardViewProps {
   error: string | null;
   showCanceled: boolean;
   onShowCanceled: (show: boolean) => void;
+  /** Columns of cards, or rows grouped by status like Linear's list. */
+  layout: Layout;
+  onLayout: (layout: Layout) => void;
   /** Rows by parent epic or feature, like Linear's sub-grouping. */
   byParent: boolean;
   onByParent: (on: boolean) => void;
-  /** The rows folded shut: their parent's key, or "" for the issues with no parent. */
+  /** The rows folded shut: their parent's key, "" for the issues with no parent, or `status:<status>` for a list group. */
   folded: string[];
   onFold: (lane: string, open: boolean) => void;
   apply: (op: Op) => Promise<void>;
@@ -22,12 +25,17 @@ export interface BoardViewProps {
   onOpen: (issue: Issue, newTab: boolean) => void;
 }
 
+export type Layout = "board" | "list";
+const LAYOUTS = [{ value: "board" as const, label: "Board" }, { value: "list" as const, label: "List" }];
+/** The list's groups, in Linear's order: what's closest to done first. */
+const LIST_ORDER: Issue["status"][] = ["in_review", "in_progress", "todo", "done", "canceled"];
+
 const EMPTY: Record<string, string> = { todo: "Nothing waiting", in_progress: "Nothing in progress", in_review: "Nothing in review", done: "Nothing finished yet", canceled: "Nothing canceled" };
 
-export function BoardView({ project, issues, error, showCanceled, onShowCanceled, byParent, onByParent, folded, onFold, apply, send, onOpen }: BoardViewProps) {
+export function BoardView({ project, issues, error, showCanceled, onShowCanceled, layout, onLayout, byParent, onByParent, folded, onFold, apply, send, onOpen }: BoardViewProps) {
   const count = (status: Issue["status"]) => issues?.filter((i) => i.status === status).length ?? 0;
   const hasParents = !!issues?.some((i) => i.parent);
-  const lanes = issues && hasParents && byParent ? boardLanes(issues, showCanceled) : null;
+  const lanes = issues && hasParents && byParent && layout === "board" ? boardLanes(issues, showCanceled) : null;
 
   const move = (issue: Issue, by: 1 | -1) => {
     const next = FLOW[FLOW.indexOf(issue.status) + by];
@@ -48,7 +56,7 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
 
   return (
     <Page
-      flush={!!issues}
+      flush={!!issues && layout === "board"}
       toolbar={
         <Toolbar className="tk-board-toolbar" title={`Issues, ${project.name}`} actions={<AddIssue apply={apply} />}>
           {issues ? (
@@ -59,7 +67,8 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
                 <SummaryChip tone="warn">{count("in_review")} in review</SummaryChip>
                 <SummaryChip tone="success">{count("done")} done</SummaryChip>
               </Summary>
-              {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
+              <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
+              {hasParents && layout === "board" ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
               <Chip pressed={showCanceled} onClick={() => onShowCanceled(!showCanceled)}>Show canceled ({count("canceled")})</Chip>
             </>
           ) : null}
@@ -69,6 +78,8 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
       {error ? <Text tone="danger" role="alert" className="tk-error">{error}</Text> : null}
       {!issues ? (
         <Loading>Loading issues</Loading>
+      ) : layout === "list" ? (
+        <IssueList project={project} issues={issues} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} />
       ) : lanes ? (
         <BoardLanes
           className="tk-lanes"
@@ -132,5 +143,47 @@ function ParentLane({ lane, issues, open, onOpenChange, onOpen, card }: { lane: 
         </BoardCell>
       ))}
     </BoardLane>
+  );
+}
+
+/** Issues as rows, grouped by status like Linear's list: each group folds, and empty ones don't show. */
+function IssueList({ project, issues, showCanceled, folded, onFold, onOpen }: { project: WingsProject; issues: Issue[]; showCanceled: boolean; folded: string[]; onFold: (group: string, open: boolean) => void; onOpen: (issue: Issue, newTab: boolean) => void }) {
+  const byKey = new Map(issues.map((i) => [i.key, i]));
+  const groups = boardColumns(issues, showCanceled)
+    .filter((g) => g.issues.length > 0)
+    .sort((a, b) => LIST_ORDER.indexOf(a.status) - LIST_ORDER.indexOf(b.status));
+  if (groups.length === 0) return <Text tone="muted">No issues for {project.name} yet.</Text>;
+  return (
+    <div className="tk-list">
+      {groups.map(({ status, issues: rows }) => (
+        <Disclosure
+          key={status}
+          className="tk-list-group"
+          open={!folded.includes(`status:${status}`)}
+          onOpenChange={(open) => onFold(`status:${status}`, open)}
+          summary={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}<span className="tk-count">{rows.length}</span></span>}
+        >
+          <List compact aria-label={STATUS_LABEL[status]}>
+            {rows.map((i) => {
+              const parent = i.parent ? byKey.get(i.parent) : undefined;
+              const done = canParent(i.type) ? progress(childrenOf(issues, i.key)) : null;
+              return (
+                <ListItem key={i.key}>
+                  <ListButton className="tk-row" data-status={i.status} {...openProps((newTab) => onOpen(i, newTab))} aria-label={`Open ${i.key}: ${i.title}`}>
+                    <span className="tk-key">{i.key}</span>
+                    <TypeIcon type={i.type} />
+                    <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>
+                    {parent ? <span className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><span className="tk-link-title">{parent.title}</span></span> : null}
+                    {done?.total ? <ChildProgress {...done} /> : null}
+                    <SessionMarker issue={i} />
+                    <Time className="tk-row-time" iso={new Date(i.updatedAt).toISOString()} />
+                  </ListButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Disclosure>
+      ))}
+    </div>
   );
 }

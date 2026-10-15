@@ -617,6 +617,18 @@ export function boardLanes(issues: Issue[], showCanceled = false): Lane[] {
   return groups.has("") ? [...lanes, lane(null, groups.get("")!)] : lanes;
 }
 
+/** The issues a tab shows in its breadcrumb at most, oldest dropped first. */
+export const TRAIL_LENGTH = 8;
+/**
+ * The breadcrumb trail for opening `next` from `current`, whose own trail is `trail`: `current` goes on the end. Opening
+ * one that's already on the trail goes back to it, so the trail never loops.
+ */
+export function trailTo(trail: string[], current: string, next: string): string[] {
+  const path = [...trail, current];
+  const back = path.indexOf(next);
+  return (back >= 0 ? path.slice(0, back) : path).slice(-TRAIL_LENGTH);
+}
+
 export const findIssue = (store: Store | null, issueKey: string): Issue | null => store?.issues.find((i) => i.key === normalizeKey(issueKey)) ?? null;
 
 /** The session that touched the issue last, or null. Resume picks this one. */

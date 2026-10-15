@@ -1,7 +1,7 @@
 // The Issue tab without its data: one issue with its spec, status, links, sessions and activity. The tab page feeds it
 // from storage, a fixture from made-up data.
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Combobox, Empty, Heading, List, ListButton, ListItem, Loading, Markdown, Menu, Page, Row, Select, Stack, Text, TextInput, Time, Timeline, TimelineCard, TimelineNote, Title, Toolbar } from "wings-plugin-ui";
 import { openProps, StatusDot, TypeIcon } from "./parts";
 import { actorName, blocksOf, canParent, childrenOf, DESCRIPTION_TEMPLATE, isClaude, LIMITS, parentChoices, progress, visibleDescription, lastSession, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type LogEntry, type Op, type Status } from "./issues";
@@ -17,6 +17,10 @@ export interface IssueViewProps {
   error: string | null;
   send: (op: Op) => Promise<void>;
   onBack: () => void;
+  /** The issues opened before this one in this tab, oldest first, shown in the breadcrumb to go back to. */
+  trail?: string[];
+  /** Go back to `trail[index]`. */
+  onBackTo?: (index: number) => void;
   onResume: () => void;
   onStart: () => void;
   onOpenUrl: (url: string) => void;
@@ -436,13 +440,19 @@ function Activity({ issue, send }: { issue: Issue; send: Send }) {
   );
 }
 
-export function IssueView({ project, issue, issues, issueKey, error, send, onBack, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
+export function IssueView({ project, issue, issues, issueKey, error, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
   const crumb = (
     <nav className="tk-crumbs" aria-label="Breadcrumb">
       <Button variant="ghost" size="sm" onClick={onBack}><span aria-hidden="true">←</span> Issues</Button>
+      {trail.map((key, i) => (
+        <Fragment key={`${i}-${key}`}>
+          <span aria-hidden="true" className="tk-crumb-sep tk-crumb-sep-link">/</span>
+          <Button variant="ghost" size="sm" className="tk-crumb-link" onClick={() => onBackTo?.(i)}>{key}</Button>
+        </Fragment>
+      ))}
       <span aria-hidden="true" className="tk-crumb-sep">/</span>
-      <span className="tk-crumb">{issue?.key ?? issueKey}</span>
+      <span className="tk-crumb" aria-current="page">{issue?.key ?? issueKey}</span>
     </nav>
   );
   const toolbar = (

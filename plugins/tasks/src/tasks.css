@@ -161,9 +161,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Narrow frames keep the back link and drop the key, so the action buttons fit. */
+.tk-crumbs .tk-crumb-link.w-button {
+  margin-left: 0;
+  padding: 0 6px;
+  font-family: var(--wings-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+/* Narrow frames keep the back links and drop the current key, so the action buttons fit. */
 @media (max-width: 760px) {
-  .tk-crumb-sep,
+  .tk-crumb-sep:not(.tk-crumb-sep-link),
   .tk-crumb {
     display: none;
   }
@@ -480,4 +487,64 @@
 }
 .tk-child-progress .tk-progress {
   width: 40px;
+}
+
+/* ---------- List ---------- */
+.tk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+/* Each group's header is a bar across the list, like Linear's. */
+.tk-list-group .w-disclosure-trigger {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+  color: var(--wings-fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.tk-list-group .w-list {
+  margin-top: 6px;
+}
+.tk-row {
+  gap: 10px;
+}
+.tk-row .tk-key {
+  min-width: 52px;
+}
+.tk-row[data-status="done"] .tk-row-title,
+.tk-row[data-status="canceled"] .tk-row-title {
+  color: var(--wings-muted);
+}
+.tk-row-parent {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 30%;
+  padding: 1px 8px;
+  border: 1px solid var(--wings-hairline-strong);
+  border-radius: 999px;
+  color: var(--wings-muted);
+  font-size: 11px;
+}
+.tk-row-time {
+  flex: none;
+  color: var(--wings-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* A narrow tab keeps the key, title and time. */
+@media (max-width: 700px) {
+  .tk-row-parent,
+  .tk-row .tk-child-progress,
+  .tk-row .w-badge {
+    display: none;
+  }
 }
