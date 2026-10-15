@@ -2,7 +2,8 @@
 
 import { Button, Empty, List, ListButton, ListItem, Loading, Row, Stack, Summary, SummaryChip, Text } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
-import { openIssues, STATUS_LABEL, type Issue, type Op } from "../lib/issues";
+import { STATUS_LABEL, type Issue, type Op } from "../lib/domain";
+import { openIssues } from "../lib/orderings";
 import { SessionMarker, StatusDot, TypeIcon } from "./parts";
 
 /** The block lists this many open issues; the board has the rest. */

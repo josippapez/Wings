@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyOp, blocksOf, childrenOf, descendantsOf, DESCRIPTION_TEMPLATE, hasContent, migrateV2, parentChoices, progress, visibleDescription } from "./issues.ts";
-import { formatIssue, formatList, parseTool } from "./tools.ts";
-import { migrateTasks } from "./issues.ts";
+import { DESCRIPTION_TEMPLATE, hasContent, visibleDescription } from "./domain.ts";
+import { formatIssue, formatList } from "./format.ts";
+import { applyOp } from "./ops.ts";
+import { blocksOf, childrenOf, descendantsOf, parentChoices, progress } from "./relations.ts";
+import { migrateTasks, migrateV2 } from "./storage.ts";
+import { parseTool } from "./tools.ts";
 
 const base = () => migrateTasks([], "web");
 const make = (s, title, extra = {}) => applyOp(s, { kind: "create", title, ...extra }, "you", 1).store;

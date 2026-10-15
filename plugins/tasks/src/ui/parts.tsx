@@ -1,7 +1,13 @@
 // Small pieces the Issues pages share.
 
 import { Badge, Button, Card, Dot, Row, Text, Time } from "wings-plugin-ui";
-import { descendantsOf, FLOW, lastSession, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Priority, type Status } from "../lib/issues";
+import { lastSession } from "../lib/actor";
+import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
+import { descendantsOf } from "../lib/relations";
+
+/** Sends an operation to main. */
+export type Send = (op: Op) => Promise<void>;
+export const iso = (ms: number) => new Date(ms).toISOString();
 
 const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: undefined, canceled: "muted" } as const;
 

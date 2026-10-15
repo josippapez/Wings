@@ -5,7 +5,10 @@
 import { useEffect, useState } from "react";
 import { Empty, Loading } from "wings-plugin-ui";
 import { IssueView } from "../ui/issue-view";
-import { agentCommand, findIssue, lastSession, resumeCommand, trailTo, TRAIL_LENGTH, type Op } from "../lib/issues";
+import { lastSession } from "../lib/actor";
+import { agentCommand, resumeCommand } from "../lib/commands";
+import type { Op } from "../lib/domain";
+import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
 import { useIssues } from "../lib/useIssues";
 import "./tasks.css";
 

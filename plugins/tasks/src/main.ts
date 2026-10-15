@@ -2,8 +2,14 @@
 // ones, one at a time, each against what storage holds at that moment. After each change it refreshes the project's
 // section in the sidebar. Which session wrote a tool call's entry comes from the pane the call was made in.
 
-import { applyOp, canParent, childrenOf, migrateLegacy, openIssues, progress, readStore, resolvePane, STATUS_LABEL, TYPE_LABEL, writeStore, type Actor, type Issue, type IssuesMessage, type Op, type OpMessage } from "./lib/issues";
-import { formatIssue, formatList, parseTool } from "./lib/tools";
+import { resolvePane } from "./lib/actor";
+import { canParent, STATUS_LABEL, TYPE_LABEL, type Actor, type Issue, type IssuesMessage, type Op, type OpMessage } from "./lib/domain";
+import { formatIssue, formatList } from "./lib/format";
+import { applyOp } from "./lib/ops";
+import { openIssues } from "./lib/orderings";
+import { childrenOf, progress } from "./lib/relations";
+import { migrateLegacy, readStore, writeStore } from "./lib/storage";
+import { parseTool } from "./lib/tools";
 
 const SECTION = "tasks";
 /** The project section shows this many rows. */

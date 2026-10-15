@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { Empty, Loading } from "wings-plugin-ui";
 import { BlockView } from "../ui/block-view";
-import type { Issue } from "../lib/issues";
+import type { Issue } from "../lib/domain";
 import { useIssues } from "../lib/useIssues";
 import "./tasks.css";
 

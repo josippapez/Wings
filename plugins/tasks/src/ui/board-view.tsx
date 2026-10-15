@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, SearchField, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
-import { boardColumns, boardLanes, canParent, childrenOf, FLOW, issueTree, matchesQuery, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "../lib/issues";
+import { canParent, FLOW, STATUS_LABEL, STATUSES, type Issue, type Op } from "../lib/domain";
+import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings";
+import { childrenOf, progress } from "../lib/relations";
+import { matchesQuery } from "../lib/search";
 import { ChildProgress, DeleteConfirm, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, TrashIcon, TypeIcon } from "./parts";
 
 export interface BoardViewProps {

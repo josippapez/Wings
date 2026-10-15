@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, priorityRank, issueTree, trailTo, estimateBytes, LIMITS, lastSession, matchesQuery, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
-import { formatIssue, formatList, parseTool } from "./tools.ts";
+import { lastSession, resolvePane } from "./actor.ts";
+import { agentCommand, PLAIN_WORD, resumeCommand } from "./commands.ts";
+import { BUDGET, LIMITS, prefixFor, priorityRank } from "./domain.ts";
+import { formatIssue, formatList } from "./format.ts";
+import { applyOp } from "./ops.ts";
+import { boardColumns, boardLanes, issueTree, openIssues, trailTo } from "./orderings.ts";
+import { matchesQuery } from "./search.ts";
+import { estimateBytes, migrateTasks } from "./storage.ts";
+import { parseTool } from "./tools.ts";
 import { defaultViewOf, startLayout } from "./view-setting.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);

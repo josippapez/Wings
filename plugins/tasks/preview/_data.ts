@@ -1,5 +1,5 @@
 // Made-up issues for the fixtures.
-import type { Issue, LogEntry } from "../src/lib/issues";
+import type { Issue, LogEntry } from "../src/lib/domain";
 
 const now = Date.now();
 const ago = (h: number) => now - h * 3_600_000;

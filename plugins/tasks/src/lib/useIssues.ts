@@ -2,7 +2,8 @@
 // go to main as operations.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readStore, type IssuesMessage, type Op, type OpMessage, type Store } from "./issues";
+import type { IssuesMessage, Op, OpMessage, Store } from "./domain";
+import { readStore } from "./storage";
 
 export function useIssues(projectId: string, projectName: string): { store: Store | null; apply: (op: Op) => Promise<void> } {
   const [store, setStore] = useState<Store | null>(null);

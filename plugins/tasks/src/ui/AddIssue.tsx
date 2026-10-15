@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Row, Text, TextInput } from "wings-plugin-ui";
-import { LIMITS, type Op } from "../lib/issues";
+import { LIMITS, type Op } from "../lib/domain";
 
 /** A line to type a title in. Enter or Add sends it to main; the input clears when main accepts it. */
 export function AddIssue({ apply }: { apply: (op: Op) => Promise<void> }) {
