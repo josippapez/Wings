@@ -86,6 +86,7 @@ export function followSessions({ create, pane, startRun, backlog, entry, gone, c
   return {
     sessions: () => [...tracked.values()].map((t) => t.value),
     get: (sessionId) => tracked.get(sessionId)?.value,
+    loaded: (sessionId) => tracked.get(sessionId)?.queue === null,
     stop() {
       offPanes();
       offTranscript();

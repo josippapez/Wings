@@ -7,7 +7,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const entry = (uuid, extra) => ({ type: "assistant", uuid, ...extra });
 
 /** A fake `wings` and a plugin that logs each handler call. `backlog` answers with entries. */
-function setup(backlog = async () => []) {
+function setup(backlog = async () => [], changed) {
   const on = { panes: [], transcript: [] };
   const subscribe = (list) => (fn) => (list.push(fn), () => list.splice(list.indexOf(fn), 1));
   const log = [];
@@ -21,6 +21,7 @@ function setup(backlog = async () => []) {
         log.push(`${live ? "live" : "old"} ${e.uuid}${thisRun ? "" : " earlier"}`);
       },
       gone: (s, paneId, open) => log.push(`gone ${paneId} ${open ? "open" : "closed"}`),
+      changed,
     },
     { onPanes: subscribe(on.panes), onTranscript: subscribe(on.transcript) },
   );
@@ -69,6 +70,25 @@ test("a resumed session, the same id with a new startedAt, starts a new run, and
   loads[2]([entry("a")]);
   await settle();
   assert.deepEqual(f.log.slice(4), ["start 3000", "backlog 3000", "old a"]);
+});
+
+test("loaded is true once the current run's backlog is in or has failed, and changed follows it", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const loads = [];
+  const seen = [];
+  const f = setup(() => new Promise((resolve, reject) => loads.push({ resolve, reject })), () => seen.push(f.follow.loaded("s1")));
+  await f.panes(["p1", "s1", 1000]);
+  await f.panes(["p1", "s1", 2000]);
+  loads[0].resolve([]);
+  await settle();
+  assert.equal(f.follow.loaded("s1"), false, "the backlog of a run that was replaced doesn't count");
+  loads[1].reject(new Error("no transcript"));
+  await settle();
+  assert.deepEqual(seen, [false, false, true]);
+  await f.panes(["p1", "s1", 3000]);
+  assert.equal(f.follow.loaded("s1"), false);
+  await f.panes(["p1"]);
+  assert.equal(f.follow.loaded("s1"), false);
 });
 
 test("a closed pane calls gone and drops the session, and a pane that stays open says so", async () => {

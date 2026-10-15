@@ -29,6 +29,11 @@ export interface FollowedSessions<S> {
   /** The sessions that run in a pane now. */
   sessions(): S[];
   get(sessionId: string): S | undefined;
+  /**
+   * Whether the session's current run has its backlog in, or its `backlog` failed. False while it loads, and for a
+   * session no pane runs. `changed` is called when a run's backlog is in, so a view that waits for it draws then.
+   */
+  loaded(sessionId: string): boolean;
   /** Stops listening. Entries still loading are dropped. */
   stop(): void;
 }

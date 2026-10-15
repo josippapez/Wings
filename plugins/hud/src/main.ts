@@ -22,8 +22,9 @@ let totalMemory: number | null = null;
 
 const sidebar = ch.share("hud", () => snapshot(follow.sessions()));
 
-// Changes come in bursts while Claude works, so the strips are drawn at most every 300 ms, which also leaves a new
-// session's backlog time to load. Wings skips a strip that is unchanged, so each pass can go through every session.
+// Changes come in bursts while Claude works, so the strips are drawn at most every 300 ms. Wings skips a strip that is
+// unchanged, so each pass can go through every session. A run whose backlog isn't in has nothing to show: its strip
+// stays as it was, and `changed` runs again when the backlog lands.
 let strips: ReturnType<typeof setTimeout> | undefined;
 function changed() {
   sidebar.changed();
@@ -31,7 +32,7 @@ function changed() {
 }
 function drawStrips() {
   strips = undefined;
-  for (const s of follow.sessions()) void wings.setPaneStatus(s.paneId, paneStatus(s)).catch(console.error);
+  for (const s of follow.sessions()) if (follow.loaded(s.id)) void wings.setPaneStatus(s.paneId, paneStatus(s)).catch(console.error);
 }
 
 // The status line runs right after each reply, so look for its numbers just after the reply lands.
