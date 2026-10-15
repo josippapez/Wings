@@ -1,13 +1,5 @@
-/** Counting check results, and turning a failed check's log into the line that says why and the end of the log. */
-import type { Counts, FailureDetail, Result } from "./types";
-
-export function counts(results: Result[]) {
-  const c: Counts = { passed: 0, failed: 0, running: 0 };
-  for (const r of results) c[r]++;
-  return c;
-}
-
-// ---------- failed checks ----------
+/** Turning a failed check's log into the line that says why and the end of the log. No `wings`, no I/O, so node tests drive it. */
+import type { FailureDetail } from "./types";
 
 const LOG_LINES = 150;
 const LOG_CHARS = 8_000;

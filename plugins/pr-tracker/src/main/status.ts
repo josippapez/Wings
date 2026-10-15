@@ -1,13 +1,10 @@
-/** Loading a PR's status, the details of its failed checks, and its diff, from whichever provider it's on. */
-import { azureChecks, azureDiff, azureFailure } from "./azure";
-import { bitbucketDiff, bitbucketStatus } from "./bitbucket";
-import { plainFailure } from "./forges";
-import { giteaDiff, giteaStatus } from "./gitea";
-import { githubDiff, githubFailure, githubStatus } from "./github";
-import { gitlabDiff, gitlabFailure, gitlabStatus } from "./gitlab";
+/** Loading a PR's status, the details of its failed checks, and its diff, from whichever forge it's on. */
+import { errorMessage } from "wings-plugin-sdk/async";
+import { forgeOf } from "../lib/forges/registry";
+import { noLog } from "../lib/forges/shared";
+import type { Diff, FailureDetail, Status } from "../lib/types";
+import { render } from "./badges";
 import { diffLoads, diffs, failKey, failures, inFlight, linkFor, manual, status } from "./state";
-import type { AzureLink, BitbucketLink, Comment, Diff, FailureDetail, Failing, GiteaLink, GitlabLink, Link, Status } from "./types";
-import { render } from "./view";
 
 // ---------- status ----------
 
@@ -18,16 +15,9 @@ export function refreshStatus(url: string, { byUser = false } = {}): Promise<voi
   if (inFlight.has(url)) return inFlight.get(url)!;
   const run = (async () => {
     try {
-      const load = {
-        github: () => githubStatus(link),
-        azure: () => azureChecks(link as AzureLink),
-        gitlab: () => gitlabStatus(link as GitlabLink),
-        bitbucket: () => bitbucketStatus(link as BitbucketLink),
-        gitea: () => giteaStatus(link as GiteaLink),
-      }[link.provider];
-      status.set(url, await load());
+      status.set(url, await forgeOf(link).status(link));
     } catch (error) {
-      status.set(url, { error: String((error as Error).message ?? error) });
+      status.set(url, { error: errorMessage(error) });
     } finally {
       inFlight.delete(url);
       manual.delete(url);
@@ -53,11 +43,9 @@ export function loadFailures(url: string) {
   const link = linkFor(url);
   // The pane moved off this PR while its status loaded.
   if (!link) return Promise.resolve([]);
-  const load = { github: githubFailure, azure: azureFailure, gitlab: gitlabFailure, bitbucket: plainFailure, gitea: plainFailure }[link.provider] as (link: Link, f: Failing) => Promise<FailureDetail[]>;
+  const forge = forgeOf(link);
   const items = Promise.all(
-    st.failing.map((f) =>
-      load(link, f).catch((error: Error): FailureDetail[] => [{ check: f.name, summary: `${f.summary ?? "Failed"} (no log: ${String(error.message ?? error)})`, log: "", url: f.url }]),
-    ),
+    st.failing.map((f) => forge.failure(link, f).catch((error: unknown): FailureDetail[] => noLog(f.name, `${f.summary ?? "Failed"} (no log: ${errorMessage(error)})`, f.url))),
   ).then((lists) => lists.flat());
   const entry = { key, items, list: null as FailureDetail[] | null };
   failures.set(url, entry);
@@ -72,18 +60,17 @@ export function loadFailures(url: string) {
 
 /** The PR's diff and review comments, cached per PR version; concurrent callers share one fetch. */
 export function loadDiff(url: string): Promise<Diff> {
-  const key = status.get(url)?.key;
+  const st = status.get(url);
   const cached = diffs.get(url);
-  if (cached && cached.key === key) return Promise.resolve(cached);
+  if (cached && cached.key === st?.key) return Promise.resolve(cached);
   if (diffLoads.has(url)) return diffLoads.get(url)!;
   const link = linkFor(url);
   // The pane moved off this PR while its status loaded.
   if (!link) return Promise.reject(new Error("This pull request isn't open in a pane any more."));
+  if (!st || st.error !== undefined) return Promise.reject(new Error(st?.error ?? "The pull request's status hasn't loaded."));
   const load = (async () => {
-    const entry = await ({ github: githubDiff, azure: azureDiff, gitlab: gitlabDiff, bitbucket: bitbucketDiff, gitea: giteaDiff }[link.provider] as (link: Link) => Promise<{ patch: string; comments: Comment[] }>)(
-      link,
-    );
-    diffs.set(url, { key, ...entry });
+    const entry = await forgeOf(link).diff(link, st);
+    diffs.set(url, { key: st.key, ...entry });
     return diffs.get(url)!;
   })().finally(() => diffLoads.delete(url));
   diffLoads.set(url, load);

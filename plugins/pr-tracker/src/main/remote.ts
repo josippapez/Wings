@@ -1,16 +1,15 @@
 // ---------- repository detection ----------
-import { git } from "./cli";
-import { parseRemote } from "./parse";
-import { remotes } from "./state";
-import type { KnownRemote, UnknownRemote } from "./types";
-
-export { parseRemote };
+import { gitOk, parseRemote } from "wings-plugin-sdk/git";
+import type { GithubRemote, GitlabRemote, KnownRemote, Remote } from "../lib/types";
 
 const HOSTS_TTL_MS = 60_000;
 /** How long a remote that no CLI knows stays unresolved without asking the CLIs again, unless Try again or a sign-in in Wings forgets it. */
 const UNRESOLVED_TTL_MS = 30 * 60_000;
 
-/** origin → when to look again. */
+/** cwd → what its `origin` is, with a host no provider's name gives away replaced once `gh` or `glab` is known to be signed in to it. */
+export const remotes = new Map<string, Remote>();
+
+/** `host/path` → when to look again. */
 const unresolved = new Map<string, number>();
 
 /** The hosts `gh` and `glab` are set up for, which is how a host with no telling name (`git.corp.example`) is known to be GitHub or GitLab. */
@@ -41,30 +40,23 @@ export function forgetHosts() {
   unresolved.clear();
 }
 
-async function resolve(remote: UnknownRemote): Promise<KnownRemote> {
+async function resolve({ host, path }: { host: string; path: string }): Promise<GithubRemote | GitlabRemote | { kind: "none"; host: string }> {
   if (!signedIn || Date.now() - signedIn.at > HOSTS_TTL_MS) signedIn = { at: Date.now(), hosts: readHosts() };
   const { github, gitlab } = await signedIn.hosts;
-  const { host, path, origin } = remote;
-  if (github.has(host)) return { kind: "github", host, path, origin };
-  if (gitlab.has(host)) return { kind: "gitlab", host, path, origin };
-  return { kind: "none", host, origin };
+  if (github.has(host)) return { kind: "github", host, path };
+  if (gitlab.has(host)) return { kind: "gitlab", host, path };
+  return { kind: "none", host };
 }
 
-export async function remoteFor(cwd: string): Promise<KnownRemote> {
-  if (!remotes.has(cwd)) {
-    try {
-      const origin = await git(cwd, ["remote", "get-url", "origin"]);
-      remotes.set(cwd, { ...parseRemote(origin), origin });
-    } catch {
-      remotes.set(cwd, { kind: "none" });
-    }
-  }
+/** The remote of a folder's `origin`. A host with no telling name is `none` until `gh` or `glab` is signed in to it, which is asked again after a while. */
+export async function remoteFor(cwd: string): Promise<KnownRemote | { kind: "none"; host?: string }> {
+  if (!remotes.has(cwd)) remotes.set(cwd, parseRemote((await gitOk(cwd, ["remote", "get-url", "origin"])) ?? ""));
   const remote = remotes.get(cwd)!;
   if (remote.kind !== "unknown") return remote;
-  const until = unresolved.get(remote.origin!);
-  if (until && Date.now() < until) return { kind: "none", host: remote.host, origin: remote.origin };
+  const key = `${remote.host}/${remote.path}`;
+  if ((unresolved.get(key) ?? 0) > Date.now()) return { kind: "none", host: remote.host };
   const resolved = await resolve(remote);
-  if (resolved.kind === "none") unresolved.set(remote.origin!, Date.now() + UNRESOLVED_TTL_MS);
+  if (resolved.kind === "none") unresolved.set(key, Date.now() + UNRESOLVED_TTL_MS);
   else remotes.set(cwd, resolved);
   return resolved;
 }

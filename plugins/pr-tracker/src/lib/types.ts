@@ -1,57 +1,20 @@
-/** The shapes the PR tracker keeps in its maps, and the parts of the CLIs' JSON it reads. */
+/** The shapes the PR tracker keeps in its maps and passes between its modules. */
+import type { Remote } from "wings-plugin-sdk/git";
 
+export type { Remote };
 export type Provider = "github" | "azure" | "gitlab" | "bitbucket" | "gitea";
-export type Cli = "gh" | "az" | "glab";
 export type Icon = NonNullable<WingsBadge["icon"]>;
 
-export interface AzureRemote {
-  kind: "azure";
-  org: string;
-  project: string;
-  repo: string;
-  origin?: string;
-}
+/** The remote of one provider. `host` is github.com or a GitHub Enterprise Server host `gh` is signed in to, and `path` is `owner/repo`. Gitea covers Gitea and Forgejo, like codeberg.org. */
+export type RemoteOf<K extends Provider> = Extract<Remote, { kind: K }>;
+export type GithubRemote = RemoteOf<"github">;
+export type AzureRemote = RemoteOf<"azure">;
+export type GitlabRemote = RemoteOf<"gitlab">;
+export type BitbucketRemote = RemoteOf<"bitbucket">;
+export type GiteaRemote = RemoteOf<"gitea">;
 
-export interface GitlabRemote {
-  kind: "gitlab";
-  host: string;
-  path: string;
-  origin?: string;
-}
-
-/** `host` is github.com or a GitHub Enterprise Server host that `gh` is signed in to; `path` is `owner/repo`. */
-export interface GithubRemote {
-  kind: "github";
-  host: string;
-  path: string;
-  origin?: string;
-}
-
-export interface BitbucketRemote {
-  kind: "bitbucket";
-  workspace: string;
-  repo: string;
-  origin?: string;
-}
-
-/** Gitea and Forgejo, like codeberg.org. */
-export interface GiteaRemote {
-  kind: "gitea";
-  host: string;
-  owner: string;
-  repo: string;
-  origin?: string;
-}
-
-/** A host that no provider's name gives away: `gh` or `glab` being signed in to it says what it is. */
-export interface UnknownRemote {
-  kind: "unknown";
-  host: string;
-  path: string;
-  origin?: string;
-}
-
-export type Remote = GithubRemote | AzureRemote | GitlabRemote | BitbucketRemote | GiteaRemote | UnknownRemote | { kind: "none"; origin?: string; org?: undefined; host?: string };
+/** A remote whose provider is settled. A host that no provider's name gives away is `unknown` until `gh` or `glab` being signed in to it says what it is. */
+export type KnownRemote = RemoteOf<Provider>;
 
 export interface GithubLink {
   provider: "github";
@@ -66,6 +29,7 @@ export interface AzureLink {
   number: number;
   repo: string;
   remote: AzureRemote;
+  /** The project's folder, which the diff is made in. */
   cwd: string;
   raw: AzurePr;
 }
@@ -95,9 +59,6 @@ export interface GiteaLink {
   repo: string;
   remote: GiteaRemote;
 }
-
-/** A remote whose provider is settled. */
-export type KnownRemote = Exclude<Remote, UnknownRemote>;
 
 /** PR ref { provider, url, number, repo, ...provider fields } */
 export type Link = GithubLink | AzureLink | GitlabLink | BitbucketLink | GiteaLink;
@@ -135,7 +96,7 @@ export interface CheckItem {
   url: string | null;
   /** Why it is in this state, from the provider's data: "2 of 3 required reviewers approved". */
   note: string | null;
-  /** Set where its log can be fetched, which `failureOf` takes. */
+  /** Set where its log can be fetched, which a forge's `failure` takes. */
   failing?: Failing;
   /** The page fills the note from what it has loaded: a comment requirement counts the open threads. */
   needs?: "unresolved";
@@ -155,6 +116,8 @@ export interface ListedPr {
   author: string | null;
   /** From the list alone, so GitLab and Azure DevOps have no check counts until the PR's own status loads. */
   status: Status;
+  /** True where the list carries what a PR's own status does, so it can stand for that status. */
+  loaded: boolean;
   /** Comments and reviews so far, or null where the list doesn't say. */
   activity: number | null;
 }
@@ -170,7 +133,8 @@ export interface PrArgs {
   repo: string;
   title: string;
   cwd: string;
-  remote?: AzureRemote | GitlabRemote | BitbucketRemote | GiteaRemote;
+  /** What the provider needs beyond the URL, which GitHub doesn't: its `linkOf` checks it is the provider's own. */
+  remote?: Remote;
 }
 
 /** Normalized status of a PR. */
@@ -227,22 +191,24 @@ export interface Reviewer {
   vote: "approved" | "changes" | "waiting" | "none";
 }
 
+/** The status, author and description of a PR, which the PR tab shows. */
+export interface Overview {
+  status: Status;
+  author: string;
+  body: string;
+  /** When the PR was opened, where the provider says. */
+  createdAt?: string;
+  /** Each reviewer's latest verdict, where the provider says; the status's `review` text covers the rest. */
+  reviewers?: Reviewer[];
+}
+
 export interface Diff {
   key: string | undefined;
   patch: string;
   comments: Comment[];
 }
 
-export interface Problem {
-  login?: boolean;
-  /** Signing in means pasting a token in Settings, since there is no CLI to sign in with. */
-  token?: boolean;
-  missing?: Cli;
-  message: string;
-}
-
-// ---------- CLI output ----------
-
+/** A pull request as `az repos pr list` and `show` print it: the parts the tracker reads. */
 export interface AzurePr {
   pullRequestId: number;
   status: string;
@@ -259,17 +225,4 @@ export interface AzurePr {
   closedDate?: string;
   sourceRefName?: string;
   targetRefName?: string;
-}
-
-export interface AzurePolicy {
-  status: string;
-  startedDate?: string;
-  completedDate?: string;
-  configuration?: {
-    isEnabled?: boolean;
-    isBlocking?: boolean;
-    type?: { id?: string; displayName?: string };
-    settings?: Record<string, unknown> & { displayName?: string };
-  };
-  context?: { buildId?: number; buildDefinitionName?: string };
 }

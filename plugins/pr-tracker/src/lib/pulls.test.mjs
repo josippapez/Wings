@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BLOCK_ROWS, countPulls, filterOf, filterPulls, fitRows, MAX_BYTES, orderPulls, serveCached, splitTitle } from "./pulls.ts";
+import { BLOCK_ROWS, countPulls, filterOf, filterPulls, fitPulls, orderPulls, splitTitle } from "./pulls.ts";
 
 const row = (id, scope, draft = false) => ({ id, scope, draft });
 const rows = [row("a", "other"), row("b", "mine"), row("c", "review", true), row("d", "other", true), row("e", "mine")];
@@ -37,16 +37,10 @@ test("leading [tags] of a title are split off, and a title that is only tags sta
 test("a list too big for a broadcast is cut at the last row that fits, a normal one is kept whole", () => {
   const args = { provider: "azure", url: "https://dev.azure.com/org/Some%20Project/_git/some-repo/pullrequest/12345", number: 12345, repo: "Some Project/some-repo", title: "x".repeat(120), cwd: "/Users/someone/projects/some-repo", remote: { kind: "azure", org: "https://dev.azure.com/org", project: "Some Project", repo: "some-repo" } };
   const one = { id: "azure:12345", title: "x".repeat(160), number: "#12345", author: "A Person With A Long Name", branch: `feature/${"y".repeat(60)} → main`, scope: "other", draft: false, badge: { text: "Checks failing", tone: "danger" }, review: "1 approved, 1 waiting for author", checks: { passed: 4, failed: 1, running: 2 }, updated: "2026-10-13T10:00:00.000Z", unread: 3, agent: "working", args };
-  const long = fitRows(Array.from({ length: BLOCK_ROWS }, () => one));
+  const long = fitPulls(Array.from({ length: BLOCK_ROWS }, () => one));
   assert.ok(long.length > 40 && long.length < BLOCK_ROWS);
-  assert.ok(JSON.stringify({ rows: long }).length < MAX_BYTES + 100);
-  assert.equal(fitRows(Array.from({ length: 50 }, () => ({ ...one, title: "short", args: { ...args, title: "short" } }))).length, 50);
-  assert.deepEqual(fitRows([]), []);
-});
-
-test("serveCached serves a list of any age only for a pane-change redraw", () => {
-  assert.equal(serveCached(10_000, 55_000, false), true);
-  assert.equal(serveCached(55_000, 55_000, false), false);
-  assert.equal(serveCached(3 * 3_600_000, 55_000, false), false);
-  assert.equal(serveCached(3 * 3_600_000, 55_000, true), true);
+  // Wings refuses a broadcast over 64,000 characters, the message around the rows counted.
+  assert.ok(JSON.stringify({ type: "pulls-response", rid: crypto.randomUUID(), rows: long }).length <= 64_000);
+  assert.equal(fitPulls(Array.from({ length: 50 }, () => ({ ...one, title: "short", args: { ...args, title: "short" } }))).length, 50);
+  assert.deepEqual(fitPulls([]), []);
 });

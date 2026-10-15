@@ -1,6 +1,5 @@
 // Made-up pull request data for the fixtures in this folder, shaped like what pr.tsx loads.
-import type { Overview } from "../src/lib/refs";
-import type { Comment, PrArgs } from "../src/lib/types";
+import type { Comment, Overview, PrArgs } from "../src/lib/types";
 import type { PrViewProps } from "../src/ui/pr-view";
 import type { PullRow } from "../src/lib/pulls";
 import type { Push } from "../src/lib/pushes";

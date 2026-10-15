@@ -1,10 +1,11 @@
 /** The `failing_checks` MCP tool: the failed checks of the pane's PR, with the end of each log, for Claude to fix. */
-import { fenced, TOOL_CHARS } from "./checks";
-import { links, refOf, status } from "./state";
+import { fenced, TOOL_CHARS } from "../lib/logs";
+import { refOf } from "../lib/providers";
+import type { Status } from "../lib/types";
+import { links, status } from "./state";
 import { loadFailures, refreshStatus } from "./status";
-import type { Status } from "./types";
 
-export async function failingChecks(_input: Record<string, unknown>, { paneId }: { paneId: string | null }) {
+export async function failingChecks(paneId: string | null) {
   const link = paneId && links.get(paneId);
   if (!link) return "Wings found no pull request for this pane's branch, so there are no checks to show.";
   await refreshStatus(link.url);

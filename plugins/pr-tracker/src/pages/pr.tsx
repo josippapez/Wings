@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useBroadcast } from "wings-plugin-sdk/react";
 import { Empty, Loading, Page } from "wings-plugin-ui";
-import { approveWith, canApprove, commentsOf, failureOf, linkOf, overviewOf, pushesFor, replyWith, snippetFor, voteWith, type Overview } from "../lib/refs";
+import { forgeOf, linkOf } from "../lib/forges/registry";
 import type { Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
-import type { Comment, Failing, Link, PrArgs } from "../lib/types";
+import type { Comment, Failing, Link, Overview, PrArgs } from "../lib/types";
 import type { AzureVote } from "../lib/vote";
 import "./pr.css";
 import { PrView } from "../ui/pr-view";
@@ -61,9 +61,9 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       setLink(l);
       // The status, description and threads load side by side; each shows as it arrives.
       const [o, c] = await Promise.all([
-        overviewOf(l).then((o) => (setOverview(o), o)),
-        commentsOf(l).then((c) => (setComments(c), c)),
-        pushesFor(l).then(setPushes),
+        forgeOf(l).overview(l).then((o) => (setOverview(o), o)),
+        forgeOf(l).comments(l).then((c) => (setComments(c), c)),
+        (forgeOf(l).pushes?.(l) ?? Promise.resolve([])).then(setPushes),
       ]);
       setError(null);
       return { o, c };
@@ -96,19 +96,19 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
 
   const onReply = useCallback(
     async (root: Comment, body: string) => {
-      const reply = await replyWith(link!, root, body);
+      const reply = await forgeOf(link!).reply(link!, root, body);
       setComments((all) => [...(all ?? []), reply]);
     },
     [link],
   );
 
   const onApprove = useCallback(async () => {
-    await approveWith(link!, overview!.status.key);
+    await forgeOf(link!).approve!(link!, overview!.status.key);
     await load();
   }, [link, load, overview]);
 
   const onVote = useCallback(async (vote: AzureVote) => {
-    await voteWith(link!, vote);
+    await forgeOf(link!).vote!(link!, vote);
     await load();
   }, [link, load]);
 
@@ -117,14 +117,14 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
     (root: Comment) => {
       const hit = snippets.current.get(root.id);
       if (hit) return hit;
-      const lines = snippetFor(link!, root, pushes, overview?.status.headCommit ?? null);
+      const lines = forgeOf(link!).snippet!(link!, root, pushes, overview?.status.headCommit ?? null);
       snippets.current.set(root.id, lines);
       return lines;
     },
     [link, pushes, overview],
   );
 
-  const onLoadFailure = useCallback((f: Failing) => failureOf(link!, f), [link]);
+  const onLoadFailure = useCallback((f: Failing) => forgeOf(link!).failure(link!, f), [link]);
 
   return (
     <PrView
@@ -132,7 +132,7 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       overview={overview}
       comments={comments}
       pushes={pushes}
-      onSnippet={link?.provider === "azure" ? onSnippet : undefined}
+      onSnippet={link && forgeOf(link).snippet ? onSnippet : undefined}
       error={error}
       notice={notice}
       busy={busy}
@@ -140,8 +140,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       onRefresh={() => void load()}
       onRun={run}
       onReply={onReply}
-      onApprove={link && canApprove(link.provider) ? onApprove : undefined}
-      onVote={link?.provider === "azure" ? onVote : undefined}
+      onApprove={link && forgeOf(link).approve ? onApprove : undefined}
+      onVote={link && forgeOf(link).vote ? onVote : undefined}
       onLoadFailure={link ? onLoadFailure : undefined}
       onBack={onBack}
     />

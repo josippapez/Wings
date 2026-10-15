@@ -1,14 +1,10 @@
 // ---------- badge ----------
-import { ghKey } from "./github";
-import { CLIS, failKey, failures, inFlight, links, manual, PROVIDERS, problems, refOf, remotes, signInKey, signingIn, state, status, sync } from "./state";
-import type { Link, Problem, Provider, Remote, Status, StatusEntry } from "./types";
-
-function ago(iso: string) {
-  const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
-}
+import { ago } from "wings-plugin-sdk/format";
+import { PROVIDERS, refOf } from "../lib/providers";
+import type { Link, Status, StatusEntry } from "../lib/types";
+import { codes, problemOf, type Problem } from "./problems";
+import { remotes } from "./remote";
+import { failKey, failures, inFlight, links, manual, state, status, sync } from "./state";
 
 function syncText({ ahead, behind }: { ahead: number; behind: number }) {
   return [ahead && `${ahead} to push`, behind && `${behind} to pull`].filter(Boolean).join(", ");
@@ -64,37 +60,10 @@ function badgeFor(link: Link, entry: StatusEntry | undefined, local: { ahead: nu
   };
 }
 
-export function problemKey(remote: Remote | undefined) {
-  switch (remote?.kind) {
-    case "github":
-      return ghKey(remote.host);
-    case "gitlab":
-      return `gitlab:${remote.host}`;
-    case "bitbucket":
-      return "bitbucket";
-    case "gitea":
-      return `gitea:${remote.host}`;
-    case "azure":
-      return remote.org;
-    default:
-      return undefined;
-  }
-}
-
-function problemBadge(remote: Remote, problem: Problem): WingsBadge {
-  const provider = remote.kind as Provider;
-  const { name, tone } = PROVIDERS[provider];
-  if (problem.missing) {
-    return {
-      label: `Install ${CLIS[problem.missing]}`,
-      tone,
-      icon: "pr-open",
-      title: name,
-      subtitle: problem.message,
-      actions: [{ id: "install", label: "Install", primary: true }, { id: "retry", label: "Try again" }],
-    };
-  }
-  if (!problem.login) {
+/** What the pane shows while its host has a problem: a button to install the CLI, sign in or add a token, or the error when nothing can be done but try again. */
+function problemBadge(problem: Problem): WingsBadge {
+  const { name, tone } = PROVIDERS[problem.remote.kind];
+  if (problem.kind === "unavailable") {
     return {
       label: "PRs unavailable",
       tone: "warning",
@@ -104,7 +73,7 @@ function problemBadge(remote: Remote, problem: Problem): WingsBadge {
       actions: [{ id: "retry", label: "Try again", primary: true }],
     };
   }
-  if (problem.token) {
+  if (problem.kind === "token") {
     return {
       label: `Add ${name} token`,
       tone,
@@ -114,29 +83,21 @@ function problemBadge(remote: Remote, problem: Problem): WingsBadge {
       actions: [{ id: "signin", label: "Add token", primary: true }, { id: "retry", label: "Try again" }],
     };
   }
-  const run = signingIn.get(signInKey(remote));
-  let label = `Sign in to ${name}`;
-  let subtitle = problem.message;
-  if (run?.code) [label, subtitle] = [`Code ${run.code}`, `Enter this code on the ${name} page in your browser. It's on your clipboard too.`];
-  else if (run) [label, subtitle] = ["Signing in…", "Finish signing in in your browser."];
-  return {
-    label,
-    tone,
-    icon: "pr-open",
-    loading: Boolean(run),
-    title: name,
-    subtitle,
-    actions: [{ id: "signin", label: "Sign in", primary: true }, { id: "retry", label: "Try again" }],
-  };
+  const { cli, words } = problem.login;
+  const key = problem.forge.problemKey(problem.remote);
+  const badge = cli.problemBadge(key, { title: name, tone, icon: "pr-open", ...words(problem.remote) })!;
+  const code = codes.get(key);
+  // While `gh` waits for the code to be entered in the browser, the badge says which.
+  return code && badge.loading ? { ...badge, label: `Code ${code}`, subtitle: `Enter this code on the ${name} page in your browser. It's on your clipboard too.` } : badge;
 }
 
 export function render() {
   for (const pane of state.panes) {
     const link = links.get(pane.paneId);
-    const remote = remotes.get(pane.cwd);
-    const problem = problems.get(problemKey(remote));
-    if (problem?.login || problem?.missing || (problem && !link)) {
-      void wings.setBadge(pane.paneId, problemBadge(remote!, problem));
+    const problem = problemOf(remotes.get(pane.cwd));
+    // A problem with the host replaces the PR's badge, except one that only means nothing could be listed.
+    if (problem && (problem.kind !== "unavailable" || !link)) {
+      void wings.setBadge(pane.paneId, problemBadge(problem));
     } else if (link) {
       const loading = inFlight.has(link.url) && (!status.has(link.url) || manual.has(link.url));
       void wings.setBadge(pane.paneId, { ...badgeFor(link, status.get(link.url), sync.get(pane.paneId)), loading });

@@ -3,13 +3,12 @@
 
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Chip, Empty, Heading, Markdown, Page, Tabs, Text, Toolbar } from "wings-plugin-ui";
-import type { Overview } from "../lib/refs";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
-import { PROVIDERS } from "../lib/state";
+import { PROVIDERS, refOf } from "../lib/providers";
 import { ago, focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
-import type { Comment, FailureDetail, Failing, PrArgs, Reviewer, Status } from "../lib/types";
+import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
 
 const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
@@ -83,7 +82,7 @@ export function PrView(props: PrViewProps) {
   const [approving, setApproving] = useState(false);
   const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
   const open = st ? !["Merged", "Closed"].includes(st.label) : false;
-  const ref = `${args.repo} ${args.provider === "gitlab" ? "!" : "#"}${args.number}`;
+  const ref = `${args.repo} ${refOf(args)}`;
 
   const send = async () => {
     const choice = pending!;
@@ -136,7 +135,7 @@ export function PrView(props: PrViewProps) {
         <header className="pr-header">
           <h1 className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
             {st?.title ?? args.title}
-            <span className="pr-number">{args.provider === "gitlab" ? "!" : "#"}{args.number}</span>
+            <span className="pr-number">{refOf(args)}</span>
           </h1>
           <div className="pr-meta">
             {st ? <Badge tone={BADGE_TONE[st.tone]} data-testid="pr-state">{st.label}</Badge> : null}
