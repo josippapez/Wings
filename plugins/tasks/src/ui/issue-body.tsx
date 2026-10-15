@@ -18,7 +18,7 @@ export function Description({ issue, send }: { issue: Issue; send: Send }) {
   };
   const save = () =>
     run(async () => {
-      await send({ kind: "update", key: issue.key, description: draft });
+      if ((await send({ kind: "update", key: issue.key, description: draft })) === false) return;
       setEditing(false);
     });
   if (editing) {
@@ -81,7 +81,7 @@ function Composer({ issue, send }: { issue: Issue; send: Send }) {
   const submit = () => {
     if (!note.trim() || busy) return;
     void run(async () => {
-      await send({ kind: "note", key: issue.key, text: note });
+      if ((await send({ kind: "note", key: issue.key, text: note })) === false) return;
       setNote("");
       setOpen(false);
     });

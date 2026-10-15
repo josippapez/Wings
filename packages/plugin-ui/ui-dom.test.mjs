@@ -783,6 +783,19 @@ test("useAction is busy while any run is going, and keeps the message of the las
   await unmount();
 });
 
+test("useAction's run resolves to whether the action worked, so a caller can keep a draft when it didn't", async () => {
+  let action;
+  const Page = () => ((action = useAction()), null);
+  const { unmount } = await mount(h(Page));
+  let worked, failed;
+  await act(async () => {
+    worked = await action.run(async () => {});
+    failed = await action.run(() => Promise.reject(new Error("Disk full")));
+  });
+  assert.deepEqual([worked, failed], [true, false]);
+  await unmount();
+});
+
 test("usePoll loads at once and when load changes, then every interval while Wings is focused, and stops on unmount", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   let focus;

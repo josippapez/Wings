@@ -60,8 +60,8 @@ export function useBlockState<T>(initial: T, check: Check<T>): [T | null, (next:
 export function useViewArgs<T>(check: Check<T>): T | null;
 
 export interface ActionState {
-  /** Runs `fn`. It never rejects: if `fn` throws, `error` is its message. Starting one clears the error. */
-  run(fn: () => unknown): Promise<void>;
+  /** Runs `fn`. It never rejects: if `fn` throws, `error` is its message. Resolves to whether `fn` worked. Starting one clears the error. */
+  run(fn: () => unknown): Promise<boolean>;
   /** True while any `run` is going. */
   busy: boolean;
   /** The message of the last `run` that threw, until the next `run` starts or `clear` is called. */

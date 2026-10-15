@@ -4,7 +4,7 @@
 import { Fragment, useState } from "react";
 import { Button, Card, Empty, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
-import { canParent, LIMITS, type Issue, type Op } from "../lib/domain";
+import { canParent, LIMITS, type Issue } from "../lib/domain";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { InlineInput } from "./inline-input";
@@ -19,7 +19,7 @@ export interface IssueViewProps {
   /** The key the tab was opened for, for the not-found page. */
   issueKey: string;
   error: string | null;
-  send: (op: Op) => Promise<void>;
+  send: Send;
   onBack: () => void;
   /** The issues opened before this one in this tab, oldest first, shown in the breadcrumb to go back to. */
   trail?: string[];

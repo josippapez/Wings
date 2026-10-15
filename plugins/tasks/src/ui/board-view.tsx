@@ -8,7 +8,7 @@ import { iso } from "../lib/format";
 import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings";
 import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
-import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TrashIcon, TypeIcon } from "./parts";
+import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TrashIcon, TypeIcon, type Send } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -29,7 +29,7 @@ export interface BoardViewProps {
   query: string;
   onQuery: (query: string) => void;
   apply: (op: Op) => Promise<void>;
-  send: (op: Op) => Promise<void>;
+  send: Send;
   onOpen: (issue: Issue, newTab: boolean) => void;
   /** The key of an issue to start out asking to delete, for a fixture. */
   deleting?: string;

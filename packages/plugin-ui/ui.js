@@ -123,7 +123,8 @@ export function useViewArgs(check) {
 
 /**
  * Runs the page's async actions and keeps what its buttons and error card show: `busy` while any `run` is going, and
- * the message of the last one that threw as `error`. Starting a `run` clears the error; `clear` does it by hand.
+ * the message of the last one that threw as `error`. Starting a `run` clears the error; `clear` does it by hand. `run`
+ * says whether the action worked, so a caller that closes an editor or clears a draft can do it only then.
  */
 export function useAction() {
   const [running, setRunning] = useState(0);
@@ -133,8 +134,10 @@ export function useAction() {
     setError(null);
     try {
       await fn();
+      return true;
     } catch (e) {
       setError(errorMessage(e));
+      return false;
     } finally {
       setRunning((n) => n - 1);
     }

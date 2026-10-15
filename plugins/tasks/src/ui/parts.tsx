@@ -7,8 +7,11 @@ import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueT
 import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
 
-/** Sends an operation to main. */
-export type Send = (op: Op) => Promise<void>;
+/**
+ * Sends an operation to main. Resolves to false when it failed and the page shows why, so an editor can stay open with
+ * its text. Resolving with nothing is not a failure.
+ */
+export type Send = (op: Op) => Promise<boolean | void>;
 
 /** An error from the last change: in the danger colour, and announced to a screen reader. */
 export function ErrorText(props: Omit<ComponentProps<typeof Text>, "tone" | "role">) {
