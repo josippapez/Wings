@@ -1,6 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { azureApiOrg, parseRemote } from "wings-plugin-sdk/git";
 import { forgetHosts, remoteFor, remotes } from "./remote.ts";
+
+// What the tracker relies on `parseRemote` for: which forge a remote is, whatever its URL looks like. The SDK owns the function.
+test("remote URLs in every shape name their forge, host and repository", () => {
+  const github = { kind: "github", host: "github.com", path: "o/r" };
+  for (const url of ["https://github.com/o/r.git", "git@github.com:o/r.git", "ssh://git@github.com/o/r", "https://user:tok@github.com/o/r/", "git://github.com/o/r.git", "ssh://git@ssh.github.com:443/o/r.git"]) assert.deepEqual(parseRemote(url), github, url);
+  for (const url of ["git@ghe.corp.example:org/repo.git", "https://ghe.corp.example:8443/org/repo", "ssh://git@ghe.corp.example:2222/org/repo.git", "HTTPS://GHE.Corp.Example/org/repo"]) assert.deepEqual(parseRemote(url), { kind: "unknown", host: "ghe.corp.example", path: "org/repo" }, url);
+  assert.deepEqual(parseRemote("ssh://git@gitlab.corp.example:2222/g/s/p"), { kind: "gitlab", host: "gitlab.corp.example", path: "g/s/p" });
+  assert.deepEqual(parseRemote("git@github.com:123/repo.git"), { kind: "github", host: "github.com", path: "123/repo" }, "an owner made of digits is a path, not a port");
+  for (const url of ["https://bitbucket.org/ws/my-repo.v2.git", "git@bitbucket.org:ws/my-repo.v2.git", "ssh://git@bitbucket.org:22/ws/my-repo.v2"]) assert.deepEqual(parseRemote(url), { kind: "bitbucket", workspace: "ws", repo: "my-repo.v2" }, url);
+  assert.equal(parseRemote("https://bitbucket.org/ws/a/b").kind, "none");
+  for (const url of ["https://codeberg.org/o/r.git", "git@codeberg.org:o/r.git", "ssh://git@codeberg.org:22/o/r"]) assert.deepEqual(parseRemote(url), { kind: "gitea", host: "codeberg.org", owner: "o", repo: "r" }, url);
+  for (const url of ["/Users/me/repo", "../repo", "file:///a/b", ""]) assert.equal(parseRemote(url).kind, "none", url);
+});
+
+test("an Azure DevOps remote in any form names its organization at the address a reply goes to", () => {
+  for (const url of ["git@ssh.dev.azure.com:v3/org/proj/repo", "https://org@dev.azure.com/org/proj/_git/repo", "https://org.visualstudio.com/DefaultCollection/proj/_git/repo", "https://org@org.visualstudio.com/proj/_git/repo"]) {
+    assert.equal(azureApiOrg(parseRemote(url).org), "https://dev.azure.com/org", url);
+  }
+  assert.deepEqual(parseRemote("git@ssh.dev.azure.com:v3/org/My%20Project/repo"), { kind: "azure", org: "https://dev.azure.com/org", project: "My Project", repo: "repo" });
+});
 
 /** A `wings.exec` that answers git's `origin` per folder, and which hosts `gh` and `glab` are signed in to. */
 function fakeWings(t, { origins, gh = [], glab = [] }) {
