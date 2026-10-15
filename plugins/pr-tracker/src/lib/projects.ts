@@ -9,6 +9,7 @@ import { argsOf } from "./refs";
 import { known, links, problems, refOf, state, status } from "./state";
 import { problemKey } from "./view";
 import { BLOCK_ROWS, fitRows, orderPulls, serveCached, type PullRow, type PullsResponse } from "./pulls";
+import { newPulls, notesFor } from "./watch";
 import type { AzureRemote, BitbucketRemote, GiteaRemote, GithubRemote, GitlabRemote, KnownRemote, ListedPr, Status } from "./types";
 
 const SECTION = "pulls";
@@ -25,6 +26,10 @@ const sent = new Map<string, string>();
 const seen = new Map<string, number>();
 /** PR url → comments and reviews counted in the latest list. */
 const activity = new Map<string, number>();
+/** `origin` → the urls of its open PRs on the last check, to tell which are new. */
+const opened = new Map<string, Set<string>>();
+/** A check interval is set in Settings, so new PRs get a notification. */
+let watching = false;
 /** `seen` as last saved. */
 let persisted = "";
 const loaded = wings.storage.get("seen").then((saved) => {
@@ -100,6 +105,7 @@ export async function refreshProjects(fresh = false) {
           const remote = await remoteFor(project.path);
           const items = remote.kind === "none" ? [] : await listFor(project.path, remote, !fresh);
           remember(items);
+          if (remote.kind !== "none") announce(project.name, remote.origin!, items);
           items.forEach((i) => live.add(i.link.url));
           // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
           for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
@@ -129,6 +135,17 @@ export async function refreshProjects(fresh = false) {
       void refreshProjects(next.fresh);
     }
   }
+}
+
+export function setWatching(on: boolean) {
+  watching = on;
+}
+
+/** Notifies about the PRs that weren't open on the last check. Tracked with notifications off too, so turning them on doesn't announce every open PR. */
+function announce(project: string, origin: string, items: ListedPr[]) {
+  const fresh = newPulls(opened.get(origin), items);
+  opened.set(origin, new Set(items.map((i) => i.link.url)));
+  if (watching) for (const note of notesFor(project, fresh)) void wings.notify(note).catch(console.error);
 }
 
 /** Sign-in or Try again: the lists that failed, or came back empty for lack of it, are fetched again. */

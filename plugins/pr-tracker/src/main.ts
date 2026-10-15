@@ -8,7 +8,7 @@
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { openDiffFor } from "./lib/diffview";
 import { refreshLinks } from "./lib/links";
-import { markSeen, pullsFor, refreshProjects } from "./lib/projects";
+import { markSeen, pullsFor, refreshProjects, setWatching } from "./lib/projects";
 import { remoteFor } from "./lib/remote";
 import type { PullsAction, PullsChanged, PullsRequest, PullsResponse } from "./lib/pulls";
 import { linkOf, replyWith } from "./lib/refs";
@@ -18,6 +18,7 @@ import { refreshStatus } from "./lib/status";
 import { failingChecks } from "./lib/tool";
 import type { Diff, Link, PrArgs } from "./lib/types";
 import { problemKey } from "./lib/view";
+import { WATCH_KEY, watchOf } from "./lib/watch";
 
 const LINK_POLL_MS = 15_000;
 const STATUS_POLL_MS = 60_000;
@@ -42,6 +43,16 @@ pollWhileFocused(refreshLinks, LINK_POLL_MS);
 pollWhileFocused(() => [...new Set([...links.values()].map((l) => l.url))].forEach((url) => refreshStatus(url)), STATUS_POLL_MS);
 // The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
 pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
+
+// New pull requests: with an interval set in Settings, the lists are also checked while Wings is in the background.
+let watchTimer: ReturnType<typeof setInterval> | undefined;
+async function loadWatch() {
+  const minutes = watchOf(await wings.storage.get(WATCH_KEY));
+  setWatching(minutes > 0);
+  clearInterval(watchTimer);
+  if (minutes) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), minutes * 60_000);
+}
+void loadWatch();
 
 wings.onTool("failing_checks", failingChecks);
 
@@ -135,7 +146,8 @@ wings.onBroadcast(async (message) => {
   await wings.broadcast({ type: "pulls-changed" } satisfies PullsChanged);
 });
 
-// Settings saved a token: ask again with it.
+// Settings saved a token: ask again with it. Or it changed how often to check for new PRs.
 wings.onBroadcast((message) => {
   if ((message as { settingsChanged?: boolean } | null)?.settingsChanged) void retry().then(() => refreshProjects(true));
+  if ((message as { watchChanged?: boolean } | null)?.watchChanged) void loadWatch();
 });
