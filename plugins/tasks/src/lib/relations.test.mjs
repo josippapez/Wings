@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyOp, blocksOf, childrenOf, DESCRIPTION_TEMPLATE, hasContent, migrateV2, parentChoices, progress, visibleDescription } from "./issues.ts";
+import { applyOp, blocksOf, childrenOf, descendantsOf, DESCRIPTION_TEMPLATE, hasContent, migrateV2, parentChoices, progress, visibleDescription } from "./issues.ts";
 import { formatIssue, formatList, parseTool } from "./tools.ts";
 import { migrateTasks } from "./issues.ts";
 
@@ -139,6 +139,25 @@ test("deleting an issue removes it from the others' relations and says so in the
   assert.equal(get(gone3, "WEB-3").blockedBy, undefined);
   assert.ok(logs(gone3, "WEB-3").includes("WEB-4 was deleted: no longer blocking"));
   assert.equal(gone3.next, s.next);
+});
+
+test("deleting with children takes the whole subtree; the rest let go of it in their logs", () => {
+  let s = sample();
+  s = up(s, "WEB-2", { parent: "WEB-1" }).store;
+  s = up(s, "WEB-3", { parent: "WEB-2" }).store;
+  s = up(s, "WEB-4", { relatedAdd: ["WEB-3"], blockedByAdd: ["WEB-2"] }).store;
+  assert.deepEqual(descendantsOf(s.issues, "WEB-1").map((i) => i.key), ["WEB-2", "WEB-3"]);
+  const gone = applyOp(s, { kind: "remove", key: "WEB-1", children: true }, "you", 9).store;
+  assert.deepEqual(gone.issues.map((i) => i.key), ["WEB-4"]);
+  assert.equal(get(gone, "WEB-4").related, undefined);
+  assert.equal(get(gone, "WEB-4").blockedBy, undefined);
+  assert.ok(logs(gone, "WEB-4").includes("WEB-3 was deleted: unlinked (related)"));
+  assert.ok(logs(gone, "WEB-4").includes("WEB-2 was deleted: no longer blocking"));
+  assert.equal(gone.next, s.next);
+  const kept = applyOp(s, { kind: "remove", key: "WEB-1" }, "you", 9).store;
+  assert.deepEqual(kept.issues.map((i) => i.key), ["WEB-2", "WEB-3", "WEB-4"]);
+  assert.equal(get(kept, "WEB-2").parent, undefined);
+  assert.equal(get(kept, "WEB-3").parent, "WEB-2");
 });
 
 test("progress counts done of all children, canceled ones left out", () => {

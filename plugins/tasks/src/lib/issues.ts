@@ -98,7 +98,8 @@ export type Op =
   | ({ kind: "create"; title: string; description?: string; status?: Status; priority?: Priority; branch?: string } & Relations)
   | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; priority?: Priority; branch?: string; pr?: string; commit?: string } & Relations)
   | { kind: "note"; key: string; text: string }
-  | { kind: "remove"; key: string };
+  /** With `children`, its child issues, theirs and so on go too. Otherwise they stay and lose their parent. */
+  | { kind: "remove"; key: string; children?: boolean };
 
 /** A page asks main to apply `op` to a project's issues; `rid` names the request. `projectName` seeds the key prefix. */
 export interface OpMessage {
@@ -346,6 +347,16 @@ function keyList(value: unknown, field: string): string[] {
 
 /** The issues whose parent is `key`. */
 export const childrenOf = (issues: Issue[], key: string): Issue[] => issues.filter((i) => i.parent === key);
+/** The issues under `key` at any depth: its children, theirs and so on. */
+export function descendantsOf(issues: Issue[], key: string): Issue[] {
+  const below = new Set<string>([key]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const i of issues) if (i.parent && below.has(i.parent) && !below.has(i.key)) (below.add(i.key), (grew = true));
+  }
+  below.delete(key);
+  return issues.filter((i) => below.has(i.key));
+}
 /** The issues `key` is blocking: the ones that list it as blocking them. */
 export const blocksOf = (issues: Issue[], key: string): Issue[] => issues.filter((i) => i.blockedBy?.includes(key));
 /** Done out of all, not counting canceled ones: "3 of 7 done". */
@@ -509,19 +520,21 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
   const current = store.issues[index];
   if (op.kind === "remove") {
     // Whatever pointed at it lets go, and says why in its log. The counter stays where it is, so the key is never handed out again.
+    const gone = new Set([wanted, ...(op.children === true ? descendantsOf(store.issues, wanted).map((i) => i.key) : [])]);
     const issues = store.issues
-      .filter((_, i) => i !== index)
+      .filter((i) => !gone.has(i.key))
       .map((i) => {
         const notes: string[] = [];
         let next = i;
         const edit = () => (next === i ? (next = { ...i }) : next);
-        if (i.parent === wanted) (delete edit().parent, notes.push(`Parent ${wanted} was deleted`));
+        if (i.parent && gone.has(i.parent)) (notes.push(`Parent ${i.parent} was deleted`), delete edit().parent);
         for (const [field, note] of [["related", "unlinked (related)"], ["blockedBy", "no longer blocking"]] as const) {
-          if (!i[field]?.includes(wanted)) continue;
-          const rest = i[field].filter((k) => k !== wanted);
+          const hit = i[field]?.filter((k) => gone.has(k));
+          if (!hit?.length) continue;
+          const rest = i[field]!.filter((k) => !gone.has(k));
           if (rest.length) edit()[field] = rest;
           else delete edit()[field];
-          notes.push(`${wanted} was deleted: ${note}`);
+          for (const k of hit) notes.push(`${k} was deleted: ${note}`);
         }
         if (next === i) return i;
         appendLoose(next, notes.map((t) => ({ at: now, by, kind: "link" as const, text: t })));

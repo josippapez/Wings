@@ -3,7 +3,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Combobox, Empty, Heading, List, ListButton, ListItem, Loading, Markdown, Menu, Page, Row, Select, Stack, Text, TextInput, Time, Timeline, TimelineCard, TimelineNote, Title, Toolbar } from "wings-plugin-ui";
-import { openProps, PriorityIcon, StatusDot, TypeIcon } from "./parts";
+import { DeleteConfirm, openProps, PriorityIcon, StatusDot, TypeIcon } from "./parts";
 import { actorName, blocksOf, canParent, childrenOf, DESCRIPTION_TEMPLATE, isClaude, LIMITS, parentChoices, PRIORITIES, PRIORITY_LABEL, progress, visibleDescription, lastSession, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type LogEntry, type Op, type Priority, type Status } from "./issues";
 
 export interface IssueViewProps {
@@ -495,17 +495,7 @@ export function IssueView({ project, issue, issues, issueKey, error, send, onBac
         {error || confirming ? (
           <Stack gap="m" className="tk-notices">
             {error ? <Card className="tk-error-card"><Text tone="danger" role="alert">{error}</Text></Card> : null}
-            {confirming ? (
-              <Card>
-                <Row gap="m" wrap justify="between">
-                  <Text size="small">Delete {issue.key}? This removes the issue and its log. Its key is never used again.</Text>
-                  <Row gap="s">
-                    <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>Keep it</Button>
-                    <Button variant="destructive" size="sm" onClick={() => void send({ kind: "remove", key: issue.key })}>Delete {issue.key}</Button>
-                  </Row>
-                </Row>
-              </Card>
-            ) : null}
+            {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => void send({ kind: "remove", key: issue.key, children })} /> : null}
           </Stack>
         ) : null}
         <div className="tk-grid">

@@ -1,7 +1,7 @@
 // Small pieces the Issues pages share.
 
 import { Badge, Button, Card, Dot, Row, Text, Time } from "wings-plugin-ui";
-import { FLOW, lastSession, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Priority, type Status } from "./issues";
+import { descendantsOf, FLOW, lastSession, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Priority, type Status } from "./issues";
 
 const TONE = { todo: "muted", in_progress: "info", in_review: "warn", done: undefined, canceled: "muted" } as const;
 
@@ -50,6 +50,48 @@ export function PriorityIcon({ priority = "none", label }: { priority?: Priority
   );
 }
 
+/** Lucide's trash-2, for the buttons that ask to delete an issue. */
+export function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+/** True for the keys that ask to delete the focused issue: Delete, or Backspace on a Mac keyboard that has no Delete. */
+export const isDeleteKey = (e: React.KeyboardEvent) => (e.key === "Delete" || e.key === "Backspace") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+
+/**
+ * Asks before deleting `issue`. With child issues (at any depth) it offers to delete only this one, which leaves them
+ * without a parent, or all of them. Focus starts on the delete that keeps the most, so Enter never takes more than asked.
+ * Escape keeps it.
+ */
+export function DeleteConfirm({ issue, issues, onCancel, onDelete }: { issue: Issue; issues: Issue[]; onCancel: () => void; onDelete: (children: boolean) => void }) {
+  const below = descendantsOf(issues, issue.key).length;
+  const children = below === 1 ? "1 child issue" : `${below} child issues`;
+  return (
+    <Card className="tk-confirm" role="alertdialog" aria-label={`Delete ${issue.key}`} onKeyDown={(e) => e.key === "Escape" && (e.preventDefault(), onCancel())}>
+      <Row gap="m" wrap justify="between">
+        <Text size="small">
+          Delete <strong>{issue.key}</strong> {issue.title}?{below ? ` It has ${children}.` : ""} This removes {below ? "what you delete" : "the issue"} and its log. Keys are never used again.
+        </Text>
+        <Row gap="s" wrap>
+          <Button variant="ghost" size="sm" onClick={onCancel}>Keep it</Button>
+          {below ? (
+            <>
+              <Button variant="outline" size="sm" autoFocus onClick={() => onDelete(false)}>Delete only {issue.key}</Button>
+              <Button variant="destructive" size="sm" onClick={() => onDelete(true)}>Delete with {children}</Button>
+            </>
+          ) : (
+            <Button variant="destructive" size="sm" autoFocus onClick={() => onDelete(false)}>Delete {issue.key}</Button>
+          )}
+        </Row>
+      </Row>
+    </Card>
+  );
+}
+
 /** Click props that open something here, or in a new tab on a middle-click or Cmd/Ctrl+click. */
 export const openProps = (open: (newTab: boolean) => void) => ({
   onClick: (e: React.MouseEvent) => open(e.metaKey || e.ctrlKey),
@@ -82,10 +124,10 @@ export function ChildProgress({ done, total }: { done: number; total: number }) 
 
 /**
  * An issue as a card: key and the session marker, the title (a button that opens the issue), when it last changed and
- * buttons to move it a column. Alt+Left and Alt+Right on the title move it too. `progress` is an epic's or feature's
+ * buttons to move it a column or delete it. Alt+Left and Alt+Right on the title move it too, Delete asks to delete it. `progress` is an epic's or feature's
  * children done; `hideParent` leaves out the parent's key in a row that already names it.
  */
-export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, onMove }: { issue: Issue; id: string; compact?: boolean; progress?: { done: number; total: number }; hideParent?: boolean; onOpen: (newTab: boolean) => void; onMove: (by: 1 | -1) => void }) {
+export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, onMove, onDelete }: { issue: Issue; id: string; compact?: boolean; progress?: { done: number; total: number }; hideParent?: boolean; onOpen: (newTab: boolean) => void; onMove: (by: 1 | -1) => void; onDelete?: () => void }) {
   const index = FLOW.indexOf(issue.status);
   const target = (by: 1 | -1) => STATUS_LABEL[FLOW[index + by] ?? issue.status];
   const movable = index >= 0;
@@ -106,6 +148,7 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
         className="tk-card-title"
         {...openProps(onOpen)}
         onKeyDown={(e) => {
+          if (onDelete && isDeleteKey(e)) return (e.preventDefault(), onDelete());
           if (!movable || !e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
           e.preventDefault();
           onMove(e.key === "ArrowRight" ? 1 : -1);
@@ -116,10 +159,15 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
       {progress?.total ? <ChildProgress {...progress} /> : null}
       <div className="tk-card-foot">
         <Time iso={new Date(issue.updatedAt).toISOString()} prefix={issue.status === "done" ? "Done " : "Updated "} />
-        {movable ? (
+        {movable || onDelete ? (
           <span className="tk-moves">
-            <Button size="xs" variant="ghost" disabled={index === 0} aria-label={`Move ${issue.key} to ${target(-1)}`} onClick={() => onMove(-1)}>←</Button>
-            <Button size="xs" variant="ghost" disabled={index === FLOW.length - 1} aria-label={`Move ${issue.key} to ${target(1)}`} onClick={() => onMove(1)}>→</Button>
+            {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><TrashIcon /></Button> : null}
+            {movable ? (
+              <>
+                <Button size="xs" variant="ghost" disabled={index === 0} aria-label={`Move ${issue.key} to ${target(-1)}`} onClick={() => onMove(-1)}>←</Button>
+                <Button size="xs" variant="ghost" disabled={index === FLOW.length - 1} aria-label={`Move ${issue.key} to ${target(1)}`} onClick={() => onMove(1)}>→</Button>
+              </>
+            ) : null}
           </span>
         ) : null}
       </div>

@@ -108,6 +108,22 @@
   .tk-card:focus-within .tk-moves {
     opacity: 1;
   }
+  /* With the trash button the buttons cover most of the time, so it steps aside instead of showing cut off. */
+  .tk-card:hover .tk-card-foot time,
+  .tk-card:focus-within .tk-card-foot time {
+    visibility: hidden;
+  }
+}
+.tk-moves .tk-delete:hover {
+  color: var(--wings-danger);
+}
+/* Above the board, padded like the error line; the list's page has its own padding. */
+.tk-confirm-wrap {
+  flex: none;
+  padding: 8px 14px;
+}
+.tk-confirm-wrap[data-layout="list"] {
+  padding: 0 0 12px;
 }
 .tk-column-empty {
   padding: 14px 8px;
@@ -533,6 +549,41 @@
   border-radius: 999px;
   color: var(--wings-muted);
   font-size: 11px;
+}
+/* The trash button sits over the time at the row's right end, shown while you're on the row. */
+.tk-row-item,
+.tk-tree-head {
+  position: relative;
+}
+.tk-row-delete {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+.tk-row-delete:hover {
+  color: var(--wings-danger);
+}
+@media (hover: hover) {
+  .tk-row-delete {
+    opacity: 0;
+    transition: opacity 150ms;
+  }
+  .tk-row-item:hover .tk-row-delete,
+  .tk-row-item:focus-within .tk-row-delete,
+  .tk-tree-head:hover .tk-row-delete,
+  .tk-tree-head:focus-within .tk-row-delete {
+    opacity: 1;
+  }
+  .tk-row-item:hover .tk-row-time,
+  .tk-row-item:focus-within .tk-row-time {
+    visibility: hidden;
+  }
+}
+@media (hover: none) {
+  .tk-row-time {
+    padding-right: 28px;
+  }
 }
 .tk-row-time {
   flex: none;
