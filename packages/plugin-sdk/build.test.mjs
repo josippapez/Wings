@@ -66,7 +66,7 @@ test("a React page is mounted from its default export in the place its page expo
   mkdirSync(ui);
   writeFileSync(join(ui, "package.json"), JSON.stringify({ name: "wings-plugin-ui", type: "module", exports: "./index.js" }));
   const show = (place) => `export const show${place} = (element, options) => { globalThis.shown = { place: "${place}", element, options }; };`;
-  writeFileSync(join(ui, "index.js"), ["Sidebar", "Tab", "View", "Popover", "Settings"].map(show).join("\n"));
+  writeFileSync(join(ui, "index.js"), ["Sidebar", "Tab", "View", "Block", "Popover", "Settings"].map(show).join("\n"));
   symlinkSync(join(import.meta.dirname, "node_modules", "react"), join(dir, "node_modules", "react"));
 
   await buildPlugin(dir);
@@ -79,9 +79,9 @@ test("a React page is mounted from its default export in the place its page expo
   assert.equal(sidebar.place, "Sidebar");
   assert.equal(sidebar.element.type().props.children, "hi");
   assert.equal(sidebar.options.fill, undefined);
-  // A block is a view for now.
+  // A block fits its height to the page.
   const box = shown("box");
-  assert.equal(box.place, "View");
+  assert.equal(box.place, "Block");
   assert.equal(box.element.type().props.children, "box");
   assert.equal(box.options.fill, true);
   assert.match(readFileSync(join(dir, "dist", "box.html"), "utf8"), /<title>Box<\/title>/);

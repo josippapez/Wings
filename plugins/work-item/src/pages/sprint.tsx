@@ -2,7 +2,7 @@
 // project, a column per state. The main script runs the queries and caches them; this page asks it, only while
 // Wings is in front and the block is on screen, and a click opens the work item in a tab.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, Row, Stack, Text } from "wings-plugin-ui";
 import { itemTabArgs } from "../lib/item";
@@ -44,26 +44,14 @@ function useSprint(path: string, mine: boolean): Answer | null {
   return answer;
 }
 
-/** Tells Wings how tall the content is, so the block fits it. */
-function useFit(ref: React.RefObject<HTMLElement | null>) {
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const fit = new ResizeObserver(() => void wings.setHeight(Math.ceil(el.getBoundingClientRect().height)));
-    fit.observe(el);
-    return () => fit.disconnect();
-  }, [ref]);
-}
 
 export default function Sprint() {
   const [project, setProject] = useState<WingsProject | null | undefined>(undefined);
   const [state, setState] = useState<SprintBlockState | null>(null);
-  const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     void wings.project().then(setProject);
     void Promise.resolve(wings.blockState()).then((raw) => setState(cleanBlockState(raw)));
   }, []);
-  useFit(root);
 
   const setMine = (mine: boolean) => {
     const next = { mine };
@@ -75,7 +63,7 @@ export default function Sprint() {
   if (project === undefined || !state) body = <Loading>Loading sprint</Loading>;
   else if (!project) body = <Text tone="muted">No project.</Text>;
   else body = <ProjectSprint key={project.id} path={project.path} mine={state.mine} onMine={setMine} />;
-  return <div ref={root}>{body}</div>;
+  return <div>{body}</div>;
 }
 
 function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; onMine: (mine: boolean) => void }) {

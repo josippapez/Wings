@@ -37,8 +37,8 @@ export function entries(dir) {
 
 /** The mount for a React page: its default export is the component and its `page` export says where it shows. */
 const mount = (file) => `import Page, { page } from ${JSON.stringify(file)};
-import { showPopover, showSettings, showSidebar, showTab, showView } from "wings-plugin-ui";
-const show = { sidebar: showSidebar, tab: showTab, view: showView, block: showView, settings: showSettings, popover: showPopover }[page.place];
+import { showBlock, showPopover, showSettings, showSidebar, showTab, showView } from "wings-plugin-ui";
+const show = { sidebar: showSidebar, tab: showTab, view: showView, block: showBlock, settings: showSettings, popover: showPopover }[page.place];
 if (!show) throw new Error("page.place is sidebar, tab, view, block, settings or popover, not " + page.place);
 show(<Page />, { fill: page.fill });
 `;
