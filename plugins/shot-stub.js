@@ -1,11 +1,29 @@
 // A stand-in for `window.wings` in `pnpm shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
-// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `respond`.
+// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `respond`,
+// and `answers` and `shared` for pages that use wings-plugin-sdk/messages.
+
+import { channel } from "wings-plugin-sdk/messages";
 
 /** Installs the stub. `fx` is the fixture module's exports. */
 export function installWings(fx) {
   const listeners = new Set();
+  const main = new Set();
   const state = { tab: null, block: null };
   const ok = () => Promise.resolve();
+  // What main sends reaches the page a moment later, after its first effects have run.
+  const toPage = (message) => setTimeout(() => listeners.forEach((l) => l(message)), 50);
+  // Wings hands messages over as JSON, so a fixture's data is held to that too.
+  const copy = (message) => JSON.parse(JSON.stringify(message ?? null));
+  // The fixture's `answers` and `shared` are answered by the SDK's own channel, the code a plugin's main script runs,
+  // so a page's `ask`, `useAsk` and `watch` take their real path, errors and all. A name the fixture leaves out stays unanswered.
+  const mainCh = channel({
+    wings: {
+      onBroadcast: (l) => (main.add(l), () => main.delete(l)),
+      broadcast: (message) => (toPage(copy(message)), ok()),
+    },
+  });
+  for (const [name, answer] of Object.entries(fx.answers ?? {})) mainCh.answer(name, answer);
+  for (const [name, shared] of Object.entries(fx.shared ?? {})) mainCh.share(name, () => shared);
   const known = {
     project: () => Promise.resolve(fx.project === undefined ? { id: "p1", name: "web", path: "/work/acme/web", branch: "main" } : fx.project),
     projects: () => Promise.resolve([]),
@@ -15,7 +33,8 @@ export function installWings(fx) {
     // A message goes nowhere, unless the fixture's `respond` has an answer for it: that is delivered like main's would be.
     broadcast: (message) => {
       const answer = fx.respond?.(message);
-      if (answer !== undefined) setTimeout(() => listeners.forEach((l) => l(answer)), 50);
+      if (answer !== undefined) toPage(answer);
+      setTimeout(() => main.forEach((l) => l(copy(message))));
       return ok();
     },
     onProject: (l) => (Promise.resolve().then(() => known.project()).then(l), () => {}),
