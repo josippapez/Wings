@@ -617,6 +617,29 @@ export function boardLanes(issues: Issue[], showCanceled = false): Lane[] {
   return groups.has("") ? [...lanes, lane(null, groups.get("")!)] : lanes;
 }
 
+/** A group of the list by parent: a top-level epic or feature over its children and theirs, each with its depth under it. */
+export interface TreeGroup {
+  root: Issue;
+  rows: { issue: Issue; depth: number }[];
+}
+
+/**
+ * The list grouped by parent, like Linear's sub-issues: one group per top-level issue that has children, with every
+ * issue below it in tree order and indented by `depth` (1 for a child), siblings by status (closest to done first) then
+ * key. `loose` is the top-level issues with no children. Canceled ones only when asked for.
+ */
+export function issueTree(issues: Issue[], showCanceled = false): { groups: TreeGroup[]; loose: Issue[] } {
+  const shown = issues.filter((i) => showCanceled || i.status !== "canceled");
+  const keys = new Set(shown.map((i) => i.key));
+  const order: Record<Status, number> = { in_review: 0, in_progress: 1, todo: 2, done: 3, canceled: 4 };
+  const sort = (list: Issue[]) => list.sort((a, b) => order[a.status] - order[b.status] || keyNumber(a.key) - keyNumber(b.key));
+  const kids = (key: string) => sort(shown.filter((i) => i.parent === key));
+  const below = (key: string, depth: number): TreeGroup["rows"] => kids(key).flatMap((issue) => [{ issue, depth }, ...below(issue.key, depth + 1)]);
+  const roots = sort(shown.filter((i) => !i.parent || !keys.has(i.parent)));
+  const groups = roots.map((root) => ({ root, rows: below(root.key, 1) })).filter((g) => g.rows.length > 0);
+  return { groups, loose: roots.filter((r) => !groups.some((g) => g.root === r)) };
+}
+
 /** The issues a tab shows in its breadcrumb at most, oldest dropped first. */
 export const TRAIL_LENGTH = 8;
 /**

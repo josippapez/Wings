@@ -1,4 +1,4 @@
-// The Issues tab as a list grouped by status, like Linear: rows with key, type, title, parent and progress.
+// The list by parent, like Linear: each epic over its children, a feature's tasks indented under it, the rest last.
 import { BoardView } from "../src/lib/board-view";
 import "../src/tasks.css";
 import { issues, project } from "./_data";

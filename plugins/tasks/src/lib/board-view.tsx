@@ -2,7 +2,7 @@
 
 import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, Summary, SummaryChip, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
-import { boardColumns, boardLanes, canParent, childrenOf, FLOW, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
+import { boardColumns, boardLanes, canParent, childrenOf, FLOW, issueTree, progress, STATUS_LABEL, STATUSES, type Issue, type Lane, type Op } from "./issues";
 import { ChildProgress, IssueCard, openProps, SessionMarker, StatusDot, TypeIcon } from "./parts";
 
 export interface BoardViewProps {
@@ -68,7 +68,7 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
                 <SummaryChip tone="success">{count("done")} done</SummaryChip>
               </Summary>
               <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
-              {hasParents && layout === "board" ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
+              {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
               <Chip pressed={showCanceled} onClick={() => onShowCanceled(!showCanceled)}>Show canceled ({count("canceled")})</Chip>
             </>
           ) : null}
@@ -79,7 +79,7 @@ export function BoardView({ project, issues, error, showCanceled, onShowCanceled
       {!issues ? (
         <Loading>Loading issues</Loading>
       ) : layout === "list" ? (
-        <IssueList project={project} issues={issues} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} />
+        <IssueList project={project} issues={issues} byParent={hasParents && byParent} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} />
       ) : lanes ? (
         <BoardLanes
           className="tk-lanes"
@@ -146,9 +146,42 @@ function ParentLane({ lane, issues, open, onOpenChange, onOpen, card }: { lane: 
   );
 }
 
-/** Issues as rows, grouped by status like Linear's list: each group folds, and empty ones don't show. */
-function IssueList({ project, issues, showCanceled, folded, onFold, onOpen }: { project: WingsProject; issues: Issue[]; showCanceled: boolean; folded: string[]; onFold: (group: string, open: boolean) => void; onOpen: (issue: Issue, newTab: boolean) => void }) {
+/** Issues as rows like Linear's list: by parent, each epic over its children indented under it, or by status. Groups fold. */
+function IssueList({ project, issues, byParent, showCanceled, folded, onFold, onOpen }: { project: WingsProject; issues: Issue[]; byParent: boolean; showCanceled: boolean; folded: string[]; onFold: (group: string, open: boolean) => void; onOpen: (issue: Issue, newTab: boolean) => void }) {
   const byKey = new Map(issues.map((i) => [i.key, i]));
+  const row = (i: Issue, depth?: number) => <IssueRow key={i.key} issue={i} issues={issues} parent={depth === undefined && i.parent ? byKey.get(i.parent) : undefined} depth={depth} onOpen={onOpen} />;
+  const isOpen = (group: string) => !folded.includes(group);
+  if (byParent) {
+    const { groups, loose } = issueTree(issues, showCanceled);
+    if (groups.length + loose.length === 0) return <Text tone="muted">No issues for {project.name} yet.</Text>;
+    return (
+      <div className="tk-list">
+        {groups.map(({ root, rows }) => (
+          <section key={root.key} className="tk-tree-group" aria-label={`${root.key} ${root.title}`}>
+            <div className="tk-tree-head">
+              <Button variant="ghost" size="icon-xs" className="tk-fold" aria-label={root.title} aria-expanded={isOpen(root.key)} onClick={() => onFold(root.key, !isOpen(root.key))}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+              </Button>
+              <ListButton className="tk-row tk-tree-root" data-status={root.status} {...openProps((newTab) => onOpen(root, newTab))} aria-label={`Open ${root.key}: ${root.title}`}>
+                <TypeIcon type={root.type} label />
+                <span className="tk-key">{root.key}</span>
+                <Text as="span" grow truncate className="tk-row-title">{root.title}</Text>
+                <ChildProgress {...progress(childrenOf(issues, root.key))} />
+                <span className="tk-row-status"><StatusDot status={root.status} />{STATUS_LABEL[root.status]}</span>
+                <span className="tk-row-time" />
+              </ListButton>
+            </div>
+            {isOpen(root.key) ? <List compact aria-label={`Under ${root.key}`}>{rows.map(({ issue, depth }) => row(issue, depth))}</List> : null}
+          </section>
+        ))}
+        {loose.length ? (
+          <Disclosure className="tk-list-group" open={isOpen("")} onOpenChange={(open) => onFold("", open)} summary={<span className="tk-col-title">No parent<span className="tk-count">{loose.length}</span></span>}>
+            <List compact aria-label="No parent">{loose.map((i) => row(i, 0))}</List>
+          </Disclosure>
+        ) : null}
+      </div>
+    );
+  }
   const groups = boardColumns(issues, showCanceled)
     .filter((g) => g.issues.length > 0)
     .sort((a, b) => LIST_ORDER.indexOf(a.status) - LIST_ORDER.indexOf(b.status));
@@ -159,31 +192,36 @@ function IssueList({ project, issues, showCanceled, folded, onFold, onOpen }: { 
         <Disclosure
           key={status}
           className="tk-list-group"
-          open={!folded.includes(`status:${status}`)}
+          open={isOpen(`status:${status}`)}
           onOpenChange={(open) => onFold(`status:${status}`, open)}
           summary={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}<span className="tk-count">{rows.length}</span></span>}
         >
-          <List compact aria-label={STATUS_LABEL[status]}>
-            {rows.map((i) => {
-              const parent = i.parent ? byKey.get(i.parent) : undefined;
-              const done = canParent(i.type) ? progress(childrenOf(issues, i.key)) : null;
-              return (
-                <ListItem key={i.key}>
-                  <ListButton className="tk-row" data-status={i.status} {...openProps((newTab) => onOpen(i, newTab))} aria-label={`Open ${i.key}: ${i.title}`}>
-                    <span className="tk-key">{i.key}</span>
-                    <TypeIcon type={i.type} />
-                    <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>
-                    {parent ? <span className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><span className="tk-link-title">{parent.title}</span></span> : null}
-                    {done?.total ? <ChildProgress {...done} /> : null}
-                    <SessionMarker issue={i} />
-                    <Time className="tk-row-time" iso={new Date(i.updatedAt).toISOString()} />
-                  </ListButton>
-                </ListItem>
-              );
-            })}
-          </List>
+          <List compact aria-label={STATUS_LABEL[status]}>{rows.map((i) => row(i))}</List>
         </Disclosure>
       ))}
     </div>
+  );
+}
+
+/**
+ * One issue as a row: key, type and title, then its parent (in the status list), its children's progress, the Claude
+ * session marker and when it changed. With a `depth` it sits in the tree by parent: indented, with its status shown.
+ */
+function IssueRow({ issue: i, issues, parent, depth, onOpen }: { issue: Issue; issues: Issue[]; parent?: Issue; depth?: number; onOpen: (issue: Issue, newTab: boolean) => void }) {
+  const done = canParent(i.type) ? progress(childrenOf(issues, i.key)) : null;
+  return (
+    <ListItem>
+      <ListButton className="tk-row" data-status={i.status} style={depth ? { paddingLeft: `${36 + (depth - 1) * 24}px` } : undefined} {...openProps((newTab) => onOpen(i, newTab))} aria-label={`Open ${i.key}: ${i.title}`}>
+        {depth && depth > 1 ? <span className="tk-tree-elbow" aria-hidden>└</span> : null}
+        <span className="tk-key">{i.key}</span>
+        <TypeIcon type={i.type} />
+        <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>
+        {parent ? <span className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><span className="tk-link-title">{parent.title}</span></span> : null}
+        {done?.total ? <ChildProgress {...done} /> : null}
+        <SessionMarker issue={i} />
+        {depth !== undefined ? <span className="tk-row-status"><StatusDot status={i.status} />{STATUS_LABEL[i.status]}</span> : null}
+        <Time className="tk-row-time" iso={new Date(i.updatedAt).toISOString()} />
+      </ListButton>
+    </ListItem>
   );
 }

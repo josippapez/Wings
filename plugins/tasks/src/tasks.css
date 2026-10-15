@@ -536,6 +536,8 @@
 }
 .tk-row-time {
   flex: none;
+  min-width: 56px;
+  text-align: right;
   color: var(--wings-muted);
   font-size: 11px;
   white-space: nowrap;
@@ -547,4 +549,42 @@
   .tk-row .w-badge {
     display: none;
   }
+}
+
+/* ---------- List by parent ---------- */
+.tk-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tk-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--wings-radius);
+  background: var(--wings-surface);
+}
+.tk-fold svg {
+  transition: transform 150ms;
+}
+.tk-fold[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+.tk-tree-root .tk-row-title {
+  font-weight: 600;
+}
+.tk-row-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 92px;
+  color: var(--wings-muted);
+  font-size: 11px;
+}
+.tk-tree-elbow {
+  flex: none;
+  margin-right: -4px;
+  color: var(--wings-hairline-strong);
 }

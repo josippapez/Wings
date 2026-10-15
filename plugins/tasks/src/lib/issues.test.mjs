@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, trailTo, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
+import { agentCommand, applyOp, boardColumns, boardLanes, BUDGET, issueTree, trailTo, estimateBytes, LIMITS, lastSession, migrateTasks, openIssues, PLAIN_WORD, prefixFor, resolvePane, resumeCommand } from "./issues.ts";
 import { formatIssue, parseTool } from "./tools.ts";
 
 const fresh = (name = "web") => migrateTasks([], name);
@@ -176,6 +176,25 @@ test("board lanes: one row per parent, open parents first, each issue once, no-p
   assert.deepEqual(shown.map(keys)[0], ["WEB-4", "WEB-6"]);
   assert.deepEqual(keys(shown.at(-1)), ["WEB-7", "WEB-2", "WEB-1", "WEB-8"]);
   assert.deepEqual(boardLanes([]), []);
+});
+
+test("the list by parent: a group per top-level parent, children indented in tree order, the rest loose", () => {
+  const mk = (n, status, extra = {}) => ({ key: `WEB-${n}`, title: `t${n}`, type: "task", status, sessions: [], log: [], createdAt: 0, updatedAt: n, ...extra });
+  const issues = [
+    mk(1, "in_progress", { type: "epic" }),
+    mk(2, "todo", { parent: "WEB-1", type: "feature" }),
+    mk(3, "todo", { parent: "WEB-2" }),
+    mk(4, "in_review", { parent: "WEB-1" }),
+    mk(5, "todo"),
+    mk(6, "canceled", { parent: "WEB-1" }),
+    mk(7, "done", { type: "epic" }),
+  ];
+  const { groups, loose } = issueTree(issues);
+  assert.deepEqual(groups.map((g) => g.root.key), ["WEB-1"]);
+  assert.deepEqual(groups[0].rows.map((r) => `${r.issue.key}@${r.depth}`), ["WEB-4@1", "WEB-2@1", "WEB-3@2"]);
+  // An epic with nothing under it is just a row, like any issue with no parent.
+  assert.deepEqual(loose.map((i) => i.key), ["WEB-5", "WEB-7"]);
+  assert.deepEqual(issueTree(issues, true).groups[0].rows.map((r) => r.issue.key), ["WEB-4", "WEB-2", "WEB-3", "WEB-6"]);
 });
 
 test("the breadcrumb trail adds the issue you leave, goes back to one already on it, and keeps the last eight", () => {
