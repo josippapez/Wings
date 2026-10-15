@@ -25,6 +25,14 @@
       "types": "./tools.d.ts",
       "default": "./tools.js"
     },
+    "./messages": {
+      "types": "./messages.d.ts",
+      "default": "./messages.js"
+    },
+    "./settings": {
+      "types": "./settings.d.ts",
+      "default": "./settings.js"
+    },
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
@@ -48,6 +56,10 @@
     "tools.d.ts",
     "tools-manifest.mjs",
     "tools-manifest.d.ts",
+    "messages.js",
+    "messages.d.ts",
+    "settings.js",
+    "settings.d.ts",
     "build.mjs",
     "build.d.ts",
     "bin.mjs",
