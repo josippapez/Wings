@@ -4,17 +4,17 @@ A plugin is a folder with a `wings-plugin.json` manifest and a JavaScript file. 
 
 `changes/` shows each pane's changed files as a badge and a sidebar tree, the repo's commit history, and a commit graph in a window of its own (`views`), all opening Wings' diff viewer.
 
-`dev-servers/` puts a `localhost:<port>` badge on a pane while a program in it listens on a local port, and opens it in the browser or in a Wings window (`views`).
+`dev-servers/` puts a `localhost:<port>` badge on a pane while a program in it listens on a local port, and opens it in the browser from a button on the badge. It is one script with no pages, so it is the smallest plugin here to read.
 
 `worktrees/` lists the git worktrees of your open projects in a sidebar, with what each one is (merged into the default branch, upstream gone, uncommitted changes, locked, folder missing, open in a pane). It removes the ones you pick, or all merged and clean ones, after you confirm, with `git worktree remove` and never `--force`, prunes records of worktrees whose folder is gone, and can delete the branch with `git branch -d`.
 
 `work-item/` shows the Azure Boards work item named in each pane's branch, and moves it to its next state. A work item opens as a tab with its description, comments and linked pull requests, and the work items assigned to you in the current sprint show under each Azure DevOps project in the sidebar.
 
-`notes/` is retired: Project info moved into Wings as each project's Project page, which agents reach with Wings' own `project_info_*` tools. Version 0.3.0 only points there.
+`notes/` is retired: Project info moved into Wings as each project's Project page, which agents reach with Wings' own `project_info_*` tools. It only points there now.
 
 `tasks/` is a lightweight issue tracker for each project, shown as Issues: a key like `WIN-12`, a type (task, bug, feature or epic), a Markdown spec (new descriptions start from a Goal, Scope, Done when and Validation template), a status (to do, in progress, in review, done, canceled), a priority (urgent, high, medium, low, shown with Linear's icons and sorted first), links (branch, pull request, commits), a parent epic or feature with progress on the epic, related and blocking issues, the Claude sessions that worked on it and an append-only activity log of who did what and when. Issue keys stay local to Wings, never in commit messages or branch names; a commit an agent makes while an issue is in progress is linked by the agent or by you with the commit, branch and PR fields. A sidebar lists the open ones, a board in a tab shows them by status, in rows by parent epic or feature like Linear's sub-grouping (each row folds and shows how many children are done), an Issue page opens as a tab (one tab reused, a middle-click or Cmd+click opens another) to read, edit, resume or start an agent on, and the open ones show under the project. Claude reads and writes them with `tasks__list`, `tasks__get`, `tasks__create`, `tasks__update` and `tasks__log`, for the project of the pane it came from.
 
-`pr-tracker/` is the example: it shows the pull request for each pane's branch as a badge with live status, checks and why they failed, the diff and review comments. It lists each project's pull requests in the sidebar (yours and the ones waiting for your review), can send a notification (`wings.notify`) when someone opens a new one, checked every minute while Wings is in front and at an interval set on its Settings page while it's in the background, and in a tab or a Project page block every open one with All open, Mine, Review requested and Drafts chips (the choice is kept with `setTabState` / `setBlockState`). The PR tab's Checks view lists every check or policy grouped by state, with required or optional, kind, duration, an Open link and, for a failure with a log, the end of it fetched when the row opens. It opens one as a tab to read, reply to, approve and send to an agent. A tab opened with no pull request (from its title bar button) lists the project's open ones to pick from. "View in diff" on a thread opens the viewer at its file and line. It works with GitHub (github.com and GitHub Enterprise Server hosts `gh` is signed in to), GitLab (gitlab.com and self-managed hosts `glab` is signed in to) and Azure DevOps through their CLIs, and with Bitbucket Cloud and Codeberg through an API token saved on its Settings page. Replies work on every host: in the review thread on GitHub (github.com and Enterprise), GitLab and Azure DevOps, under the comment on Bitbucket Cloud, and on Codeberg as a new comment that quotes the one it answers, since the Gitea API has no threaded replies. The Approve button (confirmed first) works on GitHub, GitLab, Bitbucket Cloud and Codeberg; Azure DevOps has a Vote menu (Approve, Approve with suggestions, Wait for author, Reject, Reset vote) that runs `az repos pr set-vote`, which finds your reviewer identity itself. Bitbucket needs the `write:pullrequest:bitbucket` token scope, Codeberg `write:issue` to reply and `write:repository` to approve.
+`pr-tracker/` is the largest plugin here, with five hosts and a lot of pages, so start from `dev-servers/` or `templates/wings-plugin/` instead. It shows the pull request for each pane's branch as a badge with live status, checks and why they failed, the diff and review comments. It lists each project's pull requests in the sidebar (yours and the ones waiting for your review), can send a notification (`wings.notify`) when someone opens a new one, checked every minute while Wings is in front and at an interval set on its Settings page while it's in the background, and in a tab or a Project page block every open one with All open, Mine, Review requested and Drafts chips (the choice is kept with `setTabState` / `setBlockState`). The PR tab's Checks view lists every check or policy grouped by state, with required or optional, kind, duration, an Open link and, for a failure with a log, the end of it fetched when the row opens. It opens one as a tab to read, reply to, approve and send to an agent. A tab opened with no pull request (from its title bar button) lists the project's open ones to pick from. "View in diff" on a thread opens the viewer at its file and line. It works with GitHub (github.com and GitHub Enterprise Server hosts `gh` is signed in to), GitLab (gitlab.com and self-managed hosts `glab` is signed in to) and Azure DevOps through their CLIs, and with Bitbucket Cloud and Codeberg through an API token saved on its Settings page. Replies work on every host: in the review thread on GitHub (github.com and Enterprise), GitLab and Azure DevOps, under the comment on Bitbucket Cloud, and on Codeberg as a new comment that quotes the one it answers, since the Gitea API has no threaded replies. The Approve button (confirmed first) works on GitHub, GitLab, Bitbucket Cloud and Codeberg; Azure DevOps has a Vote menu (Approve, Approve with suggestions, Wait for author, Reject, Reset vote) that runs `az repos pr set-vote`, which finds your reviewer identity itself. Bitbucket needs the `write:pullrequest:bitbucket` token scope, Codeberg `write:issue` to reply and `write:repository` to approve.
 
 ## Installing
 
@@ -29,9 +29,9 @@ The plugins in this folder install the same way:
 | Changes | `github.com/josippapez/Wings/plugins/changes` |
 | Dev servers | `github.com/josippapez/Wings/plugins/dev-servers` |
 | HUD | `github.com/josippapez/Wings/plugins/hud` |
+| Issues | `github.com/josippapez/Wings/plugins/tasks` |
 | PR tracker | `github.com/josippapez/Wings/plugins/pr-tracker` |
 | Session detail | `github.com/josippapez/Wings/plugins/session-detail` |
-| Tasks | `github.com/josippapez/Wings/plugins/tasks` |
 | Work item | `github.com/josippapez/Wings/plugins/work-item` |
 | Worktrees | `github.com/josippapez/Wings/plugins/worktrees` |
 
@@ -58,13 +58,35 @@ git archive --format=zip --output my-plugin.wings-plugin HEAD  # plain JavaScrip
 
 `templates/wings-plugin/` is a starter repo with the SDK and a workflow that builds and attaches the package to a GitHub release when you push a version tag, so the repo holds only source. Wings installs a repo's release package. A TypeScript repo with no release yet can't be installed from its link, since its source has no built files.
 
-## TypeScript and React
+## Writing a plugin
 
-Wings runs plain JavaScript: `main` and each page's `<script>`. To write a plugin in TypeScript, or a page in React, bundle it into those files before you package it and ship the built files. The `wings-plugin-sdk` npm package does that with `wings-plugin build`, and has the types and a React hook. `templates/wings-plugin/` is a plugin set up with it.
+Wings runs plain JavaScript: `main` and each page's `<script>`. You write TypeScript and React, and `wings-plugin build` from the `wings-plugin-sdk` npm package bundles it into those files. The package also has the types of `wings` and the helpers below. `dev-servers/` is the smallest plugin here (one script, no pages), and `templates/wings-plugin/` is a starter repo with the SDK set up.
 
 Every `wings.on*` call returns a function that removes the listener, so a React effect can return it as its cleanup.
 
-The plugins in this folder do that. Their code is in `<id>/src/`, and the entries are `src/main.ts` and each file in `src/pages/`. They build into `<id>/dist/`, so `src/main.ts` becomes `dist/main.js` and `src/pages/sidebar.tsx` becomes `dist/sidebar.js`, and the manifest's `main` and each `page` point into `dist/`. `src/ui/` holds the React components, `src/lib/` the logic with no UI and its tests, and `src/main/` the modules a large main script splits into. A plugin's folder has only its manifest, `icon.svg`, README, `src/`, `preview/` and `dist/`. `dist/` is committed, because Wings installs a plugin folder straight from `main`.
+### Layout
+
+```
+<id>/
+  wings-plugin.json
+  icon.svg
+  README.md        Wings shows it on the plugin's Settings page
+  src/
+    main.ts        the main script, which runs hidden
+    pages/         one file per page: sidebar.tsx, board.tsx, ...
+    main/          the modules a large main script splits into
+    ui/            React components the pages share
+    lib/           logic with no UI, messages and settings, and their tests
+    tools.ts       the tools Claude gets, if the plugin has any
+  preview/         fixtures that `pnpm shot` draws
+  dist/            what the build writes
+```
+
+The entries are `src/main.ts` and each file in `src/pages/`. Everything else in `src/` is a module they import. Each entry builds into `dist/` under its own name: `src/main.ts` becomes `dist/main.js` and `src/pages/sidebar.tsx` becomes `dist/sidebar.js`, so the manifest says `"main": "dist/main.js"` and `"page": "dist/sidebar.html"`. A plugin with no `src/main.ts` gets an empty `dist/main.js`, since Wings needs a main.
+
+A page default-exports its component and says where it shows with `export const page = { place: "sidebar" }`. `place` is `sidebar`, `popover`, `view`, `block`, `tab` or `settings`, and `fill: true` lays the page out edge to edge. A page built from `src/pages` mounts in one place, so a page that shows as a view and as a block is two files. It builds from `wings-plugin-ui`, and Wings' `plugin-ui.css` styles the components, so a Wings update restyles every plugin. The build writes the mount, which calls the matching `showSidebar`, `showView`, `showBlock` or other function, and the page's HTML. A `dist/<page>.html` of your own wins over the generated one. A page can bring its own components and CSS (`import "./sidebar.css"`, next to the page). A page that draws its own DOM, without React, is a `.ts` file, and gets its frame from `mountShell` in `wings-plugin-sdk/shell`. See the [README](../packages/plugin-ui/README.md) of `wings-plugin-ui` for the components, the `w-*` class contract and the `--wings-*` variables.
+
+### Build and check
 
 ```sh
 cd plugins
@@ -74,7 +96,179 @@ pnpm check   # type-checks, and fails if a committed file in dist/ is out of dat
 pnpm test    # runs the tests in every plugin's src/, which can import any module there
 ```
 
-Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its component and says where it shows with `export const page = { place: "sidebar" }` (`place` is `sidebar`, `popover`, `view`, `block`, `tab` or `settings`, and `fill: true` lays the page out edge to edge), and builds from the components. The build writes the mount that calls the matching `showSidebar`, `showView` or other function, and the page's HTML, and Wings' `plugin-ui.css` styles the components, so a Wings update restyles every plugin. A fixture in `preview/` imports the page without it mounting. A page can still bring its own components and CSS (`import "./sidebar.css"`, next to the page). See the [README](../packages/plugin-ui/README.md) of `wings-plugin-ui` for the components, the `w-*` class contract and the `--wings-*` variables.
+`dist/` is committed, because Wings installs a plugin folder straight from `main`. Commit it with the source change: `pnpm check` compares the content of each built file with the one on disk and fails when they differ, and a release stops on that. A plugin in its own repo commits only source and ships with `wings-plugin pack`.
+
+The build also checks the manifest against what it built, and fails with a line for each place they disagree, so a typo doesn't wait for Wings to load the plugin. It catches a `main` that isn't `dist/main.js`; a page the build doesn't write and the folder doesn't have; an `icon` that isn't a file; a `wings.onTool("name")` with no `mcpTools` entry, or the reverse; a call of `wings.setBadge`, `setPaneStatus` or `openDiff` without `badges`, `status` or `diff` in `contributes.ui`; a `wings.openView("id")` that no sidebar or view has; and an id in an `open` of a pane status, a project section row or a notification button that names no view it can open. The bundles are searched as text, so a name the code computes, like `wings.openView(id)`, is skipped.
+
+While you work, `wings-plugin dev` in the plugin's folder builds on each save and has the running Wings restart the plugin. From the Wings repo, `pnpm --dir plugins shot` draws the pages (see Fixtures).
+
+### Talking to main
+
+The main script and each page are separate frames, and they talk through `wings.broadcast`. Don't write request ids, timeouts or a hello message for that. Make a `channel` from `wings-plugin-sdk/messages` once, in a module that main and every page import, and give it the types of what it carries. A channel carries three kinds of message:
+
+- **Queries** are data. Main `serve`s a value for a key, and every page that shows the key gets the same copy and each update. Main loads a key once, however many pages show it, and reloads it only while one does. A page that fetched something on its own can `put` it, and every other part gets it too. Reach for a query first: it replaces a page that polls main on its own schedule.
+- **Questions** are commands and one-off reads: a page `ask`s, and main `answer`s, like checking out a branch or signing in.
+- **Events** carry no data: a frame `tell`s, the others `on` it.
+
+A value that a settings page saves and other frames read is a `setting()` from `wings-plugin-sdk/settings`, declared once the same way.
+
+```ts
+// src/lib/messages.ts
+import { channel } from "wings-plugin-sdk/messages";
+import { setting } from "wings-plugin-sdk/settings";
+
+export const ch = channel<
+  // Questions: a page asks, main answers.
+  { checkout: { request: { cwd: string; branch: string }; response: void } },
+  // Events: one frame tells, the others listen. `void` is no payload.
+  { "branch-changed": void },
+  // Queries: main serves a value for each key. A `void` key holds one value.
+  { branches: { key: { cwd: string }; value: string[] } }
+>();
+
+/** A value in `wings.storage` that every frame reads and hears change. */
+export const interval = setting("interval", { default: 60 });
+```
+
+Main serves the query and answers the question, and refreshes the query when something changes:
+
+```ts
+// src/main.ts
+import { git, gitOk, onGitChange } from "wings-plugin-sdk/git";
+import { ch } from "./lib/messages";
+
+// `load` runs only in main. A page that shows a key gets the kept value, and main reloads it while one does.
+ch.serve(
+  "branches",
+  async ({ cwd }) => {
+    const out = await gitOk(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+    return out ? out.split("\n") : [];
+  },
+  { staleMs: 20_000 },
+);
+
+ch.answer("checkout", async ({ cwd, branch }) => {
+  await git(cwd, ["switch", branch]);
+  ch.refresh("branches"); // reloads every key a page shows, and sends the new list to all of them
+  await ch.tell("branch-changed");
+});
+
+// A commit or checkout from anywhere reloads the list too.
+onGitChange(() => ch.refresh("branches"));
+```
+
+A page reads the query, and asks for the command:
+
+```tsx
+// src/pages/branches.tsx
+import { useQuery } from "wings-plugin-sdk/react";
+import { Empty, Heading, List, ListButton, ListItem, Loading, ProjectGate } from "wings-plugin-ui";
+import { ch } from "../lib/messages";
+
+export const page = { place: "sidebar" };
+
+export default function Page() {
+  return <ProjectGate>{(project) => <Branches cwd={project.path} />}</ProjectGate>;
+}
+
+function Branches({ cwd }: { cwd: string }) {
+  const { data, error } = useQuery(ch, "branches", { cwd }); // `data` is null until main has sent the first value
+  if (data === null && !error) return <Loading />;
+  if (error) return <Empty title="Couldn't list the branches" description={error.message} />;
+  return (
+    <>
+      <Heading>Branches</Heading>
+      <List>
+        {data?.map((branch) => (
+          <ListItem key={branch}>
+            <ListButton onClick={() => void ch.ask("checkout", { cwd, branch })}>{branch}</ListButton>
+          </ListItem>
+        ))}
+      </List>
+    </>
+  );
+}
+```
+
+| Call | Does |
+|---|---|
+| `ch.ask(name, request, { timeoutMs? })` | Asks whichever frame answers `name` and resolves its answer. It rejects with the answerer's error message, or with "Wings didn't answer. Try again." after 30 s |
+| `ch.answer(name, handler)` | Answers `name` in this frame, usually main. A thrown error reaches the asker. One handler per name: a second call replaces the first |
+| `ch.tell(name, payload?)`, `ch.on(name, listener)` | An event for every other frame that listens to `name` |
+| `ch.serve(name, load?, { refetchMs, staleMs, throttleMs })` | Main: serves a query. `load(key)` runs only in main, one load per key at a time. `refetchMs` reloads a key that long after its last value, while a page shows it and Wings is in front. A page that starts to show a key gets the kept value, then a reload if it is older than `staleMs`. `throttleMs` folds the refreshes asked for within it into one load. Without `load`, main keeps what frames `put` |
+| `ch.get(name, key, { maxAgeMs? })`, `ch.peek(name, key?)`, `ch.watching(name)` | Main: the kept value or one load, what is kept for a key without loading, and the keys some page shows now |
+| `ch.put(name, key, value)` | Any frame: sets a key's value for every frame at once. For a page that fetched something itself |
+| `ch.refresh(name, key?)` | Any frame: reloads a key now, or every key a page shows when you leave the key out |
+| `ch.subscribe(name, key, listener)` | Any frame: calls `listener({ data, error, at, loading })` as the value changes, for a page without React |
+| `useQuery(ch, name, key, { skip?, keepData?, timeoutMs? })` | In a page: `{ data, error, loading, at, refresh }`. `keepData` keeps the last key's value while a new key loads. `loading` is true only before the first value and while this hook's own `refresh()` waits, so a refetch in main never blinks |
+| `setting(key, { default, check? })` | `get()` reads it from `wings.storage`, or gives `default` when nothing valid is stored (`check` turns what is stored into the value, or `undefined` for what isn't one). `set(value)` stores it and tells the other frames. `onChange(listener)` hears a `set` from any frame. Declare it once: two objects for one key in one frame don't hear each other |
+| `useSetting(setting)` | In a page: `[value, set]`, with `value` `null` until it is read |
+
+A message is JSON that goes over `wings.broadcast`, and it reaches every other frame, never the one that sent it. Messages are marked, so they never mix with your own `broadcast` calls. One that is too big for a broadcast (64,000 characters) is split and joined again, so a value of any size arrives whole. Every frame gets every broadcast, so keep a query to what the pages show. A page that loads before main, or while main reloads, gets its value once main serves. A failed load keeps the last value and reaches every page as `error` until the next good load.
+
+### Helpers
+
+Reach for these before writing your own. Each is a module of `wings-plugin-sdk`: its `.d.ts` says what every call does, and the [README](../packages/plugin-sdk/README.md) has the setup and an example of each. The last column is a plugin here that uses it, by its path under `plugins/`.
+
+| Module | For | A plugin that uses it |
+|---|---|---|
+| `wings-plugin-sdk/messages` | `channel()`: questions, events and queries between main and the pages | `tasks/src/lib/messages.ts`, answered in `tasks/src/main.ts` |
+| `wings-plugin-sdk/react` | `useQuery`, `useSetting` and `useBroadcast`, for a page | `hud/src/pages/sidebar.tsx` |
+| `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change | `tasks/src/lib/view-setting.ts` |
+| `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/src/main.ts` |
+| `wings-plugin-sdk/tools` | `tool()`, `s` and `registerTools()`: Claude's tools, defined once in `src/tools.ts` | `changes/src/tools.ts` |
+| `wings-plugin-sdk/cli` | `cli()`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `work-item/src/lib/az.ts` |
+| `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `parseRemote`, `onGitChange` and more: read a repo through `wings.exec`, and hear it change | `changes/src/lib/changes.ts` |
+| `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front | `dev-servers/src/main.ts` |
+| `wings-plugin-sdk/async` | `cached`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile` and `errorMessage` | `work-item/src/main/sections.ts` (`cached`, `singleFlight`), `worktrees/src/lib/git.ts` (`mapLimit`) |
+| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `hud/src/lib/view.ts` |
+| `wings-plugin-sdk/shell` | `mountShell()`: the frame of a page that builds its own DOM | `changes/src/pages/graph.ts` |
+| `wings-plugin-ui` | The components, the page hooks (`useProject`, `useAction`, `usePoll` and more) and the `show*` functions | `tasks/src/pages/block.tsx` |
+
+### Tools
+
+Claude's tools are written once, in `src/tools.ts`, which exports `tools`: an object of `tool()` definitions keyed by the tool's name. `s` builds the input's schema, which is plain JSON Schema, and the type of `input` comes from it. The main script answers all of them with `registerTools(tools)` from `wings-plugin-sdk/tools`. The build writes `contributes.mcpTools` of the manifest from `tools`, so the two can't differ. `mcpInstructions`, the line that says when Claude should reach for them, stays in the manifest.
+
+```ts
+// src/tools.ts
+import { git } from "wings-plugin-sdk/git";
+import { s, tool } from "wings-plugin-sdk/tools";
+
+export const tools = {
+  list_branches: tool({
+    description: "Lists the branches of this session's project, newest commit first.",
+    input: s.object({ remote: s.boolean().describe("Include the remote branches.").optional() }),
+    // Needs "git for-each-ref" in permissions.exec.
+    async run({ remote }, { project }) {
+      if (!project) throw new Error("This call didn't come from a pane in Wings.");
+      const out = await git(project.path, ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", remote ? "refs" : "refs/heads"]);
+      return out.split("\n");
+    },
+  }),
+};
+```
+
+A call's input is checked against its schema before `run`, so a wrong one comes back to Claude as an error that names the field. `run(input, { paneId, project, session })` also says who called, as `wings.onTool` does. `src/tools.ts` and what it imports run in Node while the manifest is built, with a `wings` that does nothing, so nothing at their top level may need Wings.
+
+### Fixtures
+
+A page is looked at before it ships. A file in `preview/` renders a page with made-up data, and `pnpm --dir plugins shot <plugin>` draws every one in headless Chrome, 1000 and 640 px wide, and prints the PNG paths. `<plugin>/<file>` or `<plugin>/<file>/<state>` picks fewer. A file that exports `states` makes one screenshot for each, and a state sets what the page gets from Wings. Its fields go over the ones the file exports, so a state gives only what differs. They are `page`, `props`, `queries` (what main serves a `useQuery` with: a function of the key, or a value for every key), `answers` (what main answers an `ask` with), `storage`, `project` and `args`. A file that starts with `_` is shared data, not a fixture.
+
+```tsx
+// preview/branches.tsx
+export { default, page } from "../src/pages/branches";
+
+// Main serves two branches for any folder, and the page is the project "web".
+export const queries = { branches: () => ["main", "fix-login"] };
+
+export const states = {
+  branches: {},
+  // A folder with no branches.
+  empty: { queries: { branches: () => [] } },
+};
+```
+
+The header of [`shot.mjs`](shot.mjs) lists every field and is where to look for the rest.
 
 ## Manifest
 
@@ -85,7 +279,7 @@ Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its componen
   "version": "0.1.0",
   "description": "Shows the pull request for each pane's branch.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "permissions": {
     "exec": [
       "git branch --show-current",
@@ -120,7 +314,7 @@ Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its componen
 | `ports` | `true` to see, with `wings.ports`, which local TCP ports the programs in your terminals listen on, with each program's name, pid and start time. Only ports that `localhost` reaches, in panes Wings started |
 | `statusline` | `true` to read what Claude Code tells its status line with `wings.statusline`: your usage limits and each session's context and cache. See [Status line](#status-line) |
 
-`icon`, optional, is an SVG file in the plugin folder, like `"icon.svg"`. The Plugins list shows it instead of the puzzle piece, and a sidebar, view or panel that leaves out its own `icon` uses it on its title bar button, in the overflow menu and on its tab. Wings draws it as a one-colour mask in the current text colour, so use shapes (`fill` or `stroke`, `currentColor` is fine) and expect colours and gradients to come out as a plain silhouette. It must be a relative path to an `.svg` file inside the plugin folder (no `..`, no absolute path, no link out of it), up to 32 KB, with `svg` as its root element, or Wings refuses to load the plugin. It is only ever drawn as an image, never inserted into a page, so scripts, `on*` attributes and links to other files in it do nothing. A sidebar's, view's or panel's `icon` is still one of the built-in names; it can't point to a file. Older Wings ignores the top-level `icon` and keeps the puzzle piece, so it needs no `minWingsVersion`. A sidebar or view that leaves out `icon` is refused by Wings 0.1.19 and older, so set `"minWingsVersion": "0.1.20"` when you do that. `wings-plugin pack` ships every file outside `src/`, `icon.svg` included. Several pages of one plugin show the same icon: give all but one a built-in `icon`.
+`icon`, optional, is an SVG file in the plugin folder, like `"icon.svg"`. The Plugins list shows it instead of the puzzle piece, and a sidebar, view or panel that leaves out its own `icon` uses it on its title bar button, in the overflow menu and on its tab. Wings draws it as a one-colour mask in the current text colour, so use shapes (`fill` or `stroke`, `currentColor` is fine) and expect colours and gradients to come out as a plain silhouette. It must be a relative path to an `.svg` file inside the plugin folder (no `..`, no absolute path, no link out of it), up to 32 KB, with `svg` as its root element, or Wings refuses to load the plugin. It is only ever drawn as an image, never inserted into a page, so scripts, `on*` attributes and links to other files in it do nothing. A sidebar's, view's or panel's `icon` is still one of the built-in names; it can't point to a file. Older Wings ignores the top-level `icon` and keeps the puzzle piece, so it needs no `minWingsVersion`. A sidebar or view that leaves out `icon` is refused by Wings 0.1.19 and older, so set `"minWingsVersion": "0.1.20"` when you do that. `wings-plugin pack` ships every file except `src/`, `preview/`, `node_modules`, package and lock files, `tsconfig*.json`, `HANDOVER*`, dotfiles and other `.wings-plugin` files, `icon.svg` included. Several pages of one plugin show the same icon: give all but one a built-in `icon`.
 
 `minWingsVersion`, optional, is the oldest Wings that can run the plugin, like `"0.1.13"`. Set it when the plugin uses something an older Wings doesn't have. An older Wings refuses to install it and doesn't offer it as an update.
 
@@ -129,7 +323,7 @@ Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its componen
 | Field | Means |
 |---|---|
 | `ui` | `badges` for pane header badges, `status` for the strip under a pane's terminal, `diff` for the diff viewer. Wings refuses `setBadge`, `setPaneStatus` and `openDiff` without them. `status` needs Wings 0.1.32: set `"minWingsVersion": "0.1.32"`, since older Wings refuse the unknown `ui` value |
-| `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default |
+| `mcpTools` | `{ name, description, inputSchema? }` tools the plugin offers Claude through the Wings MCP server, handled with `wings.onTool`. Names are lowercase letters, digits and `_`, and Claude sees them as `<plugin id>__<name>`. `inputSchema` is a JSON Schema object for the arguments, `{ "type": "object" }` by default. A plugin with a `src/tools.ts` doesn't write this field: the build does, from the tools in that file (see Tools) |
 | `mcpInstructions` | A line for Claude, up to 500 characters, on when to reach for the plugin's `mcpTools`. Claude Code defers MCP tools behind tool search, so at session start it sees only tool names and the server's instructions, and never reads the tool descriptions until it searches. Wings adds this line to the instructions it sends when Claude starts a session (the cap is 4,096 characters in all, and a line that doesn't fit is left out), for plugins that are on. Name the tools and say what the user says that should trigger them. A change takes effect in new Claude sessions. Wings 0.1.48 and newer send it; older Wings ignore the field, so no `minWingsVersion` is needed |
 | `sidebars` | Up to 3 `{ id, title, icon?, page }`: the plugin's own HTML `page`, shown in the right sidebar from a title bar button. It runs sandboxed like the plugin, with the same `wings` object, and Wings loads `plugin-ui.css` first so plain buttons, inputs and selects look native. Several open sidebars show as tabs, and each keeps running while hidden. A sidebar may add `popover: { page, width, height }`, a smaller page shown under its button when you point at it or focus it, 240 to 480 wide and 160 to 640 high; see [Popovers](#popovers) |
 | `views` | Up to 3 `{ id, title, icon?, page, opens?, width?, height?, newTab?, multiple?, button? }`: pages like `sidebars` that can also open in a modal over Wings, in a window of their own or as a tab. `opens` lists where, from `sidebar`, `modal`, `window` and `tab`, and the title bar button opens it in the first; it's `["sidebar"]` by default. `width` and `height` size the modal (560 by 480 by default) and the window when it first opens; Wings remembers a window's size and position after that. The sidebar and the modal offer to move a page that can open as a window into one. A page gets the same `wings` object wherever it opens, and a modal's page stops when the modal closes. `newTab: true` lists a view that opens as a tab in the + menu and the command palette (see Tabs). `multiple: true` lets it open several tabs per project. Both need `tab` in `opens`, or Wings refuses the plugin. `button: false` leaves a view out of the title bar's plugin buttons, for a page that shows one item and only makes sense opened from a row with its `args` (Wings 0.1.37). Ids are unique across `sidebars` and `views`. Disabling or removing the plugin, or closing Wings, closes its windows |
@@ -138,7 +332,7 @@ Pages use `wings-plugin-ui`: a page in `src/pages/` default-exports its componen
 | `settings` | `{ page }`: the plugin's own HTML page in Wings Settings, listed under Plugin settings by the plugin's name. It runs sandboxed like a sidebar, with the same `wings` object, fills the settings area and stops when you leave it or close Settings. Keep what it saves in `wings.storage`. See [Settings page](#settings-page) |
 | `panels` | Up to 3 `{ id, title, icon?, url, width?, height? }` web pages, each opened in a popover from a title bar button. `icon` is one of `clock`, `globe`, `calendar`, `chart`, `list`, `git-compare`, `git-graph`, `git-branch`, `folder-tree`, `message`, `scroll`, `kanban`, `gauge`, `activity`, `timer`, `server`, `terminal`, `todo` or `puzzle` (Wings 0.1.20 and newer for all but the first five), and `url` must be https. The page runs as a normal website with no access to Wings, and keeps its cookies, so a sign-in sticks |
 
-`id` is lowercase letters, digits and dashes. `api` must be `1`.
+`id` is lowercase letters, digits and dashes. `api` must be `1`. A `page` is a built file, like `dist/sidebar.html`: the build fails on one it doesn't write and the folder doesn't have.
 
 A command runs as you, with that CLI's own sign-in, so `gh api` can read anything your GitHub account can. Only declare commands you need, because that list is what the user approves. On top of it, Wings refuses known flags that run other commands, touch files outside the repo, change data on the server or print a token: `git -c`, `--upload-pack`, `--output`, `--no-index`, `gh`/`glab` `-X`, `--method`, `-f`, `-F`, `--input`, `--show-token`, and for `az` `--method`, `--http-method`, the file flags (`--in-file`, `--out-file`, `--output-file`, `--file`, `--destination`, `--source` and their short forms) and `@path` values, which az reads as files. That list can't cover every subcommand of every CLI, so treat an `exec` entry as trusting the plugin with that command.
 
@@ -152,13 +346,13 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 |---|---|
 | `wings.onPanes(fn)` | Called with every terminal pane on each change, including a change of focus: `{ paneId, cwd, command, project, projectId, session, focused }[]`. `project` is the project's name and `projectId` its id, the same as `wings.project().id` (Wings 0.1.22). `cwd` follows `cd`. `focused` is true on the focused pane of the tab on screen. `session` is `{ sessionId, name, state, startedAt }` while Claude runs in the pane, else `null`. `startedAt` is when that `claude` started, in ms, since a resumed session's transcript also holds what came before |
 | `wings.onFocus(fn)` | Called with `{ focused }` once with the current state, then on every change: `focused` is true while any Wings window (the main one or a view window) is in front, false while you're in another app or Wings is minimized or hidden. A short move between two Wings windows doesn't count as a change. Needs no permission. `wings.focused` reads the last state (true until Wings sends it, which is right after the frame is ready). Needs Wings 0.1.17: set `"minWingsVersion": "0.1.17"`. See Pausing polls |
-| `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId })` gets Claude's arguments and the Wings pane Claude runs in (or `null`), and returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls |
+| `wings.onTool(name, fn)` | Runs one of your `mcpTools` when Claude calls it. `fn(input, { paneId, project, session })` gets Claude's arguments and who called: `paneId` is the Wings pane Claude runs in, `project` is that pane's project `{ id, name, path }`, and `session` is the Claude session in it `{ id, name }`, with `name` `null` while it has none. Each is `null` when there is none: no pane, or Claude hasn't started its session yet. `project` and `session` need Wings 0.1.50. It returns a string or a JSON value. A thrown error goes back to Claude as a failed call. Register it in `main`, since sidebar pages don't get tool calls. With a `src/tools.ts`, `registerTools` does this for you (see Tools) |
 | `wings.onAction(fn)` | Called with `{ paneId, actionId }` when a badge action is clicked. Return a promise: the button shows a spinner until it settles (up to 5 min), and a thrown error is shown in the card |
 | `wings.exec(program, args, { cwd, timeoutMs, onOutput })` | Resolves `{ code, stdout, stderr }`. `timeoutMs` is 30 s by default, 5 min at most. `onOutput(line)` gets each stdout and stderr line while the program runs. A program that prints more than 8 MB to stdout or stderr is killed and the call rejects with `Output is larger than 8 MB`, not a truncated result: ask for less (`git diff` a few files at a time) |
 | `wings.transcript(sessionId, types, { last? })` | Resolves the matching transcript entries, oldest first. `last` keeps only the newest that many (up to 1000), which is much faster on a long session |
 | `wings.statusline()` | Resolves `{ rateLimits, sessions }`, what Claude Code last told `wings statusline`. `rateLimits` is `{ fiveHour, sevenDay, at }`, each window `{ usedPercentage, resetsAt }` with `resetsAt` in epoch seconds, or `null` until a session has reported them (only Pro and Max plans get them). `sessions` has, by session id, `{ model, contextWindowSize, usedPercentage, totalInputTokens, totalOutputTokens, currentUsage, promptCache, at }`, Claude Code's own numbers from the last response. `at` is when Wings got it, in ms |
 | `wings.onTranscript(fn)` | Called with `{ sessionId, paneId, entry }` for each transcript entry Claude Code writes while it runs in a pane, when the entry's `type` is in `permissions.transcript`. Only entries written after the plugin started, or after the session started in the pane: read earlier ones with `wings.transcript`. Wings looks for new entries twice a second and skips entries over 256 KB, which are large tool results |
-| `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it |
+| `wings.setBadge(paneId, badge)` | Shows a badge in the pane header; `null` removes it. Needs `badges` in `contributes.ui`. Sending what this frame last sent for the pane does nothing, `null` included, so call it on every poll. A call for a pane that has closed rejects with `no pane <id>`. See [Badges](#badges) |
 | `wings.setPaneStatus(paneId, status)` | Shows a status strip under the pane's terminal; `null` removes it. Needs `status` in `contributes.ui`. See [Pane status](#pane-status) |
 | `wings.openUrl(url)` | Opens the URL in the browser |
 | `wings.ports()` | Needs `permissions.ports`. Resolves `{ paneId, pid, name, port, startedAt }[]`: the local TCP ports listening in each pane's shell and everything it started, sorted by pane and port. `startedAt` is in ms. Wings reads the process tree and runs `lsof` with fixed arguments, about 20 ms a call (macOS and Linux with `lsof`; rejects where it is missing), so poll every 15 s at most, and only while focused |
@@ -189,7 +383,9 @@ Plugins don't load on Windows yet. WebView2 gives child frames the app's IPC bri
 | `wings.closeView(id)` | Closes a sidebar or view wherever it's open |
 | `wings.openSettings()` | Opens Wings Settings at the plugin's settings page. Refused for a plugin without `contributes.settings` |
 | `wings.setSidebarLabel(sidebarId, label, { rows, tone })` | Takes a sidebar or view id. Up to 80 characters next to its title bar button, like a running timer; `null` clears it. Wings shows it as a green pill, cut with an ellipsis when it doesn't fit, or an amber or red one when `tone` is `"warning"` or `"danger"`. `rows` are up to 6 `{ label, value }` shown when you point at it |
-| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to the plugin's other pages: its main script and any open sidebars, popovers, modals and windows. Use it so a page refreshes when a tool call changed something |
+| `wings.broadcast(message)`, `wings.onBroadcast(fn)` | Sends a JSON value, up to 64 KB, to every other frame of the plugin that is loaded: its main script, and its sidebars, popovers, modals, windows, tabs, blocks and settings page. A frame that isn't loaded hears nothing. Use it so a page refreshes when a tool call changed something. A `channel` from `wings-plugin-sdk/messages` is built on it (see Talking to main) |
+
+### Badges
 
 A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, actions? }`:
 
@@ -202,7 +398,7 @@ A badge is `{ label, tone, icon?, counts?, loading?, title?, subtitle?, rows?, a
 
 A review comment is `{ id, replyTo, path, line, side, author, body, createdAt, url, canReply }`, where `side` is `additions` or `deletions`, and `canReply` on a thread's first comment shows a reply box under it. `path` is `null` for a comment on the whole pull request, and `line` is `null` for comments on code that has changed since. Both show under Discussion in the viewer.
 
-Wings drops a pane's badges when the pane closes.
+Wings keeps the books for badges, statuses and project sections, so a plugin keeps no copy of what it sent. A frame skips a `setBadge` or `setPaneStatus` that repeats what it sent last for the pane, `null` included (Wings 0.1.17 and newer), and Wings keeps the same badge object for an identical one, so setting the same badge again costs nothing. Wings also ignores project section rows that are identical to what the section already shows. So set them on every pass, with no signature map and no list of what is shown. Wings drops the badges and statuses of a pane when it closes, so a plugin needs no cleanup for closed panes, and a `setBadge` for a pane that is gone rejects with `no pane <id>`. Send `null` only to clear the badge of a pane that stays open, like a pull request that was merged.
 
 ### Pane status
 
@@ -244,13 +440,13 @@ The `wings-plugin-sdk` package has types for all of this.
 
 ## Pausing polls
 
-Wings is in the background most of the day, and a timer that runs `git`, `gh` or `lsof` then spends the user's battery on a badge nobody sees. Stop timers while `wings.focused` is false and check once when it turns true. `pollWhileFocused(tick, ms)` from `wings-plugin-sdk/poll` does this: it runs `tick` every `ms` while Wings is in front, and once at once when you come back. Keep event-driven work (`onPanes`, `onTranscript`, actions, tools) running. `onFocus` also tells you when to call `wings.notify`: send it only when `wings.focused` is false, since a user who is looking doesn't need a notification.
+Wings is in the background most of the day, and a timer that runs `git`, `gh` or `lsof` then spends the user's battery on a badge nobody sees. Stop timers while `wings.focused` is false and check once when it turns true. `pollWhileFocused(tick, ms)` from `wings-plugin-sdk/poll` does this: it runs `tick` every `ms` while Wings is in front, and once as soon as you come back, if `ms` has passed since the last run. Within `ms` it waits for the time that was left, so switching windows doesn't fetch on every switch. A third argument `{ immediate: true }` also runs `tick` once at the start, when Wings is in front. Keep event-driven work (`onPanes`, `onTranscript`, actions, tools) running. `onFocus` also tells you when to call `wings.notify`: send it only when `wings.focused` is false, since a user who is looking doesn't need a notification.
 
 ## Required tools
 
 A plugin needs the GitHub CLI (`gh`), the GitLab CLI (`glab`) or the Azure CLI (`az`) when its `exec` or `post` entries name it. Its page in Plugins lists them under Needs, each Installed or not. A missing one has a button: on a Mac with Homebrew, Wings asks, then opens a tab in the project on screen and runs the vendor's own Homebrew command there (`brew install gh`, `brew install glab`, `brew update && brew install azure-cli`), so you see its output and can answer it. Without Homebrew, or off macOS, it links to the vendor's install page and to brew.sh. When the command is done, Wings checks again, says so, and restarts the plugins that run it.
 
-`exec` rejects with `<program> is not installed or not on PATH` for a missing program. A plugin can then show a badge with an Install action that calls `wings.installTool(program)`, like `pr-tracker` and `work-item` do. The commands come from Wings' own table, so a plugin only names the program: one in its manifest and in that table, and Wings always asks first.
+`exec` rejects with `<program> is not installed or not on PATH` for a missing program. Don't match on that text or write the sign-in handling by hand: `cli()` from `wings-plugin-sdk/cli` runs `az`, `gh` or `glab`, tells a missing program and a signed-out one from a failed call, and `problemBadge` gives the badge with Install, Sign in and Try again. Its actions call `install()`, which asks Wings through `wings.installTool(program)`, `signIn()` and `retry()`. List each command in `permissions.exec`, `az login` and `gh auth login` included. `work-item/src/lib/az.ts` makes the handle and `work-item/src/main/badge.ts` draws the badge and answers its actions. The commands come from Wings' own table, so a plugin only names the program: one in its manifest and in that table, and Wings always asks first.
 
 ## Views
 
@@ -258,7 +454,7 @@ A view is one of your pages that can open somewhere other than the sidebar. This
 
 ```json
 "contributes": {
-  "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "board.html", "opens": ["modal", "window"], "width": 720, "height": 520 }]
+  "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "dist/board.html", "opens": ["modal", "window"], "width": 720, "height": 520 }]
 }
 ```
 
@@ -266,7 +462,7 @@ Any of the plugin's pages can open it, and keep it current while it's open in an
 
 ```js
 await wings.openView("board", { as: "window" });
-wings.broadcast({ refreshed: Date.now() }); // board.html hears it with wings.onBroadcast
+wings.broadcast({ refreshed: Date.now() }); // the board page hears it with wings.onBroadcast
 ```
 
 A window shows the same sandboxed page as the sidebar would. Its calls go to Wings' main window and are checked there against your manifest, exactly like the sidebar's, so a window can't do more than the plugin could.
@@ -295,7 +491,7 @@ wings.onProjects((projects) => {
 });
 ```
 
-A section shows under its project after the project's row, with the plugin's icon, its title and the row count, only while it has rows. Clicking its header folds it shut, and Wings remembers that per project and section. Clicking a row opens `open.view` as a tab in that row's project, switching to the project, with `args` for `viewArgs()` and following the same rules as `openView`: a tab already open with other args takes the new ones and reloads, and a view with `multiple` opens a new tab unless a tab of it in that project already has equal `args`. `open.view` must be one of the plugin's views with `tab` in `opens`, or the call rejects. Wings cuts text for you (label and detail 120 characters, badge 24, ids 64), keeps the first 50 rows, leaves out a row with no `id` or `label` or an `id` already used, and rejects `args` over 16 KB. A badge `tone` is one of the badge tones. Sections are kept in memory, not saved: they go when the plugin is turned off or removed, so fill them again on start, and send only when rows change. They need Wings 0.1.23, so set `"minWingsVersion": "0.1.23"`.
+A section shows under its project after the project's row, with the plugin's icon, its title and the row count, only while it has rows. Clicking its header folds it shut, and Wings remembers that per project and section. Clicking a row opens `open.view` as a tab in that row's project, switching to the project, with `args` for `viewArgs()` and following the same rules as `openView`: a tab already open with other args takes the new ones and reloads, and a view with `multiple` opens a new tab unless a tab of it in that project already has equal `args`. `open.view` must be one of the plugin's views with `tab` in `opens`, or the call rejects. Wings cuts text for you (label and detail 120 characters, badge 24, ids 64), keeps the first 50 rows, leaves out a row with no `id` or `label` or an `id` already used, and rejects `args` over 16 KB. A badge `tone` is one of the badge tones. Sections are kept in memory, not saved: they go when the plugin is turned off or removed, so fill them again on start, and Wings ignores rows that are identical to what a section already shows, so call `setProjectSection` whenever you have looked and keep no copy of what you sent. They need Wings 0.1.23, so set `"minWingsVersion": "0.1.23"`.
 
 ## Blocks
 
@@ -303,21 +499,21 @@ A block is a plugin page the user places on a project's Project page, between it
 
 ```json
 "contributes": {
-  "views": [{ "id": "board", "title": "Board", "page": "board.html", "opens": ["tab"] }],
-  "blocks": [{ "id": "board", "title": "Sprint board", "page": "board.html", "minHeight": 200 }]
+  "views": [{ "id": "board", "title": "Board", "page": "dist/board.html", "opens": ["tab"] }],
+  "blocks": [{ "id": "board", "title": "Sprint board", "page": "dist/block.html", "minHeight": 200 }]
 }
 ```
 
-A block's `page` can be the page of a view, so the same HTML shows as a tab and as a block; read `wings.placement()` to draw a compact version when it is `"block"`. Declaring a block adds nothing to the sidebar or the + menu: it shows only in the Project page's "+ Add" menu, for plugins that are on and approved.
+A page built from `src/pages` mounts in one place, so give a block its own page, `src/pages/block.tsx` with `export const page = { place: "block" }`, and share the components it draws from `src/ui/`, like `tasks/src/pages/block.tsx` does. A block's `page` can be the HTML of a view when you write it yourself, and then `wings.placement()` says `"block"` where a compact version is wanted. Declaring a block adds nothing to the sidebar or the + menu: it shows only in the Project page's "+ Add" menu, for plugins that are on and approved.
 
 In a block:
 
 - `wings.project()` is the Project page's project, and never changes.
 - `wings.blockState()` and `wings.setBlockState(state)` keep a small JSON value (up to 16 KB) per block, like the filter it shows. Two blocks of the same page have their own state. Wings saves it with the Project page.
-- `wings.setHeight(px)` sizes the block to its content, within `minHeight` and 1200. A page that measures itself can call it from a `ResizeObserver`; Wings applies the height without reloading the page, and the call returns at once.
+- `wings.setHeight(px)` sizes the block to its content, within `minHeight` and 1200. A page of your own that measures itself can call it from a `ResizeObserver` (`showBlock` does this for a `wings-plugin-ui` page); Wings applies the height without reloading the page, and the call returns at once.
 - Outside a block, `blockState()` gives `null`, and `setBlockState` and `setHeight` fail with a message saying so.
 
-Blocks cost a frame each, so Wings loads one only when it scrolls into view, unloads it after 5 minutes out of view (a page that saved its state with `setBlockState` comes back as it was) and shows at most 8 at once on a Project page. While a block is out of view, or its project's tab is hidden, its `wings.focused` is false from the first line of the page (not only after the first `onFocus`) and `onFocus` reports each change, so `pollWhileFocused` pauses its polling and checks once when the block is back. Gate polling on `wings.focused`, not `document.visibilityState`: a frame scrolled out of view or in a hidden tab still reports `"visible"`, because the browser only reports the state of the whole Wings window. A block page draws with `showView` from `wings-plugin-ui`; `showBlock` isn't needed. Don't poll from a block's page faster than you would from a sidebar.
+Blocks cost a frame each, so Wings loads one only when it scrolls into view, unloads it after 5 minutes out of view (a page that saved its state with `setBlockState` comes back as it was) and shows at most 8 at once on a Project page. While a block is out of view, or its project's tab is hidden, its `wings.focused` is false from the first line of the page (not only after the first `onFocus`) and `onFocus` reports each change, so `pollWhileFocused` pauses its polling and checks once when the block is back. Gate polling on `wings.focused`, not `document.visibilityState`: a frame scrolled out of view or in a hidden tab still reports `"visible"`, because the browser only reports the state of the whole Wings window. The build mounts a block page with `showBlock` from `wings-plugin-ui`, which also keeps the block as tall as the page with `wings.setHeight`. Don't poll from a block's page faster than you would from a sidebar.
 
 Blocks, `"block"` and the three calls need Wings 0.1.24, so set `"minWingsVersion": "0.1.24"`. Older Wings ignore `contributes.blocks`.
 
@@ -327,7 +523,7 @@ A sidebar can have a quick look: a second page shown under its title bar button 
 
 ```json
 "contributes": {
-  "sidebars": [{ "id": "timer", "title": "Timer", "icon": "clock", "page": "sidebar.html", "popover": { "page": "popover.html", "width": 340, "height": 420 } }]
+  "sidebars": [{ "id": "timer", "title": "Timer", "icon": "clock", "page": "dist/sidebar.html", "popover": { "page": "dist/popover.html", "width": 340, "height": 420 } }]
 }
 ```
 
@@ -339,7 +535,7 @@ A plugin can have a page in Wings Settings instead of a settings form in its sid
 
 ```json
 "contributes": {
-  "settings": { "page": "settings.html" }
+  "settings": { "page": "dist/settings.html" }
 }
 ```
 
@@ -347,7 +543,7 @@ Any of the plugin's pages, or its main script, can send the user there, and hear
 
 ```js
 await wings.openSettings();
-// settings.html, after saving:
+// the settings page, after saving. A value like this is a `setting()`, see Talking to main:
 await wings.storage.set("interval", 60);
 wings.broadcast({ settingsChanged: true });
 ```
