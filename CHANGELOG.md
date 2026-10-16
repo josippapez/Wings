@@ -2,7 +2,7 @@
 
 What changed in each Wings release, newest first.
 
-## Unreleased
+## 0.1.55 · 2026-10-16
 
 - **Claude can start a command in a new tab.** `open_pane` takes `run`, and Wings presses Enter after the command when "Let Claude run commands in new tabs" is on in Settings, Agents. It's off by default, and then the command waits for you as before. The reply tells Claude whether it ran, so it doesn't wait on a server that never started.
 
