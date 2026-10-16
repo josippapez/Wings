@@ -1,8 +1,8 @@
 // The commit graph view: every branch's commits with their lanes, from a made-up `git log`.
 import { useEffect } from "react";
 
-export const place = "view";
-export const fill = true;
+// graph.ts builds its own DOM into the frame, so there is no page to re-export: this says the frame it gets.
+export const page = { place: "view", fill: true };
 
 const NOW = Math.floor(Date.now() / 1000);
 // [hash, parents, author, ago in hours, decoration, subject], newest first, in topological order.
