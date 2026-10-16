@@ -10,6 +10,7 @@ import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanButtons, type NotificationButton } from "@/lib/notifications";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
 import { FocusTracker } from "@/lib/plugin-focus";
+import { gitListeners } from "@/lib/plugin-git";
 import { parseViewLabel, viewLabel, ViewWindowHost, type Bus } from "@/lib/plugin-views";
 import { requestToolInstall } from "@/lib/tool-install";
 import pluginUiCss from "wings-plugin-ui/plugin-ui.css?raw";
@@ -291,6 +292,7 @@ export class PluginHost {
   /** `openPane` calls waiting for their new pane to reach plugins, by Rust pane id. */
   private paneWaiters = new Map<string, () => void>();
   private unlistenTranscript = api.onPluginTranscript((events) => this.publishTranscript(events));
+  private unlistenGit = api.onGitChanged((projectIds) => this.publishGit(projectIds));
   /** Starts true: Wings opens in front, and the document is checked for focus. */
   private focus = new FocusTracker(document.hasFocus(), (focused) => {
     for (const plugin of this.frames.values()) if (plugin.ready) plugin.post({ event: "focus", data: { focused: focused && !plugin.hidden } });
@@ -566,6 +568,11 @@ export class PluginHost {
     }
   }
 
+  /** A repo moved: the frames of plugins that may run git hear which projects. */
+  private publishGit(projectIds: string[]) {
+    for (const plugin of gitListeners(this.frames.values())) plugin.post({ event: "git", data: { projectIds } });
+  }
+
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
   sendAction(pluginId: string, paneId: string, actionId: string): Promise<void> {
     return this.ask(pluginId, "action", { paneId, actionId });
@@ -612,6 +619,7 @@ export class PluginHost {
     window.removeEventListener("message", this.onMessage);
     void this.unlistenTools.then((off) => off());
     void this.unlistenTranscript.then((off) => off());
+    void this.unlistenGit.then((off) => off());
     void this.unlistenFocus.then((off) => off());
     this.focus.dispose();
     for (const running of this.frames.values()) running.remove();

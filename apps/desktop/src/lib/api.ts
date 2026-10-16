@@ -231,6 +231,8 @@ export const api = {
   /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
   onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
     listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),
+  /** The ids of the projects whose repo moved (a commit, checkout, pull or ref change), once the writes settle. */
+  onGitChanged: (cb: (projectIds: string[]) => void): Promise<UnlistenFn> => listen<string[]>("git-changed", (e) => cb(e.payload)),
   /** `right` and `bottom` are the button's edges in the window, so the panel opens just under it. */
   pluginPanelToggle: (pluginId: string, panelId: string, right: number, bottom: number) =>
     invoke<void>("plugin_panel_toggle", { pluginId, panelId, right, bottom }),
