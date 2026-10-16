@@ -1,5 +1,6 @@
 /** What the main script knows about the panes' and the lists' pull requests: every map its modules read and write. */
-import type { Diff, FailureDetail, Link, Status, StatusEntry } from "../lib/types";
+import { ch } from "../lib/messages";
+import type { Diff, Failing, FailureDetail, Link, Status, StatusEntry } from "../lib/types";
 
 export const state = { panes: [] as WingsPane[] };
 /** paneId → PR ref { provider, url, number, repo, ...provider fields } */
@@ -17,8 +18,8 @@ export const diffs = new Map<string, Diff>();
 export const diffLoads = new Map<string, Promise<Diff>>();
 /** Open diff viewer id → PR url, so a reply typed in it reaches the right PR. */
 export const viewers = new Map<string, string>();
-/** PR url → { key, items, list }: details of the failed checks `key` names. `items` is the load, `list` its result. */
-export const failures = new Map<string, { key: string; items: Promise<FailureDetail[]>; list: FailureDetail[] | null }>();
+/** PR url → { key, items, byId, list }: details of the failed checks `key` names. `items` is the load, `byId` each check's own, `list` the result. */
+export const failures = new Map<string, { key: string; items: Promise<FailureDetail[]>; byId: Map<Failing["id"], Promise<FailureDetail[]>>; list: FailureDetail[] | null }>();
 
 export const failKey = (st: Status) => st.failing.map((f) => f.id).join(" ");
 
@@ -32,10 +33,11 @@ export function linkFor(url: string) {
 /** Wings doesn't say when a diff viewer is closed, so only the newest are kept track of. */
 const MAX_VIEWERS = 20;
 
-/** What is kept per PR (its status, diff and failed checks) goes once no pane, list or open diff viewer shows the PR. `listed` is the urls of every list. */
+/** What is kept per PR (its status, diff and failed checks) goes once no pane, list, tab or open diff viewer shows the PR. `listed` is the urls of every list. */
 export function prune(listed: Iterable<string>) {
   while (viewers.size > MAX_VIEWERS) viewers.delete(viewers.keys().next().value!);
-  const shown = new Set([...listed, ...[...links.values()].map((l) => l.url), ...viewers.values()]);
+  const tabs = ch.watching("pr").map((key) => key.url);
+  const shown = new Set([...listed, ...[...links.values()].map((l) => l.url), ...viewers.values(), ...tabs]);
   const kept: Map<string, unknown>[] = [status, diffs, failures];
   for (const map of kept) for (const url of map.keys()) if (!shown.has(url)) map.delete(url);
 }

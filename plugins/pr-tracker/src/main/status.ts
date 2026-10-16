@@ -23,13 +23,18 @@ export function refreshStatus(url: string, { byUser = false } = {}): Promise<voi
       manual.delete(url);
       render();
     }
-    const st = status.get(url);
-    if (st && !st.error && diffs.get(url)?.key !== st.key) void loadDiff(url).catch(() => {});
-    if (st?.failing?.length && failures.get(url)?.key !== failKey(st as Status)) void loadFailures(url);
+    prefetch(url);
   })();
   inFlight.set(url, run);
   render();
   return run;
+}
+
+/** After a status loads: the diff, so "View changes" opens at once, and the details of checks that newly failed. */
+export function prefetch(url: string) {
+  const st = status.get(url);
+  if (st && !st.error && diffs.get(url)?.key !== st.key) void loadDiff(url).catch(() => {});
+  if (st?.failing?.length && failures.get(url)?.key !== failKey(st as Status)) void loadFailures(url);
 }
 
 // ---------- failed checks ----------
@@ -44,10 +49,12 @@ export function loadFailures(url: string) {
   // The pane moved off this PR while its status loaded.
   if (!link) return Promise.resolve([]);
   const forge = forgeOf(link);
+  // Each check's own load is kept too, so a tab that opens a failed check reads what the badge already fetched.
+  const byId = new Map(st.failing.map((f) => [f.id, forge.failure(link, f)]));
   const items = Promise.all(
-    st.failing.map((f) => forge.failure(link, f).catch((error: unknown): FailureDetail[] => noLog(f.name, `${f.summary ?? "Failed"} (no log: ${errorMessage(error)})`, f.url))),
+    st.failing.map((f) => byId.get(f.id)!.catch((error: unknown): FailureDetail[] => noLog(f.name, `${f.summary ?? "Failed"} (no log: ${errorMessage(error)})`, f.url))),
   ).then((lists) => lists.flat());
-  const entry = { key, items, list: null as FailureDetail[] | null };
+  const entry = { key, items, byId, list: null as FailureDetail[] | null };
   failures.set(url, entry);
   void items.then((list) => {
     entry.list = list;

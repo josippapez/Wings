@@ -9,26 +9,37 @@
 import { errorMessage } from "wings-plugin-sdk/async";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
-import { linkOf } from "./lib/forges/registry";
 import { ch } from "./lib/messages";
-import type { Link } from "./lib/types";
 import { watchMinutes, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
 import { refreshLinks } from "./main/links";
 import { problemOf } from "./main/problems";
-import { markSeen, pullsFor, refreshProjects, setWatching } from "./main/projects";
+import { pullsFor, refreshProjects, setWatching } from "./main/projects";
 import { remoteFor, remotes } from "./main/remote";
 import { connectClis, install, retry, signIn } from "./main/retry";
-import { known, links, state, sync } from "./main/state";
+import { links, state, sync } from "./main/state";
 import { refreshStatus } from "./main/status";
+import { serveTab } from "./main/tab";
 import { tools } from "./tools";
 
 const LINK_POLL_MS = 15_000;
 const STATUS_POLL_MS = 60_000;
 /** A block that opens gets the kept list, read again when it is older than this: a little under the poll, like the list cache. */
 const PULLS_STALE_MS = 55_000;
+/** A tab's PR older than this is loaded again by the pane poll, so a pane and a tab on it fetch once a minute. */
+const PR_STALE_MS = 55_000;
 
 connectClis();
+
+/** Each pane's PR, once a minute. A PR a tab shows is loaded for the tab, whose overview carries the status, so it is fetched once. */
+function refreshPanes() {
+  const tabs = new Map(ch.watching("pr").map((key) => [key.url, key]));
+  for (const url of new Set([...links.values()].map((l) => l.url))) {
+    const key = tabs.get(url);
+    if (!key) void refreshStatus(url);
+    else if (Date.now() - (ch.peek("pr", key)?.at ?? 0) > PR_STALE_MS) ch.refresh("pr", key);
+  }
+}
 
 wings.onPanes((list) => {
   state.panes = list;
@@ -47,7 +58,7 @@ wings.onPanes((list) => {
 wings.onProjects(() => void refreshProjects());
 // Both polls pause while Wings is in the background, and run once when you come back.
 pollWhileFocused(refreshLinks, LINK_POLL_MS);
-pollWhileFocused(() => [...new Set([...links.values()].map((l) => l.url))].forEach((url) => refreshStatus(url)), STATUS_POLL_MS);
+pollWhileFocused(refreshPanes, STATUS_POLL_MS);
 // The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
 pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
 
@@ -83,22 +94,7 @@ wings.onAction(async ({ paneId, actionId }) => {
 
 // ---------- the PR tab ----------
 
-/** What a "pr" tab asks of this script, since only it can open the diff viewer that takes replies and knows the agent panes. */
-ch.answer("pr", async ({ op, args, focus }) => {
-  if (op === "seen") return markSeen(args.url);
-  let link: Link | undefined = [...links.values()].find((l) => l.url === args.url);
-  if (!link) {
-    // No pane is on it: diff in the folder of the project whose row opened it, not the first project that listed the repo.
-    link = known.get(args.url) ?? (await linkOf(args));
-    if ("cwd" in link) link = { ...link, cwd: args.cwd };
-    known.set(args.url, link);
-  }
-  if (op === "diff") return openDiffFor(link, { title: args.title, focus });
-  // The agent working on this PR's branch: Send to agent in the viewer offers the one in this folder first.
-  const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === args.url);
-  if (!agent) throw new Error("No agent is working on this branch. Start Claude in a terminal on it, then try again.");
-  return openDiffFor(link, { title: args.title, cwd: agent.cwd, focus });
-});
+serveTab();
 
 // ---------- the Pull requests block ----------
 

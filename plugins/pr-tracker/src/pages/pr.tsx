@@ -1,15 +1,15 @@
-// The PR tab: one pull request with its status, description and review threads. The diff viewer and Send to agent
-// belong to the main script, which is asked for them; everything shown here loads after the page does.
+// The PR tab: one pull request with its status, description and review threads. The main script loads them as queries,
+// shared with every tab on the PR and with a pane's badge on it, and does what is asked of it: the diff viewer, Send to
+// agent, replies, approvals and votes.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { errorMessage } from "wings-plugin-sdk/async";
-import { Page, ProjectGate, useAction, usePoll, useViewArgs } from "wings-plugin-ui";
-import { readArgs } from "../lib/args";
-import { forgeOf, linkOf } from "../lib/forges/registry";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "wings-plugin-sdk/react";
+import { Page, ProjectGate, useAction, useViewArgs } from "wings-plugin-ui";
+import { prKey, readArgs } from "../lib/args";
 import { ch } from "../lib/messages";
 import type { Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
-import type { Comment, Failing, Link, Overview, PrArgs } from "../lib/types";
+import type { Comment, Failing, PrArgs } from "../lib/types";
 import type { AzureVote } from "../lib/vote";
 import "./pr.css";
 import { PrView } from "../ui/pr-view";
@@ -17,40 +17,26 @@ import { ProjectPulls } from "../ui/pulls-list";
 
 export const page = { place: "tab", fill: true };
 
-const REFRESH_MS = 120_000;
+/** GitLab and Azure DevOps read an overview in two calls in a row, so main gets longer than an ask's 30 s. */
+const TIMEOUT_MS = 90_000;
+/** A sign-in waits for the browser for up to 5 minutes, and main answers when it is done. */
+const ACTION_TIMEOUT_MS = 330_000;
+const NO_PUSHES: Push[] = [];
 
 function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
-  const [link, setLink] = useState<Link | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [comments, setComments] = useState<Comment[] | null>(null);
-  const [pushes, setPushes] = useState<Push[]>([]);
+  const key = useMemo(() => prKey(args), [args]);
+  const pr = useQuery(ch, "pr", key, { timeoutMs: TIMEOUT_MS });
+  const comments = useQuery(ch, "pr-comments", key, { timeoutMs: TIMEOUT_MS });
+  const pushes = useQuery(ch, "pr-pushes", key, { timeoutMs: TIMEOUT_MS });
   const snippets = useRef(new Map<number, Promise<SnippetLine[] | null>>());
-  const [error, setError] = useState<string | null>(null);
   /** Which button waits on main: the action's own flag is for all of them. */
   const [busy, setBusy] = useState<"diff" | "agent" | null>(null);
   const action = useAction();
-  const resolved = useRef<Promise<Link> | null>(null);
+  const signIn = useAction();
+  const overview = pr.data?.overview ?? null;
+  const can = pr.data?.can;
 
-  const load = useCallback(async () => {
-    try {
-      resolved.current ??= linkOf(args);
-      const l = await resolved.current;
-      setLink(l);
-      // The status, description and threads load side by side; each shows as it arrives.
-      const [o, c] = await Promise.all([
-        forgeOf(l).overview(l).then((o) => (setOverview(o), o)),
-        forgeOf(l).comments(l).then((c) => (setComments(c), c)),
-        (forgeOf(l).pushes?.(l) ?? Promise.resolve([])).then(setPushes),
-      ]);
-      setError(null);
-      return { o, c };
-    } catch (e) {
-      resolved.current = null;
-      setError(errorMessage(e));
-    }
-  }, [args]);
-
-  usePoll(load, REFRESH_MS);
+  // Opening the tab marks the PR read, and tells main which project it came from.
   useEffect(() => {
     void ch.ask("pr", { op: "seen", args }).catch(() => {});
   }, [args]);
@@ -64,55 +50,51 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
     [args, act],
   );
 
-  const onReply = useCallback(
-    async (root: Comment, body: string) => {
-      const reply = await forgeOf(link!).reply(link!, root, body);
-      setComments((all) => [...(all ?? []), reply]);
-    },
-    [link],
-  );
+  const refresh = () => {
+    pr.refresh();
+    comments.refresh();
+    pushes.refresh();
+  };
 
-  const onApprove = useCallback(async () => {
-    await forgeOf(link!).approve!(link!, overview!.status.key);
-    await load();
-  }, [link, load, overview]);
-
-  const onVote = useCallback(async (vote: AzureVote) => {
-    await forgeOf(link!).vote!(link!, vote);
-    await load();
-  }, [link, load]);
+  // Main puts the reply into the conversation that every tab on the PR shows.
+  const onReply = useCallback(async (root: Comment, body: string) => void (await ch.ask("pr-reply", { args, root, body })), [args]);
+  const onApprove = useCallback(() => ch.ask("pr", { op: "approve", args, sha: overview!.status.key }), [args, overview]);
+  const onVote = useCallback((vote: AzureVote) => ch.ask("pr", { op: "vote", args, vote }), [args]);
 
   /** Each code thread's lines are read once, when its card is opened. */
   const onSnippet = useCallback(
     (root: Comment) => {
       const hit = snippets.current.get(root.id);
       if (hit) return hit;
-      const lines = forgeOf(link!).snippet!(link!, root, pushes, overview?.status.headCommit ?? null);
+      const lines = ch.ask("pr-snippet", { args, root, head: overview?.status.headCommit ?? null });
       snippets.current.set(root.id, lines);
       return lines;
     },
-    [link, pushes, overview],
+    [args, overview],
   );
 
-  const onLoadFailure = useCallback((f: Failing) => forgeOf(link!).failure(link!, f), [link]);
+  const onLoadFailure = useCallback((failing: Failing) => ch.ask("pr-failure", { args, failing }), [args]);
 
   return (
     <PrView
       args={args}
       overview={overview}
-      comments={comments}
-      pushes={pushes}
-      onSnippet={link && forgeOf(link).snippet ? onSnippet : undefined}
-      error={error}
-      notice={action.error}
+      comments={comments.data}
+      pushes={pushes.data ?? NO_PUSHES}
+      onSnippet={can?.snippet ? onSnippet : undefined}
+      error={(pr.error ?? comments.error ?? pushes.error)?.message ?? null}
+      problem={pr.data?.problem}
+      problemBusy={signIn.busy}
+      onProblem={() => void signIn.run(() => ch.ask("pulls-action", { path: args.cwd }, { timeoutMs: ACTION_TIMEOUT_MS }))}
+      notice={action.error ?? signIn.error}
       busy={busy}
-      canReply={Boolean(link)}
-      onRefresh={() => void load()}
+      canReply={Boolean(overview)}
+      onRefresh={refresh}
       onRun={run}
       onReply={onReply}
-      onApprove={link && forgeOf(link).approve ? onApprove : undefined}
-      onVote={link && forgeOf(link).vote ? onVote : undefined}
-      onLoadFailure={link ? onLoadFailure : undefined}
+      onApprove={can?.approve ? onApprove : undefined}
+      onVote={can?.vote ? onVote : undefined}
+      onLoadFailure={overview ? onLoadFailure : undefined}
       onBack={onBack}
     />
   );

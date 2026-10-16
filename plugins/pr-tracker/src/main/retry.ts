@@ -1,5 +1,6 @@
 /** Signing in to a provider's CLI from the badge, installing it, and trying again from scratch. */
 import { forgeFor, forges, isKnown } from "../lib/forges/registry";
+import { ch } from "../lib/messages";
 import type { Remote } from "../lib/types";
 import { render } from "./badges";
 import { lookups, refreshLinks } from "./links";
@@ -50,6 +51,7 @@ export async function signIn(remote: Remote | undefined) {
     codes.delete(key);
   }
   await refreshLinks();
+  refreshTabs();
 }
 
 /** Asks Wings to install the CLI a remote's forge works through. */
@@ -60,4 +62,12 @@ export function install(remote: Remote | undefined) {
 export async function retry() {
   await Promise.all(clis.map((cli) => cli.retry()));
   await refreshLinks();
+  refreshTabs();
+}
+
+/** The open tabs' PRs load again, after a sign-in or Try again. */
+function refreshTabs() {
+  ch.refresh("pr");
+  ch.refresh("pr-comments");
+  ch.refresh("pr-pushes");
 }

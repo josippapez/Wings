@@ -12,6 +12,9 @@ globalThis.wings = {
     return { code: 0, stdout: "", stderr: "" };
   },
   setBadge: async () => {},
+  // Try again also reloads the open tabs' queries.
+  broadcast: async () => {},
+  onBroadcast: () => () => {},
 };
 const { forges } = await import("../lib/forges/registry.ts");
 const { lookups } = await import("./links.ts");

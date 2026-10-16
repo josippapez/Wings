@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { argsOf, readArgs } from "./args.ts";
+import { argsOf, prKey, readArgs } from "./args.ts";
 
 const github = { provider: "github", url: "https://github.com/o/r/pull/5", number: 5, repo: "o/r" };
 const gitlab = { provider: "gitlab", url: "https://gitlab.com/g/p/-/merge_requests/5", number: 5, repo: "g/p", remote: { kind: "gitlab", host: "gitlab.com", path: "g/p" } };
@@ -23,4 +23,10 @@ test("args that aren't a pull request's are refused, so a tab opened with someth
   for (const bad of [null, undefined, "x", 5, [], {}, { ...ok, provider: "svn" }, { ...ok, provider: "toString" }, { ...ok, number: "5" }, { ...ok, url: 5 }, { ...ok, title: undefined }, { ...ok, remote: "gitlab" }, { ...ok, remote: {} }]) {
     assert.equal(readArgs(bad), null, JSON.stringify(bad));
   }
+});
+
+test("tabs on one PR share a key whatever their title and project, and two PRs don't", () => {
+  assert.deepEqual(prKey(argsOf(gitlab, "Fix", "/work/r")), prKey(argsOf(gitlab, "Fix it", "/elsewhere/r")));
+  assert.deepEqual(prKey(argsOf(gitlab, "Fix", "/work/r")), gitlab);
+  assert.notDeepEqual(prKey(argsOf(github, "Fix", "/work/r")), prKey(argsOf({ ...github, url: "https://github.com/o/r/pull/6", number: 6 }, "Fix", "/work/r")));
 });

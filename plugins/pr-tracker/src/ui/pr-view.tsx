@@ -7,6 +7,7 @@ import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
+import type { Problem } from "../lib/messages";
 import type { SnippetLine } from "../lib/snippet";
 import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
@@ -23,6 +24,11 @@ export interface PrViewProps {
   /** The lines around a code thread's comment; absent where they can't be read. */
   onSnippet?: (root: Comment) => Promise<SnippetLine[] | null>;
   error: string | null;
+  /** The host needs signing in, a token or a CLI: shown with its button in place of the pull request. */
+  problem?: Problem | null;
+  /** The problem's button is at work. */
+  problemBusy?: boolean;
+  onProblem?: () => void;
   notice: string | null;
   busy: string | null;
   canReply: boolean;
@@ -44,7 +50,7 @@ export interface PrViewProps {
 const when = (iso: string) => new Date(iso).toLocaleString();
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
+  const { args, overview, comments, error, problem, problemBusy, onProblem, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
@@ -145,10 +151,16 @@ export function PrView(props: PrViewProps) {
           {verdict ? <Text tone={verdict.ok ? "success" : "danger"} role={verdict.ok ? "status" : "alert"} data-testid="pr-verdict">{verdict.text}</Text> : null}
         </header>
 
-        {error && !overview ? (
+        {problem && !overview ? (
+          <div className="pr-card pr-error" role="alert" data-testid="pr-problem">
+            <strong>Couldn't load this pull request</strong>
+            <Text tone="muted">{problem.message}</Text>
+            <Button size="sm" busy={problemBusy} onClick={onProblem}>{problem.action}</Button>
+          </div>
+        ) : error && !overview ? (
           <div className="pr-card pr-error" role="alert" data-testid="pr-error">
             <strong>Couldn't load this pull request</strong>
-            <Text tone="danger">{error}</Text>
+            <Text tone="danger" className="pr-error-text">{error}</Text>
             <Button size="sm" variant="outline" onClick={onRefresh}>Try again</Button>
           </div>
         ) : !overview || !st ? (

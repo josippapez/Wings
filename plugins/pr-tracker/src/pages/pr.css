@@ -624,6 +624,10 @@ button.pr-check-main {
 .pr-error {
   align-items: flex-start;
 }
+/* A CLI's error keeps its lines. */
+.pr-error-text {
+  white-space: pre-wrap;
+}
 .pr-confirm {
   align-items: flex-start;
 }

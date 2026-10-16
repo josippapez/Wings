@@ -8,7 +8,7 @@ import type { PullsAnswer } from "../lib/messages";
 import { BLOCK_ROWS, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
 import { newPulls, notesFor } from "../lib/watch";
-import { answered, explains, problemOf } from "./problems";
+import { answered, explains, shownProblem } from "./problems";
 import { remoteFor } from "./remote";
 import { known, links, prune, state, status } from "./state";
 
@@ -174,10 +174,8 @@ export async function pullsFor(path: string): Promise<PullsAnswer> {
     items = await listFor(path, remote, false);
   } catch (error) {
     // A host that needs signing in, a token or a CLI gets a short message and a button, not the error.
-    const problem = problemOf(remote);
-    if (problem?.kind === "missing") return { problem: { message: problem.message, action: "Install" } };
-    if (problem?.kind === "signed-out") return { problem: { message: problem.message, action: "Sign in" } };
-    if (problem?.kind === "token") return { problem: { message: problem.message, action: "Add token" } };
+    const problem = shownProblem(remote);
+    if (problem) return { problem };
     throw error;
   }
   remember(items);

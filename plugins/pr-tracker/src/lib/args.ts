@@ -1,4 +1,5 @@
 /** A PR to and from the args its tab is opened with. No `wings`, no I/O, so node tests drive it. */
+import type { PrKey } from "./messages";
 import { PROVIDERS } from "./providers";
 import type { Link, PrArgs, Provider, Remote } from "./types";
 
@@ -21,4 +22,9 @@ export function readArgs(raw: unknown): PrArgs | null {
     args.remote = remote as Remote;
   }
   return args;
+}
+
+/** The key a tab's PR is kept under: its args without the title and the project, so tabs opened from two projects share it. */
+export function prKey({ title: _title, cwd: _cwd, ...key }: PrArgs): PrKey {
+  return key;
 }

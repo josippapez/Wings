@@ -5,6 +5,7 @@
 import { CliError } from "wings-plugin-sdk/cli";
 import { forgeFor, isKnown } from "../lib/forges/registry";
 import { AccountProblem, type Forge, type Login } from "../lib/forges/types";
+import type { Problem as Shown } from "../lib/messages";
 import type { KnownRemote, Remote } from "../lib/types";
 
 export type Problem = { remote: KnownRemote; forge: Forge; message: string } & (
@@ -47,6 +48,14 @@ export function explains(remote: KnownRemote, error: unknown): boolean {
 /** The host answered, so whatever its token or CLI had wrong is over. */
 export function answered(remote: KnownRemote) {
   own.delete(forgeFor(remote).problemKey(remote));
+}
+
+const ACTIONS = { missing: "Install", "signed-out": "Sign in", token: "Add token" } as const;
+
+/** What a block or a tab shows for a host that needs signing in, a token or a CLI: a short message and its button. Null for anything else. */
+export function shownProblem(remote: Remote | undefined): Shown | null {
+  const problem = problemOf(remote);
+  return problem && problem.kind !== "unavailable" ? { message: problem.message, action: ACTIONS[problem.kind] } : null;
 }
 
 export function forgetProblems() {
