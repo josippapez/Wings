@@ -185,7 +185,7 @@ export function ListDetail(
     backLabel?: string;
   },
 ): ReactElement;
-/** Columns side by side that scroll sideways, each a `BoardColumn`. A region named `label`, that takes keyboard focus so the arrow keys scroll it. */
+/** Columns side by side that share the width and scroll sideways when narrower than `--w-board-column-min` each (220px), each a `BoardColumn`. A region named `label`, that takes keyboard focus so the arrow keys scroll it. */
 export function Board(props: Omit<Props<"div">, "role"> & { label: string }): ReactElement;
 /** A column of a `Board`: a `title` with the `count` of its cards and `actions`, over `children`, usually `Card`s, that scroll. */
 export function BoardColumn(props: Omit<Props<"section">, "title"> & { title: ReactNode; count?: number; actions?: ReactNode }): ReactElement;

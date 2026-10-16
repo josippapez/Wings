@@ -1,11 +1,7 @@
-/* The columns share the block's width instead of keeping their 272px, and scroll sideways only when they get too narrow. */
+/* The columns can get as narrow as 160px before the board scrolls sideways. */
 .sprint-board {
+  --w-board-column-min: 160px;
   padding: 0;
-}
-.sprint-board .w-board-column {
-  flex: 1 1 0;
-  width: auto;
-  min-width: 160px;
 }
 .sprint-assignee {
   display: inline-flex;

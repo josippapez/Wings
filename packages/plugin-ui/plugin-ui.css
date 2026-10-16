@@ -505,7 +505,8 @@ h3.w-heading {
   }
 }
 
-/* A board: columns that scroll sideways, each with a header and its cards. */
+/* A board: columns that share the width, each with a header and its cards, and scroll sideways once they'd be
+   narrower than --w-board-column-min (220px). */
 .w-board {
   display: flex;
   align-items: flex-start;
@@ -517,10 +518,10 @@ h3.w-heading {
 }
 .w-board-column {
   display: flex;
-  flex: none;
+  flex: 1 1 0;
   flex-direction: column;
   align-self: stretch;
-  width: 272px;
+  min-width: var(--w-board-column-min, 220px);
   min-height: 0;
   padding: 8px;
   border: 1px solid var(--wings-hairline);

@@ -126,12 +126,6 @@
   padding: 8px 14px;
   border-bottom: 1px solid var(--wings-hairline);
 }
-/* The tab's columns share the width, and scroll sideways only when narrower than four of 220px. */
-.tk-board .w-board-column {
-  flex: 1 1 0;
-  width: auto;
-  min-width: 220px;
-}
 
 /* ---------- Issue page ---------- */
 .tk-page .w-page-body {
