@@ -1,7 +1,7 @@
 // The plugin side of `pnpm parity`: wings-plugin-ui's components with only its stylesheet, as a plugin page has them.
 import { createRoot } from "react-dom/client"
 import "wings-plugin-ui/plugin-ui.css"
-import { Badge, Button, Chip, Menu, Select, Tabs, TextInput } from "wings-plugin-ui"
+import { Badge, Button, Chip, Menu, Select, Tabs, TextInput, Textarea } from "wings-plugin-ui"
 
 const variants = ["default", "secondary", "outline", "ghost", "destructive", "link"] as const
 const sizes = ["default", "sm", "xs", "lg"] as const
@@ -38,6 +38,7 @@ createRoot(document.getElementById("root")!).render(
     <TextInput {...{ "data-case": "input-disabled" }} disabled defaultValue="Disabled" label="Disabled" />
     <TextInput {...{ "data-case": "input" }} placeholder="Search" label="Search" />
     <TextInput {...{ "data-case": "input-value" }} defaultValue="Typed text" label="Typed" />
+    <Textarea {...{ "data-case": "textarea" }} rows={2} defaultValue={"Two lines\nof text"} label="Notes" />
     {(["default", "line"] as const).map((variant) => (
       <Tabs key={variant} variant={variant} items={tabs} value="a" onChange={noop} label="Tabs" {...{ "data-case": `tabs-${variant}` }} />
     ))}

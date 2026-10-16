@@ -324,7 +324,7 @@ export function BoardLane({ label, title, count, actions, open, defaultOpen = tr
       h(
         "div",
         { className: "w-board-lane-lead" },
-        h(Button, { variant: "ghost", size: "icon-xs", className: "w-board-lane-toggle", "aria-label": label, "aria-expanded": shown, "aria-controls": `${id}b`, onClick: toggle }, icon(CHEVRON_DOWN)),
+        h(Button, { variant: "ghost", size: "icon-xs", className: "w-board-lane-toggle", "aria-label": label, "aria-expanded": shown, "aria-controls": `${id}b`, onClick: toggle }, icon("chevron-down")),
         h("h2", { id: `${id}t`, className: "w-board-lane-title" }, title ?? label),
         count === undefined ? null : h(Badge, { variant: "secondary", className: "w-board-column-count" }, count),
         actions ? h("div", { className: "w-board-lane-actions" }, actions) : null,
@@ -652,10 +652,23 @@ export function Tabs({ label, items, value, onChange, variant = "default", child
 
 // ---------- fields ----------
 
-/** One of Lucide's icons, as the app's own components draw them. */
-const icon = (path, className) => h("svg", { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, h("path", { d: path }));
-const CHEVRON_DOWN = "m6 9 6 6 6-6";
-const CHECK = "M20 6 9 17l-5-5";
+// Lucide's paths (ISC licence), as the app's own components draw them: the icons the components use, and the ones
+// plugins pasted into their pages.
+const ICONS = {
+  check: "M20 6 9 17l-5-5",
+  "chevron-down": "m6 9 6 6 6-6",
+  trash: "M10 11v6M14 11v6M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+};
+
+/** One of Lucide's icons, in the colour of the text around it. Decoration, unless it has a `label`. */
+export function Icon({ name, label, className, ...rest }) {
+  return h(
+    "svg",
+    { ...rest, className: cx("w-icon", className), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true }) },
+    h("path", { d: ICONS[name] }),
+  );
+}
+const icon = (name, className) => h(Icon, { name, className });
 
 const FieldIdContext = createContext(undefined);
 const GroupContext = createContext(null);
@@ -707,6 +720,12 @@ export function TextInput({ label, type = "text", id, className, ...rest }) {
   return h(BaseInput, { "aria-label": label, ...rest, id: useFieldId(id), type, className: cx("w-input", className) });
 }
 
+/** A multi-line text input. Outside a `Field`, give it a `label`. */
+export function Textarea({ label, id, className, ...rest }) {
+  // Base UI's input drawn as a textarea, so that it joins a Field the way TextInput does.
+  return h(BaseInput, { "aria-label": label, ...rest, id: useFieldId(id), render: h("textarea"), className: cx("w-input w-textarea", className) });
+}
+
 /** A search box. `label` names it for screen readers. */
 export function SearchField({ label, id, className, ...rest }) {
   return h(BaseInput, { "aria-label": label, ...rest, id: useFieldId(id), type: "search", className: cx("w-input w-search", className) });
@@ -735,7 +754,7 @@ export function Select({ label, options, value, defaultValue, onChange, disabled
       BaseSelect.Trigger,
       { "aria-label": label, ...rest, id: useFieldId(id), className: cx("w-select", className) },
       h(BaseSelect.Value, { className: "w-select-value" }),
-      h(BaseSelect.Icon, { render: icon(CHEVRON_DOWN, "w-select-icon") }),
+      h(BaseSelect.Icon, { render: icon("chevron-down", "w-select-icon") }),
     ),
     h(
       BaseSelect.Portal,
@@ -750,7 +769,7 @@ export function Select({ label, options, value, defaultValue, onChange, disabled
             BaseSelect.List,
             null,
             options.map((o) =>
-              h(BaseSelect.Item, { key: o.value, value: o.value, label: o.label, disabled: o.disabled, className: "w-select-item" }, h(BaseSelect.ItemText, null, o.label), h(BaseSelect.ItemIndicator, { className: "w-item-check", render: h("span") }, icon(CHECK))),
+              h(BaseSelect.Item, { key: o.value, value: o.value, label: o.label, disabled: o.disabled, className: "w-select-item" }, h(BaseSelect.ItemText, null, o.label), h(BaseSelect.ItemIndicator, { className: "w-item-check", render: h("span") }, icon("check"))),
             ),
           ),
         ),
@@ -767,7 +786,7 @@ export function Checkbox({ onChange, children, className, id, ...rest }) {
     "label",
     { className: cx("w-check", className) },
     // A button, so `id` is the one you can focus: on Base UI's default span it names the hidden input.
-    h(BaseCheckbox.Root, { "aria-invalid": group?.invalid || undefined, ...rest, id: useFieldId(id), nativeButton: true, render: h("button", { type: "button" }), onCheckedChange: onChange && ((checked) => onChange(checked)), className: "w-checkbox" }, h(BaseCheckbox.Indicator, { className: "w-checkbox-indicator", render: h("span") }, icon(CHECK))),
+    h(BaseCheckbox.Root, { "aria-invalid": group?.invalid || undefined, ...rest, id: useFieldId(id), nativeButton: true, render: h("button", { type: "button" }), onCheckedChange: onChange && ((checked) => onChange(checked)), className: "w-checkbox" }, h(BaseCheckbox.Indicator, { className: "w-checkbox-indicator", render: h("span") }, icon("check"))),
     children,
   );
 }

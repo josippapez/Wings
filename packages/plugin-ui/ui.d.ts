@@ -301,6 +301,14 @@ export function Tabs<V extends string>(
 
 // ---------- fields ----------
 
+/** The names `Icon` draws. */
+export type IconName = "check" | "chevron-down" | "trash";
+/**
+ * One of Lucide's icons, 16px in the colour of the text around it (smaller inside the smallest buttons). It is
+ * decoration unless it has a `label`, so a button that holds only an icon needs its own `aria-label`.
+ */
+export function Icon(props: Omit<Props<"svg">, "children"> & { name: IconName; label?: string }): ReactElement;
+
 /**
  * A labelled field with a `hint` or an `error` under it, for the `TextInput`, `SearchField`, `Select` or `Combobox` in
  * `children`, on Base UI's Field. It takes one input: Base UI gives every input in a Field the first one's id, so a
@@ -321,6 +329,8 @@ export function Field(
 export function FieldGroup(props: Props<"fieldset"> & { label: ReactNode; hint?: ReactNode; error?: ReactNode }): ReactElement;
 /** A text input. Outside a `Field`, give it a `label`. */
 export function TextInput(props: Props<"input"> & { label?: string; ref?: Ref<HTMLInputElement> }): ReactElement;
+/** A multi-line text input, `rows` high at first and resizable up and down. Outside a `Field`, give it a `label`. */
+export function Textarea(props: Props<"textarea"> & { label?: string; ref?: Ref<HTMLTextAreaElement> }): ReactElement;
 /** A search box. `label` names it for screen readers. */
 export function SearchField(props: Omit<Props<"input">, "type"> & { label?: string; ref?: Ref<HTMLInputElement> }): ReactElement;
 /**

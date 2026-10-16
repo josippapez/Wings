@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, ProjectGate, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, ProjectGate, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -129,4 +129,9 @@ test("TimelineCard shows who and when, marks quiet entries, and a note is one li
   assert.match(out, /<li class="w-timeline-item" data-quiet=""><article[^>]*aria-label="By Ada Lovelace"/);
   assert.match(out, /<strong class="w-timeline-author">Ada Lovelace<\/strong><span class="w-timeline-tag">Author<\/span>/);
   assert.match(out, /<li class="w-timeline-item w-timeline-note">[\s\S]*<strong>Grace Hopper<\/strong> moved it to Active/);
+});
+
+test("Icon is decoration unless it has a label", () => {
+  assert.match(html(h(Icon, { name: "trash" })), /^<svg class="w-icon"[^>]*aria-hidden="true"><path d="M10 11v6/);
+  assert.match(html(h(Icon, { name: "check", label: "Done", className: "x" })), /^<svg class="w-icon x"(?=[^>]*role="img")(?=[^>]*aria-label="Done")(?![^>]*aria-hidden)/);
 });

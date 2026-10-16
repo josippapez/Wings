@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Toggle } from "@/components/ui/toggle"
@@ -39,6 +40,7 @@ createRoot(document.getElementById("root")!).render(
     <Input data-case="input-disabled" disabled defaultValue="Disabled" aria-label="Disabled" />
     <Input data-case="input" placeholder="Search" aria-label="Search" />
     <Input data-case="input-value" defaultValue="Typed text" aria-label="Typed" />
+    <Textarea data-case="textarea" defaultValue="Two lines&#10;of text" aria-label="Notes" />
     {(["default", "line"] as const).map((variant) => (
       <Tabs key={variant} defaultValue="a" data-case={`tabs-${variant}`}>
         <TabsList variant={variant}>

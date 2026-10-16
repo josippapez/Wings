@@ -36,6 +36,7 @@ const probes = [
   { name: "input disabled", sel: '[data-case="input-disabled"]', states: ["base"] },
   { name: "input", sel: '[data-case="input"]', states: ["base", "hover", "focus"] },
   { name: "input with text", sel: '[data-case="input-value"]', states: ["base"] },
+  { name: "textarea", sel: '[data-case="textarea"]', states: ["base", "focus"] },
   { name: "tabs list", sel: '[data-case="tabs-default"] [role="tablist"]', states: ["base"] },
   { name: "tab active", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="true"]', states: ["base", "focus"] },
   { name: "tab idle", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="false"]', states: ["base", "hover", "focus"] },

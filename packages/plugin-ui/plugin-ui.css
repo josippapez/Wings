@@ -598,6 +598,20 @@ textarea::placeholder {
   gap: 6px;
   min-width: 0;
 }
+/* An icon is as big as the text it sits in, a little smaller in small buttons. :where() keeps a component's own size. */
+.w-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+:where(.w-button[data-size="xs"], .w-button[data-size="icon-xs"]) .w-icon {
+  width: 12px;
+  height: 12px;
+}
+:where(.w-button[data-size="sm"], .w-button[data-size="icon-sm"]) .w-icon {
+  width: 14px;
+  height: 14px;
+}
 .w-board-lane-toggle svg {
   width: 14px;
   height: 14px;
@@ -1370,6 +1384,15 @@ textarea::placeholder {
     background-color 150ms,
     border-color 150ms,
     box-shadow 150ms;
+}
+/* A textarea is an input that grows by its rows: the rows set the height, up to what the person drags. */
+.w-textarea {
+  display: block;
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.43;
+  resize: vertical;
 }
 .w-input::placeholder {
   color: var(--wings-muted);
