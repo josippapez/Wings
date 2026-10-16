@@ -163,7 +163,8 @@ test("onGitChange runs nothing while unfocused, then once with the union of ids 
   fakeGit(t, { "rev-parse --show-toplevel": ok("/r\n") });
   const ev = fakeEvents([{ id: "a", path: "/r" }, { id: "b", path: "/s" }], false);
   const runs = [];
-  onGitChange((ids) => void runs.push(ids), { wings: ev.w });
+  const rootsSeen = [];
+  onGitChange((ids, roots) => void (runs.push(ids), rootsSeen.push(roots)), { wings: ev.w });
   ev.emit("a");
   ev.emit("b", "a");
   await tick();
@@ -171,6 +172,7 @@ test("onGitChange runs nothing while unfocused, then once with the union of ids 
   ev.focus(true);
   await tick();
   assert.deepEqual(runs, [["a", "b"]]);
+  assert.deepEqual(rootsSeen, [["/r"]], "the repo roots of the changed projects, once each");
   ev.focus(false);
   ev.focus(true);
   await tick();

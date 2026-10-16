@@ -43,12 +43,12 @@ export const defaultBranch: {
  * Calls `handler(projectIds)` when the repo of a project changes: a commit, checkout, pull, fetch, push, amend or
  * reset, from anywhere. Needs a `git` entry in `permissions.exec`. Events are held while the page is out of view or
  * Wings isn't focused, and handled once, with every id that came meanwhile, when it is back. A burst while `handler`
- * runs makes it run once more. The `defaultBranch` of each changed repo is forgotten first, so `handler` reads it
- * fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
+ * runs makes it run once more. `handler(projectIds, roots)` also gets the `repoRoot` of each changed project. The
+ * `defaultBranch` of each changed repo is forgotten first, so `handler` reads it fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
  * `wings` is for tests. Returns a function that stops it. Needs Wings 0.1.50.
  */
 export function onGitChange(
-  handler: (projectIds: string[]) => void | Promise<void>,
+  handler: (projectIds: string[], roots: string[]) => void | Promise<void>,
   options?: { wings?: Pick<Wings, "onGitChange" | "onFocus" | "focused" | "projects"> },
 ): () => void;
 

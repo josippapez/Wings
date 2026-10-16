@@ -74,8 +74,8 @@ export const defaultBranch = keepFound(async (root) => {
  * Calls `handler(projectIds)` when the repo of a project changes: a commit, checkout, pull, fetch, push, amend or
  * reset, from anywhere. Needs a `git` entry in `permissions.exec`. Events are held while the page is out of view or
  * Wings isn't focused, and handled once, with every id that came meanwhile, when it is back. A burst while `handler`
- * runs makes it run once more. The `defaultBranch` of each changed repo is forgotten first, so `handler` reads it
- * fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
+ * runs makes it run once more. `handler(projectIds, roots)` also gets the `repoRoot` of each changed project. The
+ * `defaultBranch` of each changed repo is forgotten first, so `handler` reads it fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
  * `wings` is for tests. Returns a function that stops it.
  */
 export function onGitChange(handler, { wings: w = globalThis.wings } = {}) {
@@ -85,15 +85,10 @@ export function onGitChange(handler, { wings: w = globalThis.wings } = {}) {
     ids.clear();
     if (!batch.length) return;
     const projects = await w.projects();
-    await Promise.all(
-      projects
-        .filter((p) => batch.includes(p.id))
-        .map(async (p) => {
-          const root = await repoRoot(p.path);
-          if (root) defaultBranch.forget(root);
-        }),
-    );
-    await handler(batch);
+    const found = await Promise.all(projects.filter((p) => batch.includes(p.id)).map((p) => repoRoot(p.path)));
+    const roots = [...new Set(found.filter(Boolean))];
+    roots.forEach((root) => defaultBranch.forget(root));
+    await handler(batch, roots);
   });
   const flush = () => run().catch((error) => console.error(error));
   const offGit = w.onGitChange(({ projectIds }) => {
