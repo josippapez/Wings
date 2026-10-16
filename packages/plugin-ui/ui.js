@@ -628,10 +628,10 @@ export function Spinner({ size, label, className, ...rest }) {
 
 /**
  * A badge: `variant` is default, secondary, destructive, outline, ghost or link, like shadcn/ui's. `tone` is Wings'
- * own addition, a colour that says something.
+ * own addition, a colour that says something. `size` sm is 18px tall, to sit in a list row without making it taller.
  */
-export function Badge({ variant = "default", tone, className, ...rest }) {
-  return h("span", { ...rest, className: cx("w-badge", className), "data-variant": variant, "data-tone": tone });
+export function Badge({ variant = "default", tone, size, className, ...rest }) {
+  return h("span", { ...rest, className: cx("w-badge", className), "data-variant": variant, "data-tone": tone, "data-size": size });
 }
 
 /** What shows before the first data comes: a spinner and the text. */

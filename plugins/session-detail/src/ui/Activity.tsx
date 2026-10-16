@@ -41,7 +41,7 @@ function Row({ sessionId, item, open, toggle }: { sessionId: string; item: ItemV
         <>
           {item.done ? <Dot tone={item.error ? "danger" : undefined} /> : <Spinner />}
           {(item.tags ?? []).map((t, i) => (
-            <Badge variant="secondary" key={i} tone={tones[t.kind]} className={t.kind}>
+            <Badge variant="secondary" size="sm" key={i} tone={tones[t.kind]} className={t.kind}>
               {t.label}
             </Badge>
           ))}
@@ -53,7 +53,7 @@ function Row({ sessionId, item, open, toggle }: { sessionId: string; item: ItemV
           <Text grow truncate tone={item.tags ? undefined : "muted"}>
             {item.summary}
           </Text>
-          {item.outcome ? <Badge variant="secondary" tone={item.outcome.endsWith("failed") ? "danger" : "success"}>{item.outcome}</Badge> : null}
+          {item.outcome ? <Badge variant="secondary" size="sm" tone={item.outcome.endsWith("failed") ? "danger" : "success"}>{item.outcome}</Badge> : null}
           <Text tone="muted">{item.error ? "failed" : took(item.ms)}</Text>
         </>,
       )}

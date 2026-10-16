@@ -20,13 +20,6 @@
   background: color-mix(in srgb, var(--git) 16%, transparent);
 }
 
-/* Badges in a row are as tall as its text, so a row with one is no taller than a row without. */
-.w-list-button .w-badge {
-  height: 18px;
-  padding-block: 0;
-  font-size: 11px;
-}
-
 /* What a row opens to. */
 .detail {
   margin: 2px 6px 8px 20px;

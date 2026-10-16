@@ -1003,6 +1003,11 @@ h3.w-heading {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.w-badge[data-size="sm"] {
+  height: 18px;
+  padding-block: 0;
+  font-size: 11px;
+}
 .w-badge[data-variant="secondary"] {
   background: var(--wings-secondary);
   color: var(--wings-fg);

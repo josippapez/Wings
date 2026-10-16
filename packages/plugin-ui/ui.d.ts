@@ -281,8 +281,8 @@ export function Avatar(props: Props<"span"> & { name: string; size?: "small" | "
 export function Spinner(props: Props<"span"> & { size?: "large"; label?: string }): ReactElement;
 /** shadcn/ui's Badge variants. */
 export type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
-/** A badge, like a label on a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something. */
-export function Badge(props: Props<"span"> & { variant?: BadgeVariant; tone?: Exclude<Tone, "muted"> }): ReactElement;
+/** A badge, like a label on a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something. `size` "sm" is 18px tall, for a list row. */
+export function Badge(props: Props<"span"> & { variant?: BadgeVariant; tone?: Exclude<Tone, "muted">; size?: "sm" }): ReactElement;
 /** What shows before the first data comes: a spinner and "Loading…", unless `children` say otherwise. */
 export function Loading(props: Props<"p">): ReactElement;
 /** Nothing to show: what's missing, a `description` on what to do about it, and `children` under them, like a button. */
