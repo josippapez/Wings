@@ -77,10 +77,15 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
 
   return {
     run,
-    /** `run`, parsed as JSON. Null when the program printed nothing, like `az boards query` for no rows. */
-    async json(args, options) {
-      const text = await run(args, options);
-      return text.trim() ? JSON.parse(text) : null;
+    /**
+     * `run`, parsed as JSON. A program that printed nothing, like `az boards query` for no rows, gives the call's `empty`;
+     * without one that is a `failed` CliError, so a result is never null.
+     */
+    async json(args, call = {}) {
+      const text = await run(args, call);
+      if (text.trim()) return JSON.parse(text);
+      if ("empty" in call) return call.empty;
+      throw new CliError("failed", `${program} printed nothing`);
     },
     problem: (key) => problems.get(key) ?? null,
     problemBadge(key, { title, signedOut: signedOutText, missing: missingText, tone = "warning", icon }) {

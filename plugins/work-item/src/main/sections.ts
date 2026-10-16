@@ -21,7 +21,7 @@ const categories = cached(
   async ({ org, project }: Project) => {
     try {
       // `--query` keeps what az prints to the names and categories: the whole answer is over a megabyte.
-      return stateCategories(await az<Parameters<typeof stateCategories>[0]>(org, invoke("wit", "workItemTypes", { project }, { jmes: "value[].{name:name,states:states[].{name:name,category:category}}" }), { quiet: true }));
+      return stateCategories(await az<Parameters<typeof stateCategories>[0]>(org, invoke("wit", "workItemTypes", { project }, { jmes: "value[].{name:name,states:states[].{name:name,category:category}}" }), { quiet: true, empty: [] }));
     } catch (error) {
       console.warn("[work-item] state categories failed, using state names:", errorMessage(error));
       throw error;
@@ -32,7 +32,7 @@ const categories = cached(
 
 /** A repository's id, which links carry in place of its name. A failed read is asked again at the next refresh. */
 const repoIds = cached(
-  async ({ org, project, repo }: AzureRemote) => (await az<{ id?: string }>(org, invoke("git", "repositories", { project, repositoryId: repo }), { quiet: true }))?.id,
+  async ({ org, project, repo }: AzureRemote) => (await az<{ id?: string }>(org, invoke("git", "repositories", { project, repositoryId: repo }), { quiet: true, empty: {} })).id,
   { key: JSON.stringify },
 );
 
@@ -47,12 +47,12 @@ const teamItems = cached(
   async ({ org, project }: Project): Promise<TeamItems> => {
     const paths = await sprintPaths({ org, project });
     if (!paths.length) return { rows: [], links: {} };
-    const found = (await az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, paths)], { quiet: true })) ?? [];
+    const found = await az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, paths)], { quiet: true, empty: [] });
     const cats = await categories.get({ org, project }).catch(() => undefined);
     const rows = found.filter((r) => !isFinished(r.fields["System.WorkItemType"], r.fields["System.State"], cats)).slice(0, ITEMS_CAP);
     // One read for all the links, never one per item.
     const ids = rows.map((r) => r.id).join(",");
-    const links = rows.length ? repoLinksOf(await az<Parameters<typeof repoLinksOf>[0]>(org, invoke("wit", "workItems", { project }, { query: [`ids=${ids}`, "$expand=Relations"] }), { quiet: true })) : {};
+    const links = rows.length ? repoLinksOf(await az<Parameters<typeof repoLinksOf>[0]>(org, invoke("wit", "workItems", { project }, { query: [`ids=${ids}`, "$expand=Relations"] }), { quiet: true, empty: {} })) : {};
     return { rows, links };
   },
   { ttlMs: TEAM_ITEMS_TTL_MS, key: JSON.stringify },

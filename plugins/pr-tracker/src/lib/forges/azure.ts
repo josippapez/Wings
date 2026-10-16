@@ -249,11 +249,7 @@ export function azureReplied(root: Comment, c: AzureComment, body: string): Comm
 // ---------- calling it ----------
 
 /** `az` printing JSON, which is never nothing here. */
-async function azJson<T>(org: string, args: string[]): Promise<T> {
-  const value = await az.json<T>(args, { key: org });
-  if (value === null) throw new Error(`az ${args.slice(0, 2).join(" ")} printed nothing`);
-  return value;
-}
+const azJson = <T>(org: string, args: string[]) => az.json<T>(args, { key: org });
 
 /** A PR by number, for a page opened with only its identifiers. */
 const show = (remote: AzureRemote, number: number) => azJson<AzurePr>(remote.org, ["repos", "pr", "show", "--id", String(number), "--organization", remote.org, "-o", "json"]);

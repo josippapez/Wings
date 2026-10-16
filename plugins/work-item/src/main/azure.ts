@@ -20,7 +20,7 @@ const remotes = cached(async (cwd: string): Promise<AzureRemote | null> => {
 export const remoteFor = (cwd: string) => remotes.get(cwd);
 
 const sprints = cached(
-  async ({ org, project }: Project) => currentIterations(await az<IterationNode>(org, invoke("wit", "classificationNodes", { project, structureGroup: "iterations" }, { query: ["$depth=4"] }), { quiet: true }), Date.now()),
+  async ({ org, project }: Project) => currentIterations(await az<IterationNode>(org, invoke("wit", "classificationNodes", { project, structureGroup: "iterations" }, { query: ["$depth=4"] }), { quiet: true, empty: {} }), Date.now()),
   { ttlMs: SPRINT_TTL_MS, key: JSON.stringify },
 );
 

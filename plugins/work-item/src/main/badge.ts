@@ -43,14 +43,13 @@ const items = new Map<string, Item>();
 const inFlight = new Set<string>();
 /** Items refreshed because you clicked something; background polls don't show a spinner. */
 const manual = new Set<string>();
-// `az boards work-item show` always prints the item, or fails.
-const show = async (org: string, id: string | number) => (await az<AzWorkItem>(org, ["boards", "work-item", "show", "--id", String(id)]))!;
+const show = (org: string, id: string | number) => az<AzWorkItem>(org, ["boards", "work-item", "show", "--id", String(id)]);
 
 /** A parent's title, read once. */
 const parentTitles = cached(async ({ org, id }: { org: string; id: number }) => (await show(org, id)).fields["System.Title"] ?? "", { key: JSON.stringify });
 /** A work item type's states, in workflow order, read once. */
 const typeStates = cached(
-  async ({ org, project, type }: { org: string; project: string; type: string }) => (await az<{ value?: TypeState[] }>(org, invoke("wit", "workItemTypeStates", { project, type })))?.value ?? [],
+  async ({ org, project, type }: { org: string; project: string; type: string }) => (await az<{ value: TypeState[] }>(org, invoke("wit", "workItemTypeStates", { project, type }), { empty: { value: [] } })).value,
   { key: JSON.stringify },
 );
 

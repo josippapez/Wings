@@ -38,11 +38,7 @@ export const gh = cli("gh", {
 });
 
 /** `gh` printing JSON, which is never nothing. */
-async function ghJson<T>(key: string, args: string[], cwd?: string): Promise<T> {
-  const value = await gh.json<T>(args, { key, cwd });
-  if (value === null) throw new Error(`gh ${args[0]} printed nothing`);
-  return value;
-}
+const ghJson = <T>(key: string, args: string[], cwd?: string) => gh.json<T>(args, { key, cwd });
 
 // ---------- the CLI's shapes and how they map ----------
 

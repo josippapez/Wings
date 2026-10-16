@@ -14,7 +14,7 @@ const sprints = cached(
     const paths = await sprintPaths({ org, project });
     if (!paths.length) return { org, project, sprints: [], items: [], total: 0 };
     const query = mine ? assignedQuery(project, paths) : sprintQuery(project, paths);
-    const rows = (await az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", query], { quiet: true })) ?? [];
+    const rows = await az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", query], { quiet: true, empty: [] });
     return { org, project, sprints: paths.map((p) => p.split("\\").at(-1) ?? p), items: blockItems(rows), total: rows.length };
   },
   { ttlMs: TTL_MS, key: JSON.stringify },

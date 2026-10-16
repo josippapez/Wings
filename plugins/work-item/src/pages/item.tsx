@@ -33,26 +33,25 @@ function Item({ args }: { args: ItemArgs }) {
   const load = useCallback(
     () =>
       runLoad(async () => {
-        const shown = (await az<Shown>(org, ["boards", "work-item", "show", "--id", String(id), "--expand", "relations"]))!;
+        const shown = await az<Shown>(org, ["boards", "work-item", "show", "--id", String(id), "--expand", "relations"]);
         setItem(shown);
         const f = shown.fields;
         const project = f["System.TeamProject"];
         // The rest is independent: each part shows when it arrives, and one failing doesn't blank the others.
-        void az<{ value?: TypeState[] }>(org, invoke("wit", "workItemTypeStates", { project, type: f["System.WorkItemType"] }))
-          .then((r) => setStates(r?.value ?? []))
+        void az<{ value: TypeState[] }>(org, invoke("wit", "workItemTypeStates", { project, type: f["System.WorkItemType"] }), { empty: { value: [] } })
+          .then((r) => setStates(r.value))
           .catch(() => setStates([]));
         const ids = allLinkIds(linkIds(shown.relations, f["System.Parent"]));
         if (ids.length) {
           // One query for every linked work item, not a call each.
-          void az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", idsQuery(ids)])
-            .then((rows) => setLinked({ data: linkedItems(rows ?? []), error: null }))
+          void az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", idsQuery(ids)], { empty: [] })
+            .then((rows) => setLinked({ data: linkedItems(rows), error: null }))
             .catch((e) => setLinked({ data: null, error: errorMessage(e) }));
         } else {
           setLinked({ data: {}, error: null });
         }
-        void az<{ value?: WorkItemUpdate[] }>(org, invoke("wit", "updates", { project, id }))
-          .then((r) => {
-            const list = r?.value ?? [];
+        void az<{ value: WorkItemUpdate[] }>(org, invoke("wit", "updates", { project, id }), { empty: { value: [] } })
+          .then(({ value: list }) => {
             const comments = commentsOf(list);
             const revisions = revisionsOf(list);
             setUpdates({ data: { comments, revisions, feed: discussionOf(comments, revisions) }, error: null });
@@ -64,7 +63,7 @@ function Item({ args }: { args: ItemArgs }) {
           links.map(async (link): Promise<PrInfo> => {
             try {
               const pr = await az<{ title?: string; status?: string; repository?: { name?: string } }>(org, invoke("git", "pullRequests", { project, pullRequestId: link.id }));
-              return { ...link, title: pr?.title, status: pr?.status, repo: pr?.repository?.name };
+              return { ...link, title: pr.title, status: pr.status, repo: pr.repository?.name };
             } catch {
               return link;
             }

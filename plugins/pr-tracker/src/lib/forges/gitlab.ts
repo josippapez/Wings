@@ -242,11 +242,7 @@ async function ran<T>(call: Promise<T>): Promise<T> {
 const apiArgs = (remote: GitlabRemote, endpoint: string, paginate = false) => ["api", "--hostname", remote.host, ...(paginate ? ["--paginate"] : []), endpoint];
 
 /** `glab api` against the remote's host, which prints JSON. */
-async function api<T>(remote: GitlabRemote, endpoint: string, paginate = false): Promise<T> {
-  const value = await ran(glab.json<T>(apiArgs(remote, endpoint, paginate), { key: keyOf(remote.host) }));
-  if (value === null) throw new Error("glab api printed nothing");
-  return value;
-}
+const api = <T>(remote: GitlabRemote, endpoint: string, paginate = false) => ran(glab.json<T>(apiArgs(remote, endpoint, paginate), { key: keyOf(remote.host) }));
 
 const project = (remote: GitlabRemote) => `projects/${encodeURIComponent(remote.path)}`;
 const mrPath = (link: GitlabLink) => `${project(link.remote)}/merge_requests/${link.number}`;

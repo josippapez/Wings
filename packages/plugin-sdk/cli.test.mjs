@@ -67,9 +67,10 @@ test("a signed-out program is a problem under its key until a call works, and a 
   assert.equal(az.problem("org"), null);
 });
 
-test("json parses what the program printed, and gives null for nothing", async () => {
+test("json parses what the program printed, gives the call's empty for nothing, and fails without one", async () => {
   const az = cli("az", { ...AZ, wings: fakeWings((p, args) => done(args[0] === "empty" ? "\n" : '{"id":7}')) });
-  assert.deepEqual([await az.json(["show"]), await az.json(["empty"])], [{ id: 7 }, null]);
+  assert.deepEqual([await az.json(["show"]), await az.json(["empty"], { empty: [] }), await az.json(["empty"], { empty: null })], [{ id: 7 }, [], null]);
+  await assert.rejects(az.json(["empty"]), (e) => e instanceof CliError && e.kind === "failed" && e.message === "az printed nothing");
 });
 
 test("signedOut can be a function for a signal that takes a second command to see, and sticky keeps the problem", async () => {

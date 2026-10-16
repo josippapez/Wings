@@ -57,8 +57,11 @@ export interface CliBadgeText {
 export interface Cli {
   /** Runs the program with `args` and resolves its stdout. Throws a `CliError`. */
   run(args: string[], call?: CliCall): Promise<string>;
-  /** `run`, parsed as JSON. Null when the program printed nothing, like `az boards query` for no rows. */
-  json<T = unknown>(args: string[], call?: CliCall): Promise<T | null>;
+  /**
+   * `run`, parsed as JSON. A program that printed nothing, like `az boards query` for no rows, gives the call's `empty`;
+   * without one that is a `failed` CliError, so a result is never null.
+   */
+  json<T = unknown>(args: string[], call?: CliCall & { empty?: T }): Promise<T>;
   /** What the last non-quiet call under `key` found, until a call under it works or `retry`. */
   problem(key?: string): CliProblem | null;
   /**
