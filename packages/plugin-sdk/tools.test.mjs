@@ -132,3 +132,41 @@ test("a manifest without tools gets them as 2-space JSON, and outDir takes the m
   assert.equal(readFileSync(join(dir, "wings-plugin.json"), "utf8"), '{ "id": "demo", "contributes": { "ui": ["badges"] } }');
   assert.equal(readFileSync(join(out, "wings-plugin.json"), "utf8"), `${JSON.stringify({ id: "demo", contributes: { ui: ["badges"], mcpTools: EXPECTED } }, null, 2)}\n`);
 });
+
+const FORMATTED = {
+  entryId: s.string({ format: "uuid" }),
+  day: s.string({ format: "date" }).optional(),
+  at: s.string({ format: "date-time" }).optional(),
+  hash: s.string({ maxLength: 40, pattern: "^[0-9a-f]{7,40}$" }).optional(),
+};
+
+test("format and pattern are written into the manifest schema, and ones that can't be checked fail when the schema is built", async (t) => {
+  assert.deepEqual(FORMATTED.hash.schema, { type: "string", maxLength: 40, pattern: "^[0-9a-f]{7,40}$" });
+  assert.deepEqual(s.object(FORMATTED).schema.properties.entryId, { type: "string", format: "uuid" });
+  assert.throws(() => s.string({ format: "email" }), /format "email" isn't one of uuid, date, date-time/);
+  assert.throws(() => s.string({ pattern: "(" }), /Invalid regular expression/);
+  const source = `import { s, tool } from "wings-plugin-sdk/tools";\nexport const tools = { get: tool({ description: "Gets.", input: s.object({ id: s.string({ format: "uuid" }).describe("An id."), day: s.string({ format: "date", pattern: "^2026-" }).optional() }), run: () => "" }) };\n`;
+  const dir = plugin({ "src/tools.ts": source });
+  t.after(() => rmSync(dir, { recursive: true }));
+  assert.deepEqual((await readTools(dir))[0].inputSchema.properties, { id: { type: "string", format: "uuid", description: "An id." }, day: { type: "string", format: "date", pattern: "^2026-" } });
+});
+
+test("a value that isn't the format or doesn't match the pattern is rejected naming the field, and never reaches the handler", () => {
+  const seen = [];
+  const registered = {};
+  registerTools({ find: tool({ description: "Finds.", input: s.object(FORMATTED), run: (input) => seen.push(input) }) }, { onTool: (name, handler) => (registered[name] = handler) });
+  const id = "123E4567-e89b-12d3-a456-426614174000";
+  const call = (input) => registered.find(input, { paneId: null });
+  call({ entryId: id, day: "2024-02-29", at: "2026-10-08T09:00:00+02:00", hash: "abcdef1" });
+  call({ entryId: id, at: "2026-10-08T09:00:00.5Z" });
+  assert.equal(seen.length, 2);
+  const wrong = [
+    [{ entryId: "nope" }, 'entryId must be a uuid, like 123e4567-e89b-12d3-a456-426614174000, this one is "nope".'],
+    [{ entryId: id, day: "2026-02-30" }, 'day must be a date as YYYY-MM-DD, this one is "2026-02-30".'],
+    [{ entryId: id, day: "26-1-1" }, 'day must be a date as YYYY-MM-DD, this one is "26-1-1".'],
+    [{ entryId: id, at: "2026-10-08" }, 'at must be a date and time like 2026-10-08T09:00:00+02:00, this one is "2026-10-08".'],
+    [{ entryId: id, hash: "xyz1234" }, 'hash must match the pattern ^[0-9a-f]{7,40}$, this one is "xyz1234".'],
+  ];
+  for (const [input, message] of wrong) assert.throws(() => call(input), { message });
+  assert.equal(seen.length, 2);
+});

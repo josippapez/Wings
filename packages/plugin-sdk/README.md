@@ -504,6 +504,20 @@ import { tools } from "../tools";
 registerTools(tools); // checks each call against its schema, then runs the tool
 ```
 
+`s.string()` takes `minLength`, `maxLength`, `format` and `pattern`. `format` is `"uuid"`, `"date"` (YYYY-MM-DD, a day
+on the calendar) or `"date-time"` (RFC 3339, like `2026-10-08T09:00:00+02:00`). `pattern` is the source of a regular
+expression that the whole value must match, so anchor it with `^` and `$`; it runs as a Unicode RegExp. Both go into
+the schema Claude reads, and a call whose value doesn't fit is rejected before `run`, with a message that names the
+field:
+
+```ts
+input: s.object({
+  entryId: s.string({ format: "uuid" }).describe("The entry's id"),
+  day: s.string({ format: "date" }).optional(),
+  commit: s.string({ pattern: "^[0-9a-f]{7,40}$" }).optional(),
+}),
+```
+
 ### Shell
 
 A page without React is a `.ts` file that builds its own DOM inside the frame `mountShell` returns:

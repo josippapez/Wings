@@ -15,9 +15,31 @@ const node = (schema, required = true) => ({
 /** `object` without the keys whose value is undefined, so a limit that wasn't given isn't in the schema. */
 const given = (object) => Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
 
+/** A YYYY-MM-DD that is a day on the calendar, so 2026-02-30 isn't one. */
+function isDay(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+/** The `format` names `s.string` takes, as JSON Schema names them, each with what a value must be and a test for it. */
+const FORMATS = {
+  uuid: { is: "a uuid, like 123e4567-e89b-12d3-a456-426614174000", test: (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) },
+  date: { is: "a date as YYYY-MM-DD", test: isDay },
+  "date-time": {
+    is: "a date and time like 2026-10-08T09:00:00+02:00",
+    test: (v) => /^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$/.test(v) && isDay(v.slice(0, 10)),
+  },
+};
+
 /** Builds the JSON Schema of a tool's input, and the type of what it accepts. */
 export const s = {
-  string: ({ minLength, maxLength } = {}) => node({ type: "string", ...given({ minLength, maxLength }) }),
+  string: ({ minLength, maxLength, format, pattern } = {}) => {
+    if (format !== undefined && !FORMATS[format]) throw new Error(`s.string: format "${format}" isn't one of ${Object.keys(FORMATS).join(", ")}.`);
+    if (pattern !== undefined) new RegExp(pattern, "u"); // a pattern that doesn't compile fails here, not on Claude's first call
+    return node({ type: "string", ...given({ minLength, maxLength, format, pattern }) });
+  },
   enum: (values) => node({ type: "string", enum: [...values] }),
   integer: ({ minimum, maximum } = {}) => node({ type: "integer", ...given({ minimum, maximum }) }),
   number: ({ minimum, maximum } = {}) => node({ type: "number", ...given({ minimum, maximum }) }),
@@ -61,6 +83,8 @@ function check(schema, value, path, owner = path) {
     const length = chars(value);
     if (length < schema.minLength) fail(`${path} needs at least ${num(schema.minLength)} character${schema.minLength === 1 ? "" : "s"}, this one has ${num(length)}.`);
     if (length > schema.maxLength) fail(`${path} is limited to ${num(schema.maxLength)} characters, this one has ${num(length)}.`);
+    if (schema.format && !FORMATS[schema.format].test(value)) fail(`${path} must be ${FORMATS[schema.format].is}, this one is ${JSON.stringify(value)}.`);
+    if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) fail(`${path} must match the pattern ${schema.pattern}, this one is ${JSON.stringify(value)}.`);
   } else if (schema.type === "integer" || schema.type === "number") {
     if (value < schema.minimum) fail(`${path} must be at least ${num(schema.minimum)}, this one is ${num(value)}.`);
     if (value > schema.maximum) fail(`${path} must be at most ${num(schema.maximum)}, this one is ${num(value)}.`);
