@@ -726,6 +726,68 @@ export function Textarea({ label, id, className, ...rest }) {
   return h(BaseInput, { "aria-label": label, ...rest, id: useFieldId(id), render: h("textarea"), className: cx("w-input w-textarea", className) });
 }
 
+/**
+ * A one-line input for editing in place, focused with its text selected. Enter or leaving it saves, Escape cancels.
+ * `onSave` gets the trimmed text and may throw or reject: the input then stays open with the text and shows the message
+ * under it, and Enter or leaving it again tries again. Nothing changed, or empty when `required`, counts as a cancel.
+ * `onDone` is called when it should close. `className` and the other props go to the input.
+ */
+export function InlineInput({ label, value, required, onSave, onDone, className, onChange, ...rest }) {
+  const [draft, setDraft] = useState(value);
+  const { run, busy, error, clear } = useAction();
+  const id = useId();
+  const ref = useRef(null);
+  // Set from the moment a save starts, before React has rendered `busy`: Enter, and the blur that follows, come together.
+  const open = useRef(true);
+  const saving = useRef(false);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  const save = async () => {
+    if (!open.current || saving.current) return;
+    const next = draft.trim();
+    if (next === value || (required && !next)) return cancel();
+    saving.current = true;
+    const ok = await run(() => onSave(next));
+    saving.current = false;
+    if (ok) {
+      open.current = false;
+      onDone();
+    }
+  };
+  const cancel = () => {
+    if (!open.current || saving.current) return;
+    open.current = false;
+    onDone();
+  };
+  return h(
+    "div",
+    { className: "w-inline-input" },
+    h(TextInput, {
+      ...rest,
+      ref,
+      label,
+      className,
+      value: draft,
+      readOnly: busy,
+      "aria-invalid": error ? true : undefined,
+      "aria-describedby": error ? `${id}-error` : undefined,
+      onChange: (e) => {
+        setDraft(e.currentTarget.value);
+        clear();
+        onChange?.(e);
+      },
+      onBlur: save,
+      onKeyDown: (e) => {
+        if (e.key === "Enter") save();
+        if (e.key === "Escape") cancel();
+      },
+    }),
+    error ? h("p", { id: `${id}-error`, role: "alert", className: "w-field-hint", "data-tone": "danger" }, error) : null,
+  );
+}
+
 /** A search box. `label` names it for screen readers. */
 export function SearchField({ label, id, className, ...rest }) {
   return h(BaseInput, { "aria-label": label, ...rest, id: useFieldId(id), type: "search", className: cx("w-input w-search", className) });

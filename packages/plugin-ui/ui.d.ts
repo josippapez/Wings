@@ -329,6 +329,21 @@ export function Field(
 export function FieldGroup(props: Props<"fieldset"> & { label: ReactNode; hint?: ReactNode; error?: ReactNode }): ReactElement;
 /** A text input. Outside a `Field`, give it a `label`. */
 export function TextInput(props: Props<"input"> & { label?: string; ref?: Ref<HTMLInputElement> }): ReactElement;
+/**
+ * A one-line input for editing in place, focused with its text selected. Enter or leaving it saves, Escape cancels.
+ * `onSave` gets the trimmed text and may throw or reject: the input then stays open with the text and shows the message
+ * under it, and Enter or leaving it again tries again. Nothing changed, or empty when `required`, counts as a cancel.
+ * `onDone` is called when it should close. `className` and the other props go to the input.
+ */
+export function InlineInput(
+  props: Omit<Props<"input">, "value" | "defaultValue" | "children"> & {
+    label: string;
+    value: string;
+    required?: boolean;
+    onSave: (value: string) => unknown;
+    onDone: () => void;
+  },
+): ReactElement;
 /** A multi-line text input, `rows` high at first and resizable up and down. Outside a `Field`, give it a `label`. */
 export function Textarea(props: Props<"textarea"> & { label?: string; ref?: Ref<HTMLTextAreaElement> }): ReactElement;
 /** A search box. `label` names it for screen readers. */

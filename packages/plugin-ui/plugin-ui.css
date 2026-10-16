@@ -1385,6 +1385,13 @@ textarea::placeholder {
     border-color 150ms,
     box-shadow 150ms;
 }
+.w-inline-input {
+  width: 100%;
+}
+.w-inline-input > .w-field-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
 /* A textarea is an input that grows by its rows: the rows set the height, up to what the person drags. */
 .w-textarea {
   display: block;
@@ -1723,6 +1730,7 @@ span.w-md {
 }
 .w-md-heading {
   margin: 4px 0 0;
+  font-size: 12px;
   font-weight: 600;
   font-size: 14px;
 }
