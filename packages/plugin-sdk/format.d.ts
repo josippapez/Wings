@@ -1,5 +1,9 @@
-/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. */
-export function ago(iso: string, now?: number): string;
+/**
+ * "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. `when` is an ISO
+ * string, a `Date`, or milliseconds since 1970, so a time in seconds, like git's, is `ago(seconds * 1000)`. `now` is
+ * for tests.
+ */
+export function ago(when: string | number | Date, now?: number): string;
 
 /** `n` with its noun: "1 file", "2 files". `many` is for a plural that isn't `one` and an s: `plural(2, "child", "children")`. */
 export function plural(n: number, one: string, many?: string): string;

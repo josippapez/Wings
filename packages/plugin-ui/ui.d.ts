@@ -429,8 +429,11 @@ export const MAX_DATA_IMAGE: number;
 
 // ---------- activity: times, a summary row, skeletons and a timeline ----------
 
-/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date; "" when `iso` isn't a date. `now` is for tests. */
-export function ago(iso: string, now?: number): string;
+/**
+ * "just now", "5 min ago", "3 h ago", "2 d ago", then the date; "" when `when` isn't a date. `when` is an ISO string, a
+ * `Date`, or milliseconds since 1970, so a time in seconds, like git's, is `ago(seconds * 1000)`. `now` is for tests.
+ */
+export function ago(when: string | number | Date, now?: number): string;
 /** A moment as a `time` element: how long ago (after `prefix`), the exact date and time as its title. Renders nothing when `iso` isn't a date. */
 export function Time(props: Omit<Props<"time">, "dateTime" | "children"> & { iso: string; prefix?: ReactNode; now?: number }): ReactElement | null;
 /** A row of `SummaryChip`s under a page's header. */

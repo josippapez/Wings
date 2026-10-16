@@ -1,9 +1,12 @@
 // Small text formatters that several plugins had a copy of.
 
-/** "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. */
-export function ago(iso, now = Date.now()) {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
+/**
+ * "just now", "5 min ago", "3 h ago", "2 d ago", then the date. "" for something that isn't a date. `when` is an ISO
+ * string, a `Date`, or milliseconds since 1970, so a time in seconds, like git's, is `ago(seconds * 1000)`.
+ */
+export function ago(when, now = Date.now()) {
+  const t = typeof when === "string" ? Date.parse(when) : when instanceof Date ? when.getTime() : when;
+  if (typeof t !== "number" || Number.isNaN(t)) return "";
   const minutes = Math.max(0, Math.round((now - t) / 60_000));
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
