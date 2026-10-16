@@ -4,6 +4,11 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.52 · 2026-10-16
+
+- Notifications play a sound, also while Wings is focused: when an agent finishes or needs you in a pane you're not looking at, for plugin notifications, and for update toasts. Settings › Notifications turns it off and picks one of four tones, with a preview. Several notifications at once play one sound. The macOS notification no longer plays its own sound, so you hear the chosen tone once.
+- PR tracker 0.20.1: a code comment's snippet keeps its space while it loads, the lines a pull request added are tinted green, and the push that opened the pull request says so.
+
 ## 0.1.51 · 2026-10-16
 
 - Opening and closing plugin pages no longer grows Wings' memory. Each open used to load the page from a new address, so WebKit cached another copy every time, about 0.4 MB per open. A plugin's pages now share one address until the plugin restarts.
