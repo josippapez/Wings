@@ -39,6 +39,8 @@ export const states = {
   "page-big": { args, queries: { pr: value(), "pr-comments": many, "pr-pushes": [] } },
   // Azure DevOps: votes instead of approving, and pushes between the threads.
   "page-azure": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes } },
+  // The same once main has answered with the code: the card keeps the height its placeholder held. Shoot both with --height 1700.
+  "page-azure-loaded": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes }, answers: { "pr-snippet": ({ root }: { root: Comment }) => props.onSnippet!(root) } },
   // Opened from the project's list: a breadcrumb back in the toolbar.
   picked: { element: <PrView {...props} onBack={back} /> },
   // Opened straight on a pull request: no breadcrumb.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { dayTime, pushesOf, timelineOf } from "./pushes.ts";
-import { snippetOf } from "./snippet.ts";
+import { addedLinesOf, snippetOf, snippetSpan } from "./snippet.ts";
 
 const commit = (id, at, comment = `msg ${id}\nbody`) => ({ commitId: id, comment, author: { name: "Ada", date: at } });
 const it = (id, createdDate, commits, extra = {}) => ({ id, createdDate, author: { displayName: "Ada" }, commits, sourceRefCommit: { commitId: `head${id}` }, commonRefCommit: { commitId: "base" }, ...extra });
@@ -61,6 +61,30 @@ test("a snippet marks the whole commented range and stops at the file's edges", 
   assert.equal(snippetOf(file, 49, 50).at(-1).n, 50);
   assert.equal(snippetOf(file, 51).length, 0);
   assert.equal(snippetOf(file, 0).length, 0);
+});
+
+test("a snippet from line 1 keeps the first line's indentation", () => {
+  assert.equal(snippetOf("    indented\nnext\n", 1)[0].text, "    indented");
+});
+
+test("the room a snippet needs is known before the file is read", () => {
+  assert.deepEqual(snippetSpan(20), { from: 16, to: 23, last: 20 });
+  assert.deepEqual(snippetSpan(2, 4), { from: 1, to: 7, last: 4 });
+  assert.equal(snippetSpan(10, 40).to - snippetSpan(10, 40).from + 1, 4 + 6 + 3);
+  assert.equal(snippetOf(file, 20).length, snippetSpan(20).to - snippetSpan(20).from + 1);
+});
+
+test("added lines come from the hunk headers of a zero-context diff", () => {
+  const diff = "diff --git a/f b/f\n@@ -3,2 +3,0 @@ x\n@@ -9 +7 @@\n@@ -12,0 +12,3 @@\n";
+  assert.deepEqual([...addedLinesOf(diff)], [7, 12, 13, 14]);
+  const lines = snippetOf(file, 12, 12, addedLinesOf(diff));
+  assert.deepEqual(lines.filter((l) => l.added).map((l) => l.n), [12, 13, 14]);
+  assert.equal(snippetOf(file, 12)[0].added, undefined);
+});
+
+test("the push that opened the PR is marked by its reason", () => {
+  const pushes = pushesOf([it(1, "2026-01-01T10:00:00Z", [commit("a", "2026-01-01T09:00:00Z")], { reason: "create" }), it(2, "2026-01-02T10:00:00Z", [commit("b", "2026-01-02T09:00:00Z")], { reason: "push" })]);
+  assert.deepEqual(pushes.map((p) => p.created), [true, false]);
 });
 
 test("a long commented range shows its first lines", () => {

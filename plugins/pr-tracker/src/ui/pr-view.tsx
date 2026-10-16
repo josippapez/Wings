@@ -8,7 +8,7 @@ import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
 import type { Problem } from "../lib/messages";
-import type { SnippetLine } from "../lib/snippet";
+import { snippetSpan, type SnippetLine } from "../lib/snippet";
 import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
 
@@ -342,7 +342,7 @@ function PushCard({ push }: { push: Push }) {
       <div className="pr-push-body">
         <div className="pr-push-head">
           <Avatar name={push.author} size="small" />
-          <span><strong>{push.author}</strong> pushed {count} {push.commits.length === 1 && !push.more ? "commit" : "commits"}</span>
+          <span><strong>{push.author}</strong> {push.created ? "opened the pull request with" : "pushed"} {count} {push.commits.length === 1 && !push.more ? "commit" : "commits"}</span>
           <Text tone="muted" size="small" as="span"><Time iso={push.at} /></Text>
         </div>
         <ul className="pr-commits" aria-label={`Commits in update ${push.id}`}>
@@ -452,6 +452,12 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
   );
 });
 
+/** Blank lines numbered like the snippet that will replace them. A file that ends sooner makes the real one a few lines shorter. */
+function placeholderLines(start: number, end?: number): SnippetLine[] {
+  const { from, to, last } = snippetSpan(start, end);
+  return Array.from({ length: to - from + 1 }, (_, i) => ({ n: from + i, text: "", hit: from + i >= start && from + i <= last }));
+}
+
 /** The lines around the commented ones, read when the card shows: mono, line numbers muted, the commented lines marked. */
 function Snippet({ root, onSnippet }: { root: Comment; onSnippet: (root: Comment) => Promise<SnippetLine[] | null> }) {
   const [lines, setLines] = useState<SnippetLine[] | null>(null);
@@ -462,11 +468,13 @@ function Snippet({ root, onSnippet }: { root: Comment; onSnippet: (root: Comment
       live = false;
     };
   }, [root, onSnippet]);
-  if (!lines) return null;
+  // While the file is read, empty lines of the count the range gives keep the card's height, so it doesn't jump when the code arrives.
+  const shown = lines ?? (root.path && root.range ? placeholderLines(root.range.start, root.range.end) : null);
+  if (!shown) return null;
   return (
-    <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} data-testid="pr-snippet">
-      {lines.map((l) => (
-        <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined}>
+    <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} aria-busy={lines ? undefined : true} data-testid="pr-snippet" data-loading={lines ? undefined : ""}>
+      {shown.map((l) => (
+        <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined} data-added={l.added ? "" : undefined}>
           <span className="pr-ln" aria-hidden="true">{l.n}</span>
           <span className="pr-code">{l.text || " "}</span>
         </code>

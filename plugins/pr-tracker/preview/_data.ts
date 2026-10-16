@@ -71,7 +71,7 @@ const commit = (sha: string, message: string, author: string, minutes: number) =
 
 /** Two pushes, the newer with more commits than it first lists. */
 export const pushes: Push[] = [
-  { id: 2, author: "Ada Lovelace", at: ago(60 * 22), more: false, head: "a".repeat(40), base: "b".repeat(40), commits: [
+  { id: 2, author: "Ada Lovelace", at: ago(60 * 22), more: false, created: false, head:"a".repeat(40), base: "b".repeat(40), commits: [
     commit("929d227", "feat(sync): start chunks as the per-minute budget allows", "Ada Lovelace", 60 * 22),
     commit("eaa4b73", "refactor(sync): remove the old migration tooling", "Ada Lovelace", 60 * 22 + 11),
     commit("87855cd", "refactor(sync): share duplicated helpers and drop dead code", "Ada Lovelace", 60 * 22 + 15),
@@ -79,7 +79,7 @@ export const pushes: Push[] = [
     commit("5a16c28", "refactor(sync): always chunk both reviews and make unset settings constants", "Ada Lovelace", 60 * 22 + 40),
     commit("0c11d9e", "test(sync): cover the Retry-After header", "Ada Lovelace", 60 * 22 + 55),
   ] },
-  { id: 1, author: "Ada Lovelace", at: ago(60 * 26), more: false, head: "c".repeat(40), base: "b".repeat(40), commits: [
+  { id: 1, author: "Ada Lovelace", at: ago(60 * 26), more: false, created: true, head:"c".repeat(40), base: "b".repeat(40), commits: [
     commit("2e70136", "feat(sync): retry with exponential backoff", "Ada Lovelace", 60 * 26),
     commit("f563a17", "docs(sync): describe the retry settings", "Ada Lovelace", 60 * 26 + 12),
   ] },
@@ -101,7 +101,7 @@ export class SyncClient {
 }
 `.repeat(8);
 
-export const onSnippet: PrViewProps["onSnippet"] = async (root) => snippetOf(FILE, root.range?.start ?? 1, root.range?.end);
+export const onSnippet: PrViewProps["onSnippet"] = async (root) => snippetOf(FILE, root.range?.start ?? 1, root.range?.end, new Set([85, 86, 87, 88, 89]));
 
 /** What PrView is given once everything has loaded. */
 export const props: PrViewProps = {

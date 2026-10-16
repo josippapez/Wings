@@ -4,7 +4,7 @@ import { azureApiOrg, git } from "wings-plugin-sdk/git";
 import { between, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
 import { pushesOf, type AzureIteration } from "../pushes";
-import { snippetOf } from "../snippet";
+import { addedLinesOf, snippetOf } from "../snippet";
 import { voteArgs } from "../vote";
 import { post } from "./post";
 import { counts, labelOf, noLog, openOrNewest, orElse, same } from "./shared";
@@ -272,6 +272,16 @@ async function comments(link: AzureLink, system = false): Promise<Comment[]> {
   return azureComments(threads?.value ?? [], link.url, system);
 }
 
+/** The lines of a file the PR added or changed at a push: a local `git diff -U0` from the merge base, as Azure DevOps compares. Undefined when git can't tell, so no line is tinted. */
+async function addedAt(link: AzureLink, base: string, sha: string, path: string): Promise<Set<number> | undefined> {
+  if (!/^[0-9a-f]{40}$/.test(base)) return undefined;
+  try {
+    return addedLinesOf(await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", "-U0", base, sha, "--", path], { raw: true }));
+  } catch {
+    return undefined;
+  }
+}
+
 /** A file as it was at a commit, from the project's own clone; a commit it doesn't have is fetched once. Null when neither works. */
 async function fileAt(link: AzureLink, sha: string, path: string): Promise<string | null> {
   if (!/^[0-9a-f]{40}$/.test(sha)) return null;
@@ -417,7 +427,8 @@ export const azure: Forge<AzureLink, AzureRemote> = {
     const push = pushes.find((p) => p.id === root.range!.iteration);
     const sha = root.side === "deletions" ? push?.base : (push?.head ?? head);
     const text = sha ? await fileAt(link, sha, root.path) : null;
-    const lines = text === null ? [] : snippetOf(text, root.range.start, root.range.end);
+    const added = text !== null && root.side !== "deletions" && sha && push?.base ? await addedAt(link, push.base, sha, root.path) : undefined;
+    const lines = text === null ? [] : snippetOf(text, root.range.start, root.range.end, added);
     return lines.length ? lines : null;
   },
 };

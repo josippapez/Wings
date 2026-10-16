@@ -20,6 +20,8 @@ export interface Push {
   /** The source and the merge base at this iteration, which a thread's snippet is read from. */
   head: string | null;
   base: string | null;
+  /** The push that opened the PR: Azure DevOps gives its iteration the reason `create`. */
+  created: boolean;
 }
 
 /** An iteration from `pullRequests/{id}/iterations?includeCommits=true`, the parts read. */
@@ -28,6 +30,7 @@ export interface AzureIteration {
   author?: { displayName?: string };
   createdDate: string;
   hasMoreCommits?: boolean;
+  reason?: string;
   sourceRefCommit?: { commitId?: string };
   commonRefCommit?: { commitId?: string };
   commits?: { commitId: string; comment?: string; author?: { name?: string; date?: string } }[];
@@ -48,7 +51,7 @@ export function pushesOf(iterations: AzureIteration[]): Push[] {
     const commits = fresh
       .map((c): PushCommit => ({ sha: c.commitId, message: (c.comment ?? "").split("\n")[0].trim(), author: c.author?.name ?? "unknown", at: c.author?.date ?? it.createdDate }))
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-    pushes.push({ id: it.id, author: it.author?.displayName ?? commits[0].author, at: it.createdDate, commits, more: Boolean(it.hasMoreCommits), head: it.sourceRefCommit?.commitId ?? null, base: it.commonRefCommit?.commitId ?? null });
+    pushes.push({ id: it.id, author: it.author?.displayName ?? commits[0].author, at: it.createdDate, commits, more: Boolean(it.hasMoreCommits), head: it.sourceRefCommit?.commitId ?? null, base: it.commonRefCommit?.commitId ?? null, created: it.reason === "create" });
   }
   return pushes;
 }

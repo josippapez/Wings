@@ -307,6 +307,15 @@
   background: color-mix(in srgb, var(--wings-info) 16%, transparent);
   box-shadow: inset 2px 0 var(--wings-info);
 }
+.pr-snippet-line[data-added] {
+  background: color-mix(in srgb, var(--wings-success) 16%, transparent);
+}
+.pr-snippet-line[data-hit][data-added] {
+  background: color-mix(in srgb, var(--wings-success) 16%, color-mix(in srgb, var(--wings-info) 16%, transparent));
+}
+.pr-snippet[data-loading] .pr-snippet-line:not([data-hit]) .pr-ln {
+  opacity: 0.4;
+}
 .pr-ln {
   flex: none;
   width: 44px;
