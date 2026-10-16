@@ -4,6 +4,20 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.50 · 2026-10-16
+
+- **Plugins store more.** Each value is saved in its own file, with 1 MB per value and 50 MB per plugin instead of 1 MB in all. Existing data moves over on first start, and the old file is kept as `.migrated`. Issues 0.13.0 keeps each issue apart, so writing a note no longer rewrites the whole project, and notes can be up to 20,000 characters.
+- **Plugins hear git changes.** A commit, checkout or pull updates PR tracker, Work item, Changes and Worktrees within about a second, without polling git every 15 s. Plugins that may run git get it through `wings.onGitChange`.
+- **Pages out of view stop polling.** A tab in the background, a closed sidebar or a closed popover is told it's hidden, and a page that comes back reloads only once its interval is up.
+- **Blocks come back after their plugin restarts.** Before, a block on a Project page stayed blank after a plugin was reinstalled at the same version.
+- **Tool calls carry the caller's project and Claude session.** Plugins get them with each call.
+- **Develop plugins without restarting.** `wings-plugin dev` rebuilds on save and reloads the plugin in Wings, and `wings plugin link <folder>` runs a plugin from its folder.
+- **Smaller fixes.** Buttons, badges and tabs inside panes no longer animate `visibility`, which could leave them half drawn after a tab switch. The approval dialog's step count no longer sits under its close button.
+- **PR tracker 0.19.0.** Main loads each PR's data once and shares it with the pane badge and every tab showing it. A tab can sign in, add a token or install a CLI itself. Only a new PR someone else opens takes up to 60 s to show.
+- **Issues 0.13.0.** A failed save keeps the edit open with the reason. The board's delete confirm stays open when the delete fails.
+- **Changes 0.6.0, Worktrees 0.4.0, Work item 0.9.0.** They reload on git changes. Their errors show in notice boxes, and times use one format ("2 h ago").
+- **Plugin SDK 0.17.0 and plugin-ui 0.10.0.** Plugins share data between their parts with keyed queries (`serve` in main, `useQuery` in pages). New SDK modules cover messages, settings, sessions, git, CLI calls and async helpers. New plugin-ui parts are Icon, Textarea, InlineInput, Confirm and Notice. Plugins build into `dist/`, and the build checks the manifest against the code.
+
 ## 0.1.49 · 2026-10-15
 
 - Settings › Plugins › Claude Code has a "Load Wings tools at session start" switch. It sets `alwaysLoad` on the Wings server, so Claude sees plugin tools from the first message instead of only when something tells it to look. It takes effect in new sessions.
