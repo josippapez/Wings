@@ -34,7 +34,7 @@ const changes = {
   priority: priorityField.describe("How urgent it is: urgent, high, medium, low, or none. none clears it."),
   branch: s.string({ maxLength: LIMITS.branch }).optional().describe("The git branch. An empty string removes it."),
   pr: s.string({ maxLength: LIMITS.pr }).optional().describe("The pull request's https URL. An empty string removes it."),
-  commit: s.string({ maxLength: LIMITS.commit }).optional().describe("A git commit hash, 7 to 40 hex digits, to add to the issue's commits. Call update with it after each commit you make for the issue."),
+  commit: s.string({ maxLength: LIMITS.commit, pattern: "^[0-9a-fA-F]{7,40}$" }).optional().describe("A git commit hash, 7 to 40 hex digits, to add to the issue's commits. Call update with it after each commit you make for the issue."),
   ...relations,
 };
 const changeNames = Object.keys(changes);

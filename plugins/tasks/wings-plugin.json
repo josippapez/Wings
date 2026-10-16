@@ -267,6 +267,7 @@
             "commit": {
               "type": "string",
               "maxLength": 40,
+              "pattern": "^[0-9a-fA-F]{7,40}$",
               "description": "A git commit hash, 7 to 40 hex digits, to add to the issue's commits. Call update with it after each commit you make for the issue."
             },
             "type": {
