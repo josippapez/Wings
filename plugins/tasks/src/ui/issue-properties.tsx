@@ -6,8 +6,10 @@ import { Badge, Button, Combobox, copyText, InlineInput, Row, Select, Text, Time
 import { lastSession } from "../lib/actor";
 import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type Priority, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
+import { itemsOf, type TodoList } from "../lib/todo";
 import { blocksOf, parentChoices } from "../lib/relations";
 import { openProps, PriorityIcon, StatusDot, TypeIcon, type Apply, type Send } from "./parts";
+import { TodoItems } from "./todo-items";
 
 const STATUS_OPTIONS = STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }));
 const PRIORITY_OPTIONS = PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }));
@@ -154,9 +156,10 @@ function Links({ issue, issues, send, onOpenIssue }: { issue: Issue; issues: Iss
   );
 }
 
-export function Properties({ issue, issues, project, apply, send, onOpenUrl, onOpenIssue }: { issue: Issue; issues: Issue[]; project: WingsProject; apply: Apply; send: Send; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
+export function Properties({ issue, issues, todos = [], project, apply, send, onOpenUrl, onOpenIssue }: { issue: Issue; todos?: TodoList[]; issues: Issue[]; project: WingsProject; apply: Apply; send: Send; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
   const last = lastSession(issue);
   const commits = issue.links?.commits ?? [];
+  const todoOf = (sessionId: string) => todos.find((t) => t.sessionId === sessionId);
   return (
     <aside className="tk-props" aria-label="Properties">
       <Prop label="Status">
@@ -203,6 +206,7 @@ export function Properties({ issue, issues, project, apply, send, onOpenUrl, onO
                 <Text as="span" tone="muted" size="tiny">
                   <span className="tk-sha" title={s.id}>{s.id.slice(0, 8)}</span> · <Time iso={iso(s.seen)} prefix="seen " />
                 </Text>
+                {todoOf(s.id) ? <TodoItems items={itemsOf(todoOf(s.id)!)} label={`Steps of ${s.name || "Claude session"}`} /> : null}
               </li>
             ))}
           </ul>

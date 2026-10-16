@@ -6,6 +6,7 @@ import type { Actor, Issue, Op } from "../lib/domain";
 import { ch } from "../lib/messages";
 import { applyOp } from "../lib/ops";
 import { migrateLegacy, readStore, writeStore } from "../lib/storage";
+import { rememberPrefix } from "./hooks";
 import { pushSection } from "./section";
 
 /** Writes run one after another, so a read-then-write never interleaves with another. */
@@ -25,6 +26,7 @@ export function write(projectId: string, projectName: string, op: Op, by: Actor)
     await migrateOnce(projectId, projectName);
     const before = await readStore(projectId, projectName);
     const { store, issue, changed } = applyOp(before, op, by);
+    rememberPrefix(projectId, store.prefix, store.issues.length);
     if (changed) {
       await writeStore(projectId, before, store);
       await ch.tell("issues", { projectId }).catch(console.error);
@@ -41,5 +43,7 @@ export function write(projectId: string, projectName: string, op: Op, by: Actor)
 export const loadProject = (projectId: string, projectName: string): Promise<void> =>
   queue(async () => {
     await migrateOnce(projectId, projectName).catch(console.error);
-    await pushSection(projectId, (await readStore(projectId, projectName)).issues);
+    const { prefix, issues } = await readStore(projectId, projectName);
+    rememberPrefix(projectId, prefix, issues.length);
+    await pushSection(projectId, issues);
   });

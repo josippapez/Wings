@@ -5,6 +5,7 @@ import { Fragment, useState } from "react";
 import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { canParent, LIMITS, type Issue } from "../lib/domain";
+import type { TodoList } from "../lib/todo";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { DeleteConfirm, ErrorText, TypeIcon, type Apply, type Send } from "./parts";
@@ -15,6 +16,8 @@ export interface IssueViewProps {
   issue: Issue | null | undefined;
   /** Every issue of the project, for the parent, related and blocking pickers and the child list. */
   issues: Issue[];
+  /** The project's todo lists, for the steps shown under each session. */
+  todos?: TodoList[];
   /** The key the tab was opened for, for the not-found page. */
   issueKey: string;
   error: string | null;
@@ -53,7 +56,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   );
 }
 
-export function IssueView({ project, issue, issues, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
+export function IssueView({ project, issue, issues, todos, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
   const crumb = (
     <nav className="tk-crumbs" aria-label="Breadcrumb">
@@ -108,7 +111,7 @@ export function IssueView({ project, issue, issues, issueKey, error, apply, send
           <header className="tk-head">
             <IssueTitle issue={issue} apply={apply} />
           </header>
-          <Properties issue={issue} issues={issues} project={project} apply={apply} send={send} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
+          <Properties issue={issue} issues={issues} todos={todos} project={project} apply={apply} send={send} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
           <div className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}

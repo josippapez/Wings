@@ -9,6 +9,7 @@ import { agentCommand, resumeCommand } from "../lib/commands";
 import type { Op } from "../lib/domain";
 import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
 import { useIssues } from "../ui/useIssues";
+import { useTodos } from "../ui/useTodos";
 import "./tasks.css";
 
 export const page = { place: "tab", fill: true };
@@ -44,6 +45,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
   const trail = args?.trail ?? [];
   const projectId = args?.projectId ?? project.id;
   const { store, apply } = useIssues(projectId, project.name);
+  const todos = useTodos(projectId) ?? [];
   const action = useAction();
   const send = (op: Op) => action.run(() => apply(op));
   const issue = store ? findIssue(store, issueKey) : undefined;
@@ -54,6 +56,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       project={project}
       issue={issue}
       issues={store?.issues ?? []}
+      todos={todos}
       issueKey={issueKey}
       error={action.error}
       apply={apply}

@@ -8,5 +8,5 @@ import type { Op } from "./domain";
 export const ch = channel<
   // `projectName` seeds the key prefix of a project's first issue.
   { op: { request: { projectId: string; projectName: string; op: Op }; response: void } },
-  { issues: { projectId: string } }
+  { issues: { projectId: string }; todo: { projectId: string } }
 >();

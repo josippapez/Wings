@@ -11,6 +11,9 @@ const listeners = { main: new Set(), page: new Set() };
 const send = (to, message) => queueMicrotask(() => listeners[to].forEach((listener) => listener(JSON.parse(JSON.stringify(message)))));
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 let projects;
+let panes;
+const hooks = new Map();
+const rails = [];
 
 globalThis.wings = {
   storage: {
@@ -23,6 +26,9 @@ globalThis.wings = {
   onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
   onTool: (name, handler) => handlers.set(name, handler),
   onProjects: (listener) => (projects = listener),
+  onPanes: (listener) => (panes = listener),
+  onHook: (event, handler) => hooks.set(event, handler),
+  setPaneRail: async (paneId, rail) => void rails.push({ paneId, rail }),
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
 };
 await import("./main.ts");
@@ -31,6 +37,8 @@ const { slotOf } = await import("./lib/storage.ts");
 const page = channel({ wings: { broadcast: async (message) => send("main", message), onBroadcast: (listener) => (listeners.page.add(listener), () => listeners.page.delete(listener)) } });
 const told = [];
 page.on("issues", (m) => told.push(m));
+const todoTold = [];
+page.on("todo", (m) => todoTold.push(m));
 const call = async (name, input) => handlers.get(name)(input, { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } });
 const ask = (op) => page.ask("op", { projectId: "proj1", projectName: "web", op });
 
@@ -99,4 +107,35 @@ test("the project's section shows its open issues after a change, and is filled 
   await settle();
   assert.deepEqual(sections.filter((s) => s.id === "proj1").at(-1).rows, rows);
   assert.equal(sections.filter((s) => s.id === "proj2").at(-1).rows, null, "a project with no issues has no section");
+});
+
+const ctx = { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } };
+
+test("the todo tool keeps the session's list, links it to the issue, tells the pages and shows the card on the session's pane", async () => {
+  await panes([{ paneId: "p1", projectId: "proj1", cwd: "/work/web", command: "claude", project: "web", session: { sessionId: "s-1", name: "agent one", state: "idle", startedAt: 1 }, focused: true }]);
+  await settle();
+  assert.equal(rails.at(-1).rail, null, "no list, no card");
+  assert.match(await call("todo", {}), /No todo list/);
+  const out = await call("todo", { items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], key: "web-1" });
+  assert.match(out, /\(WEB-1\): 1 of 2 done\.\n\[x\] read\n\[~\] write/);
+  await settle();
+  assert.deepEqual(todoTold, [{ projectId: "proj1" }]);
+  assert.deepEqual(rails.at(-1), { paneId: "p1", rail: { title: "Todo · 1/2 · WEB-1", items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], open: "todo" } });
+  assert.equal(JSON.parse(JSON.stringify([...storage].find(([k]) => k.startsWith("todo/"))[1])).versions.length, 1);
+  await call("todo", { items: [{ text: "read", status: "done" }, { text: "write", status: "done" }] });
+  assert.equal(rails.at(-1).rail, null, "all done clears the card");
+  await assert.rejects(handlers.get("todo")({}, { ...ctx, session: null }), /no Claude session/);
+  await assert.rejects(call("todo", { items: [{ text: "x", status: "pending" }], key: "WEB-99" }), /No issue WEB-99/);
+});
+
+test("the session start line and the commit check answer from storage", async () => {
+  const start = await hooks.get("SessionStart")({ session_id: "s-1" }, ctx);
+  assert.match(start, /Wings Issues is the local tracker for web/);
+  assert.match(start, /This session is on WEB-\d "/);
+  assert.equal(await hooks.get("SessionStart")({ session_id: "s-1" }, { ...ctx, project: null }), null);
+  const bash = (command) => hooks.get("PreToolUse")({ session_id: "s-1", tool_name: "Bash", tool_input: { command } }, ctx);
+  assert.match((await bash('git commit -m "WEB-1 done"')).deny, /^WEB-1 is a local Wings issue/);
+  assert.equal(await bash('git commit -m "done"'), null);
+  await wings.storage.set("keepLocal", false);
+  assert.equal(await bash('git commit -m "WEB-1 done"'), null, "with the setting off nothing is denied");
 });

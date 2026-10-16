@@ -1,6 +1,7 @@
 // The operations a page or a tool asks for, applied to a store: `applyOp` gives the changed copy, or throws an Error that says
 // what was wrong. Nothing is saved here.
 
+import { isClaude } from "./actor";
 import { hasContent, isPriority, isStatus, isType, LIMITS, normalizeKey, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPES, type Actor, type Issue, type LogEntry, type Op, type Relations, type Store } from "./domain";
 import { append, appendLoose, touch } from "./log";
 import { descendantsOf, relate } from "./relations";
@@ -125,7 +126,10 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
   let entries: LogEntry[] = [];
   let changed = false;
   let others: Issue[] | null = null;
-  if (op.kind === "note") {
+  if (op.kind === "touch") {
+    // Only records the session on the issue, once: a todo list linked to it.
+    changed = isClaude(by) && !!by.id && !next.sessions.some((x) => x.id === by.id);
+  } else if (op.kind === "note") {
     const note = text(op.text, "text", LIMITS.note);
     if (!note) throw new Error("text is required.");
     entries = [{ at: now, by, kind: "note", text: note }];

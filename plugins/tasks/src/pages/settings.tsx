@@ -2,7 +2,8 @@
 
 import type { ReactNode } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
-import { Chips, Heading, Stack, Text } from "wings-plugin-ui";
+import { Checkbox, Chips, Heading, Stack, Text } from "wings-plugin-ui";
+import { keepLocal } from "../lib/local-setting";
 import { DEFAULT_VIEWS, defaultView, lastLayout, type DefaultView } from "../lib/view-setting";
 import "./tasks.css";
 
@@ -63,6 +64,7 @@ const PICTURES: Record<DefaultView, { drawing: ReactNode; hint: string }> = {
 
 export default function IssuesSettings() {
   const [view, setView] = useSetting(defaultView);
+  const [local, setLocal] = useSetting(keepLocal);
   return (
     <Stack gap="s">
       <Heading>Issues board</Heading>
@@ -87,6 +89,13 @@ export default function IssuesSettings() {
           }))}
         />
       )}
+      <Heading>Commits and pull requests</Heading>
+      {local === null ? null : (
+        <Checkbox checked={local} onChange={(checked) => void setLocal(checked)}>
+          Keep issues local
+        </Checkbox>
+      )}
+      <Text tone="muted" size="small">Issues live on this computer. With this on, Claude can't put an issue key like WIN-12 in a commit, tag, pull request or issue comment: the command is stopped and it is asked to take the key out.</Text>
     </Stack>
   );
 }

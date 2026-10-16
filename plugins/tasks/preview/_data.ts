@@ -1,4 +1,5 @@
 // Made-up issues for the fixtures.
+import type { TodoList } from "../src/lib/todo";
 import type { Issue, LogEntry } from "../src/lib/domain";
 import { entriesOf } from "../src/lib/storage";
 import type { BoardViewProps } from "../src/ui/board-view";
@@ -98,3 +99,22 @@ export const defaults: BoardViewProps = {
 
 /** For a state of a whole page: the page reads its issues from storage, so the stub's storage holds these for the project. */
 export const storage = Object.fromEntries(entriesOf(project.id, { v: 3, prefix: "WEB", next: 15, issues }));
+
+/** Agent todo lists: one in the middle of its work with earlier versions, one finished, one not on an issue. */
+const step = (text: string, status: "pending" | "in_progress" | "done") => ({ text, status });
+export const todos: TodoList[] = [
+  {
+    sessionId: s3.id,
+    sessionName: "checkout summary",
+    projectId: project.id,
+    issueKey: "WEB-4",
+    updatedAt: ago(1),
+    versions: [
+      { at: ago(5), items: [step("Read the cart code", "in_progress"), step("Fix the empty cart", "pending"), step("Add a test", "pending")] },
+      { at: ago(3), items: [step("Read the cart code", "done"), step("Fix the empty cart", "in_progress"), step("Add a test", "pending")] },
+      { at: ago(1), items: [step("Read the cart code", "done"), step("Hide the card for an empty cart", "done"), step("Add a test for the empty cart", "in_progress"), step("Check the focus order of the promo field with a keyboard", "pending"), step("Update the PR description", "pending")] },
+    ],
+  },
+  { sessionId: s2.id, sessionName: "fix the totals", projectId: project.id, issueKey: "WEB-5", updatedAt: ago(6), versions: [{ at: ago(6), items: [step("Retry with backoff", "done"), step("Log each failed delivery", "done")] }] },
+  { sessionId: "0c7d9e41-5a2b-4f08-8d13-e6a9b2c47f50", projectId: project.id, updatedAt: ago(30), versions: [{ at: ago(30), items: [step("Check why the build is slow", "in_progress")] }] },
+];

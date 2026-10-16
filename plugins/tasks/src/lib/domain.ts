@@ -100,6 +100,8 @@ export type Op =
   | ({ kind: "create"; title: string; description?: string; status?: Status; priority?: Priority; branch?: string } & Relations)
   | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; priority?: Priority; branch?: string; pr?: string; commit?: string } & Relations)
   | { kind: "note"; key: string; text: string }
+  /** Records the acting session on the issue without a log entry. Nothing changes when it is already there. */
+  | { kind: "touch"; key: string }
   /** With `children`, its child issues, theirs and so on go too. Otherwise they stay and lose their parent. */
   | { kind: "remove"; key: string; children?: boolean };
 
