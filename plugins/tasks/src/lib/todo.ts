@@ -55,6 +55,6 @@ export function formatTodo(list: TodoList | null): string {
 export function railOf(list: TodoList, view: string): { title: string; items: TodoItem[]; open: string } | null {
   const items = itemsOf(list);
   if (!items.some((i) => i.status !== "done")) return null;
-  const { done, total } = counts(items);
-  return { title: `Todo · ${done}/${total}${list.issueKey ? ` · ${list.issueKey}` : ""}`.slice(0, 40), items, open: view };
+  // Wings shows the done count beside the title, so the title leaves it out.
+  return { title: `Todo${list.issueKey ? ` · ${list.issueKey}` : ""}`.slice(0, 40), items, open: view };
 }

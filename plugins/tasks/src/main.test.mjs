@@ -120,7 +120,7 @@ test("the todo tool keeps the session's list, links it to the issue, tells the p
   assert.match(out, /\(WEB-1\): 1 of 2 done\.\n\[x\] read\n\[~\] write/);
   await settle();
   assert.deepEqual(todoTold, [{ projectId: "proj1" }]);
-  assert.deepEqual(rails.at(-1), { paneId: "p1", rail: { title: "Todo · 1/2 · WEB-1", items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], open: "todo" } });
+  assert.deepEqual(rails.at(-1), { paneId: "p1", rail: { title: "Todo · WEB-1", items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], open: "todo" } });
   assert.equal(JSON.parse(JSON.stringify([...storage].find(([k]) => k.startsWith("todo/"))[1])).versions.length, 1);
   await call("todo", { items: [{ text: "read", status: "done" }, { text: "write", status: "done" }] });
   assert.equal(rails.at(-1).rail, null, "all done clears the card");

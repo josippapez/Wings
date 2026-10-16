@@ -21,6 +21,6 @@ test("the card shows the step in progress while any step is open, and nothing on
   const items = [step("a", "done"), step("b"), step("c", "in_progress")];
   assert.equal(currentStep(items).text, "c");
   const list = withItems(null, who, items, "WEB-4", 1);
-  assert.equal(railOf(list, "todo").title, "Todo · 1/3 · WEB-4");
+  assert.equal(railOf(list, "todo").title, "Todo · WEB-4");
   assert.equal(railOf(withItems(list, who, [step("a", "done")], undefined, 2), "todo"), null);
 });
