@@ -384,12 +384,13 @@ interface Wings {
   };
   /**
    * The plugin's own storage for settings and state, since `localStorage` throws in plugin pages. Values are
-   * JSON. Keys are 1 to 128 letters, digits and `- _ . : /`, and it holds 1 MB in all. Only this plugin sees it.
+   * JSON. Keys are 1 to 128 letters, digits and `- _ . : /`. A value may be 1 MB and everything together 50 MB (1 MB in all
+   * before Wings 0.1.50). Only this plugin sees it.
    */
   storage: {
     /** The value, or `null` when the key isn't set. */
     get(key: string): Promise<unknown>;
-    /** Refused if it would take the plugin's storage over 1 MB. */
+    /** Refused for a value over 1 MB, or if it would take the plugin's storage over 50 MB. */
     set(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<void>;
     /** Every key, sorted. */
