@@ -141,7 +141,8 @@ function Approve(props: { plugin: PluginView | null; step: { at: number; of: num
     <Dialog open={p !== null} onOpenChange={(open) => !open && props.onCancel()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-baseline justify-between gap-3">
+          {/* pr-8 keeps the title and the count clear of the dialog's close button in the corner. */}
+          <DialogTitle className="flex items-baseline gap-3 pr-8">
             <span>Turn on {p?.name}?</span>
             {more && <span className="shrink-0 text-[12px] font-normal tabular-nums text-muted-foreground">1 of {props.step.of}</span>}
           </DialogTitle>
