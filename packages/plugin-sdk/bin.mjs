@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// wings-plugin init [folder]   starts a plugin in a new folder (--pm <manager> installs with another package manager, --no-install skips it)
 // wings-plugin build           builds the plugin in this folder into dist/
 // wings-plugin build --check   fails if a file in dist/ differs from what src/ builds
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
@@ -8,10 +9,28 @@
 import { relative } from "node:path";
 import { buildPlugin, entries, pack } from "./build.mjs";
 import { dev } from "./dev.mjs";
+import { init } from "./init.mjs";
 
 const [command, ...flags] = process.argv.slice(2);
+if (command === "init") {
+  const pm = flags.indexOf("--pm");
+  const manager = pm < 0 ? "npm" : flags.splice(pm, 2)[1];
+  const skip = flags.includes("--no-install");
+  const folder = flags.find((f) => !f.startsWith("--")) ?? ".";
+  if (!manager || manager.startsWith("--")) {
+    console.error("--pm needs a package manager, like --pm pnpm.");
+    process.exit(2);
+  }
+  try {
+    init(folder, { install: skip ? false : manager });
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 if (command !== "build" && command !== "pack" && command !== "dev") {
-  console.error("Usage: wings-plugin build [--check] | wings-plugin pack | wings-plugin dev");
+  console.error("Usage: wings-plugin init [folder] [--pm <manager>] [--no-install] | wings-plugin build [--check] | wings-plugin pack | wings-plugin dev");
   process.exit(2);
 }
 const dir = process.cwd();

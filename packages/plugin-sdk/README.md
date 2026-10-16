@@ -1,8 +1,17 @@
 # wings-plugin-sdk
 
 The `wings` API types, the page frame, helpers and the build command for [Wings](https://github.com/josippapez/Wings)
-plugins. The components for plugin pages are in [wings-plugin-ui](../plugin-ui/README.md). A starter repo that
-already has all of this set up is [templates/wings-plugin](../../templates/wings-plugin).
+plugins. The components for plugin pages are in [wings-plugin-ui](../plugin-ui/README.md). `wings-plugin init` makes a
+plugin that already has all of this set up.
+
+```sh
+npx wings-plugin-sdk init my-plugin   # a new folder: id and name from its name, the SDK pinned, npm install run
+cd my-plugin && npm run dev           # builds on each save and has Wings restart the plugin
+```
+
+`--pm pnpm` (or `yarn`, `bun`) installs with another package manager and `--no-install` skips the install. `init` stops
+at a folder that already has files. The plugin has `src/` with a badge and a sidebar, a manifest, a `tsconfig.json`,
+and a workflow that builds and attaches the package to a GitHub release when you push a version tag.
 
 Wings itself gives each plugin the `wings` object at runtime. This package doesn't contain it: it types it, and
 bundles your TypeScript and React into the plain scripts Wings loads.

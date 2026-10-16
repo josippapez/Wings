@@ -4,8 +4,8 @@ A starting point for a Wings plugin that lives in its own repo. It shows each pa
 
 ## Start a plugin
 
-1. Copy this folder into a new repo and run `npm install`.
-2. In `wings-plugin.json`, set your own `id` (lowercase letters, digits and dashes), `name` and `description`. Replace `icon.svg`, the plugin's one-colour icon in the Plugins list (24 by 24, up to 32 KB). `minWingsVersion` is the oldest Wings the plugin runs on. This template needs 0.1.20, for `wings.onFocus` and a sidebar with no `icon` of its own, and you raise it when you use something newer.
+1. `npx wings-plugin-sdk init my-plugin` makes a folder like this one, with its `id` and `name` taken from the folder name, and runs `npm install` (`--pm pnpm` uses another package manager, `--no-install` skips it).
+2. In `wings-plugin.json`, set your own `description`. Replace `icon.svg`, the plugin's one-colour icon in the Plugins list (24 by 24, up to 32 KB). `minWingsVersion` is the oldest Wings the plugin runs on. This template needs 0.1.20, for `wings.onFocus` and a sidebar with no `icon` of its own, and you raise it when you use something newer.
 3. Replace the code in `src/`:
    - `src/main.ts` is the plugin's hidden main script. It sets the badges and shares the branches.
    - `src/pages/sidebar.tsx` is the sidebar's page, in React with `wings-plugin-ui`. Each file in `src/pages/` is a page, and the manifest points at its built `dist/<name>.html`.
@@ -13,7 +13,7 @@ A starting point for a Wings plugin that lives in its own repo. It shows each pa
 4. Replace this README. Wings shows a plugin's README on its page in Settings, so write it for the people who install your plugin.
 5. Commit `src/`, `package.json` and `package-lock.json`. The built files in `dist/` stay out of git: the release workflow builds them.
 
-`npm run check` type-checks the code, then builds and packs the plugin. The build also compares `wings-plugin.json` with the code and fails where they disagree, like a badge set without `badges` in `contributes.ui`.
+`npm run dev` builds on each save and has the running Wings restart the plugin, so there is no restart by hand. `npm run check` type-checks the code, then builds and packs the plugin. The build also compares `wings-plugin.json` with the code and fails where they disagree, like a badge set without `badges` in `contributes.ui`.
 
 Each helper in `wings-plugin-sdk` has a short example in its README (`node_modules/wings-plugin-sdk/README.md` once installed). The whole `wings` API is in `plugins/README.md` in the Wings repo.
 

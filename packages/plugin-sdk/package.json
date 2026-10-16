@@ -93,6 +93,8 @@
     "build.mjs",
     "build.d.ts",
     "dev.mjs",
+    "init.mjs",
+    "template",
     "socket.mjs",
     "manifest-check.mjs",
     "bin.mjs",

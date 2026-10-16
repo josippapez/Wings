@@ -2,6 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "wings-plugin dev",
+    "build": "wings-plugin build",
     "pack": "wings-plugin pack",
     "check": "tsc && wings-plugin pack"
   },
