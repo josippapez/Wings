@@ -1679,6 +1679,7 @@ const leftPanel = usePanelRef();
                       space={spaces.find((s) => s.id === tab.spaceId)}
                       branch={git[tab.spaceId]?.branch}
                       plugins={activePlugins}
+                      epochs={epochs}
                       host={pluginHost.current}
                       visible={tab.id === activeTabId}
                     />

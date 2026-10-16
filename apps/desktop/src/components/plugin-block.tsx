@@ -12,6 +12,8 @@ const SAVE_HEIGHT_MS = 400;
 export type PluginBlockProps = {
   plugins: PluginView[];
   host: PluginHost | null;
+  /** Counts the plugin's restarts. A restart stops its frames, so a new value mounts the block again. */
+  epoch: number;
   pluginId: string;
   blockId: string;
   /** The project the page shows; `wings.project()` in the block. */
@@ -37,7 +39,7 @@ export type PluginBlockProps = {
  * not approved shows a placeholder instead.
  */
 export function PluginBlock(props: PluginBlockProps) {
-  const { plugins, host, pluginId, blockId, projectId, instanceId, visible } = props;
+  const { plugins, host, epoch, pluginId, blockId, projectId, instanceId, visible } = props;
   const plugin = plugins.find((p) => p.id === pluginId);
   const runnable = !!plugin && plugin.enabled && plugin.approved;
   const block = plugin && findBlock(plugin, blockId);
@@ -110,7 +112,7 @@ export function PluginBlock(props: PluginBlockProps) {
       hidden.current = null;
       remove?.();
     };
-  }, [loaded, runnable, host, plugin?.version, pluginId, blockId, projectId, instanceId, block?.minHeight]);
+  }, [loaded, runnable, host, plugin?.version, epoch, pluginId, blockId, projectId, instanceId, block?.minHeight]);
 
   const note = !plugin ? `${pluginId} isn't installed` : !runnable ? `Turn on ${plugin.name} to show this` : !block ? `${plugin.name} no longer has this block` : error;
   const waiting = runnable && !error && !ready;

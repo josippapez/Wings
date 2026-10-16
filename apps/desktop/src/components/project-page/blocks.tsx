@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { messageOf, type Apply } from "./use-project-info";
 
 /** A plugin's block on the page: a title bar with move and delete, then the plugin's page in its own frame. */
-export function BlockItem({ projectId, item, plugins, host, visible, first, last, apply }: { projectId: string; item: Block; plugins: PluginView[]; host: PluginHost | null; visible: boolean; first: boolean; last: boolean; apply: Apply }) {
+export function BlockItem({ projectId, item, plugins, epoch, host, visible, first, last, apply }: { projectId: string; item: Block; plugins: PluginView[]; epoch: number; host: PluginHost | null; visible: boolean; first: boolean; last: boolean; apply: Apply }) {
   const entry = listBlocks(plugins).find((b) => b.pluginId === item.pluginId && b.blockId === item.blockId);
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState("");
@@ -52,6 +52,7 @@ export function BlockItem({ projectId, item, plugins, host, visible, first, last
       {entry ? (
         <PluginBlock
           plugins={plugins}
+          epoch={epoch}
           host={host}
           pluginId={item.pluginId}
           blockId={item.blockId}

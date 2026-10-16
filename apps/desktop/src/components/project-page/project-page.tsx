@@ -21,7 +21,7 @@ import { messageOf, useProjectInfo } from "./use-project-info";
 export type ProjectPageSpace = { id: string; name: string; path: string };
 
 /** A project's page: its facts, then sections and plugin blocks in the order you put them, with "+ Add" between. */
-export function ProjectPage({ space, branch, plugins, host, visible }: { space: ProjectPageSpace; branch?: string | null; plugins: PluginView[]; host: PluginHost | null; visible: boolean }) {
+export function ProjectPage({ space, branch, plugins, epochs, host, visible }: { space: ProjectPageSpace; branch?: string | null; plugins: PluginView[]; epochs: Record<string, number>; host: PluginHost | null; visible: boolean }) {
   const { info, error: unreadable, apply } = useProjectInfo(space.id);
   const [error, setError] = useState("");
   const factInput = useRef<HTMLInputElement>(null);
@@ -211,7 +211,7 @@ export function ProjectPage({ space, branch, plugins, host, visible }: { space: 
               <SectionCard mark={marks.get(`item:${item.id}`)} projectId={space.id} section={item} first={i === 0} last={i === info.items.length - 1} startEditing={fresh.current === item.id} apply={apply} read={read} />
             ) : (
               <div className={cn("rounded-xl", markClass(marks.get(`item:${item.id}`)))}>
-                <BlockItem projectId={space.id} item={item} plugins={plugins} host={host} visible={visible && onScreen.has(item.id)} first={i === 0} last={i === info.items.length - 1} apply={apply} />
+                <BlockItem projectId={space.id} item={item} plugins={plugins} epoch={epochs[item.pluginId] ?? 0} host={host} visible={visible && onScreen.has(item.id)} first={i === 0} last={i === info.items.length - 1} apply={apply} />
               </div>
             )}
             {addRow({ after: item.id }, `Add after ${item.kind === "section" ? item.title : item.blockId}`, i === info.items.length - 1)}
