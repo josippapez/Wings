@@ -136,7 +136,8 @@ export type McpCall = {
   session: { id: string; name: string | null } | null;
 };
 /** Claude asked Wings (the `open_pane` tool) for a new tab. Answer with `mcpToolResult`: the pane id, or the error. */
-export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null };
+/** `run`: Claude asked for Enter after `input`, which the window presses only while the user allows it. */
+export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null; run: boolean };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
 export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */

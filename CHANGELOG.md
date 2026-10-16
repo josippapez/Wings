@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+- **Claude can start a command in a new tab.** `open_pane` takes `run`, and Wings presses Enter after the command when "Let Claude run commands in new tabs" is on in Settings, Agents. It's off by default, and then the command waits for you as before. The reply tells Claude whether it ran, so it doesn't wait on a server that never started.
+
+## 0.1.54 · 2026-10-16
+
 - **Plugins can answer Claude Code's hooks.** A plugin lists `SessionStart` or `PreToolUse` in `contributes.hooks` and answers with `wings.onHook`: it can add context when a session starts, and refuse a Bash command with a reason Claude sees. Connect adds `wings hook` to your Claude Code settings after the hooks you already have, and Disconnect takes it out; with Wings closed or slow, Claude is never held up. Needs Wings 0.1.54.
 - **Plugins can float a card over a terminal.** `wings.setPaneRail` shows a list, like the agent's todo list, in a corner of a pane. Drag it to another corner, minimise it to a pill, or close it until it changes. It never takes the terminal's focus and moving it doesn't resize the terminal. Needs `rail` in `contributes.ui` and Wings 0.1.54.
 - **A page that opens no longer misses the panes.** `wings.onPanes` registered after Wings sent the panes now hears them right away. Before, the Worktrees sidebar could open saying there was no git repo until you switched panes.

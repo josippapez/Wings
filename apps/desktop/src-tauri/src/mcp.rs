@@ -231,14 +231,16 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
         Some(pane.recent_output())
     }
 
-    fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<String, String> {
-        let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input });
+    fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<crate::mcp_panes::Opened, String> {
+        let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input, "run": plan.run });
         let answer = ask_webview(self.0, "mcp-open-pane", payload)?;
         if answer.is_error {
-            Err(answer.text)
-        } else {
-            Ok(answer.text)
+            return Err(answer.text);
         }
+        // The window answers `{ paneId, ran }`: it alone knows whether the user lets Claude press Enter.
+        let reply: Value = serde_json::from_str(&answer.text).map_err(|e| e.to_string())?;
+        let pane_id = reply["paneId"].as_str().ok_or("The window didn't say which pane it opened")?.to_string();
+        Ok(crate::mcp_panes::Opened { pane_id, ran: reply["ran"].as_bool().unwrap_or(false) })
     }
 
     fn notify(&self, title: String, body: String) -> Result<(), String> {

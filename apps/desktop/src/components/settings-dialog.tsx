@@ -217,6 +217,8 @@ export function SettingsDialog(props: {
   onSleepChange: (sleep: SleepSettings) => void;
   notifySound: SoundSettings;
   onNotifySoundChange: (sound: SoundSettings) => void;
+  agentsRunCommands: boolean;
+  onAgentsRunCommandsChange: (on: boolean) => void;
   /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
   newTabs: NewTabEntry[];
   newTabPage: string;
@@ -404,6 +406,15 @@ export function SettingsDialog(props: {
                     value={props.sleep.minutes}
                     onChange={(minutes) => props.onSleepChange({ ...props.sleep, minutes })}
                   />
+                </Row>
+              </Group>
+              <Group>
+                <Row
+                  id="agents-run-commands"
+                  label="Let Claude run commands in new tabs"
+                  hint="When Claude opens a tab for a command, like a dev server, Wings presses Enter for it. Claude Code still asks you before it opens the tab, unless you allowed open_pane without asking. Off: the command waits for you to press Enter."
+                >
+                  <Switch id="agents-run-commands" checked={props.agentsRunCommands} onCheckedChange={props.onAgentsRunCommandsChange} />
                 </Row>
               </Group>
             </TabsContent>

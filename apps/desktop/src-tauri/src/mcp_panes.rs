@@ -35,8 +35,16 @@ pub struct PaneRow {
 pub struct OpenPlan {
     pub space_id: String,
     pub cwd: Option<String>,
-    /// Text typed into the new shell. Never with Enter: the user reads it and runs it themselves.
+    /// Text typed into the new shell, without Enter.
     pub input: Option<String>,
+    /// Claude asked for Enter after `input`. The window presses it only while the user's setting allows it.
+    pub run: bool,
+}
+
+/// What the window did with an `OpenPlan`.
+pub struct Opened {
+    pub pane_id: String,
+    pub ran: bool,
 }
 
 /// The running app, as far as the tools are concerned.
@@ -46,8 +54,8 @@ pub trait Host {
     fn spaces(&self) -> Vec<Space>;
     /// The raw bytes a pane has printed lately, oldest first.
     fn output(&self, pane_id: &str) -> Option<Vec<u8>>;
-    /// Opens a tab through the window and returns the new pane's id.
-    fn open(&self, plan: OpenPlan) -> Result<String, String>;
+    /// Opens a tab through the window: the new pane's id, and whether it pressed Enter.
+    fn open(&self, plan: OpenPlan) -> Result<Opened, String>;
     /// A system notification, if the rate limit allows one.
     fn notify(&self, title: String, body: String) -> Result<(), String>;
 }
@@ -75,12 +83,13 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "open_pane",
-            "description": "Open a new tab in one of the user's Wings projects, and optionally type a command in it. The command is typed but never run: the user reads it and presses Enter. Returns the new pane's id.",
+            "description": "Open a new tab in one of the user's Wings projects, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. Returns the new pane's id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "cwd": { "type": "string", "description": "Absolute path of the folder to start in. It has to be inside a project in Wings. Leave out for the root of your own project." },
-                    "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." }
+                    "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." },
+                    "run": { "type": "boolean", "default": false, "description": "Press Enter after the command, if the user's setting allows it." }
                 }
             }
         }),
@@ -114,10 +123,15 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
         },
         "open_pane" => {
             let caller_pane = caller().and_then(|id| host.panes().into_iter().find(|p| p.id == id));
-            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command")).and_then(|plan| {
+            let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
+            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command"), run).and_then(|plan| {
                 let typed = plan.input.is_some();
-                let pane_id = host.open(plan)?;
-                Ok(json!({ "paneId": pane_id, "commandTyped": typed }).to_string())
+                let opened = host.open(plan)?;
+                let mut reply = json!({ "paneId": opened.pane_id, "commandTyped": typed, "commandRun": opened.ran });
+                if run && !opened.ran {
+                    reply["note"] = json!("Running commands in new tabs is off in Wings Settings, Agents, so the command waits for the user to press Enter. To start it now, run it yourself in the background.");
+                }
+                Ok(reply.to_string())
             })
         }
         "notify" => match text("title").map(str::trim).filter(|t| !t.is_empty()) {
@@ -234,11 +248,12 @@ fn tail(text: &str, lines: usize, max_bytes: usize) -> (String, bool) {
 }
 
 /// Which project, folder and keystrokes a new tab gets, or why not. The folder has to be inside a project the user
-/// added: a tool call never adds a project of its own. The command is only typed, so it can't run outside Claude
-/// Code's own approval of shell commands. A control character is refused: a newline would press Enter, and an escape
-/// could drive the shell's line editor.
-fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, command: Option<&str>) -> Result<OpenPlan, String> {
+/// added: a tool call never adds a project of its own. Enter, which runs the command outside Claude Code's own approval
+/// of shell commands, is only pressed by the window and only while the user allows it. A control character is refused:
+/// a newline would press Enter whatever that setting says, and an escape could drive the shell's line editor.
+fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, command: Option<&str>, run: bool) -> Result<OpenPlan, String> {
     let input = match command {
+        None if run => return Err("run needs a command".into()),
         None => None,
         Some(c) if c.trim().is_empty() => return Err("command is empty".into()),
         Some(c) if c.len() > COMMAND_MAX || c.chars().any(char::is_control) => {
@@ -255,7 +270,7 @@ fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, comm
         }
         None => (current.ok_or("Pass cwd, a folder inside one of the user's Wings projects")?, None),
     };
-    Ok(OpenPlan { space_id: spaces[project].id.clone(), cwd: dir, input })
+    Ok(OpenPlan { space_id: spaces[project].id.clone(), cwd: dir, input, run })
 }
 
 #[cfg(test)]
@@ -271,6 +286,8 @@ mod tests {
         spaces: Vec<Space>,
         output: HashMap<String, Vec<u8>>,
         opened: RefCell<Vec<OpenPlan>>,
+        /// The user's "Let Claude run commands in new tabs" setting.
+        allow_run: bool,
         notified: RefCell<Vec<(String, String)>>,
     }
 
@@ -287,9 +304,10 @@ mod tests {
         fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
             self.output.get(pane_id).cloned()
         }
-        fn open(&self, plan: OpenPlan) -> Result<String, String> {
+        fn open(&self, plan: OpenPlan) -> Result<Opened, String> {
+            let ran = plan.run && self.allow_run;
             self.opened.borrow_mut().push(plan);
-            Ok("p9".into())
+            Ok(Opened { pane_id: "p9".into(), ran })
         }
         fn notify(&self, title: String, body: String) -> Result<(), String> {
             self.notified.borrow_mut().push((title, body));
@@ -394,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn open_pane_types_without_enter_unless_asked_and_stays_inside_projects() {
+    fn open_pane_runs_only_when_asked_and_allowed_and_stays_inside_projects() {
         let dir = std::env::temp_dir().join(format!("wings-open-pane-{}", std::process::id()));
         let sub = dir.join("app/src");
         std::fs::create_dir_all(&sub).unwrap();
@@ -406,12 +424,15 @@ mod tests {
         };
         // From a pane, with no folder: that pane's project, command typed but not run.
         let reply: Value = serde_json::from_str(&run(&host, "open_pane", json!({ "command": "npm test" }), Some("p1")).unwrap()).unwrap();
-        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true }));
-        // A `run` flag from an older client is ignored: nothing presses Enter.
-        run(&host, "open_pane", json!({ "cwd": sub.to_str().unwrap(), "command": "ls", "run": true }), Some("p1")).unwrap();
+        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true, "commandRun": false }));
+        // run while the user's setting is off: typed, not run, and Claude is told why.
+        let reply: Value = serde_json::from_str(&run(&host, "open_pane", json!({ "cwd": sub.to_str().unwrap(), "command": "ls", "run": true }), Some("p1")).unwrap()).unwrap();
+        assert_eq!(reply["commandRun"], false);
+        assert!(reply["note"].as_str().unwrap().contains("Settings, Agents"), "{reply}");
         let opened = host.opened.borrow();
-        assert_eq!(opened[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("npm test".into()) });
+        assert_eq!(opened[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("npm test".into()), run: false });
         assert_eq!(opened[1].input.as_deref(), Some("ls"));
+        assert!(opened[1].run);
         assert_eq!(opened[1].cwd.as_deref(), Some(sub.canonicalize().unwrap().to_str().unwrap()));
         drop(opened);
         for (args, caller, needle) in [
@@ -420,10 +441,15 @@ mod tests {
             (json!({ "command": "ls\nrm -rf ~" }), Some("p1"), "control characters"),
             (json!({ "command": "ls\u{1b}[200~" }), Some("p1"), "control characters"),
             (json!({ "command": "  " }), Some("p1"), "empty"),
+            (json!({ "run": true }), Some("p1"), "needs a command"),
         ] {
             assert!(run(&host, "open_pane", args.clone(), caller).unwrap_err().contains(needle), "{args}");
         }
         assert_eq!(host.opened.borrow().len(), 2, "refused calls open nothing");
+        // With the setting on, run presses Enter.
+        let allowed = Fake { allow_run: true, ..host };
+        let reply: Value = serde_json::from_str(&run(&allowed, "open_pane", json!({ "command": "npm run dev", "run": true }), Some("p1")).unwrap()).unwrap();
+        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true, "commandRun": true }));
         let _ = std::fs::remove_dir_all(dir);
     }
 

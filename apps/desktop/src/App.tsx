@@ -113,6 +113,8 @@ type SavedWorkspace = {
   sleep?: SleepSettings;
   /** The sound for new notifications. */
   notifySound?: SoundSettings;
+  /** Whether Claude's `open_pane` may press Enter after the command it types. */
+  agentsRunCommands?: boolean;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
   /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
@@ -286,6 +288,9 @@ const leftPanel = usePanelRef();
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [notifySound, setNotifySound] = useState<SoundSettings>(DEFAULT_SOUND);
+  const [agentsRunCommands, setAgentsRunCommands] = useState(false);
+  const agentsRunRef = useRef(agentsRunCommands);
+  agentsRunRef.current = agentsRunCommands;
   const [sleepTick, setSleepTick] = useState(0);
   const [newTabPage, setNewTabPage] = useState<string>("terminal");
   const [newProjectOpens, setNewProjectOpens] = useState<NewProjectOpens>("terminal");
@@ -463,10 +468,11 @@ const leftPanel = usePanelRef();
   useEffect(() => {
     const off = api.onMcpOpenPane(async (call) => {
       try {
-        const key = openTab(call.spaceId, call.input, null, call.cwd);
+        const ran = call.run && call.input !== null && agentsRunRef.current;
+        const key = openTab(call.spaceId, ran ? `${call.input}\r` : call.input, null, call.cwd);
         const paneId = await terminals.get(key)?.whenStarted;
         if (!paneId) throw new Error("The pane didn't start");
-        void api.mcpToolResult(call.callId, paneId, false);
+        void api.mcpToolResult(call.callId, JSON.stringify({ paneId, ran }), false);
       } catch (e) {
         void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
       }
@@ -669,6 +675,7 @@ const leftPanel = usePanelRef();
       notify({ type: "restore", list: restoreNotifications(saved.notifications, new Set(running.values())) });
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       setNotifySound(cleanSound(saved.notifySound));
+      setAgentsRunCommands(saved.agentsRunCommands === true);
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
       const restored = saved.tabs
@@ -787,6 +794,7 @@ const leftPanel = usePanelRef();
       asleep,
       sleep,
       notifySound,
+      agentsRunCommands,
       newTabPage,
       newProjectOpens,
       collapsedSections,
@@ -802,7 +810,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1862,7 +1870,7 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}
