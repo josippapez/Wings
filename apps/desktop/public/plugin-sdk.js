@@ -12,6 +12,7 @@
   const listeners = { panes: [], action: [], broadcast: [] };
   let replyHandler = null;
   listeners.transcript = [];
+  listeners.git = [];
   listeners.focus = [];
   listeners.project = [];
   listeners.projects = [];
@@ -200,6 +201,8 @@
      * started in the pane; `transcript` reads earlier ones. Entries over 256 KB are skipped.
      */
     onTranscript: (listener) => subscribe(listeners.transcript, listener),
+    /** With a `git` exec entry: the ids of the projects whose repo changed (HEAD, index or refs), as `{ projectIds }`. */
+    onGitChange: (listener) => subscribe(listeners.git, listener),
     /**
      * What Claude Code last told its status line, with `permissions.statusline`, once `wings statusline` is your
      * `statusLine` command. Resolves `{ rateLimits, sessions }`: the 5-hour and weekly limits, or `null` until a

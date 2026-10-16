@@ -298,6 +298,15 @@ interface Wings {
    * To follow the sessions in panes, use `followSessions` from `wings-plugin-sdk/sessions`: it does both, once each.
    */
   onTranscript(listener: (event: WingsTranscriptEvent) => void): () => void;
+  /**
+   * Needs a `git` entry in `permissions.exec`, or it never fires. Wings sends the ids of the projects whose repo
+   * moved: a commit, checkout, pull, fetch, push, amend or reset, from a pane or from anywhere else, once the writes
+   * settle (at most one a second). Map an id to a repo with `projects` and `repoRoot`. It carries nothing else: no
+   * paths, branch names or counts. Edits to files in the working tree don't count, so keep a slow poll for those,
+   * and a pane in a repo that isn't a project gets nothing. Fires in the background too; `onGitChange` from
+   * `wings-plugin-sdk/git` holds events until the page is in view. Needs Wings 0.1.50.
+   */
+  onGitChange(listener: (event: { projectIds: string[] }) => void): () => void;
   /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
   /**

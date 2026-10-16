@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; onGitChange(fn: (e: { projectIds: string[] }) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame(init?: unknown) {
@@ -31,6 +31,16 @@ function frame(init?: unknown) {
   const reply = (id: number, error?: string, result: unknown = null) => handlers.forEach((fn) => fn({ source: parent, data: { wings: 1, id, result, error } }));
   return { wings: context.wings as Sdk, send, calls, reply, mouse };
 }
+
+test("onGitChange hears the project ids Wings sends, and stops once it's removed", () => {
+  const { wings, send } = frame();
+  const got: string[][] = [];
+  const off = wings.onGitChange((e) => got.push(e.projectIds));
+  send("git", { projectIds: ["a", "b"] });
+  off();
+  send("git", { projectIds: ["c"] });
+  assert.deepEqual(got, [["a", "b"]]);
+});
 
 test("an on* listener stops getting events once it's removed", () => {
   const { wings, send } = frame();
