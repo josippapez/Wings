@@ -1,4 +1,5 @@
 // ---------- badge ----------
+import { lastLine } from "wings-plugin-sdk/cli";
 import { ago } from "wings-plugin-sdk/format";
 import { PROVIDERS, refOf } from "../lib/providers";
 import type { Link, Status, StatusEntry } from "../lib/types";
@@ -20,7 +21,7 @@ function badgeFor(link: Link, entry: StatusEntry | undefined, local: { ahead: nu
   const subtitle = `${link.repo} ${ref}`;
   if (!entry) return { label: ref, tone: "neutral", icon: "pr-open", title: "Loading pull request…", subtitle, actions };
   if (entry.error) {
-    return { label: ref, tone: "neutral", icon: "pr-open", title: `Pull request ${ref}`, subtitle, rows: [{ label: "Status", value: entry.error, tone: "danger" }], actions };
+    return { label: ref, tone: "neutral", icon: "pr-open", title: `Pull request ${ref}`, subtitle, rows: [{ label: "Status", value: lastLine(entry.error), tone: "danger" }], actions };
   }
   const st = entry as Status;
   const { passed, failed, running } = st.checks;

@@ -7,7 +7,8 @@ const NOT_INSTALLED = /is not installed or not on PATH/;
 const NAMES = { az: "Azure CLI", gh: "GitHub CLI", glab: "GitLab CLI" };
 /** The longest `wings.exec` allows, for a sign-in that waits on a browser. */
 const SIGN_IN_TIMEOUT_MS = 300_000;
-const lastLine = (text) => text.trim().split("\n").at(-1);
+/** The last line of `text`, which is the error az, gh and glab print after their warnings and context. */
+export const lastLine = (text) => text.trim().split("\n").at(-1);
 
 /** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `stderr` is all of it, when the program ran. */
 export class CliError extends Error {
@@ -21,7 +22,7 @@ export class CliError extends Error {
 
 /**
  * A handle on one CLI. `run` and `json` call it and throw a `CliError`: `missing` when it isn't installed, `signed-out`
- * when `signedOut` says so, else `failed`, with the last line of stderr as the message. Unless `quiet`, a call
+ * when `signedOut` says so, else `failed`, with all of stderr, trimmed, as the message (`lastLine` takes its last line, for a badge). Unless `quiet`, a call
  * records `missing` and `signed-out` under its `key` (the Azure organization, or a provider and host), and a call
  * that works clears it, so `problem` and `problemBadge` say what a pane should offer. A background read that must
  * not turn badges into sign-in prompts is `quiet`. `signedOut` is a RegExp tested on stderr, or a function of the
@@ -60,10 +61,10 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
       if (!quiet && !sticky) forget(key);
       return out.stdout;
     }
-    const message = lastLine(out.stderr) || `${program} failed`;
+    const text = out.stderr.trim();
     const loggedOut = typeof signedOut === "function" ? await signedOut(out, key) : signedOut.test(out.stderr);
-    if (loggedOut && !quiet) record(key, { kind: "signed-out", message });
-    throw new CliError(loggedOut ? "signed-out" : "failed", message, out.stderr);
+    if (loggedOut && !quiet) record(key, { kind: "signed-out", message: lastLine(text) || `${program} failed` });
+    throw new CliError(loggedOut ? "signed-out" : "failed", text || `${program} failed`, out.stderr);
   }
 
   async function retry() {

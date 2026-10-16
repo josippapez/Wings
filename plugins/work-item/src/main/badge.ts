@@ -2,6 +2,7 @@
 // actions to open it and to move it to its next state.
 
 import { cached, errorMessage } from "wings-plugin-sdk/async";
+import { lastLine } from "wings-plugin-sdk/cli";
 import { gitOk } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { az, azCli, azRun, invoke } from "../lib/az";
@@ -83,7 +84,7 @@ async function refreshItem(key: string, { byUser = false } = {}) {
     items.set(key, await loadItem(ref));
   } catch (error) {
     const message = errorMessage(error);
-    items.set(key, NOT_FOUND.test(message) ? { missing: true } : { error: message || "az failed" });
+    items.set(key, NOT_FOUND.test(message) ? { missing: true } : { error: lastLine(message) || "az failed" });
   } finally {
     inFlight.delete(key);
     manual.delete(key);

@@ -1,5 +1,5 @@
 /** Azure DevOps: the PR for the branch (`az repos`), its policies, failed builds, the diff from local git, comments from threads and replies. */
-import { cli, CliError } from "wings-plugin-sdk/cli";
+import { cli, CliError, lastLine } from "wings-plugin-sdk/cli";
 import { azureApiOrg, git } from "wings-plugin-sdk/git";
 import { between, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
@@ -310,7 +310,7 @@ export const azure: Forge<AzureLink, AzureRemote> = {
       ]);
     } catch (error) {
       // az ran and failed for a reason that isn't being signed out: the pane says pull requests are unavailable.
-      if (error instanceof CliError && error.kind === "failed" && error.stderr) throw new AccountProblem("unavailable", error.message);
+      if (error instanceof CliError && error.kind === "failed" && error.stderr) throw new AccountProblem("unavailable", lastLine(error.message));
       throw error;
     }
     const pr = openOrNewest(prs, (p) => p.status === "active");

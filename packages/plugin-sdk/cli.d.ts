@@ -1,7 +1,10 @@
 /// <reference path="./wings.d.ts" />
 export type CliKind = "missing" | "signed-out" | "failed";
 
-/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `stderr` is all of it, when the program ran. */
+/** The last line of `text`, which is the error az, gh and glab print after their warnings and context. For a badge, which has room for one line. */
+export function lastLine(text: string): string;
+
+/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `message` is all of stderr, trimmed, when the program ran and said something. `stderr` is it untouched. */
 export class CliError extends Error {
   constructor(kind: CliKind, message: string, stderr?: string);
   kind: CliKind;
@@ -87,7 +90,7 @@ export interface Cli {
 
 /**
  * A handle on one CLI. `run` and `json` call it and throw a `CliError`: `missing` when it isn't installed, `signed-out`
- * when `signedOut` says so, else `failed`, with the last line of stderr as the message. Unless `quiet`, a call
+ * when `signedOut` says so, else `failed`, with all of stderr, trimmed, as the message (`lastLine` takes its last line, for a badge). Unless `quiet`, a call
  * records `missing` and `signed-out` under its `key` (the Azure organization, or a provider and host), and a call
  * that works clears it, so `problem` and `problemBadge` say what a pane should offer.
  */

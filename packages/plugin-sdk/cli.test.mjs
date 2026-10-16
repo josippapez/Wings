@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as next } from "node:timers/promises";
 
-import { cli, CliError } from "./cli.js";
+import { cli, CliError, lastLine } from "./cli.js";
 
 const done = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr, code = 1) => ({ code, stdout: "", stderr });
@@ -51,7 +51,8 @@ test("a signed-out program is a problem under its key until a call works, and a 
   const az = cli("az", { ...AZ, wings: fakeWings(() => reply) });
   await assert.rejects(az.run(["boards"], { key: "org", quiet: true }), { kind: "signed-out" });
   assert.equal(az.problem("org"), null, "a quiet call records nothing");
-  await assert.rejects(az.run(["boards"], { key: "org" }), { kind: "signed-out", message: "ERROR: Please run 'az login' to setup account.", stderr: reply.stderr });
+  await assert.rejects(az.run(["boards"], { key: "org" }), { kind: "signed-out", message: "WARNING: something\nERROR: Please run 'az login' to setup account.", stderr: reply.stderr });
+  assert.deepEqual([az.problem("org").message, lastLine("WARNING: something\nERROR: Please run 'az login' to setup account.\n")], ["ERROR: Please run 'az login' to setup account.", "ERROR: Please run 'az login' to setup account."], "a badge takes the last line");
   assert.deepEqual([labels(az, "org"), labels(az, "other")], ["Sign in to Azure DevOps", undefined]);
   assert.deepEqual([az.problemBadge("org", TEXT).subtitle, az.problemBadge("org", TEXT).loading], ["Sign in, please.", false]);
 
