@@ -5,6 +5,7 @@ import { repoRoot } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
 
+import { forgetRepos } from "./lib/changes";
 import { openChanges } from "./lib/diff";
 import { POLL_MS } from "./lib/messages";
 import { refreshBadges } from "./main/badges";
@@ -26,6 +27,7 @@ pollWhileFocused(() => void refreshBadges(panes), POLL_MS);
 
 wings.onAction(async ({ paneId, actionId }) => {
   const pane = panes.find((p) => p.paneId === paneId);
+  if (actionId === "refresh") forgetRepos();
   const root = pane && (await repoRoot(pane.cwd));
   if (!root) return;
   if (actionId === "open") return openChanges(root, "uncommitted", null);

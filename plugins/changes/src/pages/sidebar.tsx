@@ -58,6 +58,8 @@ export default function Sidebar() {
 
   const openDiff = (path: string | null) => repo && void ch.ask("open", { root: repo.root, mode, path });
   const refresh = () => {
+    // Sent first, so main forgets its kept repos before it hears the asks.
+    void ch.tell("refresh");
     changes.refresh();
     history.refresh();
   };

@@ -20,11 +20,23 @@ export function git(cwd: string, args: string[], options?: { raw?: boolean }): P
  */
 export function gitOk(cwd: string, args: string[]): Promise<string | null>;
 
-/** The top folder of the repo that `cwd` is in, or null outside one. Found roots are kept; a miss is asked again next time. */
-export function repoRoot(cwd: string): Promise<string | null>;
+/**
+ * The top folder of the repo that `cwd` is in, or null outside one. A found root is kept for good. A folder git says
+ * is in no repo is believed for a minute, so a poll doesn't ask again for it. A call git refused (the plugin isn't
+ * approved yet) is kept for neither.
+ */
+export const repoRoot: {
+  (cwd: string): Promise<string | null>;
+  /** Forgets what was found for `cwd`, or for every folder when left out, so the next call asks git again. For a Refresh button. */
+  forget(cwd?: string): void;
+};
 
-/** The branch a repo's "this branch" is compared against: `origin/HEAD` as the remote set it, else `origin/main`, `origin/master`, `main` or `master`. Null when none exists. Kept once found. */
-export function defaultBranch(root: string): Promise<string | null>;
+/** The branch a repo's "this branch" is compared against: `origin/HEAD` as the remote set it, else `origin/main`, `origin/master`, `main` or `master`. Null when none exists. Kept once found, until `forget`. */
+export const defaultBranch: {
+  (root: string): Promise<string | null>;
+  /** Forgets what was found for `root`, or for every repo when left out, so the next call asks git again. */
+  forget(root?: string): void;
+};
 
 /** What to call a checkout: its branch, else "detached at" and its short commit, else "no commits". `head` is `git rev-parse --verify --quiet HEAD`, null in a repo with no commits. */
 export function branchLabel(branch: string | null | undefined, head: string | null | undefined): string;

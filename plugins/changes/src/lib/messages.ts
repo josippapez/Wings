@@ -24,6 +24,8 @@ export const ch = channel<
     "graph-repo": { request: void; response: { root: string | null; name: string | null } };
   },
   {
+    /** The sidebar's Refresh: main forgets which repo each folder is in, and the page asks again. */
+    refresh: void;
     /** The focused pane's repo may have changed, so the sidebar asks again. */
     "repo-changed": void;
     /** The graph view was opened again, maybe on another repo, so it asks which. */

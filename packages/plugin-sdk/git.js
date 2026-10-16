@@ -29,16 +29,38 @@ export const gitOk = (cwd, args) =>
   );
 
 const NONE = new Error("nothing found");
-/** A lookup that answers null for "nothing", kept per argument. Only an answer is kept, so a change later on is seen. */
-function keepFound(look) {
-  const found = cached(async (arg) => (await look(arg)) || Promise.reject(NONE));
-  return (arg) => found.get(arg).catch(() => null);
+/** How long a folder git said is in no repo is believed, so a poll doesn't ask again for each such pane. */
+const MISS_TTL_MS = 60_000;
+/**
+ * A lookup that answers null for "nothing", kept per argument. `look` resolves a falsy value when git says there is
+ * none, and rejects when git couldn't be asked (a refused call). An answer is kept for good and a "none" for
+ * `missTtlMs` (0 unless set); a call that couldn't be asked is kept for neither. `forget(arg)` drops one argument's
+ * answer, and with no argument every answer, for a Refresh button.
+ */
+function keepFound(look, { missTtlMs = 0 } = {}) {
+  const found = cached(async (arg) => (await look(arg)) || Promise.reject(NONE), { failTtlMs: missTtlMs });
+  const get = (arg) =>
+    found.get(arg).catch((error) => {
+      if (error !== NONE) found.delete(arg);
+      return null;
+    });
+  return Object.assign(get, { forget: (arg) => (arg === undefined ? found.clear() : found.delete(arg)) });
 }
 
-/** The top folder of the repo that `cwd` is in, or null outside one. Found roots are kept; a miss is asked again next time. */
-export const repoRoot = keepFound((cwd) => cwd && gitOk(cwd, ["rev-parse", "--show-toplevel"]));
+/**
+ * The top folder of the repo that `cwd` is in, or null outside one. A found root is kept for good. A folder git says
+ * is in no repo is believed for a minute, so a poll doesn't ask again for it; `forget` shows a new repo at once.
+ */
+export const repoRoot = keepFound(
+  async (cwd) => {
+    if (!cwd) return null;
+    const r = await gitRun(cwd, ["rev-parse", "--show-toplevel"]);
+    return r.code === 0 ? r.stdout.trim() : null;
+  },
+  { missTtlMs: MISS_TTL_MS },
+);
 
-/** The branch a repo's "this branch" is compared against: `origin/HEAD` as the remote set it, else `origin/main`, `origin/master`, `main` or `master`. Null when none exists. Kept once found. */
+/** The branch a repo's "this branch" is compared against: `origin/HEAD` as the remote set it, else `origin/main`, `origin/master`, `main` or `master`. Null when none exists. Kept once found, until `forget`. */
 export const defaultBranch = keepFound(async (root) => {
   const head = await gitOk(root, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
   if (head && head !== "origin/HEAD") return head;

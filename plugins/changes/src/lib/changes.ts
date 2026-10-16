@@ -1,9 +1,15 @@
 import { cached } from "wings-plugin-sdk/async";
 import { basename } from "wings-plugin-sdk/format";
-import { branchLabel, defaultBranch, git, gitOk, gitRun } from "wings-plugin-sdk/git";
+import { branchLabel, defaultBranch, git, gitOk, gitRun, repoRoot } from "wings-plugin-sdk/git";
 
 import { COLOR, EMPTY_TREE, literal } from "./git";
 import type { FileRow, Mode } from "./types";
+
+/** For Refresh: the next look at a folder asks git again which repo it is in and which branch is its default. */
+export function forgetRepos() {
+  repoRoot.forget();
+  defaultBranch.forget();
+}
 
 /** A result this fresh is reused, so the badge poll and the sidebar's refresh don't run git twice. */
 const FRESH_MS = 3_000;

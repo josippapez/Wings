@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
-import { repoRoot } from "wings-plugin-sdk/git";
+import { defaultBranch, repoRoot } from "wings-plugin-sdk/git";
 import { Button, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { loadRepos, prune, removeWorktrees, rowsOf, type Outcome, type Repo } from "../lib/git";
@@ -124,7 +124,16 @@ export default function Worktrees() {
           </Text>
         </Stack>
         {loading ? <Spinner label="Refreshing" /> : null}
-        <Button variant="outline" size="sm" onClick={() => void refresh()}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            // The button only: focus and pane changes keep what was found.
+            repoRoot.forget();
+            defaultBranch.forget();
+            void refresh();
+          }}
+        >
           Refresh
         </Button>
       </Row>

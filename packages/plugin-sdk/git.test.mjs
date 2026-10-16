@@ -43,7 +43,8 @@ test("gitOk is null for a failed command and for a refused call, and gitRun pass
   assert.deepEqual(await gitRun("/r", ["grep", "x"]), failed("", 1));
 });
 
-test("repoRoot keeps a found root, and asks again after a miss or a refusal", async (t) => {
+test("repoRoot keeps a found root for good and a miss for a minute, and never keeps a refusal", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   let answer = failed();
   const calls = fakeGit(t, (args, cwd) => (cwd === "/work/app/src" ? ok("/work/app\n") : answer));
   assert.deepEqual(await Promise.all([repoRoot("/work/app/src"), repoRoot("/work/app/src")]), ["/work/app", "/work/app"]);
@@ -51,12 +52,41 @@ test("repoRoot keeps a found root, and asks again after a miss or a refusal", as
   assert.equal(calls.length, 1, "found once, shared and kept");
 
   assert.equal(await repoRoot("/tmp/plain"), null);
-  answer = new Error("not approved yet");
   assert.equal(await repoRoot("/tmp/plain"), null);
+  assert.equal(calls.length, 2, "a miss is not asked again within the minute");
+  t.mock.timers.tick(61_000);
   answer = ok("/tmp/plain\n");
-  assert.equal(await repoRoot("/tmp/plain"), "/tmp/plain", "git init later is seen");
+  assert.equal(await repoRoot("/tmp/plain"), "/tmp/plain", "git init later is seen after the minute");
+
+  answer = new Error("not approved yet");
+  assert.equal(await repoRoot("/tmp/other"), null);
+  answer = ok("/tmp/other\n");
+  assert.equal(await repoRoot("/tmp/other"), "/tmp/other", "a refusal is asked again at once");
   assert.equal(await repoRoot(""), null);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
+});
+
+test("forget makes the next repoRoot and defaultBranch ask git again, for one argument or all", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  let root = "/a";
+  const calls = fakeGit(t, (args, cwd) => (args[0] === "rev-parse" && args[1] === "--show-toplevel" ? (cwd === "/none" ? failed() : ok(`${root}\n`)) : args[2] === "origin/HEAD" ? ok("origin/main\n") : failed()));
+  assert.equal(await repoRoot("/x"), "/a");
+  assert.equal(await repoRoot("/none"), null);
+  root = "/b";
+  assert.equal(await repoRoot("/x"), "/a", "kept");
+  repoRoot.forget("/x");
+  assert.equal(await repoRoot("/x"), "/b", "forgotten, so a nested repo made since is seen");
+  const asked = calls.length;
+  repoRoot.forget();
+  await repoRoot("/none");
+  assert.equal(calls.length, asked + 1, "forgetting all drops a kept miss too");
+
+  await defaultBranch("/r");
+  await defaultBranch("/r");
+  const before = calls.length;
+  defaultBranch.forget("/r");
+  await defaultBranch("/r");
+  assert.equal(calls.length, before + 1);
 });
 
 test("defaultBranch is origin/HEAD, else the first of the usual names, kept once found", async (t) => {

@@ -5,7 +5,7 @@ import { fitJson } from "wings-plugin-sdk/async";
 import { basename } from "wings-plugin-sdk/format";
 import { branchLabel, gitOk, repoRoot } from "wings-plugin-sdk/git";
 
-import { changes, fileRow } from "../lib/changes";
+import { changes, fileRow, forgetRepos } from "../lib/changes";
 import { openChanges } from "../lib/diff";
 import { commitRow, historyPage, openCommit } from "../lib/history";
 import { ch, MAX_ANSWER } from "../lib/messages";
@@ -28,6 +28,8 @@ export function serveSidebar(panes: () => WingsPane[]) {
     const others = await Promise.all(list.filter((p) => p !== focused).map((p) => repoRoot(p.cwd)));
     return (shown = shown && others.includes(shown) ? shown : (others.find(Boolean) ?? null));
   }
+
+  ch.on("refresh", forgetRepos);
 
   ch.answer("changes", async ({ mode }) => {
     const root = await sidebarRoot();
