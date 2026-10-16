@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.56 · 2026-10-16
+
+- **Comments in the diff viewer render as Markdown.** Bold, lists and links work, a `<details>` block is a fold you can open, and `<!-- -->` comments are hidden. A link in a plugin's comment still opens through that plugin's permission.
+- PR tracker 0.21.0: a comment left on an older push says "As of push N" on its code, with "Show latest" to see where those lines are now, the way Azure DevOps shows them. Bot comments no longer show their hidden `<!-- -->` state as text.
+- Issues 0.14.2: the session start line tells Claude to find or open the issue before anything else, investigating included.
+- plugin-ui hides `<!-- -->` comments in Markdown, so changes, hud, notes, session-detail, work-item and worktrees get a patch release.
+
 ## 0.1.55 · 2026-10-16
 
 - **Claude can start a command in a new tab.** `open_pane` takes `run`, and Wings presses Enter after the command when "Let Claude run commands in new tabs" is on in Settings, Agents. It's off by default, and then the command waits for you as before. The reply tells Claude whether it ran, so it doesn't wait on a server that never started.
