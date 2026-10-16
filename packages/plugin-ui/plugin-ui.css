@@ -1298,6 +1298,8 @@ h3.w-heading {
 }
 .w-tabs[data-variant="line"] {
   gap: 4px;
+  /* The list's 3px and the tab's 1px border and 6px padding, so the first label starts at the content edge. */
+  margin-left: -10px;
   border-radius: 0;
   background: transparent;
 }
