@@ -61,6 +61,12 @@ export interface Cli {
   /** Runs the program with `args` and resolves its stdout. Throws a `CliError`. */
   run(args: string[], call?: CliCall): Promise<string>;
   /**
+   * Runs the program like `wings.exec` and resolves `{ code, stdout, stderr }` whatever the exit code, for a command
+   * whose output matters when it fails, like `gh auth status`. Records and clears no sign-in problem. It throws a
+   * `CliError` only when the program didn't run: `missing` when it isn't installed (recorded unless `quiet`), else `failed`.
+   */
+  exec(args: string[], call?: CliCall): Promise<CliResult>;
+  /**
    * `run`, parsed as JSON. A program that printed nothing, like `az boards query` for no rows, gives the call's `empty`;
    * without one that is a `failed` CliError, so a result is never null.
    */

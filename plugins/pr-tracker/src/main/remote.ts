@@ -1,5 +1,7 @@
 // ---------- repository detection ----------
 import { gitOk, parseRemote } from "wings-plugin-sdk/git";
+import { gh } from "../lib/forges/github";
+import { glab } from "../lib/forges/gitlab";
 import type { GithubRemote, GitlabRemote, KnownRemote, Remote } from "../lib/types";
 
 const HOSTS_TTL_MS = 60_000;
@@ -19,16 +21,17 @@ let signedIn: { at: number; hosts: Promise<{ github: Set<string>; gitlab: Set<st
 async function readHosts() {
   const github = new Set<string>();
   const gitlab = new Set<string>();
-  const [gh, glab] = await Promise.all([
-    wings.exec("gh", ["auth", "status", "--json", "hosts"]).catch(() => null),
-    wings.exec("glab", ["auth", "status", "--all"]).catch(() => null),
+  const [ghOut, glabOut] = await Promise.all([
+    // Quiet: asking which hosts are set up must not turn a pane's badge into a sign-in prompt.
+    gh.exec(["auth", "status", "--json", "hosts"], { quiet: true }).catch(() => null),
+    glab.exec(["auth", "status", "--all"], { quiet: true }).catch(() => null),
   ]);
   try {
-    for (const host of Object.keys((JSON.parse(gh?.stdout ?? "{}") as { hosts?: Record<string, unknown> }).hosts ?? {})) github.add(host.toLowerCase());
+    for (const host of Object.keys((JSON.parse(ghOut?.stdout ?? "{}") as { hosts?: Record<string, unknown> }).hosts ?? {})) github.add(host.toLowerCase());
   } catch {
     // Not JSON: an old gh without --json knows no hosts this way.
   }
-  for (const line of `${glab?.stdout ?? ""}\n${glab?.stderr ?? ""}`.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
+  for (const line of `${glabOut?.stdout ?? ""}\n${glabOut?.stderr ?? ""}`.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
     if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?$/i.test(line)) gitlab.add(line.toLowerCase());
   }
   return { github, gitlab };

@@ -47,16 +47,20 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
     if (known?.kind !== problem.kind || known.message !== problem.message) changed();
   };
 
-  async function run(args, { key, cwd, timeoutMs, quiet = false } = {}) {
-    let out;
+  async function exec(args, { key, cwd, timeoutMs, quiet = false } = {}) {
     try {
-      out = await w().exec(program, args, { cwd, timeoutMs });
+      return await w().exec(program, args, { cwd, timeoutMs });
     } catch (error) {
       const message = errorMessage(error);
       const missing = NOT_INSTALLED.test(message);
       if (missing && !quiet) record(key, { kind: "missing", message });
       throw new CliError(missing ? "missing" : "failed", message);
     }
+  }
+
+  async function run(args, call = {}) {
+    const { key, quiet = false } = call;
+    const out = await exec(args, call);
     if (out.code === 0) {
       if (!quiet && !sticky) forget(key);
       return out.stdout;
@@ -78,6 +82,12 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
 
   return {
     run,
+    /**
+     * Runs the program like `wings.exec` and resolves `{ code, stdout, stderr }` whatever the exit code, for a command
+     * whose output matters when it fails, like `gh auth status`. Records and clears no sign-in problem. It throws a
+     * `CliError` only when the program didn't run: `missing` when it isn't installed (recorded unless `quiet`), else `failed`.
+     */
+    exec,
     /**
      * `run`, parsed as JSON. A program that printed nothing, like `az boards query` for no rows, gives the call's `empty`;
      * without one that is a `failed` CliError, so a result is never null.

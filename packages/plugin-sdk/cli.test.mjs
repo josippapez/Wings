@@ -112,6 +112,18 @@ test("signIn runs the login, shows Signing in… meanwhile, then retries: proble
   assert.deepEqual([reloads, az.problem("org"), seen], [1, null, ["Signing in…", undefined]]);
 });
 
+test("exec resolves what the program printed whatever its exit code, and throws only when it didn't run", async () => {
+  let reply = fail("host.example\n  Logged in\n", 1);
+  const glab = cli("glab", { signedOut: /login/i, signIn: ["auth", "login"], wings: fakeWings(() => reply) });
+  assert.deepEqual(await glab.exec(["auth", "status"], { key: "k" }), reply);
+  assert.equal(glab.problem("k"), null, "a failing exit code is no problem");
+  reply = new Error("glab is not installed or not on PATH");
+  await assert.rejects(glab.exec(["auth", "status"], { key: "k", quiet: true }), { kind: "missing" });
+  assert.equal(glab.problem("k"), null);
+  await assert.rejects(glab.exec(["auth", "status"], { key: "k" }), { kind: "missing" });
+  assert.equal(glab.problem("k").kind, "missing");
+});
+
 test("a sign-in that fails throws the program's message, and the badge offers Sign in again", async () => {
   const w = fakeWings((p, args) => (args[0] === "login" ? fail("ERROR: Authentication cancelled\n") : fail("Please run 'az login'")));
   const az = cli("az", { ...AZ, signIn: (key) => ["login", key], wings: w });
