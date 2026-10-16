@@ -20,6 +20,8 @@ export function fakeWings() {
   const fake = {
     reply: repos(),
     sent: [],
+    /** What `wings.projects()` lists. */
+    projects: [],
     heard: undefined,
     /** Asks the way a page's channel does, and resolves the answer or rejects with its error. */
     async ask(name, request) {
@@ -32,6 +34,7 @@ export function fakeWings() {
     },
   };
   globalThis.wings = {
+    projects: async () => fake.projects,
     exec: async (program, args, { cwd }) => {
       const reply = fake.reply(args.join(" "), cwd);
       if (reply instanceof Error) throw reply;

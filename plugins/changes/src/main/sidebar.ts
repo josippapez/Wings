@@ -3,7 +3,7 @@
 
 import { fitJson } from "wings-plugin-sdk/async";
 import { basename } from "wings-plugin-sdk/format";
-import { branchLabel, gitOk, repoRoot } from "wings-plugin-sdk/git";
+import { branchLabel, gitOk, repoRoot, watchedProject } from "wings-plugin-sdk/git";
 
 import { changes, fileRow, forgetRepos } from "../lib/changes";
 import { openChanges } from "../lib/diff";
@@ -47,7 +47,9 @@ export function serveSidebar(panes: () => WingsPane[]) {
     const repo = { root, name: basename(root), branch: branchLabel(branch, head) };
     const page = head || all ? await historyPage(root, { query: query.trim().slice(0, 200), all, skip }) : { commits: [], more: false };
     const rows = fitJson(page.commits.map(commitRow), MAX_ANSWER, (rows) => ({ repo, rows, more: true }));
-    return { repo, rows, more: page.more || rows.length < page.commits.length };
+    // A repo no project has isn't watched by Wings, so the page keeps polling it.
+    const watched = (await watchedProject(root, await wings.projects())) !== null;
+    return { repo, rows, more: page.more || rows.length < page.commits.length, watched };
   });
 
   ch.answer("open", ({ root, mode, path }) => openChanges(root, mode, path));
@@ -71,6 +73,10 @@ export function serveSidebar(panes: () => WingsPane[]) {
   });
 
   return {
+    /** Tells the sidebar to look again when a repo it may show moved: a commit, checkout or pull. */
+    async gitChanged(roots: string[]) {
+      if (shown && roots.includes(shown)) await ch.tell("repo-changed");
+    },
     /** Tells the sidebar to look again when the panes changed in a way that moves its repo. */
     async panesChanged() {
       const key = panes()

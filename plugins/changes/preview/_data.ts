@@ -74,4 +74,4 @@ export const commits: CommitRow[] = [
   c("3d4e5f6a1b2c", "Initial commit", "Ada Lovelace", 200 * 86_400, ["t:v0.1.0"]),
 ];
 
-export const history = (extra: Partial<Extract<HistoryAnswer, { rows: CommitRow[] }>> = {}): HistoryAnswer => ({ repo, rows: commits, more: true, ...extra });
+export const history = (extra: Partial<Extract<HistoryAnswer, { rows: CommitRow[] }>> = {}): HistoryAnswer => ({ repo, rows: commits, more: true, watched: true, ...extra });

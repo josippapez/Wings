@@ -1,5 +1,6 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
+import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { useAsk } from "wings-plugin-sdk/react";
 
 import { withFirstPage } from "../lib/history-rows";
@@ -24,7 +25,10 @@ const sourceOf = (repo: Repo, query: string, all: boolean) => JSON.stringify([re
  * `skip` leaves the tab alone while it is hidden; its rows stay for when it comes back.
  */
 export function useHistory({ query, all, skip }: { query: string; all: boolean; skip: boolean }) {
-  const first = useAsk(ch, "history", { query, all, skip: 0 }, { pollMs: POLL_MS, skip });
+  const first = useAsk(ch, "history", { query, all, skip: 0 }, { skip });
+  // Main says when a watched repo changes, so only a repo no project has is polled.
+  const watched = first.data?.repo ? first.data.watched : false;
+  useEffect(() => (skip || watched ? undefined : pollWhileFocused(first.refresh, POLL_MS)), [skip, watched, first.refresh]);
   const [shown, setShown] = useState<Shown | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);

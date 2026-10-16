@@ -63,3 +63,12 @@ test("the commit ask only takes a full hash, since it goes to git show as an arg
   serveSidebar(() => []);
   await assert.rejects(fake.ask("commit", { root: "/w/a6", hash: "--output=/tmp/x", subject: "", author: "", at: 0 }), /isn't a commit hash/);
 });
+
+test("a history answer says whether Wings watches its repo, so the page polls only when it doesn't", async () => {
+  serveSidebar(() => [pane("a", "/w/a7", true)]);
+  fake.projects = [];
+  assert.equal((await fake.ask("history", { query: "", all: false, skip: 0 })).watched, false);
+  fake.projects = [{ id: "p", path: "/w/a7" }];
+  assert.equal((await fake.ask("history", { query: "", all: false, skip: 0 })).watched, true);
+  fake.projects = [];
+});

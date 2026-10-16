@@ -19,7 +19,7 @@ export type ChangesAnswer =
   | { repo: Repo; against: string; files: FileRow[]; total: number; added: number; removed: number; partial: boolean };
 
 /** One page of the History tab for one search and scope, or `repo: null` when no pane is in a repo. */
-export type HistoryAnswer = { repo: null } | { repo: Repo; rows: CommitRow[]; more: boolean };
+export type HistoryAnswer = { repo: null } | { repo: Repo; rows: CommitRow[]; more: boolean; /** Whether Wings tells main when the repo changes, so the page needn't poll. */ watched: boolean };
 
 /** What the History list or the graph already shows of a commit, so the viewer opens with a title before git answers. */
 export interface CommitRef {
