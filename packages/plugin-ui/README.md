@@ -5,19 +5,26 @@ with. The components are Base UI's, like the Wings app's own shadcn/ui ones, wit
 Build and pack the plugin with [wings-plugin-sdk](../plugin-sdk/README.md).
 
 ```sh
-npm install --save-dev wings-plugin-sdk wings-plugin-ui react react-dom @types/react @types/react-dom
+npm install --save-dev wings-plugin-sdk wings-plugin-ui react react-dom @types/react
 ```
 
 `wings-plugin-ui` lets a page say what it shows and where, and Wings decides how it looks. A page built from
 it never touches the DOM, writes HTML or lays itself out with CSS, so when Wings moves or redesigns a place,
 your page follows without a release.
 
+```ts
+// src/lib/messages.ts
+import { channel } from "wings-plugin-sdk/messages";
+
+export const ch = channel<{}, {}, { usage: { key: void; value: { percent: number } } }>();
+```
+
 ```tsx
 // src/pages/usage.tsx
 import { useQuery } from "wings-plugin-sdk/react";
 import { Card, Gauge, Heading } from "wings-plugin-ui";
 
-import { ch } from "../lib/messages"; // channel<{}, {}, { usage: { key: void; value: { percent: number } } }>()
+import { ch } from "../lib/messages";
 
 export const page = { place: "sidebar" };
 
@@ -39,8 +46,9 @@ export default function Usage() {
 ## Places
 
 A page in `src/pages/` default-exports its component and exports `page` with the place it shows in, and
-`wings-plugin build` writes the mount: it calls `showSidebar`, `showPopover`, `showView`, `showTab` or
-`showSettings` (a `block` mounts as a view) with `<Usage />`. Each mounts a React element in that place's
+`wings-plugin build` writes the mount: it calls `showSidebar`, `showPopover`, `showView`, `showTab`, `showBlock` or
+`showSettings` with `<Usage />`. `showBlock` is a view's shell that also keeps a block on a Project page as tall as
+the page, by asking Wings for its height with `wings.setHeight` each time it changes. Each mounts a React element in that place's
 shell: Wings' padding, spacing and scrolling for a sidebar, a popover, a view (in a modal or a window), a tab or the
 settings page. `fill: true` in `page` lays the page out edge to edge with no padding, for a page that scrolls on its
 own, like a canvas. The functions are exported too, for a page that mounts itself, with `{ fill: true }` as their
@@ -59,6 +67,50 @@ A page and your main script talk through a `channel` from `wings-plugin-sdk/mess
 `serve`, and a page reads it with `useQuery(ch, name, key)` from `wings-plugin-sdk/react`, whose `data` is `null` until
 main has sent it. `ask` puts a question to main, and `useBroadcast(listener)` gets every raw `wings.broadcast`
 message.
+
+## Page hooks
+
+A page about a project, a tab or a block reads these from `wings-plugin-ui`. Each follows the `wings` object, so a
+page doesn't wire up `onProject` or `tabState` itself.
+
+| Hook | Gives |
+|---|---|
+| `useProject()` | The project the page is about: `undefined` until Wings says, then the project, or `null` when none is open. Follows `wings.onProject` |
+| `ProjectGate` | Shows `children(project)` once Wings has said which project, keyed by its id, so a page that holds state starts over for another project. Shows `loading` until then and an `Empty` titled "No project" (or your `empty`) when none is open |
+| `useTabState(initial, check)`, `useBlockState(initial, check)` | `[value, set]`: the state saved with `wings.setTabState` or `setBlockState`. `check` turns what was saved, which is any JSON, into the value, or `null` to use `initial`. The value is `null` until it is read. A save that fails leaves the page with the value it set |
+| `useViewArgs(check)` | What `wings.openView` opened this tab with, read by `check`, or `null`. Read once: a tab opened with other args reloads |
+| `useAction()` | `{ run, busy, error, clear }`. `run(fn)` runs an async action and resolves to whether it worked: `busy` is true while one goes and `error` has the message of the last one that threw, for a button's `busy` and an error `Notice` |
+| `usePoll(load, ms)` | Calls `load` on mount and when it changes, if Wings is in front, then every `ms` while it is, and once when Wings is back. Wrap `load` in `useCallback`. For data a query doesn't cover, since a `useQuery` is refetched by main |
+| `copyText(text)` | Puts `text` on the clipboard, with a fallback for a frame that refuses the clipboard API |
+
+```tsx
+// src/pages/project.tsx
+import { Button, Notice, ProjectGate, useAction, useTabState } from "wings-plugin-ui";
+
+export const page = { place: "tab" };
+
+export default function Project() {
+  return <ProjectGate>{(project) => <Opened name={project.name} />}</ProjectGate>;
+}
+
+function Opened({ name }: { name: string }) {
+  // Saved with the tab, and back after a restart. `null` until it is read.
+  const [opened, setOpened] = useTabState(0, (raw) => (typeof raw === "number" ? raw : null));
+  const { run, busy, error } = useAction();
+  const open = () => run(async () => {
+    await wings.openUrl("https://example.com");
+    setOpened((opened ?? 0) + 1);
+  });
+  return (
+    <>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <Button busy={busy} onClick={() => void open()}>
+        {name}: opened {opened ?? 0} times
+      </Button>
+    </>
+  );
+}
+```
 
 ## Components
 
@@ -80,17 +132,17 @@ message.
 | `Split` | `start`, `end`, `direction` (`horizontal`, `vertical`), `defaultSize` (px, 280), `min` (120), `max`, `onResize`, `label` | Two panes with a draggable handle, a `separator` with `aria-valuenow` in px. Arrow keys (Shift for bigger steps), Home and End resize it. A drag only changes a CSS variable and `onResize(size)` runs once when it ends, so save it with `wings.setTabState()` and pass it back as `defaultSize` |
 | `Dot`, `Spinner` | `tone`, `size`, `label`; `Dot` also `color` | A status dot or a spinner, announced only with a `label`. A dot's `color` comes from your data, like a work item type's `#cc293d` |
 | `Avatar` | `name`, `size` (`small`, `large`), `label` | A round avatar with the initials of a name on a colour that depends only on the name. Decoration next to the name; with a `label` it's announced |
-| `Pill`, `Tag` | `tone` | A filled pill, or an outlined tag like a branch |
+| `Badge` | `variant` (`default`, `secondary`, `destructive`, `outline`, `ghost`, `link`), `tone` (`info`, `success`, `warn`, `danger`) | A small label, like a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something |
 | `Loading`, `Empty` | `Empty`: `title`, `description` | Before the first data, and nothing to show |
-| `Button` | `variant` (`primary`, `ghost`, `danger`), `size` (`small`), `busy` | A button, `type="button"`; `busy` shows a spinner and ignores clicks, keeping focus |
+| `Button` | `variant` (`default`, `secondary`, `outline`, `ghost`, `destructive`, `link`), `size` (`default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`), `busy` | A button, `type="button"`; `default` is the filled one. `busy` shows a spinner and ignores clicks, keeping focus |
 | `Chip`, `Chips` | `pressed`; `Chips`: `label`, `options`, `value`, `onChange` | A small quiet button, and a group of them that picks one, with `aria-pressed`. An option's other props, like `id`, go to its chip |
-| `Tabs` | `label`, `items`, `value`, `onChange`, `children` | Tabs with arrow keys, Home and End, over their panel |
+| `Tabs` | `label`, `items`, `value`, `onChange`, `variant` (`default`, a pill in a tray; `line`, an underline), `children` | Tabs with arrow keys, Home and End, over their panel |
 | `Field` | `label`, `hint`, `error`, `id`, `inline` | A labelled field that names and describes the one input in it (a second input goes beside it: Base UI gives every input in a Field the first one's id). `id` becomes the input's, for a page that puts focus back by id; `inline` puts the label beside it |
 | `FieldGroup` | `label`, `hint`, `error` | Several controls under one label, like checkboxes: a `fieldset` with its `legend`, described by the hint; an error marks each checkbox invalid |
 | `TextInput`, `SearchField`, `Select` | `label`; `Select`: `options`, `value`, `onChange` | Inputs Wings styles; outside a `Field`, `label` names them |
 | `Checkbox` | `checked`, `onChange`, `children` | A checkbox with its label |
 | `Combobox` | `label`, `value`, `onInput`, `options: { value, label, detail? }[]`, `onPick`, `onEnter`, `onKeyDown`, `freeText`, `openOnFocus`, `open`, `filter`, `empty` | A text field with suggestions under it: arrows, Enter, Escape and Tab, and a press outside closes it. With `freeText` it keeps what you type; otherwise it picks one of `options`. `openOnFocus={false}` for a page that puts focus back into it after a render. Without `freeText` the picked label is selected when the field gets focus and after a pick, so typing replaces it. `onEnter(text)` runs on Enter when no option is highlighted, with the typed text, and stops the Enter from submitting a form around it. An `onKeyDown` you pass runs first; `e.preventDefault()` in it skips the combobox's own keys. ArrowDown on a closed combobox opens it and highlights the first option, as in the [WAI-ARIA APG combobox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/). `open="whileText"` keeps the list shown for as long as the field has text and an option matches, even after Escape, Tab or a press outside (those only clear the highlighted option) and it closes when the text is emptied or an option is picked; `aria-expanded` follows whether the list is shown. Accessibility caveat: the APG pattern has Escape dismiss the popup and treats it as shown only while the user is working in the combobox, so this mode departs from it. Use it only where the suggestions are the page's main content, such as a people search that is useful to keep in view, and not for a field where a stray list would cover other controls |
-| `Menu` | `label`, `items: { id, label, onSelect, tone? }[]`, `align`, `variant`, `size` | A button that opens a menu: arrows, Home, End, Enter, Escape |
+| `Menu` | `label`, `items: { id, label, onSelect, variant? }[]`, `align`, `variant`, `size` | A button that opens a menu: arrows, Home, End, Enter, Escape. An item's `variant` is `default` or `destructive`; the menu's own `variant` and `size` are the Button's |
 | `Disclosure` | `summary` | More behind a line that opens it |
 | `Time`, `ago` | `Time`: `iso`, `prefix`; `ago(iso)` gives the text | A moment as how long ago it was ("5 min ago", "3 h ago", "2 d ago", then the date) in a `time` element with the exact date and time on hover |
 | `Summary`, `SummaryChip` | `SummaryChip`: `tone` (`info`, `success`, `warn`, `danger`), `onClick` | A row of small facts under a page's header, like "2 approved" or "Priority 1"; with `onClick` a chip is a button that goes to where the fact comes from |
@@ -105,9 +157,16 @@ A button that's working on something is `busy`: it shows a spinner, ignores clic
 and `aria-disabled`, and unlike `disabled` it keeps the keyboard focus:
 
 ```tsx
-<Button variant="primary" busy={saving} onClick={save}>
-  Save
-</Button>
+// src/ui/save-button.tsx
+import { Button } from "wings-plugin-ui";
+
+export function SaveButton({ saving, save }: { saving: boolean; save: () => void }) {
+  return (
+    <Button busy={saving} onClick={save}>
+      Save
+    </Button>
+  );
+}
 ```
 
 ## Ours or your own
@@ -135,7 +194,7 @@ The colours, radius and font come from the Wings app's theme (`apps/desktop/src/
 // src/pages/sidebar.tsx
 import "./sidebar.css";
 
-function Banner({ children }: { children: string }) {
+export function Banner({ children }: { children: string }) {
   return <div className="banner">{children}</div>;
 }
 ```
@@ -169,12 +228,12 @@ rather than styles.
 `w-title` with `data-size`; `w-heading`, `w-heading-row`; `w-card` with `data-size`; `w-gauge`, `w-gauge-label`, `w-gauge-value`,
 `w-gauge-note`, `w-meter` with `data-tone`, `w-meter-fill`; `w-stats`, `w-stat-label`, `w-stat-value`;
 `w-props`, `w-prop`, `w-prop-label`, `w-prop-value`; `w-list` with `data-density`, `w-list-item`,
-`w-list-button` with `data-align`; `w-dot` with `data-tone` or `data-color`; `w-avatar` with `data-size` and `--w-hue`; `w-pill`, `w-tag` with `data-tone`; `w-spinner` with `data-size`;
+`w-list-button` with `data-align`; `w-dot` with `data-tone` or `data-color`; `w-avatar` with `data-size` and `--w-hue`; `w-badge` with `data-variant` and `data-tone`; `w-spinner` with `data-size`;
 `w-loading`, `w-empty`, `w-empty-detail`; `w-button` with `data-variant`, `data-size`, `aria-disabled`; `w-chips`, `w-chip`;
-`w-tabs`, `w-tab`; `w-field` with `data-layout`, `w-field-row`, `w-field-label`, `w-field-hint`,
+`w-tabs` with `data-variant`, `w-tab`; `w-field` with `data-layout`, `w-field-row`, `w-field-label`, `w-field-hint`,
 `w-field-group`, `w-input`, `w-search`, `w-select`, `w-check`; `w-combobox`, `w-listbox`, `w-option`,
 `w-option-label`, `w-option-detail`, `w-option-empty`; `w-menu-root`, `w-menu` with `data-align`, `w-menu-item`
-with `data-tone`; `w-disclosure`. A `ul` or `ol` with `w-row`, `w-stack` or `w-card` loses its bullets.
+with `data-variant`; `w-disclosure`. A `ul` or `ol` with `w-row`, `w-stack` or `w-card` loses its bullets.
 
 ## Tailwind or any CSS
 
