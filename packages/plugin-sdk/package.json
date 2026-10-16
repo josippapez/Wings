@@ -92,6 +92,8 @@
     "git.d.ts",
     "build.mjs",
     "build.d.ts",
+    "dev.mjs",
+    "socket.mjs",
     "manifest-check.mjs",
     "bin.mjs",
     "README.md",
