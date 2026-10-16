@@ -283,7 +283,7 @@ export function Spinner(props: Props<"span"> & { size?: "large"; label?: string 
 export type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
 /** A badge, like a label on a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something. */
 export function Badge(props: Props<"span"> & { variant?: BadgeVariant; tone?: Exclude<Tone, "muted"> }): ReactElement;
-/** What shows before the first data comes: "Loading…" unless `children` say otherwise. */
+/** What shows before the first data comes: a spinner and "Loading…", unless `children` say otherwise. */
 export function Loading(props: Props<"p">): ReactElement;
 /** Nothing to show: what's missing, a `description` on what to do about it, and `children` under them, like a button. */
 export function Empty(props: Omit<Props<"div">, "title"> & { title: ReactNode; description?: ReactNode }): ReactElement;

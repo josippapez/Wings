@@ -634,9 +634,9 @@ export function Badge({ variant = "default", tone, className, ...rest }) {
   return h("span", { ...rest, className: cx("w-badge", className), "data-variant": variant, "data-tone": tone });
 }
 
-/** What shows before the first data comes. */
+/** What shows before the first data comes: a spinner and the text. */
 export function Loading({ children = "Loading…", className, ...rest }) {
-  return h("p", { ...rest, className: cx("w-loading", className) }, children);
+  return h("p", { ...rest, className: cx("w-loading", className) }, h(Spinner), children);
 }
 
 /** Nothing to show: a `title`, a `description` on what to do about it, and `children`, like a button, under them. */

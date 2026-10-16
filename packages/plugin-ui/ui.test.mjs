@@ -72,8 +72,8 @@ test("Empty has a title and a description, and shows no description line without
 });
 
 test("ProjectGate says Loading… until it knows the project, unless it's told what to say", () => {
-  assert.equal(html(h(ProjectGate, null, () => null)), '<p class="w-loading">Loading…</p>');
-  assert.equal(html(h(ProjectGate, { loading: "Loading issues" }, () => null)), '<p class="w-loading">Loading issues</p>');
+  assert.equal(html(h(ProjectGate, null, () => null)), '<p class="w-loading"><span class="w-spinner" aria-hidden="true"></span>Loading…</p>');
+  assert.equal(html(h(ProjectGate, { loading: "Loading issues" }, () => null)), '<p class="w-loading"><span class="w-spinner" aria-hidden="true"></span>Loading issues</p>');
 });
 
 test("Page puts its toolbar over a body that is flush when it lays itself out", () => {

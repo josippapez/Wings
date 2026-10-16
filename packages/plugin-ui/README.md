@@ -133,7 +133,7 @@ function Opened({ name }: { name: string }) {
 | `Dot`, `Spinner` | `tone`, `size`, `label`; `Dot` also `color` | A status dot or a spinner, announced only with a `label`. A dot's `color` comes from your data, like a work item type's `#cc293d` |
 | `Avatar` | `name`, `size` (`small`, `large`), `label` | A round avatar with the initials of a name on a colour that depends only on the name. Decoration next to the name; with a `label` it's announced |
 | `Badge` | `variant` (`default`, `secondary`, `destructive`, `outline`, `ghost`, `link`), `tone` (`info`, `success`, `warn`, `danger`) | A small label, like a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something |
-| `Loading`, `Empty` | `Empty`: `title`, `description` | Before the first data, and nothing to show |
+| `Loading`, `Empty` | `Empty`: `title`, `description` | Before the first data (a spinner and the text), and nothing to show |
 | `Button` | `variant` (`default`, `secondary`, `outline`, `ghost`, `destructive`, `link`), `size` (`default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`), `busy` | A button, `type="button"`; `default` is the filled one. `busy` shows a spinner and ignores clicks, keeping focus |
 | `Chip`, `Chips` | `pressed`; `Chips`: `label`, `options`, `value`, `onChange` | A small quiet button, and a group of them that picks one, with `aria-pressed`. An option's other props, like `id`, go to its chip |
 | `Tabs` | `label`, `items`, `value`, `onChange`, `variant` (`default`, a pill in a tray; `line`, an underline), `children` | Tabs with arrow keys, Home and End, over their panel |

@@ -1055,6 +1055,9 @@ h3.w-heading {
 
 /* Nothing to show yet, or nothing at all. */
 .w-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--wings-muted);
 }
 .w-empty {
