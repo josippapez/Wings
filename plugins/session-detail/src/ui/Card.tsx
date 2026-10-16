@@ -1,5 +1,4 @@
-import { useEffect } from "react";
-import { useAsk } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Text } from "wings-plugin-ui";
 
 import { ch } from "../lib/messages";
@@ -8,12 +7,8 @@ import { took } from "./format";
 
 /** What a row opens to: the prompt in full, or a tool call's inputs, timing and the start of its result. */
 export function Card({ sessionId, item }: { sessionId: string; item: ItemView }) {
-  const { data: d, error, refresh } = useAsk(ch, "detail", { sessionId, key: item.key });
-  // A call that was still running when the row opened has its result by now.
-  const finished = item.done === true && d?.done === false;
-  useEffect(() => {
-    if (finished) refresh();
-  }, [finished, refresh]);
+  // Main sends it again when the session changes, so a call still running when the row opened gets its result.
+  const { data: d, error } = useQuery(ch, "detail", { sessionId, key: item.key });
   if (!d)
     return (
       <div className="detail">

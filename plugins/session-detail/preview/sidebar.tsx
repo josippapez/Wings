@@ -5,16 +5,15 @@ import { PressWhenDrawn } from "./_press";
 
 export { page };
 export default Sidebar;
-export const shared = { sessions: [working, idle] };
-export const answers = { detail };
+export const queries = { sessions: [working, idle], detail };
 
 export const states = {
   // A working session: running tools, to-dos, edited files, activity.
   working: {},
   // An idle session with a short history and nothing running.
-  idle: { shared: { sessions: [idle] } },
+  idle: { queries: { sessions: [idle], detail } },
   // No Claude session in the panes.
-  none: { shared: { sessions: [] } },
+  none: { queries: { sessions: [], detail } },
   // Rows opened for their detail: your message in full, an edit, a failed test and a call that is still running.
   opened: {
     element: (
@@ -26,7 +25,6 @@ export const states = {
   // What goes wrong: a row that main doesn't keep any more, and a file whose diff can't open.
   errors: {
     answers: {
-      detail,
       diff: () => {
         throw new Error("cart.tsx is outside web, so there is no diff to show.");
       },

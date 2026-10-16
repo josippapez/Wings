@@ -25,6 +25,8 @@ import { tools } from "./tools";
 
 const LINK_POLL_MS = 15_000;
 const STATUS_POLL_MS = 60_000;
+/** A block that opens gets the kept list, read again when it is older than this: a little under the poll, like the list cache. */
+const PULLS_STALE_MS = 55_000;
 
 connectClis();
 
@@ -100,14 +102,18 @@ ch.answer("pr", async ({ op, args, focus }) => {
 
 // ---------- the Pull requests block ----------
 
-/** A block on a Project page asks for its project's open pull requests, from the same cache as the sidebar section. */
-ch.answer("pulls", async ({ path }) => {
-  try {
-    return await pullsFor(path);
-  } catch (e) {
-    throw new Error(errorMessage(e).slice(0, 300));
-  }
-});
+/** A block on a Project page shows its project's open pull requests, from the same cache as the sidebar section. */
+ch.serve(
+  "pulls",
+  async ({ path }) => {
+    try {
+      return await pullsFor(path);
+    } catch (e) {
+      throw new Error(errorMessage(e).slice(0, 300));
+    }
+  },
+  { refetchMs: STATUS_POLL_MS, staleMs: PULLS_STALE_MS },
+);
 
 /** The block's button: what the pane badge's Sign in, Add token or Install does for this project's host. */
 ch.answer("pulls-action", async ({ path }) => {
@@ -116,7 +122,7 @@ ch.answer("pulls-action", async ({ path }) => {
   if (remote.kind === "none") await retry();
   else if (problemOf(remote)?.kind === "missing") await install(remote);
   else await signIn(remote);
-  await ch.tell("pulls-changed");
+  ch.refresh("pulls", { path });
 });
 
 // Settings saved or removed a token: ask again with it.

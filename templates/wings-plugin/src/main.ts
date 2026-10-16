@@ -10,8 +10,8 @@ import { type Branch, ch } from "./lib/messages";
 let panes: WingsPane[] = [];
 let branches: Branch[] = [];
 
-// The sidebar gets `branches` when it opens, and again after each `changed()`.
-const sidebar = ch.share("branches", () => branches);
+// The sidebar gets `branches` when it opens, and again after each `refresh`.
+ch.serve("branches", () => branches);
 
 // Wings sends the panes on every change. A call while `look` runs makes it run once more when it is done.
 const refresh = singleFlight(look);
@@ -29,7 +29,7 @@ async function look() {
     }),
   );
   branches = found.filter((b) => b !== null);
-  sidebar.changed();
+  ch.refresh("branches");
 }
 
 wings.onPanes((list) => {

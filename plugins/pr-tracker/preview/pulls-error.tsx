@@ -5,7 +5,7 @@ import "../src/pages/pr.css";
 import { Page } from "wings-plugin-ui";
 
 export const fill = true;
-export const answers = {
+export const queries = {
   pulls: (): PullsAnswer => {
     throw new Error("gh pr list failed: HTTP 502 from api.github.com. Try again in a minute.");
   },

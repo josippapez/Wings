@@ -24,12 +24,15 @@ wings.onPanes((list) => {
 
 // The badge counts edits to files in the working tree, which Wings doesn't watch, so it keeps a slow poll. Paused
 // while Wings is in the background, and runs once when you come back.
-pollWhileFocused(() => void refreshBadges(panes), POLL_MS);
+pollWhileFocused(() => {
+  void refreshBadges(panes);
+  sidebar.poll();
+}, POLL_MS);
 // A commit, checkout or pull shows at once in the panes of the repos that moved, and in the sidebar if it follows one.
 onGitChange(async (_ids, roots) => {
   const paneRoots = await Promise.all(panes.map((p) => repoRoot(p.cwd)));
   await refreshBadges(panes.filter((_, i) => paneRoots[i] && roots.includes(paneRoots[i])), { fresh: true });
-  await sidebar.gitChanged(roots);
+  sidebar.gitChanged(roots);
 });
 
 wings.onAction(async ({ paneId, actionId }) => {

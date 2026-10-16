@@ -60,13 +60,6 @@ export function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T,
  */
 export function latestOnly(): () => () => boolean;
 
-/**
- * The longest start of `rows` whose JSON is at most `max` characters, for a broadcast: Wings refuses one over 64,000,
- * counted by the length of its JSON text. With `wrap`, the JSON is of `wrap(rows)`, so the rest of the message counts
- * too: `fitJson(files, 64_000, (rows) => ({ type: "state", rows }))`.
- */
-export function fitJson<T>(rows: readonly T[], max: number, wrap?: (rows: T[]) => unknown): T[];
-
 /** What `wings.openDiff` takes, without a patch: that is what `openDiffWhile` loads. */
 export type DiffOpen = Omit<Parameters<Wings["openDiff"]>[0], "patch">;
 /** What `wings.updateDiff` takes for a viewer that is loading. */

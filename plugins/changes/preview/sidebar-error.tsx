@@ -4,7 +4,7 @@ import { changes } from "./_data";
 
 let asked = 0;
 export const place = "sidebar";
-export const answers = {
+export const queries = {
   changes: () => {
     if (++asked === 1) return changes();
     throw new Error("fatal: Unable to create '/work/acme/web/.git/index.lock': File exists.");

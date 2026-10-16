@@ -1,6 +1,6 @@
 // A stand-in for `window.wings` in `pnpm shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
 // of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `storage`,
-// `respond`, and `answers` and `shared` for pages that use wings-plugin-sdk/messages.
+// `respond`, and `answers` and `queries` for pages that use wings-plugin-sdk/messages.
 
 import { channel } from "wings-plugin-sdk/messages";
 
@@ -14,8 +14,8 @@ export function installWings(fx) {
   const toPage = (message) => setTimeout(() => listeners.forEach((l) => l(message)), 50);
   // Wings hands messages over as JSON, so a fixture's data is held to that too.
   const copy = (message) => JSON.parse(JSON.stringify(message ?? null));
-  // The fixture's `answers` and `shared` are answered by the SDK's own channel, the code a plugin's main script runs,
-  // so a page's `ask`, `useAsk` and `watch` take their real path, errors and all. A name the fixture leaves out stays unanswered.
+  // The fixture's `answers` and `queries` are served by the SDK's own channel, the code a plugin's main script runs, so a
+  // page's `ask` and `useQuery` take their real path, errors and all. A name the fixture leaves out stays unanswered.
   const mainCh = channel({
     wings: {
       onBroadcast: (l) => (main.add(l), () => main.delete(l)),
@@ -23,7 +23,8 @@ export function installWings(fx) {
     },
   });
   for (const [name, answer] of Object.entries(fx.answers ?? {})) mainCh.answer(name, answer);
-  for (const [name, shared] of Object.entries(fx.shared ?? {})) mainCh.share(name, () => shared);
+  // A query is a loader, `(key) => value`, or the value itself for every key.
+  for (const [name, query] of Object.entries(fx.queries ?? {})) mainCh.serve(name, typeof query === "function" ? query : () => query);
   // What `wings.storage` holds: the fixture's `storage` to start with, then whatever the page sets.
   const stored = new Map(Object.entries(fx.storage ?? {}));
   const known = {

@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { pollWhileFocused } from "./poll.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * Calls `listener` with each message the plugin's other pages send with `wings.broadcast`, while the component
@@ -11,55 +10,55 @@ export function useBroadcast(listener) {
   useEffect(() => wings.onBroadcast((message) => latest.current(message)), []);
 }
 
-// What `useAsk` holds before its first answer, shared so setting it on mount changes nothing.
-const IDLE = { data: null, error: null, loading: false };
-const LOADING = { data: null, error: null, loading: true };
+const TIMEOUT = "Wings didn't answer. Try again.";
+const IDLE = { data: null, error: null, loading: false, at: 0 };
 
 /**
- * Asks `name` on the channel when the component mounts and whenever `request` changes (compared as JSON), and every
- * `pollMs` while Wings is focused. `data` is the latest answer, kept while the next is on its way, and `null` once the
- * request changes. `error` is the last ask's error, cleared by the next answer. An answer to an ask that a newer one
- * replaced is ignored. `skip` asks nothing.
+ * The value of the query `name` for `key`, which main serves on the channel, and its updates. Components in one frame
+ * showing one key share one subscription. `loading` is true before the first value for a key and while `refresh()` waits;
+ * main's own refetches never set it. `keepData` keeps the previous key's value while a new key loads. With no value or
+ * error after `timeoutMs` (default 30 s), `error` says Wings didn't answer, and a value that comes later clears it.
+ * `skip` subscribes to nothing.
  */
-export function useAsk(ch, name, request, { pollMs, skip = false } = {}) {
-  const [state, setState] = useState(skip ? IDLE : LOADING);
-  const ask = useRef(() => {});
-  const refresh = useCallback(() => ask.current(), []);
-  const latest = useRef(request);
-  latest.current = request;
-  const key = JSON.stringify(request);
-  useEffect(() => {
-    setState(skip ? IDLE : LOADING);
-    ask.current = () => {};
-    if (skip) return;
-    let live = true;
-    let turn = 0;
-    ask.current = () => {
-      const mine = ++turn;
-      setState((s) => (s.loading ? s : { ...s, loading: true }));
-      ch.ask(name, latest.current).then(
-        (data) => live && mine === turn && setState({ data, error: null, loading: false }),
-        (error) => live && mine === turn && setState((s) => ({ ...s, error, loading: false })),
-      );
-    };
-    ask.current();
-    const stop = pollMs ? pollWhileFocused(() => ask.current(), pollMs) : undefined;
-    return () => {
-      live = false;
-      stop?.();
-    };
-  }, [ch, name, key, pollMs, skip]);
-  return { ...state, refresh };
-}
+export function useQuery(ch, name, key, { skip = false, keepData = false, timeoutMs = 30_000 } = {}) {
+  const id = skip ? null : JSON.stringify([name, key ?? null]);
+  const latestKey = useRef(key);
+  latestKey.current = key;
+  const [state, setState] = useState(() => (skip ? IDLE : { ...IDLE, loading: true }));
+  const waiting = useRef(undefined);
 
-/** The state main shares as `name` on the channel, or `null` until main has sent it. */
-export function useShared(ch, name) {
-  const [state, setState] = useState(null);
   useEffect(() => {
-    setState(null);
-    return ch.watch(name, setState);
-  }, [ch, name]);
-  return state;
+    if (id === null) {
+      setState(IDLE);
+      return;
+    }
+    setState((s) => ({ data: keepData ? s.data : null, error: null, loading: true, at: 0 }));
+    const timeout = () => setState((s) => (s.loading ? { ...s, error: TIMEOUT, loading: false } : s));
+    const timer = setTimeout(timeout, timeoutMs);
+    const off = ch.subscribe(name, latestKey.current, (snap) => {
+      if (!snap.loading) {
+        clearTimeout(timer);
+        clearTimeout(waiting.current);
+      }
+      setState((s) => ({ data: snap.data ?? (keepData && snap.error === null ? s.data : null), error: snap.error, loading: snap.loading, at: snap.at }));
+    });
+    waiting.current = undefined;
+    return () => {
+      off();
+      clearTimeout(timer);
+      clearTimeout(waiting.current);
+    };
+  }, [ch, id, keepData, timeoutMs]);
+
+  const refresh = useCallback(() => {
+    if (id === null) return;
+    ch.refresh(name, latestKey.current ?? null);
+    clearTimeout(waiting.current);
+    waiting.current = setTimeout(() => setState((s) => (s.loading ? { ...s, error: TIMEOUT, loading: false } : s)), timeoutMs);
+  }, [ch, id, timeoutMs]);
+
+  const error = useMemo(() => (state.error === null ? null : new Error(state.error)), [state.error]);
+  return { data: state.data, error, loading: state.loading, at: state.at, refresh };
 }
 
 /** A setting's value, `null` until it is read, and a function that sets it. It follows changes made in any frame. */

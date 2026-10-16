@@ -3,7 +3,7 @@
 import { channel } from "wings-plugin-sdk/messages";
 import type { BlockItem } from "./sections";
 
-/** The Sprint block asks for the sprint of the Azure DevOps project that the folder `path` is in. `mine`: only what's assigned to you; false is the whole sprint. */
+/** The Sprint block shows the sprint of the Azure DevOps project that the folder `path` is in. `mine`: only what's assigned to you; false is the whole sprint. */
 export interface SprintRequest {
   path: string;
   mine: boolean;
@@ -22,7 +22,8 @@ export interface Sprint {
 export type SprintAnswer = Sprint | { none: true };
 
 export const ch = channel<
-  { sprint: { request: SprintRequest; response: SprintAnswer } },
+  {},
   // The item tab moved a work item to another state.
-  { "item-changed": { org: string; id: number } }
+  { "item-changed": { org: string; id: number } },
+  { sprint: { key: SprintRequest; value: SprintAnswer } }
 >();

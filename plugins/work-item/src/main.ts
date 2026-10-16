@@ -3,8 +3,8 @@
 
 import { showBadges } from "./main/badge";
 import { showSections } from "./main/sections";
-import { answerSprint } from "./main/sprint";
+import { serveSprint } from "./main/sprint";
 
 showBadges();
 showSections();
-answerSprint();
+serveSprint();

@@ -2,7 +2,7 @@
 // The plugin's main script keeps the state and shares it here.
 
 import { useState } from "react";
-import { useShared } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Empty, Loading, Select } from "wings-plugin-ui";
 
 import { Activity } from "../ui/Activity";
@@ -19,7 +19,7 @@ export const page = { place: "sidebar" };
 const rowId = (sessionId: string, key: string) => `${sessionId}\n${key}`;
 
 export default function Sidebar() {
-  const sessions = useShared(ch, "sessions");
+  const { data: sessions } = useQuery(ch, "sessions", undefined);
   /** The session you picked; otherwise the one that changed last. */
   const [picked, setPicked] = useState<string | null>(null);
   /** Activity rows you opened, by row id. */

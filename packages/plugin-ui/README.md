@@ -14,16 +14,16 @@ your page follows without a release.
 
 ```tsx
 // src/pages/usage.tsx
-import { useShared } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Card, Gauge, Heading } from "wings-plugin-ui";
 
-import { ch } from "../lib/messages"; // channel<{}, {}, { usage: { percent: number } }>()
+import { ch } from "../lib/messages"; // channel<{}, {}, { usage: { key: void; value: { percent: number } } }>()
 
 export const page = { place: "sidebar" };
 
 export default function Usage() {
-  // The `usage` state your main script shares on `ch`: null until main has sent it, then each change.
-  const usage = useShared(ch, "usage");
+  // The `usage` query your main script serves on `ch`: null until main has sent it, then each change.
+  const { data: usage } = useQuery(ch, "usage", undefined);
   if (!usage) return null;
   return (
     <>
@@ -55,9 +55,9 @@ from `mountShell(place, options)` in `wings-plugin-sdk/shell`, which returns the
 
 ## Talking to main
 
-A page and your main script talk through a `channel` from `wings-plugin-sdk/messages`. Main shares state with
-`share`, and a page reads it with `useShared(ch, name)` from `wings-plugin-sdk/react`, which is `null` until main has
-sent it. `ask` and `useAsk` put a question to main, and `useBroadcast(listener)` gets every raw `wings.broadcast`
+A page and your main script talk through a `channel` from `wings-plugin-sdk/messages`. Main serves data with
+`serve`, and a page reads it with `useQuery(ch, name, key)` from `wings-plugin-sdk/react`, whose `data` is `null` until
+main has sent it. `ask` puts a question to main, and `useBroadcast(listener)` gets every raw `wings.broadcast`
 message.
 
 ## Components

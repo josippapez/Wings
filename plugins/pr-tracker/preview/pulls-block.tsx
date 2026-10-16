@@ -5,5 +5,5 @@ import "../src/pages/pr.css";
 import { rows } from "./_data";
 
 export const place = "view";
-export const answers = { pulls: (): PullsAnswer => ({ rows }) };
+export const queries = { pulls: (): PullsAnswer => ({ rows }) };
 export default <ProjectPulls path="/work/acme/web" name="web" store="block" onOpen={() => {}} />;

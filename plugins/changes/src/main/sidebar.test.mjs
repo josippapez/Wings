@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fakeWings, ok, repos } from "../lib/fake-wings.mjs";
+import { fakeWings, repos } from "../lib/fake-wings.mjs";
+import { ch } from "../lib/messages.ts";
 import { serveSidebar } from "./sidebar.ts";
 
 const fake = fakeWings();
 const pane = (paneId, cwd, focused = false) => ({ paneId, cwd, focused });
-const changes = async () => (await fake.ask("changes", { mode: "uncommitted" })).repo;
+const changes = async () => (await ch.get("changes", { mode: "uncommitted" })).repo;
 
 // Each test uses folders of its own: the SDK keeps the repo of a folder it found.
 
@@ -42,33 +43,28 @@ test("a repo lookup that failed is asked again next time, not kept", async () =>
   assert.equal((await changes()).root, "/w/a4");
 });
 
-test("a Changes answer too big for one message lists the files that fit, whatever their path lengths, and says how many there are", async () => {
-  serveSidebar(() => [pane("a", "/w/a5", true)]);
-  // The files that fit end at a different place for each length, and some end close to the limit, where the envelope the answer travels in counts.
-  for (let length = 20; length < 60; length++) {
-    const paths = Array.from({ length: 3000 }, (_, i) => `src/${String(i).padStart(length, "0")}.ts`);
-    fake.reply = (args, cwd) =>
-      args.startsWith("diff") && args.includes("--name-status")
-        ? ok(paths.map((p) => `M\0${p}`).join("\0") + "\0")
-        : args.startsWith("diff") && args.includes("--numstat")
-          ? ok(paths.map((p) => `1\t0\t${p}`).join("\0") + "\0")
-          : repos()(args, cwd);
-    const answer = await fake.ask("changes", { mode: "uncommitted" });
-    assert.equal(answer.total, 3000);
-    assert.ok(answer.files.length > 500 && answer.files.length < 3000, `${answer.files.length} files listed`);
-  }
-});
-
 test("the commit ask only takes a full hash, since it goes to git show as an argument", async () => {
   serveSidebar(() => []);
   await assert.rejects(fake.ask("commit", { root: "/w/a6", hash: "--output=/tmp/x", subject: "", author: "", at: 0 }), /isn't a commit hash/);
 });
 
-test("a history answer says whether Wings watches its repo, so the page polls only when it doesn't", async () => {
-  serveSidebar(() => [pane("a", "/w/a7", true)]);
+test("main's poll reloads a shown history only when Wings doesn't watch its repo, since a git change reloads the rest", async () => {
+  const sidebar = serveSidebar(() => [pane("a", "/w/a7", true)]);
+  const loads = () => fake.sent.filter((m) => (m.kind === "state" || m.kind === "fresh") && m.name === "history").length;
+  const waitFor = async (n) => {
+    while (loads() < n) await new Promise((resolve) => setTimeout(resolve, 1));
+  };
   fake.projects = [];
-  assert.equal((await fake.ask("history", { query: "", all: false, skip: 0 })).watched, false);
+  fake.heard({ "wings:sdk": 1, kind: "sub", from: "page", subs: [["history", { query: "", all: false }]] });
+  await waitFor(1);
+  sidebar.poll();
+  await waitFor(2);
   fake.projects = [{ id: "p", path: "/w/a7" }];
-  assert.equal((await fake.ask("history", { query: "", all: false, skip: 0 })).watched, true);
+  sidebar.poll();
+  await waitFor(3);
+  const before = loads();
+  sidebar.poll();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(loads(), before);
   fake.projects = [];
 });

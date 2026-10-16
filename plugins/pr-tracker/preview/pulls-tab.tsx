@@ -6,7 +6,7 @@ import { Page } from "wings-plugin-ui";
 import { rows } from "./_data";
 
 export const fill = true;
-export const answers = { pulls: (): PullsAnswer => ({ rows }) };
+export const queries = { pulls: (): PullsAnswer => ({ rows }) };
 export default (
   <Page className="pr-page">
     <ProjectPulls path="/work/acme/web" name="web" store="tab" onOpen={() => {}} />

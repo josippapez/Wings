@@ -120,25 +120,6 @@ export function latestOnly() {
 }
 
 /**
- * The longest start of `rows` whose JSON is at most `max` characters, for a broadcast: Wings refuses one over 64,000,
- * counted by the length of its JSON text. With `wrap`, the JSON is of `wrap(rows)`, so the rest of the message counts
- * too: `fitJson(files, 64_000, (rows) => ({ type: "state", rows }))`.
- */
-export function fitJson(rows, max, wrap = (all) => all) {
-  const fits = (n) => JSON.stringify(wrap(rows.slice(0, n))).length <= max;
-  if (fits(rows.length)) return rows.slice();
-  // A longer start is always longer JSON, so the answer is found by halving.
-  let lo = 0;
-  let hi = rows.length - 1;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (fits(mid)) lo = mid;
-    else hi = mid - 1;
-  }
-  return rows.slice(0, lo);
-}
-
-/**
  * Opens the diff viewer at once, loading, then fills it with what `load(id)` resolves: `{ patch }` or `{ error }`, with
  * `comments` and `focus` if it has them. A `load` that throws shows its message in the viewer. `id` is the viewer's, for
  * a plugin that keeps track of its viewers. Resolves when the viewer has been updated.

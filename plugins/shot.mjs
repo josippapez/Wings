@@ -15,8 +15,8 @@
 //   project   what `wings.project()` answers (default: a project "web"; null for none)
 //   args      what `wings.viewArgs()` answers (default: null)
 //   storage   { key: value }: what `wings.storage` holds at the start, and keeps what the page sets
-//   answers   { name: (request) => response }: what main answers an `ask` or `useAsk` with
-//   shared    { name: state }: what main shares, which a `watch` hears
+//   answers   { name: (request) => response }: what main answers an `ask` with
+//   queries   { name: (key) => value, or a value for every key }: what main serves a `useQuery` or `subscribe` with
 //   respond   (message) => answer | undefined: what main answers a broadcast with, delivered to `onBroadcast`
 //   states    { name: { ...fields } }: one screenshot per state. Each shows the file's fields with its own over them.
 //             The PNGs are <plugin>-<file>-<state>-<width>.png; a file without states makes <plugin>-<file>-<width>.png

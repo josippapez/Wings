@@ -1,9 +1,9 @@
 // The Sprint block of a Project page: the work items of the sprint running now in the project's Azure DevOps
-// project, a column per state. The main script runs the queries and caches them (main/sprint.ts); this page asks it,
+// project, a column per state. The main script runs the queries and keeps them fresh (main/sprint.ts); this page shows them,
 // and a click opens the work item in a tab.
 
 import { truncate } from "wings-plugin-sdk/format";
-import { useAsk } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, ProjectGate, Row, Stack, Text, useBlockState } from "wings-plugin-ui";
 import { itemTabArgs } from "../lib/item";
 import { ch } from "../lib/messages";
@@ -12,8 +12,6 @@ import { TypeIcon } from "../ui/TypeIcon";
 import "./sprint.css";
 
 export const page = { place: "block" };
-
-const POLL_MS = 60_000;
 
 export default function Sprint() {
   const [state, setState] = useBlockState({ mine: true }, cleanBlockState);
@@ -25,7 +23,7 @@ export default function Sprint() {
 }
 
 function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; onMine: (mine: boolean) => void }) {
-  const { data, error } = useAsk(ch, "sprint", { path, mine }, { pollMs: POLL_MS });
+  const { data, error } = useQuery(ch, "sprint", { path, mine });
   // Not an Azure project: nothing to filter, so no chips.
   if (data && "none" in data) return <Text tone="muted">Not an Azure DevOps project.</Text>;
 

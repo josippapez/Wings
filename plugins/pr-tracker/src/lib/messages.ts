@@ -22,15 +22,15 @@ export const ch = channel<
   {
     /** A "pr" tab asks for what only main can do: open the diff viewer that takes replies, find the agent on the branch, or mark the PR read. */
     pr: { request: { op: "diff" | "agent" | "seen"; args: PrArgs; focus?: WingsDiffFocus }; response: void };
-    /** A block asks for its project's open pull requests, from the same cache as the sidebar section. */
-    pulls: { request: { path: string }; response: PullsAnswer };
     /** A block's button: what the pane badge's Sign in, Add token or Install does for this project's host. */
     "pulls-action": { request: { path: string }; response: void };
   },
   {
-    /** Main says a sign-in, token or install finished, so a block asks again instead of waiting for its poll. */
-    "pulls-changed": void;
     /** Settings saved or removed a token, which main asks again with. */
     "tokens-changed": void;
+  },
+  {
+    /** A block's project's open pull requests, from the same cache as the sidebar section. */
+    pulls: { key: { path: string }; value: PullsAnswer };
   }
 >();

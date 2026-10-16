@@ -1,15 +1,9 @@
 // The Pull requests block on a Project page: the order and the filters of its rows. No `wings`, no I/O, so node tests drive it.
 
-import { fitJson } from "wings-plugin-sdk/async";
 import type { Counts, PrArgs } from "./types";
 
 /** The most rows a list asks for, which is what a provider's one call returns. */
 export const BLOCK_ROWS = 100;
-/**
- * A broadcast is limited to 64,000 characters of JSON, and an answer is wrapped in the messages envelope; a row is 0.5 to
- * 1 KB, so a long list of long titles is cut short rather than refused.
- */
-const MAX_CHARS = 56_000;
 
 /** Whose a pull request is: you wrote it, your review is asked for, or neither. */
 type Scope = "mine" | "review" | "other";
@@ -80,5 +74,3 @@ export function splitTitle(title: string): { tags: string[]; text: string } {
   return rest ? { tags, text: rest } : { tags: [], text: title.trim() };
 }
 
-/** The rows that fit a broadcast, in order: stops before the one that would pass `MAX_CHARS`. */
-export const fitPulls = (rows: PullRow[]) => fitJson(rows, MAX_CHARS, (fit) => ({ rows: fit }));

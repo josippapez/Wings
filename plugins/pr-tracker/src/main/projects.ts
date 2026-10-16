@@ -5,7 +5,7 @@ import { argsOf } from "../lib/args";
 import { forgeFor, isKnown } from "../lib/forges/registry";
 import { refOf } from "../lib/providers";
 import type { PullsAnswer } from "../lib/messages";
-import { BLOCK_ROWS, fitPulls, orderPulls, type PullRow } from "../lib/pulls";
+import { BLOCK_ROWS, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
 import { newPulls, notesFor } from "../lib/watch";
 import { answered, explains, problemOf } from "./problems";
@@ -204,5 +204,5 @@ export async function pullsFor(path: string): Promise<PullsAnswer> {
       args: argsOf(link, item.title, path),
     };
   });
-  return { rows: fitPulls(orderPulls(rows).slice(0, BLOCK_ROWS)) };
+  return { rows: orderPulls(rows).slice(0, BLOCK_ROWS) };
 }

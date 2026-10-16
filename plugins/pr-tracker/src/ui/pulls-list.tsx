@@ -1,16 +1,14 @@
 // The project's open pull requests as a list: every open one, with chips to narrow it to yours, the ones waiting for
 // your review or drafts. The Pull requests block of a Project page shows it, and so does a "pr" tab opened with no pull
-// request. The main script owns the lists and their cache; this asks it, only while Wings is in front and the list is on screen.
+// request. The main script owns the lists and their cache, and keeps this one fresh while it is on screen and Wings is in front.
 
-import { useEffect } from "react";
-import { useAsk } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Avatar, Button, Chips, Empty, Row, Skeleton, Skeletons, Stack, Text, Time, useAction, useBlockState, useTabState } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 import { countPulls, filterOf, filterPulls, splitTitle, type Filter, type PullRow } from "../lib/pulls";
 import "./pulls-list.css";
 import type { PrArgs } from "../lib/types";
 
-const POLL_MS = 60_000;
 /** A sign-in waits for the browser for up to 5 minutes, and main answers when it is done. */
 const ACTION_TIMEOUT_MS = 330_000;
 
@@ -49,10 +47,8 @@ interface ListProps {
 }
 
 export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
-  // The project's list: once at the start, then on each poll while Wings is focused. `refresh` is Refresh.
-  const { data, error, loading, refresh } = useAsk(ch, "pulls", { path }, { pollMs: POLL_MS });
-  // A sign-in, token or install finished in main.
-  useEffect(() => ch.on("pulls-changed", refresh), [refresh]);
+  // The project's list, which main keeps fresh while it is on screen and Wings is focused, and sends again after a sign-in. `refresh` is Refresh.
+  const { data, error, loading, refresh } = useQuery(ch, "pulls", { path });
   const [filter, setFilter] = useFilter(store);
   const sign = useAction();
   const rows = data?.rows ?? [];

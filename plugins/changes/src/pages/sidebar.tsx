@@ -1,15 +1,15 @@
 // The Changes sidebar page: the changed files of the focused pane's repo as a folder tree, and its commit history. The
-// plugin's main script runs git and answers what this page asks for; a click asks it to open the diff viewer.
+// plugin's main script runs git and keeps what this page shows fresh; a click asks it to open the diff viewer.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { plural } from "wings-plugin-sdk/format";
-import { useAsk } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Button, Card, Chips, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { FileTree } from "../ui/FileTree";
 import { History } from "../ui/History";
 import { useHistory } from "../ui/useHistory";
-import { ch, POLL_MS } from "../lib/messages";
+import { ch } from "../lib/messages";
 import type { CommitRow, Mode, Repo } from "../lib/types";
 import "./sidebar.css";
 
@@ -34,18 +34,8 @@ export default function Sidebar() {
 
   const onHistory = view === "history";
   const mode: Mode = view === "branch" ? "branch" : "uncommitted";
-  const changes = useAsk(ch, "changes", { mode }, { pollMs: POLL_MS, skip: onHistory });
+  const changes = useQuery(ch, "changes", { mode }, { skip: onHistory });
   const history = useHistory({ query, all, skip: !onHistory });
-
-  // Main says when the focused pane's repo may have changed.
-  useEffect(
-    () =>
-      ch.on("repo-changed", () => {
-        changes.refresh();
-        history.refresh();
-      }),
-    [changes.refresh, history.refresh],
-  );
 
   /** What the tab on screen last answered: null before its first answer, and its `repo` is null when no pane is in one. */
   const answered = onHistory ? history.shown : changes.data;

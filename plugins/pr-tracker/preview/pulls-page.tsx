@@ -4,5 +4,5 @@ import Pulls from "../src/pages/pulls";
 import { rows } from "./_data";
 
 export const place = "view";
-export const answers = { pulls: (): PullsAnswer => ({ rows }) };
+export const queries = { pulls: (): PullsAnswer => ({ rows }) };
 export default Pulls;

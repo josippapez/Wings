@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as next, setTimeout as sleep } from "node:timers/promises";
 
-import { cached, errorMessage, fitJson, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
+import { cached, errorMessage, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
 
 test("errorMessage takes the message of an Error or of anything with one, else the text of the value", () => {
   assert.equal(errorMessage(new Error("boom")), "boom");
@@ -120,18 +120,6 @@ test("latestOnly says a load is stale once a later one has started", () => {
   const start = latestOnly();
   const [first, second] = [start(), start()];
   assert.deepEqual([first(), second()], [true, false]);
-});
-
-test("fitJson keeps the longest start of the rows whose JSON fits, wrapped or not", () => {
-  const rows = ["aaaaa", "bbbbb", "ccccc", "ddddd"];
-  // The JSON of n of them is 8n + 1 characters long.
-  assert.deepEqual(fitJson(rows, 100), rows);
-  assert.deepEqual(fitJson(rows, 25), rows.slice(0, 3));
-  assert.deepEqual(fitJson(rows, 24), rows.slice(0, 2));
-  // `{"rows":` and `}` add 9.
-  assert.deepEqual(fitJson(rows, 26, (all) => ({ rows: all })), rows.slice(0, 2));
-  assert.deepEqual(fitJson(rows, 5), []);
-  assert.deepEqual(fitJson([], 5), []);
 });
 
 test("openDiffWhile opens the viewer before loading, then updates it with the result or the error message", async (t) => {

@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { tokens } from "wings-plugin-sdk/format";
-import { useShared } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text } from "wings-plugin-ui";
 
 import { gb } from "../lib/format";
@@ -48,7 +48,7 @@ function ServerRow({ server }: { server: Server }) {
 }
 
 export default function Hud() {
-  const hud = useShared(ch, "hud");
+  const { data: hud } = useQuery(ch, "hud", undefined);
   /** The session you picked; otherwise the first. */
   const [picked, setPicked] = useState<string | null>(null);
 

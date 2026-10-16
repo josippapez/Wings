@@ -12,8 +12,19 @@ import { snapshot } from "./lib/view";
 /** Entries read for a run: the newest rows and more. A run with more than this has its older calls and token counts missed, which `partial` says. */
 const BACKLOG = 500;
 
-// The return type is written out because `follow` uses `sidebar` and `sidebar` uses `follow`.
-const sidebar = ch.share("sessions", (): SessionView[] => snapshot(follow.sessions()));
+// The return type is written out because `follow` uses the loader and the loader uses `follow`.
+ch.serve("sessions", (): SessionView[] => snapshot(follow.sessions()), { throttleMs: 300 });
+
+// A row opens to its detail, which follows the row: a call still running when it opened gets its result.
+ch.serve(
+  "detail",
+  ({ sessionId, key }) => {
+    const item = follow.get(sessionId)?.items.find((i) => i.key === key);
+    if (!item) throw new Error("That row isn't kept any more.");
+    return item;
+  },
+  { throttleMs: 300 },
+);
 
 const follow = followSessions({
   create: session,
@@ -26,13 +37,11 @@ const follow = followSessions({
     return entries;
   },
   entry: (s, entry, { thisRun }) => ingest(s, entry, thisRun),
-  changed: sidebar.changed,
+  changed(s) {
+    ch.refresh("sessions");
+    for (const key of ch.watching("detail")) if (key.sessionId === s.id) ch.refresh("detail", key);
+  },
 });
 
-// A row opens to its detail, and a file to its diff.
-ch.answer("detail", ({ sessionId, key }) => {
-  const item = follow.get(sessionId)?.items.find((i) => i.key === key);
-  if (!item) throw new Error("That row isn't kept any more.");
-  return item;
-});
+// A file opens to its diff.
 ch.answer("diff", ({ sessionId, path }) => openChanges(follow.get(sessionId), path));

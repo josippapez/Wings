@@ -20,14 +20,14 @@ const RESULTS = 100;
 
 let totalMemory: number | null = null;
 
-const sidebar = ch.share("hud", () => snapshot(follow.sessions()));
+ch.serve("hud", () => snapshot(follow.sessions()), { throttleMs: 300 });
 
 // Changes come in bursts while Claude works, so the strips are drawn at most every 300 ms. Wings skips a strip that is
 // unchanged, so each pass can go through every session. A run whose backlog isn't in has nothing to show: its strip
 // stays as it was, and `changed` runs again when the backlog lands.
 let strips: ReturnType<typeof setTimeout> | undefined;
 function changed() {
-  sidebar.changed();
+  ch.refresh("hud");
   strips ??= setTimeout(drawStrips, 300);
 }
 function drawStrips() {
@@ -114,7 +114,7 @@ async function refreshMemory() {
     state.memory = null;
     console.error(error);
   }
-  sidebar.changed();
+  ch.refresh("hud");
 }
 
 // Limits reset on their own and memory moves, so both are checked once a minute. Each check is a few ms.

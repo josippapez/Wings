@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
-import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { useAsk } from "wings-plugin-sdk/react";
+import { useQuery } from "wings-plugin-sdk/react";
 
 import { withFirstPage } from "../lib/history-rows";
-import { ch, POLL_MS } from "../lib/messages";
+import { ch } from "../lib/messages";
 import type { CommitRow, Repo } from "../lib/types";
 
 interface Shown {
@@ -19,21 +18,18 @@ interface Shown {
 const sourceOf = (repo: Repo, query: string, all: boolean) => JSON.stringify([repo.root, query, all]);
 
 /**
- * The History tab's commits. The first page is an ask that polls and replaces itself, like any `useAsk`. The rest is
- * explicit because the newest answer doesn't win there: Load more appends the next page, and a first page that arrives
- * later goes over the top of the rows already shown, so a poll after a new commit keeps the pages Load more added.
+ * The History tab's commits. The first page is a query that main keeps fresh and replaces itself. The rest is explicit
+ * because the newest answer doesn't win there: Load more asks for the next page and appends it, and a first page that
+ * arrives later goes over the top of the rows already shown, so a refetch after a new commit keeps the pages Load more added.
  * `skip` leaves the tab alone while it is hidden; its rows stay for when it comes back.
  */
 export function useHistory({ query, all, skip }: { query: string; all: boolean; skip: boolean }) {
-  const first = useAsk(ch, "history", { query, all, skip: 0 }, { skip });
-  // Main says when a watched repo changes, so only a repo no project has is polled.
-  const watched = first.data?.repo ? first.data.watched : false;
-  useEffect(() => (skip || watched ? undefined : pollWhileFocused(first.refresh, POLL_MS)), [skip, watched, first.refresh]);
+  const first = useQuery(ch, "history", { query, all }, { skip });
   const [shown, setShown] = useState<Shown | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
 
-  // `first.data` is the answer to the request on screen: `useAsk` drops it when the request changes. A layout effect, so the
+  // `first.data` is the first page of the key on screen: `useQuery` drops it when the key changes. A layout effect, so the
   // rows on screen never lag the answer by a painted frame.
   useLayoutEffect(() => {
     const page = first.data;
@@ -68,9 +64,9 @@ export function useHistory({ query, all, skip }: { query: string; all: boolean; 
 
   return {
     shown,
-    /** A first page is on its way, poll or not. */
+    /** The first page isn't here yet, or Refresh waits for it. */
     loading: first.loading,
-    /** The first page of this search and scope isn't here yet, so `shown` may be of another. A poll isn't pending. */
+    /** The first page of this search and scope isn't here yet, so `shown` may be of another. A refetch isn't pending. */
     pending: first.data === null,
     loadingMore,
     error: first.error?.message ?? moreError,
