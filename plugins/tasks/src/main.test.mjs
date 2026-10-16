@@ -13,7 +13,12 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 let projects;
 
 globalThis.wings = {
-  storage: { get: async (key) => storage.get(key) ?? null, set: async (key, value) => void storage.set(key, JSON.parse(JSON.stringify(value))) },
+  storage: {
+    get: async (key) => storage.get(key) ?? null,
+    set: async (key, value) => void storage.set(key, JSON.parse(JSON.stringify(value))),
+    delete: async (key) => void storage.delete(key),
+    entries: async (prefix) => [...storage].filter(([k]) => k.startsWith(prefix)).sort(([a], [b]) => (a < b ? -1 : 1)),
+  },
   broadcast: async (message) => send("page", message),
   onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
   onTool: (name, handler) => handlers.set(name, handler),
@@ -21,6 +26,7 @@ globalThis.wings = {
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
 };
 await import("./main.ts");
+const { slotOf } = await import("./lib/storage.ts");
 
 const page = channel({ wings: { broadcast: async (message) => send("main", message), onBroadcast: (listener) => (listeners.page.add(listener), () => listeners.page.delete(listener)) } });
 const told = [];
@@ -48,7 +54,7 @@ test("a tool's input is checked against its schema first, and the error names th
     ["update", { key: "WEB-1", related_add: Array(21).fill("WEB-2") }, /related_add takes up to 20 items, this one has 21/],
     ["update", { key: "WEB-1", parent: 4 }, /parent must be text/],
     ["update", { key: "WEB-1", commit: "a".repeat(41) }, /commit is limited to 40 characters/],
-    ["log", { key: "WEB-1", text: "x".repeat(4_001) }, /text is limited to 4,000 characters/],
+    ["log", { key: "WEB-1", text: "x".repeat(20_001) }, /text is limited to 20,000 characters/],
     ["list", { status: "x" }, /status must be one of/],
     ["list", { type: "x" }, /type must be one of/],
     ["list", { query: 5 }, /query must be text/],
@@ -77,7 +83,7 @@ test("a page's operation is answered once it is saved: pages are told once, a ch
   await ask({ kind: "update", key: "WEB-1", title: "Done it" });
   await settle();
   assert.deepEqual(told.slice(before), [{ projectId: "proj1" }]);
-  assert.equal(storage.get("issues:proj1").issues[0].title, "Done it");
+  assert.equal(storage.get(`issues/${slotOf("proj1")}/WEB-1`).title, "Done it");
   await ask({ kind: "update", key: "WEB-1", title: "Done it" });
   await settle();
   assert.equal(told.length, before + 1);

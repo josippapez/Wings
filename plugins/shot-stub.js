@@ -57,6 +57,7 @@ export function installWings(fx) {
       set: (key, value) => (stored.set(key, copy(value)), ok()),
       delete: (key) => (stored.delete(key), ok()),
       keys: () => Promise.resolve([...stored.keys()].sort()),
+      entries: (prefix = "") => Promise.resolve([...stored].filter(([k]) => k.startsWith(prefix)).sort(([a], [b]) => (a < b ? -1 : 1))),
     },
     secrets: { has: () => Promise.resolve(false), set: ok, delete: ok },
   };

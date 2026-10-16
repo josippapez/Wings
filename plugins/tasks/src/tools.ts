@@ -9,6 +9,8 @@ import { formatIssue, formatList } from "./lib/format";
 import { readStore } from "./lib/storage";
 import { write } from "./main/write";
 
+/** A limit as the descriptions write it: 20,000. */
+const n = (limit: number) => limit.toLocaleString("en");
 const issueKey = (description: string) => s.string({ minLength: 1, maxLength: LIMITS.key }).describe(description);
 const issueKeys = (description: string) => s.array(s.string({ maxLength: LIMITS.key }), { maxItems: MAX_LINKS }).optional().describe(description);
 const statusField = s.enum(STATUSES).optional();
@@ -26,8 +28,8 @@ const relations = {
 
 /** What `update` changes, besides the issue named by its key. */
 const changes = {
-  title: s.string({ maxLength: LIMITS.title }).optional().describe("Up to 200 characters."),
-  description: s.string({ maxLength: LIMITS.description }).optional().describe("Replaces the description, up to 20,000 characters. An empty string clears it."),
+  title: s.string({ maxLength: LIMITS.title }).optional().describe(`Up to ${n(LIMITS.title)} characters.`),
+  description: s.string({ maxLength: LIMITS.description }).optional().describe(`Replaces the description, up to ${n(LIMITS.description)} characters. An empty string clears it.`),
   status: statusField,
   priority: priorityField.describe("How urgent it is: urgent, high, medium, low, or none. none clears it."),
   branch: s.string({ maxLength: LIMITS.branch }).optional().describe("The git branch. An empty string removes it."),
@@ -84,8 +86,8 @@ export const tools = {
   create: tool({
     description: "Creates an issue in this terminal's project and returns its key. Use it when you start a piece of work that has no issue yet, or for a follow-up worth keeping for a later session. In the description fill Goal, Scope, Done when (a checklist) and Validation (the commands or checks that prove it). Check list first so you don't duplicate one. To group work, create an epic (type epic) and pass its key as parent when you create the pieces; use type bug for defects and related or blocked_by_add to tie issues together. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
     input: s.object({
-      title: s.string({ minLength: 1, maxLength: LIMITS.title }).describe("A short title, up to 200 characters."),
-      description: s.string({ maxLength: LIMITS.description }).optional().describe("Markdown spec: goal, scope, acceptance criteria. Up to 20,000 characters."),
+      title: s.string({ minLength: 1, maxLength: LIMITS.title }).describe(`A short title, up to ${n(LIMITS.title)} characters.`),
+      description: s.string({ maxLength: LIMITS.description }).optional().describe(`Markdown spec: goal, scope, acceptance criteria. Up to ${n(LIMITS.description)} characters.`),
       status: statusField.describe("Defaults to todo. Use in_progress when you start on it now."),
       priority: priorityField.describe("How urgent it is: urgent, high, medium, low, or none. Defaults to none."),
       ...relations,
@@ -112,7 +114,7 @@ export const tools = {
     description: "Adds a note to an issue's activity log, stamped with your session and the time. Write what you did and what is next, at meaningful steps and always before you stop, so the next session or the user can pick the work up. Notes can't be edited or removed afterwards. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
     input: s.object({
       key: issueKey("The issue's key, like WIN-12."),
-      text: s.string({ minLength: 1, maxLength: LIMITS.note }).describe("What you did and what's next, up to 4,000 characters. Markdown works."),
+      text: s.string({ minLength: 1, maxLength: LIMITS.note }).describe(`What you did and what's next, up to ${n(LIMITS.note)} characters. Markdown works.`),
     }),
     run: async ({ key, text }, context) => {
       const { issue } = await edit(context, { kind: "note", key, text });

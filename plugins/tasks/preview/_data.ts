@@ -1,5 +1,6 @@
 // Made-up issues for the fixtures.
 import type { Issue, LogEntry } from "../src/lib/domain";
+import { entriesOf } from "../src/lib/storage";
 import type { BoardViewProps } from "../src/ui/board-view";
 
 const now = Date.now();
@@ -96,4 +97,4 @@ export const defaults: BoardViewProps = {
 };
 
 /** For a state of a whole page: the page reads its issues from storage, so the stub's storage holds these for the project. */
-export const storage = { [`issues:${project.id}`]: { v: 3, prefix: "WEB", next: 15, issues } };
+export const storage = Object.fromEntries(entriesOf(project.id, { v: 3, prefix: "WEB", next: 15, issues }));

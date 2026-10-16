@@ -2,15 +2,17 @@
 // and descriptions that every other module shares. Nothing here touches Wings.
 
 /**
- * Why these numbers: all of the plugin's storage is 1 MB, shared by every project. An issue with a short description and
- * ten one-line log entries is about 2 KB of JSON (see `estimateBytes` and the test that measures it), so 300 of them are
- * about 600 KB. `BUDGET` stops one project well before the 1 MB wall, with a message instead of storage's own refusal.
+ * Why these numbers: each issue is its own storage entry, and Wings holds 1 MB per entry and 50 MB for the whole plugin,
+ * shared by every project. An issue with a short description and ten one-line log entries is about 2 KB of JSON (see
+ * `estimateBytes` and the test that measures it), so 300 of them are about 600 KB, and a busy issue with a long spec and
+ * notes is still tens of KB. `ISSUE_BUDGET` stops one issue before the 1 MB wall, with a message instead of storage's own
+ * refusal: an issue with 50 notes of the full 20,000 characters is about 1 MB.
  * A broadcast is limited to 64,000 characters, and none carries issue text from main to a page: it carries ids.
  * `key`, `commit` and `query` only bound what a tool accepts: a key like WEB-12 is 13 characters at most, a commit hash 40.
  */
-export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 4_000, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200 } as const;
-/** The most one project's entry may take, in bytes of JSON. */
-export const BUDGET = 700_000;
+export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 20_000, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200 } as const;
+/** The most one issue's entry may take, in bytes of JSON. */
+export const ISSUE_BUDGET = 1_000_000;
 export const FORMAT_VERSION = 3;
 /** Links one issue keeps to others, of each kind. */
 export const MAX_LINKS = 20;

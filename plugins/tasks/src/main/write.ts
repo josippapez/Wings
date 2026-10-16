@@ -11,12 +11,22 @@ import { pushSection } from "./section";
 /** Writes run one after another, so a read-then-write never interleaves with another. */
 const queue = serial();
 
+/** The projects whose older entries are saved as one entry per issue in this run, so a write only adds to that. */
+const migrated = new Set<string>();
+async function migrateOnce(projectId: string, projectName: string): Promise<void> {
+  if (migrated.has(projectId)) return;
+  await migrateLegacy(projectId, projectName);
+  migrated.add(projectId);
+}
+
 /** Applies `op` as `by` to a project's issues, saves it, and tells the pages. An op that changes nothing saves and sends nothing. */
 export function write(projectId: string, projectName: string, op: Op, by: Actor): Promise<{ issue: Issue; changed: boolean }> {
   return queue(async () => {
-    const { store, issue, changed } = applyOp(await readStore(projectId, projectName), op, by);
+    await migrateOnce(projectId, projectName);
+    const before = await readStore(projectId, projectName);
+    const { store, issue, changed } = applyOp(before, op, by);
     if (changed) {
-      await writeStore(projectId, store);
+      await writeStore(projectId, before, store);
       await ch.tell("issues", { projectId }).catch(console.error);
       await pushSection(projectId, store.issues);
     }
@@ -30,6 +40,6 @@ export function write(projectId: string, projectName: string, op: Op, by: Actor)
  */
 export const loadProject = (projectId: string, projectName: string): Promise<void> =>
   queue(async () => {
-    await migrateLegacy(projectId, projectName).catch(console.error);
+    await migrateOnce(projectId, projectName).catch(console.error);
     await pushSection(projectId, (await readStore(projectId, projectName)).issues);
   });
