@@ -119,7 +119,7 @@ function Opened({ name }: { name: string }) {
 | `Row`, `Stack` | `gap` (`none`, `xs`, `s`, `m`, `l`), `grow`; `Row` also `align`, `justify`, `wrap`; `as` (`form`, `ul`, `ol` too) | Children side by side or one under the other; as a `ul` or `ol`, a list with no bullets. With `as`, the props and handlers are the element's: `<Row as="form" onSubmit={(e) => e.currentTarget.requestSubmit()}>` has a `HTMLFormElement` |
 | `Text` | `tone` (`muted`, `info`, `success`, `warn`, `danger`), `size` (`small`, `tiny`), `weight` (`medium`, `strong`), `mono`, `numeric`, `truncate`, `clamp`, `grow`, `as` | A span, or the element in `as` |
 | `Title` | `as` (`h1`, `h2`, `h3`), `size` (`large`), `truncate` | A page's or a card's title, like a sprint's name or a setup step's question |
-| `Heading` | `level` (2, 3, 4), `actions` | A small section heading, `h2` by default, with chips or a button on its right |
+| `Heading` | `level` (2, 3, 4), `actions` | A small muted section label, `h2` by default, with chips or a button on its right. Level 3 is a section title: 14px, bold, in the text colour |
 | `Card` | `compact`, `as` (`form`, `ul`, `ol` too) | A card, a card that's a form, or a list. Typed for its `as` element like `Row` and `Stack` |
 | `Gauge`, `Meter` | `label`, `percent`, `note`, `tone` or `levels` | A labelled bar with its percentage, or the bar alone, with the meter role |
 | `Stats` | `items: { label, value, tone? }[]` | Small figures side by side, label over value |

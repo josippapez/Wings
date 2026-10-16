@@ -120,7 +120,7 @@ export function Text(
     grow?: boolean;
   },
 ): ReactElement;
-/** A section heading, an `h2`, with `actions` like chips or a button on its right. */
+/** A section heading, an `h2`, with `actions` like chips or a button on its right. Level 3 is the section title of a page: 14px, bold, in the text colour. Levels 2 and 4 are small muted labels. */
 export function Heading(props: Props<"h2"> & { level?: 2 | 3 | 4; actions?: ReactNode }): ReactElement;
 /** A page's or a card's title, like a sprint's name or a setup step's question: an `h1` unless `as` says otherwise. */
 /** `truncate` cuts a title that's too long for its place to one line, with an ellipsis. */

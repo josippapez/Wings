@@ -329,12 +329,17 @@ textarea::placeholder {
   min-width: 0;
 }
 
-/* A section heading, with its controls on the right. */
+/* A section heading, with its controls on the right. Level 3 is the one that names a section of a page, so it reads as one. */
 .w-heading {
   margin-top: 6px;
   font-size: 12px;
   font-weight: 500;
   color: var(--wings-muted);
+}
+h3.w-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wings-fg);
 }
 .w-heading-row {
   display: flex;

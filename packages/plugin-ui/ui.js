@@ -207,7 +207,7 @@ export function Title({ as = "h1", size, truncate, className, ...rest }) {
   return h(as, { ...rest, className: cx("w-title", className), "data-size": size, "data-truncate": flag(truncate) });
 }
 
-/** A small section heading, `h2` unless `level` says 3 or 4, with `actions` like chips or a button on its right. */
+/** A small section heading, `h2` unless `level` says 3 or 4, with `actions` like chips or a button on its right. Level 3 is bigger and in the text colour: the title of a section of a page. */
 export function Heading({ level = 2, actions, className, ...rest }) {
   const heading = h(`h${level}`, { ...rest, className: cx("w-heading", className) });
   return actions ? h("div", { className: "w-heading-row" }, heading, actions) : heading;
