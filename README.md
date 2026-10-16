@@ -1,18 +1,56 @@
 # Wings
 
-Wings is a terminal workspace for coding agents such as Claude Code and opencode. Your projects sit in a sidebar with each agent and what it is doing, and every project has tabs and split panes of real terminals. It is a Tauri 2 and React 19 app, MIT licensed.
+A terminal workspace for coding agents such as Claude Code and opencode. Your projects sit in a sidebar next to the agents running in them, and every project has tabs and split panes of real terminals.
+
+![Wings with three projects in the sidebar, a Claude Code pane with its todo card, a dev server and a git log](docs/images/hero.png)
+
+Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed.
 
 ## Features
 
-- Projects in a sidebar, with the agents running in them and whether each one is working, waiting or needs you.
-- Tabs and split panes per project. Rename, reorder and move them by dragging or from the right-click menus.
-- Past sessions: browse history and resume a session.
-- Command palette on ⌘K (Ctrl+Shift+K elsewhere) for commands, projects, tabs, agents and sessions. It lists every shortcut. Tab, Pane and View menus show them too.
-- A global shortcut, ⌃⌥J by default (change it in Settings, Keyboard), that brings Wings forward and goes to the agent that needs you. ⌘J does the same inside the app.
-- Worktrees: start an agent in a new git worktree from a project's right-click menu, and list or clean up worktrees with the Worktrees plugin.
+### Know what every agent is doing
+
+The sidebar lists your projects and the agents in each one, and shows whether an agent is working, waiting or needs you. Press ⌘J to jump to the agent that needs you. A global shortcut, ⌃⌥J by default, brings Wings forward and goes there from any app. You can change it in Settings, Keyboard.
+
+A notification list keeps track of the times an agent needed you or finished.
+
+### Tabs and split panes
+
+Each project has tabs, and each tab can split into panes. Rename, reorder and move them by dragging or from the right-click menus. Tabs, splits and the font size come back on the next launch, and panes that were running Claude Code resume their session.
+
+### Command palette
+
+⌘K opens a palette for commands, projects, tabs, agents and sessions. It lists every shortcut. The Tab, Pane and View menus show them too.
+
+![The command palette listing agents that need you, agents and commands with their shortcuts](docs/images/palette.png)
+
+### Issues, and the agent's todo
+
+The Issues plugin keeps a local tracker for each project, with types, specs, priorities, links to commits and PRs, and an activity log. See the issues on a board, as rows by epic, or as a list. Claude Code reads and writes them through tools, and a session start line tells it to track its work there. A setting keeps issue keys out of its commits and PRs.
+
+![The Issues board for a project with columns for to do, in progress, in review and done](docs/images/issues.png)
+
+The agent also keeps its own step list with `tasks__todo`. It shows as a card floating over its pane, and on a Todo tab with the history kept.
+
+![A Claude Code pane with a card listing its steps and which one is in progress](docs/images/todo.png)
+
+### Review and history
+
 - Diff review: comment on lines of a diff and send the comments to the agent in that repo.
-- A notification list for when agents needed you or finished.
-- Plugins that add badges, sidebars and actions to panes.
+- Past sessions: browse history and resume a session.
+- Worktrees: start an agent in a new git worktree from a project's right-click menu, and list or clean up worktrees with the Worktrees plugin.
+- Project page: each project has a page of facts, sections and blocks that plugins add to. Agents can read and write it too.
+
+### Plugins
+
+A plugin adds badges, sidebars, tabs, blocks and actions to Wings, and can answer Claude Code hooks. Plugins run in a sandbox and can only do what you approved. This repo has plugins for:
+
+- Changes: changed files per pane, the repo's history and a commit graph.
+- Dev servers: a badge with the port while a program in a pane listens on one.
+- HUD: Claude Code usage.
+- Issues: the tracker above.
+- PR tracker: the pull request for each pane's branch, with its checks.
+- Session detail, Work item and Worktrees.
 
 ## Install
 
