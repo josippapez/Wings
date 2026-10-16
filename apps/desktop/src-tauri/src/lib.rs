@@ -271,6 +271,16 @@ fn install_file(app: &AppHandle, path: &str) -> Res<PluginView> {
     install(app, &bytes, Source::File, None)
 }
 
+/// Runs a plugin folder where it is, or reads one that's linked again, which restarts it. Claude's sessions only
+/// hear about it when the plugin's tools changed.
+fn link_folder(app: &AppHandle, folder: &str) -> Res<plugin_store::Linked> {
+    let linked = app.state::<AppState>().plugins.lock().unwrap().link(std::path::Path::new(folder))?;
+    if linked.tools_changed {
+        tools_changed(app);
+    }
+    Ok(linked)
+}
+
 fn install_github(app: &AppHandle, url: &str) -> Res<PluginView> {
     let (repo, folder) = plugin_store::parse_github(url).ok_or("That isn't a GitHub repo link, like github.com/owner/name or github.com/owner/name/plugins/<id>")?;
     let bytes = plugin_store::download_github(&repo, folder.as_deref())?;
@@ -360,14 +370,10 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
 
 /// The README.md of an installed plugin, for its page in Settings. Works whether or not the plugin is on.
 #[tauri::command(async)]
-fn plugin_readme(app: AppHandle, state: State<AppState>, id: String) -> Res<Option<String>> {
-    // Only ids of installed plugins get a path, so `id` can't point outside the plugins folder.
-    if state.plugins.lock().unwrap().view(&id).is_none() {
-        return Err(format!("{id} isn't installed"));
-    }
-    let installed = app.path().app_data_dir().map_err(err)?.join("plugins").join(&id);
-    let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")).join(&id));
-    Ok([Some(installed), dev].into_iter().flatten().find_map(|dir| read_readme(&dir)))
+fn plugin_readme(state: State<AppState>, id: String) -> Res<Option<String>> {
+    // Only ids of installed plugins get a path, so `id` can't point outside the plugin's own folder.
+    let dir = state.plugins.lock().unwrap().dir(&id).ok_or_else(|| format!("{id} isn't installed"))?;
+    Ok(read_readme(&dir))
 }
 
 const README_MAX_BYTES: u64 = 256 * 1024;

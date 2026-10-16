@@ -58,6 +58,10 @@ struct Entry {
     /// reach the old plugin's tokens even if deleting them failed.
     #[serde(default = "new_scope")]
     scope: String,
+    /// A plugin folder the user linked (`wings-plugin dev`) and runs in place, instead of a copy in the plugins
+    /// folder. `source` stays `File` for these: a new kind would make an older build drop the whole state file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<PathBuf>,
 }
 
 /// Unique, not secret: it only has to differ between installs.
@@ -77,7 +81,7 @@ pub struct SecretScope {
 
 impl Entry {
     fn new(source: Source) -> Self {
-        Self { enabled: false, approved: None, source, secrets: Vec::new(), scope: new_scope() }
+        Self { enabled: false, approved: None, source, secrets: Vec::new(), scope: new_scope(), folder: None }
     }
 }
 
@@ -95,6 +99,18 @@ pub struct PluginView {
     pub icon_svg: Option<String>,
     /// Loaded from the repo's `plugins/` folder by a dev build: always approved, can't be removed.
     pub dev: bool,
+    /// The folder a linked plugin runs from.
+    pub folder: Option<PathBuf>,
+}
+
+/// What `Store::link` did, for the caller to tell the UI and Claude's sessions.
+#[derive(Debug)]
+pub struct Linked {
+    pub view: PluginView,
+    /// A new link or a changed grant: the UI should open the approval.
+    pub review: bool,
+    /// Its MCP tools, their instructions or whether they're offered changed.
+    pub tools_changed: bool,
 }
 
 pub struct Store {
@@ -117,6 +133,14 @@ impl Store {
             return store;
         }
         store.plugins = plugins::discover(std::slice::from_ref(&store.root));
+        for (id, folder) in store.entries.iter().filter_map(|(id, e)| Some((id.clone(), e.folder.clone()?))) {
+            match plugins::load(&folder) {
+                Ok(plugin) => {
+                    store.plugins.insert(id, plugin);
+                }
+                Err(e) => eprintln!("[plugins] skipped linked {}: {e}", folder.display()),
+            }
+        }
         if let Some(dev) = dev_root {
             for (id, plugin) in plugins::discover(&[dev.to_path_buf()]) {
                 store.dev.insert(id.clone());
@@ -144,6 +168,7 @@ impl Store {
             source: entry.map(|e| e.source.clone()),
             icon_svg: plugin.icon_svg.clone(),
             dev,
+            folder: entry.and_then(|e| e.folder.clone()),
         })
     }
 
@@ -151,6 +176,11 @@ impl Store {
     pub fn active(&self, id: &str) -> Option<Plugin> {
         let view = self.view(id)?;
         (view.enabled && view.approved).then(|| self.plugins[id].clone())
+    }
+
+    /// Where the plugin's files are.
+    pub fn dir(&self, id: &str) -> Option<PathBuf> {
+        self.plugins.get(id).map(|p| p.dir.clone())
     }
 
     pub fn source(&self, id: &str) -> Option<Source> {
@@ -177,6 +207,9 @@ impl Store {
         let checked = unpack(bytes, &staging, folder).and_then(|()| plugins::load(&staging));
         let id = match checked {
             Ok(plugin) if self.dev.contains(&plugin.manifest.id) => Err(format!("{} is loaded from the repo in this dev build", plugin.manifest.id)),
+            Ok(plugin) if self.entries.get(&plugin.manifest.id).is_some_and(|e| e.folder.is_some()) => {
+                Err(format!("{} is linked from a folder. Remove it first to install it", plugin.manifest.id))
+            }
             Ok(plugin) if expected_id.is_some_and(|id| id != plugin.manifest.id) => {
                 Err(format!("The update is a different plugin ({}), so it wasn't installed", plugin.manifest.id))
             }
@@ -199,10 +232,46 @@ impl Store {
         let approved = old.as_ref().and_then(|e| e.approved.clone());
         let enabled = old.as_ref().is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
         let (secrets, scope) = old.map_or_else(|| (Vec::new(), new_scope()), |e| (e.secrets, e.scope));
-        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets, scope });
+        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets, scope, folder: None });
         self.plugins.insert(id.clone(), plugin);
         self.save()?;
         Ok((self.view(&id).expect("just installed"), dropped))
+    }
+
+    /// Runs the plugin in `folder` where it is, and reads it again when it's already linked. A new link starts off
+    /// and unapproved. An existing one keeps its approval for as long as the manifest asks for the same access
+    /// and adds the same things. A folder that doesn't load leaves the plugin that's running as it was.
+    pub fn link(&mut self, folder: &Path) -> Result<Linked, String> {
+        if cfg!(windows) {
+            return Err("Plugins aren't available on Windows yet".into());
+        }
+        let folder = folder.canonicalize().map_err(|e| format!("Couldn't read {}: {e}", folder.display()))?;
+        let plugin = plugins::load(&folder)?;
+        let id = plugin.manifest.id.clone();
+        let offered = |s: &Store| s.active(&id).map(|p| (p.manifest.contributes.mcp_tools, p.manifest.contributes.mcp_instructions));
+        let (tools_before, old_grant) = (offered(self), self.plugins.get(&id).map(|p| Grant::of(&p.manifest)));
+        let mut is_new = false;
+        if self.dev.contains(&id) {
+            // A debug build's own repo plugin: only to read it again.
+            if self.plugins[&id].dir.canonicalize().ok().as_deref() != Some(folder.as_path()) {
+                return Err(format!("{id} is loaded from the repo in this dev build"));
+            }
+        } else {
+            match self.entries.get(&id) {
+                Some(e) if e.folder.as_deref() == Some(folder.as_path()) => {}
+                Some(Entry { folder: Some(other), .. }) => return Err(format!("{id} is already linked from {}. Remove it first", other.display())),
+                Some(_) => return Err(format!("{id} is installed from a file or GitHub. Remove it first to link a folder")),
+                None => {
+                    is_new = true;
+                    self.entries.insert(id.clone(), Entry { folder: Some(folder), ..Entry::new(Source::File) });
+                }
+            }
+        }
+        let review = is_new || old_grant.is_none_or(|grant| grant != Grant::of(&plugin.manifest));
+        self.plugins.insert(id.clone(), plugin);
+        self.save()?;
+        let tools_changed = tools_before != offered(self);
+        Ok(Linked { view: self.view(&id).expect("just linked"), review: review && !self.dev.contains(&id), tools_changed })
     }
 
     /// Turning a plugin on approves `shown`, what the user was shown, and only if that's still what the
@@ -235,8 +304,12 @@ impl Store {
             return Err(format!("{id} is loaded from the repo in this dev build"));
         }
         let plugin = self.plugins.remove(id).ok_or_else(|| format!("unknown plugin {id}"))?;
-        let secrets = self.entries.remove(id).map(|e| SecretScope { scope: e.scope, names: e.secrets });
-        fs::remove_dir_all(&plugin.dir).map_err(|e| e.to_string())?;
+        let entry = self.entries.remove(id);
+        // A linked folder is the author's own: only the link goes.
+        if entry.as_ref().is_none_or(|e| e.folder.is_none()) {
+            fs::remove_dir_all(&plugin.dir).map_err(|e| e.to_string())?;
+        }
+        let secrets = entry.map(|e| SecretScope { scope: e.scope, names: e.secrets });
         self.save()?;
         Ok(secrets)
     }
@@ -821,6 +894,72 @@ mod tests {
         let err = s.install(&package(&[("wings-plugin.json", &with_min("999.0.0")), ("main.js", "")]), Source::File, None).unwrap_err();
         assert!(err.contains("needs Wings 999.0.0 or newer"), "{err}");
     }
+    /// A plugin folder like an author's: the manifest and a main.js.
+    fn folder(dir: &Path, manifest: &str) -> PathBuf {
+        let folder = dir.join("mine");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("wings-plugin.json"), manifest).unwrap();
+        fs::write(folder.join("main.js"), "").unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_link_starts_off_and_asks_again_only_when_the_grant_changes() {
+        let (mut s, dir) = store();
+        let path = folder(&dir, &manifest_with_tools("demo", &[]));
+        let first = s.link(&path).unwrap();
+        assert!(first.review && !first.view.enabled && !first.view.approved && s.active("demo").is_none());
+        // Source stays `file`, and the folder is a new field next to it.
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join("plugins.json")).unwrap()).unwrap();
+        assert_eq!(saved["demo"]["source"], serde_json::json!({ "kind": "file" }));
+        assert_eq!(saved["demo"]["folder"], serde_json::json!(path.canonicalize().unwrap()));
+
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let again = Store::load(dir.join("plugins"), dir.join("plugins.json"), None);
+        assert!(again.active("demo").is_some() && again.view("demo").unwrap().folder.is_some());
+
+        // Reading it again after a code change keeps the approval and leaves the tools alone.
+        fs::write(path.join("main.js"), "// edited").unwrap();
+        let same = s.link(&path).unwrap();
+        assert!(!same.review && !same.tools_changed && same.view.approved);
+        // A tool changes what Claude is offered, and what was approved no longer matches.
+        fs::write(path.join("wings-plugin.json"), manifest_with_tools("demo", &["get_status"])).unwrap();
+        let more = s.link(&path).unwrap();
+        assert!(more.review && more.tools_changed && !more.view.approved && s.active("demo").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_folder_that_doesnt_load_leaves_the_linked_plugin_running() {
+        let (mut s, dir) = store();
+        let path = folder(&dir, &manifest("demo", &[]));
+        s.link(&path).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        fs::write(path.join("wings-plugin.json"), "{ not json").unwrap();
+        assert!(s.link(&path).is_err());
+        assert!(s.active("demo").is_some());
+        // A new id in the same folder is a different plugin and links on its own.
+        fs::write(path.join("wings-plugin.json"), manifest("other", &[])).unwrap();
+        assert!(s.link(&path).unwrap().review && s.view("demo").is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn linking_and_installing_refuse_each_others_ids_and_remove_keeps_the_folder() {
+        let (mut s, dir) = store();
+        let pkg = package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        s.install(&pkg, Source::File, None).unwrap();
+        let path = folder(&dir, &manifest("demo", &[]));
+        assert!(s.link(&path).unwrap_err().contains("Remove it first"));
+        s.remove("demo").unwrap();
+
+        s.link(&path).unwrap();
+        assert!(s.install(&pkg, Source::File, None).unwrap_err().contains("linked"));
+        s.remove("demo").unwrap();
+        assert!(s.view("demo").is_none() && path.join("wings-plugin.json").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
 }
 
 

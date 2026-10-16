@@ -18,6 +18,7 @@ const USAGE: &str = "Usage: wings plugin <command>
   list [--json]           Installed plugins and whether they're on
   install <file | link>   Install a .wings-plugin file or a GitHub repo, like github.com/owner/name
                           or a plugin folder in one, like github.com/owner/name/plugins/<id>
+  link <folder>           Run a plugin folder where it is, which `wings-plugin dev` does after each build
   update <id>             Reinstall a GitHub plugin from its newest release
   enable <id>             Turn a plugin on. New access still needs your approval in Wings
   disable <id>            Turn a plugin off
@@ -42,6 +43,10 @@ pub fn run(args: &[String]) -> i32 {
             };
             ("install", json!({ "source": source }))
         }
+        ["link", folder] => match Path::new(folder).canonicalize() {
+            Ok(full) => ("link", json!({ "folder": full.to_string_lossy() })),
+            Err(e) => return fail(&format!("Couldn't read {folder}: {e}")),
+        },
         [op @ ("update" | "enable" | "disable" | "remove"), id] => (*op, json!({ "plugin": id })),
         _ => {
             eprintln!("{USAGE}");
@@ -145,6 +150,9 @@ fn state(p: &Value) -> &'static str {
 }
 
 fn source(p: &Value) -> String {
+    if let Some(folder) = p["folder"].as_str() {
+        return format!("linked from {folder}");
+    }
     if p.get("dev").and_then(Value::as_bool).unwrap_or(false) {
         return "this repo".into();
     }

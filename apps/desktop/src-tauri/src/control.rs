@@ -26,6 +26,11 @@ pub fn handle(app: &AppHandle, op: &str, request: &Value) -> Option<Res<Value>> 
             let view = if std::path::Path::new(&source).is_absolute() { crate::install_file(app, &source) } else { crate::install_github(app, &source) };
             view.map(installed)
         }
+        // `wings-plugin dev` sends this after each build. Linking a linked folder again is the reload.
+        "link" => crate::link_folder(app, &arg("folder")).map(|linked| {
+            changed(&linked.view.manifest.id, linked.review);
+            json!(linked.view)
+        }),
         "update" => crate::update_plugin(app, &arg("plugin")).map(installed),
         "enable" => {
             let id = arg("plugin");

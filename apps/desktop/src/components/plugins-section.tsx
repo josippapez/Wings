@@ -71,6 +71,7 @@ function PluginIcon({ plugin, className }: { plugin: PluginView; className: stri
 /** Where the plugin came from; a GitHub repo is a link. */
 function Source({ plugin: p }: { plugin: PluginView }) {
   if (p.dev) return "From this repo (development build)";
+  if (p.folder) return `Linked from ${p.folder}`;
   if (p.source?.kind !== "github") return "From a file";
   const folder = p.source.folder;
   const url = folder ? `https://github.com/${p.source.repo}/tree/HEAD/${folder}` : `https://github.com/${p.source.repo}`;

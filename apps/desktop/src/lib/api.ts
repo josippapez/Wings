@@ -151,6 +151,8 @@ export type PluginView = {
   source: PluginSource | null;
   /** Loaded from the repo by a dev build: always approved, can't be removed. */
   dev: boolean;
+  /** The folder a linked plugin runs from (`wings-plugin dev`); its source is still a file. */
+  folder?: string;
 };
 
 export type SessionSummary = {
