@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
-import { defaultBranch, repoRoot } from "wings-plugin-sdk/git";
+import { defaultBranch, onGitChange, repoRoot } from "wings-plugin-sdk/git";
 import { Button, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { loadRepos, prune, removeWorktrees, rowsOf, type Outcome, type Repo } from "../lib/git";
@@ -66,9 +66,15 @@ export default function Worktrees() {
     const offFocus = wings.onFocus(({ focused }) => {
       if (focused) void refresh();
     });
+    // A commit, checkout or pull in any of the repos shown, from anywhere. Dirty state isn't seen: it reloads on focus and after actions.
+    const offGit = onGitChange(async (_ids, roots) => {
+      const known = knownRepos.current?.split("\0") ?? [];
+      if (roots.some((root) => known.includes(root))) await refresh();
+    });
     return () => {
       offPanes();
       offFocus();
+      offGit();
     };
   }, [refresh]);
 
