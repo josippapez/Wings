@@ -1,6 +1,7 @@
 // The Issues tab as a board: in rows by parent epic or feature, in one board of columns, searched, empty, loading, and as the page runs it.
 import BoardPage, { page } from "../src/pages/board";
 import { BoardView } from "../src/ui/board-view";
+import { Steps } from "./_steps";
 import { defaults, project, storage } from "./_data";
 
 export { page };
@@ -18,6 +19,8 @@ export const states = {
   canceled: { element: <BoardView {...defaults} error="A project holds up to 300 issues. Remove one first." showCanceled folded={["WEB-13"]} /> },
   // Asking to delete an epic with child issues: delete only it, or it and everything under it.
   delete: { element: <BoardView {...defaults} deleting="WEB-10" /> },
+  // The delete failed: the card stays open with the reason.
+  "delete-failed": { element: <Steps steps={[{ click: "Delete WEB-1" }]}><BoardView {...defaults} apply={() => Promise.reject(new Error("The issue could not be deleted. Try again."))} deleting="WEB-1" /></Steps> },
   // No issues.
   empty: { element: <BoardView {...defaults} issues={[]} /> },
   // While the list loads.

@@ -2,13 +2,12 @@
 // from storage, a fixture from made-up data.
 
 import { Fragment, useState } from "react";
-import { Button, Card, Empty, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
+import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { canParent, LIMITS, type Issue } from "../lib/domain";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
-import { InlineInput } from "./inline-input";
-import { DeleteConfirm, ErrorText, TypeIcon, type Send } from "./parts";
+import { DeleteConfirm, ErrorText, TypeIcon, type Apply, type Send } from "./parts";
 
 export interface IssueViewProps {
   project: WingsProject;
@@ -19,6 +18,8 @@ export interface IssueViewProps {
   /** The key the tab was opened for, for the not-found page. */
   issueKey: string;
   error: string | null;
+  /** Changes made from a part that stays open when it fails: the editors, and the delete. They show the reason themselves. */
+  apply: Apply;
   send: Send;
   onBack: () => void;
   /** The issues opened before this one in this tab, oldest first, shown in the breadcrumb to go back to. */
@@ -33,13 +34,13 @@ export interface IssueViewProps {
 }
 
 /** The title, large, with the key beside it. Click it, or press Enter or F2 on it, to edit. */
-function IssueTitle({ issue, send }: { issue: Issue; send: Send }) {
+function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   const [editing, setEditing] = useState(false);
   return (
     <div className="tk-title-row">
       <TypeIcon type={issue.type} label />
       {editing ? (
-        <InlineInput label="Title" className="tk-title-input" value={issue.title} max={LIMITS.title} required onSave={(title) => void send({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
+        <InlineInput label="Title" className="tk-title-input" value={issue.title} maxLength={LIMITS.title} required onSave={(title) => apply({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
       ) : (
         <Title as="h1" className="tk-title">
           <Button variant="ghost" className="tk-title-button" title="Edit the title" onClick={() => setEditing(true)} onKeyDown={(e) => { if (e.key === "F2") setEditing(true); }}>
@@ -52,7 +53,7 @@ function IssueTitle({ issue, send }: { issue: Issue; send: Send }) {
   );
 }
 
-export function IssueView({ project, issue, issues, issueKey, error, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
+export function IssueView({ project, issue, issues, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
   const crumb = (
     <nav className="tk-crumbs" aria-label="Breadcrumb">
@@ -100,18 +101,18 @@ export function IssueView({ project, issue, issues, issueKey, error, send, onBac
         {error || confirming ? (
           <Stack gap="m" className="tk-notices">
             {error ? <Card><ErrorText>{error}</ErrorText></Card> : null}
-            {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => void send({ kind: "remove", key: issue.key, children })} /> : null}
+            {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => apply({ kind: "remove", key: issue.key, children })} /> : null}
           </Stack>
         ) : null}
         <div className="tk-grid">
           <header className="tk-head">
-            <IssueTitle issue={issue} send={send} />
+            <IssueTitle issue={issue} apply={apply} />
           </header>
-          <Properties issue={issue} issues={issues} project={project} send={send} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
+          <Properties issue={issue} issues={issues} project={project} apply={apply} send={send} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
           <div className="tk-main">
-            <Description issue={issue} send={send} />
+            <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}
-            <Activity issue={issue} send={send} />
+            <Activity issue={issue} apply={apply} />
           </div>
         </div>
       </div>

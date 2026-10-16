@@ -2,13 +2,12 @@
 // the commits and sessions, and when it was made and last changed.
 
 import { useState } from "react";
-import { Badge, Button, Combobox, copyText, Row, Select, Text, Time } from "wings-plugin-ui";
+import { Badge, Button, Combobox, copyText, InlineInput, Row, Select, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type Priority, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
 import { blocksOf, parentChoices } from "../lib/relations";
-import { InlineInput } from "./inline-input";
-import { openProps, PriorityIcon, StatusDot, TypeIcon, type Send } from "./parts";
+import { openProps, PriorityIcon, StatusDot, TypeIcon, type Apply, type Send } from "./parts";
 
 const STATUS_OPTIONS = STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }));
 const PRIORITY_OPTIONS = PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }));
@@ -27,7 +26,7 @@ function Prop({ label, wide, empty, actions, children }: { label: string; wide?:
   );
 }
 
-function Branch({ issue, project, send }: { issue: Issue; project: WingsProject; send: Send }) {
+function Branch({ issue, project, apply, send }: { issue: Issue; project: WingsProject; apply: Apply; send: Send }) {
   const branch = issue.links?.branch ?? "";
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -35,7 +34,7 @@ function Branch({ issue, project, send }: { issue: Issue; project: WingsProject;
     void copyText(branch).then(() => setCopied(true));
     setTimeout(() => setCopied(false), 1500);
   };
-  const set = (value: string) => void send({ kind: "update", key: issue.key, branch: value });
+  const set = (value: string) => apply({ kind: "update", key: issue.key, branch: value });
   return (
     <Prop
       label="Branch"
@@ -49,14 +48,14 @@ function Branch({ issue, project, send }: { issue: Issue; project: WingsProject;
       }
     >
       {editing ? (
-        <InlineInput label="Branch" className="tk-prop-input" value={branch} max={LIMITS.branch} placeholder="feature/name" onSave={set} onDone={() => setEditing(false)} />
+        <InlineInput label="Branch" className="tk-prop-input" value={branch} maxLength={LIMITS.branch} placeholder="feature/name" onSave={set} onDone={() => setEditing(false)} />
       ) : branch ? (
         <Text as="span" mono size="small" className="tk-prop-mono" title={branch}>{branch}</Text>
       ) : (
         <Text as="span" tone="muted" size="small">None</Text>
       )}
       {!editing && project.branch && project.branch !== branch ? (
-        <Button size="xs" variant="ghost" className="tk-prop-use" onClick={() => set(project.branch ?? "")}>Use {project.branch}</Button>
+        <Button size="xs" variant="ghost" className="tk-prop-use" onClick={() => void send({ kind: "update", key: issue.key, branch: project.branch ?? "" })}>Use {project.branch}</Button>
       ) : null}
     </Prop>
   );
@@ -72,13 +71,13 @@ const prLabel = (url: string) => {
   }
 };
 
-function PullRequest({ issue, send, onOpenUrl }: { issue: Issue; send: Send; onOpenUrl: (url: string) => void }) {
+function PullRequest({ issue, apply, onOpenUrl }: { issue: Issue; apply: Apply; onOpenUrl: (url: string) => void }) {
   const pr = issue.links?.pr ?? "";
   const [editing, setEditing] = useState(false);
   return (
     <Prop label="Pull request" actions={editing ? null : <Button size="xs" variant="ghost" aria-label="Edit the pull request link" onClick={() => setEditing(true)}>Edit</Button>}>
       {editing ? (
-        <InlineInput label="Pull request URL" className="tk-prop-input" value={pr} max={LIMITS.pr} placeholder="https://" onSave={(value) => void send({ kind: "update", key: issue.key, pr: value })} onDone={() => setEditing(false)} />
+        <InlineInput label="Pull request URL" className="tk-prop-input" value={pr} maxLength={LIMITS.pr} placeholder="https://" onSave={(value) => apply({ kind: "update", key: issue.key, pr: value })} onDone={() => setEditing(false)} />
       ) : pr ? (
         <Button variant="outline" size="xs" className="tk-pr-chip" title={pr} onClick={() => onOpenUrl(pr)}>{prLabel(pr)} <span aria-hidden="true">↗</span></Button>
       ) : (
@@ -155,7 +154,7 @@ function Links({ issue, issues, send, onOpenIssue }: { issue: Issue; issues: Iss
   );
 }
 
-export function Properties({ issue, issues, project, send, onOpenUrl, onOpenIssue }: { issue: Issue; issues: Issue[]; project: WingsProject; send: Send; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
+export function Properties({ issue, issues, project, apply, send, onOpenUrl, onOpenIssue }: { issue: Issue; issues: Issue[]; project: WingsProject; apply: Apply; send: Send; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
   const last = lastSession(issue);
   const commits = issue.links?.commits ?? [];
   return (
@@ -179,8 +178,8 @@ export function Properties({ issue, issues, project, send, onOpenUrl, onOpenIssu
         </Row>
       </Prop>
       <Links issue={issue} issues={issues} send={send} onOpenIssue={onOpenIssue} />
-      <Branch issue={issue} project={project} send={send} />
-      <PullRequest issue={issue} send={send} onOpenUrl={onOpenUrl} />
+      <Branch issue={issue} project={project} apply={apply} send={send} />
+      <PullRequest issue={issue} apply={apply} onOpenUrl={onOpenUrl} />
       <Prop label="Commits" wide empty={!commits.length}>
         {commits.length ? (
           <Row gap="s" wrap>

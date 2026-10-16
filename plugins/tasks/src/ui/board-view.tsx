@@ -1,14 +1,14 @@
 // The Issues tab without its data: the board for a list of issues. The tab page feeds it from storage, a fixture from made-up data.
 
 import { useState } from "react";
-import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, List, ListButton, ListItem, Loading, Page, SearchField, Text, Time, Toolbar } from "wings-plugin-ui";
+import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, Icon, List, ListButton, ListItem, Loading, Page, SearchField, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { canParent, FLOW, STATUS_LABEL, STATUSES, type Issue, type Op } from "../lib/domain";
 import { iso } from "../lib/format";
 import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings";
 import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
-import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TrashIcon, TypeIcon, type Send } from "./parts";
+import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TypeIcon, type Send } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -92,7 +92,7 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
       {error ? <ErrorText className="tk-error">{error}</ErrorText> : null}
       {doomed && issues ? (
         <div className="tk-confirm-wrap" data-layout={layout}>
-          <DeleteConfirm issue={doomed} issues={issues} onCancel={() => setDeleting(null)} onDelete={(children) => void send({ kind: "remove", key: doomed.key, children }).then(() => setDeleting(null))} />
+          <DeleteConfirm issue={doomed} issues={issues} onCancel={() => setDeleting(null)} onDelete={(children) => apply({ kind: "remove", key: doomed.key, children }).then(() => setDeleting(null))} />
         </div>
       ) : null}
       {!issues ? (
@@ -180,7 +180,7 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
           <section key={root.key} className="tk-tree-group" aria-label={`${root.key} ${root.title}`}>
             <div className="tk-tree-head">
               <Button variant="ghost" size="icon-xs" className="tk-fold" aria-label={root.title} aria-expanded={isOpen(root.key)} onClick={() => onFold(root.key, !isOpen(root.key))}>
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+                <Icon name="chevron-down" />
               </Button>
               <ListButton className="tk-row tk-tree-root" data-status={root.status} {...openProps((newTab) => onOpen(root, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(root))} aria-label={`Open ${root.key}: ${root.title}`}>
                 <PriorityIcon priority={root.priority} label />
@@ -253,5 +253,5 @@ function IssueRow({ issue: i, issues, parent, depth, onOpen, onDelete }: { issue
 
 /** A row's trash button, over its right end where the time is, shown while you're on the row. */
 function DeleteButton({ issue, onDelete }: { issue: Issue; onDelete: (issue: Issue) => void }) {
-  return <Button size="icon-xs" variant="ghost" className="tk-row-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={() => onDelete(issue)}><TrashIcon /></Button>;
+  return <Button size="icon-xs" variant="ghost" className="tk-row-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={() => onDelete(issue)}><Icon name="trash" /></Button>;
 }

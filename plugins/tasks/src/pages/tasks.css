@@ -181,11 +181,6 @@
     display: none;
   }
 }
-.tk-textarea {
-  width: 100%;
-  min-width: 0;
-  resize: vertical;
-}
 .tk-notices {
   margin-bottom: 16px;
 }
@@ -441,17 +436,6 @@
   height: 28px;
   font-size: 12px;
 }
-.tk-progress {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: var(--wings-secondary);
-}
-.tk-progress span {
-  display: block;
-  height: 100%;
-  background: var(--wings-success);
-}
 
 /* The counts and the two chips wrap onto a second line in a narrow tab instead of running under the Add field. */
 .tk-board-toolbar .w-toolbar-main {
@@ -498,7 +482,7 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.tk-child-progress .tk-progress {
+.tk-child-progress .w-meter {
   width: 40px;
 }
 

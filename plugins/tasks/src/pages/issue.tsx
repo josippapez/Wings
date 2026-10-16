@@ -56,6 +56,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       issues={store?.issues ?? []}
       issueKey={issueKey}
       error={action.error}
+      apply={apply}
       send={send}
       onBack={() => void wings.openView("board", { as: "tab" })}
       trail={trail}

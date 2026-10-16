@@ -1,17 +1,17 @@
 // Small pieces the Issues pages share.
 
 import type { ComponentProps } from "react";
-import { Badge, Button, Card, Dot, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
+import { Badge, Button, Card, Confirm, Dot, Icon, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
 
-/**
- * Sends an operation to main. Resolves to false when it failed and the page shows why, so an editor can stay open with
- * its text. Resolving with nothing is not a failure.
- */
-export type Send = (op: Op) => Promise<boolean | void>;
+/** Sends an operation to main. A failure shows in the page's error card; an editor that must stay open uses `apply`, which rejects. */
+export type Send = (op: Op) => Promise<unknown>;
+
+/** Applies an operation and rejects with the reason when it failed, for an editor that stays open with what was typed and shows the reason itself. */
+export type Apply = (op: Op) => Promise<void>;
 
 /** An error from the last change: in the danger colour, and announced to a screen reader. */
 export function ErrorText(props: Omit<ComponentProps<typeof Text>, "tone" | "role">) {
@@ -78,45 +78,29 @@ export function PriorityIcon({ priority = "none", label }: { priority?: Priority
   );
 }
 
-/** Lucide's trash-2, for the buttons that ask to delete an issue. */
-export function TrashIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
 /** True for the keys that ask to delete the focused issue: Delete, or Backspace on a Mac keyboard that has no Delete. */
 export const isDeleteKey = (e: React.KeyboardEvent) => (e.key === "Delete" || e.key === "Backspace") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
 
 /**
  * Asks before deleting `issue`. With child issues (at any depth) it offers to delete only this one, which leaves them
  * without a parent, or all of them. Focus starts on the delete that keeps the most, so Enter never takes more than asked.
- * Escape keeps it.
+ * Escape keeps it. `onDelete` rejects when it failed: the card then stays open with the reason.
  */
-export function DeleteConfirm({ issue, issues, onCancel, onDelete }: { issue: Issue; issues: Issue[]; onCancel: () => void; onDelete: (children: boolean) => void }) {
+export function DeleteConfirm({ issue, issues, onCancel, onDelete }: { issue: Issue; issues: Issue[]; onCancel: () => void; onDelete: (children: boolean) => Promise<unknown> }) {
   const below = descendantsOf(issues, issue.key).length;
   const children = below === 1 ? "1 child issue" : `${below} child issues`;
+  const actions = below
+    ? [
+        { id: "one", label: `Delete only ${issue.key}`, variant: "outline" as const, autoFocus: true, onConfirm: () => onDelete(false) },
+        { id: "all", label: `Delete with ${children}`, onConfirm: () => onDelete(true) },
+      ]
+    : [{ id: "one", label: `Delete ${issue.key}`, autoFocus: true, onConfirm: () => onDelete(false) }];
   return (
-    <Card role="alertdialog" aria-label={`Delete ${issue.key}`} onKeyDown={(e) => e.key === "Escape" && (e.preventDefault(), onCancel())}>
-      <Row gap="m" wrap justify="between">
-        <Text size="small">
-          Delete <strong>{issue.key}</strong> {issue.title}?{below ? ` It has ${children}.` : ""} This removes {below ? "what you delete" : "the issue"} and its log. Keys are never used again.
-        </Text>
-        <Row gap="s" wrap>
-          <Button variant="ghost" size="sm" onClick={onCancel}>Keep it</Button>
-          {below ? (
-            <>
-              <Button variant="outline" size="sm" autoFocus onClick={() => onDelete(false)}>Delete only {issue.key}</Button>
-              <Button variant="destructive" size="sm" onClick={() => onDelete(true)}>Delete with {children}</Button>
-            </>
-          ) : (
-            <Button variant="destructive" size="sm" autoFocus onClick={() => onDelete(false)}>Delete {issue.key}</Button>
-          )}
-        </Row>
-      </Row>
-    </Card>
+    <Confirm title={`Delete ${issue.key} ${issue.title}?`} cancelLabel="Keep it" onCancel={onCancel} actions={actions}>
+      <Text size="small">
+        {below ? `It has ${children}. ` : ""}This removes {below ? "what you delete" : "the issue"} and its log. Keys are never used again.
+      </Text>
+    </Confirm>
   );
 }
 
@@ -141,11 +125,8 @@ export function SessionMarker({ issue }: { issue: Issue }) {
 export function ChildProgress({ done, total }: { done: number; total: number }) {
   return (
     <span className="tk-child-progress" title={`${done} of ${total} child issues done`}>
-      <span className="tk-progress" aria-hidden>
-        <span style={{ width: `${(done / total) * 100}%` }} />
-      </span>
+      <Meter percent={(done / total) * 100} label={`${done} of ${total} child issues done`} tone="success" />
       <span aria-hidden>{done}/{total}</span>
-      <span className="w-visually-hidden">{done} of {total} child issues done</span>
     </span>
   );
 }
@@ -189,7 +170,7 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
         <Time iso={iso(issue.updatedAt)} prefix={issue.status === "done" ? "Done " : "Updated "} />
         {movable || onDelete ? (
           <span className="tk-moves">
-            {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><TrashIcon /></Button> : null}
+            {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><Icon name="trash" /></Button> : null}
             {movable ? (
               <>
                 <Button size="xs" variant="ghost" disabled={index === 0} aria-label={`Move ${issue.key} to ${target(-1)}`} onClick={() => onMove(-1)}>←</Button>

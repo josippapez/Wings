@@ -363,6 +363,11 @@ textarea::placeholder {
   padding: 8px 10px;
   font-size: 12px;
 }
+.w-confirm > .w-field-hint {
+  margin: 0;
+  font-size: 12px;
+}
+
 /* A message tinted by its tone. */
 .w-notice {
   --w-notice: var(--wings-info);
