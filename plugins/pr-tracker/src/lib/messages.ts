@@ -40,8 +40,8 @@ export const ch = channel<
     pr: { request: { op: "diff" | "agent" | "seen" | "approve" | "vote"; args: PrArgs; focus?: WingsDiffFocus; sha?: string; vote?: AzureVote }; response: void };
     /** Posts a reply to a thread, which every tab on the PR then shows. */
     "pr-reply": { request: { args: PrArgs; root: Comment; body: string }; response: Comment };
-    /** The lines around a code thread's comment, from the commit it was written on. */
-    "pr-snippet": { request: { args: PrArgs; root: Comment; head: string | null }; response: SnippetLine[] | null };
+    /** The lines around a code thread's comment, from the commit it was written on, or with `now` from the latest push. */
+    "pr-snippet": { request: { args: PrArgs; root: Comment; head: string | null; now?: boolean }; response: SnippetLine[] | null };
     /** Why one failed check failed. */
     "pr-failure": { request: { args: PrArgs; failing: Failing }; response: FailureDetail[] };
     /** A block's or a tab's button: what the pane badge's Sign in, Add token or Install does for this project's host. */

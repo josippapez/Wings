@@ -658,3 +658,15 @@ button.pr-check-main {
     font-size: 17px;
   }
 }
+.pr-snippet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 -14px;
+  padding: 2px 8px 2px 14px;
+  border-top: 1px solid var(--wings-hairline);
+}
+.pr-snippet-gone {
+  padding: 6px 0;
+}

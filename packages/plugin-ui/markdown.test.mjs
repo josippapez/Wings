@@ -137,3 +137,14 @@ test("<details> folds its blocks under its <summary>, and nothing of the HTML sh
   assert.deepEqual(nested[0].blocks.map((b) => b.kind), ["details", "paragraph"]);
   assert.equal(nested[0].blocks[0].blocks[0].text, "in");
 });
+
+test("an HTML comment shows nothing, outside code", () => {
+  const src = "Summary\n\n<!-- state:v4 {\"a\":1}\nmore --> <!-- tag -->\n\nAfter <!-- x --> text\n\n`<!-- kept -->`\n\n```\n<!-- kept too -->\n```";
+  assert.deepEqual(parseBlocks(src), [
+    { kind: "paragraph", text: "Summary" },
+    { kind: "paragraph", text: "After  text" },
+    { kind: "paragraph", text: "`<!-- kept -->`" },
+    { kind: "code", lang: "", text: "<!-- kept too -->" },
+  ]);
+  assert.deepEqual(parseBlocks("Text\n<!-- never closed\nhidden"), [{ kind: "paragraph", text: "Text" }]);
+});

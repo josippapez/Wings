@@ -28,7 +28,7 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const pr = useQuery(ch, "pr", key, { timeoutMs: TIMEOUT_MS });
   const comments = useQuery(ch, "pr-comments", key, { timeoutMs: TIMEOUT_MS });
   const pushes = useQuery(ch, "pr-pushes", key, { timeoutMs: TIMEOUT_MS });
-  const snippets = useRef(new Map<number, Promise<SnippetLine[] | null>>());
+  const snippets = useRef(new Map<string, Promise<SnippetLine[] | null>>());
   /** Which button waits on main: the action's own flag is for all of them. */
   const [busy, setBusy] = useState<"diff" | "agent" | null>(null);
   const action = useAction();
@@ -61,13 +61,14 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   const onApprove = useCallback(() => ch.ask("pr", { op: "approve", args, sha: overview!.status.key }), [args, overview]);
   const onVote = useCallback((vote: AzureVote) => ch.ask("pr", { op: "vote", args, vote }), [args]);
 
-  /** Each code thread's lines are read once, when its card is opened. */
+  /** Each code thread's lines are read once per view (as commented, or now), when its card shows them. */
   const onSnippet = useCallback(
-    (root: Comment) => {
-      const hit = snippets.current.get(root.id);
+    (root: Comment, now: boolean) => {
+      const key = `${root.id}:${now}`;
+      const hit = snippets.current.get(key);
       if (hit) return hit;
-      const lines = ch.ask("pr-snippet", { args, root, head: overview?.status.headCommit ?? null });
-      snippets.current.set(root.id, lines);
+      const lines = ch.ask("pr-snippet", { args, root, head: overview?.status.headCommit ?? null, now });
+      snippets.current.set(key, lines);
       return lines;
     },
     [args, overview],

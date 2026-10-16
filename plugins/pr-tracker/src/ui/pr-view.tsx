@@ -22,7 +22,7 @@ export interface PrViewProps {
   /** Pushes to the branch with their commits, where the provider lists them (Azure DevOps). */
   pushes?: Push[];
   /** The lines around a code thread's comment; absent where they can't be read. */
-  onSnippet?: (root: Comment) => Promise<SnippetLine[] | null>;
+  onSnippet?: (root: Comment, now: boolean) => Promise<SnippetLine[] | null>;
   error: string | null;
   /** The host needs signing in, a token or a CLI: shown with its button in place of the pull request. */
   problem?: Problem | null;
@@ -317,6 +317,7 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
                 onReply={onReply}
                 onDiff={diff}
                 onSnippet={onSnippet}
+                latest={pushes.length ? Math.max(...pushes.map((p) => p.id)) : undefined}
               />
             );
           })}
@@ -389,10 +390,12 @@ interface ThreadProps {
   canReply: boolean;
   onReply: (root: Comment, body: string) => Promise<void>;
   onDiff: (focus?: WingsDiffFocus) => void;
-  onSnippet?: (root: Comment) => Promise<SnippetLine[] | null>;
+  onSnippet?: (root: Comment, now: boolean) => Promise<SnippetLine[] | null>;
+  /** The latest push's number, which a thread written on an older one can switch its code to. */
+  latest?: number;
 }
 
-const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAuthor, canReply, onReply, onDiff, onSnippet }: ThreadProps) {
+const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAuthor, canReply, onReply, onDiff, onSnippet, latest }: ThreadProps) {
   const { root, replies } = thread;
   const [open, setOpen] = useState(defaultOpen);
   const where = root.path ? `${root.path}${root.line ? `:${root.line}` : ""}` : null;
@@ -428,7 +431,7 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
               </div>
               <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
             </div>
-            {onSnippet ? <Snippet root={root} onSnippet={onSnippet} /> : null}
+            {onSnippet ? <Snippet root={root} latest={latest} onSnippet={onSnippet} /> : null}
           </>
         ) : null}
         <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor} bot={isAutomated(root)}>
@@ -458,28 +461,58 @@ function placeholderLines(start: number, end?: number): SnippetLine[] {
   return Array.from({ length: to - from + 1 }, (_, i) => ({ n: from + i, text: "", hit: from + i >= start && from + i <= last }));
 }
 
-/** The lines around the commented ones, read when the card shows: mono, line numbers muted, the commented lines marked. */
-function Snippet({ root, onSnippet }: { root: Comment; onSnippet: (root: Comment) => Promise<SnippetLine[] | null> }) {
+/**
+ * The lines around the commented ones, read when the card shows: mono, line numbers muted, the commented lines marked.
+ * A thread written on an older push shows the code as it was then, and can switch to where those lines sit now.
+ */
+function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; onSnippet: (root: Comment, now: boolean) => Promise<SnippetLine[] | null> }) {
+  const [now, setNow] = useState(false);
   const [lines, setLines] = useState<SnippetLine[] | null>(null);
+  const [gone, setGone] = useState(false);
   useEffect(() => {
     let live = true;
-    void onSnippet(root).then((l) => live && setLines(l));
+    setLines(null);
+    setGone(false);
+    void onSnippet(root, now).then((l) => {
+      if (!live) return;
+      setLines(l);
+      setGone(now && !l);
+    });
     return () => {
       live = false;
     };
-  }, [root, onSnippet]);
+  }, [root, now, onSnippet]);
+  const iteration = root.range?.iteration;
+  const older = iteration !== undefined && latest !== undefined && iteration < latest;
   // While the file is read, empty lines of the count the range gives keep the card's height, so it doesn't jump when the code arrives.
-  const shown = lines ?? (root.path && root.range ? placeholderLines(root.range.start, root.range.end) : null);
+  const shown = lines ?? (root.path && root.range && !gone ? placeholderLines(root.range.start, root.range.end) : null);
+  const bar = older ? (
+    <div className="pr-snippet-bar" data-testid="pr-snippet-bar">
+      <Text tone="muted" size="tiny" as="span">{now ? `Latest code, push ${latest}` : `As of push ${iteration}`}</Text>
+      <Button size="sm" variant="ghost" aria-pressed={now} onClick={() => setNow((n) => !n)}>{now ? `Show push ${iteration}` : "Show latest"}</Button>
+    </div>
+  ) : null;
+  if (gone) {
+    return (
+      <>
+        {bar}
+        <Text tone="muted" size="small" className="pr-snippet-gone">These lines are no longer in the latest code.</Text>
+      </>
+    );
+  }
   if (!shown) return null;
   return (
-    <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} aria-busy={lines ? undefined : true} data-testid="pr-snippet" data-loading={lines ? undefined : ""}>
-      {shown.map((l) => (
-        <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined} data-added={l.added ? "" : undefined}>
-          <span className="pr-ln" aria-hidden="true">{l.n}</span>
-          <span className="pr-code">{l.text || " "}</span>
-        </code>
-      ))}
-    </pre>
+    <>
+      {bar}
+      <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} aria-busy={lines ? undefined : true} data-testid="pr-snippet" data-loading={lines ? undefined : ""}>
+        {shown.map((l) => (
+          <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined} data-added={l.added ? "" : undefined}>
+            <span className="pr-ln" aria-hidden="true">{l.n}</span>
+            <span className="pr-code">{l.text || " "}</span>
+          </code>
+        ))}
+      </pre>
+    </>
   );
 }
 

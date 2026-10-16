@@ -75,8 +75,8 @@ export interface Forge<L extends Link = Link, R extends KnownRemote = KnownRemot
   vote?(link: L, vote: AzureVote): Promise<void>;
   /** The PR's pushes with their commits, where the provider lists them. */
   pushes?(link: L): Promise<Push[]>;
-  /** The lines around a code thread's comment, from the commit it was written on. Null where they can't be had. */
-  snippet?(link: L, root: Comment, pushes: Push[], head: string | null): Promise<SnippetLine[] | null>;
+  /** The lines around a code thread's comment, from the commit it was written on, or with `now` where they sit at the latest push. Null where they can't be had. */
+  snippet?(link: L, root: Comment, pushes: Push[], head: string | null, now?: boolean): Promise<SnippetLine[] | null>;
   /** Forgets what it kept about the account, like who you are, after a sign-in or Try again. */
   forget?(): void;
 }

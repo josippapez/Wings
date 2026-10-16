@@ -40,7 +40,9 @@ export const states = {
   // Azure DevOps: votes instead of approving, and pushes between the threads.
   "page-azure": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes } },
   // The same once main has answered with the code: the card keeps the height its placeholder held. Shoot both with --height 1700.
-  "page-azure-loaded": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes }, answers: { "pr-snippet": ({ root }: { root: Comment }) => props.onSnippet!(root) } },
+  "page-azure-loaded": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes }, answers: { "pr-snippet": ({ root, now }: { root: Comment; now?: boolean }) => props.onSnippet!(root, Boolean(now)) } },
+  // A thread written on push 1 of 2: "As of push 1" over its code, and a button to see where the lines sit now.
+  "page-azure-older": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments.map((c) => (c.id === 5 ? { ...c, range: { ...c.range!, iteration: 1 } } : c)), "pr-pushes": pushes }, answers: { "pr-snippet": ({ root, now }: { root: Comment; now?: boolean }) => props.onSnippet!(root, Boolean(now)) } },
   // Opened from the project's list: a breadcrumb back in the toolbar.
   picked: { element: <PrView {...props} onBack={back} /> },
   // Opened straight on a pull request: no breadcrumb.

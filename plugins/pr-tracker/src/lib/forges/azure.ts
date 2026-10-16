@@ -3,7 +3,7 @@ import { cli, CliError, lastLine } from "wings-plugin-sdk/cli";
 import { azureApiOrg, git } from "wings-plugin-sdk/git";
 import { between, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
-import { pushesOf, type AzureIteration } from "../pushes";
+import { pushesOf, type AzureIteration, type Push } from "../pushes";
 import { addedLinesOf, snippetOf } from "../snippet";
 import { voteArgs } from "../vote";
 import { post } from "./post";
@@ -282,6 +282,15 @@ async function addedAt(link: AzureLink, base: string, sha: string, path: string)
   }
 }
 
+/** The lines around `start`-`end` of a file on one side of a push: the merge base for deletions, else the push's head. */
+async function linesAt(link: AzureLink, path: string, side: Comment["side"], base: string | null | undefined, head: string | null | undefined, start: number, end: number) {
+  const sha = side === "deletions" ? base : head;
+  const text = sha ? await fileAt(link, sha, path) : null;
+  const added = text !== null && side !== "deletions" && sha && base ? await addedAt(link, base, sha, path) : undefined;
+  const lines = text === null ? [] : snippetOf(text, start, end, added);
+  return lines.length ? lines : null;
+}
+
 /** A file as it was at a commit, from the project's own clone; a commit it doesn't have is fetched once. Null when neither works. */
 async function fileAt(link: AzureLink, sha: string, path: string): Promise<string | null> {
   if (!/^[0-9a-f]{40}$/.test(sha)) return null;
@@ -422,13 +431,22 @@ export const azure: Forge<AzureLink, AzureRemote> = {
     return pushesOf(out?.value ?? []);
   },
 
-  async snippet(link, root, pushes, head) {
+  async snippet(link, root, pushes, head, now) {
     if (!root.path || !root.range) return null;
-    const push = pushes.find((p) => p.id === root.range!.iteration);
-    const sha = root.side === "deletions" ? push?.base : (push?.head ?? head);
-    const text = sha ? await fileAt(link, sha, root.path) : null;
-    const added = text !== null && root.side !== "deletions" && sha && push?.base ? await addedAt(link, push.base, sha, root.path) : undefined;
-    const lines = text === null ? [] : snippetOf(text, root.range.start, root.range.end, added);
-    return lines.length ? lines : null;
+    if (!now) {
+      const push = pushes.find((p) => p.id === root.range!.iteration);
+      return linesAt(link, root.path, root.side, push?.base, push?.head ?? head, root.range.start, root.range.end);
+    }
+    // Azure moves the thread's lines to where they sit at the latest push, as its own page shows them.
+    const latest = pushes.reduce<Push | undefined>((a, p) => (a && a.id > p.id ? a : p), undefined);
+    if (!latest) return null;
+    const route = [...prRoute(link), `threadId=${Math.floor(root.id / 10_000)}`];
+    const t = (await orElse(invoke(link.remote.org, "git", "pullRequestThreads", route, ["--query-parameters", `$iteration=${latest.id}`]), null)) as AzureThread | null;
+    const ctx = t?.threadContext;
+    const right = ctx?.rightFileStart?.line;
+    const start = right ?? ctx?.leftFileStart?.line;
+    if (!ctx?.filePath || !start) return null;
+    const end = (right ? ctx.rightFileEnd?.line : ctx.leftFileEnd?.line) ?? start;
+    return linesAt(link, ctx.filePath.replace(/^\//, ""), right ? "additions" : "deletions", latest.base, head ?? latest.head, start, end);
   },
 };

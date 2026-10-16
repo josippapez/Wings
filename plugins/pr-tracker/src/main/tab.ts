@@ -126,10 +126,10 @@ export function serveTab() {
     return reply;
   });
 
-  ch.answer("pr-snippet", async ({ args, root, head }) => {
+  ch.answer("pr-snippet", async ({ args, root, head, now }) => {
     const link = await linkOfArgs(args);
     const pushes = ch.peek("pr-pushes", prKey(args))?.data ?? [];
-    return (await forgeOf(link).snippet?.(link, root, pushes, head)) ?? null;
+    return (await forgeOf(link).snippet?.(link, root, pushes, head, now)) ?? null;
   });
 
   /** A failed check's details: the ones the badge fetched ahead, else its own load. */

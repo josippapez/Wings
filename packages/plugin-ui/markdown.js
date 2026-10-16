@@ -97,6 +97,18 @@ export function parseBlocks(src, depth = 0) {
       blocks.push({ kind: "code", lang: open[2], text: code.join("\n") });
       continue;
     }
+    // An HTML comment (`<!-- … -->`, often a bot's hidden state) shows nothing, as on the forge. Not inside inline
+    // code. One left open hides the rest, as in HTML.
+    const commentAt = line.indexOf("<!--");
+    if (commentAt >= 0 && (line.slice(0, commentAt).match(/`/g)?.length ?? 0) % 2 === 0) {
+      let rest = line.slice(commentAt + 4);
+      let j = i;
+      while (!rest.includes("-->") && j + 1 < lines.length) rest += `\n${lines[++j]}`;
+      const close = rest.indexOf("-->");
+      lines[j] = line.slice(0, commentAt) + (close >= 0 ? rest.slice(close + 3) : "");
+      i = j - 1;
+      continue;
+    }
     if (!line.trim()) {
       flush();
       continue;
