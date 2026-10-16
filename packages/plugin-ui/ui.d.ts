@@ -238,9 +238,9 @@ export function Split(
 // ---------- figures ----------
 
 /** A bar from 0 to 100, with the meter role. */
-export function Meter(props: Props<"div"> & { percent: number; label: string; tone?: "warn" | "danger" }): ReactElement;
+export function Meter(props: Props<"div"> & { percent: number; label: string; tone?: "success" | "warn" | "danger" }): ReactElement;
 /** A labelled bar with its percentage and a `note` under it. `levels` are where it turns warn and danger, like `[75, 90]`. */
-export function Gauge(props: Props<"div"> & { label: string; percent: number; note?: ReactNode; tone?: "warn" | "danger"; levels?: [number, number] }): ReactElement;
+export function Gauge(props: Props<"div"> & { label: string; percent: number; note?: ReactNode; tone?: "success" | "warn" | "danger"; levels?: [number, number] }): ReactElement;
 export interface Stat {
   label: string;
   value: ReactNode;

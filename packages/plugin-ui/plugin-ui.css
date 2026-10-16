@@ -779,6 +779,9 @@ textarea::placeholder {
   border-radius: 2px;
   background: var(--wings-info);
 }
+.w-meter[data-tone="success"] > .w-meter-fill {
+  background: var(--wings-success);
+}
 .w-meter[data-tone="warn"] > .w-meter-fill {
   background: var(--wings-warning);
 }

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Notice, ProjectGate, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Meter, Notice, ProjectGate, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -141,4 +141,8 @@ test("Notice announces a warning or an error at once and the rest politely", () 
   assert.match(html(h(Notice, { tone: "warn" }, "Careful")), /data-tone="warn" role="alert"/);
   assert.match(html(h(Notice, { tone: "danger" }, "Failed")), /role="alert"/);
   assert.match(html(h(Notice, { tone: "success" }, "Done")), /role="status"/);
+});
+
+test("Meter takes a success tone", () => {
+  assert.match(html(h(Meter, { percent: 100, label: "Done", tone: "success" })), /role="meter"[^>]*data-tone="success"/);
 });
