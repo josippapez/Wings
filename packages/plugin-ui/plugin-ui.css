@@ -1234,6 +1234,7 @@ h3.w-heading {
 /* Chips, the app's small toggle: a quiet button, and a group of them that filters what shows. */
 .w-chips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;

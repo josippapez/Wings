@@ -307,7 +307,7 @@ export interface Option<V extends string> {
   label: ReactNode;
   title?: string;
 }
-/** Chips that pick one of `options`, like a filter, in a group named `label`. `onChange` gets each click, the chip that's on too. */
+/** Chips that pick one of `options`, like a filter, in a group named `label`. They wrap onto another line when the place is narrow. `onChange` gets each click, the chip that's on too. */
 export function Chips<V extends string>(
   props: Omit<Props<"div">, "onChange"> & {
     label: string;
