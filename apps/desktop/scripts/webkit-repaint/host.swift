@@ -1,7 +1,8 @@
 // Runs the Wings UI in a real WKWebView and checks that pane badges are drawn after a quick tab switch. The window is
 // borderless at desktop level and the app never activates, so it takes no focus. Pixels come from `screencapture -l`,
 // which captures what the window server composited, so a layer WebKit forgot to repaint shows as a difference.
-// Usage: host <url> <stub.js> <plugin.js> <out dir>. Exits 1 when a badge row differs from the reference.
+// Usage: host <url> <stub.js> <plugin.js> <out dir> <page.html>. Exits 1 when a badge row differs from the reference, or
+// when a plugin page is left wrong after the terminal tab in front of it closes.
 import AppKit
 import WebKit
 
@@ -10,12 +11,14 @@ let url = URL(string: args[1])!
 let stub = try! String(contentsOfFile: args[2], encoding: .utf8)
 let pluginJs = try! Data(contentsOf: URL(fileURLWithPath: args[3]))
 let out = args[4]
+let pageHtml = try! Data(contentsOf: URL(fileURLWithPath: args[5]))
 
-/** Serves the test plugin for every `wings-plugin://` request. */
+/** Serves the test plugin's page for `.html` and its script for every other `wings-plugin://` request. */
 final class PluginScheme: NSObject, WKURLSchemeHandler {
   func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
-    task.didReceive(HTTPURLResponse(url: task.request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/javascript"])!)
-    task.didReceive(pluginJs)
+    let isPage = task.request.url!.path.hasSuffix(".html")
+    task.didReceive(HTTPURLResponse(url: task.request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": isPage ? "text/html" : "text/javascript", "Access-Control-Allow-Origin": "*"])!)
+    task.didReceive(isPage ? pageHtml : pluginJs)
     task.didFinish()
   }
   func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
@@ -109,7 +112,36 @@ final class Loaded: NSObject, WKNavigationDelegate {
         print("\(bad ? "FAIL" : "ok  ") back after \(stay)s: differing pixels per badge row \(diffs)")
       }
       print(failed == 0 ? "Badges drawn after every tab switch." : "\(failed) tab switches left badges undrawn; screenshots in \(out)")
-      exit(failed == 0 ? 0 : 1)
+
+      // A plugin page in its own tab, a terminal tab opened in front of it and closed again. The page must come back
+      // as drawn before.
+      _ = await js("document.querySelector('button[aria-label=\"New tab menu\"]').click()")
+      await wait(0.5)
+      _ = await js("[...document.querySelectorAll('[role=menuitem]')].find(e => e.textContent.includes('Issues'))?.click()")
+      await wait(3)
+      guard let boxJson = await js("(() => { const b = document.querySelector('[data-plugin-tab]')?.getBoundingClientRect(); return b ? JSON.stringify([b.x, b.y, b.width, b.height]) : null })()") as? String,
+            let box = try? JSONSerialization.jsonObject(with: boxJson.data(using: .utf8)!) as? [Double] else {
+        print("setup failed: the plugin page tab did not open")
+        exit(2)
+      }
+      let pageReference = shot("page-reference")
+      var closeFailed = 0
+      for (n, stay) in [0.3, 2.0, 6.0].enumerated() {
+        _ = await js("document.querySelector('button[aria-label=\"New tab\"]').click()")
+        await wait(stay)
+        _ = await js("document.querySelector('[data-pane-grid]:not(.invisible) button[aria-label=\"Close pane\"]').click()")
+        var elapsed = 0.0
+        for after in [0.05, 0.5, 1.5, 3.0] {
+          await wait(after - elapsed)
+          elapsed = after
+          let image = shot("close-\(n)-\(after)")
+          let diff = differing(pageReference, image, box)
+          if diff > 100 { closeFailed += 1 }
+          print("\(diff > 100 ? "FAIL" : "ok  ") page \(after)s after closing a terminal tab opened \(stay)s earlier: \(diff) differing pixels")
+        }
+      }
+      print(closeFailed == 0 ? "Plugin page drawn after every terminal tab closed." : "\(closeFailed) shots of the plugin page differed; screenshots in \(out)")
+      exit(failed + closeFailed == 0 ? 0 : 1)
     }
   }
 }

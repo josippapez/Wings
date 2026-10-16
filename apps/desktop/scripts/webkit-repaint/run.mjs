@@ -1,6 +1,7 @@
 // `pnpm repaint`: builds the app, runs it in a real WKWebView (host.swift) with three test plugins badging every pane,
 // splits a tab, opens a second one and switches back and forth quickly, then checks the badges were drawn, pixel by
-// pixel against the first switch. WebKit's headless test builds paint screenshots afresh, so they never show a layer
+// pixel against the first switch. It then opens a plugin page tab, opens a terminal tab in front of it and closes it
+// again, and checks the page is drawn as before. WebKit's headless test builds paint screenshots afresh, so they never show a layer
 // WebKit forgot to repaint; this captures what the window server composited. Opt-in: macOS only, needs swiftc and
 // Screen Recording for the terminal. A borderless window sits at desktop level for about 20 s and never takes focus.
 // `--keep` keeps the screenshots. Exits 1 when a badge row was left undrawn.
@@ -46,7 +47,7 @@ execFileSync("swiftc", ["-O", "-o", host, join(here, "host.swift")], { stdio: "i
 const shots = join(work, "shots");
 mkdirSync(shots);
 const code = await new Promise((resolve) => {
-  const proc = spawn(host, [`http://127.0.0.1:${server.address().port}/`, join(here, "stub.js"), join(here, "plugin.js"), shots], { stdio: "inherit" });
+  const proc = spawn(host, [`http://127.0.0.1:${server.address().port}/`, join(here, "stub.js"), join(here, "plugin.js"), shots, join(here, "page.html")], { stdio: "inherit" });
   proc.on("exit", resolve);
 });
 server.close();

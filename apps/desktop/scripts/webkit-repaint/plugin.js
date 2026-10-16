@@ -5,6 +5,6 @@ const badge = {
   pr: { label: "#12 Merged", tone: "merged", icon: "pr-merged" },
   context: { label: "Model · 187k", tone: "neutral" },
 }[id];
-wings.onPanes((panes) => {
+if (badge) wings.onPanes((panes) => {
   for (const pane of panes) wings.setBadge(pane.paneId, badge);
 });
