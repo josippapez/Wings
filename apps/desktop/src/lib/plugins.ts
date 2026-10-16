@@ -261,7 +261,8 @@ function cleanDiffUpdate(p: Record<string, unknown>): Partial<DiffView> {
 
 /**
  * `run` is new for every start. WebKit keeps files from non-http schemes in its memory cache for good, so a
- * reinstalled plugin would otherwise get its old scripts until Wings quits.
+ * reinstalled plugin would otherwise get its old scripts until Wings quits. Pages reuse their plugin's run: a new
+ * one per page load would leave another copy of the page's files in that cache each time a page opens.
  */
 const pluginUrl = (id: string, run: string, file: string) =>
   `${/Windows/.test(navigator.userAgent) ? "http://wings-plugin.localhost" : "wings-plugin://localhost"}/${id}/${run}/${file}`;
@@ -275,6 +276,8 @@ export class PluginHost {
   private frames = new Map<Window | string, Running>();
   /** View windows asked for but not yet showing their page, by label. */
   private opening = new Map<string, { plugin: PluginView; viewId: string }>();
+  /** The `run` of each running plugin's start, by plugin id. */
+  private runs = new Map<string, string>();
   private windows = new ViewWindowHost(tauriBus(), {
     attach: (label) => this.attachWindow(label),
     message: (label, data) => {
@@ -325,7 +328,9 @@ export class PluginHost {
     frame.hidden = true;
     frame.title = `Plugin ${plugin.name}`;
     const nonce = crypto.randomUUID();
-    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce, null)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, newRun(), plugin.main)}"></script>`;
+    const run = newRun();
+    this.runs.set(plugin.id, run);
+    frame.srcdoc = `<!doctype html><meta charset="utf-8">${nonceScript(nonce, null)}<script src="${sdk}"></script><script src="${pluginUrl(plugin.id, run, plugin.main)}"></script>`;
     document.body.appendChild(frame);
     this.track(frame, plugin, "main", nonce);
   }
@@ -368,7 +373,8 @@ export class PluginHost {
   /** A page's document: the plugin's HTML with its nonce, the SDK and Wings' base styles loaded first. */
   private async pageDocument(plugin: PluginView, viewId: string | null, kind: "page" | "popover" | "settings" | "block", placement: PagePlacement, args?: unknown, focused?: boolean) {
     const { title, file } = this.pageFile(plugin, viewId, kind);
-    const run = newRun();
+    // A plugin that isn't running, like a turned off one's settings page, has no run to share.
+    const run = this.runs.get(plugin.id) ?? newRun();
     const html = await (await fetch(pluginUrl(plugin.id, run, file))).text();
     const base = pluginUrl(plugin.id, run, file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "");
     const nonce = crypto.randomUUID();
@@ -492,6 +498,7 @@ export class PluginHost {
     running.remove();
     this.frames.delete(key);
     if (running.kind !== "main") return;
+    this.runs.delete(running.id);
     for (const [token, action] of this.actions) if (action.pluginId === running.id) this.settle(token, new Error("The plugin was turned off"));
     for (const [token, tool] of this.tools) {
       if (tool.pluginId !== running.id) continue;
