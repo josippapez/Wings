@@ -1209,8 +1209,7 @@ fn send_notification(app: &AppHandle, pane_id: &str, title: String, body: String
             let shown = notify_rust::Notification::new()
                 .summary(&title)
                 .body(&body)
-                // macOS plays no sound unless the notification names one.
-                .sound_name("NSUserNotificationDefaultSoundName")
+                // No system sound: the web view plays the chosen one (`notificationSound`), so it isn't doubled.
                 .show();
             if let Ok(handle) = shown {
                 let _ = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {

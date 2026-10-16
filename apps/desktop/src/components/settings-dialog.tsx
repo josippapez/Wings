@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -6,11 +7,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useRef, useState } from "react";
-import { BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { BellIcon, BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import type { PluginView } from "@/lib/api";
 import { pluginSettingsSection, type NewProjectOpens, type NewTabEntry } from "@/lib/plugin-pages";
+import { playSound, SOUNDS, type SoundSettings } from "@/lib/sound";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
@@ -123,6 +125,7 @@ const sections = [
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "editor", label: "Editor", icon: CodeIcon },
   { id: "agents", label: "Agents", icon: BotIcon },
+  { id: "notifications", label: "Notifications", icon: BellIcon },
   { id: "plugins", label: "Plugins", icon: PuzzleIcon },
 ] as const;
 
@@ -212,6 +215,8 @@ export function SettingsDialog(props: {
   onLookChange: (look: TerminalLook) => void;
   sleep: SleepSettings;
   onSleepChange: (sleep: SleepSettings) => void;
+  notifySound: SoundSettings;
+  onNotifySoundChange: (sound: SoundSettings) => void;
   /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
   newTabs: NewTabEntry[];
   newTabPage: string;
@@ -399,6 +404,27 @@ export function SettingsDialog(props: {
                     value={props.sleep.minutes}
                     onChange={(minutes) => props.onSleepChange({ ...props.sleep, minutes })}
                   />
+                </Row>
+              </Group>
+            </TabsContent>
+            <TabsContent value="notifications" className="flex flex-col gap-3 p-6">
+              <h3 className="text-[15px] font-semibold">Notifications</h3>
+              <Group>
+                <Row id="notify-sound" label="Play a sound" hint="When an agent needs you or finishes, a plugin notifies, or an update is ready. Several at once play one sound.">
+                  <Switch id="notify-sound" checked={props.notifySound.enabled} onCheckedChange={(enabled) => props.onNotifySoundChange({ ...props.notifySound, enabled })} />
+                </Row>
+                <Row id="notify-sound-pick" label="Sound">
+                  <div className="flex items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" data-testid="notify-sound-preview" onClick={() => playSound(props.notifySound.sound)}>
+                      Preview
+                    </Button>
+                    <Choice
+                      id="notify-sound-pick"
+                      items={SOUNDS.map((s) => ({ value: s.id, label: s.label }))}
+                      value={props.notifySound.sound}
+                      onChange={(sound) => props.onNotifySoundChange({ ...props.notifySound, sound })}
+                    />
+                  </div>
                 </Row>
               </Group>
             </TabsContent>

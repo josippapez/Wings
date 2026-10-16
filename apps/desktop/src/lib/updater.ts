@@ -2,6 +2,8 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { toast } from "sonner";
 
+import { notificationSound } from "./sound.ts";
+
 const TOAST_ID = "update";
 // One small request to GitHub; a few times a day is plenty for a release feed.
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -45,6 +47,7 @@ export async function checkForUpdate({ manual = false } = {}) {
       showDetails(update);
       return;
     }
+    notificationSound();
     toast(`Wings ${update.version} is available`, {
       id: TOAST_ID,
       duration: Infinity,

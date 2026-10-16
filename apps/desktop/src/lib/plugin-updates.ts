@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { api, type PluginView } from "@/lib/api";
+import { notificationSound } from "@/lib/sound";
 
 const TOAST_ID = "plugin-updates";
 // Same cadence as the app's own update check; each plugin is one small request to GitHub.
@@ -53,6 +54,7 @@ export function usePluginUpdates(plugins: PluginView[], openPlugin: (id: string)
     if (fresh.length === 0) return;
     for (const { plugin, version } of fresh) announced.current.add(`${plugin.id}@${version}`);
     const open = () => latest.current.openPlugin(fresh[0].plugin.id);
+    notificationSound();
     toast(fresh.length === 1 ? `${fresh[0].plugin.name} ${fresh[0].version} is available` : "Plugin updates available", {
       id: TOAST_ID,
       duration: Infinity,

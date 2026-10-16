@@ -33,6 +33,7 @@ import { TerminalCommandPrompt } from "@/components/terminal-command";
 import { ProjectBar, TitleBar, type PluginButton, type TabView } from "@/components/title-bar";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
+import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
@@ -109,6 +110,8 @@ type SavedWorkspace = {
   asleep?: string[];
   /** When idle agents sleep. */
   sleep?: SleepSettings;
+  /** The sound for new notifications. */
+  notifySound?: SoundSettings;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
   /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
@@ -281,6 +284,7 @@ const leftPanel = usePanelRef();
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
+  const [notifySound, setNotifySound] = useState<SoundSettings>(DEFAULT_SOUND);
   const [sleepTick, setSleepTick] = useState(0);
   const [newTabPage, setNewTabPage] = useState<string>("terminal");
   const [newProjectOpens, setNewProjectOpens] = useState<NewProjectOpens>("terminal");
@@ -661,6 +665,7 @@ const leftPanel = usePanelRef();
       setCollapsedSections(restoreCollapsed(saved.collapsedSections, list.map((s) => s.id)));
       notify({ type: "restore", list: restoreNotifications(saved.notifications, new Set(running.values())) });
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
+      setNotifySound(cleanSound(saved.notifySound));
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
       const restored = saved.tabs
@@ -778,6 +783,7 @@ const leftPanel = usePanelRef();
       sessionKinds,
       asleep,
       sleep,
+      notifySound,
       newTabPage,
       newProjectOpens,
       collapsedSections,
@@ -793,7 +799,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -897,6 +903,7 @@ const leftPanel = usePanelRef();
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
   useEffect(() => setTerminalLook(terminalLook), [terminalLook]);
+  useEffect(() => setSoundSettings(notifySound), [notifySound]);
 
   // Wings sends a system notification only while it's in the background (`notify_transitions` in lib.rs).
   // In front, it's a toast instead, unless you're already looking at that pane.
@@ -925,7 +932,10 @@ const leftPanel = usePanelRef();
         type: "add",
         event: { id: eventId, at: Date.now(), kind: agent.state, title, project, detail: agent.state === "blocked" ? (agent.waitingFor ?? "waiting for input") : "", paneId: agent.paneId, read: seen },
       });
-      if (!document.hasFocus() || seen) continue;
+      // Looking at it already, so nothing new to announce. Otherwise it sounds, in front or in the background.
+      if (seen) continue;
+      notificationSound();
+      if (!document.hasFocus()) continue;
       toast(title, {
         id,
         onDismiss: () => notify({ type: "read", id: eventId }),
@@ -1013,8 +1023,10 @@ const leftPanel = usePanelRef();
         setRightSidebar(key);
         setOpenedSidebars((all) => (all.includes(key) ? all : [...all, key]));
       },
-      notified: (pluginName, title, body, plugin) =>
-        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false, plugin } }),
+      notified: (pluginName, title, body, plugin) => {
+        notificationSound();
+        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false, plugin } });
+      },
       openSettings: (pluginId) => {
         setSettingsSection(pluginSettingsSection(pluginId));
         setSettingsOpen(true);
@@ -1828,7 +1840,7 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}
