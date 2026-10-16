@@ -1,6 +1,6 @@
 // A stand-in for `window.wings` in `pnpm shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
-// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `storage`,
-// `respond`, and `answers` and `queries` for pages that use wings-plugin-sdk/messages.
+// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `storage`, and
+// `answers` and `queries` for pages that use wings-plugin-sdk/messages.
 
 import { channel } from "wings-plugin-sdk/messages";
 
@@ -33,10 +33,8 @@ export function installWings(fx) {
     viewArgs: () => fx.args ?? null,
     placement: () => "tab",
     onBroadcast: (l) => (listeners.add(l), () => listeners.delete(l)),
-    // A message goes nowhere, unless the fixture's `respond` has an answer for it: that is delivered like main's would be.
+    // A message goes to main's listeners, which are the channel above.
     broadcast: (message) => {
-      const answer = fx.respond?.(message);
-      if (answer !== undefined) toPage(answer);
       setTimeout(() => main.forEach((l) => l(copy(message))));
       return ok();
     },

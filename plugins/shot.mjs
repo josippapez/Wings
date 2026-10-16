@@ -8,16 +8,15 @@
 //   default   a React element, or a component, to show
 //   props     what a component `default` is shown with
 //   element   a React element to show in place of `default`
-//   page      { place, fill } as a page declares them, so that `export { default, page } from "../src/pages/x"` is that page
-//   place     "tab" (default), "view", "block", "settings", "sidebar" or "popover": which `show*` mounts it. Wins over `page`
-//   fill      true for a page that fills the tab (`showTab(..., { fill: true })`): the frame is as tall as --height.
-//             Without it the PNG is as tall as the page. Wins over `page`
+//   page      { place, fill } as a page declares them, so that `export { default, page } from "../src/pages/x"` is that page.
+//             place is "tab" (default), "view", "block", "settings", "sidebar" or "popover": which `show*` mounts it.
+//             fill is true for a page that fills the tab (`showTab(..., { fill: true })`): the frame is as tall as --height.
+//             Without it the PNG is as tall as the page. A state can set its own `page`
 //   project   what `wings.project()` answers (default: a project "web"; null for none)
 //   args      what `wings.viewArgs()` answers (default: null)
 //   storage   { key: value }: what `wings.storage` holds at the start, and keeps what the page sets
 //   answers   { name: (request) => response }: what main answers an `ask` with
 //   queries   { name: (key) => value, or a value for every key }: what main serves a `useQuery` or `subscribe` with
-//   respond   (message) => answer | undefined: what main answers a broadcast with, delivered to `onBroadcast`
 //   states    { name: { ...fields } }: one screenshot per state. Each shows the file's fields with its own over them.
 //             The PNGs are <plugin>-<file>-<state>-<width>.png; a file without states makes <plugin>-<file>-<width>.png
 // The page gets plugin-ui.css from packages/plugin-ui and the CSS its imports bring, in the app's dark theme, with a
@@ -85,13 +84,14 @@ async function pageOf(fixture) {
         const names = Object.keys(file.states ?? {});
         window.fixtureStates = names;
         const fx = names.length ? { ...file, ...file.states[new URLSearchParams(location.search).get("state") ?? names[0]] } : file;
-        const place = fx.place ?? fx.page?.place ?? "tab";
+        for (const old of ["place", "fill", "respond"]) if (old in fx) throw new Error("A fixture has no " + old + " any more: say the frame in page = { place, fill }, and what main answers in answers or queries.");
+        const place = fx.page?.place ?? "tab";
         const show = { tab: showTab, view: showView, block: showBlock, sidebar: showSidebar, popover: showPopover, settings: showSettings }[place];
         if (!show) throw new Error("place is tab, view, block, settings, sidebar or popover, not " + place);
         const element = fx.element ?? (typeof fx.default === "function" ? createElement(fx.default, fx.props) : fx.default);
         if (element == null) throw new Error("A fixture shows its default export, or a state its element: this one has neither.");
         installWings(fx);
-        show(element, { fill: Boolean(fx.fill ?? fx.page?.fill) });
+        show(element, { fill: Boolean(fx.page?.fill) });
       `,
     },
     outdir: join(work, fixture.id.replace("/", "-")),

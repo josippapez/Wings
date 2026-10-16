@@ -29,7 +29,7 @@ Plugin pages use `wings-plugin-ui`. Its components carry the padding, spacing an
 
 ## Check before done
 
-1. **Fixture.** Add or update a fixture in `plugins/<plugin>/preview/<name>.tsx` with made-up data. It should cover each state you touched: navigated in, opened directly, empty, and error.
+1. **Fixture.** Add or update the page's fixture, `plugins/<plugin>/preview/<page>.tsx`, with made-up data. It re-exports the page (`export { default, page } from "../src/pages/<page>"`) and has a state in `states` for each state you touched: navigated in, opened directly, empty, loading and error. Each state is one screenshot. What main answers goes in `queries` (for `useQuery`) or `answers` (for `ask`), not in a `respond` function. The header of `plugins/shot.mjs` lists what a fixture and a state can set.
 2. **Render.** Run `pnpm --dir plugins shot <plugin>` and read every PNG it prints. It renders at 1000px and 640px.
 3. **Compare.** Hold the page against the app around it.
    - Padding matches the toolbar.
