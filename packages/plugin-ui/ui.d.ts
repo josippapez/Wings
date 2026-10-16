@@ -128,6 +128,27 @@ export function Title(props: Props<"h1"> & { as?: "h1" | "h2" | "h3"; size?: "la
 /** A card. `compact` for a summary line. As a `form` it holds a form; as a `ul` or `ol`, a list of `li`. `as` types the props like `Row`'s. */
 export function Card<E extends CardAs = "div">(props: Own<E, { as?: E; compact?: boolean }>): ReactElement;
 
+export interface ConfirmAction {
+  /** Names the action while it runs, and keys its button. */
+  id: string;
+  label: ReactNode;
+  /** May throw or reject: the card stays open and shows the message. Closing it on success is the page's job. */
+  onConfirm: () => unknown;
+  /** "destructive" by default. */
+  variant?: "default" | "destructive" | "outline";
+  /** Start with this action focused rather than Cancel. */
+  autoFocus?: boolean;
+}
+/**
+ * A card that asks before something is done, in the page rather than over it, so the page behind keeps working
+ * (`role="alertdialog"`). `children` say what will happen. Cancel is focused unless an action has `autoFocus`, Escape
+ * cancels, and focus goes back to what opened it when it closes. An action's `onConfirm` may throw or reject: the card
+ * then stays open and shows the message above its buttons. On success the page closes it, from inside `onConfirm`.
+ */
+export function Confirm(
+  props: Omit<Props<"div">, "title"> & { title: ReactNode; actions: ConfirmAction[]; cancelLabel?: string; onCancel: () => void },
+): ReactElement;
+
 // ---------- pages ----------
 
 /**

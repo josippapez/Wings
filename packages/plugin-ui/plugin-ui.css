@@ -363,6 +363,10 @@ textarea::placeholder {
   padding: 8px 10px;
   font-size: 12px;
 }
+/* A card that asks before something is done, the danger colour on its edge. */
+.w-confirm {
+  border-color: color-mix(in srgb, var(--wings-danger) 45%, transparent);
+}
 
 /* Pages that fill a tab: a toolbar over a body, list and detail, a board, a split. */
 .w-page {

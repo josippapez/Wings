@@ -218,6 +218,67 @@ export function Card({ as = "div", compact, className, ...rest }) {
   return h(as, { ...rest, className: cx("w-card", className), "data-size": compact ? "compact" : undefined });
 }
 
+/**
+ * A card that asks before something is done, in the page rather than over it, so the page behind keeps working. Cancel
+ * is focused unless an action says `autoFocus`, Escape cancels, and focus goes back to what opened it when it closes.
+ * An action's `onConfirm` may throw or reject: the card then stays open and shows the message above its buttons. On
+ * success the page closes it, from inside `onConfirm`.
+ */
+export function Confirm({ title, children, actions, cancelLabel = "Cancel", onCancel, className, ...rest }) {
+  const { run, busy, error } = useAction();
+  const [pending, setPending] = useState(null);
+  const id = useId();
+  // What had focus when the card appeared: read while rendering, because an autoFocus button takes it at commit.
+  const [opener] = useState(() => (typeof document === "undefined" ? null : document.activeElement));
+  useEffect(() => () => {
+    if (opener && opener !== document.body && opener.isConnected) opener.focus();
+  }, [opener]);
+  const focusAction = actions.some((a) => a.autoFocus);
+  return h(
+    Card,
+    {
+      compact: true,
+      ...rest,
+      className: cx("w-confirm", className),
+      role: "alertdialog",
+      "aria-labelledby": `${id}t`,
+      "aria-describedby": error ? `${id}e` : undefined,
+      onKeyDown: (e) => {
+        if (e.key === "Escape" && !busy) {
+          e.preventDefault();
+          onCancel();
+        }
+      },
+    },
+    h(Text, { as: "div", id: `${id}t`, weight: "strong" }, title),
+    children,
+    error ? h("p", { id: `${id}e`, role: "alert", className: "w-field-hint", "data-tone": "danger" }, error) : null,
+    h(
+      Row,
+      { gap: "s", wrap: true },
+      ...actions.map((a) =>
+        h(
+          Button,
+          {
+            key: a.id,
+            variant: a.variant ?? "destructive",
+            size: "sm",
+            autoFocus: a.autoFocus,
+            busy: busy && pending === a.id,
+            disabled: busy && pending !== a.id,
+            onClick: () => {
+              setPending(a.id);
+              run(a.onConfirm);
+            },
+          },
+          a.label,
+        ),
+      ),
+      h(Button, { variant: "ghost", size: "sm", autoFocus: !focusAction, disabled: busy, onClick: onCancel }, cancelLabel),
+    ),
+  );
+}
+
 // ---------- pages ----------
 
 /**
