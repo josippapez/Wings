@@ -1,8 +1,9 @@
 //! Refreshes a project's git status as soon as its repo changes, instead of waiting for the next poll.
 //! It watches the few places git writes when HEAD, the index or a ref moves (a pull, commit, checkout,
 //! fetch or push, from a pane or from anywhere else), waits for the writes to settle, then refreshes only
-//! the projects that repo belongs to. Edits to files in the working tree are not watched; the slow poll
-//! in `start_git_status` still picks those up.
+//! the projects that repo belongs to, and tells the main window which ones moved (`git-changed`), which
+//! forwards it to the plugins that may read git. Edits to files in the working tree are not watched; the slow
+//! poll in `start_git_status` still picks those up.
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use std::collections::HashSet;
@@ -145,7 +146,7 @@ fn run(tx: Sender<Msg>, rx: Receiver<Msg>, spaces: impl Fn() -> Vec<(String, Pat
 
 /// Starts the watcher thread for the app's projects.
 pub fn start(app: tauri::AppHandle) {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
     let (tx, rx) = mpsc::channel();
     if TX.set(tx.clone()).is_err() {
         return;
@@ -159,7 +160,11 @@ pub fn start(app: tauri::AppHandle) {
                 list
             }
         };
-        run(tx, rx, spaces, |ids| crate::git_refresh_spaces(&app, &ids));
+        run(tx, rx, spaces, |ids| {
+            crate::git_refresh_spaces(&app, &ids);
+            // After the refresh, so a plugin that reads git then sees what the status shows. One per settled batch.
+            let _ = app.emit_to("main", "git-changed", &ids);
+        });
     });
 }
 
@@ -209,10 +214,14 @@ mod tests {
     /// The watcher starts on its own thread and only sees writes once it has installed its watches, so
     /// `probe` (a write to the repo) is repeated until the watcher reports one. Those refreshes are cleared.
     fn watch(repo: &Path, probe: impl Fn()) -> Calls {
+        watch_projects(vec![("a".to_string(), repo.to_path_buf())], probe)
+    }
+
+    /// Like `watch`, for several projects at once.
+    fn watch_projects(list: Vec<(String, PathBuf)>, probe: impl Fn()) -> Calls {
         let calls: Calls = Arc::new(Mutex::new(Vec::new()));
         let seen = calls.clone();
         let (tx, rx) = mpsc::channel();
-        let list = vec![("a".to_string(), repo.to_path_buf())];
         thread::spawn(move || run(tx, rx, move || list.clone(), move |ids| seen.lock().unwrap().push((Instant::now(), ids))));
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -220,7 +229,7 @@ mod tests {
             if wait_for(Duration::from_secs(2), || count(&calls) > 0) {
                 break;
             }
-            assert!(Instant::now() < deadline, "watcher never reported a write in {}", repo.display());
+            assert!(Instant::now() < deadline, "watcher never reported a write");
         }
         thread::sleep(QUIET);
         calls.lock().unwrap().clear();
@@ -277,6 +286,26 @@ mod tests {
         let calls = watch(&wt, || git(&wt, &["commit", "-q", "--allow-empty", "-m", "probe"]));
         git(&wt, &["commit", "-q", "--allow-empty", "-m", "two"]);
         assert!(wait_for(DEADLINE, || count(&calls) > 0), "commit in a worktree refreshes");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_commit_in_one_worktree_reports_every_project_of_the_repo_in_one_batch() {
+        let root = std::env::temp_dir().join(format!("wings-gitwatch-two-{}", std::process::id()));
+        let repo = root.join("repo");
+        let wt = root.join("wt");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git(&repo, &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()]);
+        let list = vec![("a".to_string(), repo.clone()), ("b".to_string(), wt.clone())];
+        let calls = watch_projects(list, || git(&wt, &["commit", "-q", "--allow-empty", "-m", "probe"]));
+
+        git(&wt, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        expect_refreshes(&calls, 1, "one batch for a commit in a linked worktree");
+        let mut ids = calls.lock().unwrap()[0].1.clone();
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()], "both projects share the refs the commit moved");
         let _ = fs::remove_dir_all(&root);
     }
 
