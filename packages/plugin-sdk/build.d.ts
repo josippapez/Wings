@@ -11,11 +11,19 @@ export function entries(dir: string): { src: string; out: string }[];
  * that differ from what's on disk. With `outDir`, writes there instead of `dist/`. A plugin with a `src/tools.ts`
  * gets `contributes.mcpTools` in its manifest written from it, in `manifestDir` (the plugin folder by default).
  *
- * Rejects with a line for each place the manifest and the built code disagree: a `main` that isn't `dist/main.js`, a
- * page that isn't a file the build writes or the plugin folder has, a `wings.onTool("name")` and a `contributes.mcpTools`
- * entry that don't match, a call of `wings.setBadge`, `setPaneStatus`, `openDiff` or `updateDiff` without `badges`,
- * `status` or `diff` in `contributes.ui`, and a `wings.openView("id")` for an id that no sidebar or view has. A name the
- * code computes, like `wings.openView(id)`, is skipped.
+ * Rejects with a line for each place the manifest and the built code disagree:
+ * - a `main` that isn't `dist/main.js`, a page that isn't a file the build writes or the plugin folder has, and an
+ *   `icon` that isn't a file in the plugin folder;
+ * - a `wings.onTool("name")` and a `contributes.mcpTools` entry that don't match;
+ * - a call of `wings.setBadge`, `setPaneStatus`, `openDiff` or `updateDiff` without `badges`, `status` or `diff` in
+ *   `contributes.ui`;
+ * - an id that no sidebar or view has, in `wings.openView("id")`, `closeView("id")`, `setSidebarLabel("id", ...)` or the
+ *   `open: "id"` of a pane status;
+ * - an id that no view with `tab` in its `opens` has, in the `open: { view: "id" }` of a project section row or a
+ *   notification button.
+ *
+ * A name the code computes, like `wings.openView(id)`, is skipped, and so is a constant the minifier keeps as a
+ * variable, like one used more than once.
  */
 export function buildPlugin(
   dir: string,

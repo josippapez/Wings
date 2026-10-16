@@ -10,6 +10,7 @@ import { unzipSync } from "fflate";
 import { buildPlugin, pack } from "./build.mjs";
 
 const boxBlocks = [{ id: "box", title: "Box", page: "dist/box.html" }];
+const tabView = { id: "item", title: "Item", icon: "list", page: "dist/sidebar.html", opens: ["tab"] };
 const ping = { name: "ping", description: "Pings.", inputSchema: { type: "object" } };
 
 /** A plugin folder with this package installed, like `npm link wings-plugin-sdk` makes it. A file set to null is left out, and `patch` changes the manifest. */
@@ -159,9 +160,15 @@ test("a manifest that disagrees with the code fails build, check and pack, namin
   const cases = [
     [{ main: "mian.js" }, {}, /wings-plugin\.json: main is "mian\.js", but the build writes the main script to dist\/main\.js/],
     [{ contributes: { sidebars: [sidebar] } }, {}, /contributes\.sidebars\[0\]\.page is "dist\/sidbar\.html".* It writes dist\/sidebar\.html/],
+    [{ icon: "icn.svg" }, { "icon.svg": "<svg/>" }, /wings-plugin\.json: icon is "icn\.svg", which the plugin folder doesn't have/],
     [{ contributes: { mcpTools: [ping] } }, { "src/main.ts": 'wings.onTool("pong", () => "pong");' }, /dist\/main\.js answers "pong".*\(it has ping\).*contributes\.mcpTools lists "ping"/s],
     [{}, { "src/main.ts": 'wings.setBadge("p", null);' }, /dist\/main\.js calls wings\.setBadge, so contributes\.ui must list "badges"/],
     [{}, { "src/main.ts": 'wings.openView("sidbar");' }, /dist\/main\.js calls wings\.openView\("sidbar"\).*\(they have demo\)/],
+    [{}, { "src/main.ts": 'wings.closeView("sidbar");\nwings.setSidebarLabel("sidbar", null);' }, /wings\.closeView\("sidbar"\).*wings\.setSidebarLabel\("sidbar"\)/s],
+    [{ contributes: { ui: ["status"] } }, { "src/main.ts": 'wings.setPaneStatus("p", { items: [], open: "sidbar" });' }, /dist\/main\.js sets open: "sidbar" on a pane status, but contributes\.sidebars and contributes\.views have no such id \(they have demo\)/],
+    [{ contributes: { views: [tabView] } }, { "src/main.ts": 'wings.setProjectSection("p", "s", [{ id: "a", label: "A", open: { view: "itm" } }]);' }, /dist\/main\.js sets open: \{ view: "itm" \} on a project section row or a notification button, but contributes\.views has no view of that id with "tab" in opens \(the views that have it: item\)/],
+    // A sidebar is a page, but a button can't open it as a tab.
+    [{ contributes: { views: [tabView] } }, { "src/main.ts": 'wings.notify({ title: "t", actions: [{ label: "Open", open: { view: "demo", args: 1 } }] });' }, /sets open: \{ view: "demo" \}.*\(the views that have it: item\)/],
   ];
   for (const [patch, files, message] of cases) {
     const dir = plugin(files, patch);
@@ -173,8 +180,23 @@ test("a manifest that disagrees with the code fails build, check and pack, namin
 });
 
 test("a manifest that agrees with the code builds, and a name the code computes is left alone", async (t) => {
-  const main = 'const id = String(Date.now());\nwings.onTool("ping", () => "pong");\nwings.onTool(id, () => "x");\nwings.setBadge("p", null);\nwings.openView("demo");\nwings.openView(id);';
-  const dir = plugin({ "src/main.ts": main }, { contributes: { ui: ["badges"], mcpTools: [ping, { ...ping, name: "other" }] } });
+  const main = [
+    "const id = String(Date.now());",
+    'wings.onTool("ping", () => "pong");',
+    'wings.onTool(id, () => "x");',
+    'wings.setBadge("p", null);',
+    'wings.openView("demo");',
+    "wings.openView(id);",
+    // A string joined to something else isn't a name.
+    'wings.openView("x-" + id);',
+    'wings.closeView("demo");',
+    'wings.setSidebarLabel("item", null);',
+    'wings.setPaneStatus("p", { items: [], open: "demo" });',
+    'wings.setPaneStatus("p", { items: [], open: id });',
+    'wings.setProjectSection("p", "s", [{ id: "a", label: "A", open: { view: "item", args: id } }]);',
+    'wings.notify({ title: "t", actions: [{ label: "Open", open: { view: "item" } }, { label: "Other", open: { view: `item-${id}` } }] });',
+  ].join("\n");
+  const dir = plugin({ "src/main.ts": main, "icon.svg": "<svg/>" }, { icon: "icon.svg", contributes: { ui: ["badges", "status"], views: [tabView], mcpTools: [ping, { ...ping, name: "other" }] } });
   t.after(() => rmSync(dir, { recursive: true }));
   await buildPlugin(dir);
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
