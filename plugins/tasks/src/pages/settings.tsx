@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
 import { Chips, Heading, Stack, Text } from "wings-plugin-ui";
-import { DEFAULT_VIEWS, defaultView, type DefaultView } from "../lib/view-setting";
+import { DEFAULT_VIEWS, defaultView, lastLayout, type DefaultView } from "../lib/view-setting";
 import "./tasks.css";
 
 export const page = { place: "settings" };
@@ -66,13 +66,13 @@ export default function IssuesSettings() {
   return (
     <Stack gap="s">
       <Heading>Issues board</Heading>
-      <Text tone="muted">The view the Issues tab opens in. You can still switch views in the tab, until you close it.</Text>
+      <Text tone="muted">The view the Issues tab opens in. Switching views in the tab is remembered until you pick here again.</Text>
       {view === null ? null : (
         <Chips
           label="Default view"
           className="tk-views"
           value={view}
-          onChange={(value) => void setView(value)}
+          onChange={(value) => void setView(value).then(() => lastLayout.set(null))}
           options={DEFAULT_VIEWS.map(({ value, label }) => ({
             value,
             label: (

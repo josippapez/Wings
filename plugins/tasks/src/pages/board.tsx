@@ -1,14 +1,15 @@
 // The Issues tab: a board of to do, in progress, in review and done, with canceled behind a toggle, in rows by parent
 // epic or feature unless that's turned off. Click a card to open the issue. Alt+Left and Alt+Right on a card move it
 // between columns, and so do its buttons. List shows them as rows grouped by status instead. The view and the rows choice
-// start from the Default view setting, and the folded rows are kept with the tab. The search box filters what's shown.
+// start as they were last left, or from the Default view setting, and the folded rows are kept with the tab. The search
+// box filters what's shown.
 
 import { useEffect, useState } from "react";
 import { Loading, ProjectGate, useAction, useTabState } from "wings-plugin-ui";
 import { BoardView } from "../ui/board-view";
 import type { Issue, Op } from "../lib/domain";
 import { useIssues } from "../ui/useIssues";
-import { defaultView, startLayout } from "../lib/view-setting";
+import { defaultView, lastLayout, startLayout, type Layout } from "../lib/view-setting";
 import "./tasks.css";
 
 export const page = { place: "tab", fill: true };
@@ -30,10 +31,13 @@ const foldedOf = (saved: unknown) => {
 function ProjectBoard({ project }: { project: WingsProject }) {
   const { store, apply } = useIssues(project.id, project.name);
   const [showCanceled, setShowCanceled] = useState(false);
-  // The layout and rows choice start from the Default view setting each time the tab opens, and changing them lasts until
-  // it closes. The folded rows are kept with the tab.
-  const [view, setView] = useState<ReturnType<typeof startLayout> | null>(null);
-  useEffect(() => void defaultView.get().then((v) => setView(startLayout(v))), []);
+  // The layout and rows choice start as last picked in any Issues tab, else from the Default view setting.
+  const [view, setView] = useState<Layout | null>(null);
+  useEffect(() => void Promise.all([lastLayout.get(), defaultView.get()]).then(([last, v]) => setView(last ?? startLayout(v))), []);
+  const pick = (next: Layout) => {
+    setView(next);
+    void lastLayout.set(next);
+  };
   const [tab, setTab] = useTabState({ folded: [] as string[] }, foldedOf);
   const [query, setQuery] = useState("");
   const action = useAction();
@@ -49,9 +53,9 @@ function ProjectBoard({ project }: { project: WingsProject }) {
       showCanceled={showCanceled}
       onShowCanceled={setShowCanceled}
       layout={view.layout}
-      onLayout={(layout) => setView({ ...view, layout })}
+      onLayout={(layout) => pick({ ...view, layout })}
       byParent={view.byParent}
-      onByParent={(byParent) => setView({ ...view, byParent })}
+      onByParent={(byParent) => pick({ ...view, byParent })}
       folded={tab.folded}
       onFold={fold}
       query={query}
