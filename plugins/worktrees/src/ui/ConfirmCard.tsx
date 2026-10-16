@@ -1,31 +1,28 @@
 // The card that asks before anything is removed: what git will do, the branches to delete with it, and the two buttons.
 
 import { plural } from "wings-plugin-sdk/format";
-import { Button, Card, Checkbox, Row, Text } from "wings-plugin-ui";
+import { Checkbox, Confirm, Text } from "wings-plugin-ui";
 
 import { shortenPath } from "../lib/worktrees";
 
 /** What the user is being asked to confirm: removing one worktree, removing the merged ones, or pruning the missing ones. */
-export type Confirm = { kind: "remove" | "bulk" | "prune"; root: string; paths: string[] };
+export type Ask = { kind: "remove" | "bulk" | "prune"; root: string; paths: string[] };
 
 export function ConfirmCard(p: {
-  ask: Confirm;
+  ask: Ask;
   /** The branch of the one worktree being removed, which can be deleted with it. */
   branch: string | null;
   deleteBranch: boolean;
   onDeleteBranch: (v: boolean) => void;
-  working: boolean;
-  onConfirm: () => void;
+  /** Removes or prunes. It rejects with the reason when nothing could be done: the card then stays open and shows it. */
+  onConfirm: () => Promise<unknown>;
   onCancel: () => void;
 }) {
   const { kind, paths } = p.ask;
   const title = kind === "prune" ? `Forget ${plural(paths.length, "worktree record")} whose folder is gone?` : kind === "bulk" ? `Remove ${plural(paths.length, "worktree")}?` : `Remove ${shortenPath(paths[0])}?`;
   const branches = kind === "bulk" ? "Also delete their branches (git branch -d)" : kind === "remove" && p.branch ? `Also delete branch ${p.branch} (git branch -d)` : null;
   return (
-    <Card compact className="confirm" role="group" aria-label="Confirm">
-      <Text as="div" weight="strong">
-        {title}
-      </Text>
+    <Confirm title={title} cancelLabel="Cancel" onCancel={p.onCancel} actions={[{ id: kind, label: kind === "prune" ? "Prune" : "Remove", onConfirm: p.onConfirm }]}>
       {kind !== "remove" ? (
         <ul className="confirm-list">
           {paths.map((path) => (
@@ -42,14 +39,6 @@ export function ConfirmCard(p: {
           {branches}
         </Checkbox>
       ) : null}
-      <Row gap="s">
-        <Button variant="destructive" size="sm" busy={p.working} onClick={p.onConfirm}>
-          {kind === "prune" ? "Prune" : "Remove"}
-        </Button>
-        <Button variant="ghost" size="sm" disabled={p.working} onClick={p.onCancel}>
-          Cancel
-        </Button>
-      </Row>
-    </Card>
+    </Confirm>
   );
 }

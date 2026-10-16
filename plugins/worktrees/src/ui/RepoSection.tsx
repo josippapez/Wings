@@ -6,20 +6,20 @@ import { Button, Heading, Row, Stack, Text } from "wings-plugin-ui";
 
 import type { Repo } from "../lib/git";
 import { shortenPath, type Row as WorktreeRow } from "../lib/worktrees";
-import { ConfirmCard, type Confirm } from "./ConfirmCard";
+import { ConfirmCard, type Ask } from "./ConfirmCard";
 import { WorktreeItem } from "./WorktreeItem";
 
 export function RepoSection(p: {
   repo: Repo;
   rows: WorktreeRow[];
   /** What is being confirmed in this repo, if anything. */
-  asked: Confirm | null;
-  /** The confirmed work is running. */
+  asked: Ask | null;
+  /** The confirmed work is running: the other buttons wait. */
   working: boolean;
   deleteBranch: boolean;
   onDeleteBranch: (v: boolean) => void;
-  onAsk: (c: Confirm) => void;
-  onConfirm: () => void;
+  onAsk: (c: Ask) => void;
+  onConfirm: () => Promise<unknown>;
   onCancel: () => void;
   onOpen: (path: string) => void;
 }) {
@@ -27,8 +27,8 @@ export function RepoSection(p: {
   const bulk = rows.filter((r) => r.bulk);
   const missing = rows.filter((r) => r.missing && !r.locked);
   const name = basename(repo.root);
-  const card = (ask: Confirm, branch: string | null) => (
-    <ConfirmCard ask={ask} branch={branch} deleteBranch={p.deleteBranch} onDeleteBranch={p.onDeleteBranch} working={working} onConfirm={p.onConfirm} onCancel={p.onCancel} />
+  const card = (ask: Ask, branch: string | null) => (
+    <ConfirmCard ask={ask} branch={branch} deleteBranch={p.deleteBranch} onDeleteBranch={p.onDeleteBranch} onConfirm={p.onConfirm} onCancel={p.onCancel} />
   );
   return (
     <section aria-label={name}>

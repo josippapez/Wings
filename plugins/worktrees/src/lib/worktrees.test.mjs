@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { age, contains, describe, goneBranches, parseWorktrees, shortenPath } from "./worktrees.ts";
+import { contains, describe, goneBranches, parseWorktrees, shortenPath } from "./worktrees.ts";
 
 const PORCELAIN = `worktree /Users/me/dev/app
 HEAD 1111111111111111111111111111111111111111
@@ -118,16 +118,10 @@ test("a pane belongs to the deepest worktree holding its folder", () => {
   assert.equal(contains("/r/", "/r"), true);
 });
 
-test("paths are shortened with ~, ages are readable, gone upstreams are found", () => {
+test("paths are shortened with ~, gone upstreams are found", () => {
   assert.equal(shortenPath("/Users/me/dev/app"), "~/dev/app");
   assert.equal(shortenPath("/home/me"), "~");
   assert.equal(shortenPath("/Users/mex"), "~");
   assert.equal(shortenPath("/srv/app"), "/srv/app");
-  const now = 1_000_000 * 1000;
-  assert.equal(age(null, now), "");
-  assert.equal(age(1_000_000 - 30, now), "1m ago");
-  assert.equal(age(1_000_000 - 3 * 3600, now), "3h ago");
-  assert.equal(age(1_000_000 - 5 * 86_400, now), "5d ago");
-  assert.equal(age(1_000_000 - 100 * 86_400, now), "3mo ago");
   assert.deepEqual([...goneBranches("a\t[gone]\nb\t[ahead 1]\nc\t\nd\t[gone]\n")], ["a", "d"]);
 });

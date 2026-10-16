@@ -5,11 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { defaultBranch, onGitChange, repoRoot } from "wings-plugin-sdk/git";
-import { Button, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
+import { Button, Empty, Loading, Notice, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { loadRepos, prune, removeWorktrees, rowsOf, type Outcome, type Repo } from "../lib/git";
 import { shortenPath } from "../lib/worktrees";
-import type { Confirm } from "../ui/ConfirmCard";
+import type { Ask } from "../ui/ConfirmCard";
 import { RepoSection } from "../ui/RepoSection";
 import "./sidebar.css";
 
@@ -25,7 +25,7 @@ export default function Worktrees() {
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [cwds, setCwds] = useState<string[]>([]);
-  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [confirm, setConfirm] = useState<Ask | null>(null);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -78,21 +78,20 @@ export default function Worktrees() {
     };
   }, [refresh]);
 
-  const ask = (c: Confirm) => {
+  const ask = (c: Ask) => {
     setNotes([]);
     setDeleteBranch(false);
     setConfirm(c);
   };
 
+  /** Runs what the confirm asked for. A throw leaves the confirm open and is shown in it; otherwise it closes and the notes show. */
   const act = async (key: string, work: () => Promise<Note[]>) => {
     setBusy(key);
     setNotes([]);
     try {
       setNotes(await work());
-    } catch (e) {
-      setNotes([{ tone: "danger", text: errorMessage(e) }]);
-    } finally {
       setConfirm(null);
+    } finally {
       setBusy(null);
       void refresh();
     }
@@ -104,11 +103,17 @@ export default function Worktrees() {
     ...o.branchErrors.map((b) => ({ tone: "danger" as const, text: `Branch ${b.branch} kept: ${b.error}` })),
   ];
 
-  const doConfirm = (repo: Repo) => {
+  const doConfirm = async (repo: Repo) => {
     if (!confirm) return;
     const { kind, paths } = confirm;
-    if (kind === "prune") return void act(`prune:${repo.root}`, async () => [{ tone: "success", text: (await prune(repo.root)) || "Nothing to prune." }]);
-    void act(`${kind}:${repo.root}`, async () => summarize(await removeWorktrees(repo.root, paths, { deleteBranch, onlyMerged: kind === "bulk" }, () => cwdsRef.current)));
+    if (kind === "prune") return act(`prune:${repo.root}`, async () => [{ tone: "success", text: (await prune(repo.root)) || "Nothing to prune." }]);
+    return act(`${kind}:${repo.root}`, async () => {
+      const outcome = await removeWorktrees(repo.root, paths, { deleteBranch, onlyMerged: kind === "bulk" }, () => cwdsRef.current);
+      const notes = summarize(outcome);
+      // Nothing was removed: the confirm stays so you can read why, and try again or cancel.
+      if (!outcome.removed.length && notes.length) throw new Error(notes.map((n) => n.text).join("\n"));
+      return notes;
+    });
   };
 
   const openPane = (path: string) =>
@@ -144,14 +149,14 @@ export default function Worktrees() {
         </Button>
       </Row>
       {notes.map((n, i) => (
-        <Text key={i} as="p" tone={n.tone === "danger" ? "danger" : "success"} className="note" role={n.tone === "danger" ? "alert" : "status"}>
+        <Notice key={i} tone={n.tone} className="note">
           {n.text}
-        </Text>
+        </Notice>
       ))}
       {errors.map((e) => (
-        <Text key={e} as="p" tone="warn" className="note">
+        <Notice key={e} tone="warn" className="note">
           {e}
-        </Text>
+        </Notice>
       ))}
       {repos.length === 0 ? <Empty title="No git repo in your panes." description="Open a terminal in a repo and its worktrees show here." /> : null}
       {sections.map(({ repo, rows }) => (

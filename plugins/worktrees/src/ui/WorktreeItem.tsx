@@ -1,9 +1,10 @@
 // One worktree on the Worktrees page: its branch, where it is, what state it is in, and what can be done with it.
 
 import type { ReactNode } from "react";
+import { ago } from "wings-plugin-sdk/format";
 import { Badge, Button, Row, Text } from "wings-plugin-ui";
 
-import { age, shortenPath, type Row as WorktreeRow } from "../lib/worktrees";
+import { shortenPath, type Row as WorktreeRow } from "../lib/worktrees";
 
 export function WorktreeItem(p: {
   row: WorktreeRow;
@@ -24,7 +25,8 @@ export function WorktreeItem(p: {
   if (row.dirty) flags.push({ label: "uncommitted", tone: "warn" });
   if (row.locked) flags.push({ label: "locked", tone: "warn", title: wt.locked || undefined });
   if (row.inPane) flags.push({ label: "open in a pane", tone: "info" });
-  const when = age(row.lastCommit, Date.now());
+  // git prints seconds; ago wants milliseconds.
+  const when = row.lastCommit === null ? "" : ago(row.lastCommit * 1000);
   return (
     <li className="wt" data-removable={row.removable}>
       <Row>

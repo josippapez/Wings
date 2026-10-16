@@ -22,12 +22,6 @@
 .item-actions {
   justify-content: space-between;
 }
-.confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-color: color-mix(in srgb, var(--wings-danger) 45%, transparent);
-}
 .confirm-list {
   margin: 0;
   padding-left: 16px;
@@ -36,6 +30,4 @@
 }
 .note {
   margin: 4px 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }

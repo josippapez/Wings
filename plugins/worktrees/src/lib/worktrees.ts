@@ -132,17 +132,6 @@ export function shortenPath(path: string): string {
   return path.replace(/^(?:\/Users|\/home)\/[^/]+(?=\/|$)|^\/root(?=\/|$)/, "~");
 }
 
-/** `3d ago`, from a time in seconds. */
-export function age(seconds: number | null, now: number): string {
-  if (seconds === null) return "";
-  const s = Math.max(0, Math.floor(now / 1000 - seconds));
-  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
-  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 86_400 * 60) return `${Math.floor(s / 86_400)}d ago`;
-  if (s < 86_400 * 730) return `${Math.floor(s / (86_400 * 30))}mo ago`;
-  return `${Math.floor(s / (86_400 * 365))}y ago`;
-}
-
 /** The lines of `git branch --format=%(refname:short)%09%(upstream:track)` whose upstream is gone. */
 export function goneBranches(text: string): Set<string> {
   const out = new Set<string>();
