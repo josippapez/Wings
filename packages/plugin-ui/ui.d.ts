@@ -128,6 +128,11 @@ export function Title(props: Props<"h1"> & { as?: "h1" | "h2" | "h3"; size?: "la
 /** A card. `compact` for a summary line. As a `form` it holds a form; as a `ul` or `ol`, a list of `li`. `as` types the props like `Row`'s. */
 export function Card<E extends CardAs = "div">(props: Own<E, { as?: E; compact?: boolean }>): ReactElement;
 
+/**
+ * A short message in a tinted box: what happened, or what to know. `tone` is "info" by default. A "warn" or "danger"
+ * one is announced to a screen reader when it appears (`role="alert"`), the others politely (`role="status"`).
+ */
+export function Notice(props: Omit<Props<"div">, "role"> & { tone?: "info" | "success" | "warn" | "danger" }): ReactElement;
 export interface ConfirmAction {
   /** Names the action while it runs, and keys its button. */
   id: string;

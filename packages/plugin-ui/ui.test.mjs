@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, ProjectGate, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Notice, ProjectGate, Row, Stack, Title } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -134,4 +134,11 @@ test("TimelineCard shows who and when, marks quiet entries, and a note is one li
 test("Icon is decoration unless it has a label", () => {
   assert.match(html(h(Icon, { name: "trash" })), /^<svg class="w-icon"[^>]*aria-hidden="true"><path d="M10 11v6/);
   assert.match(html(h(Icon, { name: "check", label: "Done", className: "x" })), /^<svg class="w-icon x"(?=[^>]*role="img")(?=[^>]*aria-label="Done")(?![^>]*aria-hidden)/);
+});
+
+test("Notice announces a warning or an error at once and the rest politely", () => {
+  assert.equal(html(h(Notice, null, "Saved")), '<div class="w-notice" data-tone="info" role="status">Saved</div>');
+  assert.match(html(h(Notice, { tone: "warn" }, "Careful")), /data-tone="warn" role="alert"/);
+  assert.match(html(h(Notice, { tone: "danger" }, "Failed")), /role="alert"/);
+  assert.match(html(h(Notice, { tone: "success" }, "Done")), /role="status"/);
 });

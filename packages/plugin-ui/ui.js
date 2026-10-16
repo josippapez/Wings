@@ -218,6 +218,11 @@ export function Card({ as = "div", compact, className, ...rest }) {
   return h(as, { ...rest, className: cx("w-card", className), "data-size": compact ? "compact" : undefined });
 }
 
+/** A short message tinted by its `tone`: what happened, or what to know. A warning or an error is announced to a screen reader at once. */
+export function Notice({ tone = "info", className, ...rest }) {
+  return h("div", { ...rest, className: cx("w-notice", className), "data-tone": tone, role: tone === "warn" || tone === "danger" ? "alert" : "status" });
+}
+
 /**
  * A card that asks before something is done, in the page rather than over it, so the page behind keeps working. Cancel
  * is focused unless an action says `autoFocus`, Escape cancels, and focus goes back to what opened it when it closes.

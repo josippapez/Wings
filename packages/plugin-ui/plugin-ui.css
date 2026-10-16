@@ -363,6 +363,27 @@ textarea::placeholder {
   padding: 8px 10px;
   font-size: 12px;
 }
+/* A message tinted by its tone. */
+.w-notice {
+  --w-notice: var(--wings-info);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--w-notice) 12%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.w-notice[data-tone="success"] {
+  --w-notice: var(--wings-success);
+}
+.w-notice[data-tone="warn"] {
+  --w-notice: var(--wings-warning);
+}
+.w-notice[data-tone="danger"] {
+  --w-notice: var(--wings-danger);
+}
+
 /* A card that asks before something is done, the danger colour on its edge. */
 .w-confirm {
   border-color: color-mix(in srgb, var(--wings-danger) 45%, transparent);
