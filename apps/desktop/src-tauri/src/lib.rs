@@ -726,6 +726,12 @@ fn plugin_storage_keys(state: State<AppState>, plugin_id: String) -> Res<Vec<Str
     state.storage.keys(&plugin_id, &scope)
 }
 
+#[tauri::command(async)]
+fn plugin_storage_entries(state: State<AppState>, plugin_id: String, prefix: String) -> Res<Vec<(String, serde_json::Value)>> {
+    let scope = storage_scope(&state, &plugin_id)?;
+    state.storage.entries(&plugin_id, &scope, &prefix)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FetchRequest {
@@ -1482,6 +1488,7 @@ pub fn run() {
             plugin_storage_set,
             plugin_storage_delete,
             plugin_storage_keys,
+            plugin_storage_entries,
             plugin_fetch,
             mcp_tool_result,
             mcp_status,

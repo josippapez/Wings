@@ -251,8 +251,8 @@
     }),
     /**
      * The plugin's own key-value storage for settings and state, since `localStorage` throws in plugin frames.
-     * Values are JSON. Keys are 1 to 128 letters, digits and `- _ . : /`, and everything together is limited to
-     * 1 MB. Only this plugin's pages see it, and it goes when the plugin is removed.
+     * Values are JSON. Keys are 1 to 128 letters, digits and `- _ . : /`. A value is limited to 1 MB and everything
+     * together to 50 MB. Only this plugin's pages see it, and it goes when the plugin is removed.
      */
     storage: Object.freeze({
       /** Resolves the value, or `null` when the key isn't set. */
@@ -261,6 +261,8 @@
       delete: (key) => call("storageDelete", { key }),
       /** Resolves every key, sorted. */
       keys: () => call("storageKeys", {}),
+      /** Resolves `[key, value]` for every key that starts with `prefix`, sorted by key. */
+      entries: (prefix = "") => call("storageEntries", { prefix }),
     }),
     /**
      * Short text next to a sidebar's or view's title bar button, like a running timer. `null` clears it. `rows`, up to 6

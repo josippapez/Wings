@@ -47,6 +47,7 @@ const COMMANDS: &[&str] = &[
     "plugin_storage_set",
     "plugin_storage_delete",
     "plugin_storage_keys",
+    "plugin_storage_entries",
     "plugin_fetch",
     "mcp_tool_result",
     "mcp_status",

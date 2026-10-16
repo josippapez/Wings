@@ -394,6 +394,8 @@ interface Wings {
     delete(key: string): Promise<void>;
     /** Every key, sorted. */
     keys(): Promise<string[]>;
+    /** `[key, value]` for every key that starts with `prefix` (all keys when empty), sorted by key. Needs Wings 0.1.50. */
+    entries(prefix?: string): Promise<[string, unknown][]>;
   };
   /** Short text next to a sidebar's or view's title bar button, like a running timer. `null` clears it. */
   setSidebarLabel(sidebarId: string, label: string | null, options?: { rows?: { label: string; value: string }[]; tone?: "warning" | "danger" }): Promise<void>;

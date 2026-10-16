@@ -602,7 +602,7 @@ mod tests {
         install(&mut s, Source::File);
         let fresh = s.storage_scope("demo").unwrap();
         assert!(fresh != first && storage.keys("demo", &fresh).unwrap().is_empty());
-        assert!(!dir.join(format!("plugin-storage/demo.{first}.json")).exists());
+        assert!(!dir.join(format!("plugin-storage/demo.{first}")).exists());
 
         storage.set("demo", &fresh, "history", value).unwrap();
         let old = s.remove("demo").unwrap().unwrap();

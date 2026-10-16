@@ -76,6 +76,7 @@
     "allow-plugin-storage-set",
     "allow-plugin-storage-delete",
     "allow-plugin-storage-keys",
+    "allow-plugin-storage-entries",
     "allow-plugin-fetch",
     "allow-mcp-tool-result",
     "allow-mcp-status",

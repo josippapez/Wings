@@ -751,17 +751,19 @@ export class PluginHost {
       case "storageGet":
         return invoke("plugin_storage_get", { pluginId, key: String(p.key) });
       case "storageSet": {
-        // Values are what JSON.stringify keeps. Rust checks the 1 MB total; this only stops one value that
-        // can't fit from crossing the bridge.
+        // Values are what JSON.stringify keeps. Rust checks the sizes; this only stops a value that can't fit
+        // from crossing the bridge.
         const text = JSON.stringify(p.value);
         if (text === undefined) throw new Error("wings.storage.set needs a JSON value. Use delete to remove a key");
-        if (text.length > 1024 * 1024) throw new Error("Storage is limited to 1 MB per plugin");
+        if (text.length > 1024 * 1024) throw new Error("A stored value is limited to 1 MB");
         return invoke("plugin_storage_set", { pluginId, key: String(p.key), value: JSON.parse(text) });
       }
       case "storageDelete":
         return invoke("plugin_storage_delete", { pluginId, key: String(p.key) });
       case "storageKeys":
         return invoke("plugin_storage_keys", { pluginId });
+      case "storageEntries":
+        return invoke("plugin_storage_entries", { pluginId, prefix: String(p.prefix ?? "") });
       case "setSidebarLabel": {
         const sidebarId = String(p.sidebarId);
         if (!plugin.views.includes(sidebarId)) throw new Error(`${pluginId} has no sidebar or view ${sidebarId}`);
