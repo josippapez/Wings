@@ -110,7 +110,7 @@ function oneReact(dir) {
 
 /**
  * Builds the plugin in `dir` into its `dist/` folder. With `check`, writes nothing and returns the outputs that
- * differ from what's on disk instead, so a release can refuse built files older than their source. With `outDir`,
+ * differ from what's on disk instead, so a release can refuse built files that no longer match their source. With `outDir`,
  * writes the outputs there instead; a page's own HTML or CSS already in `outDir` still wins over a generated one.
  * The manifest with the tools from src/tools.ts goes to `manifestDir`, the plugin folder by default. Throws a line for
  * each place that manifest and the built code disagree.

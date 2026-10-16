@@ -1,4 +1,4 @@
-// Builds every plugin in this folder with wings-plugin-sdk's build: src/main.ts becomes dist/main.js, src/sidebar.tsx
+// Builds every plugin in this folder with wings-plugin-sdk's build: src/main.ts becomes dist/main.js, src/pages/sidebar.tsx
 // becomes dist/sidebar.js, and so on. The output is committed, because Wings installs a plugin folder straight from
 // the default branch.
 //   node build.mjs           build every plugin

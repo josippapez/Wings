@@ -307,7 +307,11 @@ interface Wings {
    * `wings-plugin-sdk/git` holds events until the page is in view. Needs Wings 0.1.50.
    */
   onGitChange(listener: (event: { projectIds: string[] }) => void): () => void;
-  /** Needs `"badges"` in `contributes.ui`. `null` removes it. */
+  /**
+   * Needs `"badges"` in `contributes.ui`. `null` removes it. Sending what this frame last sent for the pane does
+   * nothing, `null` included, so it is safe to call on every poll. Wings drops a closed pane's badge, so send `null`
+   * only to clear a pane that stays open. A call for a pane that has closed rejects with `no pane <id>`.
+   */
   setBadge(paneId: string, badge: WingsBadge | null): Promise<void>;
   /**
    * Needs `"status"` in `contributes.ui`. Shows a slim strip under the pane's terminal, or removes it with `null`.

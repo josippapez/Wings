@@ -37,7 +37,7 @@ cargo test          # Rust tests, run in src-tauri/
 
 ## Plugins
 
-A plugin is a folder with a `wings-plugin.json` and some TypeScript, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing and the plugins in this repo (Changes, Dev servers, HUD, PR tracker, Session detail, Work item, Worktrees). To write one, use [`wings-plugin-sdk`](https://www.npmjs.com/package/wings-plugin-sdk) and [`wings-plugin-ui`](https://www.npmjs.com/package/wings-plugin-ui), whose sources are in `packages/`.
+A plugin is a folder with a `wings-plugin.json` and some TypeScript, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing and the plugins in this repo (Changes, Dev servers, HUD, Issues, PR tracker, Session detail, Work item, Worktrees). To write one, use [`wings-plugin-sdk`](https://www.npmjs.com/package/wings-plugin-sdk) and [`wings-plugin-ui`](https://www.npmjs.com/package/wings-plugin-ui), whose sources are in `packages/`.
 
 ## License
 

@@ -1,8 +1,9 @@
 #!/bin/sh
 # Packs each folder in the repo's plugins/ into <out-dir>/<id>.wings-plugin with wings-plugin pack: a zip with
 # wings-plugin.json at its root and the built files in dist/, without the plugin's source. Prints the path of each
-# file. release-mac.sh attaches them to the release, so github.com/josippapez/Wings/plugins/<id> installs and
-# updates from there.
+# file. release-mac.sh attaches them to the release, for installing a plugin from a file. A
+# github.com/josippapez/Wings/plugins/<id> link doesn't use them: Wings installs that folder from the default branch
+# (plugin_store.rs, pick), so a plugin ships by pushing a version bump.
 #   sh scripts/pack-plugins.sh <out-dir>
 set -e
 OUT="${1:?Usage: pack-plugins.sh <out-dir>}"

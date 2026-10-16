@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // wings-plugin build           builds the plugin in this folder into dist/
-// wings-plugin build --check   fails if a file in dist/ is older than its source
+// wings-plugin build --check   fails if a file in dist/ differs from what src/ builds
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
 //                              writing built files into the folder
 // wings-plugin dev            builds on each save and has the running Wings restart the plugin, until you stop it

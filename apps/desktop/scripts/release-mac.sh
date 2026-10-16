@@ -45,12 +45,13 @@ const latest = {
 fs.writeFileSync(process.argv[1], JSON.stringify(latest, null, 2) + "\n");
 ' "$DIR/latest.json"
 
-# Plugins ship their committed built files, so a release stops if one is older than its source.
+# Plugins ship their committed built files, so a release stops if one no longer matches its source (`pnpm check` compares the content of each built file).
 (cd ../../packages/plugin-sdk && pnpm install --frozen-lockfile >/dev/null)
 (cd ../../packages/plugin-ui && pnpm install --frozen-lockfile >/dev/null)
 (cd ../../plugins && pnpm install --frozen-lockfile >/dev/null && pnpm check)
 
-# Each official plugin as <id>.wings-plugin, so github.com/josippapez/Wings/plugins/<id> installs from the release.
+# Each official plugin as <id>.wings-plugin, for installing from a file. A github.com/josippapez/Wings/plugins/<id> link
+# installs that folder from the default branch instead (plugin_store.rs, pick).
 PACKED=$(sh scripts/pack-plugins.sh "$DIR")
 PLUGINS=$(printf '%s\n' "$PACKED" | while read -r f; do printf ' "%s"' "$f"; done)
 
