@@ -29,6 +29,8 @@ use crate::{
 const SEPARATOR: &str = "__";
 /// A slow plugin call (one that waits on a network API, say) still gets an answer back to Claude.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a plugin has to answer a Claude Code hook. `wings hook` gives up on Wings after 2 s.
+const HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// What a tool call returns to Claude: text, and whether it failed.
 pub struct ToolResult {
@@ -93,6 +95,11 @@ fn serve(app: &AppHandle, stream: UnixStream) {
                 let ppid = request.get("ppid").and_then(Value::as_u64).map(|p| p as u32);
                 let result = call(app, name, arguments, ppid).unwrap_or_else(|text| ToolResult { text, is_error: true });
                 json!({ "id": id, "result": { "content": [{ "type": "text", "text": result.text }], "isError": result.is_error } })
+            }
+            Some("hook") => {
+                let input = request.get("input").cloned().unwrap_or(Value::Null);
+                let ppid = request.get("ppid").and_then(Value::as_u64).map(|p| p as u32);
+                json!({ "id": id, "result": hook(app, &input, ppid) })
             }
             Some(op) => match crate::control::handle(app, op, &request) {
                 Some(Ok(result)) => json!({ "id": id, "result": result }),
@@ -166,7 +173,11 @@ fn project_info_tool(app: &AppHandle, name: &str, arguments: &Value, ppid: Optio
 }
 
 /// Sends the webview `event` with a call id added to `payload`, and waits for it to answer through `mcp_tool_result`.
-fn ask_webview(app: &AppHandle, event: &str, mut payload: Value) -> Result<ToolResult, String> {
+fn ask_webview(app: &AppHandle, event: &str, payload: Value) -> Result<ToolResult, String> {
+    ask_webview_within(app, event, payload, CALL_TIMEOUT)
+}
+
+fn ask_webview_within(app: &AppHandle, event: &str, mut payload: Value, timeout: Duration) -> Result<ToolResult, String> {
     let state = app.state::<AppState>();
     let call_id = state.mcp.next.fetch_add(1, Ordering::Relaxed);
     payload["callId"] = json!(call_id);
@@ -176,7 +187,7 @@ fn ask_webview(app: &AppHandle, event: &str, mut payload: Value) -> Result<ToolR
         state.mcp.pending.lock().unwrap().remove(&call_id);
         return Err(e.to_string());
     }
-    let result = answer.recv_timeout(CALL_TIMEOUT).map_err(|_| "Wings didn't answer in time".to_string());
+    let result = answer.recv_timeout(timeout).map_err(|_| "Wings didn't answer in time".to_string());
     state.mcp.pending.lock().unwrap().remove(&call_id);
     result
 }
@@ -257,6 +268,64 @@ fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Res
         .map_err(|_| format!("{plugin_id} didn't answer in time"))
 }
 
+/// What the plugins that answer a Claude Code hook say, as `{ context?, deny? }` for `wings hook` to print. Only
+/// plugins that are on and declare the event are asked, so with none the reply is empty and the webview isn't
+/// involved. They're asked together, each with `HOOK_TIMEOUT`; one that is slow, throws or says nothing adds nothing.
+fn hook(app: &AppHandle, input: &Value, ppid: Option<u32>) -> Value {
+    let Some(event) = input.get("hook_event_name").and_then(Value::as_str) else { return json!({}) };
+    // PreToolUse is installed for Bash only, but the input is Claude Code's to say.
+    if event == "PreToolUse" && input.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+        return json!({});
+    }
+    let plugins: Vec<String> = {
+        let state = app.state::<AppState>();
+        let store = state.plugins.lock().unwrap();
+        store.list().into_iter().filter(|p| p.enabled && p.approved && p.manifest.contributes.hooks.iter().any(|h| h == event)).map(|p| p.manifest.id).collect()
+    };
+    if plugins.is_empty() {
+        return json!({});
+    }
+    let pane_id = ppid.and_then(|pid| pane_of(app, pid));
+    let (project, session) = caller_of(app, pane_id.as_deref());
+    // The pane's agent may not know its session id yet at startup, but the hook's input always does.
+    let session = match input.get("session_id").and_then(Value::as_str) {
+        Some(id) => json!({ "id": id, "name": session.get("name").cloned().unwrap_or(Value::Null) }),
+        None => session,
+    };
+    let answers: Vec<Value> = thread::scope(|scope| {
+        let asked: Vec<_> = plugins
+            .iter()
+            .map(|plugin| {
+                let payload = json!({ "pluginId": plugin, "tool": event, "hook": true, "arguments": input, "paneId": pane_id, "project": project, "session": session });
+                scope.spawn(move || ask_webview_within(app, "mcp-call", payload, HOOK_TIMEOUT))
+            })
+            .collect();
+        asked
+            .into_iter()
+            .filter_map(|h| h.join().ok()?.ok())
+            .filter(|r| !r.is_error)
+            .filter_map(|r| serde_json::from_str(&r.text).ok())
+            .collect()
+    });
+    merge_hook_answers(event, &answers)
+}
+
+/// The answers of several plugins as one: contexts joined by a blank line, and for `PreToolUse` the reasons to
+/// refuse joined by a new line. Any refusal refuses, so the first plugin's doesn't hide the others' reasons.
+fn merge_hook_answers(event: &str, answers: &[Value]) -> Value {
+    let all = |key: &str| -> Vec<&str> { answers.iter().filter_map(|a| a.get(key)?.as_str()).filter(|t| !t.is_empty()).collect() };
+    let mut out = serde_json::Map::new();
+    let contexts = all("context");
+    if !contexts.is_empty() {
+        out.insert("context".into(), json!(contexts.join("\n\n")));
+    }
+    let denies = all("deny");
+    if event == "PreToolUse" && !denies.is_empty() {
+        out.insert("deny".into(), json!(denies.join("\n")));
+    }
+    Value::Object(out)
+}
+
 /// What a plugin's tool handler is told about who called, besides the pane: that pane's project and the Claude session
 /// running in it. Each is null when there is none: a call from outside Wings' panes has neither, and a pane that isn't
 /// running Claude Code, or whose session has no id yet, has no session.
@@ -327,6 +396,15 @@ mod tests {
         }
         // A call from outside every pane has neither.
         assert_eq!(caller(None, None), (Value::Null, Value::Null));
+    }
+
+    #[test]
+    fn hook_answers_merge_into_one() {
+        let answers = [json!({ "context": "a" }), json!({}), json!({ "context": "b", "deny": "no, because x" }), json!({ "deny": "and y", "context": "" })];
+        assert_eq!(merge_hook_answers("PreToolUse", &answers), json!({ "context": "a\n\nb", "deny": "no, because x\nand y" }));
+        // A session can't be refused.
+        assert_eq!(merge_hook_answers("SessionStart", &answers), json!({ "context": "a\n\nb" }));
+        assert_eq!(merge_hook_answers("SessionStart", &[]), json!({}));
     }
 
     #[test]

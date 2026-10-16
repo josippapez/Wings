@@ -152,6 +152,23 @@ interface WingsPaneStatus {
   open?: string;
 }
 
+/** One line of a pane rail. */
+interface WingsRailItem {
+  /** Up to 200 characters. */
+  text: string;
+  status: "pending" | "in_progress" | "done";
+}
+
+/** A small card floating over a pane's terminal, like an agent's todo list. */
+interface WingsPaneRail {
+  /** Up to 40 characters. Shown in the header, and with `done/total` when minimised. */
+  title: string;
+  /** Up to 30 lines. */
+  items: WingsRailItem[];
+  /** The id of one of the plugin's sidebars or views. Clicking the title opens it. */
+  open?: string;
+}
+
 /** Where the diff viewer scrolls to and highlights once the patch is shown. A path or line the patch doesn't have just opens the diff. */
 interface WingsDiffFocus {
   path: string;
@@ -256,6 +273,25 @@ interface WingsToolContext {
   session: { id: string; name: string | null } | null;
 }
 
+/** What Claude Code sends a hook, as `wings.onHook` passes it on. `SessionStart` adds `source`; `PreToolUse` adds `tool_name` (always `"Bash"`) and `tool_input`. */
+interface WingsHookInput {
+  session_id: string;
+  transcript_path?: string;
+  cwd?: string;
+  permission_mode?: string;
+  hook_event_name: "SessionStart" | "PreToolUse";
+  /** SessionStart: `"startup"`, `"resume"`, `"clear"`, `"compact"` or `"fork"`. */
+  source?: string;
+  /** PreToolUse. */
+  tool_name?: string;
+  /** PreToolUse: for Bash, `{ command, description?, ... }`. */
+  tool_input?: { command?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+/** What a hook handler answers: a string is `context`. `deny` only counts for `PreToolUse`. */
+type WingsHookAnswer = string | { context?: string; deny?: string } | null | undefined;
+
 interface Wings {
   // Every `on*` call returns a function that removes the listener, for cleaning up in a React effect.
   /** Every terminal pane, on every change. */
@@ -282,6 +318,13 @@ interface Wings {
    * Claude session running there, so a tool can act on "this project" without tracking panes. Register it in `main`.
    */
   onTool(name: string, handler: (input: Record<string, unknown>, context: WingsToolContext) => unknown): void;
+  /**
+   * Answers a Claude Code hook listed in `contributes.hooks` (Wings 0.1.54): `"SessionStart"` adds `context` to the
+   * session, `"PreToolUse"` can add context and `deny` a Bash command with a reason Claude sees. Wings runs
+   * `wings hook` for Claude Code once Connect has installed it. An error, a slow answer (1.5 s) or no answer
+   * counts as nothing, so Claude is never held up. `context` is capped at 10,000 characters. Register it in `main`.
+   */
+  onHook(event: "SessionStart" | "PreToolUse", handler: (input: WingsHookInput, context: WingsToolContext) => WingsHookAnswer | Promise<WingsHookAnswer>): void;
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. Rejects with `Output is larger than 8 MB` (and kills the program) when stdout or stderr passes 8 MB. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**
@@ -320,6 +363,14 @@ interface Wings {
    * `open` that isn't one of the plugin's sidebars or views. Sending what this frame last sent for the pane does nothing.
    */
   setPaneStatus(paneId: string, status: WingsPaneStatus | null): Promise<void>;
+  /**
+   * Needs `"rail"` in `contributes.ui` and Wings 0.1.54. Floats a card over the pane's terminal, or removes it with
+   * `null`. The user can drag it to a corner, minimise it and close it; a closed rail comes back when you send a
+   * different one. One rail per plugin per pane; Wings removes it when the pane closes or the plugin stops. Rejects a
+   * rail over the limits (40-character title, 30 items, 200-character text), an unknown `status`, or an `open` that
+   * isn't one of the plugin's sidebars or views. Sending what this frame last sent for the pane does nothing.
+   */
+  setPaneRail(paneId: string, rail: WingsPaneRail | null): Promise<void>;
   /**
    * Needs `permissions.ports`. The local TCP ports the programs in your panes listen on, that `localhost`
    * reaches. About 20 ms a call, so poll slowly.

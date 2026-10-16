@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
+import { cleanPaneRail, type PaneRail } from "@/lib/pane-rail";
 import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
 import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanButtons, type NotificationButton } from "@/lib/notifications";
@@ -26,6 +27,7 @@ export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "merg
 export type BadgeIcon = "pr-open" | "pr-merged" | "pr-closed" | "pr-draft";
 export type CountIcon = "changed" | "push" | "pull";
 
+export type { PaneRail, RailItem } from "@/lib/pane-rail";
 export type { PaneStatus, StatusItem } from "@/lib/pane-status";
 
 export type Badge = {
@@ -106,6 +108,7 @@ type Callbacks = {
   setBadge: (pluginId: string, paneId: string, badge: Badge | null) => void;
   /** The strip a plugin shows under a pane's terminal; null removes it. */
   setPaneStatus: (pluginId: string, paneId: string, status: PaneStatus | null) => void;
+  setPaneRail: (pluginId: string, paneId: string, rail: PaneRail | null) => void;
   openDiff: (view: DiffView) => void;
   updateDiff: (pluginId: string, id: string, update: Partial<DiffView>) => void;
   /** A plugin stopped: drop everything it showed. */
@@ -606,13 +609,13 @@ export class PluginHost {
     });
   }
 
-  /** Hands an MCP tool call from Claude to the plugin's main frame. Rust has checked the tool is declared. */
+  /** Hands an MCP tool call, or a Claude Code hook, from Claude to the plugin's main frame. Rust has checked the plugin declared it. */
   private runTool(call: McpCall) {
     const entry = [...this.frames].find(([, p]) => p.id === call.pluginId && p.kind === "main" && p.ready);
     if (!entry) return void api.mcpToolResult(call.callId, `${call.pluginId} is still starting in Wings. Try again in a moment.`, true);
     const token = crypto.randomUUID();
     this.tools.set(token, { pluginId: call.pluginId, callId: call.callId });
-    entry[1].post({ event: "tool", data: { token, name: call.tool, arguments: call.arguments, paneId: call.paneId, project: call.project, session: call.session } });
+    entry[1].post({ event: "tool", data: { token, name: call.tool, hook: call.hook === true, arguments: call.arguments, paneId: call.paneId, project: call.project, session: call.session } });
   }
 
   private settle(token: string, error: Error | null) {
@@ -906,6 +909,13 @@ export class PluginHost {
         const paneId = String(p.paneId);
         if (!this.panes.some((s) => s.paneId === paneId)) throw new Error(`no pane ${paneId}`);
         this.callbacks.setPaneStatus(pluginId, paneId, p.status === null ? null : cleanPaneStatus(p.status, pagesOf(plugin.plugin).map((v) => v.id)));
+        return null;
+      }
+      case "setPaneRail": {
+        needs("rail");
+        const paneId = String(p.paneId);
+        if (!this.panes.some((s) => s.paneId === paneId)) throw new Error(`no pane ${paneId}`);
+        this.callbacks.setPaneRail(pluginId, paneId, p.rail === null ? null : cleanPaneRail(p.rail, pagesOf(plugin.plugin).map((v) => v.id)));
         return null;
       }
       case "actionDone":

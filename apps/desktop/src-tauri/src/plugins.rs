@@ -66,6 +66,10 @@ pub struct Contributes {
     /// use them unprompted. Up to `MAX_MCP_INSTRUCTIONS` characters.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mcp_instructions: String,
+    /// Claude Code hooks it answers with `wings.onHook`: `SessionStart` to add context to a session, `PreToolUse`
+    /// to refuse a Bash command. Needs Wings 0.1.54.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<String>,
     /// Web pages it shows in a popover from a title bar button.
     pub panels: Vec<Panel>,
     /// Its own pages shown in the right sidebar from a title bar button.
@@ -219,7 +223,9 @@ fn empty_schema() -> Value {
     serde_json::json!({ "type": "object" })
 }
 
-const UI_KINDS: [&str; 3] = ["badges", "diff", "status"];
+const UI_KINDS: [&str; 4] = ["badges", "diff", "rail", "status"];
+/// The Claude Code hooks a plugin can answer. `PreToolUse` only ever sees Bash commands.
+pub const HOOK_EVENTS: [&str; 2] = ["SessionStart", "PreToolUse"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -359,6 +365,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     resolve(dir, &manifest.main).ok_or("main is outside the plugin folder")?;
     if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
         return Err(format!("unknown ui {kind:?}, expected one of {UI_KINDS:?}"));
+    }
+    if let Some(event) = manifest.contributes.hooks.iter().find(|e| !HOOK_EVENTS.contains(&e.as_str())) {
+        return Err(format!("unknown hook {event:?}, expected one of {HOOK_EVENTS:?}"));
     }
     // Up to 60 so `<plugin id>__<tool>` stays within MCP's 128 characters.
     let tool_name = |n: &str| !n.is_empty() && n.len() <= 60 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');

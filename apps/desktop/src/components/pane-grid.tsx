@@ -7,6 +7,7 @@ import { IconButton } from "@/components/icon-button";
 import { InlineName } from "@/components/inline-name";
 import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
+import { PaneRails, type PaneRailEntry } from "@/components/pane-rail";
 import { PaneStatusStrip, type PaneStatusEntry } from "@/components/pane-status";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -47,6 +48,8 @@ type GridProps = {
   /** What plugins show under each pane's terminal, and what a click on it opens. */
   statuses: Record<string, PaneStatusEntry[]>;
   onOpenStatus: (pluginId: string, page: string) => void;
+  /** The cards plugins float over each pane's terminal. A click on a card's title opens its page, like a status. */
+  rails: Record<string, PaneRailEntry[]>;
   actions: PaneActions;
 };
 
@@ -304,7 +307,10 @@ function PaneCard(props: GridProps & { paneKey: string }) {
         </ContextMenuSub>
       </ContextMenuContent>
       </ContextMenu>
-      <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
+        {!!props.rails[paneKey]?.length && <PaneRails paneKey={paneKey} entries={props.rails[paneKey]} onOpen={props.onOpenStatus} />}
+      </div>
       {!!props.statuses[paneKey]?.length && <PaneStatusStrip entries={props.statuses[paneKey]} onOpen={props.onOpenStatus} />}
       {session && <FindBar session={session} />}
     </motion.section>

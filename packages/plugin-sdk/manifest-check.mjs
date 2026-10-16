@@ -6,7 +6,7 @@ import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 
 /** The `wings` calls that need a `contributes.ui` entry, by that entry. Wings refuses them without it. */
-const SURFACES = { badges: ["setBadge"], status: ["setPaneStatus"], diff: ["openDiff", "updateDiff"] };
+const SURFACES = { badges: ["setBadge"], status: ["setPaneStatus"], rail: ["setPaneRail"], diff: ["openDiff", "updateDiff"] };
 
 /** The `wings` calls that take the id of a sidebar or view as their first argument. */
 const PAGE_CALLS = ["openView", "closeView", "setSidebarLabel"];
@@ -71,6 +71,16 @@ export function manifestProblems(manifest, { root, built, main }) {
     for (const name of declared.filter((n) => !answered.includes(n))) problems.push(`contributes.mcpTools lists "${name}", but nothing in ${main} answers it with wings.onTool or registerTools.`);
   }
 
+  // A hook the manifest doesn't list never reaches the plugin, and one it lists with no handler does nothing.
+  const hooks = contributes.hooks ?? [];
+  const hooked = named(mainText, "onHook");
+  for (const event of hooked.filter((e) => !hooks.includes(e))) {
+    problems.push(`${main} answers "${event}" with wings.onHook, but contributes.hooks doesn't list it${hooks.length ? ` (it lists ${hooks.join(", ")})` : ""}.`);
+  }
+  if (mainText.split(".onHook(").length - 1 === hooked.length) {
+    for (const event of hooks.filter((e) => !hooked.includes(e))) problems.push(`contributes.hooks lists "${event}", but nothing in ${main} answers it with wings.onHook.`);
+  }
+
   for (const [kind, methods] of Object.entries(SURFACES)) {
     if ((contributes.ui ?? []).includes(kind)) continue;
     for (const { file, text } of bundles) {
@@ -92,9 +102,9 @@ export function manifestProblems(manifest, { root, built, main }) {
       }
     }
     // An `open` key can be anything, so it's only read in a bundle that calls what takes it.
-    if (text.includes("wings.setPaneStatus(")) {
+    if (text.includes("wings.setPaneStatus(") || text.includes("wings.setPaneRail(")) {
       for (const id of new Set(literals(text, OPEN))) {
-        if (!pages.includes(id)) problems.push(`${file} sets open: "${id}" on a pane status, but ${noPage}.`);
+        if (!pages.includes(id)) problems.push(`${file} sets open: "${id}" on a pane status or rail, but ${noPage}.`);
       }
     }
     if (text.includes("wings.setProjectSection(") || text.includes("wings.notify(")) {

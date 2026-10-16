@@ -1,5 +1,6 @@
 //! Puts `wings statusline` in Claude Code's `statusLine` setting without taking it over: the status line you
-//! already had runs after Wings, on the same input, so it still shows. Removing Wings puts yours back as it was.
+//! already had runs after Wings, on the same input, so it still shows. It also adds `wings hook` to the
+//! `SessionStart` and `PreToolUse` hooks, after the hooks you have. Removing Wings puts yours back as it was.
 
 use std::path::{Path, PathBuf};
 
@@ -65,18 +66,41 @@ fn command(settings: &Map<String, Value>) -> Option<&str> {
     line.get("command")?.as_str()
 }
 
-/// Whether Claude Code's status line goes through Wings.
-pub fn connected(path: &Path) -> bool {
-    read(path).is_ok_and(|s| command(&s).and_then(unwrap).is_some())
+/// The hooks Wings adds, with the matcher each one has. `PreToolUse` is only for Bash: Wings starts in 20 to
+/// 60 ms, which every tool call shouldn't wait for.
+const HOOKS: [(&str, Option<&str>); 2] = [("SessionStart", None), ("PreToolUse", Some("Bash"))];
+/// Claude Code's own cap is 600 s; Wings answers within 2 s or says nothing.
+const HOOK_TIMEOUT: u64 = 5;
+
+/// The Wings program in a hook command Wings wrote.
+fn hook_exe(command: &str) -> Option<String> {
+    let exe = unquote(command.strip_suffix(" hook")?)?;
+    (Path::new(&exe).file_stem()? == "wings").then_some(exe)
 }
 
-/// Puts Wings in front of your status line, or repoints it when Wings moved. Returns whether the file changed.
-pub fn add(path: &Path, exe: &Path) -> Result<bool, String> {
-    let mut settings = read(path)?;
+/// The hooks of `event`'s entries that run `wings hook`.
+fn hook_commands<'a>(settings: &'a mut Map<String, Value>, event: &str) -> Vec<&'a mut Value> {
+    let Some(Value::Array(entries)) = settings.get_mut("hooks").and_then(|h| h.get_mut(event)) else { return vec![] };
+    entries
+        .iter_mut()
+        .filter_map(|entry| entry.get_mut("hooks")?.as_array_mut())
+        .flatten()
+        .filter(|hook| hook.get("command").and_then(Value::as_str).and_then(hook_exe).is_some())
+        .collect()
+}
+
+/// Whether Claude Code's status line and hooks go through Wings.
+pub fn connected(path: &Path) -> bool {
+    read(path).is_ok_and(|mut s| {
+        command(&s).and_then(unwrap).is_some() && HOOKS.iter().all(|(event, _)| !hook_commands(&mut s, event).is_empty())
+    })
+}
+
+fn add_statusline(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, String> {
     let next = match settings.get("statusLine") {
         None => wrap(exe, None),
         Some(_) => {
-            let current = command(&settings).ok_or("Claude Code's statusLine isn't a command, so Wings left it alone")?;
+            let current = command(settings).ok_or("Claude Code's statusLine isn't a command, so Wings left it alone")?;
             match unwrap(current) {
                 Some((was, _)) if Path::new(&was) == exe => return Ok(false),
                 Some((_, yours)) => wrap(exe, yours.as_deref()),
@@ -86,22 +110,101 @@ pub fn add(path: &Path, exe: &Path) -> Result<bool, String> {
     };
     let line = settings.entry("statusLine").or_insert_with(|| json!({ "type": "command" }));
     line["command"] = Value::String(next);
+    Ok(true)
+}
+
+/// Adds `wings hook` after the hooks you have for each event, or repoints it when Wings moved.
+fn add_hooks(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, String> {
+    let ours = format!("{} hook", quote(&exe.to_string_lossy()));
+    let mut changed = false;
+    for (event, matcher) in HOOKS {
+        let found = hook_commands(settings, event);
+        if !found.is_empty() {
+            for hook in found {
+                if hook["command"] != ours.as_str() {
+                    hook["command"] = Value::String(ours.clone());
+                    changed = true;
+                }
+            }
+            continue;
+        }
+        let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
+        let entries = hooks
+            .as_object_mut()
+            .ok_or("Claude Code's hooks isn't an object, so Wings left it alone")?
+            .entry(event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("Claude Code's {event} hooks isn't a list, so Wings left it alone"))?;
+        let mut entry = Map::new();
+        if let Some(matcher) = matcher {
+            entry.insert("matcher".into(), json!(matcher));
+        }
+        entry.insert("hooks".into(), json!([{ "type": "command", "command": ours, "timeout": HOOK_TIMEOUT }]));
+        entries.push(Value::Object(entry));
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// Takes `wings hook` out of each event, and an entry or event that held only that. Yours stay as they were.
+fn remove_hooks(settings: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+    for (event, _) in HOOKS {
+        let Some(Value::Array(entries)) = settings.get_mut("hooks").and_then(|h| h.get_mut(event)) else { continue };
+        let is_ours = |hook: &Value| hook.get("command").and_then(Value::as_str).and_then(hook_exe).is_some();
+        for entry in entries.iter_mut() {
+            if let Some(list) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                let had = list.len();
+                list.retain(|hook| !is_ours(hook));
+                changed |= list.len() != had;
+            }
+        }
+        entries.retain(|entry| entry.get("hooks").and_then(Value::as_array).is_none_or(|list| !list.is_empty()));
+        if entries.is_empty() {
+            if let Some(Value::Object(hooks)) = settings.get_mut("hooks") {
+                hooks.shift_remove(event);
+            }
+        }
+    }
+    if settings.get("hooks").and_then(Value::as_object).is_some_and(|h| h.is_empty()) && changed {
+        settings.shift_remove("hooks");
+    }
+    changed
+}
+
+/// Puts Wings in front of your status line and after your hooks, or repoints both when Wings moved. Returns
+/// whether the file changed.
+pub fn add(path: &Path, exe: &Path) -> Result<bool, String> {
+    let mut settings = read(path)?;
+    let line = add_statusline(&mut settings, exe)?;
+    let hooks = add_hooks(&mut settings, exe)?;
+    if !(line || hooks) {
+        return Ok(false);
+    }
     write(path, &settings)?;
     Ok(true)
 }
 
-/// Puts back the status line you had before Wings, or removes the one Wings added. Returns whether the file changed.
+/// Puts back the status line and hooks you had before Wings, or removes the ones Wings added. Returns whether the
+/// file changed.
 pub fn remove(path: &Path) -> Result<bool, String> {
     let mut settings = read(path)?;
-    let Some((_, yours)) = command(&settings).and_then(unwrap) else { return Ok(false) };
-    match yours {
-        Some(yours) => settings["statusLine"]["command"] = Value::String(yours),
-        None => {
-            settings.shift_remove("statusLine");
+    let mut changed = false;
+    if let Some((_, yours)) = command(&settings).and_then(unwrap) {
+        match yours {
+            Some(yours) => settings["statusLine"]["command"] = Value::String(yours),
+            None => {
+                settings.shift_remove("statusLine");
+            }
         }
+        changed = true;
     }
-    write(path, &settings)?;
-    Ok(true)
+    changed |= remove_hooks(&mut settings);
+    if changed {
+        write(path, &settings)?;
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -134,7 +237,7 @@ mod tests {
 
         assert!(add(&path, exe).unwrap());
         let settings = read(&path).unwrap();
-        assert_eq!(settings.keys().collect::<Vec<_>>(), ["model", "statusLine", "outputStyle"]);
+        assert_eq!(settings.keys().collect::<Vec<_>>(), ["model", "statusLine", "outputStyle", "hooks"]);
         assert_eq!(settings["statusLine"]["refreshInterval"], 5);
         assert_eq!(command(&settings), Some(format!("'{}'{PASS}{HUD}\n}}", exe.display()).as_str()));
         assert!(connected(&path));
@@ -158,6 +261,61 @@ mod tests {
         let path = file("none", "{\n  \"model\": \"opus\"\n}\n");
         add(&path, Path::new("/a/wings")).unwrap();
         assert_eq!(command(&read(&path).unwrap()), Some("'/a/wings' statusline"));
+        remove(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\n  \"model\": \"opus\"\n}\n");
+    }
+
+    #[test]
+    fn hooks_go_after_yours_once_and_come_off_again() {
+        let before = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "model": "opus",
+                "hooks": {
+                    "PreToolUse": [
+                        { "matcher": "Bash", "hooks": [{ "type": "command", "command": "rtk hook claude" }] },
+                        { "matcher": "Edit", "hooks": [{ "type": "command", "command": "fmt" }] }
+                    ],
+                    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "after" }] }]
+                },
+                "outputStyle": "concise"
+            }))
+            .unwrap()
+        );
+        let path = file("hooks", &before);
+        let exe = Path::new("/Applications/Wings.app/Contents/MacOS/wings");
+
+        assert!(add(&path, exe).unwrap());
+        let settings = read(&path).unwrap();
+        assert_eq!(settings.keys().collect::<Vec<_>>(), ["model", "hooks", "outputStyle", "statusLine"]);
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 3);
+        assert_eq!(pre[0]["hooks"][0]["command"], "rtk hook claude");
+        assert_eq!(pre[1]["hooks"][0]["command"], "fmt");
+        assert_eq!(pre[2], json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] }));
+        assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(settings["hooks"]["SessionStart"][0].get("matcher"), None);
+        assert_eq!(settings["hooks"]["PostToolUse"], json!([{ "hooks": [{ "type": "command", "command": "after" }] }]));
+        assert!(connected(&path));
+        assert!(!add(&path, exe).unwrap(), "a second add changes nothing");
+
+        // Moved: repointed, not duplicated.
+        let moved = Path::new("/new place/Wings.app/Contents/MacOS/wings");
+        assert!(add(&path, moved).unwrap());
+        let settings = read(&path).unwrap();
+        assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 3);
+        assert_eq!(settings["hooks"]["PreToolUse"][2]["hooks"][0]["command"], format!("'{}' hook", moved.display()));
+
+        assert!(remove(&path).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert!(!connected(&path));
+    }
+
+    #[test]
+    fn hooks_added_to_a_file_without_any_leave_no_trace() {
+        let path = file("nohooks", "{\n  \"model\": \"opus\"\n}\n");
+        add(&path, Path::new("/a/wings")).unwrap();
+        assert_eq!(read(&path).unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"], "'/a/wings' hook");
         remove(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\n  \"model\": \"opus\"\n}\n");
     }

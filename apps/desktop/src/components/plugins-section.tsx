@@ -31,7 +31,7 @@ const sidebarName = (s: PluginSidebar) => `${s.title} sidebar${s.popover ? " and
 
 /** What a plugin adds, as short chips: UI parts, MCP tools for Claude, and whether it runs commands. */
 function Adds({ plugin }: { plugin: PluginView }) {
-  const { ui, mcpTools, panels, sidebars, views, settings } = plugin.contributes;
+  const { ui, mcpTools, panels, sidebars, views, settings, hooks = [] } = plugin.contributes;
   const chips = [
     ...ui.map((kind) => ({ key: kind, label: uiNames[kind] ?? kind, title: undefined as string | undefined })),
     ...sidebars.map((s) => ({ key: `sidebar:${s.id}`, label: sidebarName(s), title: undefined })),
@@ -42,6 +42,7 @@ function Adds({ plugin }: { plugin: PluginView }) {
     ...(mcpTools.length
       ? [{ key: "mcp", label: `${mcpTools.length} MCP ${mcpTools.length === 1 ? "tool" : "tools"}`, title: mcpTools.map((t) => t.name).join(", ") }]
       : []),
+    ...(hooks.length ? [{ key: "hooks", label: "Claude Code hooks", title: hooks.join(", ") }] : []),
     ...(plugin.permissions.exec.length ? [{ key: "exec", label: "Runs commands", title: plugin.permissions.exec.join(", ") }] : []),
     ...(plugin.permissions.panes ? [{ key: "panes", label: "Opens terminals", title: plugin.permissions.panes.join(", ") || undefined }] : []),
     ...(plugin.permissions.notify ? [{ key: "notify", label: "Notifications", title: undefined }] : []),
@@ -95,13 +96,14 @@ function Source({ plugin: p }: { plugin: PluginView }) {
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
   const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports } = plugin.permissions;
-  const { ui, mcpTools, panels, sidebars, views, settings } = plugin.contributes;
+  const { ui, mcpTools, panels, sidebars, views, settings, hooks = [] } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
     { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map(sidebarName), ...views.map(viewName), ...(settings ? ["Settings page"] : [])] },
     { title: "Call these web addresses, with tokens you give it", items: fetch },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
+    { title: "Answer these Claude Code hooks: add context to a session, or refuse a Bash command", items: hooks },
     { title: "Run these commands as you, with your own sign-ins", items: exec },
     { title: "Post to these addresses as you, like replying to a review comment", items: post },
     { title: "Open terminals in your projects and move your typing to any pane", items: [], on: panes !== null },
@@ -198,7 +200,7 @@ function ClaudeConnect({ open }: { open: boolean }) {
   return (
     <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
       <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
-        <div className="min-w-0 basis-full">
+        <div className="min-w-0 flex-1 basis-80">
           <p className="flex items-center gap-1.5 text-[13px] font-medium">
             Claude Code
             {connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
@@ -442,6 +444,10 @@ export function PluginsSection(props: {
           )}
         </AnimatePresence>
       </div>
+      <div className="shrink-0 [&>div]:px-6">
+        <ClaudeConnect open />
+        <TerminalCommandRow open />
+      </div>
 
       <div className="flex min-h-0 flex-1">
         <div className="flex w-80 shrink-0 flex-col border-r border-hairline">
@@ -508,10 +514,6 @@ export function PluginsSection(props: {
               })}
             </ul>
           </ScrollArea>
-          <div className="shrink-0 border-t border-hairline [&>div:last-child]:border-b-0 [&>div]:px-4">
-            <ClaudeConnect open />
-            <TerminalCommandRow open />
-          </div>
         </div>
 
         <ScrollArea className="min-h-0 min-w-0 flex-1">

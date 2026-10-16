@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; onGitChange(fn: (e: { projectIds: string[] }) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; onGitChange(fn: (e: { projectIds: string[] }) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void; onHook(event: string, handler: (input: unknown, context: unknown) => unknown): void; setPaneRail(paneId: string, rail: unknown): Promise<unknown> };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame(init?: unknown) {
@@ -136,6 +136,15 @@ test("onFocus registered after the state is known hears it right away", async ()
   assert.deepEqual(got, [false]);
 });
 
+test("onPanes registered after Wings sent the panes hears them right away", async () => {
+  const { wings, send } = frame();
+  send("panes", [{ paneId: "p1", cwd: "/repo" }]);
+  const got: unknown[][] = [];
+  wings.onPanes((p) => got.push(p));
+  await Promise.resolve();
+  assert.deepEqual(got, [[{ paneId: "p1", cwd: "/repo" }]]);
+});
+
 test("onProjects gets the list once at start, then on each change until it's removed, and setProjectSection sends its arguments", async () => {
   const { wings, send, calls, reply } = frame();
   const got: unknown[] = [];
@@ -230,6 +239,41 @@ test("a tool handler is told the pane Claude runs in, its project and its sessio
   send("tool", { token: "t3", name: "x", arguments: {} });
   await new Promise((r) => setTimeout(r));
   assert.deepEqual(JSON.parse(JSON.stringify(contexts)), [{ paneId: "p1", project, session }, none, none]);
+});
+
+test("a hook answers with context or a refusal as JSON, and a handler that throws or is missing says nothing", async () => {
+  const { wings, send, calls } = frame();
+  wings.onHook("SessionStart", (input) => `hello ${(input as { source: string }).source}`);
+  wings.onHook("PreToolUse", async () => ({ deny: "no", context: "" }));
+  const origError = console.error;
+  console.error = () => {};
+  wings.onHook("Other", () => {
+    throw new Error("boom");
+  });
+  for (const [token, name] of [["a", "SessionStart"], ["b", "PreToolUse"], ["c", "Other"], ["d", "Missing"]]) send("tool", { token, name, hook: true, arguments: { source: "startup" }, paneId: null });
+  await new Promise((r) => setTimeout(r));
+  console.error = origError;
+  // Handlers settle in their own time, so the order isn't the order they were sent in.
+  const done = calls("toolDone").map((c) => JSON.parse(JSON.stringify(c.params)) as { token: string });
+  assert.deepEqual(done.sort((x, y) => x.token.localeCompare(y.token)), [
+    { token: "a", text: '{"context":"hello startup"}', isError: false },
+    { token: "b", text: '{"deny":"no"}', isError: false },
+    { token: "c", text: "{}", isError: false },
+    { token: "d", text: "{}", isError: false },
+  ]);
+});
+
+test("setPaneRail sends a rail once, and again only when it changes", async () => {
+  const { wings, calls, reply } = frame();
+  const rail = { title: "Todo", items: [{ text: "a", status: "done" }] };
+  const first = wings.setPaneRail("p1", rail);
+  const [call] = calls("setPaneRail");
+  reply(call.id);
+  await first;
+  await wings.setPaneRail("p1", { ...rail });
+  assert.equal(calls("setPaneRail").length, 1);
+  void wings.setPaneRail("p1", null);
+  assert.equal(calls("setPaneRail").length, 2);
 });
 
 test("a real mouse back or forward press over the page asks Wings to go back or forward", () => {

@@ -20,7 +20,10 @@
   // Wings sets `focused` in the init of a block, which can mount out of view; every other page starts in front.
   let focused = init.focused ?? true;
   let focusKnown = false;
+  /** The last pane list Wings sent, for a listener that registers after it (Wings sends it once, right after ready). */
+  let panes = null;
   const tools = new Map();
+  const hooks = new Map();
   // `setHeight`: the height asked for last, the one sent last, and whether a send is queued for the end of this tick.
   let wantedHeight = null;
   let sentHeight = null;
@@ -46,6 +49,7 @@
   // starts with an empty memory) and drops a badge when its pane leaves the list, which `forgetPanes` mirrors.
   const sentBadges = new Map();
   const sentStatuses = new Map();
+  const sentRails = new Map();
   const sentLabels = new Map();
   // `projectId \0 sectionId` → the rows. A project's id is its folder, so one removed and added again has the same id:
   // Wings dropped its sections, and `forgetProjects` drops what this frame remembers of them.
@@ -64,6 +68,7 @@
     const live = new Set(Array.isArray(panes) ? panes.map((p) => p?.paneId) : []);
     for (const paneId of sentBadges.keys()) if (!live.has(paneId)) sentBadges.delete(paneId);
     for (const paneId of sentStatuses.keys()) if (!live.has(paneId)) sentStatuses.delete(paneId);
+    for (const paneId of sentRails.keys()) if (!live.has(paneId)) sentRails.delete(paneId);
   };
   const forgetProjects = (projects) => {
     const live = new Set(Array.isArray(projects) ? projects.map((p) => p?.id) : []);
@@ -99,7 +104,10 @@
       else resolve(message.result);
       return;
     }
-    if (message.event === "panes") forgetPanes(message.data);
+    if (message.event === "panes") {
+      panes = message.data;
+      forgetPanes(panes);
+    }
     if (message.event === "projects") forgetProjects(message.data);
     if (message.event === "focus") {
       if (message.data?.focused === focused && focusKnown) return;
@@ -145,10 +153,25 @@
   }
 
   // Claude called one of the plugin's MCP tools. A thrown error goes back to Claude as a failed call.
-  async function runTool({ token, name, arguments: input, paneId, project, session }) {
+  async function runTool({ token, name, hook, arguments: input, paneId, project, session }) {
     let text;
     let isError = false;
     try {
+      if (hook) {
+        // A Claude Code hook: the answer is `{ context?, deny? }` as JSON. Anything that goes wrong says nothing.
+        const context = { paneId: paneId ?? null, project: project ?? null, session: session ?? null };
+        let answer = null;
+        try {
+          answer = await hooks.get(name)?.(input ?? {}, context);
+        } catch (e) {
+          console.error(e);
+        }
+        const say = typeof answer === "string" ? { context: answer } : answer && typeof answer === "object" ? answer : {};
+        const out = {};
+        if (typeof say.context === "string" && say.context) out.context = say.context;
+        if (typeof say.deny === "string" && say.deny) out.deny = say.deny;
+        return void call("toolDone", { token, text: JSON.stringify(out), isError: false });
+      }
       const handler = tools.get(name);
       if (!handler) throw new Error(`The plugin has no handler for ${name}`);
       const result = await handler(input ?? {}, { paneId: paneId ?? null, project: project ?? null, session: session ?? null });
@@ -162,7 +185,11 @@
 
   window.wings = Object.freeze({
     /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` is set while Claude runs, `focused` on the focused pane of the tab on screen. Called on every change. */
-    onPanes: (listener) => subscribe(listeners.panes, listener),
+    onPanes: (listener) => {
+      const off = subscribe(listeners.panes, listener);
+      if (panes) queueMicrotask(() => { try { listener(panes); } catch (error) { console.error(error); } });
+      return off;
+    },
     /**
      * Whether the user is in Wings: `{ focused }`, true while any Wings window (the main one, or a view window) is in
      * front. Called once with the current state, then on each change. Pause timers while it is false and check
@@ -187,6 +214,14 @@
      * in it, `{ id, name }`; each is `null` when there is none.
      */
     onTool: (name, handler) => void tools.set(name, handler),
+    /**
+     * Answers a Claude Code hook the manifest lists in `contributes.hooks`, from the main script: `"SessionStart"` to
+     * add context to a session, `"PreToolUse"` to refuse a Bash command. `handler(input, { paneId, project, session })`
+     * gets the hook's input from Claude Code (`session_id`, `cwd`, `hook_event_name`, and `source` for SessionStart or
+     * `tool_name` and `tool_input` for PreToolUse) and returns a string (context), `{ context?, deny? }`, or nothing,
+     * or a promise of one. A thrown error or a slow answer (1.5 s) counts as nothing, so Claude is never held up.
+     */
+    onHook: (event, handler) => void hooks.set(event, handler),
     /**
      * Runs a program from the manifest's `permissions.exec`. Resolves `{ code, stdout, stderr }`.
      * `timeoutMs` defaults to 30 s, max 5 min. `onOutput(line)` gets each stdout or stderr line while it runs.
@@ -224,6 +259,15 @@
      * Sending what this frame last sent for the pane does nothing.
      */
     setPaneStatus: (paneId, status) => sendChanged(sentStatuses, paneId, status, "setPaneStatus", { paneId, status }),
+    /**
+     * Floats a small card over a pane's terminal, or removes it with `null`. Needs `"rail"` in `contributes.ui`.
+     * `{ title, items, open? }`: `title` up to 40 characters, up to 30 `items` of `{ text, status }` (text up to 200
+     * characters, `status` "pending", "in_progress" or "done"), and `open`, the id of one of the plugin's sidebars or
+     * views, which a click on the title opens. The user can drag it to a corner, minimise it and close it; a closed
+     * rail comes back when you send a different one. One rail per plugin per pane. Rejects a rail that breaks a
+     * limit. Sending what this frame last sent for the pane does nothing.
+     */
+    setPaneRail: (paneId, rail) => sendChanged(sentRails, paneId, rail, "setPaneRail", { paneId, rail }),
     /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], matching `permissions.openUrl` in the browser. */
     openUrl: (url) => call("openUrl", { url }),
     /**

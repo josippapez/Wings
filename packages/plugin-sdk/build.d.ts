@@ -15,10 +15,11 @@ export function entries(dir: string): { src: string; out: string }[];
  * - a `main` that isn't `dist/main.js`, a page that isn't a file the build writes or the plugin folder has, and an
  *   `icon` that isn't a file in the plugin folder;
  * - a `wings.onTool("name")` and a `contributes.mcpTools` entry that don't match;
- * - a call of `wings.setBadge`, `setPaneStatus`, `openDiff` or `updateDiff` without `badges`, `status` or `diff` in
+ * - a `wings.onHook("event")` and a `contributes.hooks` entry that don't match;
+ * - a call of `wings.setBadge`, `setPaneStatus`, `setPaneRail`, `openDiff` or `updateDiff` without `badges`, `status`, `rail` or `diff` in
  *   `contributes.ui`;
  * - an id that no sidebar or view has, in `wings.openView("id")`, `closeView("id")`, `setSidebarLabel("id", ...)` or the
- *   `open: "id"` of a pane status;
+ *   `open: "id"` of a pane status or rail;
  * - an id that no view with `tab` in its `opens` has, in the `open: { view: "id" }` of a project section row or a
  *   notification button.
  *

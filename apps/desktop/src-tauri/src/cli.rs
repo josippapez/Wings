@@ -1,6 +1,6 @@
 //! `wings plugin ...`: install and manage plugins from a terminal or a script. It talks to the running Wings
 //! over its socket, so the app's list, the Plugins sheet and Claude's tools stay in step. `wings statusline`
-//! passes Claude Code's status line data on the same way.
+//! passes Claude Code's status line data on the same way, and `wings hook` answers its hooks.
 
 use std::{
     io::{BufRead, BufReader, Write},
@@ -136,6 +136,74 @@ pub fn statusline(pass: bool) -> i32 {
     0
 }
 
+/// A hook input is the session, the tool and its input: a Bash command can be long, a file's contents aren't in it.
+const HOOK_LIMIT: u64 = 1024 * 1024;
+/// Claude Code's own cap on a hook's `additionalContext`.
+const CONTEXT_LIMIT: usize = 10_000;
+/// How long `wings hook` waits for Wings, in all, before it says nothing.
+const HOOK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `wings hook`, for Claude Code's `SessionStart` and `PreToolUse` hooks. Hands the hook's input to the running
+/// Wings, which asks the plugins that answer that event, and prints what they said as Claude Code expects it.
+/// It never holds Claude up: with Wings closed, slow, or with nothing to say, it prints nothing and exits 0.
+pub fn hook() -> i32 {
+    use std::io::{IsTerminal, Read};
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        eprintln!("wings hook is a Claude Code hook command: it reads the hook input Claude Code sends it.");
+        return 2;
+    }
+    let mut input = Vec::new();
+    if stdin.lock().take(HOOK_LIMIT).read_to_end(&mut input).is_err() {
+        return 0;
+    }
+    let Ok(input) = serde_json::from_slice::<Value>(&input) else { return 0 };
+    let Some(reply) = hook_reply(&input) else { return 0 };
+    if let Some(out) = hook_output(&input, &reply) {
+        println!("{out}");
+    }
+    0
+}
+
+/// Wings' answer to a hook input, within `HOOK_WAIT`.
+fn hook_reply(input: &Value) -> Option<Value> {
+    let start = std::time::Instant::now();
+    let stream = UnixStream::connect(socket().ok()?).ok()?;
+    stream.set_write_timeout(Some(HOOK_WAIT)).ok()?;
+    let request = json!({ "op": "hook", "id": 1, "input": input, "ppid": std::os::unix::process::parent_id() });
+    writeln!(&stream, "{request}").ok()?;
+    let mut lines = BufReader::new(&stream);
+    loop {
+        // One deadline for the whole wait, not for each line: Wings also sends events on this connection.
+        let left = HOOK_WAIT.checked_sub(start.elapsed())?;
+        stream.set_read_timeout(Some(left)).ok()?;
+        let mut line = String::new();
+        if lines.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+        if message.get("id") == Some(&json!(1)) {
+            return message.get("result").cloned();
+        }
+    }
+}
+
+/// What Claude Code's hook JSON says for Wings' reply `{ context?, deny? }`, or nothing when the reply says nothing.
+fn hook_output(input: &Value, reply: &Value) -> Option<Value> {
+    let event = input.get("hook_event_name").and_then(Value::as_str)?;
+    let say = |key: &str| reply.get(key).and_then(Value::as_str).filter(|t| !t.is_empty());
+    let mut out = serde_json::Map::new();
+    out.insert("hookEventName".into(), json!(event));
+    if let Some(context) = say("context") {
+        out.insert("additionalContext".into(), json!(context.chars().take(CONTEXT_LIMIT).collect::<String>()));
+    }
+    if let (Some(reason), "PreToolUse") = (say("deny"), event) {
+        out.insert("permissionDecision".into(), json!("deny"));
+        out.insert("permissionDecisionReason".into(), json!(reason));
+    }
+    (out.len() > 1).then(|| json!({ "hookSpecificOutput": out }))
+}
+
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
 }
@@ -200,6 +268,29 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn hook_output_is_what_claude_code_reads_or_nothing() {
+        let start = json!({ "hook_event_name": "SessionStart" });
+        assert_eq!(super::hook_output(&start, &json!({})), None);
+        assert_eq!(super::hook_output(&start, &json!({ "context": "" })), None);
+        assert_eq!(
+            super::hook_output(&start, &json!({ "context": "use the tracker" })),
+            Some(json!({ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "use the tracker" } }))
+        );
+        // Only PreToolUse can refuse.
+        assert_eq!(super::hook_output(&start, &json!({ "deny": "no" })), None);
+        let pre = json!({ "hook_event_name": "PreToolUse" });
+        assert_eq!(
+            super::hook_output(&pre, &json!({ "deny": "no", "context": "why" })),
+            Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "additionalContext": "why", "permissionDecision": "deny", "permissionDecisionReason": "no" } }))
+        );
+        let long = "x".repeat(super::CONTEXT_LIMIT + 5);
+        let out = super::hook_output(&start, &json!({ "context": long })).unwrap();
+        assert_eq!(out["hookSpecificOutput"]["additionalContext"].as_str().unwrap().len(), super::CONTEXT_LIMIT);
+    }
+
     #[test]
     fn command_opens_the_app_with_no_arguments() {
         let script = super::command_script(std::path::Path::new("/Applications/Wing's.app/Contents/MacOS/wings"));

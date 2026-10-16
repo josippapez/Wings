@@ -13,6 +13,7 @@ import { PluginModal, type ModalRef } from "@/components/plugin-modal";
 import { Welcome } from "@/components/welcome";
 import { RightSidebar, type SidebarRef } from "@/components/right-sidebar";
 import { PaneGrid, type PaneActions } from "@/components/pane-grid";
+import type { PaneRailEntry } from "@/components/pane-rail";
 import type { PaneStatusEntry } from "@/components/pane-status";
 import { agentLabel, paneLabel, type PaneLabelInfo } from "@/components/pane-label";
 import { Sidebar } from "@/components/sidebar";
@@ -36,7 +37,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
-import { PluginHost, type Badge, type DiffView, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
+import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
 import { findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
@@ -305,6 +306,8 @@ const leftPanel = usePanelRef();
   const [badges, setBadges] = useState<Record<string, Record<string, Badge>>>({});
   /** Plugin pane statuses (the strip under a terminal) by Rust pane id, then plugin id. */
   const [statuses, setStatuses] = useState<Record<string, Record<string, PaneStatus>>>({});
+  /** Plugin rails (the card over a terminal) by Rust pane id, then plugin id. */
+  const [rails, setRails] = useState<Record<string, Record<string, PaneRail>>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
   const pluginHost = useRef<PluginHost | null>(null);
   const tabsRef = useRef(tabs);
@@ -997,8 +1000,12 @@ const leftPanel = usePanelRef();
     const host = new PluginHost({
       setBadge: (pluginId, paneId, badge) => setBadges((all) => withBadge(all, paneId, pluginId, badge)),
       setPaneStatus: (pluginId, paneId, status) => setStatuses((all) => withBadge(all, paneId, pluginId, status)),
+      setPaneRail: (pluginId, paneId, rail) => setRails((all) => withBadge(all, paneId, pluginId, rail)),
       openDiff: setDiff,
       clearPlugin: (pluginId) => {
+        setRails((all) =>
+          Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
+        );
         setStatuses((all) =>
           Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
         );
@@ -1139,6 +1146,10 @@ const leftPanel = usePanelRef();
       const kept = Object.fromEntries(Object.entries(all).filter(([paneId]) => live.has(paneId)));
       return Object.keys(kept).length === Object.keys(all).length ? all : kept;
     });
+    setRails((all) => {
+      const kept = Object.fromEntries(Object.entries(all).filter(([paneId]) => live.has(paneId)));
+      return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+    });
   }, [panes, agentsByPane, paneInfo, spaces, focusedPaneId]);
 
   const paneBadges = useMemo(() => {
@@ -1162,6 +1173,16 @@ const leftPanel = usePanelRef();
     }
     return out;
   }, [panes, statuses, activePlugins]);
+
+  const paneRails = useMemo(() => {
+    const out: Record<string, PaneRailEntry[]> = {};
+    for (const [key, meta] of Object.entries(panes)) {
+      const byPlugin = meta.paneId ? rails[meta.paneId] : undefined;
+      const entries = byPlugin ? activePlugins.flatMap((p) => (byPlugin[p.id] ? [{ pluginId: p.id, rail: byPlugin[p.id] }] : [])) : [];
+      if (entries.length) out[key] = entries;
+    }
+    return out;
+  }, [panes, rails, activePlugins]);
 
   const onOpenStatus = useCallback((pluginId: string, page: string) => void pluginHost.current?.openStatusTarget(pluginId, page).catch((e) => toast.error(String(e))), []);
 
@@ -1721,6 +1742,7 @@ const leftPanel = usePanelRef();
                     badges={paneBadges}
                     onBadgeAction={onBadgeAction}
                     statuses={paneStatuses}
+                    rails={paneRails}
                     onOpenStatus={onOpenStatus}
                     actions={actions}
                   />

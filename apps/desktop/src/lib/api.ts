@@ -93,6 +93,8 @@ export type PluginContributes = {
   mcpTools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
   /** A line telling Claude when to use `mcpTools`, added to the Wings MCP server's instructions; absent when none. */
   mcpInstructions?: string;
+  /** Claude Code hooks it answers with `wings.onHook`; absent when none. */
+  hooks?: ("SessionStart" | "PreToolUse")[];
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
   views: PluginPage[];
@@ -124,7 +126,10 @@ export type CliStatus = { available: boolean; installed: boolean; onPath: boolea
 export type McpCall = {
   callId: number;
   pluginId: string;
+  /** The tool's name, or for a hook the event's name. */
   tool: string;
+  /** Set when `tool` is a Claude Code hook event and `arguments` the hook's input. */
+  hook?: boolean;
   arguments: Record<string, unknown>;
   paneId: string | null;
   project: { id: string; name: string; path: string } | null;

@@ -162,10 +162,11 @@ test("a manifest that disagrees with the code fails build, check and pack, namin
     [{ contributes: { sidebars: [sidebar] } }, {}, /contributes\.sidebars\[0\]\.page is "dist\/sidbar\.html".* It writes dist\/sidebar\.html/],
     [{ icon: "icn.svg" }, { "icon.svg": "<svg/>" }, /wings-plugin\.json: icon is "icn\.svg", which the plugin folder doesn't have/],
     [{ contributes: { mcpTools: [ping] } }, { "src/main.ts": 'wings.onTool("pong", () => "pong");' }, /dist\/main\.js answers "pong".*\(it has ping\).*contributes\.mcpTools lists "ping"/s],
+    [{ contributes: { hooks: ["SessionStart"] } }, { "src/main.ts": 'wings.onHook("PreToolUse", () => null);' }, /dist\/main\.js answers "PreToolUse" with wings\.onHook, but contributes\.hooks doesn't list it \(it lists SessionStart\).*contributes\.hooks lists "SessionStart", but nothing/s],
     [{}, { "src/main.ts": 'wings.setBadge("p", null);' }, /dist\/main\.js calls wings\.setBadge, so contributes\.ui must list "badges"/],
     [{}, { "src/main.ts": 'wings.openView("sidbar");' }, /dist\/main\.js calls wings\.openView\("sidbar"\).*\(they have demo\)/],
     [{}, { "src/main.ts": 'wings.closeView("sidbar");\nwings.setSidebarLabel("sidbar", null);' }, /wings\.closeView\("sidbar"\).*wings\.setSidebarLabel\("sidbar"\)/s],
-    [{ contributes: { ui: ["status"] } }, { "src/main.ts": 'wings.setPaneStatus("p", { items: [], open: "sidbar" });' }, /dist\/main\.js sets open: "sidbar" on a pane status, but contributes\.sidebars and contributes\.views have no such id \(they have demo\)/],
+    [{ contributes: { ui: ["status"] } }, { "src/main.ts": 'wings.setPaneStatus("p", { items: [], open: "sidbar" });' }, /dist\/main\.js sets open: "sidbar" on a pane status or rail, but contributes\.sidebars and contributes\.views have no such id \(they have demo\)/],
     [{ contributes: { views: [tabView] } }, { "src/main.ts": 'wings.setProjectSection("p", "s", [{ id: "a", label: "A", open: { view: "itm" } }]);' }, /dist\/main\.js sets open: \{ view: "itm" \} on a project section row or a notification button, but contributes\.views has no view of that id with "tab" in opens \(the views that have it: item\)/],
     // A sidebar is a page, but a button can't open it as a tab.
     [{ contributes: { views: [tabView] } }, { "src/main.ts": 'wings.notify({ title: "t", actions: [{ label: "Open", open: { view: "demo", args: 1 } }] });' }, /sets open: \{ view: "demo" \}.*\(the views that have it: item\)/],

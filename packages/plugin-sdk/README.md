@@ -132,10 +132,11 @@ A typo shows up when you build, not when Wings loads the plugin. It catches:
 - a `main` that isn't `dist/main.js`, a page that isn't a file the build writes or the folder has, and an `icon`
   that isn't a file in the folder;
 - a `wings.onTool("name")` with no `mcpTools` entry, or the reverse;
-- a call of `wings.setBadge`, `setPaneStatus`, `openDiff` or `updateDiff` without `badges`, `status` or `diff` in
+- a `wings.onHook("event")` with no `hooks` entry, or the reverse;
+- a call of `wings.setBadge`, `setPaneStatus`, `setPaneRail`, `openDiff` or `updateDiff` without `badges`, `status`, `rail` or `diff` in
   `contributes.ui`;
 - an id that no sidebar or view has, in `wings.openView("id")`, `closeView("id")`, `setSidebarLabel("id", ...)` or
-  the `open: "id"` of a pane status;
+  the `open: "id"` of a pane status or rail;
 - an id that no view with `tab` in its `opens` has, in the `open: { view: "id" }` of a project section row or a
   notification button.
 
@@ -516,6 +517,19 @@ input: s.object({
   day: s.string({ format: "date" }).optional(),
   commit: s.string({ pattern: "^[0-9a-f]{7,40}$" }).optional(),
 }),
+```
+
+### Hooks and the pane rail
+
+`wings.onHook` answers a Claude Code hook, so a plugin can add context at session start or refuse a Bash command.
+List the event in `contributes.hooks` (`"SessionStart"` or `"PreToolUse"`) and register the handler in `main`. The
+handler gets `WingsHookInput` and `{ paneId, project, session }`, and returns a string, `{ context?, deny? }` or
+nothing (`deny` counts for `PreToolUse` only). `wings.setPaneRail(paneId, { title, items, open? })` floats a card
+with a todo-style list over a pane's terminal, and needs `"rail"` in `contributes.ui`. Both need Wings 0.1.54, so
+set `minWingsVersion` to match. The build checks them as in Build. See [plugins/README.md](https://github.com/josippapez/Wings/blob/main/plugins/README.md) for the limits.
+
+```ts
+wings.onHook("SessionStart", (input, { project }) => (project ? `Track work in ${project.name}.` : null));
 ```
 
 ### Shell
