@@ -320,9 +320,10 @@ export function Chips<V extends string>(
 /**
  * Tabs named `label` over the panel they show, `children`, on Base UI's Tabs. Arrow keys, Home and End move between
  * tabs and show the one they land on. `variant` is shadcn/ui's: "default", a pill in a tray, or "line", an underline.
+ * An item with `disabled` is dimmed and can't be picked, by click or by the arrow keys.
  */
 export function Tabs<V extends string>(
-  props: Omit<Props<"div">, "onChange"> & { label: string; items: Option<V>[]; value: V; onChange: (value: V) => void; variant?: "default" | "line" },
+  props: Omit<Props<"div">, "onChange"> & { label: string; items: (Option<V> & { disabled?: boolean })[]; value: V; onChange: (value: V) => void; variant?: "default" | "line" },
 ): ReactElement;
 
 // ---------- fields ----------

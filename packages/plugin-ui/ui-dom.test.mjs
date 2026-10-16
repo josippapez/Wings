@@ -347,6 +347,26 @@ test("Tabs show the panel of the tab picked, and arrow keys, Home and End move t
   await unmount();
 });
 
+test("A Tabs item that is disabled can't be picked by a click or by the arrow keys", async () => {
+  function Views() {
+    const [value, setValue] = useState("one");
+    return h(Tabs, { label: "Views", items: [{ value: "one", label: "One" }, { value: "two", label: "Two", disabled: true }, { value: "three", label: "Three" }], value, onChange: setValue }, h("p", null, `Panel ${value}`));
+  }
+  const { host, unmount } = await mount(h(Views));
+  const tabs = () => [...host.querySelectorAll("[role=tab]")];
+  assert.equal(tabs()[1].hasAttribute("data-disabled"), true);
+  await click(tabs()[1]);
+  assert.equal(host.querySelector("[role=tabpanel]").textContent, "Panel one");
+  await act(() => tabs()[0].focus());
+  await press(document.activeElement, "ArrowRight");
+  await settle();
+  assert.equal(host.querySelector("[role=tabpanel]").textContent, "Panel one", "the arrow key reaches the disabled tab without showing it");
+  await press(document.activeElement, "ArrowRight");
+  await settle();
+  assert.equal(host.querySelector("[role=tabpanel]").textContent, "Panel three");
+  await unmount();
+});
+
 const menuItems = (picked) => ["Rename", "Duplicate", "Delete"].map((label) => ({ id: label, label, onSelect: () => picked.push(label), variant: label === "Delete" ? "destructive" : undefined }));
 const items = () => [...document.querySelectorAll("[role=menuitem]")];
 

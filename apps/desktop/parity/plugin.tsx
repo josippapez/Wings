@@ -42,6 +42,7 @@ createRoot(document.getElementById("root")!).render(
     {(["default", "line"] as const).map((variant) => (
       <Tabs key={variant} variant={variant} items={tabs} value="a" onChange={noop} label="Tabs" {...{ "data-case": `tabs-${variant}` }} />
     ))}
+    <Tabs items={[tabs[0], { ...tabs[1], disabled: true }]} value="a" onChange={noop} label="Tabs disabled" {...{ "data-case": "tabs-disabled" }} />
     <div style={{ display: "flex", gap: 8 }}>
       <Chip pressed={false} {...{ "data-case": "chip" }}>Off</Chip>
       <Chip pressed {...{ "data-case": "chip-on" }}>On</Chip>

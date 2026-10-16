@@ -710,7 +710,7 @@ export function Tabs({ label, items, value, onChange, variant = "default", child
     h(
       BaseTabs.List,
       { className: "w-tabs", "aria-label": label, "data-variant": variant, activateOnFocus: true },
-      items.map((t) => h(BaseTabs.Tab, { key: t.value, value: t.value, className: "w-tab", title: t.title }, t.label)),
+      items.map((t) => h(BaseTabs.Tab, { key: t.value, value: t.value, className: "w-tab", title: t.title, disabled: t.disabled }, t.label)),
     ),
     h(BaseTabs.Panel, { value, className: "w-tab-panel" }, children),
   );

@@ -40,6 +40,7 @@ const probes = [
   { name: "tabs list", sel: '[data-case="tabs-default"] [role="tablist"]', states: ["base"] },
   { name: "tab active", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="true"]', states: ["base", "focus"] },
   { name: "tab idle", sel: '[data-case="tabs-default"] [role="tab"][aria-selected="false"]', states: ["base", "hover", "focus"] },
+  { name: "tab disabled", sel: '[data-case="tabs-disabled"] [role="tab"][aria-selected="false"]', states: ["base"] },
   { name: "line tabs list", sel: '[data-case="tabs-line"] [role="tablist"]', states: ["base"] },
   { name: "line tab active", sel: '[data-case="tabs-line"] [role="tab"][aria-selected="true"]', states: ["base"] },
   { name: "line tab idle", sel: '[data-case="tabs-line"] [role="tab"][aria-selected="false"]', states: ["base"] },

@@ -49,6 +49,12 @@ createRoot(document.getElementById("root")!).render(
         </TabsList>
       </Tabs>
     ))}
+    <Tabs defaultValue="a" data-case="tabs-disabled">
+      <TabsList>
+        <TabsTrigger value="a">First</TabsTrigger>
+        <TabsTrigger value="b" disabled>Second</TabsTrigger>
+      </TabsList>
+    </Tabs>
     <div style={{ display: "flex", gap: 8 }}>
       <Toggle size="sm" data-case="chip" aria-label="Off">Off</Toggle>
       <Toggle size="sm" defaultPressed data-case="chip-on" aria-label="On">On</Toggle>

@@ -1334,6 +1334,10 @@ h3.w-heading {
 .w-tab:active {
   transform: none;
 }
+.w-tab[data-disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
 .w-tab[data-active] {
   border-color: var(--wings-control-border);
   background: var(--wings-control-bg);
