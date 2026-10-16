@@ -16,6 +16,8 @@ const ok = (v) => ({ code: 0, stdout: typeof v === "string" ? v : JSON.stringify
 globalThis.wings = {
   focused: false,
   onFocus: () => () => {},
+  onGitChange: () => () => {},
+  projects: async () => [],
   onPanes: (fn) => (onPanes = fn),
   onAction: (fn) => (onAction = fn),
   onBroadcast: (fn) => (toMain = fn),

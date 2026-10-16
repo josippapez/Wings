@@ -3,7 +3,7 @@
 
 import { cached, errorMessage } from "wings-plugin-sdk/async";
 import { lastLine } from "wings-plugin-sdk/cli";
-import { gitOk } from "wings-plugin-sdk/git";
+import { gitOk, onGitChange, watchedProject } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { az, azCli, azRun, invoke } from "../lib/az";
 import { workItemId } from "../lib/branch";
@@ -37,6 +37,8 @@ interface AzWorkItem {
 }
 
 let panes: WingsPane[] = [];
+/** paneId → the project whose repo the pane is in, or null when no project has it, so Wings doesn't watch it. */
+const watched = new Map<string, string | null>();
 /** paneId → { org, id, key } */
 const refs = new Map<string, Ref>();
 /** `${org} ${id}` → normalized work item, { missing: true } or { error } */
@@ -56,9 +58,12 @@ const typeStates = cached(
 
 // ---------- finding the work item for a pane ----------
 
-async function refreshRefs() {
+/** Reads the branch of the panes `which` picks, all of them when it is left out. */
+async function refreshRefs(which?: (pane: WingsPane) => boolean) {
+  const projects = await wings.projects();
   await Promise.all(
-    panes.map(async (pane) => {
+    panes.filter((pane) => !which || which(pane)).map(async (pane) => {
+      watched.set(pane.paneId, await watchedProject(pane.cwd, projects));
       const remote = await remoteFor(pane.cwd);
       const id = workItemId(remote ? ((await gitOk(pane.cwd, ["branch", "--show-current"])) ?? "") : "");
       if (!remote || !id) return void refs.delete(pane.paneId);
@@ -151,8 +156,10 @@ export function showBadges() {
     panes = list;
     void refreshRefs();
   });
-  // Both polls pause while Wings is in the background, and run once when you come back.
-  pollWhileFocused(refreshRefs, BRANCH_POLL_MS);
+  // Wings says when a project's repo changes, so the branch is read then. Only panes in a repo that is no project's
+  // keep a poll. Both pause while Wings is in the background, and the repo changes are held until you come back.
+  onGitChange((ids) => refreshRefs((pane) => ids.includes(watched.get(pane.paneId) ?? "")));
+  pollWhileFocused(() => refreshRefs((pane) => !watched.get(pane.paneId)), BRANCH_POLL_MS);
   pollWhileFocused(() => new Set([...refs.values()].map((r) => r.key)).forEach((key) => void refreshItem(key)), ITEM_POLL_MS);
 
   azCli.onChange(render);
