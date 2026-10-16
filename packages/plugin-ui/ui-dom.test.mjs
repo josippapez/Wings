@@ -406,7 +406,7 @@ test("Select shows the option picked, opens a list in the page, and tells onChan
   assert.equal(trigger.textContent, "Alpha");
   assert.equal(trigger.getAttribute("aria-label"), "Pick");
   await click(trigger);
-  await settle();
+  await until(() => document.querySelector("[role=option]"), "the list to open");
   const choices = [...document.querySelectorAll("[role=option]")];
   assert.deepEqual(choices.map((o) => o.textContent), ["Alpha", "Bravo", "Charlie"]);
   assert.ok(!host.contains(choices[0]), "the list is in the page, not in the select's place");
@@ -430,7 +430,7 @@ test("a Select keeps a pick when the page drops an option before it in the same 
   const { unmount } = await mount(h(Pick));
   const trigger = document.getElementById("pick");
   await click(trigger);
-  await settle();
+  await until(() => document.querySelector("[role=option]"), "the list to open");
   await click([...document.querySelectorAll("[role=option]")].find((o) => o.textContent === "Bravo"));
   await settle();
   assert.deepEqual(seen, ["b"]);
