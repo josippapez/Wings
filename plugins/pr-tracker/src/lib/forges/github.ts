@@ -257,6 +257,11 @@ async function comments(link: GithubLink): Promise<Comment[]> {
   return githubConversation(discussion ?? { comments: [], reviews: [] }, (lines ?? []).flat(), link.url);
 }
 
+/** The PR a `pr-link` transcript entry records, or null for any other entry. */
+export function prLinkOf(entry: TranscriptEntry | undefined): GithubLink | null {
+  return entry?.type === "pr-link" && entry.prUrl ? { provider: "github", url: entry.prUrl, number: entry.prNumber, repo: entry.prRepository } : null;
+}
+
 export const github: Forge<GithubLink, GithubRemote> = {
   problemKey: (remote) => ghKey(remote.host),
   repoKey: (remote) => `github:${remote.host}/${remote.path}`,
@@ -284,8 +289,7 @@ export const github: Forge<GithubLink, GithubRemote> = {
 
   async fromSession(sessionId) {
     try {
-      const last = (await wings.transcript(sessionId, ["pr-link"], { last: 1 })).at(-1);
-      if (last?.type === "pr-link" && last.prUrl) return { provider: "github", url: last.prUrl, number: last.prNumber, repo: last.prRepository };
+      return prLinkOf((await wings.transcript(sessionId, ["pr-link"], { last: 1 })).at(-1));
     } catch {
       // A brand-new session may not have a transcript yet.
     }

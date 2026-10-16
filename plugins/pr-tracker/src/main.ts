@@ -7,12 +7,14 @@
 // When checks fail, the badge says which step failed and why, and Claude can read the logs with `failing_checks`.
 
 import { errorMessage } from "wings-plugin-sdk/async";
+import { onGitChange } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
 import { ch } from "./lib/messages";
 import { watchMinutes, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
-import { refreshLinks } from "./main/links";
+import { prLinkOf } from "./lib/forges/github";
+import { forgetPanes, projectOf, refreshLinks, sessionLinked } from "./main/links";
 import { problemOf } from "./main/problems";
 import { pullsFor, refreshProjects, setWatching } from "./main/projects";
 import { remoteFor, remotes } from "./main/remote";
@@ -32,7 +34,9 @@ const PR_STALE_MS = 55_000;
 connectClis();
 
 /** Each pane's PR, once a minute. A PR a tab shows is loaded for the tab, whose overview carries the status, so it is fetched once. */
-function refreshPanes() {
+async function refreshPanes() {
+  // The lookup uses the branch read last and the lookup cache, so a PR opened on the forge shows with no git call.
+  await refreshLinks({ local: false });
   const tabs = new Map(ch.watching("pr").map((key) => [key.url, key]));
   for (const url of new Set([...links.values()].map((l) => l.url))) {
     const key = tabs.get(url);
@@ -51,13 +55,25 @@ wings.onPanes((list) => {
       sync.delete(paneId);
     }
   }
+  forgetPanes(open);
   void refreshLinks();
   // An agent starting or stopping on a PR's branch changes its row.
   void refreshProjects();
 });
 wings.onProjects(() => void refreshProjects());
-// Both polls pause while Wings is in the background, and run once when you come back.
-pollWhileFocused(refreshLinks, LINK_POLL_MS);
+// Wings says when a project's repo changes, so a pane's branch and its commits to push and pull are read then and when
+// you come back. Only a pane in a repo no project has keeps the poll. The polls pause while Wings is in the
+// background, and run once when you come back.
+onGitChange((ids) => refreshLinks({ which: (pane) => ids.includes(projectOf(pane) ?? "") }));
+wings.onFocus(({ focused }) => focused && void refreshLinks({ which: (pane) => projectOf(pane) !== null }));
+pollWhileFocused(() => refreshLinks({ which: (pane) => projectOf(pane) === null }), LINK_POLL_MS);
+// The PR Claude Code records for a session arrives as it is written.
+wings.onTranscript(({ sessionId, paneId, entry }) => {
+  const link = prLinkOf(entry);
+  if (!link) return;
+  sessionLinked(sessionId, link);
+  void refreshLinks({ local: false, which: (pane) => pane.paneId === paneId });
+});
 pollWhileFocused(refreshPanes, STATUS_POLL_MS);
 // The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
 pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
