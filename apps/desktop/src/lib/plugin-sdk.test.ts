@@ -140,6 +140,34 @@ test("onProjects gets the list once at start, then on each change until it's rem
   assert.deepEqual(JSON.parse(JSON.stringify(calls("setProjectSection")[0].params)), { projectId: "p", sectionId: "s", rows: null });
 });
 
+test("setProjectSection skips rows the project's section already has, and sends a change, a removal or another section", () => {
+  const { wings, calls } = frame();
+  const rows = [{ id: "a", label: "A" }];
+  void wings.setProjectSection("/p", "s", rows);
+  void wings.setProjectSection("/p", "s", [{ id: "a", label: "A" }]);
+  void wings.setProjectSection("/p", "t", rows);
+  void wings.setProjectSection("/q", "s", rows);
+  void wings.setProjectSection("/p", "s", [{ id: "a", label: "B" }]);
+  void wings.setProjectSection("/p", "s", null);
+  void wings.setProjectSection("/p", "s", null);
+  assert.equal(calls("setProjectSection").length, 5);
+});
+
+test("a project removed and added again gets its section sent again, and a refused call is retried", async () => {
+  const { wings, send, calls, reply } = frame();
+  void wings.setProjectSection("/p", "s", [{ id: "a" }]);
+  void wings.setProjectSection("/q", "s", [{ id: "a" }]);
+  send("projects", [{ id: "/q" }]);
+  void wings.setProjectSection("/p", "s", [{ id: "a" }]);
+  void wings.setProjectSection("/q", "s", [{ id: "a" }]);
+  assert.deepEqual(calls("setProjectSection").map((c) => (c.params as { projectId: string }).projectId), ["/p", "/q", "/p"], "only the removed project is sent again");
+  const refused = wings.setProjectSection("/r", "s", []).catch((e) => String(e.message));
+  reply(calls("setProjectSection")[3].id, "no project /r");
+  assert.equal(await refused, "no project /r");
+  void wings.setProjectSection("/r", "s", []);
+  assert.equal(calls("setProjectSection").length, 5);
+});
+
 test("in a block, blockState and setBlockState go to Wings, and setHeight sends the last height of a tick once", async () => {
   const { wings, calls } = frame({ placement: "block" });
   void wings.blockState();

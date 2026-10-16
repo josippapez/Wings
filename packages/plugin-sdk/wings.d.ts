@@ -444,7 +444,9 @@ interface Wings {
    * Shows `rows` under a project in the sidebar, in the section `sectionId` that the manifest declares in
    * `contributes.projectSections`, or removes the section with `null`. Up to 50 rows. Rejects for a project that isn't
    * there, a section the plugin didn't declare, or a row whose `open.view` isn't one of its views that opens as a tab.
-   * Sections are kept in memory and go when the plugin is turned off, so fill them again on start. Needs Wings 0.1.23.
+   * Sections are kept in memory and go when the plugin is turned off, so fill them again on start. Sending what this
+   * frame last sent for the project and section does nothing, so a poll can send every time; a project that leaves
+   * the list is forgotten, so one added again is filled again. Needs Wings 0.1.23; skipping a repeat needs 0.1.50.
    */
   setProjectSection(projectId: string, sectionId: string, rows: WingsProjectSectionRow[] | null): Promise<void>;
   /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. Opening the tab with new `args` clears it. Needs Wings 0.1.22. */

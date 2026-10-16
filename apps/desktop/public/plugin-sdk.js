@@ -46,6 +46,9 @@
   const sentBadges = new Map();
   const sentStatuses = new Map();
   const sentLabels = new Map();
+  // `projectId \0 sectionId` → the rows. A project's id is its folder, so one removed and added again has the same id:
+  // Wings dropped its sections, and `forgetProjects` drops what this frame remembers of them.
+  const sentSections = new Map();
   // Sends only when `value` differs from the last one sent under `key`. A call that fails is forgotten, so the next one retries.
   const sendChanged = (sent, key, value, method, params) => {
     const json = JSON.stringify(value);
@@ -60,6 +63,10 @@
     const live = new Set(Array.isArray(panes) ? panes.map((p) => p?.paneId) : []);
     for (const paneId of sentBadges.keys()) if (!live.has(paneId)) sentBadges.delete(paneId);
     for (const paneId of sentStatuses.keys()) if (!live.has(paneId)) sentStatuses.delete(paneId);
+  };
+  const forgetProjects = (projects) => {
+    const live = new Set(Array.isArray(projects) ? projects.map((p) => p?.id) : []);
+    for (const key of sentSections.keys()) if (!live.has(key.split("\0")[0])) sentSections.delete(key);
   };
 
   // The webview's own menu offers only "Reload", which would reload this frame. Keep it for fields and a selection (Copy).
@@ -92,6 +99,7 @@
       return;
     }
     if (message.event === "panes") forgetPanes(message.data);
+    if (message.event === "projects") forgetProjects(message.data);
     if (message.event === "focus") {
       if (message.data?.focused === focused && focusKnown) return;
       focused = message.data?.focused === true;
@@ -332,9 +340,9 @@
      * clicking it opens `open.view`, one of your views that opens as a tab, in that project, with `args`. Up to 50 rows;
      * Wings cuts text to 120 characters (badge 24) and rejects args over 16 KB. Rejects for a project that isn't there, a
      * section you didn't declare or a view that doesn't open as a tab. Sections are kept in memory and go when the plugin
-     * stops, so fill them again on start.
+     * stops, so fill them again on start. Sending what this frame last sent for the project and section does nothing.
      */
-    setProjectSection: (projectId, sectionId, rows) => call("setProjectSection", { projectId, sectionId, rows }),
+    setProjectSection: (projectId, sectionId, rows) => sendChanged(sentSections, `${projectId}\0${sectionId}`, rows, "setProjectSection", { projectId, sectionId, rows }),
     /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. */
     tabState: () => call("tabState", {}),
     /**
