@@ -4,6 +4,10 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.53 · 2026-10-16
+
+- The notification sound also plays when the agent in the pane you're looking at needs you or finishes. Settings › Notifications has "Also for the pane on screen" to turn that off.
+
 ## 0.1.52 · 2026-10-16
 
 - Notifications play a sound, also while Wings is focused: when an agent finishes or needs you in a pane you're not looking at, for plugin notifications, and for update toasts. Settings › Notifications turns it off and picks one of four tones, with a preview. Several notifications at once play one sound. The macOS notification no longer plays its own sound, so you hear the chosen tone once.
