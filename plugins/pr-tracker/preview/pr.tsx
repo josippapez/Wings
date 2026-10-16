@@ -1,10 +1,11 @@
-// The real PR page, fed by main's queries: a pull request, a long conversation, an Azure DevOps one with its pushes, and a
-// host that needs signing in.
-import type { PrValue } from "../src/lib/messages";
+// The PR tab: a pull request on each of its tabs (through main's queries, or the view alone), a long conversation, an Azure
+// DevOps one with its pushes, while it loads, when it can't be read, a host that needs signing in, and the project's list a
+// tab with no pull request starts on.
+import type { PrValue, PullsAnswer } from "../src/lib/messages";
 import type { Comment, PrArgs } from "../src/lib/types";
 import { PrView } from "../src/ui/pr-view";
 import "../src/pages/pr.css";
-import { args, comments, overview, props, pushes } from "./_data";
+import { args, comments, overview, props, pushes, rows, withChecks } from "./_data";
 
 export { default, page } from "../src/pages/pr";
 
@@ -29,6 +30,8 @@ const azure: PrArgs = {
   remote: { kind: "azure", org: "https://dev.azure.com/acme", project: "Web", repo: "web" },
 };
 
+const back = () => {};
+
 export const states = {
   // Opened straight on a pull request.
   page: { args, queries: { pr: value(), "pr-comments": comments, "pr-pushes": [] } },
@@ -36,6 +39,22 @@ export const states = {
   "page-big": { args, queries: { pr: value(), "pr-comments": many, "pr-pushes": [] } },
   // Azure DevOps: votes instead of approving, and pushes between the threads.
   "page-azure": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes } },
+  // Opened from the project's list: a breadcrumb back in the toolbar.
+  picked: { element: <PrView {...props} onBack={back} /> },
+  // Opened straight on a pull request: no breadcrumb.
+  direct: { element: <PrView {...props} /> },
+  // Its Files tab.
+  files: { element: <PrView {...props} initialTab="files" onBack={back} /> },
+  // Its Checks tab: every check and policy, grouped by how it stands.
+  checks: { element: <PrView {...withChecks} initialTab="checks" onBack={back} /> },
+  // No description, checks or comments yet.
+  empty: { element: <PrView {...props} comments={[]} overview={{ ...props.overview!, body: "", reviewers: [], status: { ...props.overview!.status, review: "No reviews yet", checks: { passed: 0, failed: 0, running: 0 }, changes: null } }} /> },
+  // While its status and conversation load.
+  loading: { element: <PrView {...props} overview={null} comments={null} onBack={back} /> },
+  // When it could not be loaded.
+  error: { element: <PrView {...props} overview={null} comments={null} error="gh pr view failed: could not resolve to a pull request with the number 482 in acme/web. Run gh auth status to check you are signed in." onBack={back} /> },
+  // As the tab opens with no pull request: the project's list, asked of main.
+  home: { queries: { pulls: (): PullsAnswer => ({ rows }) } },
   // gh isn't signed in: the tab offers to sign in, as the pane's badge does.
   signin: {
     element: <PrView {...props} overview={null} comments={null} problem={{ message: "Sign in to GitHub to see this branch's pull request.", action: "Sign in" }} onProblem={() => {}} />,
