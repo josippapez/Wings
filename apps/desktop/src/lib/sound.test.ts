@@ -11,6 +11,6 @@ test("notifications within a second play one sound", () => {
 
 test("the setting defaults to on, and unknown values fall back", () => {
   assert.deepEqual(cleanSound(undefined), DEFAULT_SOUND);
-  assert.deepEqual(cleanSound({ enabled: false, sound: "pop" }), { enabled: false, sound: "pop" });
+  assert.deepEqual(cleanSound({ enabled: false, sound: "pop", watching: false }), { enabled: false, sound: "pop", watching: false });
   assert.deepEqual(cleanSound({ enabled: "no", sound: "gong" }), DEFAULT_SOUND);
 });

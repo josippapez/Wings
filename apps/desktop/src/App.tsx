@@ -932,9 +932,9 @@ const leftPanel = usePanelRef();
         type: "add",
         event: { id: eventId, at: Date.now(), kind: agent.state, title, project, detail: agent.state === "blocked" ? (agent.waitingFor ?? "waiting for input") : "", paneId: agent.paneId, read: seen },
       });
-      // Looking at it already, so nothing new to announce. Otherwise it sounds, in front or in the background.
+      notificationSound(seen);
+      // Looking at it already, so no toast. Otherwise it shows, in front or in the background.
       if (seen) continue;
-      notificationSound();
       if (!document.hasFocus()) continue;
       toast(title, {
         id,

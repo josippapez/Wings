@@ -1,7 +1,8 @@
 /** The sound for a new notification or toast: a short tone Web Audio makes on the spot, so no files ship. */
 export type SoundId = "chime" | "pop" | "ping" | "drop";
-export type SoundSettings = { enabled: boolean; sound: SoundId };
-export const DEFAULT_SOUND: SoundSettings = { enabled: true, sound: "chime" };
+/** `watching`: also sound for an agent in the pane you are looking at. */
+export type SoundSettings = { enabled: boolean; sound: SoundId; watching: boolean };
+export const DEFAULT_SOUND: SoundSettings = { enabled: true, sound: "chime", watching: true };
 
 /** Notes of a sound: frequency in Hz, start and length in seconds. */
 type Note = { hz: number; at: number; len: number };
@@ -18,6 +19,7 @@ export function cleanSound(saved: unknown): SoundSettings {
   return {
     enabled: typeof s.enabled === "boolean" ? s.enabled : DEFAULT_SOUND.enabled,
     sound: SOUNDS.some((x) => x.id === s.sound) ? (s.sound as SoundId) : DEFAULT_SOUND.sound,
+    watching: typeof s.watching === "boolean" ? s.watching : DEFAULT_SOUND.watching,
   };
 }
 
@@ -66,7 +68,8 @@ export function setSoundSettings(settings: SoundSettings) {
   current = settings;
 }
 
-/** A notification or toast came in: plays the chosen sound unless it's off or one just played. */
-export function notificationSound() {
+/** A notification or toast came in: plays the chosen sound unless it's off or one just played. `watching`: it's about the pane on screen. */
+export function notificationSound(watching = false) {
+  if (watching && !current.watching) return;
   if (current.enabled && due(Date.now())) playSound(current.sound);
 }

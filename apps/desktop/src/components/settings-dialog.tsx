@@ -426,6 +426,9 @@ export function SettingsDialog(props: {
                     />
                   </div>
                 </Row>
+                <Row id="notify-sound-watching" label="Also for the pane on screen" hint="Play it when the agent you're looking at needs you or finishes.">
+                  <Switch id="notify-sound-watching" checked={props.notifySound.watching} disabled={!props.notifySound.enabled} onCheckedChange={(watching) => props.onNotifySoundChange({ ...props.notifySound, watching })} />
+                </Row>
               </Group>
             </TabsContent>
             <TabsContent value="plugins" className="min-h-0 flex-1">
