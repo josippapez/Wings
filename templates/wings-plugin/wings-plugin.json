@@ -2,14 +2,16 @@
   "id": "hello-wings",
   "name": "Hello Wings",
   "version": "0.1.0",
-  "description": "Shows the current git branch as a badge on every pane.",
+  "minWingsVersion": "0.1.20",
+  "description": "Shows each pane's git branch as a badge, and lists the branches in a sidebar.",
   "api": 1,
-  "main": "main.js",
+  "main": "dist/main.js",
   "icon": "icon.svg",
   "permissions": {
     "exec": ["git branch --show-current"]
   },
   "contributes": {
-    "ui": ["badges"]
+    "ui": ["badges"],
+    "sidebars": [{ "id": "branches", "title": "Branches", "page": "dist/sidebar.html" }]
   }
 }
