@@ -44,7 +44,7 @@ function ProgressIndicator({
       data-slot="progress-indicator"
       // Indeterminate (value null): a short bar sweeping across, instead of nothing.
       className={cn(
-        "h-full bg-primary transition-all data-indeterminate:w-1/3 data-indeterminate:bg-gradient-to-r data-indeterminate:from-transparent data-indeterminate:via-white/50 data-indeterminate:to-transparent data-indeterminate:motion-safe:animate-[diff-progress_1.2s_ease-in-out_infinite]",
+        "h-full bg-primary transition-[width] data-indeterminate:w-1/3 data-indeterminate:bg-gradient-to-r data-indeterminate:from-transparent data-indeterminate:via-white/50 data-indeterminate:to-transparent data-indeterminate:motion-safe:animate-[diff-progress_1.2s_ease-in-out_infinite]",
         className
       )}
       {...props}
