@@ -21,7 +21,7 @@ function Page({ entry, host }: { entry: ModalRef; host: PluginHost }) {
     let gone = false;
     void host
       .mountPage(entry.plugin, entry.viewId, box.current, "modal")
-      .then((r) => (gone ? r() : (remove = r)))
+      .then((r) => (gone ? r.remove() : (remove = r.remove)))
       .catch((e) => console.error(e));
     return () => {
       gone = true;

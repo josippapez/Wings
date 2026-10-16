@@ -186,10 +186,13 @@ test("in a block, blockState and setBlockState go to Wings, and setHeight sends 
   assert.throws(() => wings.setHeight(NaN), /number of pixels/);
 });
 
-test("a block that mounts out of view has wings.focused false before Wings sends anything, and a page without it starts true", () => {
+test("a page that mounts out of view has wings.focused false before Wings sends anything, and a page without it starts true", () => {
   assert.equal(frame({ placement: "block", focused: false }).wings.focused, false);
   assert.equal(frame({ placement: "block", focused: true }).wings.focused, true);
   assert.equal(frame({ placement: "tab" }).wings.focused, true);
+  // Restored tabs and closed sidebars mount out of view, so they don't poll once at start.
+  assert.equal(frame({ placement: "tab", focused: false }).wings.focused, false);
+  assert.equal(frame({ placement: "sidebar", focused: false }).wings.focused, false);
   const { wings, send } = frame({ placement: "block", focused: false });
   const got: boolean[] = [];
   wings.onFocus((e) => got.push(e.focused));

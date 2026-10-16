@@ -20,7 +20,7 @@ function fakeWings(focused) {
 }
 
 test("ticks on the interval while focused, stops on blur, checks once and resumes on focus", () => {
-  mock.timers.enable({ apis: ["setInterval"] });
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   try {
     const w = fakeWings(true);
     let n = 0;
@@ -40,7 +40,7 @@ test("ticks on the interval while focused, stops on blur, checks once and resume
 });
 
 test("starting unfocused waits for focus, and the stop function removes the listener and the timer", () => {
-  mock.timers.enable({ apis: ["setInterval"] });
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   try {
     const w = fakeWings(false);
     let n = 0;
@@ -59,7 +59,7 @@ test("starting unfocused waits for focus, and the stop function removes the list
 });
 
 test("immediate ticks once at start when focused, and an unfocused start still waits for focus", () => {
-  mock.timers.enable({ apis: ["setInterval"] });
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   try {
     let n = 0;
     pollWhileFocused(() => n++, 1000, { immediate: true, wings: fakeWings(true) });
@@ -71,6 +71,69 @@ test("immediate ticks once at start when focused, and an unfocused start still w
     assert.equal(n, 2);
     w.set(true);
     assert.equal(n, 3);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("regaining focus within ms of the last tick doesn't tick, and the next one comes when the interval was due", () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+  try {
+    const w = fakeWings(true);
+    let n = 0;
+    pollWhileFocused(() => n++, 1000, { wings: w });
+    mock.timers.tick(1000);
+    assert.equal(n, 1);
+    mock.timers.tick(300);
+    w.set(false);
+    mock.timers.tick(100);
+    w.set(true);
+    assert.equal(n, 1);
+    mock.timers.tick(599);
+    assert.equal(n, 1);
+    mock.timers.tick(1);
+    assert.equal(n, 2);
+    mock.timers.tick(1000);
+    assert.equal(n, 3);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("flipping 10 times in a minute adds no ticks, and a regain after ms ticks once", () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+  try {
+    const w = fakeWings(true);
+    let n = 0;
+    pollWhileFocused(() => n++, 60_000, { wings: w });
+    for (let i = 0; i < 10; i++) {
+      mock.timers.tick(2000);
+      w.set(false);
+      mock.timers.tick(1000);
+      w.set(true);
+    }
+    assert.equal(n, 0);
+    w.set(false);
+    mock.timers.tick(120_000);
+    w.set(true);
+    assert.equal(n, 1);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("losing focus while waiting for the rest of the interval cancels it", () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+  try {
+    const w = fakeWings(true);
+    let n = 0;
+    pollWhileFocused(() => n++, 1000, { wings: w });
+    mock.timers.tick(400);
+    w.set(false);
+    w.set(true);
+    w.set(false);
+    mock.timers.tick(5000);
+    assert.equal(n, 0);
   } finally {
     mock.timers.reset();
   }

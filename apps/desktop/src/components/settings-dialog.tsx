@@ -161,7 +161,7 @@ function PluginSettingsPage({ entry, host }: { entry: PluginSettingsRef; host: P
     let gone = false;
     void host
       .mountPage(entry.plugin, null, box.current, "settings")
-      .then((r) => (gone ? r() : (remove = r)))
+      .then((r) => (gone ? r.remove() : (remove = r.remove)))
       .catch((e) => console.error(e));
     return () => {
       gone = true;

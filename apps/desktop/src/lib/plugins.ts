@@ -156,7 +156,7 @@ type Running = {
   tab?: PageTab;
   /** Set on a page shown as a block on a Project page: the project it is fixed to, and its saved state. */
   block?: BlockMount;
-  /** A block that is out of view, or in a tab that is hidden: its `focus` event says not focused. */
+  /** A block, tab, sidebar or popover page that is out of view: its `focus` event says not focused. */
   hidden?: boolean;
   /** The project this frame last learned of, as JSON, once it asked with `project`; changes are sent from then on. */
   lastProject?: string;
@@ -378,12 +378,14 @@ export class PluginHost {
   /**
    * Shows one of a plugin's pages inside `container`, sandboxed like the plugin itself. A sidebar or tab frame lives
    * until the plugin stops or the tab closes, so hiding it keeps its state. `viewId` is null for the settings page.
-   * A tab page passes `tab`, which fixes its project and gives it its saved state and args. Resolves a function that removes the frame.
+   * A tab page passes `tab`, which fixes its project and gives it its saved state and args. `hidden` is whether the
+   * page mounts out of view. Resolves `remove`, and `setHidden`, which tells the page it is out of view (its `focus`
+   * event turns false, so polls pause) or back in view.
    */
-  async mountPage(plugin: PluginView, viewId: string | null, container: HTMLElement, kind: "sidebar" | "modal" | "tab" | "popover" | "settings", tab?: PageTab) {
+  async mountPage(plugin: PluginView, viewId: string | null, container: HTMLElement, kind: "sidebar" | "modal" | "tab" | "popover" | "settings", tab?: PageTab, hidden = false) {
     // A popover belongs to a sidebar button; the settings page lives in Wings Settings, a dialog.
     const placement: PagePlacement = kind === "popover" ? "sidebar" : kind === "settings" ? "modal" : kind;
-    const { title, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover" || kind === "settings" ? kind : "page", placement, tab?.args);
+    const { title, srcdoc, nonce } = await this.pageDocument(plugin, viewId, kind === "popover" || kind === "settings" ? kind : "page", placement, tab?.args, this.focus.focused && !hidden);
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts", "allow-forms");
     frame.title = title;
@@ -392,7 +394,19 @@ export class PluginHost {
     container.replaceChildren(frame);
     this.track(frame, plugin, kind, nonce, viewId ?? undefined, tab);
     const win = frame.contentWindow;
-    return () => void (win && this.stop(win));
+    const running = win ? this.frames.get(win) : undefined;
+    if (running) running.hidden = hidden;
+    return {
+      remove: () => void (win && this.stop(win)),
+      setHidden: (next: boolean) => this.setHidden(running, next),
+    };
+  }
+
+  /** Tells a frame it is out of view or back in view, once per change. */
+  private setHidden(running: Running | undefined, hidden: boolean) {
+    if (!running || running.hidden === hidden) return;
+    running.hidden = hidden;
+    if (running.ready) running.post({ event: "focus", data: { focused: this.focus.focused && !hidden } });
   }
 
   /**
@@ -423,11 +437,7 @@ export class PluginHost {
     if (running) running.hidden = block.hidden;
     return {
       remove: () => this.stop(win),
-      setHidden: (hidden: boolean) => {
-        if (!running || running.hidden === hidden) return;
-        running.hidden = hidden;
-        if (running.ready) running.post({ event: "focus", data: { focused: this.focus.focused && !hidden } });
-      },
+      setHidden: (hidden: boolean) => this.setHidden(running, hidden),
     };
   }
 

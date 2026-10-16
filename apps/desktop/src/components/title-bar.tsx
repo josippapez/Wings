@@ -62,22 +62,32 @@ export type PluginButton = {
   popover?: { width: number; height: number; key: string };
 };
 
-/** Mounts a sidebar button's popover page into `container`; resolves a function that removes it. */
-export type MountPopover = (button: PluginButton, container: HTMLElement) => Promise<() => void>;
+/** Mounts a sidebar button's popover page into `container`, hidden or not; resolves what removes it and tells it it is out of view. */
+export type MountPopover = (button: PluginButton, container: HTMLElement, hidden: boolean) => Promise<{ remove: () => void; setHidden: (hidden: boolean) => void }>;
 
 /** The plugin's popover page, loaded once and kept while the popover is closed, so it reopens at once. */
-function PopoverPage({ button, mount }: { button: PluginButton; mount: MountPopover }) {
+function PopoverPage({ button, mount, open }: { button: PluginButton; mount: MountPopover; open: boolean }) {
   const box = useRef<HTMLDivElement>(null);
+  const page = useRef<{ setHidden: (hidden: boolean) => void }>(null);
+  const hidden = useRef(!open);
+  hidden.current = !open;
+  useEffect(() => page.current?.setHidden(!open), [open]);
   // Keyed on the page's key only: a new plugins list or callback mustn't reload it.
   useEffect(() => {
     if (!box.current) return;
     let remove: (() => void) | undefined;
     let gone = false;
-    void mount(button, box.current)
-      .then((r) => (gone ? r() : (remove = r)))
+    void mount(button, box.current, hidden.current)
+      .then((r) => {
+        if (gone) return r.remove();
+        remove = r.remove;
+        page.current = r;
+        r.setHidden(hidden.current);
+      })
       .catch((e) => console.error(e));
     return () => {
       gone = true;
+      page.current = null;
       remove?.();
     };
   }, [button.popover?.key]);
@@ -119,7 +129,7 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
           className="overflow-hidden p-0"
           style={{ width: `min(${popover.width}px, calc(100vw - 1rem))`, height: `min(${popover.height}px, calc(100vh - 4rem))` }}
         >
-          <PopoverPage button={button} mount={mount} />
+          <PopoverPage button={button} mount={mount} open={open} />
         </HoverCardContent>
       )}
     </HoverCard>

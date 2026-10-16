@@ -1665,10 +1665,10 @@ const leftPanel = usePanelRef();
             pinned={pinnedButtons}
             onTogglePin={(key) => setPinnedButtons((all) => (all.includes(key) ? all.filter((k) => k !== key) : [...all, key]))}
             onPluginButton={pressPluginButton}
-            onMountPopover={async (button, container) => {
+            onMountPopover={async (button, container, hidden) => {
               const plugin = activePlugins.find((p) => p.id === button.pluginId);
               if (!plugin || !pluginHost.current) throw new Error(`${button.pluginId} isn't running`);
-              return pluginHost.current.mountPage(plugin, button.id, container, "popover");
+              return pluginHost.current.mountPage(plugin, button.id, container, "popover", undefined, hidden);
             }}
               />
               <main className="relative min-h-0 min-w-0 flex-1">

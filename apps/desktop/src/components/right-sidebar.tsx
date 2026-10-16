@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { pagesOf, type PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
 import { PluginGlyph } from "@/components/plugin-glyph";
+import { sidebarPageShown } from "@/lib/sidebar-page";
 import { cn } from "@/lib/utils";
 
 
@@ -21,19 +22,30 @@ const sidebarOf = (entry: SidebarRef) => pagesOf(entry.plugin).find((s) => s.id 
  * One plugin page, mounted into its own box once and kept running while hidden, until `loaded` goes false (it was
  * hidden long enough to unload) and its frame goes. It loads again, and asks its plugin for its state, when shown.
  */
-function Page({ entry, host, visible, loaded }: { entry: SidebarRef; host: PluginHost | null; visible: boolean; loaded: boolean }) {
+function Page({ entry, host, visible, shown, loaded }: { entry: SidebarRef; host: PluginHost | null; visible: boolean; shown: boolean; loaded: boolean }) {
   const box = useRef<HTMLDivElement>(null);
+  const page = useRef<{ setHidden: (hidden: boolean) => void }>(null);
+  // `visible` is the DOM `hidden` attribute; `shown` is whether the page is on screen, which the page is told.
+  const hidden = useRef(!shown);
+  hidden.current = !shown;
+  useEffect(() => page.current?.setHidden(!shown), [shown]);
   // Keyed on entry.key, which changes only when the plugin restarts, so a new plugins list doesn't reload it.
   useEffect(() => {
     if (!box.current || !host || !loaded) return;
     let remove: (() => void) | undefined;
     let gone = false;
     void host
-      .mountPage(entry.plugin, entry.sidebarId, box.current, "sidebar")
-      .then((r) => (gone ? r() : (remove = r)))
+      .mountPage(entry.plugin, entry.sidebarId, box.current, "sidebar", undefined, hidden.current)
+      .then((r) => {
+        if (gone) return r.remove();
+        remove = r.remove;
+        page.current = r;
+        r.setHidden(hidden.current);
+      })
       .catch((e) => console.error(e));
     return () => {
       gone = true;
+      page.current = null;
       remove?.();
     };
   }, [entry.key, host, loaded]);
@@ -161,7 +173,7 @@ export function RightSidebar(props: {
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-hairline bg-surface">
           {props.mounted.map((entry) => (
-            <Page key={entry.key} entry={entry} host={props.host} visible={entry.key === current?.key} loaded={!props.unloaded.has(entry.id)} />
+            <Page key={entry.key} entry={entry} host={props.host} visible={entry.key === current?.key} shown={sidebarPageShown(showing, entry.key, current?.key)} loaded={!props.unloaded.has(entry.id)} />
           ))}
         </div>
       </motion.div>

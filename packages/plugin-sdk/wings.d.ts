@@ -262,7 +262,8 @@ interface Wings {
   onPanes(listener: (panes: WingsPane[]) => void): () => void;
   /**
    * Whether the user is in Wings: true while any Wings window (the main one or a view window) is in front, false
-   * while another app is. In a block on a Project page it is also false while the block is out of view or its tab is hidden.
+   * while another app is. In a page it is also false while the page is out of view: a tab that isn't showing, a sidebar
+   * that is closed or showing another page, a popover that is closed, a block that is scrolled away. Needs Wings 0.1.50.
    * Called once with the current state, then on each change. Needs no permission. Pause timers
    * while it is false and check once when it turns true, or use `pollWhileFocused` from `wings-plugin-sdk/poll`.
    */

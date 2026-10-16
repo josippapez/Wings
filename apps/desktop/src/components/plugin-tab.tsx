@@ -6,22 +6,33 @@ import { cn } from "@/lib/utils";
 
 /**
  * A plugin view open as a tab: its page fills the pane area like a pane card. It stays mounted while another tab
- * shows, so it keeps running, and goes when the tab closes or `loaded` goes false (the tab was hidden long enough
+ * shows, so it keeps running (its page is told it is out of view, so its polls pause), and goes when the tab closes or `loaded` goes false (the tab was hidden long enough
  * to unload; the page loads again when the tab is shown). `pageKey` changes when the plugin restarts or the tab gets new args; `tab` is read when the page mounts.
  */
 export function PluginTab(props: { plugin: PluginView | undefined; viewId: string; pageKey: string; tab: PageTab; visible: boolean; loaded: boolean; host: PluginHost | null }) {
   const box = useRef<HTMLDivElement>(null);
+  const page = useRef<{ setHidden: (hidden: boolean) => void }>(null);
+  // Read when the page finishes mounting, which can be after the tab was shown or hidden.
+  const hidden = useRef(!props.visible);
+  hidden.current = !props.visible;
+  useEffect(() => page.current?.setHidden(!props.visible), [props.visible]);
   useEffect(() => {
     const { plugin, host } = props;
     if (!box.current || !plugin || !host || !props.loaded) return;
     let remove: (() => void) | undefined;
     let gone = false;
     void host
-      .mountPage(plugin, props.viewId, box.current, "tab", props.tab)
-      .then((r) => (gone ? r() : (remove = r)))
+      .mountPage(plugin, props.viewId, box.current, "tab", props.tab, hidden.current)
+      .then((r) => {
+        if (gone) return r.remove();
+        remove = r.remove;
+        page.current = r;
+        r.setHidden(hidden.current);
+      })
       .catch((e) => console.error(e));
     return () => {
       gone = true;
+      page.current = null;
       remove?.();
     };
   }, [props.pageKey, props.host, props.loaded]);
