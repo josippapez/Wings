@@ -231,12 +231,17 @@ A page reads the query with `useQuery`, and asks for the command:
 ```tsx
 // src/pages/branches.tsx
 import { useQuery } from "wings-plugin-sdk/react";
-import { Empty, Heading, List, ListButton, ListItem, Loading } from "wings-plugin-ui";
+import { Empty, Heading, List, ListButton, ListItem, Loading, ProjectGate } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 
 export const page = { place: "sidebar" };
 
-export default function Branches({ cwd = "/" }: { cwd?: string }) {
+// The page is about the project on screen, so wait for Wings to say which.
+export default function Page() {
+  return <ProjectGate>{(project) => <Branches cwd={project.path} />}</ProjectGate>;
+}
+
+function Branches({ cwd }: { cwd: string }) {
   const { data, error, refresh } = useQuery(ch, "branches", { cwd });
   if (data === null && !error) return <Loading />;
   if (error) return <Empty title="Couldn't list the branches" description={error.message} />;
