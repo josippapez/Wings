@@ -40,6 +40,7 @@ From a terminal or a script, use the `wings plugin` command while Wings is open:
 ```sh
 wings plugin install ~/Downloads/cyclops.wings-plugin   # or github.com/owner/name
 wings plugin list            # --json for scripts
+wings plugin link ~/code/my-plugin   # load a plugin folder in place, for development: `wings-plugin dev` does it on each save
 wings plugin enable cyclops  # also update, disable, remove
 ```
 
