@@ -79,7 +79,7 @@ Every `wings.on*` call returns a function that removes the listener, so a React 
     ui/            React components the pages share
     lib/           logic with no UI, messages and settings, and their tests
     tools.ts       the tools Claude gets, if the plugin has any
-  preview/         fixtures that `pnpm shot` draws
+  preview/         fixtures that `wings-plugin shot` draws
   dist/            what the build writes
 ```
 
@@ -101,7 +101,7 @@ pnpm test    # runs the tests in every plugin's src/, which can import any modul
 
 The build also checks the manifest against what it built, and fails with a line for each place they disagree, so a typo doesn't wait for Wings to load the plugin. It catches a `main` that isn't `dist/main.js`; a page the build doesn't write and the folder doesn't have; an `icon` that isn't a file; a `wings.onTool("name")` with no `mcpTools` entry, or the reverse; a call of `wings.setBadge`, `setPaneStatus` or `openDiff` without `badges`, `status` or `diff` in `contributes.ui`; a `wings.openView("id")` that no sidebar or view has; and an id in an `open` of a pane status, a project section row or a notification button that names no view it can open. The bundles are searched as text, so a name the code computes, like `wings.openView(id)`, is skipped.
 
-While you work, `wings-plugin dev` in the plugin's folder builds on each save and has the running Wings restart the plugin. From the Wings repo, `pnpm --dir plugins shot` draws the pages (see Fixtures).
+While you work, `wings-plugin dev` in the plugin's folder builds on each save and has the running Wings restart the plugin. `wings-plugin shot` draws the pages (see Fixtures); in this repo, `pnpm --dir plugins shot` does it for every plugin.
 
 ### Talking to main
 
@@ -253,7 +253,7 @@ A call's input is checked against its schema before `run`, so a wrong one comes 
 
 ### Fixtures
 
-A page is looked at before it ships. A file in `preview/` renders a page with made-up data, and `pnpm --dir plugins shot <plugin>` draws every one in headless Chrome, 1000 and 640 px wide, and prints the PNG paths. `<plugin>/<file>` or `<plugin>/<file>/<state>` picks fewer. A file that exports `states` makes one screenshot for each, and a state sets what the page gets from Wings. Its fields go over the ones the file exports, so a state gives only what differs. They are `page`, `props`, `queries` (what main serves a `useQuery` with: a function of the key, or a value for every key), `answers` (what main answers an `ask` with), `storage`, `project` and `args`. A file that starts with `_` is shared data, not a fixture.
+A page is looked at before it ships. A file in `preview/` renders a page with made-up data, and `wings-plugin shot` in the plugin's folder (in this repo, `pnpm --dir plugins shot <plugin>`) draws every one in headless Chrome, 1000 and 640 px wide, and prints the PNG paths. It needs Chrome or Chromium (`CHROME=/path/to/chrome` if it isn't in the usual place), Node 22.4 or newer, and `wings-plugin-ui` and React installed in the plugin. `--width`, `--height` and `--out <dir>` change the sizes and where the PNGs go. `<plugin>/<file>` or `<plugin>/<file>/<state>` picks fewer, with the plugin's folder name for `<plugin>`. A file that exports `states` makes one screenshot for each, and a state sets what the page gets from Wings. Its fields go over the ones the file exports, so a state gives only what differs. They are `page`, `props`, `queries` (what main serves a `useQuery` with: a function of the key, or a value for every key), `answers` (what main answers an `ask` with), `storage`, `project` and `args`. A file that starts with `_` is shared data, not a fixture.
 
 ```tsx
 // preview/branches.tsx
@@ -269,7 +269,7 @@ export const states = {
 };
 ```
 
-The header of [`shot.mjs`](shot.mjs) lists every field and is where to look for the rest.
+The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists every field and is where to look for the rest.
 
 ## Manifest
 

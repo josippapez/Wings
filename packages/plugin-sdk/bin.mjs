@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // wings-plugin init [folder]   starts a plugin in a new folder (--pm <manager> installs with another package manager, --no-install skips it)
+// wings-plugin shot [filter...] screenshots the pages in ./preview with headless Chrome (--width, --height, --out)
 // wings-plugin build           builds the plugin in this folder into dist/
 // wings-plugin build --check   fails if a file in dist/ differs from what src/ builds
 // wings-plugin pack            builds the plugin into <id>.wings-plugin, the file Wings installs, without
@@ -29,8 +30,13 @@ if (command === "init") {
   }
   process.exit(0);
 }
+if (command === "shot") {
+  // Loaded here because it brings nothing the other commands need.
+  const { shot } = await import("./shot.mjs");
+  process.exit(await shot(flags, [process.cwd()]));
+}
 if (command !== "build" && command !== "pack" && command !== "dev") {
-  console.error("Usage: wings-plugin init [folder] [--pm <manager>] [--no-install] | wings-plugin build [--check] | wings-plugin pack | wings-plugin dev");
+  console.error("Usage: wings-plugin init [folder] [--pm <manager>] [--no-install] | wings-plugin build [--check] | wings-plugin pack | wings-plugin dev | wings-plugin shot [filter...]");
   process.exit(2);
 }
 const dir = process.cwd();

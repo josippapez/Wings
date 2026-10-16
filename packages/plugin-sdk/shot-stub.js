@@ -1,8 +1,8 @@
-// A stand-in for `window.wings` in `pnpm shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
-// of Wings does anything. A fixture can say more through its exports (see shot.mjs): `project`, `args`, `storage`, and
+// A stand-in for `window.wings` in `wings-plugin shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
+// of Wings does anything. A fixture can say more through its exports (see the header of shot.mjs): `project`, `args`, `storage`, and
 // `answers` and `queries` for pages that use wings-plugin-sdk/messages.
 
-import { channel } from "wings-plugin-sdk/messages";
+import { channel } from "./messages.js";
 
 /** Installs the stub. `fx` is the fixture module's exports. */
 export function installWings(fx) {

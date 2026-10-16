@@ -100,7 +100,7 @@ Put the code in `src/`, next to `wings-plugin.json`:
     ui/            React components the pages share
     lib/           logic with no UI, messages and settings, and their tests
     tools.ts       the tools Claude gets, if the plugin has any
-  preview/         fixtures for `pnpm shot` in the Wings repo
+  preview/         fixtures for `wings-plugin shot`
   dist/            what the build writes
 ```
 
@@ -530,6 +530,19 @@ and the files your plugin ships, like its icon, its own `.html`, `.css` and imag
 Wings shows in Settings. It leaves out `src/`, `preview/`, `node_modules`, `package.json` and lock files,
 `tsconfig*.json`, `HANDOVER*`, dotfiles and other `.wings-plugin` files. Your folder gets no built files. From a
 script, `pack(dir, { out })` in `wings-plugin-sdk/build` does the same and resolves the package's path.
+
+## Shot
+
+`npx wings-plugin shot [filter...]` draws the pages in the plugin's `preview/` folder with headless Chrome, so you look at
+a page before it ships. Each `preview/<file>.tsx` is a fixture: a module that shows a page with made-up data, in one
+state or several. It writes `<plugin>-<file>-<state>-<width>.png` at 1000 and 640 px wide (`--width 1000,640`,
+`--height 900`, `--out <dir>`) and prints each path. A filter is a substring of `<plugin>/<file>` or
+`<plugin>/<file>/<state>`, with the plugin's folder name for `<plugin>`. It needs Chrome or Chromium (set
+`CHROME=/path/to/chrome` if it isn't in the usual place), Node 22.4 or newer, and `wings-plugin-ui` and React installed in
+the plugin: the page and its CSS are found from the plugin's folder, like in a build. It exits 1 when a fixture throws
+or logs a console error. The header of `shot.mjs` lists the fields a fixture exports (`page`, `queries`, `answers`,
+`storage`, `project`, `args` and `states`). From a script, `shot(args, folders)` in `wings-plugin-sdk/shot` draws the
+fixtures of several plugin folders at once.
 
 ## Dev
 

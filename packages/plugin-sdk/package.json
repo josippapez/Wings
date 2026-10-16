@@ -56,6 +56,10 @@
     "./build": {
       "types": "./build.d.ts",
       "default": "./build.mjs"
+    },
+    "./shot": {
+      "types": "./shot.d.ts",
+      "default": "./shot.mjs"
     }
   },
   "scripts": {
@@ -94,6 +98,9 @@
     "build.d.ts",
     "dev.mjs",
     "init.mjs",
+    "shot.mjs",
+    "shot.d.ts",
+    "shot-stub.js",
     "template",
     "socket.mjs",
     "manifest-check.mjs",
