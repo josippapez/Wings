@@ -1,7 +1,8 @@
 import { useCallback } from "react";
+import { ago } from "wings-plugin-sdk/format";
 import { Badge, Button, Checkbox, Empty, List, ListButton, ListItem, Row, SearchField, Stack, Text } from "wings-plugin-ui";
 
-import { ago, dateTimeOf } from "../lib/dates";
+import { dateTimeOf } from "../lib/dates";
 import { describeRef } from "../lib/log";
 import type { CommitRow } from "../lib/types";
 import "./ref-pill.css";
@@ -43,7 +44,7 @@ function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => v
             {author}
           </Text>
           <Text tone="muted" size="tiny">
-            {ago(at)}
+            {ago(at * 1000)}
           </Text>
         </Row>
         {refs.length ? (

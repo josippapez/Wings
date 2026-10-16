@@ -70,14 +70,3 @@
     transition: none;
   }
 }
-
-/* A git error shown above the list it left in place. */
-.notice {
-  margin: 0;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--wings-warning) 12%, transparent);
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}

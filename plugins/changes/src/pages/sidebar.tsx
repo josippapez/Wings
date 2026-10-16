@@ -4,7 +4,7 @@
 import { useRef, useState } from "react";
 import { plural } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
-import { Button, Card, Chips, Empty, Loading, Row, Spinner, Stack, Text } from "wings-plugin-ui";
+import { Button, Card, Chips, Empty, Loading, Notice, Row, Spinner, Stack, Text } from "wings-plugin-ui";
 
 import { FileTree } from "../ui/FileTree";
 import { History } from "../ui/History";
@@ -148,9 +148,7 @@ export default function Sidebar() {
         onChange={setView}
       />
       {error ? (
-        <Text as="p" tone="warn" className="notice" role="alert">
-          {error}
-        </Text>
+        <Notice tone="warn">{error}</Notice>
       ) : null}
       {body}
     </>
