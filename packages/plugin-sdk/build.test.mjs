@@ -202,3 +202,13 @@ test("a manifest that agrees with the code builds, and a name the code computes 
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
   await pack(dir);
 });
+
+test("a bundle leaves out the SDK helpers it doesn't import", async (t) => {
+  const dir = plugin({ "src/main.ts": 'import { gitOk } from "wings-plugin-sdk/git";\nwings.onPanes(() => gitOk("/", ["status"]));' });
+  t.after(() => rmSync(dir, { recursive: true }));
+  await buildPlugin(dir);
+  const main = readFileSync(join(dir, "dist", "main.js"), "utf8");
+  assert.ok(main.includes("status"));
+  // repoRoot and defaultBranch live in the same module as gitOk.
+  assert.ok(!main.includes("--show-toplevel") && !main.includes("origin/HEAD"));
+});

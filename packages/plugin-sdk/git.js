@@ -35,7 +35,8 @@ const MISS_TTL_MS = 60_000;
  * A lookup that answers null for "nothing", kept per argument. `look` resolves a falsy value when git says there is
  * none, and rejects when git couldn't be asked (a refused call). An answer is kept for good and a "none" for
  * `missTtlMs` (0 unless set); a call that couldn't be asked is kept for neither. `forget(arg)` drops one argument's
- * answer, and with no argument every answer, for a Refresh button.
+ * answer, and with no argument every answer, for a Refresh button. It only builds a closure, so a call at the top
+ * level is marked `@__PURE__`: a bundle that doesn't import the result leaves it out.
  */
 function keepFound(look, { missTtlMs = 0 } = {}) {
   const found = cached(async (arg) => (await look(arg)) || Promise.reject(NONE), { failTtlMs: missTtlMs });
@@ -51,7 +52,7 @@ function keepFound(look, { missTtlMs = 0 } = {}) {
  * The top folder of the repo that `cwd` is in, or null outside one. A found root is kept for good. A folder git says
  * is in no repo is believed for a minute, so a poll doesn't ask again for it; `forget` shows a new repo at once.
  */
-export const repoRoot = keepFound(
+export const repoRoot = /* @__PURE__ */ keepFound(
   async (cwd) => {
     if (!cwd) return null;
     const r = await gitRun(cwd, ["rev-parse", "--show-toplevel"]);
@@ -61,7 +62,7 @@ export const repoRoot = keepFound(
 );
 
 /** The branch a repo's "this branch" is compared against: `origin/HEAD` as the remote set it, else `origin/main`, `origin/master`, `main` or `master`. Null when none exists. Kept once found, until `forget`. */
-export const defaultBranch = keepFound(async (root) => {
+export const defaultBranch = /* @__PURE__ */ keepFound(async (root) => {
   const head = await gitOk(root, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
   if (head && head !== "origin/HEAD") return head;
   for (const name of ["origin/main", "origin/master", "main", "master"]) {
