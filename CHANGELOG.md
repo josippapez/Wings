@@ -4,6 +4,13 @@ What changed in each Wings release, newest first.
 
 ## Unreleased
 
+## 0.1.51 · 2026-10-16
+
+- Opening and closing plugin pages no longer grows Wings' memory. Each open used to load the page from a new address, so WebKit cached another copy every time, about 0.4 MB per open. A plugin's pages now share one address until the plugin restarts.
+- The approval dialog's step count sits beside its title instead of under the close button.
+- PR tracker 0.20.0: a notification when someone mentions you or replies in a thread you wrote in, on any pull request in your projects. Turn it on from its Settings page. It only checks while Wings is in the background.
+- Plugin SDK 0.18.0: `wings-plugin init` starts a plugin from the template, and `wings-plugin shot` takes screenshots of a plugin's preview fixtures. plugin-ui 0.11.0: bolder section headings, a Loading spinner, Chips that wrap, Tabs aligned to the content and with disabled items, a small Badge, and Board columns that share the width.
+
 ## 0.1.50 · 2026-10-16
 
 - **Plugins store more.** Each value is saved in its own file, with 1 MB per value and 50 MB per plugin instead of 1 MB in all. Existing data moves over on first start, and the old file is kept as `.migrated`. Issues 0.13.0 keeps each issue apart, so writing a note no longer rewrites the whole project, and notes can be up to 20,000 characters.
