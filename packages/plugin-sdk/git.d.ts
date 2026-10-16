@@ -1,3 +1,4 @@
+/// <reference path="./wings.d.ts" />
 /** What `wings.exec` resolves: `code` is null when the program was killed by a signal. */
 export interface GitResult {
   code: number | null;
@@ -37,6 +38,26 @@ export const defaultBranch: {
   /** Forgets what was found for `root`, or for every repo when left out, so the next call asks git again. */
   forget(root?: string): void;
 };
+
+/**
+ * Calls `handler(projectIds)` when the repo of a project changes: a commit, checkout, pull, fetch, push, amend or
+ * reset, from anywhere. Needs a `git` entry in `permissions.exec`. Events are held while the page is out of view or
+ * Wings isn't focused, and handled once, with every id that came meanwhile, when it is back. A burst while `handler`
+ * runs makes it run once more. The `defaultBranch` of each changed repo is forgotten first, so `handler` reads it
+ * fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
+ * `wings` is for tests. Returns a function that stops it. Needs Wings 0.1.50.
+ */
+export function onGitChange(
+  handler: (projectIds: string[]) => void | Promise<void>,
+  options?: { wings?: Pick<Wings, "onGitChange" | "onFocus" | "focused" | "projects"> },
+): () => void;
+
+/**
+ * The id of the project whose repo `cwd` is in, or null when no project has that repo, which means Wings isn't
+ * watching it and the caller keeps polling. `projects` is `wings.projects()`. Wings watches a project's repo
+ * from its folder up, and the answer is the project whose `repoRoot` is the same as `cwd`'s.
+ */
+export function watchedProject(cwd: string, projects: { id: string; path: string }[]): Promise<string | null>;
 
 /** What to call a checkout: its branch, else "detached at" and its short commit, else "no commits". `head` is `git rev-parse --verify --quiet HEAD`, null in a repo with no commits. */
 export function branchLabel(branch: string | null | undefined, head: string | null | undefined): string;

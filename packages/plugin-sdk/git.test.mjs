@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { azureApiOrg, branchLabel, defaultBranch, git, gitOk, gitRun, parseRemote, repoRoot } from "./git.js";
+import { azureApiOrg, branchLabel, defaultBranch, git, gitOk, gitRun, onGitChange, parseRemote, repoRoot, watchedProject } from "./git.js";
 
 const ok = (stdout) => ({ code: 0, stdout, stderr: "" });
 const failed = (stderr = "fatal: no", code = 128) => ({ code, stdout: "", stderr });
@@ -134,4 +134,104 @@ test("azureApiOrg gives an organization its dev.azure.com address, whichever for
   for (const url of ["git@ssh.dev.azure.com:v3/acme/proj/app", "acme@vs-ssh.visualstudio.com:v3/acme/proj/app", "https://acme@dev.azure.com/acme/proj/_git/app", "https://acme.visualstudio.com/DefaultCollection/proj/_git/app", "https://acme@acme.visualstudio.com/proj/_git/app"]) {
     assert.equal(azureApiOrg(parseRemote(url).org), "https://dev.azure.com/acme", url);
   }
+});
+
+/** A stand-in `wings` for `onGitChange`: `emit` sends a git event, `focus` changes focus. */
+function fakeEvents(projects, focused = true) {
+  let gitListener;
+  const focusListeners = [];
+  const w = {
+    focused,
+    projects: async () => projects,
+    onGitChange: (fn) => ((gitListener = fn), () => (gitListener = undefined)),
+    onFocus: (fn) => (focusListeners.push(fn), () => focusListeners.splice(focusListeners.indexOf(fn), 1)),
+  };
+  return {
+    w,
+    emit: (...projectIds) => gitListener?.({ projectIds }),
+    focus: (next) => {
+      w.focused = next;
+      focusListeners.forEach((fn) => fn({ focused: next }));
+    },
+    listening: () => gitListener !== undefined || focusListeners.length > 0,
+  };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test("onGitChange runs nothing while unfocused, then once with the union of ids on focus", async (t) => {
+  fakeGit(t, { "rev-parse --show-toplevel": ok("/r\n") });
+  const ev = fakeEvents([{ id: "a", path: "/r" }, { id: "b", path: "/s" }], false);
+  const runs = [];
+  onGitChange((ids) => void runs.push(ids), { wings: ev.w });
+  ev.emit("a");
+  ev.emit("b", "a");
+  await tick();
+  assert.deepEqual(runs, []);
+  ev.focus(true);
+  await tick();
+  assert.deepEqual(runs, [["a", "b"]]);
+  ev.focus(false);
+  ev.focus(true);
+  await tick();
+  assert.equal(runs.length, 1);
+});
+
+test("onGitChange folds a burst that comes while the handler runs into one more run", async (t) => {
+  fakeGit(t, { "rev-parse --show-toplevel": ok("/r\n") });
+  const ev = fakeEvents([{ id: "a", path: "/r" }]);
+  const runs = [];
+  let release;
+  onGitChange(
+    (ids) => {
+      runs.push(ids);
+      return runs.length === 1 ? new Promise((r) => (release = r)) : undefined;
+    },
+    { wings: ev.w },
+  );
+  ev.emit("a");
+  await tick();
+  for (let i = 0; i < 5; i++) ev.emit("a");
+  await tick();
+  assert.equal(runs.length, 1);
+  release();
+  await tick();
+  assert.deepEqual(runs, [["a"], ["a"]]);
+});
+
+test("onGitChange makes defaultBranch ask again for the changed repo only, and the stop function removes both listeners", async (t) => {
+  const calls = fakeGit(t, (args, cwd) => (args[0] === "rev-parse" && args[1] === "--show-toplevel" ? ok(`${cwd}\n`) : args[1] === "--abbrev-ref" ? ok("origin/main\n") : failed()));
+  await defaultBranch("/r");
+  await defaultBranch("/s");
+  assert.equal(calls.filter((c) => c.includes("--abbrev-ref")).length, 2);
+  const ev = fakeEvents([{ id: "a", path: "/r" }, { id: "b", path: "/s" }]);
+  const seen = [];
+  const stop = onGitChange(async (ids) => {
+    seen.push(ids);
+    await defaultBranch("/r");
+    await defaultBranch("/s");
+  }, { wings: ev.w });
+  ev.emit("a");
+  await tick();
+  assert.deepEqual(seen, [["a"]]);
+  assert.equal(calls.filter((c) => c.includes("--abbrev-ref")).length, 3);
+  stop();
+  assert.equal(ev.listening(), false);
+  defaultBranch.forget();
+  repoRoot.forget();
+});
+
+test("watchedProject is the project whose repo the folder is in, and null for a repo no project has", async (t) => {
+  fakeGit(t, (args, cwd) => (args[1] === "--show-toplevel" ? (cwd.startsWith("/nested") ? ok("/nested\n") : ok(`${cwd.split("/").slice(0, 2).join("/")}\n`)) : failed()));
+  const projects = [{ id: "a", path: "/web" }, { id: "b", path: "/api/server" }];
+  assert.equal(await watchedProject("/web/src/deep", projects), "a");
+  assert.equal(await watchedProject("/api/x", projects), "b");
+  assert.equal(await watchedProject("/nested/sub", projects), null);
+  repoRoot.forget();
+});
+
+test("watchedProject is null outside any repo", async (t) => {
+  fakeGit(t, {});
+  assert.equal(await watchedProject("/tmp/x", [{ id: "a", path: "/web" }]), null);
+  repoRoot.forget();
 });

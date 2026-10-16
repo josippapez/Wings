@@ -1,6 +1,6 @@
 // Reading git from a plugin: the helpers each plugin had its own copy of, with one rule for error text and trimming.
 // A plugin still lists each git command it runs in `permissions.exec`.
-import { cached } from "./async.js";
+import { cached, singleFlight } from "./async.js";
 
 /** Runs `git args` in `cwd` and resolves what `wings.exec` does: the exit code, stdout and stderr, exactly as git gave them. */
 export const gitRun = (cwd, args) => globalThis.wings.exec("git", args, { cwd });
@@ -69,6 +69,57 @@ export const defaultBranch = keepFound(async (root) => {
   }
   return null;
 });
+
+/**
+ * Calls `handler(projectIds)` when the repo of a project changes: a commit, checkout, pull, fetch, push, amend or
+ * reset, from anywhere. Needs a `git` entry in `permissions.exec`. Events are held while the page is out of view or
+ * Wings isn't focused, and handled once, with every id that came meanwhile, when it is back. A burst while `handler`
+ * runs makes it run once more. The `defaultBranch` of each changed repo is forgotten first, so `handler` reads it
+ * fresh. Edits to files in the working tree don't send an event, so a plugin that shows them keeps a slow poll.
+ * `wings` is for tests. Returns a function that stops it.
+ */
+export function onGitChange(handler, { wings: w = globalThis.wings } = {}) {
+  const ids = new Set();
+  const run = singleFlight(async () => {
+    const batch = [...ids];
+    ids.clear();
+    if (!batch.length) return;
+    const projects = await w.projects();
+    await Promise.all(
+      projects
+        .filter((p) => batch.includes(p.id))
+        .map(async (p) => {
+          const root = await repoRoot(p.path);
+          if (root) defaultBranch.forget(root);
+        }),
+    );
+    await handler(batch);
+  });
+  const flush = () => run().catch((error) => console.error(error));
+  const offGit = w.onGitChange(({ projectIds }) => {
+    projectIds.forEach((id) => ids.add(id));
+    if (w.focused) flush();
+  });
+  const offFocus = w.onFocus(({ focused }) => {
+    if (focused && ids.size) flush();
+  });
+  return () => {
+    offGit();
+    offFocus();
+  };
+}
+
+/**
+ * The id of the project whose repo `cwd` is in, or null when no project has that repo, which means Wings isn't
+ * watching it and the caller keeps polling. `projects` is `wings.projects()`. Wings watches a project's repo
+ * from its folder up, and the answer is the project whose `repoRoot` is the same as `cwd`'s.
+ */
+export async function watchedProject(cwd, projects) {
+  const root = await repoRoot(cwd);
+  if (!root) return null;
+  const roots = await Promise.all(projects.map((p) => repoRoot(p.path)));
+  return projects[roots.indexOf(root)]?.id ?? null;
+}
 
 /** What to call a checkout: its branch, else "detached at" and its short commit, else "no commits". `head` is `git rev-parse --verify --quiet HEAD`, null in a repo with no commits. */
 export const branchLabel = (branch, head) => branch || (head ? `detached at ${head.slice(0, 7)}` : "no commits");
