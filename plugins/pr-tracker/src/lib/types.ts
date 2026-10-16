@@ -120,6 +120,8 @@ export interface ListedPr {
   loaded: boolean;
   /** Comments and reviews so far, or null where the list doesn't say. */
   activity: number | null;
+  /** When the PR last changed (ISO), which says whether its comments are worth fetching. Null where the list doesn't say, as on Azure DevOps. */
+  updatedAt: string | null;
 }
 
 /**
@@ -175,6 +177,8 @@ export interface FailureDetail {
 }
 
 export interface Comment extends WingsComment {
+  /** The account that wrote it, in the form `Forge.me` gives. `author` is a display name on some forges and can't be matched with that. */
+  by?: string;
   /** The GitLab discussion a note belongs to, which a reply goes to. */
   discussion?: string;
   /** On a thread's first comment, where the provider keeps thread states: open ("active") or done ("resolved"), with its own word for it. */
@@ -215,12 +219,12 @@ export interface AzurePr {
   title: string;
   isDraft?: boolean;
   mergeStatus?: string;
-  reviewers?: { vote: number; displayName?: string; uniqueName?: string; isRequired?: boolean }[];
+  reviewers?: { id?: string; vote: number; displayName?: string; uniqueName?: string; isRequired?: boolean }[];
   repository?: { webUrl?: string };
   lastMergeSourceCommit?: { commitId: string };
   lastMergeTargetCommit?: { commitId: string };
   description?: string;
-  createdBy?: { displayName?: string; uniqueName?: string };
+  createdBy?: { id?: string; displayName?: string; uniqueName?: string };
   creationDate: string;
   closedDate?: string;
   sourceRefName?: string;

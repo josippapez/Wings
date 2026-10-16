@@ -4,7 +4,8 @@
 
 import { useEffect, useState } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
-import { Button, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
+import { Button, Checkbox, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
+import { mentionsOn } from "../lib/inbox";
 import { ch } from "../lib/messages";
 import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
 
@@ -78,10 +79,23 @@ function WatchField() {
   );
 }
 
+function MentionsField() {
+  const [on, setOn] = useSetting(mentionsOn);
+
+  return (
+    <Stack gap="s">
+      <Heading>Comments for you</Heading>
+      <Text tone="muted">Get a notification when someone mentions you, or replies in a thread you wrote in, on any pull request in your projects. It only checks while Wings is in the background, as often as above, or every 5 minutes when that is off.</Text>
+      {on === null ? null : <Checkbox checked={on} onChange={(checked) => void setOn(checked)}>Notify me about mentions and replies</Checkbox>}
+    </Stack>
+  );
+}
+
 export default function PrTrackerSettings() {
   return (
     <Stack gap="l">
       <WatchField />
+      <MentionsField />
       <Heading>Pull request hosts</Heading>
       <Text tone="muted">GitHub (including GitHub Enterprise), GitLab and Azure DevOps use the gh, glab and az sign-in. Bitbucket Cloud and Codeberg use a token saved here.</Text>
       {HOSTS.map((h) => <TokenField key={h.secret} host={h} />)}

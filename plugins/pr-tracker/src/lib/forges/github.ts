@@ -203,6 +203,7 @@ export function githubListed(prs: GhPr[], me: string, requested: ReadonlySet<num
     status: githubStatusOf(pr),
     loaded: true,
     activity: (pr.comments?.length ?? 0) + (pr.reviews?.length ?? 0),
+    updatedAt: pr.updatedAt ?? null,
   }));
 }
 
@@ -215,6 +216,7 @@ export function githubComment(c: GhComment): Comment {
     line: c.line ?? null,
     side: c.side === "LEFT" ? "deletions" : "additions",
     author: c.user?.login ?? "unknown",
+    by: c.user?.login,
     body: c.body ?? "",
     createdAt: c.created_at,
     url: c.html_url,
@@ -231,7 +233,7 @@ export function githubConversation(discussion: GhDiscussion, lineComments: GhCom
   const general = [
     ...discussion.comments.map((c) => ({ author: c.author?.login, body: c.body, createdAt: c.createdAt, url: c.url })),
     ...discussion.reviews.filter((r) => r.body).map((r) => ({ author: r.author?.login, body: r.body, createdAt: r.submittedAt, url })),
-  ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown" }));
+  ].map((c, i): Comment => ({ id: -(i + 1), replyTo: null, path: null, line: null, side: "additions", ...c, author: c.author ?? "unknown", by: c.author }));
   return [...general, ...lineComments.map(githubComment)];
 }
 
@@ -301,6 +303,12 @@ export const github: Forge<GithubLink, GithubRemote> = {
     const prs = await orElse(gh.json<{ url: string; number: number }[]>(["pr", "list", ...repoArgs(remote), "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number"], { key: ghKey(remote.host), cwd }), null);
     const pr = prs?.[0];
     return pr ? { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) } : null;
+  },
+
+  /** The login `gh` is signed in as, which is also what a mention is written with. */
+  async me(remote) {
+    const login = await logins.get(remote.host);
+    return { ids: [login], handles: [login] };
   },
 
   /** One `gh pr list` for every open PR of the repo (up to 100) and one for the ones asking for your review, each marked yours or waiting for you. */

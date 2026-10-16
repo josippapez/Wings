@@ -33,7 +33,7 @@ interface AzureComment {
   id: number;
   commentType?: string;
   isDeleted?: boolean;
-  author?: { displayName?: string };
+  author?: { displayName?: string; uniqueName?: string };
   content?: string;
   publishedDate: string;
 }
@@ -195,7 +195,7 @@ export function azWho(pr: Pick<AzurePr, "createdBy" | "reviewers">, me: string) 
 export function azureListed(prs: AzurePr[], me: string, remote: AzureRemote, cwd: string): ListedPr[] {
   return prs.map((pr): ListedPr => {
     const status = { ...azureStatus(pr, { passed: 0, failed: 0, running: 0 }), failing: [] };
-    return { link: azureLink(pr, remote, cwd), title: pr.title, head: status.head, ...azWho(pr, me), author: pr.createdBy?.displayName ?? null, status, loaded: false, activity: null };
+    return { link: azureLink(pr, remote, cwd), title: pr.title, head: status.head, ...azWho(pr, me), author: pr.createdBy?.displayName ?? null, status, loaded: false, activity: null, updatedAt: null };
   });
 }
 
@@ -228,6 +228,7 @@ export function azureComments(threads: AzureThread[], url: string, system = fals
         line: right ?? left ?? null,
         side: right ? "additions" : "deletions",
         author: c.author?.displayName ?? "unknown",
+        by: c.author?.uniqueName,
         body: c.content ?? "",
         createdAt: c.publishedDate,
         url,
@@ -287,6 +288,16 @@ async function fileAt(link: AzureLink, sha: string, path: string): Promise<strin
   }
 }
 
+/** The user `az` is signed in as, per organization, which marks the PRs you wrote and the ones that wait for you. */
+const who = async (org: string) => {
+  const name = (await az.run(["account", "show", "--query", "user.name", "-o", "tsv"], { key: org })).trim();
+  if (!name) throw new Error("az account show printed no user");
+  return name;
+};
+
+/** organization → your identity id, as a PR in the list shows it. */
+const identities = new Map<string, string>();
+
 export const azure: Forge<AzureLink, AzureRemote> = {
   problemKey: (remote) => remote.org,
   repoKey: (remote) => `azure:${remote.org}/${remote.project}/${remote.repo}`,
@@ -317,14 +328,22 @@ export const azure: Forge<AzureLink, AzureRemote> = {
     return pr ? azureLink(pr, remote, cwd) : null;
   },
 
-  /** Every active PR of the repo (up to 100) in one `az repos pr list`, each marked yours or waiting for you; `az account show` says who you are. */
+  /** `az account show` says who you are: the same name Azure DevOps knows you by as `uniqueName`. A mention is written `@<id>` with your identity id, which a PR you wrote or review carries, so it is read from the list. */
+  async me(remote) {
+    const name = await who(remote.org);
+    const id = identities.get(remote.org);
+    return { ids: [name], handles: id ? [name, id] : [name] };
+  },
+
+  /** Every active PR of the repo (up to 100) in one `az repos pr list`, each marked yours or waiting for you. */
   async list(cwd, remote) {
-    const me = (await az.run(["account", "show", "--query", "user.name", "-o", "tsv"], { key: remote.org })).trim();
-    if (!me) throw new Error("az account show printed no user");
+    const me = await who(remote.org);
     const prs = await azJson<AzurePr[]>(remote.org, [
       "repos", "pr", "list", "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
       "--status", "active", "--top", "100", "-o", "json",
     ]);
+    const mine = prs.flatMap((p) => [p.createdBy, ...(p.reviewers ?? [])]).find((u) => same(u?.uniqueName, me) && u?.id);
+    if (mine) identities.set(remote.org, mine.id!);
     return azureListed(prs, me, remote, cwd);
   },
 

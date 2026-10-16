@@ -187,6 +187,7 @@ export function glListed(mrs: GlMr[], me: string, toLink: (mr: GlMr) => GitlabLi
     status: glListStatus(mr),
     loaded: false,
     activity: mr.user_notes_count ?? null,
+    updatedAt: mr.updated_at ?? null,
   }));
 }
 
@@ -209,6 +210,7 @@ export function glComments(discussions: { id: string; notes?: GlNote[] }[], url:
         line: pos ? (pos.new_line ?? pos.old_line ?? null) : null,
         side: pos?.new_line ? "additions" : "deletions",
         author: nameOf(n.author) ?? "unknown",
+        by: n.author?.username,
         body: n.body ?? "",
         createdAt: n.created_at,
         url,
@@ -288,6 +290,12 @@ export const gitlab: Forge<GitlabLink, GitlabRemote> = {
     const mrs = await api<GlMr[]>(remote, `${project(remote)}/merge_requests?source_branch=${encodeURIComponent(branch)}&state=all&order_by=updated_at&per_page=5`);
     const mr = openOrNewest(mrs, (m) => m.state === "opened");
     return mr ? toLink(mr, remote) : null;
+  },
+
+  /** The username `glab` is signed in as, which is also what a mention is written with. */
+  async me(remote) {
+    const name = await users.get(remote);
+    return { ids: [name], handles: [name] };
   },
 
   /** Every open MR of the project (up to 100) in one call, each marked yours or waiting for you. */

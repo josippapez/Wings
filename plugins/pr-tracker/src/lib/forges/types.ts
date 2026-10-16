@@ -1,3 +1,9 @@
+/** Who you are on a forge: `ids` match `Comment.by`, `handles` are what a mention in a comment's text is written with (`@handle`). */
+export interface Me {
+  ids: string[];
+  handles: string[];
+}
+
 /** What a forge is to the rest of the tracker: one object that knows how to find, read and answer a pull request. */
 import type { Cli } from "wings-plugin-sdk/cli";
 import type { Push } from "../pushes";
@@ -46,6 +52,8 @@ export interface Forge<L extends Link = Link, R extends KnownRemote = KnownRemot
   fromSession?(sessionId: string): Promise<L | null>;
   /** The PR for a branch, or null. */
   find(cwd: string, remote: R, branch: string): Promise<L | null>;
+  /** The signed-in account, which a comment's `by` is matched against. Lookups the list makes are kept, so this costs no extra call. */
+  me(remote: R): Promise<Me>;
   /** The repo's open PRs. */
   list(cwd: string, remote: R): Promise<ListedPr[]>;
   /** The link a tab's args name, which may need the provider asked again. */

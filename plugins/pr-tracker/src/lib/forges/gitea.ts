@@ -138,7 +138,7 @@ export function gtListed(prs: GtPr[], me: string, link: (pr: GtPr) => GiteaLink)
   return prs.map((pr): ListedPr => {
     const { mine, reviewing } = gtWho(pr, me);
     const [label, tone, icon] = labelOf({ draft: pr.draft, conflicts: pr.mergeable === false, checks: NO_CHECKS });
-    return { link: link(pr), title: pr.title, head: pr.head.ref, mine, reviewing, author: pr.user ? gtName(pr.user) : null, status: { ...gtStatusOf(pr, [], []), label, tone, icon }, loaded: false, activity: (pr.comments ?? 0) + (pr.review_comments ?? 0) };
+    return { link: link(pr), title: pr.title, head: pr.head.ref, mine, reviewing, author: pr.user ? gtName(pr.user) : null, status: { ...gtStatusOf(pr, [], []), label, tone, icon }, loaded: false, activity: (pr.comments ?? 0) + (pr.review_comments ?? 0), updatedAt: pr.updated_at ?? null };
   });
 }
 
@@ -152,7 +152,7 @@ export function gtComments(comments: GtComment[], reviews: GtReview[], url: stri
     ...comments.map((c) => ({ id: c.id, user: c.user, body: c.body, at: c.created_at, url: c.html_url })),
     ...reviews.filter((r) => r.body && r.state !== "PENDING").map((r) => ({ id: -r.id, user: r.user, body: r.body, at: r.submitted_at, url: r.html_url })),
   ];
-  return general.map((c): Comment => ({ id: c.id, replyTo: null, path: null, line: null, side: "additions", author: gtName(c.user), body: c.body ?? "", createdAt: c.at, url: c.url ?? url, canReply: true }));
+  return general.map((c): Comment => ({ id: c.id, replyTo: null, path: null, line: null, side: "additions", author: gtName(c.user), by: c.user?.login, body: c.body ?? "", createdAt: c.at, url: c.url ?? url, canReply: true }));
 }
 
 /**
@@ -205,6 +205,12 @@ export const gitea: Forge<GiteaLink, GiteaRemote> = {
     const found = await forgeJson<GtPr[]>(accountOf(remote.host), `${api(remote)}/pulls?state=all&sort=recentupdate&limit=20&head=${encodeQuery(branch)}`);
     const pr = openOrNewest(gtOwn(found, `${remote.owner}/${remote.repo}`), (p) => p.state === "open");
     return pr ? toLink(pr, remote) : null;
+  },
+
+  /** The login the token belongs to, which is also what a mention is written with. */
+  async me(remote) {
+    const login = await forgeUser<{ login?: string }>(accountOf(remote.host), `https://${remote.host}/api/v1/user`, (u) => u.login);
+    return { ids: [login], handles: [login] };
   },
 
   /** One call for the repo's open PRs, kept when you wrote them or were asked to review them. */

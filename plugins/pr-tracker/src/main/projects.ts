@@ -8,6 +8,7 @@ import type { PullsAnswer } from "../lib/messages";
 import { BLOCK_ROWS, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
 import { newPulls, notesFor } from "../lib/watch";
+import { checkMentions, markRead, pruneMentions } from "./inbox";
 import { answered, explains, shownProblem } from "./problems";
 import { remoteFor } from "./remote";
 import { known, links, prune, state, status } from "./state";
@@ -111,6 +112,7 @@ const runProjects = singleFlight(async () => {
         const mine = [...items.filter((i) => i.mine), ...items.filter((i) => !i.mine && i.reviewing)];
         const rows = mine.slice(0, MAX_ROWS).map((i) => row(i, project.path));
         await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null);
+        if (isKnown(remote)) await checkMentions(project, remote, items).catch(console.error);
       } catch (error) {
         complete = false;
         console.error(error);
@@ -122,6 +124,7 @@ const runProjects = singleFlight(async () => {
     for (const url of [...seen.keys()]) if (!live.has(url)) seen.delete(url);
     for (const url of [...activity.keys()]) if (!live.has(url)) activity.delete(url);
     prune(live);
+    pruneMentions(live);
   }
   const json = JSON.stringify(Object.fromEntries(seen));
   if (json !== persisted) void wings.storage.set("seen", JSON.parse(json));
@@ -155,6 +158,7 @@ export function forgetLists() {
 
 /** The tab for a PR is open: everything up to its latest comment counts as read. */
 export function markSeen(url: string) {
+  void loadSeen().then(() => markRead(url));
   const count = activity.get(url);
   if (count === undefined) return;
   seen.set(url, count);

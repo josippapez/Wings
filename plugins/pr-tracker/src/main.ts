@@ -11,6 +11,7 @@ import { onGitChange } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
 import { ch } from "./lib/messages";
+import { mentionsOn } from "./lib/inbox";
 import { watchMinutes, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
 import { prLinkOf } from "./lib/forges/github";
@@ -79,14 +80,21 @@ pollWhileFocused(refreshPanes, STATUS_POLL_MS);
 pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
 
 // New pull requests: with an interval set in Settings, the lists are also checked while Wings is in the background.
+// Mentions use the same checks, every 5 minutes when no interval is set for new pull requests.
+const MENTION_MINUTES = 5;
 let watchTimer: ReturnType<typeof setInterval> | undefined;
-function watchEvery(minutes: WatchMinutes) {
+let minutes: WatchMinutes = 0;
+let mentions = false;
+function watch() {
   setWatching(minutes > 0);
   clearInterval(watchTimer);
-  if (minutes) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), minutes * 60_000);
+  const every = minutes || (mentions ? MENTION_MINUTES : 0);
+  if (every) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), every * 60_000);
 }
-void watchMinutes.get().then(watchEvery);
-watchMinutes.onChange(watchEvery);
+void watchMinutes.get().then((m) => ((minutes = m), watch()));
+watchMinutes.onChange((m) => ((minutes = m), watch()));
+void mentionsOn.get().then((on) => ((mentions = on), watch()));
+mentionsOn.onChange((on) => ((mentions = on), watch()));
 
 registerTools(tools);
 

@@ -1,4 +1,5 @@
 /** Bitbucket Cloud: pull requests through the REST API 2.0 with an API token, the diff from local git, replies and approvals through the same token. */
+import { cached } from "wings-plugin-sdk/async";
 import { git } from "wings-plugin-sdk/git";
 import { real } from "../checklist";
 import { counts, encodeQuery, labelOf, openOrNewest, plainFailure, withSecondPage } from "./shared";
@@ -26,6 +27,7 @@ interface BbUser {
   uuid?: string;
   display_name?: string;
   nickname?: string;
+  account_id?: string;
 }
 
 /** The fields of a pull request the tracker reads, from `GET /2.0/repositories/{workspace}/{repo}/pullrequests[/{id}]`. */
@@ -138,7 +140,7 @@ export function bbListed(prs: BbPr[], me: string, link: (pr: BbPr) => BitbucketL
     const { changes } = bbReviews(pr);
     const [label, tone, icon] = labelOf({ draft: pr.draft, checks: NO_CHECKS, changes });
     const status = { ...bbStatusOf(pr, []), label, tone, icon };
-    return { link: link(pr), title: pr.title, head: pr.source.branch.name, mine, reviewing, author: pr.author ? bbName(pr.author) : null, status, loaded: false, activity: pr.comment_count ?? null };
+    return { link: link(pr), title: pr.title, head: pr.source.branch.name, mine, reviewing, author: pr.author ? bbName(pr.author) : null, status, loaded: false, activity: pr.comment_count ?? null, updatedAt: pr.updated_on ?? null };
   });
 }
 
@@ -160,6 +162,7 @@ export function bbComments(values: BbComment[], url: string): Comment[] {
       line: inline ? (inline.to ?? inline.from ?? null) : null,
       side: inline?.to ? "additions" : inline ? "deletions" : "additions",
       author: bbName(c.user),
+      by: c.user?.uuid,
       body: c.content?.raw ?? "",
       createdAt: c.created_on,
       url: c.links?.html?.href ?? url,
@@ -180,6 +183,9 @@ const getPage = async <T>(url: string) => (await forgeJson<Page<T>>(ACCOUNT, url
 
 /** The account the token belongs to, by uuid, which Bitbucket filters and marks authors and reviewers with. */
 const me = () => forgeUser<{ uuid?: string }>(ACCOUNT, `${API}user`, (u) => u.uuid);
+
+/** The token's account in full, for a mention, which Bitbucket writes with the account id or the uuid. */
+const profile = cached(() => forgeJson<BbUser>(ACCOUNT, `${API}user`));
 
 const toLink = (pr: BbPr, remote: BitbucketRemote, cwd: string): BitbucketLink => ({
   provider: "bitbucket",
@@ -206,6 +212,13 @@ export const bitbucket: Forge<BitbucketLink, BitbucketRemote> = {
     const found = await getPage<BbPr>(`${repoPath(remote)}/pullrequests?q=${q}&${states}&sort=-updated_on&pagelen=20`);
     const pr = openOrNewest(bbOwn(found, `${remote.workspace}/${remote.repo}`), (p) => p.state === "OPEN");
     return pr ? toLink(pr, remote, cwd) : null;
+  },
+
+  /** The account the token belongs to. Its uuid is what a comment's `by` is, and a mention is the account id or the uuid. */
+  async me() {
+    const u = await profile.get("user");
+    const uuid = u.uuid ?? "";
+    return { ids: [uuid], handles: [uuid, u.account_id, u.nickname].filter((h): h is string => Boolean(h)) };
   },
 
   /** Every open PR of the repo: one call, and a second for a repo with more than a page. The list has no check results, which the PR's own status adds. */
@@ -254,5 +267,8 @@ export const bitbucket: Forge<BitbucketLink, BitbucketRemote> = {
     await forgePost(ACCOUNT, `${prUrl(link)}/approve`);
   },
 
-  forget: forgetUsers,
+  forget() {
+    forgetUsers();
+    profile.clear();
+  },
 };
