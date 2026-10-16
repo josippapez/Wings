@@ -797,7 +797,7 @@ test("useAction's run resolves to whether the action worked, so a caller can kee
 });
 
 test("usePoll loads at once and when load changes, then every interval while Wings is focused, and stops on unmount", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   let focus;
   globalThis.wings = { focused: true, onFocus: (listener) => ((focus = listener), () => (focus = null)) };
   const calls = [];
@@ -810,6 +810,25 @@ test("usePoll loads at once and when load changes, then every interval while Win
   await render(h(Page, { name: "b" }));
   await unmount();
   t.mock.timers.tick(5000);
-  assert.deepEqual(calls, ["a", "a", "a", "a", "b"], "at once, each interval, once Wings is back, and when load changes; not while away or after unmount");
+  assert.deepEqual(calls, ["a", "a", "a", "a", "b"], "at once, each interval, once Wings is back for longer than the interval, and when load changes; not while away or after unmount");
   assert.equal(focus, null, "the focus listener is removed");
+});
+
+test("usePoll doesn't load when Wings is back within the interval, and waits for the time that was left", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+  let focus;
+  globalThis.wings = { focused: true, onFocus: (listener) => ((focus = listener), () => (focus = null)) };
+  const calls = [];
+  const Page = () => (usePoll(useCallback(() => calls.push("load"), []), 1000), null);
+  const { unmount } = await mount(h(Page));
+  t.mock.timers.tick(400);
+  focus({ focused: false });
+  t.mock.timers.tick(100);
+  focus({ focused: true });
+  assert.equal(calls.length, 1, "only the load at mount");
+  t.mock.timers.tick(499);
+  assert.equal(calls.length, 1);
+  t.mock.timers.tick(1);
+  assert.equal(calls.length, 2, "the next one comes when the interval was due");
+  await unmount();
 });
