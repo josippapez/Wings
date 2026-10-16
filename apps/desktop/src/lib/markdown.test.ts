@@ -103,3 +103,11 @@ test("a link or image URL the browser can't parse is not one, so rendering never
     assert.ok(!parseInline(`![a](${bad})`).some((p) => p.kind === "image"), bad);
   }
 });
+
+test("a <details> fold with its summary, and HTML comments hidden outside code", () => {
+  assert.deepEqual(parseBlocks("Finding.\n<details>\n<summary>📋 Context & sources</summary>\n\n**Why:** it lags.\n</details>\n<!-- state:v4\n{} --> <!-- tag -->\n`<!-- kept -->`"), [
+    { kind: "paragraph", text: "Finding." },
+    { kind: "details", summary: "📋 Context & sources", blocks: [{ kind: "paragraph", text: "**Why:** it lags." }] },
+    { kind: "paragraph", text: "`<!-- kept -->`" },
+  ]);
+});

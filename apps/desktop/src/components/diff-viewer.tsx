@@ -34,6 +34,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DiffScrollbars } from "@/components/diff-scrollbars";
+import { LinkOpener, Markdown } from "@/components/markdown";
 import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
 import { LINE_HEIGHT, rowNumber, rowTop } from "@/lib/diff-scroll";
 import { resolveFocus, type ResolvedFocus } from "@/lib/diff-focus";
@@ -177,7 +178,9 @@ function CommentBody({ comment, onOpen }: { comment: DiffComment; onOpen: (url: 
             </Button>
           )}
         </p>
-        <p className="mt-1 text-[13px] leading-relaxed break-words whitespace-pre-wrap select-text">{comment.body}</p>
+        <LinkOpener.Provider value={onOpen}>
+          <Markdown source={comment.body} className="mt-1 select-text" />
+        </LinkOpener.Provider>
       </div>
     </div>
   );

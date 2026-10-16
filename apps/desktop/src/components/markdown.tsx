@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { memo, useEffect, useState } from "react";
+import { createContext, memo, useContext, useEffect, useState } from "react";
 
 import { parseBlocks, parseInline, type Inline as InlinePart, type MdBlock } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,11 @@ function StoredImage({ name, alt, read }: { name: string; alt: string; read?: Lo
   return <span className="text-muted-foreground">{failed || !read ? `[image missing: ${alt || name}]` : ""}</span>;
 }
 
+/** How a link opens. Text a plugin sent sets its own, so its links go through the plugin's `openUrl` permission. */
+export const LinkOpener = createContext<(url: string) => void>((url) => void openUrl(url));
+
 function Inline({ text, read }: { text: string; read?: LocalImage }) {
+  const open = useContext(LinkOpener);
   return inlinesOf(text).map((part: InlinePart, i) => {
     switch (part.kind) {
       case "code":
@@ -91,7 +95,7 @@ function Inline({ text, read }: { text: string; read?: LocalImage }) {
             href={part.href}
             onClick={(e) => {
               e.preventDefault();
-              void openUrl(part.href);
+              open(part.href);
             }}
             className="text-working underline-offset-2 hover:underline"
           >
@@ -110,6 +114,19 @@ const depthPad = ["", "pl-4", "pl-8", "pl-12"];
 
 function Block({ b, headingOffset, read }: { b: MdBlock; headingOffset: number; read?: LocalImage }) {
   switch (b.kind) {
+    case "details":
+      return (
+        <details className="rounded-lg border border-hairline px-3 py-1.5">
+          <summary className="cursor-pointer text-muted-foreground select-none">
+            <Inline text={b.summary} read={read} />
+          </summary>
+          <div className="mt-2 flex flex-col gap-2.5">
+            {b.blocks.map((c, i) => (
+              <Block key={i} b={c} headingOffset={headingOffset} read={read} />
+            ))}
+          </div>
+        </details>
+      );
     case "heading": {
       const Tag = `h${Math.min(b.level + headingOffset, 6)}` as "h4" | "h5" | "h6";
       return (
