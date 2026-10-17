@@ -1,5 +1,6 @@
 import { ArrowDownIcon, ArrowUpIcon, PencilIcon, SparklesIcon, Trash2Icon, UserIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { IconButton } from "@/components/icon-button";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -26,8 +27,7 @@ export const SectionCard = memo(
     const now = useNow();
     const [editing, setEditing] = useState(startEditing);
     const [confirm, setConfirm] = useState(false);
-    const [error, setError] = useState("");
-    const act = (op: Parameters<Apply>[0]) => apply(op).then(() => setError(""), (e) => setError(messageOf(e)));
+    const act = (op: Parameters<Apply>[0]) => apply(op).catch((e) => void toast.error(messageOf(e)));
     return (
       <article id={`item-${section.id}`} aria-label={section.title} className={cn("group/section rounded-xl border border-hairline bg-white/[0.02] px-5 py-4 transition-colors hover:border-hairline-strong focus-within:border-hairline-strong", markClass(mark))}>
         {editing ? (
@@ -76,11 +76,6 @@ export const SectionCard = memo(
               </time>
             </p>
           </>
-        )}
-        {error && (
-          <p role="alert" className="mt-2 text-[12px] text-destructive">
-            {error}
-          </p>
         )}
       </article>
     );

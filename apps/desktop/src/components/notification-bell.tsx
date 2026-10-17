@@ -102,12 +102,12 @@ export function NotificationBell({
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="flex items-baseline gap-2 text-[13px]">
-                      <span className="min-w-0 flex-1 truncate font-medium">{e.title}</span>
+                      <span title={e.title} className="min-w-0 flex-1 truncate font-medium">{e.title}</span>
                       <time dateTime={new Date(e.at).toISOString()} className="shrink-0 text-[11px] text-muted-foreground">
                         {ago(e.at)}
                       </time>
                     </p>
-                    <p className="truncate text-[12px] text-muted-foreground">{[e.project, e.detail].filter(Boolean).join(": ")}</p>
+                    <p title={[e.project, e.detail].filter(Boolean).join(": ")} className="line-clamp-2 text-[12px] text-muted-foreground">{[e.project, e.detail].filter(Boolean).join(": ")}</p>
                     {e.paneId !== null && (
                       <Button
                         variant="ghost"

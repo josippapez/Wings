@@ -277,6 +277,8 @@ export function PluginsSection(props: {
   const [reviews, setReviews] = useState<PluginView[]>([]);
   const approving = reviews[0] ?? null;
   const queueReview = (...plugins: PluginView[]) => setReviews((q) => enqueue(q, ...plugins));
+  /** The plugin whose Remove was pressed and waits for a second click. */
+  const [removing, setRemoving] = useState<string | null>(null);
   const [readme, setReadme] = useState<{ id: string; version: string; text: string | null } | null>(null);
 
   const current = props.plugins.find((p) => p.id === props.selected) ?? props.plugins[0] ?? null;
@@ -572,23 +574,34 @@ export function PluginsSection(props: {
                       Reinstall from GitHub
                     </Button>
                   )}
-                  {!current.dev && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending}
-                      className="text-destructive hover:text-destructive"
-                      onClick={() =>
-                        void work(current.id, async () => {
-                          await api.pluginRemove(current.id);
-                          await refresh();
-                        })
-                      }
-                    >
-                      <TrashIcon aria-hidden />
-                      Remove
-                    </Button>
-                  )}
+                  {!current.dev &&
+                    (removing === current.id ? (
+                      <>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          autoFocus
+                          disabled={pending}
+                          onClick={() =>
+                            void work(current.id, async () => {
+                              await api.pluginRemove(current.id);
+                              setRemoving(null);
+                              await refresh();
+                            })
+                          }
+                        >
+                          Remove plugin
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setRemoving(null)}>
+                          Keep
+                        </Button>
+                      </>
+                    ) : (
+                      <Button variant="outline" size="sm" disabled={pending} className="text-destructive hover:text-destructive" onClick={() => setRemoving(current.id)}>
+                        <TrashIcon aria-hidden />
+                        Remove
+                      </Button>
+                    ))}
                 </div>
               )}
               {rowError[current.id] && (

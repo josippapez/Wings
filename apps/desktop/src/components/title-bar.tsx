@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactElement } from "react";
+import { toast } from "sonner";
 import { flushSync } from "react-dom";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
@@ -84,7 +85,7 @@ function PopoverPage({ button, mount, open }: { button: PluginButton; mount: Mou
         page.current = r;
         r.setHidden(hidden.current);
       })
-      .catch((e) => console.error(e));
+      .catch((e) => toast.error("Couldn't open that panel", { description: String(e) }));
     return () => {
       gone = true;
       page.current = null;

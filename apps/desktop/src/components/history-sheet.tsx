@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { CheckIcon, ChevronDownIcon, CopyIcon, EllipsisIcon, GitBranchIcon, GitForkIcon, SearchIcon, SearchXIcon, SquareTerminalIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -126,7 +127,7 @@ export function HistorySheet(props: {
     void navigator.clipboard.writeText(command).then(() => {
       setCopied(hit.id);
       setTimeout(() => setCopied((id) => (id === hit.id ? null : id)), 1500);
-    });
+    }, () => void toast.error("Couldn't copy"));
   };
 
   const resume = (hit: HistoryHit, fork: boolean) => {
@@ -289,7 +290,7 @@ export function HistorySheet(props: {
                 return (
                   <li key={s.id} className="group/session flex items-start gap-2 rounded-lg p-2.5 transition-colors duration-150 hover:bg-hover">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{s.title ?? s.firstPrompt ?? "Untitled session"}</p>
+                      <p title={s.title ?? s.firstPrompt ?? undefined} className="truncate text-sm font-medium">{s.title ?? s.firstPrompt ?? "Untitled session"}</p>
                       {snippet ? (
                         <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
                           <span className="text-foreground/70">{SPEAKER[snippet.role]}: </span>
@@ -299,7 +300,7 @@ export function HistorySheet(props: {
                         s.title &&
                         s.firstPrompt && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{s.firstPrompt}</p>
                       )}
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                      <p title={s.cwd ?? space?.path} className="mt-1 truncate text-xs text-muted-foreground">
                         {ago(s.lastActiveMs)}
                         {s.gitBranch && <> on {s.gitBranch}</>}
                         {place && <> in {place}</>}

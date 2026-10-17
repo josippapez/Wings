@@ -62,6 +62,7 @@ function FactForm({ initial, add, keyRef, onSave, onCancel }: { initial?: Fact; 
 /** The facts as a table, each row editable in place, with a row to add one. */
 export function FactsTable({ facts, apply, addRef, marks }: { facts: Fact[]; apply: Apply; addRef: RefObject<HTMLInputElement | null>; marks: ReadonlyMap<string, Mark> }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState("");
   const run = async (job: Promise<unknown>) => {
     try {
@@ -97,16 +98,27 @@ export function FactsTable({ facts, apply, addRef, marks }: { facts: Fact[]; app
                     <MarkdownInline text={f.value} />
                   </td>
                   <td className="w-[92px] rounded-r-lg px-1 py-1 text-right align-top whitespace-nowrap">
-                    <span className="inline-flex items-center opacity-0 transition-opacity group-focus-within/fact:opacity-100 group-hover/fact:opacity-100">
+                    <span className={`inline-flex items-center transition-opacity group-focus-within/fact:opacity-100 group-hover/fact:opacity-100 ${removing === f.key ? "opacity-100" : "opacity-0"}`}>
                       <span className="mr-1 text-[11px] text-muted-foreground" title={byLabel(f.by)}>
                         {f.by === "agent" ? "agent" : "you"}
                       </span>
                       <IconButton label={`Edit ${f.key}`} onClick={() => setEditing(f.key)}>
                         <PencilIcon />
                       </IconButton>
-                      <IconButton label={`Remove ${f.key}`} onClick={() => void run(apply({ kind: "removeFact", key: f.key })).catch(() => {})}>
-                        <Trash2Icon />
-                      </IconButton>
+                      {removing === f.key ? (
+                        <>
+                          <Button size="xs" variant="destructive" autoFocus onClick={() => void run(apply({ kind: "removeFact", key: f.key })).then(() => setRemoving(null), () => {})}>
+                            Remove
+                          </Button>
+                          <Button size="xs" variant="ghost" onClick={() => setRemoving(null)}>
+                            Keep
+                          </Button>
+                        </>
+                      ) : (
+                        <IconButton label={`Remove ${f.key}`} onClick={() => setRemoving(f.key)}>
+                          <Trash2Icon />
+                        </IconButton>
+                      )}
                     </span>
                   </td>
                 </tr>

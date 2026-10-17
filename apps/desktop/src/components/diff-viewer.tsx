@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs";
@@ -311,7 +312,7 @@ function CommentThread({
         className ?? "my-1.5 mr-3 ml-12",
       )}
     >
-      {thread.root.path !== null && className && <p className="mb-2.5 truncate text-[11px] text-muted-foreground">{thread.root.path}</p>}
+      {thread.root.path !== null && className && <p title={thread.root.path} className="mb-2.5 truncate text-[11px] text-muted-foreground">{thread.root.path}</p>}
       <CommentBody comment={thread.root} onOpen={onOpen} />
       {thread.replies.length > 0 && (
         <div className="mt-3 flex flex-col gap-3 border-l border-hairline-strong pl-3">
@@ -473,7 +474,7 @@ export function DiffViewer({
   const removeReview = (id: string) => setReview({ id: diff?.id ?? null, items: reviewItems.filter((c) => c.id !== id) });
 
   const openComment = (url: string) => {
-    if (diff) void invoke("plugin_open_url", { pluginId: diff.pluginId, url }).catch((e) => console.error(e));
+    if (diff) void invoke("plugin_open_url", { pluginId: diff.pluginId, url }).catch((e) => toast.error("Couldn't open the link", { description: String(e) }));
   };
   const reply = diff ? (replyTo: number, body: string) => onReply(diff, replyTo, body) : undefined;
 

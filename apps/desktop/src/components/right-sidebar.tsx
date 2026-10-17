@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppWindowIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { PeekStrip, usePeek } from "@/components/sidebar-peek";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -25,6 +26,7 @@ const sidebarOf = (entry: SidebarRef) => pagesOf(entry.plugin).find((s) => s.id 
 function Page({ entry, host, visible, shown, loaded }: { entry: SidebarRef; host: PluginHost | null; visible: boolean; shown: boolean; loaded: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const page = useRef<{ setHidden: (hidden: boolean) => void }>(null);
+  const [error, setError] = useState("");
   // `visible` is the DOM `hidden` attribute; `shown` is whether the page is on screen, which the page is told.
   const hidden = useRef(!shown);
   hidden.current = !shown;
@@ -32,6 +34,7 @@ function Page({ entry, host, visible, shown, loaded }: { entry: SidebarRef; host
   // Keyed on entry.key, which changes only when the plugin restarts, so a new plugins list doesn't reload it.
   useEffect(() => {
     if (!box.current || !host || !loaded) return;
+    setError("");
     let remove: (() => void) | undefined;
     let gone = false;
     void host
@@ -42,14 +45,26 @@ function Page({ entry, host, visible, shown, loaded }: { entry: SidebarRef; host
         page.current = r;
         r.setHidden(hidden.current);
       })
-      .catch((e) => console.error(e));
+      .catch((e) => setError(String(e)));
     return () => {
       gone = true;
       page.current = null;
       remove?.();
     };
   }, [entry.key, host, loaded]);
-  return <div ref={box} hidden={!visible} className="min-h-0 flex-1" />;
+  return (
+    <>
+      {error && visible && (
+        <Empty className="size-full">
+          <EmptyHeader>
+            <EmptyTitle>This page couldn't load</EmptyTitle>
+            <EmptyDescription>{error}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+      <div ref={box} hidden={!visible || !!error} className="min-h-0 flex-1" />
+    </>
+  );
 }
 
 /** The classes of the sidebar element: a column in its panel when docked, an overlay on the panes when peeking. */

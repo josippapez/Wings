@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
@@ -60,7 +61,7 @@ const agentOrder: Record<AgentState, number> = { blocked: 0, done: 1, working: 2
 
 const revealLabel = { macos: "Reveal in Finder", windows: "Show in Explorer" }[document.documentElement.dataset.platform ?? ""] ?? "Show in file manager";
 
-const copy = (text: string) => void navigator.clipboard.writeText(text).catch(() => {});
+const copy = (text: string) => void navigator.clipboard.writeText(text).catch(() => toast.error("Couldn't copy"));
 
 function agentStatus(agent: Agent) {
   if (agent.state === "blocked" && agent.waitingFor) return `needs you: ${agent.waitingFor}`;
@@ -431,7 +432,7 @@ export function Sidebar(props: {
                             <CircleDashedIcon className="size-3.5 text-muted-foreground" aria-hidden />
                           )}
                         </span>
-                        <span className="min-w-0 flex-1">
+                        <span className="min-w-0 flex-1" title={`${pending.title ?? agentLabel(pending.kind)}\n${spaceName(pending.spaceId)}, ${pendingLabel[pending.phase]}`}>
                           <span className={cn("block truncate text-[13px] font-medium", pending.phase !== "starting" && "text-muted-foreground")}>{pending.title ?? agentLabel(pending.kind)}</span>
                           <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                             {spaceName(pending.spaceId)}, {pendingLabel[pending.phase]}
@@ -463,7 +464,7 @@ export function Sidebar(props: {
                       <span className="flex size-4 shrink-0 items-center justify-center">
                         <PaneIcon agent={agent} />
                       </span>
-                      <span className="min-w-0 flex-1">
+                      <span className="min-w-0 flex-1" title={`${agent.name ?? agentLabel(agent.kind)}\n${spaceName(agent.spaceId)}, ${agentStatus(agent)}`}>
                         <span className="block truncate text-[13px] font-medium">{agent.name ?? agentLabel(agent.kind)}</span>
                         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                           {spaceName(agent.spaceId)}, {agentStatus(agent)}

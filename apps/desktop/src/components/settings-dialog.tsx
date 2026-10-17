@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -158,20 +159,34 @@ export type PluginSettingsRef = { plugin: PluginView; key: string };
 /** A plugin's settings page, there while its section shows: leaving the section or closing Settings removes it. */
 function PluginSettingsPage({ entry, host }: { entry: PluginSettingsRef; host: PluginHost }) {
   const box = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
     if (!box.current) return;
+    setError("");
     let remove: (() => void) | undefined;
     let gone = false;
     void host
       .mountPage(entry.plugin, null, box.current, "settings")
       .then((r) => (gone ? r.remove() : (remove = r.remove)))
-      .catch((e) => console.error(e));
+      .catch((e) => setError(String(e)));
     return () => {
       gone = true;
       remove?.();
     };
   }, [entry.key, host]);
-  return <div ref={box} data-plugin-settings={entry.plugin.id} className="size-full" />;
+  return (
+    <>
+      {error && (
+        <Empty className="size-full">
+          <EmptyHeader>
+            <EmptyTitle>This page couldn't load</EmptyTitle>
+            <EmptyDescription>{error}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+      <div ref={box} data-plugin-settings={entry.plugin.id} hidden={!!error} className="size-full" />
+    </>
+  );
 }
 
 /** What the Plugins section needs from App: the list, the selection and the install and update state. */

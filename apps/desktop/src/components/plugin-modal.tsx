@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppWindowIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { pagesOf, type PluginView } from "@/lib/api";
 import type { PluginHost } from "@/lib/plugins";
@@ -15,20 +16,34 @@ const bound = (value: number | null, fallback: number, min: number, max: number)
 /** The plugin's page, removed when the modal closes: unlike a sidebar, a closed modal keeps nothing running. */
 function Page({ entry, host }: { entry: ModalRef; host: PluginHost }) {
   const box = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
     if (!box.current) return;
+    setError("");
     let remove: (() => void) | undefined;
     let gone = false;
     void host
       .mountPage(entry.plugin, entry.viewId, box.current, "modal")
       .then((r) => (gone ? r.remove() : (remove = r.remove)))
-      .catch((e) => console.error(e));
+      .catch((e) => setError(String(e)));
     return () => {
       gone = true;
       remove?.();
     };
   }, [entry.key, host]);
-  return <div ref={box} className="min-h-0 flex-1" />;
+  return (
+    <>
+      {error && (
+        <Empty className="size-full">
+          <EmptyHeader>
+            <EmptyTitle>This page couldn't load</EmptyTitle>
+            <EmptyDescription>{error}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+      <div ref={box} hidden={!!error} className="min-h-0 flex-1" />
+    </>
+  );
 }
 
 /** A plugin page in a dialog over Wings, sized by its manifest. */

@@ -19,6 +19,8 @@ import { agentLabel, paneLabel, type PaneLabelInfo } from "@/components/pane-lab
 import { Sidebar } from "@/components/sidebar";
 import { SidebarPeek } from "@/components/sidebar-peek";
 import { rollUp, StatusDot } from "@/components/status-dot";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SettingsDialog, type SettingsSection } from "@/components/settings-dialog";
 import { ToolInstallDialog } from "@/components/tool-install";
 import { pluginsUsing } from "@/lib/tool-install";
@@ -1225,10 +1227,18 @@ const leftPanel = usePanelRef();
     // The line is typed into a terminal, where a control character acts as a key press.
     if (!key || !paneId || !isSessionId(session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
     const cd = session.cwd === paneInfo[paneId]?.cwd ? "" : `cd ${shellQuote(session.cwd)} && `;
-    void api.paneWrite(paneId, cd + resumeCommand(session.id)).catch((e) => console.error(e));
+    void api.paneWrite(paneId, cd + resumeCommand(session.id)).catch((e) => toast.error("Couldn't type the resume command", { description: String(e) }));
     setHistoryOpen(false);
     // The sheet hands focus back to what opened it as it closes, so take it after that.
     setTimeout(() => terminals.get(key)?.focus(), 0);
+  }
+
+  /** Removing a project closes its tabs, running agents included, so one with tabs open asks first. */
+  const [removeAsk, setRemoveAsk] = useState<{ id: string; name: string; tabs: number } | null>(null);
+  function askRemoveSpace(spaceId: string) {
+    const tabs = tabsRef.current.filter((t) => t.spaceId === spaceId).length;
+    if (tabs === 0) return void removeSpace(spaceId).catch((e) => toast.error("Couldn't remove the project", { description: String(e) }));
+    setRemoveAsk({ id: spaceId, name: spaces.find((s) => s.id === spaceId)?.name ?? "this project", tabs });
   }
 
   async function removeSpace(spaceId: string) {
@@ -1281,7 +1291,7 @@ const leftPanel = usePanelRef();
     const shellReady = !!meta.paneId && isShellCommand(paneInfoRef.current[meta.paneId]?.command);
     if (meta.paneId && !shellReady) return patchPane(key, { ...noResume, resumeAt: Date.now(), resumeFailed: true });
     patchPane(key, { ...noResume, resumeAt: Date.now() });
-    if (meta.paneId) void api.paneSend(meta.paneId, resumeLine(meta.kind, meta.sessionId, meta.args)).catch((e) => console.error(e));
+    if (meta.paneId) void api.paneSend(meta.paneId, resumeLine(meta.kind, meta.sessionId, meta.args)).catch((e) => toast.error("Couldn't restart the agent", { description: String(e) }));
     if (focus) selectPaneKey(key);
   }
   const resumePaneRef = useRef(resumePane);
@@ -1437,7 +1447,7 @@ const leftPanel = usePanelRef();
     onForkAgent: forkAgent,
     onCloseAgent: closeAgent,
     onAddSpace: (path) => void addSpace(path),
-    onRemoveSpace: (id) => void removeSpace(id),
+    onRemoveSpace: askRemoveSpace,
     onSearch: () => setPaletteOpen(true),
     onHistory: () => setHistoryOpen(true),
     onSettings: () => setSettingsOpen(true),
@@ -1605,7 +1615,7 @@ const leftPanel = usePanelRef();
       const found = await api.historySearch(query, {}, 8);
       return found.sessions.flatMap((h) =>
         h.cwd
-          ? [{ id: `session:${h.id}`, kind: "session" as const, title: h.title ?? h.firstPrompt ?? "Untitled session", subtitle: [h.cwd.split("/").pop(), h.gitBranch, h.lastActive].filter(Boolean).join(" · "), keywords: h.cwd, run: () => void launchSessionRef.current({ id: h.id, cwd: h.cwd! }, false).catch((e) => console.error(e)) }]
+          ? [{ id: `session:${h.id}`, kind: "session" as const, title: h.title ?? h.firstPrompt ?? "Untitled session", subtitle: [h.cwd.split("/").pop(), h.gitBranch, h.lastActive].filter(Boolean).join(" · "), keywords: h.cwd, run: () => void launchSessionRef.current({ id: h.id, cwd: h.cwd! }, false).catch((e) => toast.error("Couldn't resume the session", { description: String(e) })) }]
           : [],
       );
     },
@@ -1621,7 +1631,7 @@ const leftPanel = usePanelRef();
   /** What a plugin button on the title bar does; `rect` is the button, which a panel opens under. */
   const pressPluginButton = (button: PluginButton, rect: { right: number; bottom: number }, newTab?: boolean) => {
     if (button.kind === "panel") {
-      void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => console.error(e));
+      void api.pluginPanelToggle(button.pluginId, button.id, rect.right, rect.bottom).catch((e) => toast.error("Couldn't open the panel", { description: String(e) }));
       return;
     }
     if (button.kind === "modal") return setModal((open) => (open === button.key ? null : button.key));
@@ -1840,6 +1850,31 @@ const leftPanel = usePanelRef();
         <TerminalCommandPrompt />
         <Toaster position="bottom-right" />
         <UpdateDialog />
+        <Dialog open={removeAsk !== null} onOpenChange={(open) => !open && setRemoveAsk(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Remove {removeAsk?.name}?</DialogTitle>
+              <DialogDescription>
+                {removeAsk?.tabs === 1 ? "Its open tab" : `Its ${removeAsk?.tabs} open tabs`} will close, and any agent running there stops. The folder stays on disk.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setRemoveAsk(null)}>
+                Keep
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  const id = removeAsk?.id;
+                  setRemoveAsk(null);
+                  if (id) void removeSpace(id).catch((e) => toast.error("Couldn't remove the project", { description: String(e) }));
+                }}
+              >
+                Remove
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <WorktreeAgentDialog
           spaces={spaces}
           onCreated={(space, input) => {
@@ -1896,7 +1931,7 @@ const leftPanel = usePanelRef();
           onResumeHere={resumeHere}
           onLaunch={(session, fork) => {
             setHistoryOpen(false);
-            void launchSession(session, fork).catch((e) => console.error(e));
+            void launchSession(session, fork).catch((e) => toast.error(fork ? "Couldn't fork the session" : "Couldn't resume the session", { description: String(e) }));
           }}
         />
       </TooltipProvider>

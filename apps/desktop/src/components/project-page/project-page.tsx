@@ -1,5 +1,6 @@
 import { FolderIcon, GitBranchIcon, SearchIcon, StickyNoteIcon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import type { PluginView } from "@/lib/api";
 import { listBlocks, type BlockEntry } from "@/lib/plugin-blocks";
@@ -23,7 +24,6 @@ export type ProjectPageSpace = { id: string; name: string; path: string };
 /** A project's page: its facts, then sections and plugin blocks in the order you put them, with "+ Add" between. */
 export function ProjectPage({ space, branch, plugins, epochs, host, visible }: { space: ProjectPageSpace; branch?: string | null; plugins: PluginView[]; epochs: Record<string, number>; host: PluginHost | null; visible: boolean }) {
   const { info, error: unreadable, apply } = useProjectInfo(space.id);
-  const [error, setError] = useState("");
   const factInput = useRef<HTMLInputElement>(null);
   /** The section just added, which opens for writing. */
   const fresh = useRef<string | null>(null);
@@ -96,10 +96,7 @@ export function ProjectPage({ space, branch, plugins, epochs, host, visible }: {
       const known = new Set(before?.items.map((i) => i.id));
       const added = next.items.find((i) => !known.has(i.id));
       fresh.current = added?.kind === "section" ? added.id : null;
-    }).then(
-      () => setError(""),
-      (e) => setError(messageOf(e)),
-    );
+    }).catch((e) => void toast.error(messageOf(e)));
 
   if (unreadable && !info) {
     return (
@@ -218,11 +215,6 @@ export function ProjectPage({ space, branch, plugins, epochs, host, visible }: {
           </Fragment>
         ))}
       </div>
-      {error && (
-        <p role="alert" className="text-[12px] text-destructive">
-          {error}
-        </p>
-      )}
     </div>
     </NowProvider>
   );
