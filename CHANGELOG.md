@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.58 · 2026-10-17
+
+- **Errors show up where you'll see them.** A failed Add, section or block action on the Project page is a toast, not a line at the bottom of the page. Resume, fork, agent restart, plugin panels, Copy and comment links say when they fail instead of doing nothing.
+- **Removing asks first.** Removing a plugin or a fact asks for a second click. Removing a project that has tabs open asks in a dialog, since its tabs and agents close.
+- A plugin page that fails to load says so instead of staying blank.
+- Long names in notifications, the sidebar, History and diff threads show in full on hover.
+- PR tracker 0.22.1 to 0.22.3: Vote opens a menu under its button, a commit in a push opens its changes, a running GitHub job says its log comes when it finishes, and removing a saved token asks first.
+- Issues 0.14.3, Changes 0.6.3, Session detail 0.6.4 and Work item 0.9.3: confirms and errors scroll into view or sit next to what caused them, commit shas copy, and every linked pull request is listed.
+
 ## 0.1.57 · 2026-10-17
 
 - PR tracker 0.22.0: open a build check in the Checks tab to see its run. Jobs and steps with their status and time sit beside the step's log, with the CI's colours, error and warning lines, folded groups and line numbers. Works for Azure DevOps, GitHub Actions and GitLab.
