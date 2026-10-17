@@ -8,7 +8,7 @@ import { canParent, LIMITS, type Issue } from "../lib/domain";
 import type { TodoList } from "../lib/todo";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
-import { DeleteConfirm, ErrorText, TypeIcon, type Apply, type Send } from "./parts";
+import { DeleteConfirm, ErrorText, TypeIcon, useScrollIntoView, type Apply, type Send } from "./parts";
 
 export interface IssueViewProps {
   project: WingsProject;
@@ -58,6 +58,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
 
 export function IssueView({ project, issue, issues, todos, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
+  const noticesRef = useScrollIntoView<HTMLDivElement>(confirming || error);
   const crumb = (
     <nav className="tk-crumbs" aria-label="Breadcrumb">
       <Button variant="ghost" size="sm" onClick={onBack}><span aria-hidden="true">←</span> Issues</Button>
@@ -102,10 +103,12 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
     <Page toolbar={toolbar} className="tk-page">
       <div className="tk-wrap">
         {error || confirming ? (
-          <Stack gap="m" className="tk-notices">
-            {error ? <Card><ErrorText>{error}</ErrorText></Card> : null}
-            {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => apply({ kind: "remove", key: issue.key, children })} /> : null}
-          </Stack>
+          <div ref={noticesRef}>
+            <Stack gap="m" className="tk-notices">
+              {error ? <Card><ErrorText>{error}</ErrorText></Card> : null}
+              {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => apply({ kind: "remove", key: issue.key, children })} /> : null}
+            </Stack>
+          </div>
         ) : null}
         <div className="tk-grid">
           <header className="tk-head">

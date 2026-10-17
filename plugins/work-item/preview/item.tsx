@@ -10,6 +10,8 @@ export const states = {
   links: { element: <ItemView {...props} initialTab="links" /> },
   // Its comments and linked items are still loading, and its pull request call failed.
   parts: { element: <ItemView {...props} states={[]} linked={{ data: null, error: "az boards query failed: network unreachable" }} updates={{ data: null, error: null }} prs={[]} /> },
+  // More pull requests than the list shows at first: the rest are behind "Show all".
+  manyPrs: { element: <ItemView {...props} initialTab="links" prs={Array.from({ length: 12 }, (_, i) => ({ id: 480 + i, repoId: "r1", title: `Sync client change ${i + 1}`, status: i % 3 ? "completed" : "active", repo: "web" }))} /> },
   loading: { element: <ItemSkeleton id={1432} /> },
   error: { element: <ItemError id={1432} message="TF401232: Work item 1432 does not exist, or you do not have permissions to read it." onRetry={() => {}} /> },
 };

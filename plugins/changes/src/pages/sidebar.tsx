@@ -2,6 +2,7 @@
 // plugin's main script runs git and keeps what this page shows fresh; a click asks it to open the diff viewer.
 
 import { useRef, useState } from "react";
+import { errorMessage } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
 import { Button, Card, Chips, Empty, Loading, Notice, Row, Spinner, Stack, Text } from "wings-plugin-ui";
@@ -26,6 +27,8 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [all, setAll] = useState(false);
+  /** Why the last diff, graph or commit didn't open. */
+  const [openError, setOpenError] = useState<string | null>(null);
   /** What the search box holds, which becomes the query after a pause. */
   const typed = useRef("");
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -46,7 +49,11 @@ export default function Sidebar() {
   if (!answered && !repo && !error) return <Loading />;
   if (answered && !repo) return <Empty title="No git repo in your panes." description="Open a terminal in a repo and its changes show here." />;
 
-  const openDiff = (path: string | null) => repo && void ch.ask("open", { root: repo.root, mode, path });
+  const open = (ask: Promise<unknown>) => {
+    setOpenError(null);
+    ask.catch((e) => setOpenError(errorMessage(e)));
+  };
+  const openDiff = (path: string | null) => repo && open(ch.ask("open", { root: repo.root, mode, path }));
   const refresh = () => {
     // Sent first, so main forgets its kept repos before it hears the asks.
     void ch.tell("refresh");
@@ -70,8 +77,8 @@ export default function Sidebar() {
         searchText={typed.current}
         onSearch={onSearch}
         onAll={setAll}
-        onGraph={() => repo && void ch.ask("graph", { root: repo.root })}
-        onOpen={([hash, subject, author, at]: CommitRow) => repo && void ch.ask("commit", { root: repo.root, hash, subject, author, at })}
+        onGraph={() => repo && open(ch.ask("graph", { root: repo.root }))}
+        onOpen={([hash, subject, author, at]: CommitRow) => repo && open(ch.ask("commit", { root: repo.root, hash, subject, author, at }))}
         onMore={history.loadMore}
       />
     );
@@ -150,6 +157,7 @@ export default function Sidebar() {
       {error ? (
         <Notice tone="warn">{error}</Notice>
       ) : null}
+      {openError ? <Notice tone="warn">{openError}</Notice> : null}
       {body}
     </>
   );

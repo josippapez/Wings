@@ -337,7 +337,11 @@ function LinkRow({ id, item, onOpen }: { id: number; item?: LinkedItem; onOpen: 
   );
 }
 
+/** The pull requests shown before "Show all". */
+const PRS_SHOWN = 10;
+
 function LinksTab({ links, linked, prs, onOpenItem, onOpenUrl, prUrl, onRefresh }: ItemViewProps & { links: ReturnType<typeof linkIds> }) {
+  const [allPrs, setAllPrs] = useState(false);
   const groups: [string, number[]][] = [
     ["Parent", links.parent ? [links.parent] : []],
     ["Children", links.children],
@@ -366,7 +370,7 @@ function LinksTab({ links, linked, prs, onOpenItem, onOpenUrl, prUrl, onRefresh 
         <section className="wi-group" aria-label="Pull requests">
           <Heading level={3}>Pull requests · {prs.length}</Heading>
           <ul className="wi-links">
-            {prs.map((p) => {
+            {(allPrs ? prs : prs.slice(0, PRS_SHOWN)).map((p) => {
               const status = prStatus(p.status);
               return (
                 <li key={p.id}>
@@ -380,6 +384,7 @@ function LinksTab({ links, linked, prs, onOpenItem, onOpenUrl, prUrl, onRefresh 
               );
             })}
           </ul>
+          {prs.length > PRS_SHOWN && !allPrs ? <Button variant="link" size="sm" onClick={() => setAllPrs(true)}>Show all {prs.length}</Button> : null}
         </section>
       ) : null}
     </div>

@@ -50,7 +50,7 @@ export function BlockView({ project, issues, apply, openBoard, openIssue }: Bloc
               ))}
             </List>
           )}
-          {open.length > BLOCK_ROWS ? <Text tone="muted" size="small">{open.length - BLOCK_ROWS} more on the board</Text> : null}
+          {open.length > BLOCK_ROWS ? <Button variant="link" size="xs" onClick={openBoard}>{open.length - BLOCK_ROWS} more on the board</Button> : null}
         </>
       )}
     </Stack>

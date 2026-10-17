@@ -2,7 +2,7 @@
 // failed check's log is asked for (`onLoadFailure`) only when the row is opened, and shown as plain text.
 
 import { useMemo, useRef, useState } from "react";
-import { ago, Button, Text } from "wings-plugin-ui";
+import { ago, Button, Text, useAction } from "wings-plugin-ui";
 import { groupChecks, durationText, hasLog, logTail, withUnresolved, type Group, type GroupId } from "../lib/checklist";
 import type { CheckItem, CheckState, FailureDetail, Failing, Run, RunRef, RunStep, Status } from "../lib/types";
 import { RunView } from "./run-view";
@@ -99,6 +99,7 @@ function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad, o
 
 function CheckRow({ item: c, load, onAsk, canLoad, onOpenRun }: { item: CheckItem; load: Load | undefined; onAsk: (c: CheckItem) => void; canLoad: boolean; onOpenRun?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
+  const opening = useAction();
   const expandable = !onOpenRun && canLoad && c.state === "failed" && hasLog(c.failing);
   const url = c.url?.startsWith("https://") ? c.url : null;
   const time = c.at ? ago(c.at) : "";
@@ -147,8 +148,9 @@ function CheckRow({ item: c, load, onAsk, canLoad, onOpenRun }: { item: CheckIte
             {[time, took].filter(Boolean).join(" · ")}
           </Text>
         ) : null}
-        <span className="pr-check-open">{url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void wings.openUrl(url)}>Open</Button> : null}</span>
+        <span className="pr-check-open">{url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void opening.run(() => wings.openUrl(url))}>Open</Button> : null}</span>
       </div>
+      {opening.error ? <Text tone="danger" size="small" role="alert" className="pr-check-note">{opening.error}</Text> : null}
       {open ? <FailureBody id={detailId} load={load} /> : null}
     </li>
   );

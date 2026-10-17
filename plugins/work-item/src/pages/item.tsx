@@ -29,6 +29,7 @@ function Item({ args }: { args: ItemArgs }) {
   // The error of loading the work item is the page's error card, and the error of a move shows over the work item.
   const { run: runLoad, error } = useAction();
   const move = useAction();
+  const open = useAction();
 
   const load = useCallback(
     () =>
@@ -57,10 +58,11 @@ function Item({ args }: { args: ItemArgs }) {
             setUpdates({ data: { comments, revisions, feed: discussionOf(comments, revisions) }, error: null });
           })
           .catch((e) => setUpdates({ data: null, error: errorMessage(e) }));
-        const links = pullRequestLinks(shown.relations).slice(0, 10);
+        const links = pullRequestLinks(shown.relations);
         setPrs(links);
+        // Titles for the first ten, one call each; the rest show by number, behind Show all.
         void Promise.all(
-          links.map(async (link): Promise<PrInfo> => {
+          links.slice(0, 10).map(async (link): Promise<PrInfo> => {
             try {
               const pr = await az<{ title?: string; status?: string; repository?: { name?: string } }>(org, invoke("git", "pullRequests", { project, pullRequestId: link.id }));
               return { ...link, title: pr.title, status: pr.status, repo: pr.repository?.name };
@@ -68,7 +70,7 @@ function Item({ args }: { args: ItemArgs }) {
               return link;
             }
           }),
-        ).then(setPrs);
+        ).then((first) => setPrs([...first, ...links.slice(10)]));
       }),
     [runLoad, org, id],
   );
@@ -99,11 +101,11 @@ function Item({ args }: { args: ItemArgs }) {
       updates={updates}
       prs={prs}
       moving={move.busy ? movingTo : null}
-      moveError={move.error}
+      moveError={move.error ?? open.error}
       onMove={onMove}
       onRefresh={() => void load()}
       onOpenItem={(target) => void wings.openView("item", { as: "tab", args: itemTabArgs(target, org) })}
-      onOpenUrl={(url) => void wings.openUrl(url)}
+      onOpenUrl={(url) => void open.run(() => wings.openUrl(url))}
       prUrl={(p) => prUrl(org, project, p.repoId, p.id)}
       workItemUrl={workItemUrl(org, project, id)}
     />

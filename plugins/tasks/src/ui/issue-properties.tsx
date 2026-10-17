@@ -63,6 +63,16 @@ function Branch({ issue, project, apply, send }: { issue: Issue; project: WingsP
   );
 }
 
+/** A commit's sha as a small button that copies it. */
+function Sha({ sha }: { sha: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void copyText(sha).then(() => setCopied(true));
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return <Button size="xs" variant="secondary" className="tk-sha" title={`Copy ${sha}`} aria-label={`Copy commit ${sha}`} onClick={copy}>{copied ? "Copied" : sha}</Button>;
+}
+
 const prLabel = (url: string) => {
   const m = /\/(?:pull|pullrequest|pullrequests|merge_requests)\/(\d+)/.exec(url);
   if (m) return `PR #${m[1]}`;
@@ -186,7 +196,7 @@ export function Properties({ issue, issues, todos = [], project, apply, send, on
       <Prop label="Commits" wide empty={!commits.length}>
         {commits.length ? (
           <Row gap="s" wrap>
-            {commits.map((c) => <Badge key={c} variant="secondary" className="tk-sha">{c}</Badge>)}
+            {commits.map((c) => <Sha key={c} sha={c} />)}
           </Row>
         ) : (
           <Text as="span" tone="muted" size="small">None</Text>

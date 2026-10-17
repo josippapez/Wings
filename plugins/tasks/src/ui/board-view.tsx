@@ -8,7 +8,7 @@ import { iso } from "../lib/format";
 import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings";
 import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
-import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TypeIcon, type Send } from "./parts";
+import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TypeIcon, useScrollIntoView, type Send } from "./parts";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -53,6 +53,9 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
   const lanes = issues && hasParents && byParent && layout === "board" ? boardLanes(issues, showCanceled) : null;
   const [deleting, setDeleting] = useState<string | null>(asking ?? null);
   const doomed = deleting ? issues?.find((i) => i.key === deleting) : undefined;
+  // Both show at the top of the body, and the trash button or arrow that caused them can be far down the board.
+  const errorRef = useScrollIntoView<HTMLDivElement>(error);
+  const confirmRef = useScrollIntoView<HTMLDivElement>(doomed?.key);
 
   const move = (issue: Issue, by: 1 | -1) => {
     const next = FLOW[FLOW.indexOf(issue.status) + by];
@@ -89,9 +92,9 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
         </Toolbar>
       }
     >
-      {error ? <ErrorText className="tk-error">{error}</ErrorText> : null}
+      {error ? <div ref={errorRef}><ErrorText className="tk-error">{error}</ErrorText></div> : null}
       {doomed && issues ? (
-        <div className="tk-confirm-wrap" data-layout={layout}>
+        <div ref={confirmRef} className="tk-confirm-wrap" data-layout={layout}>
           <DeleteConfirm issue={doomed} issues={issues} onCancel={() => setDeleting(null)} onDelete={(children) => apply({ kind: "remove", key: doomed.key, children }).then(() => setDeleting(null))} />
         </div>
       ) : null}

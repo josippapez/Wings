@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
-import { Button, Checkbox, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
+import { Button, Checkbox, Confirm, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
 import { mentionsOn } from "../lib/inbox";
 import { ch } from "../lib/messages";
 import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
@@ -34,6 +34,7 @@ function TokenField({ host }: { host: Host }) {
   const [saved, setSaved] = useState<boolean | null>(null);
   const [value, setValue] = useState("");
   const { run, busy, error } = useAction();
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     void wings.secrets.has(host.secret).then(setSaved);
@@ -56,8 +57,18 @@ function TokenField({ host }: { host: Host }) {
       <Row gap="s">
         <TextInput label={`${host.name} token`} type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} />
         <Button size="sm" busy={busy} disabled={!value.trim()} onClick={() => void change(true)}>Save</Button>
-        {saved ? <Button size="sm" variant="ghost" busy={busy} onClick={() => void change(false)}>Remove</Button> : null}
+        {saved ? <Button size="sm" variant="ghost" busy={busy} onClick={() => setRemoving(true)}>Remove</Button> : null}
       </Row>
+      {removing ? (
+        <Confirm
+          title={`Remove the ${host.name} token?`}
+          cancelLabel="Keep it"
+          onCancel={() => setRemoving(false)}
+          actions={[{ id: "remove", label: "Remove", onConfirm: () => change(false).then((ok) => ok && setRemoving(false)) }]}
+        >
+          <Text size="small">{host.name} pull requests stop showing until you save a token again.</Text>
+        </Confirm>
+      ) : null}
       {error ? <Text tone="danger" role="alert">{error}</Text> : null}
     </Stack>
   );

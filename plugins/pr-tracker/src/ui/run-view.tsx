@@ -3,7 +3,7 @@
 // step's log when the step is picked.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Button, List, ListButton, ListItem, ListDetail, Loading, Text } from "wings-plugin-ui";
+import { Button, List, ListButton, ListItem, ListDetail, Loading, Text, useAction } from "wings-plugin-ui";
 import { durationText } from "../lib/checklist";
 import { parseLog, pickStep, type LogEntry, type LogLine } from "../lib/runlog";
 import type { CheckItem, CheckState, Run, RunStep } from "../lib/types";
@@ -48,6 +48,7 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
   const going = item.state === "running" || item.state === "queued";
   const [run, reloadRun] = useLoad(onLoadRun, [item.id, item.state, going ? version : null]);
   const [picked, setPicked] = useState<string | null>(null);
+  const opening = useAction();
   const steps = useMemo(() => (run?.state === "done" ? run.value.jobs.flatMap((j) => j.steps) : []), [run]);
   const step = steps.find((s) => s.id === picked) ?? pickStep(steps.filter((s) => s.log));
   const [log, reloadLog] = useLoad(step?.log ? () => onLoadLog(step) : null, [step?.id, step?.state, step?.seconds]);
@@ -73,9 +74,10 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
           >
             Refresh
           </Button>
-          {url ? <Button variant="ghost" size="sm" onClick={() => void wings.openUrl(url)}>Open</Button> : null}
+          {url ? <Button variant="ghost" size="sm" onClick={() => void opening.run(() => wings.openUrl(url))}>Open</Button> : null}
         </span>
       </div>
+      {opening.error ? <Text tone="danger" size="small" role="alert">{opening.error}</Text> : null}
       {!run || run.state === "loading" ? <Loading>Loading the run…</Loading> : null}
       {run?.state === "error" ? <Text tone="danger" size="small" role="alert">{run.message}</Text> : null}
       {run?.state === "done" && !run.value.jobs.length ? <Text tone="muted" size="small">{going ? "The run hasn't started any jobs yet." : "This run has no jobs."}</Text> : null}

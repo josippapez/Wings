@@ -76,7 +76,7 @@ function ItemCard({ item, org, showAssignee }: { item: BlockItem; org: string; s
         aria-label={`Open ${item.type} ${item.id}: ${item.title}${showAssignee && item.assignee ? `, assigned to ${item.assignee}` : ""}`}
       >
         <Stack gap="xs">
-          <Text weight="medium" clamp>{item.title}</Text>
+          <Text weight="medium" clamp title={item.title}>{item.title}</Text>
           <Row gap="s">
             <TypeIcon type={item.type} size={14} />
             <Text tone="muted" size="tiny" numeric>#{item.id}</Text>

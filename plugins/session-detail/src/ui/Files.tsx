@@ -21,6 +21,11 @@ export function Files({ sessionId, files }: { sessionId: string; files: [string,
   return (
     <>
       <Heading actions={all}>{`Files edited (${files.length})`}</Heading>
+      {error ? (
+        <Text as="p" tone="danger" role="alert">
+          {error}
+        </Text>
+      ) : null}
       <List>
         {files.map(([path, n]) => (
           <ListItem key={path}>
@@ -33,11 +38,6 @@ export function Files({ sessionId, files }: { sessionId: string; files: [string,
           </ListItem>
         ))}
       </List>
-      {error ? (
-        <Text as="p" tone="danger" role="alert">
-          {error}
-        </Text>
-      ) : null}
     </>
   );
 }

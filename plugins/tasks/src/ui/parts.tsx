@@ -1,6 +1,6 @@
 // Small pieces the Issues pages share.
 
-import type { ComponentProps } from "react";
+import { useEffect, useRef, type ComponentProps } from "react";
 import { Badge, Button, Card, Confirm, Dot, Icon, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
@@ -16,6 +16,15 @@ export type Apply = (op: Op) => Promise<void>;
 /** An error from the last change: in the danger colour, and announced to a screen reader. */
 export function ErrorText(props: Omit<ComponentProps<typeof Text>, "tone" | "role">) {
   return <Text tone="danger" role="alert" {...props} />;
+}
+
+/** A ref for a card or message that appears at the top of a page the user has scrolled down: it scrolls into view when `shown` changes to something truthy. */
+export function useScrollIntoView<T extends HTMLElement>(shown: unknown) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (shown) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [shown]);
+  return ref;
 }
 
 /** How many issues are to do, in progress, in review and done. */
