@@ -1,5 +1,6 @@
 /** Opening a PR's diff in the viewer, from a pane's badge or from a PR tab, and replies typed in it. */
 import { openDiffWhile } from "wings-plugin-sdk/async";
+import { git } from "wings-plugin-sdk/git";
 import { forgeOf } from "../lib/forges/registry";
 import { refOf } from "../lib/providers";
 import type { Link } from "../lib/types";
@@ -30,6 +31,15 @@ export async function openDiffFor(link: Link, options: { title?: string; cwd?: s
     if (loaded?.error) throw new Error(loaded.error);
     const { patch, comments } = await loadDiff(link.url);
     return { patch, comments };
+  });
+}
+
+/** One commit's changes against its first parent, as the forge's commit page shows them, from git in the project's folder. */
+export async function openCommit(link: Link, cwd: string, commit: { sha: string; message: string }) {
+  if (!/^[0-9a-f]{40}$/.test(commit.sha)) throw new Error("That isn't a commit id.");
+  await openDiffWhile({ title: commit.message || commit.sha.slice(0, 7), subtitle: `${link.repo} ${commit.sha.slice(0, 7)}`, cwd }, async () => {
+    await git(cwd, ["fetch", "--quiet", "--end-of-options", "origin", commit.sha]);
+    return { patch: await git(cwd, ["diff", "--no-color", "--no-ext-diff", `${commit.sha}^`, commit.sha], { raw: true }) };
   });
 }
 

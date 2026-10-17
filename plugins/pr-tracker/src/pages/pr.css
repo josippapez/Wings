@@ -385,6 +385,19 @@
   min-width: 0;
   padding: 3px 0;
 }
+.pr-commits > li:has(> .pr-commit) {
+  padding: 0;
+}
+/* A commit that opens its changes: the same row, a button. */
+.w-list-button.pr-commit {
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+  padding: 3px 6px;
+  margin-left: -6px;
+  font-weight: 400;
+}
 .pr-commit-msg {
   flex: 1 1 18em;
   min-width: 0;

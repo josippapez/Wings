@@ -35,9 +35,9 @@ export const ch = channel<
   {
     /**
      * A "pr" tab asks for what only main can do: open the diff viewer that takes replies, find the agent on the branch,
-     * mark the PR read, approve it at the head commit `sha` it showed, or cast an Azure DevOps `vote`.
+     * mark the PR read, approve it at the head commit `sha` it showed, cast an Azure DevOps `vote`, or open one `commit`'s changes.
      */
-    pr: { request: { op: "diff" | "agent" | "seen" | "approve" | "vote"; args: PrArgs; focus?: WingsDiffFocus; sha?: string; vote?: AzureVote }; response: void };
+    pr: { request: { op: "diff" | "agent" | "seen" | "approve" | "vote" | "commit"; args: PrArgs; focus?: WingsDiffFocus; sha?: string; vote?: AzureVote; commit?: { sha: string; message: string } }; response: void };
     /** Posts a reply to a thread, which every tab on the PR then shows. */
     "pr-reply": { request: { args: PrArgs; root: Comment; body: string }; response: Comment };
     /** The lines around a code thread's comment, from the commit it was written on, or with `now` from the latest push. */

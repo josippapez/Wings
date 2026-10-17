@@ -1,8 +1,8 @@
 // The PR tab's page, drawn from what it's given: no loading and no talking to Wings in here, so the same component can be
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Chip, copyText, Empty, Heading, Markdown, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar } from "wings-plugin-ui";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Avatar, Badge, Button, Chip, copyText, Empty, Heading, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
@@ -34,6 +34,8 @@ export interface PrViewProps {
   canReply: boolean;
   onRefresh: () => void;
   onRun: (op: "diff" | "agent", focus?: WingsDiffFocus) => void;
+  /** Opens one commit's changes in the diff viewer. */
+  onCommit?: (commit: { sha: string; message: string }) => void;
   onReply: (root: Comment, body: string) => Promise<void>;
   /** Approves the pull request as you. Absent where the provider's approval can't be sent from here. */
   onApprove?: () => Promise<void>;
@@ -61,7 +63,6 @@ export function PrView(props: PrViewProps) {
   /** Every comment, a bot's too: the Overview tab's count. Pushes are not comments. */
   const people = comments?.length ?? 0;
   const unresolved = useMemo(() => (comments ? comments.filter((c) => c.replyTo === null && !c.system && c.thread?.state === "active").length : null), [comments]);
-  const [menu, setMenu] = useState(false);
   /** What the user picked and has yet to confirm. */
   const [pending, setPending] = useState<{ label: string; run: () => Promise<void> } | null>(null);
   const [approving, setApproving] = useState(false);
@@ -83,10 +84,10 @@ export function PrView(props: PrViewProps) {
       setPending(null);
     }
   };
-  const pick = (choice: { label: string; run: () => Promise<void> }) => {
-    setMenu(false);
-    setPending(choice);
-  };
+  const pick = (choice: { label: string; run: () => Promise<void> }) => setPending(choice);
+  // The card sits under the title: a vote picked while scrolled down brings it into view.
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => confirmRef.current?.scrollIntoView({ block: "nearest" }), [pending]);
 
   const toolbar = (
     <Toolbar
@@ -97,7 +98,17 @@ export function PrView(props: PrViewProps) {
           <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => onRun("agent")}>Send to agent</Button>
           <Button variant="outline" size="sm" onClick={() => void wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
           {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={pending !== null} onClick={() => pick({ label: "Approve", run: onApprove })} data-testid="pr-approve">Approve</Button> : null}
-          {onVote && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={menu} aria-haspopup="true" onClick={() => setMenu((m) => !m)} data-testid="pr-vote">Vote ▾</Button> : null}
+          {onVote && open ? (
+            <Menu
+              label="Vote ▾"
+              variant="outline"
+              size="sm"
+              align="end"
+              disabled={approving}
+              data-testid="pr-vote"
+              items={(Object.keys(AZURE_VOTES) as AzureVote[]).map((v) => ({ id: v, label: AZURE_VOTES[v], onSelect: () => pick({ label: AZURE_VOTES[v], run: () => onVote(v) }) }))}
+            />
+          ) : null}
           <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
         </>
       }
@@ -135,15 +146,8 @@ export function PrView(props: PrViewProps) {
             {st?.updated ? <Text tone="muted" size="small" as="span"><Time iso={st.updated} prefix="updated " /></Text> : null}
           </div>
           {notice ? <Text tone="danger" role="alert">{notice}</Text> : null}
-          {menu && onVote ? (
-            <div className="pr-card pr-confirm" role="menu" aria-label="Vote" data-testid="pr-vote-menu">
-              {(Object.keys(AZURE_VOTES) as AzureVote[]).map((v) => (
-                <Button key={v} size="sm" variant="ghost" role="menuitem" onClick={() => pick({ label: AZURE_VOTES[v], run: () => onVote(v) })}>{AZURE_VOTES[v]}</Button>
-              ))}
-            </div>
-          ) : null}
           {pending ? (
-            <div className="pr-card pr-confirm" role="group" aria-label="Confirm" data-testid="pr-confirm">
+            <div ref={confirmRef} className="pr-card pr-confirm" role="group" aria-label="Confirm" data-testid="pr-confirm">
               <Text>{pending.label} on {ref} as you? Everyone on it sees your vote.</Text>
               <div className="pr-reply-actions">
                 <Button size="sm" busy={approving} onClick={() => void send()}>{pending.label}</Button>
@@ -280,7 +284,7 @@ function PrSkeleton() {
 
 // ---------- overview: description and conversation ----------
 
-function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, onReply, onRun, onSnippet }: PrViewProps & { overview: Overview }) {
+function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, onReply, onRun, onCommit, onSnippet }: PrViewProps & { overview: Overview }) {
   // Pushes and threads share one timeline, the newest first, as Azure DevOps lists them.
   const entries = useMemo(() => (comments ? timelineOf(threadsOf(comments), pushes) : null), [comments, pushes]);
   const [showResolved, setShowResolved] = useState(false);
@@ -306,7 +310,7 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
       ) : (
         <Timeline label="Conversation" data-testid="pr-conversation">
           {entries.map((e) => {
-            if (e.kind === "push") return <PushCard key={`push-${e.push.id}`} push={e.push} />;
+            if (e.kind === "push") return <PushCard key={`push-${e.push.id}`} push={e.push} onCommit={onCommit} />;
             const t = e.thread;
             const kind = kindOf(t);
             return (
@@ -336,7 +340,7 @@ const NO_PUSHES: Push[] = [];
 const COMMITS_SHOWN = 5;
 
 /** A push: one quiet line, then its commits in muted text. Comments are what people read, so this stays small. */
-function PushCard({ push }: { push: Push }) {
+function PushCard({ push, onCommit }: { push: Push; onCommit?: (commit: { sha: string; message: string }) => void }) {
   const [all, setAll] = useState(false);
   const shown = all ? push.commits : push.commits.slice(0, COMMITS_SHOWN);
   const count = `${push.commits.length}${push.more ? "+" : ""}`;
@@ -352,12 +356,13 @@ function PushCard({ push }: { push: Push }) {
         <ul className="pr-commits" aria-label={`Commits in update ${push.id}`}>
           {shown.map((c) => (
             <li key={c.sha}>
-              <span className="pr-commit-msg" title={c.message}>{c.message || "No message"}</span>
-              <span className="pr-commit-meta">
-                <code>{c.sha.slice(0, 7)}</code>
-                <span>{c.author}</span>
-                <time dateTime={c.at} title={when(c.at)}>{dayTime(c.at)}</time>
-              </span>
+              {onCommit ? (
+                <ListButton className="pr-commit" aria-label={`See the changes in ${c.sha.slice(0, 7)}: ${c.message || "No message"}`} onClick={() => onCommit({ sha: c.sha, message: c.message })}>
+                  <CommitLine c={c} />
+                </ListButton>
+              ) : (
+                <CommitLine c={c} />
+              )}
             </li>
           ))}
         </ul>
@@ -366,6 +371,19 @@ function PushCard({ push }: { push: Push }) {
         ) : null}
       </div>
     </li>
+  );
+}
+
+function CommitLine({ c }: { c: Push["commits"][number] }) {
+  return (
+    <>
+      <span className="pr-commit-msg" title={c.message}>{c.message || "No message"}</span>
+      <span className="pr-commit-meta">
+        <code>{c.sha.slice(0, 7)}</code>
+        <span>{c.author}</span>
+        <time dateTime={c.at} title={when(c.at)}>{dayTime(c.at)}</time>
+      </span>
+    </>
   );
 }
 

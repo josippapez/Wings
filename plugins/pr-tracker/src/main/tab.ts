@@ -8,7 +8,7 @@ import { forgeOf, isKnown, linkOf } from "../lib/forges/registry";
 import { ch, type PrKey, type PrValue } from "../lib/messages";
 import type { KnownRemote, Link, PrArgs } from "../lib/types";
 import { render } from "./badges";
-import { openDiffFor } from "./diff";
+import { openCommit, openDiffFor } from "./diff";
 import { answered, explains, shownProblem } from "./problems";
 import { markSeen } from "./projects";
 import { remoteFor } from "./remote";
@@ -98,7 +98,7 @@ export function serveTab() {
   );
 
   /** What only main can do: the diff viewer that takes replies, the agent on the branch, marking the PR read, and approving or voting. */
-  ch.answer("pr", async ({ op, args, focus, sha, vote }) => {
+  ch.answer("pr", async ({ op, args, focus, sha, vote, commit }) => {
     if (op === "seen") {
       folders.set(args.url, args.cwd);
       return markSeen(args.url);
@@ -111,6 +111,7 @@ export function serveTab() {
       return ch.refresh("pr", prKey(args));
     }
     if (op === "diff") return openDiffFor(link, { title: args.title, focus });
+    if (op === "commit") return openCommit(link, args.cwd, commit!);
     // The agent working on this PR's branch: Send to agent in the viewer offers the one in this folder first.
     const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === args.url);
     if (!agent) throw new Error("No agent is working on this branch. Start Claude in a terminal on it, then try again.");

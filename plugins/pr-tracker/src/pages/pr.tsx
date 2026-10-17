@@ -50,6 +50,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
     [args, act],
   );
 
+  const onCommit = useCallback((commit: { sha: string; message: string }) => void act(() => ch.ask("pr", { op: "commit", args, commit })), [args, act]);
+
   const refresh = () => {
     pr.refresh();
     comments.refresh();
@@ -94,6 +96,7 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       canReply={Boolean(overview)}
       onRefresh={refresh}
       onRun={run}
+      onCommit={onCommit}
       onReply={onReply}
       onApprove={can?.approve ? onApprove : undefined}
       onVote={can?.vote ? onVote : undefined}
