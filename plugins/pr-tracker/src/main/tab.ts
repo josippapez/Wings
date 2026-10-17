@@ -132,6 +132,18 @@ export function serveTab() {
     return (await forgeOf(link).snippet?.(link, root, pushes, head, now)) ?? null;
   });
 
+  ch.answer("pr-run", async ({ args, run }) => {
+    const link = await linkOfArgs(args);
+    const forge = forgeOf(link);
+    if (!forge.run) throw new Error("This provider's CI has no run to show here.");
+    return forge.run(link, run);
+  });
+
+  ch.answer("pr-run-log", async ({ args, run, step }) => {
+    const link = await linkOfArgs(args);
+    return forgeOf(link).runLog!(link, run, step);
+  });
+
   /** A failed check's details: the ones the badge fetched ahead, else its own load. */
   ch.answer("pr-failure", async ({ args, failing }) => {
     const ahead = failures.get(args.url)?.byId.get(failing.id);

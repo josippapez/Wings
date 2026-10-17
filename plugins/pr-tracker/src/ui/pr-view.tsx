@@ -9,7 +9,7 @@ import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Threa
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
 import type { Problem } from "../lib/messages";
 import { snippetSpan, type SnippetLine } from "../lib/snippet";
-import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Status } from "../lib/types";
+import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Run, RunRef, RunStep, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
 
 const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
@@ -41,6 +41,9 @@ export interface PrViewProps {
   onVote?: (vote: AzureVote) => Promise<void>;
   /** Why a failed check failed: its log, fetched when its row is opened. */
   onLoadFailure?: (f: Failing) => Promise<FailureDetail[]>;
+  /** A check's run and a step's log, for the Checks tab's run view. */
+  onLoadRun?: (run: RunRef) => Promise<Run>;
+  onLoadRunLog?: (run: RunRef, step: RunStep) => Promise<string[]>;
   /** Goes back to the project's list, when the PR was picked from it in this tab. */
   onBack?: () => void;
   /** The tab to open on, for a fixture; the page opens on the overview. */
@@ -50,7 +53,7 @@ export interface PrViewProps {
 const when = (iso: string) => new Date(iso).toLocaleString();
 
 export function PrView(props: PrViewProps) {
-  const { args, overview, comments, error, problem, problemBusy, onProblem, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onBack } = props;
+  const { args, overview, comments, error, problem, problemBusy, onProblem, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onLoadRun, onLoadRunLog, onBack } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
@@ -188,7 +191,7 @@ export function PrView(props: PrViewProps) {
               ]}
             >
               {tab === "overview" ? <OverviewTab {...props} overview={overview} /> : null}
-              {tab === "checks" ? <div className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} /></div> : null}
+              {tab === "checks" ? <div className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} onLoadRun={onLoadRun} onLoadRunLog={onLoadRunLog} /></div> : null}
               {tab === "files" ? (
                 <div className="pr-card pr-files">
                   <strong>{st.changes ?? "Changed files"}</strong>

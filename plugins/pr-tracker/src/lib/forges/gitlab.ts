@@ -97,6 +97,7 @@ export function glItem(j: GlJob, projectId: number | undefined): CheckItem {
     url: j.web_url,
     note,
     failing: state === "failed" ? { id: j.id, name: j.name, job: j.id, project: projectId, url: j.web_url, summary: j.status === "canceled" ? "Canceled" : null } : undefined,
+    run: projectId ? { job: j.id, project: projectId } : undefined,
   };
 }
 
@@ -335,6 +336,17 @@ export const gitlab: Forge<GitlabLink, GitlabRemote> = {
     if (f.summary) return noLog(f.name, f.summary, f.url);
     const trace = await ran(glab.run(apiArgs(link.remote, `projects/${f.project}/jobs/${f.job}/trace`), { key: keyOf(link.remote.host) }));
     return [detail(f.name, null, cleanLog(trace.split("\n")), [], f.url)];
+  },
+
+  /** A GitLab job has no steps of its own: its log is one, folded by the sections the runner marks. */
+  async run(link, ref) {
+    const j = await api<GlJob>(link.remote, `projects/${ref.project}/jobs/${ref.job}`);
+    const item = glItem(j, ref.project);
+    return { url: j.web_url, jobs: [{ id: String(j.id), name: j.name, stage: null, state: item.state, seconds: item.seconds, steps: [{ id: "log", name: "Job log", state: item.state, seconds: item.seconds, log: "trace" }] }] };
+  },
+
+  async runLog(link, ref) {
+    return (await ran(glab.run(apiArgs(link.remote, `projects/${ref.project}/jobs/${ref.job}/trace`), { key: keyOf(link.remote.host) }))).split("\n");
   },
 
   async reply(link, root, body) {

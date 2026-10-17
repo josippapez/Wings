@@ -485,7 +485,8 @@ h3.w-heading {
 .w-list-detail-body > .w-empty {
   flex: 1;
 }
-.w-list-detail-back {
+/* Above .w-button's display, which comes later in this file. */
+.w-list-detail-detail > .w-list-detail-back {
   display: none;
   align-self: flex-start;
   margin: 8px 8px 0;
@@ -500,7 +501,7 @@ h3.w-heading {
   .w-list-detail:not([data-has-detail]) > .w-list-detail-detail {
     display: none;
   }
-  .w-list-detail-back {
+  .w-list-detail-detail > .w-list-detail-back {
     display: inline-flex;
   }
 }

@@ -670,3 +670,180 @@ button.pr-check-main {
 .pr-snippet-gone {
   padding: 6px 0;
 }
+
+/* A check's run: its jobs and steps beside the picked step's log. */
+.pr-check-go {
+  margin-left: auto;
+  color: var(--wings-muted);
+  font-size: 16px;
+  line-height: 20px;
+}
+.pr-run {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.pr-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.pr-run-name {
+  overflow-wrap: anywhere;
+}
+.pr-run-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.pr-run-split {
+  height: min(72vh, 760px);
+  min-height: 360px;
+  border: 1px solid var(--wings-hairline);
+  border-radius: var(--wings-radius-sm);
+}
+.pr-run-split .w-list-detail-body {
+  padding: 0;
+}
+.pr-run-split .w-list-detail-body > .w-text,
+.pr-run-split .w-list-detail-body > .w-loading {
+  padding: 14px;
+}
+.pr-run-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pr-run-stage {
+  padding: 4px 6px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pr-run-job-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  min-width: 0;
+}
+.pr-run-took {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.pr-run-step {
+  gap: 8px;
+}
+.pr-run-step[aria-current] {
+  background: var(--wings-menu-active, var(--wings-hover));
+}
+.pr-run-step:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pr-run-step-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-run-none {
+  padding: 2px 6px 2px 30px;
+}
+.pr-run-log {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.pr-run-more {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--wings-hairline);
+}
+.pr-log.pr-run-pre {
+  flex: 1;
+  max-height: none;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+}
+.pr-run-line {
+  display: flex;
+  min-width: max-content;
+  padding: 0 12px 0 0;
+}
+button.pr-run-line {
+  justify-content: flex-start;
+  gap: 0;
+  width: 100%;
+  height: auto;
+  padding: 0 12px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.pr-run-line:active {
+  transform: none;
+}
+button.pr-run-line:hover {
+  background: var(--wings-hover);
+}
+button.pr-run-line:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: -2px;
+}
+.pr-run-group .pr-chevron:not([data-open]) {
+  display: inline-block;
+  transform: rotate(-90deg);
+}
+.pr-run-group .pr-run-text {
+  font-weight: 600;
+}
+.pr-run-n {
+  flex: none;
+  width: 5ch;
+  padding-right: 12px;
+  color: var(--wings-muted);
+  text-align: right;
+  user-select: none;
+}
+.pr-run-text {
+  white-space: pre;
+}
+.pr-run-line[data-tone="error"] {
+  background: color-mix(in srgb, var(--wings-danger) 12%, transparent);
+  color: var(--wings-danger);
+}
+.pr-run-line[data-tone="warning"] {
+  background: color-mix(in srgb, var(--wings-warning) 12%, transparent);
+  color: var(--wings-warning);
+}
+.pr-run-line[data-tone="command"] {
+  color: var(--wings-info);
+}
+.pr-run-line[data-tone="section"] {
+  color: var(--wings-success);
+  font-weight: 600;
+}
+.pr-run-line[data-tone="debug"] {
+  color: var(--wings-muted);
+}
+/* ANSI colours, onto the theme's own. */
+.pr-run-text [data-fg="0"], .pr-run-text [data-fg="8"] { color: var(--wings-muted); }
+.pr-run-text [data-fg="1"], .pr-run-text [data-fg="9"] { color: var(--wings-danger); }
+.pr-run-text [data-fg="2"], .pr-run-text [data-fg="10"] { color: var(--wings-success); }
+.pr-run-text [data-fg="3"], .pr-run-text [data-fg="11"] { color: var(--wings-warning); }
+.pr-run-text [data-fg="4"], .pr-run-text [data-fg="12"],
+.pr-run-text [data-fg="6"], .pr-run-text [data-fg="14"] { color: var(--wings-info); }
+.pr-run-text [data-fg="5"], .pr-run-text [data-fg="13"] { color: var(--wings-primary); }
+.pr-run-text [data-fg="7"], .pr-run-text [data-fg="15"] { color: var(--wings-fg); }
+.pr-run-text [data-bold] { font-weight: 700; }
+.pr-run-text [data-dim] { opacity: 0.7; }
+.pr-run-text [data-italic] { font-style: italic; }
+.pr-run-text [data-underline] { text-decoration: underline; }

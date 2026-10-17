@@ -77,6 +77,38 @@ export interface Failing {
   project?: number;
 }
 
+/** Where a check's run is read: an Azure DevOps build, or a GitHub Actions or GitLab job. */
+export interface RunRef {
+  build?: number;
+  job?: string | number;
+  project?: number;
+}
+
+/** One step of a job. `log` is what the forge reads the step's log by, null where the step has none. */
+export interface RunStep {
+  id: string;
+  name: string;
+  state: CheckState;
+  seconds: number | null;
+  log: string | null;
+}
+
+export interface RunJob {
+  id: string;
+  name: string;
+  /** The stage it ran in, where the run has more than one. */
+  stage: string | null;
+  state: CheckState;
+  seconds: number | null;
+  steps: RunStep[];
+}
+
+/** A check's run: its jobs and their steps, and where the provider shows it. */
+export interface Run {
+  jobs: RunJob[];
+  url: string | null;
+}
+
 /** What a check is doing. `skipped` is not run, not applicable or waiting for someone to start it. */
 export type CheckState = "failed" | "running" | "queued" | "passed" | "skipped";
 
@@ -98,6 +130,8 @@ export interface CheckItem {
   note: string | null;
   /** Set where its log can be fetched, which a forge's `failure` takes. */
   failing?: Failing;
+  /** Set where its run's jobs, steps and logs can be read, which a forge's `run` takes. */
+  run?: RunRef;
   /** The page fills the note from what it has loaded: a comment requirement counts the open threads. */
   needs?: "unresolved";
 }

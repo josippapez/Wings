@@ -9,7 +9,7 @@ import type { Cli } from "wings-plugin-sdk/cli";
 import type { Push } from "../pushes";
 import type { SnippetLine } from "../snippet";
 import type { AzureVote } from "../vote";
-import type { Comment, FailureDetail, Failing, Link, ListedPr, Overview, PrArgs, KnownRemote, Status } from "../types";
+import type { Comment, FailureDetail, Failing, Link, ListedPr, Overview, PrArgs, KnownRemote, Run, RunRef, RunStep, Status } from "../types";
 
 /**
  * Why a forge can't be used for this account, which the pane's badge and the Pull requests block say: there is no
@@ -67,6 +67,10 @@ export interface Forge<L extends Link = Link, R extends KnownRemote = KnownRemot
   comments(link: L): Promise<Comment[]>;
   /** Why one failed check failed: its failed step and the end of its log. */
   failure(link: L, f: Failing): Promise<FailureDetail[]>;
+  /** A check's run: its jobs and steps, where the provider's CI has them. */
+  run?(link: L, ref: RunRef): Promise<Run>;
+  /** One step's log as the CI wrote it, colours and markup kept. */
+  runLog?(link: L, ref: RunRef, step: RunStep): Promise<string[]>;
   /** Posts a reply to a thread. */
   reply(link: L, root: Comment, body: string): Promise<Comment>;
   /** Approves as you. `sha` is the head commit you were looking at, which GitLab approves only. Absent where the provider votes instead. */

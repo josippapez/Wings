@@ -3,7 +3,7 @@ import { channel } from "wings-plugin-sdk/messages";
 import type { PullRow } from "./pulls";
 import type { Push } from "./pushes";
 import type { SnippetLine } from "./snippet";
-import type { Comment, Failing, FailureDetail, Overview, PrArgs } from "./types";
+import type { Comment, Failing, FailureDetail, Overview, PrArgs, Run, RunRef, RunStep } from "./types";
 import type { AzureVote } from "./vote";
 
 /** What a block or a tab shows when the host isn't set up, and the label of the button that sets it up. */
@@ -44,6 +44,10 @@ export const ch = channel<
     "pr-snippet": { request: { args: PrArgs; root: Comment; head: string | null; now?: boolean }; response: SnippetLine[] | null };
     /** Why one failed check failed. */
     "pr-failure": { request: { args: PrArgs; failing: Failing }; response: FailureDetail[] };
+    /** A check's run: its jobs and steps. */
+    "pr-run": { request: { args: PrArgs; run: RunRef }; response: Run };
+    /** One step's log, as the CI wrote it. */
+    "pr-run-log": { request: { args: PrArgs; run: RunRef; step: RunStep }; response: string[] };
     /** A block's or a tab's button: what the pane badge's Sign in, Add token or Install does for this project's host. */
     "pulls-action": { request: { path: string }; response: void };
   },

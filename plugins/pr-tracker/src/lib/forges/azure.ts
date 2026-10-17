@@ -9,7 +9,7 @@ import { voteArgs } from "../vote";
 import { post } from "./post";
 import { counts, labelOf, noLog, openOrNewest, orElse, same } from "./shared";
 import { AccountProblem, type Forge } from "./types";
-import type { AzureLink, AzurePr, AzureRemote, CheckItem, CheckState, Comment, Counts, Failing, ListedPr, Result, Reviewer, Status } from "../types";
+import type { AzureLink, AzurePr, AzureRemote, CheckItem, CheckState, Comment, Counts, Failing, ListedPr, Result, Reviewer, Run, RunJob, RunStep, Status } from "../types";
 
 export const az = cli("az", {
   // `az` words a signed-out state in many ways, and every one says `login`.
@@ -38,13 +38,55 @@ interface AzureComment {
   publishedDate: string;
 }
 
-/** A record of a build's timeline. */
+/** A record of a build's timeline: a Stage holds Phases, a Phase holds Jobs, a Job holds Tasks. */
 interface TimelineRecord {
+  id: string;
+  parentId?: string | null;
   type: string;
-  result: string;
+  state?: string;
+  result: string | null;
   name: string;
+  order?: number | null;
+  startTime?: string | null;
+  finishTime?: string | null;
   issues?: { type: string; message?: string }[];
   log?: { id: number } | null;
+}
+
+function recordState(r: TimelineRecord): CheckState {
+  if (r.state === "pending") return "queued";
+  if (r.state === "inProgress") return "running";
+  if (r.result === "skipped") return "skipped";
+  return r.result === "succeeded" || r.result === "succeededWithIssues" ? "passed" : "failed";
+}
+
+const byOrder = (a: TimelineRecord, b: TimelineRecord) => (a.order ?? 0) - (b.order ?? 0) || (a.startTime ?? "").localeCompare(b.startTime ?? "");
+
+/** A build's timeline as its jobs and their tasks, in the order the build page lists them. */
+export function azureRun(records: TimelineRecord[], url: string): Run {
+  const byId = new Map(records.map((r) => [r.id, r]));
+  const stageOf = (r: TimelineRecord) => {
+    for (let p = byId.get(r.parentId ?? ""); p; p = byId.get(p.parentId ?? "")) if (p.type === "Stage") return p;
+    return undefined;
+  };
+  // Every job of a phase has order 1: the phase's order is the one the build page lists them by.
+  const phaseOf = (r: TimelineRecord) => byId.get(r.parentId ?? "") ?? r;
+  const jobs = records.filter((r) => r.type === "Job").sort((a, b) => byOrder(stageOf(a) ?? a, stageOf(b) ?? b) || byOrder(phaseOf(a), phaseOf(b)) || byOrder(a, b));
+  const stages = new Set(jobs.map((j) => stageOf(j)?.id));
+  return {
+    url,
+    jobs: jobs.map((j): RunJob => ({
+      id: j.id,
+      name: j.name,
+      stage: stages.size > 1 ? (stageOf(j)?.name ?? null) : null,
+      state: recordState(j),
+      seconds: between(j.startTime ?? undefined, j.finishTime ?? undefined),
+      steps: records
+        .filter((t) => t.type === "Task" && t.parentId === j.id)
+        .sort(byOrder)
+        .map((t): RunStep => ({ id: t.id, name: t.name, state: recordState(t), seconds: between(t.startTime ?? undefined, t.finishTime ?? undefined), log: t.log ? String(t.log.id) : null })),
+    })),
+  };
 }
 
 interface AzurePolicy {
@@ -161,6 +203,7 @@ export function azureItems(policies: AzurePolicy[], pr: AzurePr, org: string, pr
         note,
         needs,
         failing: state === "failed" && build ? { id: build, name, build } : undefined,
+        run: build ? { build } : undefined,
       };
     });
 }
@@ -410,6 +453,18 @@ export const azure: Forge<AzureLink, AzureRemote> = {
         return detail(f.name, r.name, lines, issues, url);
       }),
     );
+  },
+
+  async run(link, ref) {
+    const { org, project: name } = link.remote;
+    const { records = [] } = ((await invoke(org, "build", "timeline", [`project=${name}`, `buildId=${ref.build}`])) ?? {}) as { records?: TimelineRecord[] };
+    return azureRun(records, `${org}/${encodeURIComponent(name)}/_build/results?buildId=${ref.build}&view=logs`);
+  },
+
+  async runLog(link, ref, step) {
+    const { org, project: name } = link.remote;
+    const out = (await invoke(org, "build", "logs", [`project=${name}`, `buildId=${ref.build}`, `logId=${step.log}`])) as { value?: string[] } | null;
+    return out?.value ?? [];
   },
 
   /** Azure comment ids are `thread * 10000 + comment`, as `azureComments` builds them. */

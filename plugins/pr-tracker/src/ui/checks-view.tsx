@@ -4,7 +4,8 @@
 import { useMemo, useRef, useState } from "react";
 import { ago, Button, Text } from "wings-plugin-ui";
 import { groupChecks, durationText, hasLog, logTail, withUnresolved, type Group, type GroupId } from "../lib/checklist";
-import type { CheckItem, CheckState, FailureDetail, Failing, Status } from "../lib/types";
+import type { CheckItem, CheckState, FailureDetail, Failing, Run, RunRef, RunStep, Status } from "../lib/types";
+import { RunView } from "./run-view";
 
 const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };
 const STATE_MARK: Record<CheckState, string> = { failed: "✕", running: "●", queued: "○", passed: "✓", skipped: "–" };
@@ -14,20 +15,30 @@ interface ChecksViewProps {
   /** Open comment threads, once they have loaded; a comment requirement says how many. */
   unresolved: number | null;
   onLoadFailure?: (f: Failing) => Promise<FailureDetail[]>;
+  /** A check's run, for a check whose CI has jobs and steps to show. */
+  onLoadRun?: (run: RunRef) => Promise<Run>;
+  onLoadRunLog?: (run: RunRef, step: RunStep) => Promise<string[]>;
 }
 
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "done"; details: FailureDetail[] };
 
-export function ChecksView({ status, unresolved, onLoadFailure }: ChecksViewProps) {
+export function ChecksView({ status, unresolved, onLoadFailure, onLoadRun, onLoadRunLog }: ChecksViewProps) {
   const items = useMemo(() => withUnresolved(status.items ?? [], unresolved), [status.items, unresolved]);
   const groups = useMemo(() => groupChecks(items), [items]);
   const [open, setOpen] = useState<Partial<Record<GroupId, boolean>>>({});
   const [loads, setLoads] = useState<Record<string, Load>>({});
   const asked = useRef(new Set<string>());
+  const [opened, setOpened] = useState<string | null>(null);
 
   if (!items.length) {
     const { passed, failed, running } = status.checks;
     return <Text tone="muted">{passed + failed + running ? "This provider didn't list the checks by name." : "No checks reported."}</Text>;
+  }
+
+  const run = items.find((c) => c.id === opened && c.run);
+  if (run?.run && onLoadRun && onLoadRunLog) {
+    const ref = run.run;
+    return <RunView key={run.id} item={run} version={status} onLoadRun={() => onLoadRun(ref)} onLoadLog={(step) => onLoadRunLog(ref, step)} onBack={() => setOpened(null)} />;
   }
 
   // The log belongs to the commit it ran for, so a new push asks again.
@@ -49,7 +60,7 @@ export function ChecksView({ status, unresolved, onLoadFailure }: ChecksViewProp
   return (
     <div className="pr-checks" data-testid="pr-checks-view">
       {groups.map((g) => (
-        <GroupSection key={g.id} group={g} open={open[g.id] ?? (g.id === "failed" || g.id === "active")} onToggle={() => setOpen((o) => ({ ...o, [g.id]: !(o[g.id] ?? (g.id === "failed" || g.id === "active")) }))} loadKey={loadKey} loads={loads} onAsk={ask} canLoad={Boolean(onLoadFailure)} />
+        <GroupSection key={g.id} group={g} open={open[g.id] ?? (g.id === "failed" || g.id === "active")} onToggle={() => setOpen((o) => ({ ...o, [g.id]: !(o[g.id] ?? (g.id === "failed" || g.id === "active")) }))} loadKey={loadKey} loads={loads} onAsk={ask} canLoad={Boolean(onLoadFailure)} onOpenRun={onLoadRun && onLoadRunLog ? setOpened : undefined} />
       ))}
     </div>
   );
@@ -63,9 +74,10 @@ interface SectionProps {
   loads: Record<string, Load>;
   onAsk: (c: CheckItem) => void;
   canLoad: boolean;
+  onOpenRun?: (id: string) => void;
 }
 
-function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad }: SectionProps) {
+function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad, onOpenRun }: SectionProps) {
   const listId = `pr-checks-${group.id}`;
   return (
     <section className="pr-check-group" data-group={group.id} aria-label={group.label}>
@@ -77,7 +89,7 @@ function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad }:
       {open ? (
         <ul id={listId} className="pr-check-list" aria-label={`${group.label} checks`}>
           {group.items.map((c) => (
-            <CheckRow key={c.id} item={c} load={loads[loadKey(c)]} onAsk={onAsk} canLoad={canLoad} />
+            <CheckRow key={c.id} item={c} load={loads[loadKey(c)]} onAsk={onAsk} canLoad={canLoad} onOpenRun={c.run ? onOpenRun : undefined} />
           ))}
         </ul>
       ) : null}
@@ -85,9 +97,9 @@ function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad }:
   );
 }
 
-function CheckRow({ item: c, load, onAsk, canLoad }: { item: CheckItem; load: Load | undefined; onAsk: (c: CheckItem) => void; canLoad: boolean }) {
+function CheckRow({ item: c, load, onAsk, canLoad, onOpenRun }: { item: CheckItem; load: Load | undefined; onAsk: (c: CheckItem) => void; canLoad: boolean; onOpenRun?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
-  const expandable = canLoad && c.state === "failed" && hasLog(c.failing);
+  const expandable = !onOpenRun && canLoad && c.state === "failed" && hasLog(c.failing);
   const url = c.url?.startsWith("https://") ? c.url : null;
   const time = c.at ? ago(c.at) : "";
   const took = durationText(c.seconds);
@@ -104,12 +116,17 @@ function CheckRow({ item: c, load, onAsk, canLoad }: { item: CheckItem; load: Lo
         {c.note ? <Text tone={c.state === "failed" ? "danger" : "muted"} size="small" as="span" className="pr-check-note">{c.note}</Text> : null}
       </span>
       {expandable ? <span aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾</span> : null}
+      {onOpenRun ? <span aria-hidden="true" className="pr-check-go">›</span> : null}
     </>
   );
   return (
     <li className="pr-check" data-state={c.state} data-testid="pr-check">
       <div className="pr-check-row">
-        {expandable ? (
+        {onOpenRun ? (
+          <button type="button" className="pr-check-main" aria-label={`${c.name}: see its jobs, steps and logs`} onClick={() => onOpenRun(c.id)}>
+            {main}
+          </button>
+        ) : expandable ? (
           <button
             type="button"
             className="pr-check-main"

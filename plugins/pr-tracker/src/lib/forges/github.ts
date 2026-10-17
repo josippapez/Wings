@@ -3,10 +3,11 @@ import { cached } from "wings-plugin-sdk/async";
 import { cli } from "wings-plugin-sdk/cli";
 import { between, failingOf, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
+import { stepLines } from "../runlog";
 import { post } from "./post";
 import { counts, labelOf, noLog, orElse, same } from "./shared";
 import type { Forge } from "./types";
-import type { CheckItem, CheckState, Comment, GithubLink, GithubRemote, ListedPr, Failing, Result, Reviewer, Status } from "../types";
+import type { CheckItem, CheckState, Comment, GithubLink, GithubRemote, ListedPr, Failing, Result, Reviewer, Run, RunStep, Status } from "../types";
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
@@ -101,6 +102,36 @@ interface GhDiscussion {
   reviews: { author?: { login?: string }; body: string; submittedAt: string }[];
 }
 
+/** An Actions job from `actions/jobs/{id}`. */
+interface GhJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  html_url?: string | null;
+  steps?: { number: number; name: string; status: string; conclusion: string | null; started_at?: string | null; completed_at?: string | null }[];
+}
+
+function jobState(status: string, conclusion: string | null): CheckState {
+  if (status !== "completed") return status === "in_progress" ? "running" : "queued";
+  if (conclusion === "success" || conclusion === "neutral") return "passed";
+  return conclusion === "skipped" ? "skipped" : "failed";
+}
+
+/** A check run's job and its steps. A step that has started has a log, which `runLog` cuts out of the job's. */
+export function ghRun(j: GhJob): Run {
+  const steps = (j.steps ?? []).map((s): RunStep => ({
+    id: String(s.number),
+    name: s.name,
+    state: jobState(s.status, s.conclusion),
+    seconds: between(s.started_at, s.completed_at),
+    log: s.started_at ? String(s.number) : null,
+  }));
+  return { url: j.html_url ?? null, jobs: [{ id: String(j.id), name: j.name, stage: null, state: jobState(j.status, j.conclusion), seconds: between(j.started_at, j.completed_at), steps }] };
+}
+
 const GH_FAILED = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"];
 const GH_NOTE: Record<string, string> = { TIMED_OUT: "Timed out", CANCELLED: "Cancelled", ACTION_REQUIRED: "Action required", STARTUP_FAILURE: "Failed to start" };
 
@@ -138,6 +169,7 @@ export function ghItem(c: GhCheck, host: string, index = 0): CheckItem {
     url,
     note,
     failing: state === "failed" ? failing : undefined,
+    run: job ? { job } : undefined,
   };
 }
 
@@ -359,6 +391,24 @@ export const github: Forge<GithubLink, GithubRemote> = {
     const cleanup = lines.indexOf("Post job cleanup.");
     if (cleanup >= 0) lines = lines.slice(0, cleanup);
     return [detail(f.name, step ?? null, lines, [], f.url)];
+  },
+
+  async run(link, ref) {
+    const host = hostOf(link.url);
+    return ghRun(await gh.json<GhJob>(apiArgs(host, `repos/${link.repo}/actions/jobs/${ref.job}`), { key: ghKey(host) }));
+  },
+
+  /** Actions keeps one log per job, which is cut into its steps by when each ran. */
+  async runLog(link, ref, step) {
+    const host = hostOf(link.url);
+    const key = ghKey(host);
+    const [job, log] = await Promise.all([
+      gh.json<GhJob>(apiArgs(host, `repos/${link.repo}/actions/jobs/${ref.job}`), { key }),
+      gh.run(apiArgs(host, `repos/${link.repo}/actions/jobs/${ref.job}/logs`, "--allow-escape-sequences"), { key }),
+    ]);
+    const steps = job.steps ?? [];
+    const parts = stepLines(log.split("\n"), steps.map((s) => ({ start: s.started_at ?? null, end: s.completed_at ?? null })));
+    return parts[steps.findIndex((s) => String(s.number) === step.id)] ?? [];
   },
 
   async reply(link, root, body) {

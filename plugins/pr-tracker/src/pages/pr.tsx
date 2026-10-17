@@ -9,7 +9,7 @@ import { prKey, readArgs } from "../lib/args";
 import { ch } from "../lib/messages";
 import type { Push } from "../lib/pushes";
 import type { SnippetLine } from "../lib/snippet";
-import type { Comment, Failing, PrArgs } from "../lib/types";
+import type { Comment, Failing, PrArgs, RunRef, RunStep } from "../lib/types";
 import type { AzureVote } from "../lib/vote";
 import "./pr.css";
 import { PrView } from "../ui/pr-view";
@@ -75,6 +75,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
   );
 
   const onLoadFailure = useCallback((failing: Failing) => ch.ask("pr-failure", { args, failing }), [args]);
+  const onLoadRun = useCallback((run: RunRef) => ch.ask("pr-run", { args, run }), [args]);
+  const onLoadRunLog = useCallback((run: RunRef, step: RunStep) => ch.ask("pr-run-log", { args, run, step }), [args]);
 
   return (
     <PrView
@@ -96,6 +98,8 @@ function Pr({ args, onBack }: { args: PrArgs; onBack?: () => void }) {
       onApprove={can?.approve ? onApprove : undefined}
       onVote={can?.vote ? onVote : undefined}
       onLoadFailure={overview ? onLoadFailure : undefined}
+      onLoadRun={overview ? onLoadRun : undefined}
+      onLoadRunLog={overview ? onLoadRunLog : undefined}
       onBack={onBack}
     />
   );
