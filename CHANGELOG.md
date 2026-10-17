@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.57 · 2026-10-17
+
+- PR tracker 0.22.0: open a build check in the Checks tab to see its run. Jobs and steps with their status and time sit beside the step's log, with the CI's colours, error and warning lines, folded groups and line numbers. Works for Azure DevOps, GitHub Actions and GitLab.
+- plugin-ui's list and detail layout no longer shows its back button when the page is wide enough for both panes.
+
 ## 0.1.56 · 2026-10-16
 
 - **Comments in the diff viewer render as Markdown.** Bold, lists and links work, a `<details>` block is a fold you can open, and `<!-- -->` comments are hidden. A link in a plugin's comment still opens through that plugin's permission.
