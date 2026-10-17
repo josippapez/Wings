@@ -20,10 +20,14 @@ REPO=josippapez/Wings
 # Read the key into the build's environment only. Tauri signs the update archive with it; it is never written elsewhere.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}"
-sh scripts/build-mac-app.sh
 
 DIR="src-tauri/target/release/bundle/macos"
 ARCHIVE="$DIR/Wings.app.tar.gz"
+# The last release's files go first: after a failed build, `gh release create` finds them missing and publishes nothing,
+# instead of uploading the old version under the new tag.
+rm -f "$ARCHIVE" "$ARCHIVE.sig" "$DIR/latest.json" "$DIR/notes.md" "$DIR"/*.wings-plugin
+sh scripts/build-mac-app.sh
+
 [ -f "$ARCHIVE" ] && [ -f "$ARCHIVE.sig" ] || { echo "Build didn't produce $ARCHIVE and its .sig" >&2; exit 1; }
 
 # The updater fetches this file from the latest release, so it names the assets of the release being published.
