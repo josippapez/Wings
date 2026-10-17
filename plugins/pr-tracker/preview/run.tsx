@@ -58,6 +58,8 @@ const never = () => new Promise<never>(() => {});
 export const states = {
   failed: { element: frame(<RunView {...props} />) },
   running: { element: frame(<RunView {...props} item={{ ...item, state: "running", note: null }} onLoadRun={async () => ({ ...run, jobs: run.jobs.map((j) => (j.id === "test" ? { ...j, state: "running" as const, steps: j.steps.map((s) => (s.id === "t3" ? { ...s, state: "running" as const } : s.id === "t4" || s.id === "t5" ? { ...s, state: "queued" as const, log: null } : s)) } : j)) })} onLoadLog={async () => log.slice(0, 20)} />) },
+  // A GitHub job still going: its steps have no log yet.
+  "github-running": { element: frame(<RunView {...props} item={{ ...item, name: "Unit tests", kind: "Workflow", state: "running", note: null }} onLoadRun={async () => ({ url: null, note: "GitHub shows the log once the job finishes.", jobs: [{ id: "j", name: "Unit tests", stage: null, state: "running" as const, seconds: null, steps: [{ ...step("g1", "Set up job", "passed", 2), log: null }, { ...step("g2", "Run npm test", "running", null), log: null }, step("g3", "Post job cleanup", "queued", null)] }] })} />) },
   loading: { element: frame(<RunView {...props} onLoadRun={never} />) },
   error: { element: frame(<RunView {...props} onLoadRun={() => Promise.reject(new Error("az devops invoke failed: TF400813: The user is not authorized to access this resource."))} />) },
 };

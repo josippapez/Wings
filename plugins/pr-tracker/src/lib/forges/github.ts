@@ -120,16 +120,17 @@ function jobState(status: string, conclusion: string | null): CheckState {
   return conclusion === "skipped" ? "skipped" : "failed";
 }
 
-/** A check run's job and its steps. A step that has started has a log, which `runLog` cuts out of the job's. */
+/** A check run's job and its steps. GitHub keeps a job's log only once the job has finished, which `runLog` cuts into its steps. */
 export function ghRun(j: GhJob): Run {
+  const done = j.status === "completed";
   const steps = (j.steps ?? []).map((s): RunStep => ({
     id: String(s.number),
     name: s.name,
     state: jobState(s.status, s.conclusion),
     seconds: between(s.started_at, s.completed_at),
-    log: s.started_at ? String(s.number) : null,
+    log: done && s.started_at ? String(s.number) : null,
   }));
-  return { url: j.html_url ?? null, jobs: [{ id: String(j.id), name: j.name, stage: null, state: jobState(j.status, j.conclusion), seconds: between(j.started_at, j.completed_at), steps }] };
+  return { url: j.html_url ?? null, ...(done ? {} : { note: "GitHub shows the log once the job finishes." }), jobs: [{ id: String(j.id), name: j.name, stage: null, state: jobState(j.status, j.conclusion), seconds: between(j.started_at, j.completed_at), steps }] };
 }
 
 const GH_FAILED = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"];

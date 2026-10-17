@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hasLog } from "../checklist.ts";
-import { ghItem, ghState, ghWho, githubComment, githubConversation, githubListed, githubReviewers, githubStatusOf } from "./github.ts";
+import { ghItem, ghRun, ghState, ghWho, githubComment, githubConversation, githubListed, githubReviewers, githubStatusOf } from "./github.ts";
 
 const pr = (over = {}) => ({
   number: 12, url: "https://github.com/o/r/pull/12", title: "Fix x", state: "OPEN", isDraft: false, reviewDecision: "", mergeable: "MERGEABLE",
@@ -120,4 +120,14 @@ test("two GitHub contexts that share a link and even a name get different ids", 
   const ctx = (context, i) => ghItem({ __typename: "StatusContext", context, state: "SUCCESS", targetUrl: "https://codecov.example/pr/1" }, "github.com", i);
   assert.notEqual(ctx("codecov/patch", 0).id, ctx("codecov/project", 1).id);
   assert.notEqual(ctx("codecov/patch", 0).id, ctx("codecov/patch", 1).id);
+});
+
+test("ghRun gives no step a log until the job finishes, because GitHub has none before", () => {
+  const step = { number: 1, name: "Set up job", status: "completed", conclusion: "success", started_at: "2026-10-17T07:00:00Z", completed_at: "2026-10-17T07:00:02Z" };
+  const running = ghRun({ id: 7, name: "test", status: "in_progress", conclusion: null, steps: [step] });
+  assert.equal(running.jobs[0].steps[0].log, null);
+  assert.match(running.note, /once the job finishes/);
+  const done = ghRun({ id: 7, name: "test", status: "completed", conclusion: "success", steps: [step] });
+  assert.equal(done.jobs[0].steps[0].log, "1");
+  assert.equal(done.note, undefined);
 });

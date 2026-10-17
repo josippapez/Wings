@@ -107,6 +107,8 @@ export interface RunJob {
 export interface Run {
   jobs: RunJob[];
   url: string | null;
+  /** Why no step has a log yet, where the provider says. */
+  note?: string;
 }
 
 /** What a check is doing. `skipped` is not run, not applicable or waiting for someone to start it. */

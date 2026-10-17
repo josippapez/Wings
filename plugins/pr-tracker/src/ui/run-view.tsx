@@ -79,6 +79,7 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
       {!run || run.state === "loading" ? <Loading>Loading the run…</Loading> : null}
       {run?.state === "error" ? <Text tone="danger" size="small" role="alert">{run.message}</Text> : null}
       {run?.state === "done" && !run.value.jobs.length ? <Text tone="muted" size="small">{going ? "The run hasn't started any jobs yet." : "This run has no jobs."}</Text> : null}
+      {run?.state === "done" && run.value.note ? <Text tone="muted" size="small">{run.value.note}</Text> : null}
       {run?.state === "done" && run.value.jobs.length ? (
         <ListDetail
           className="pr-run-split"
