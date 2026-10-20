@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.62 · 2026-10-20
+
+- **Past OpenCode sessions are in History.** They list next to Claude Code's with the agent's icon, search by what was said in them, and Resume runs `opencode --session`. The first load runs in the background and fills in as it goes. `search_history` and `read_session` cover them too.
+
 ## 0.1.61 · 2026-10-20
 
 - **Agents' change journals reach Issues.** `wings journal` is the sink a change journal runs at the end of each turn, and Wings sets itself up as that sink while Claude Code or OpenCode is connected. A sink you set up yourself is left alone.
