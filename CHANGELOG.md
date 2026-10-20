@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.65 · 2026-10-20
+
+- **Running agents show their session title again.** The sidebar showed the name Claude Code makes from the folder, like `wings-ff`, instead of the session's title. The title comes first now, and a generated name is only used when there is neither.
+
 ## 0.1.64 · 2026-10-20
 
 - **Better generated names.** An agent Claude Code named after its folder, like `wings-b3`, now gets a name from its work. A short first prompt is read together with the next ones, and a session with almost nothing in it keeps showing its first prompt instead of a guessed name.
