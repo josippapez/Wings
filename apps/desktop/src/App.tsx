@@ -54,7 +54,7 @@ import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -182,9 +182,6 @@ function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
   }
   return best?.key ?? null;
 }
-
-/** The history lists Claude Code's sessions only, so its ids are checked as Claude's. */
-const isSessionId = (id: string) => isSessionIdOf("claude", id);
 
 export default function App() {
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -391,7 +388,7 @@ const leftPanel = usePanelRef();
       );
     }
   }, [pendingSpaces]);
-  const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.kind === "claude" && a.sessionId ? [a.sessionId] : []))), [agents]);
+  const liveSessionIds = useMemo(() => new Set(agents.flatMap((a) => (a.sessionId ? [a.sessionId] : []))), [agents]);
 
   /** The names you gave panes, kept in their tabs' layouts. */
   const names = useMemo(() => Object.assign({}, ...tabs.map((t) => (isPaneTab(t) ? paneNames(t.layout) : {}))) as Record<string, string>, [tabs]);
@@ -454,8 +451,8 @@ const leftPanel = usePanelRef();
   );
 
   const openTab = useCallback(
-    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null) => {
-      const key = createPane(spaceId, initialInput, sessionId, cwd);
+    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null, kind: SessionKind = "claude") => {
+      const key = createPane(spaceId, initialInput, sessionId, cwd, [], null, kind);
       const id = crypto.randomUUID();
       setTabs((ts) => [...ts, { id, spaceId, layout: pane(key), focusedPane: key, zoomedPane: null }]);
       setActiveTabBySpace((m) => ({ ...m, [spaceId]: id }));
@@ -1209,24 +1206,25 @@ const leftPanel = usePanelRef();
   }
 
   /** Opens a past session where it started, in the project that holds its folder. A new project is added. */
-  async function launchSession(session: { id: string; cwd: string }, fork: boolean) {
-    if (!isSessionId(session.id)) return;
+  async function launchSession(session: { id: string; cwd: string; kind: SessionKind }, fork: boolean) {
+    const line = fork ? forkLine(session.kind, session.id) : resumeLine(session.kind, session.id);
+    if (!isSessionIdOf(session.kind, session.id) || !line) return;
     const holders = spaces.filter((s) => session.cwd === s.path || session.cwd.startsWith(`${s.path}/`));
     const space = holders.sort((a, b) => b.path.length - a.path.length)[0] ?? (await api.spacesAdd(session.cwd));
     setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
     const cd = session.cwd === space.path ? "" : `cd ${shellQuote(session.cwd)} && `;
-    openTab(space.id, cd + (fork ? forkLine("claude", session.id)! : resumeCommand(session.id)), fork ? null : session.id);
+    openTab(space.id, cd + line, fork ? null : session.id, null, session.kind);
   }
 
-  /** Runs `claude --resume` at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
-  function resumeHere(session: { id: string; cwd: string }) {
+  /** Runs the agent's resume command at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
+  function resumeHere(session: { id: string; cwd: string; kind: SessionKind }) {
     const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
     const key = tab && isPaneTab(tab) ? tab.focusedPane : undefined;
     const paneId = key ? panesRef.current[key]?.paneId : null;
     // The line is typed into a terminal, where a control character acts as a key press.
-    if (!key || !paneId || !isSessionId(session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
+    if (!key || !paneId || !isSessionIdOf(session.kind, session.id) || /[\x00-\x1f\x7f]/.test(session.cwd) || !isShellCommand(paneInfo[paneId]?.command)) return;
     const cd = session.cwd === paneInfo[paneId]?.cwd ? "" : `cd ${shellQuote(session.cwd)} && `;
-    void api.paneWrite(paneId, cd + resumeCommand(session.id)).catch((e) => toast.error("Couldn't type the resume command", { description: String(e) }));
+    void api.paneWrite(paneId, cd + resumeLine(session.kind, session.id)).catch((e) => toast.error("Couldn't type the resume command", { description: String(e) }));
     setHistoryOpen(false);
     // The sheet hands focus back to what opened it as it closes, so take it after that.
     setTimeout(() => terminals.get(key)?.focus(), 0);
@@ -1615,7 +1613,7 @@ const leftPanel = usePanelRef();
       const found = await api.historySearch(query, {}, 8);
       return found.sessions.flatMap((h) =>
         h.cwd
-          ? [{ id: `session:${h.id}`, kind: "session" as const, title: h.title ?? h.firstPrompt ?? "Untitled session", subtitle: [h.cwd.split("/").pop(), h.gitBranch, h.lastActive].filter(Boolean).join(" · "), keywords: h.cwd, run: () => void launchSessionRef.current({ id: h.id, cwd: h.cwd! }, false).catch((e) => toast.error("Couldn't resume the session", { description: String(e) })) }]
+          ? [{ id: `session:${h.id}`, kind: "session" as const, title: h.title ?? h.firstPrompt ?? "Untitled session", subtitle: [h.cwd.split("/").pop(), h.gitBranch, h.lastActive].filter(Boolean).join(" · "), keywords: h.cwd, run: () => void launchSessionRef.current({ id: h.id, cwd: h.cwd!, kind: h.agent }, false).catch((e) => toast.error("Couldn't resume the session", { description: String(e) })) }]
           : [],
       );
     },
@@ -1923,9 +1921,9 @@ const leftPanel = usePanelRef();
           open={historyOpen}
           onOpenChange={setHistoryOpen}
           liveSessionIds={liveSessionIds}
-          onResume={(id) => {
+          onResume={({ id, kind }) => {
             setHistoryOpen(false);
-            if (activeSpace && isSessionId(id)) openTab(activeSpace.id, resumeCommand(id), id);
+            if (activeSpace && isSessionIdOf(kind, id)) openTab(activeSpace.id, resumeLine(kind, id), id, null, kind);
           }}
           pane={focusedPaneId ? { idle: isShellCommand(paneInfo[focusedPaneId]?.command) } : null}
           onResumeHere={resumeHere}

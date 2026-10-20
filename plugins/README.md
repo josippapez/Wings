@@ -455,7 +455,7 @@ Wings adds tools of its own to that server, with or without plugins:
 
 | Tool | What it does |
 | --- | --- |
-| `search_history`, `read_session` | Find and read past Claude Code sessions. |
+| `search_history`, `read_session` | Find and read past Claude Code and OpenCode sessions. |
 | `list_sessions` | The open panes: id, project, folder, program and, for Claude, its state (working, blocked, done or idle), what it waits for, session id and name. |
 | `read_pane(pane_id, lines?)` | The last up to 200 lines (32 KB) of a pane's output as plain text. Marked as data, since a pane can print anything. |
 | `open_pane(cwd?, command?, run?)` | A new tab in a project (`cwd` has to be inside one you added), with a command typed in it. With `run`, Wings also presses Enter, but only while "Let Claude run commands in new tabs" is on in Settings, Agents (off by default). The reply says whether it ran. The command can't hold a newline or other control character. Needs Wings 0.1.55. |

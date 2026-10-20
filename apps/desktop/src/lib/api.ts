@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { paneInput } from "./pane-input.ts";
+import type { SessionKind } from "./resume.ts";
 
 export type Space = {
   id: string;
@@ -172,11 +173,13 @@ export type SessionSummary = {
   sizeBytes: number;
 };
 
-/** Where a search matched: a prompt, Claude's reply, or a file the session edited. */
+/** Where a search matched: a prompt, the agent's reply, or a file the session edited. */
 export type HistorySnippet = { role: "user" | "assistant" | "file"; text: string };
 /** A past session from the history search. `cwd` is where it started, so where it resumes. */
 export type HistoryHit = {
   id: string;
+  /** Which agent ran it, so which CLI resumes it. */
+  agent: SessionKind;
   cwd: string | null;
   title: string | null;
   firstPrompt: string | null;
@@ -190,7 +193,13 @@ export type HistoryHit = {
 };
 /** `project` also covers folders inside it, like worktrees. Leave it out to search every project. */
 export type HistoryFilter = { project?: string | null; branch?: string | null; sinceMs?: number | null };
-export type HistoryResults = { sessions: HistoryHit[]; total: number; branches: string[] };
+export type HistoryResults = {
+  sessions: HistoryHit[];
+  total: number;
+  branches: string[];
+  /** OpenCode's sessions are still being fetched, so a search a moment later may find more. */
+  opencodeLoading: boolean;
+};
 
 export const api = {
   spacesList: () => invoke<Space[]>("spaces_list"),

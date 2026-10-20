@@ -31,6 +31,10 @@ const TITLE_PREFIX: &str = "OC | ";
 /// Longer titles are cut to 37 characters and an ellipsis (tui/src/app.tsx in opencode).
 const TITLE_LIMIT: usize = 40;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const HISTORY_TIMEOUT: Duration = Duration::from_secs(20);
+/// ureq's own default.
+const BODY_LIMIT: u64 = 10 * 1024 * 1024;
+const HISTORY_BODY_LIMIT: u64 = 512 * 1024 * 1024;
 /// How many root sessions of a folder are listed to find the pane's by title.
 const LIST_LIMIT: &str = "20";
 const BACKOFF: [u64; 5] = [1, 2, 5, 10, 30];
@@ -141,6 +145,13 @@ fn read_service() -> Result<Service, Error> {
     Service::parse(&text)
 }
 
+/// A client for the service `service.json` names, for the history search. Never starts opencode. A page of
+/// a long session's messages is tens of MB of tool output (78 MB for one session here) and takes the service
+/// up to a second, so a request gets more time and room than the status polling's.
+pub fn connect() -> Result<Client, Error> {
+    read_service().map(|service| Client::with_limits(&service, HISTORY_TIMEOUT, HISTORY_BODY_LIMIT))
+}
+
 // ---- http -----------------------------------------------------------------------------------------------
 
 pub trait Api {
@@ -154,6 +165,8 @@ pub struct Client {
     stream_agent: ureq::Agent,
     base: String,
     auth: Option<Secret>,
+    /// The most bytes read from one answer.
+    max_body: u64,
 }
 
 fn agent(global: Option<Duration>) -> ureq::Agent {
@@ -169,8 +182,12 @@ fn agent(global: Option<Duration>) -> ureq::Agent {
 
 impl Client {
     pub fn new(service: &Service) -> Client {
+        Client::with_limits(service, REQUEST_TIMEOUT, BODY_LIMIT)
+    }
+
+    fn with_limits(service: &Service, timeout: Duration, max_body: u64) -> Client {
         let auth = service.password.as_ref().map(|p| Secret(format!("Basic {}", base64(format!("opencode:{}", p.0).as_bytes()))));
-        Client { agent: agent(Some(REQUEST_TIMEOUT)), stream_agent: agent(None), base: service.url.clone(), auth }
+        Client { agent: agent(Some(timeout)), stream_agent: agent(None), base: service.url.clone(), auth, max_body }
     }
 
     fn request(&self, agent: &ureq::Agent, path: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
@@ -194,7 +211,7 @@ impl Api for Client {
         for (key, value) in query {
             request = request.query(*key, *value);
         }
-        let text = request.call().map_err(from_ureq)?.body_mut().read_to_string().map_err(|_| Error::BadBody)?;
+        let text = request.call().map_err(from_ureq)?.body_mut().with_config().limit(self.max_body).read_to_string().map_err(|_| Error::BadBody)?;
         serde_json::from_str(&text).map_err(|_| Error::BadBody)
     }
 }

@@ -1,8 +1,14 @@
-//! Search over past Claude Code sessions, for the history sheet and the `search_history` and `read_session`
-//! MCP tools. Each transcript is parsed once into its prompts, Claude's replies, title and edited files, which
-//! stay in memory. Transcripts only grow, so every search first re-reads just the bytes appended since.
-//! The format is internal to Claude Code: a line that doesn't parse, or an entry of a type not used here, is
-//! skipped.
+//! Search over past Claude Code and OpenCode sessions, for the history sheet and the `search_history` and
+//! `read_session` MCP tools. Each Claude transcript is parsed once into its prompts, Claude's replies, title
+//! and edited files, which stay in memory. Transcripts only grow, so every search first re-reads just the
+//! bytes appended since. The format is internal to Claude Code: a line that doesn't parse, or an entry of a
+//! type not used here, is skipped.
+//!
+//! OpenCode keeps its sessions in its background service, which `opencode.rs` already finds (it never
+//! starts it, so without one there are no OpenCode sessions). A refresh lists the root sessions and fetches
+//! the messages of those new or changed since (`time.updated`), a few at a time. It runs in the background:
+//! a search never waits for it, it reports `opencodeLoading` while one runs, and the sheet asks again. The
+//! MCP tools do wait, since their caller can't ask again.
 //!
 //! debt: a scan, not an index. On 1,510 transcripts (1.2 GB) the first search parses them all in ~0.5 s on 8
 //! cores, and the app grows by ~85 MB. Then a search takes ~15 ms, ~12 ms of it the refresh's stat of every
@@ -16,14 +22,18 @@ use std::{
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Mutex,
-    time::UNIX_EPOCH,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
-use crate::{claude::project_folder_name, AppState};
+use crate::{
+    claude::project_folder_name,
+    opencode::{self, Api},
+    AppState,
+};
 
 /// Tools whose input names a file the session changed.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -36,9 +46,41 @@ const AFTER: usize = 140;
 const PAGE_BYTES: usize = 40_000;
 const MESSAGE_BYTES: usize = 8_000;
 
+/// OpenCode's service is asked for changes at most this often.
+const OPENCODE_EVERY: Duration = Duration::from_secs(5);
+/// How long an MCP call waits for a refresh already running.
+const OPENCODE_WAIT: Duration = Duration::from_secs(30);
+/// Sessions fetched at once, and the page size of both lists.
+const OPENCODE_WORKERS: usize = 6;
+const OPENCODE_PAGE: &str = "200";
+/// Stops a list whose cursor never ends.
+const OPENCODE_MAX_PAGES: usize = 200;
+
 #[derive(Default)]
 pub struct History {
     index: Mutex<HashMap<PathBuf, Transcript>>,
+    opencode: Mutex<OpenCode>,
+}
+
+/// OpenCode's root sessions, each fetched once and again when its `time.updated` changes.
+#[derive(Default)]
+struct OpenCode {
+    sessions: HashMap<String, Cached>,
+    loading: bool,
+    last: Option<Instant>,
+}
+
+struct Cached {
+    updated: u64,
+    session: Session,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Agent {
+    #[default]
+    Claude,
+    OpenCode,
 }
 
 /// One transcript, parsed up to `offset`. `modified` and `len` are the file's when it was last read.
@@ -67,6 +109,7 @@ struct Message {
 #[derive(Default)]
 struct Session {
     id: String,
+    agent: Agent,
     /// The folder under `projects/`, named after the cwd the session started in.
     folder: String,
     cwd: Option<String>,
@@ -454,6 +497,115 @@ fn refresh(index: &mut HashMap<PathBuf, Transcript>, claude_dir: &Path) {
     *index = kept;
 }
 
+// ---- OpenCode ---------------------------------------------------------------------------------------------
+
+/// `2026-10-01T10:00:05.000Z` for a time in ms since the epoch.
+fn iso(ms: u64) -> String {
+    let (days, rest) = ((ms / 86_400_000) as i64, ms % 86_400_000);
+    // Civil date from a day count (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z", rest / 3_600_000, rest / 60_000 % 60, rest / 1000 % 60, rest % 1000)
+}
+
+fn created(item: &Value) -> Option<String> {
+    item.pointer("/time/created").and_then(Value::as_u64).map(iso)
+}
+
+/// Every page of a list endpoint, in the order the service sends it. The last page's cursor still has a
+/// `next`, so the end is an empty page.
+fn pages(api: &impl Api, path: &str) -> Result<Vec<Value>, opencode::Error> {
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..OPENCODE_MAX_PAGES {
+        // A cursor goes without `order`: the service takes it from the cursor.
+        let mut query = vec![("limit", OPENCODE_PAGE)];
+        if let Some(c) = &cursor {
+            query.push(("cursor", c));
+        }
+        let page = api.get(path, &query)?;
+        let data = page.get("data").and_then(Value::as_array).ok_or(opencode::Error::BadBody)?;
+        if data.is_empty() {
+            break;
+        }
+        items.extend(data.iter().cloned());
+        match page.pointer("/cursor/next").and_then(Value::as_str) {
+            Some(next) if cursor.as_deref() != Some(next) => cursor = Some(next.to_string()),
+            _ => break,
+        }
+    }
+    Ok(items)
+}
+
+/// The root sessions: `(id, time.updated, the session's JSON)`. Child sessions belong to a subagent.
+fn opencode_roots(api: &impl Api) -> Result<Vec<(String, u64, Value)>, opencode::Error> {
+    Ok(pages(api, "/api/session")?
+        .into_iter()
+        .filter(|s| s.get("parentID").is_none_or(Value::is_null))
+        .filter_map(|s| {
+            let id = s.get("id")?.as_str()?.to_string();
+            let updated = s.pointer("/time/updated").and_then(Value::as_u64).unwrap_or(0);
+            Some((id, updated, s))
+        })
+        .collect())
+}
+
+/// What a session holds, from the session's JSON and its messages oldest first. Only what you typed and
+/// the assistant's text count; tool calls, reasoning and notices are left out.
+fn opencode_session(info: &Value, messages: &[Value]) -> Session {
+    let text = |key: &str| info.get(key).and_then(Value::as_str).filter(|t| !t.is_empty()).map(String::from);
+    let mut session = Session {
+        id: text("id").unwrap_or_default(),
+        agent: Agent::OpenCode,
+        cwd: info.pointer("/location/directory").and_then(Value::as_str).filter(|d| !d.is_empty()).map(String::from),
+        ai_title: text("title"),
+        first_time: info.pointer("/time/created").and_then(Value::as_u64).map(iso),
+        last_time: info.pointer("/time/updated").and_then(Value::as_u64).map(iso),
+        ..Session::default()
+    };
+    for item in messages {
+        match item.get("type").and_then(Value::as_str) {
+            Some("user") => {
+                let prompt = item.get("text").and_then(Value::as_str).unwrap_or_default().trim();
+                if !prompt.is_empty() {
+                    session.push(Role::User, prompt, created(item));
+                }
+            }
+            Some("assistant") => {
+                if let Some(model) = item.pointer("/model/id").and_then(Value::as_str) {
+                    push_unique(&mut session.models, model.to_string());
+                }
+                for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
+                    if part.get("type").and_then(Value::as_str) != Some("text") {
+                        continue;
+                    }
+                    let reply = part.get("text").and_then(Value::as_str).unwrap_or_default().trim();
+                    if !reply.is_empty() {
+                        session.reply(reply, created(item));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    session.finish();
+    session
+}
+
+fn opencode_messages(api: &impl Api, id: &str) -> Result<Vec<Value>, opencode::Error> {
+    // Newest first, so the history reads it backwards.
+    let mut messages = pages(api, &format!("/api/session/{id}/message"))?;
+    messages.reverse();
+    Ok(messages)
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Filter {
@@ -474,6 +626,7 @@ pub struct Snippet {
 #[serde(rename_all = "camelCase")]
 pub struct Hit {
     pub id: String,
+    pub agent: Agent,
     pub cwd: Option<String>,
     pub title: Option<String>,
     pub first_prompt: Option<String>,
@@ -495,43 +648,51 @@ pub struct Results {
     pub total: usize,
     /// The branches of the sessions in the project, most recently used first.
     pub branches: Vec<String>,
+    /// OpenCode's sessions are still being fetched, so more may show up on the next search.
+    pub opencode_loading: bool,
 }
 
 impl History {
     pub fn search(&self, claude_dir: &Path, query: &str, filter: &Filter, limit: usize) -> Results {
         let mut index = self.index.lock().unwrap();
         refresh(&mut index, claude_dir);
+        let opencode = self.opencode.lock().unwrap();
         let terms = terms(query);
         let project = filter.project.as_deref().map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty());
-        let mut scope: Vec<&Transcript> =
-            index.values().filter(|t| !t.session.messages.is_empty() && project.is_none_or(|p| t.session.in_project(p))).collect();
-        scope.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.session.id.cmp(&b.session.id)));
+        // Each session with the time it was last active.
+        let mut scope: Vec<(u64, &Session)> = index
+            .values()
+            .map(|t| (t.modified, &t.session))
+            .chain(opencode.sessions.values().map(|c| (c.updated, &c.session)))
+            .filter(|(_, s)| !s.messages.is_empty() && project.is_none_or(|p| s.in_project(p)))
+            .collect();
+        scope.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
         let mut branches = Vec::new();
-        for t in &scope {
-            for branch in t.session.branches.iter().rev() {
+        for (_, s) in &scope {
+            for branch in s.branches.iter().rev() {
                 push_unique(&mut branches, branch.clone());
             }
         }
         branches.truncate(50);
-        let found: Vec<&Transcript> = scope
+        let found: Vec<(u64, &Session)> = scope
             .into_iter()
-            .filter(|t| filter.branch.as_ref().is_none_or(|b| t.session.branches.contains(b)))
-            .filter(|t| filter.since_ms.is_none_or(|since| t.modified >= since))
-            .filter(|t| t.session.matches(&terms))
+            .filter(|(_, s)| filter.branch.as_ref().is_none_or(|b| s.branches.contains(b)))
+            .filter(|(modified, _)| filter.since_ms.is_none_or(|since| *modified >= since))
+            .filter(|(_, s)| s.matches(&terms))
             .collect();
         let sessions = found
             .iter()
             .take(limit)
-            .map(|t| {
-                let s = &t.session;
+            .map(|(modified, s)| {
                 let (matches, snippets) = if terms.is_empty() { (0, Vec::new()) } else { s.snippets(&terms) };
                 Hit {
                     id: s.id.clone(),
+                    agent: s.agent,
                     cwd: s.cwd.clone(),
                     title: s.title().map(String::from),
                     first_prompt: s.first_prompt(),
                     git_branch: s.branches.last().cloned(),
-                    last_active_ms: t.modified,
+                    last_active_ms: *modified,
                     last_active: s.last_time.clone(),
                     messages: s.messages.len(),
                     matches,
@@ -539,14 +700,76 @@ impl History {
                 }
             })
             .collect();
-        Results { sessions, total: found.len(), branches }
+        Results { sessions, total: found.len(), branches, opencode_loading: opencode.loading }
+    }
+
+    /// Claims the next OpenCode refresh: false while one runs or one started within `OPENCODE_EVERY`.
+    pub fn begin_opencode(&self) -> bool {
+        let mut opencode = self.opencode.lock().unwrap();
+        if opencode.loading || opencode.last.is_some_and(|t| t.elapsed() < OPENCODE_EVERY) {
+            return false;
+        }
+        (opencode.loading, opencode.last) = (true, Some(Instant::now()));
+        true
+    }
+
+    /// The refresh `begin_opencode` claimed. Without a running service there is nothing to load.
+    pub fn run_opencode(&self) {
+        match opencode::connect() {
+            Ok(client) => self.refresh_opencode(&client),
+            Err(_) => self.opencode.lock().unwrap().loading = false,
+        }
+    }
+
+    /// A refresh that returns when it's done, for the MCP tools. One already running is waited for.
+    pub fn sync_opencode(&self) {
+        if self.begin_opencode() {
+            return self.run_opencode();
+        }
+        let start = Instant::now();
+        while self.opencode.lock().unwrap().loading && start.elapsed() < OPENCODE_WAIT {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Lists the root sessions, drops the ones that are gone and fetches the new or changed ones, each one
+    /// in the cache as soon as it arrives. A session that fails to load is tried again next time.
+    fn refresh_opencode<A: Api + Sync>(&self, api: &A) {
+        if let Ok(roots) = opencode_roots(api) {
+            let ids: Vec<&str> = roots.iter().map(|(id, _, _)| id.as_str()).collect();
+            let mut work = {
+                let mut opencode = self.opencode.lock().unwrap();
+                opencode.sessions.retain(|id, _| ids.contains(&id.as_str()));
+                roots.iter().filter(|(id, updated, _)| opencode.sessions.get(id).is_none_or(|c| c.updated != *updated)).collect::<Vec<_>>()
+            };
+            // Newest last, since workers pop from the end: what you most likely look for loads first.
+            work.sort_by_key(|(_, updated, _)| *updated);
+            let queue = Mutex::new(work);
+            std::thread::scope(|scope| {
+                for _ in 0..OPENCODE_WORKERS {
+                    scope.spawn(|| loop {
+                        let Some((id, updated, info)) = queue.lock().unwrap().pop() else { break };
+                        let Ok(messages) = opencode_messages(api, id) else { continue };
+                        let session = opencode_session(info, &messages);
+                        self.opencode.lock().unwrap().sessions.insert(id.clone(), Cached { updated: *updated, session });
+                    });
+                }
+            });
+        }
+        self.opencode.lock().unwrap().loading = false;
     }
 
     /// One session's summary and a page of its messages, for `read_session`.
     pub fn read_session(&self, claude_dir: &Path, id: &str, offset: usize, limit: usize) -> Result<Value, String> {
         let mut index = self.index.lock().unwrap();
         refresh(&mut index, claude_dir);
-        let s = index.values().map(|t| &t.session).find(|s| s.id == id).ok_or_else(|| format!("No session {id}"))?;
+        let opencode = self.opencode.lock().unwrap();
+        let s = index
+            .values()
+            .map(|t| &t.session)
+            .find(|s| s.id == id)
+            .or_else(|| opencode.sessions.get(id).map(|c| &c.session))
+            .ok_or_else(|| format!("No session {id}"))?;
         let mut messages = Vec::new();
         let mut used = 0;
         let mut next = offset.min(s.messages.len());
@@ -565,6 +788,7 @@ impl History {
         Ok(json!({
             "session": {
                 "sessionId": s.id,
+                "agent": s.agent,
                 "project": s.cwd,
                 "title": s.title(),
                 "branches": s.branches,
@@ -592,7 +816,11 @@ fn clip(text: &str) -> String {
 }
 
 #[tauri::command(async)]
-pub fn history_search(state: State<AppState>, query: String, filter: Filter, limit: usize) -> Results {
+pub fn history_search(app: AppHandle, state: State<AppState>, query: String, filter: Filter, limit: usize) -> Results {
+    // OpenCode's sessions load in the background, so this search answers with what is there.
+    if state.history.begin_opencode() {
+        std::thread::spawn(move || app.state::<AppState>().history.run_opencode());
+    }
     state.history.search(&state.claude_dir, &query, &filter, limit)
 }
 
@@ -601,7 +829,7 @@ pub fn mcp_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "search_history",
-            "description": "Search past Claude Code sessions on this computer: the prompts, Claude's replies, session titles and the files each session edited. Every word or \"quoted phrase\" has to match, ignoring case. Returns the most recent matches first, with snippets. Read one with read_session.",
+            "description": "Search past Claude Code and OpenCode sessions on this computer: the prompts, the replies, session titles and the files each Claude Code session edited. Every word or \"quoted phrase\" has to match, ignoring case. Returns the most recent matches first, with snippets. Read one with read_session.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -614,7 +842,7 @@ pub fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "read_session",
-            "description": "Read a past Claude Code session found with search_history: a summary, then the prompts and Claude's replies, oldest first. Long sessions come in pages; pass nextOffset back as offset for the next one.",
+            "description": "Read a past Claude Code or OpenCode session found with search_history: a summary, then the prompts and replies, oldest first. Long sessions come in pages; pass nextOffset back as offset for the next one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -642,6 +870,7 @@ pub fn call_tool(history: &History, claude_dir: &Path, name: &str, args: &Value)
                     .map(|h| {
                         json!({
                             "sessionId": h.id,
+                            "agent": h.agent,
                             "project": h.cwd,
                             "title": h.title.or(h.first_prompt),
                             "branch": h.git_branch,
@@ -891,6 +1120,202 @@ mod tests {
         assert!(call("read_session", json!({ "session_id": "nope" })).is_err());
         assert!(call_tool(&history, &dir, "cyclops__start_timer", &json!({})).is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An OpenCode service with fixed sessions. Like the real one, a list's last page still has a `next`.
+    struct FakeService {
+        sessions: Mutex<Vec<Value>>,
+        messages: HashMap<&'static str, Vec<Value>>,
+        fetched: Mutex<Vec<String>>,
+    }
+
+    impl Api for FakeService {
+        fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, opencode::Error> {
+            let next = Some("c1");
+            if query.iter().any(|(k, _)| *k == "cursor") {
+                return Ok(json!({ "data": [], "cursor": { "next": next } }));
+            }
+            if path == "/api/session" {
+                return Ok(json!({ "data": *self.sessions.lock().unwrap(), "cursor": { "next": next } }));
+            }
+            let id = path.strip_prefix("/api/session/").and_then(|p| p.strip_suffix("/message")).ok_or(opencode::Error::Status(404))?;
+            self.fetched.lock().unwrap().push(id.to_string());
+            // The real service sends the newest message first.
+            let mut data = self.messages.get(id).cloned().ok_or(opencode::Error::Status(404))?;
+            data.reverse();
+            Ok(json!({ "data": data, "cursor": { "next": next } }))
+        }
+    }
+
+    fn oc_session(id: &str, dir: &str, updated: u64, title: Option<&str>, parent: Option<&str>) -> Value {
+        let mut s = json!({ "id": id, "location": { "directory": dir }, "time": { "created": 1_790_000_000_000u64, "updated": updated } });
+        if let Some(t) = title {
+            s["title"] = json!(t);
+        }
+        if let Some(p) = parent {
+            s["parentID"] = json!(p);
+        }
+        s
+    }
+
+    fn oc_user(text: &str) -> Value {
+        json!({ "id": "m", "type": "user", "text": text, "time": { "created": 1_790_000_001_000u64 } })
+    }
+
+    fn oc_assistant(parts: Value) -> Value {
+        json!({ "id": "m", "type": "assistant", "model": { "id": "gpt-6", "providerID": "openai" }, "content": parts, "time": { "created": 1_790_000_002_000u64 } })
+    }
+
+    fn fake_opencode() -> FakeService {
+        FakeService {
+            sessions: Mutex::new(vec![
+                oc_session("ses_root1", "/w/app", 1_790_000_900_000, Some("Wire up the MCP config"), None),
+                oc_session("ses_child", "/w/app", 1_790_000_950_000, None, Some("ses_root1")),
+                oc_session("ses_root2", "/w/other", 1_790_000_100_000, None, None),
+                oc_session("ses_empty", "/w/app", 1_790_000_999_000, None, None),
+            ]),
+            messages: HashMap::from([
+                (
+                    "ses_root1",
+                    vec![
+                        json!({ "id": "s", "type": "system", "text": "instructions about mcp-config.json" }),
+                        oc_user("Where is mcp-config.json read?"),
+                        oc_assistant(json!([{ "type": "reasoning", "text": "secret thoughts" }, { "type": "text", "text": "It is read in Config::load." }, { "type": "tool", "name": "read" }, { "type": "text", "text": "Done." }])),
+                        json!({ "id": "i", "type": "idle", "outcome": "succeeded" }),
+                    ],
+                ),
+                ("ses_root2", vec![oc_user("Čakovec release notes")]),
+                ("ses_empty", vec![json!({ "id": "i", "type": "idle" })]),
+            ]),
+            fetched: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn formats_times() {
+        assert_eq!(iso(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso(1_790_000_001_234), "2026-09-21T14:13:21.234Z");
+        assert_eq!(iso(951_782_400_000), "2000-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn parses_an_opencode_session() {
+        let service = fake_opencode();
+        let info = oc_session("ses_root1", "/w/app", 1_790_000_900_000, Some("Wire up the MCP config"), None);
+        let session = opencode_session(&info, &opencode_messages(&service, "ses_root1").unwrap());
+        assert_eq!((session.id.as_str(), session.agent, session.cwd.as_deref(), session.title()), ("ses_root1", Agent::OpenCode, Some("/w/app"), Some("Wire up the MCP config")));
+        assert_eq!(session.models, ["gpt-6"]);
+        let texts: Vec<(Role, &str)> = (0..session.messages.len()).map(|i| (session.messages[i].role, &session.text[session.range(i).0..session.range(i).1])).collect();
+        assert_eq!(
+            texts,
+            [(Role::User, "Where is mcp-config.json read?"), (Role::Assistant, "It is read in Config::load.\n\nDone.")],
+            "oldest first; system notices, reasoning and tool calls are left out"
+        );
+        assert_eq!(session.messages[0].time.as_deref(), Some("2026-09-21T14:13:21.000Z"));
+    }
+
+    #[test]
+    fn searches_opencode_next_to_claude() {
+        let dir = temp_claude_dir("opencode");
+        transcript(&dir, "/w/app", "a", &[user("/w/app", "main", "Fix the config loader"), assistant("Config::load fixed.")]);
+        let service = fake_opencode();
+        let history = History::default();
+        assert!(!history.search(&dir, "", &Filter::default(), 10).opencode_loading);
+        assert!(history.begin_opencode());
+        assert!(history.search(&dir, "", &Filter::default(), 10).opencode_loading, "a refresh is running");
+        assert!(!history.begin_opencode(), "one at a time");
+        history.refresh_opencode(&service);
+
+        let all = history.search(&dir, "", &Filter::default(), 10);
+        assert!(!all.opencode_loading);
+        let ids: Vec<(&str, Agent)> = all.sessions.iter().map(|h| (h.id.as_str(), h.agent)).collect();
+        assert_eq!(ids, [("a", Agent::Claude), ("ses_root1", Agent::OpenCode), ("ses_root2", Agent::OpenCode)], "child and empty sessions are left out");
+        let found = history.search(&dir, "MCP-CONFIG.json", &Filter::default(), 10);
+        assert_eq!(found.sessions.len(), 1, "a system notice is not searched");
+        let hit = &found.sessions[0];
+        assert_eq!((hit.id.as_str(), hit.agent, hit.last_active_ms), ("ses_root1", Agent::OpenCode, 1_790_000_900_000));
+        assert_eq!((hit.snippets[0].role, hit.snippets[0].text.as_str()), (Role::User, "Where is mcp-config.json read?"));
+        let reply = history.search(&dir, "config::load", &Filter::default(), 10);
+        assert_eq!(reply.sessions.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "ses_root1"], "a reply is searched, newest first");
+        assert_eq!(reply.sessions[1].snippets[0].role, Role::Assistant);
+        assert!(history.search(&dir, "secret thoughts", &Filter::default(), 10).sessions.is_empty(), "reasoning is not searched");
+        assert_eq!(history.search(&dir, "wire up", &Filter::default(), 10).sessions.len(), 1, "titles are searched");
+
+        let app = Filter { project: Some("/w/app".into()), ..Filter::default() };
+        assert_eq!(history.search(&dir, "", &app, 10).sessions.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "ses_root1"], "the project filter uses the session's folder");
+        assert!(history.search(&dir, "", &Filter { branch: Some("main".into()), project: Some("/w/other".into()), ..Filter::default() }, 10).sessions.is_empty());
+        assert_eq!(history.search(&dir, "čakovec", &Filter { since_ms: Some(1_790_000_100_000), ..Filter::default() }, 10).total, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refetches_only_changed_opencode_sessions() {
+        let dir = temp_claude_dir("opencode-delta");
+        let service = fake_opencode();
+        let history = History::default();
+        history.refresh_opencode(&service);
+        let mut first = service.fetched.lock().unwrap().clone();
+        first.sort();
+        assert_eq!(first, ["ses_empty", "ses_root1", "ses_root2"], "root sessions only");
+        service.fetched.lock().unwrap().clear();
+        history.refresh_opencode(&service);
+        assert!(service.fetched.lock().unwrap().is_empty(), "nothing changed, nothing fetched");
+
+        service.sessions.lock().unwrap()[2] = oc_session("ses_root2", "/w/other", 1_790_000_200_000, None, None);
+        service.sessions.lock().unwrap().remove(0);
+        history.refresh_opencode(&service);
+        assert_eq!(*service.fetched.lock().unwrap(), ["ses_root2"]);
+        let ids: Vec<String> = history.search(&dir, "", &Filter::default(), 10).sessions.into_iter().map(|h| h.id).collect();
+        assert_eq!(ids, ["ses_root2"], "a session the service no longer lists is dropped");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_an_opencode_session_and_the_mcp_tools_name_the_agent() {
+        let dir = temp_claude_dir("opencode-read");
+        let service = fake_opencode();
+        let history = History::default();
+        history.refresh_opencode(&service);
+        let page = history.read_session(&dir, "ses_root1", 0, 1).unwrap();
+        assert_eq!((page["session"]["agent"].as_str(), page["session"]["project"].as_str(), page["session"]["messages"].as_u64()), (Some("opencode"), Some("/w/app"), Some(2)));
+        assert_eq!((page["messages"][0]["role"].as_str(), page["nextOffset"].as_u64()), (Some("user"), Some(1)));
+        let next = history.read_session(&dir, "ses_root1", 1, 10).unwrap();
+        assert_eq!((next["messages"][0]["text"].as_str(), next["nextOffset"].as_u64()), (Some("It is read in Config::load.\n\nDone."), None));
+        assert!(history.read_session(&dir, "ses_child", 0, 10).is_err());
+        let found: Value = serde_json::from_str(&call_tool(&history, &dir, "search_history", &json!({ "query": "Čakovec" })).unwrap().unwrap()).unwrap();
+        assert_eq!((found["sessions"][0]["sessionId"].as_str(), found["sessions"][0]["agent"].as_str()), (Some("ses_root2"), Some("opencode")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Loads the sessions of the opencode service running on this Mac and prints the timings:
+    /// `cargo test --release live_opencode -- --ignored --nocapture`. It only reads.
+    #[test]
+    #[ignore]
+    fn live_opencode() {
+        let client = opencode::connect().expect("an opencode service is running");
+        let history = History::default();
+        let start = Instant::now();
+        assert!(history.begin_opencode());
+        history.refresh_opencode(&client);
+        println!("first load: {:?}", start.elapsed());
+        let (sessions, messages) = {
+            let oc = history.opencode.lock().unwrap();
+            (oc.sessions.len(), oc.sessions.values().map(|c| c.session.messages.len()).sum::<usize>())
+        };
+        println!("{sessions} root sessions loaded, {messages} messages");
+        let roots = opencode_roots(&client).unwrap().len();
+        println!("{roots} root sessions listed, {} failed to load", roots - sessions);
+        let real = crate::claude::claude_dir();
+        history.search(&real, "", &Filter::default(), 1);
+        for query in ["mcp-config.json", "the", "xyzzy-nowhere"] {
+            let start = Instant::now();
+            let found = history.search(&real, query, &Filter::default(), 100);
+            let opencode = found.sessions.iter().filter(|h| h.agent == Agent::OpenCode).count();
+            println!("search {query:?} over Claude and OpenCode: {:?}, {} sessions ({opencode} OpenCode)", start.elapsed(), found.total);
+        }
+        let start = Instant::now();
+        history.refresh_opencode(&client);
+        println!("repeat refresh with nothing new: {:?}", start.elapsed());
     }
 
     /// Times this Mac's transcripts: `cargo test --release bench_real -- --ignored --nocapture`. It only reads

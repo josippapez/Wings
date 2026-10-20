@@ -21,7 +21,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type HistoryHit, type HistoryResults, type HistorySnippet, type Space } from "@/lib/api";
-import { shellQuote } from "@/lib/resume";
+import { ClaudeIcon } from "@/components/claude-icon";
+import { OpencodeIcon } from "@/components/opencode-icon";
+import { canFork, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
@@ -66,7 +68,16 @@ function Highlight({ text, terms }: { text: string; terms: string[] }) {
   );
 }
 
-const SPEAKER: Record<HistorySnippet["role"], string> = { user: "You", assistant: "Claude", file: "Edited" };
+const AGENT_NAME: Record<SessionKind, string> = { claude: "Claude", opencode: "OpenCode" };
+
+function speaker(role: HistorySnippet["role"], agent: SessionKind) {
+  return role === "user" ? "You" : role === "assistant" ? AGENT_NAME[agent] : "Edited";
+}
+
+function AgentMark({ agent }: { agent: SessionKind }) {
+  const Icon = agent === "opencode" ? OpencodeIcon : ClaudeIcon;
+  return <Icon role="img" aria-label={AGENT_NAME[agent]} className={agent === "opencode" ? "size-3 shrink-0 text-foreground" : "size-3 shrink-0 text-[#d97757]"} />;
+}
 
 export function HistorySheet(props: {
   space: Space | null;
@@ -74,13 +85,13 @@ export function HistorySheet(props: {
   onOpenChange: (open: boolean) => void;
   liveSessionIds: Set<string>;
   /** Resumes a session that started in the current project's folder. */
-  onResume: (sessionId: string) => void;
+  onResume: (session: { id: string; kind: SessionKind }) => void;
   /** Resumes or forks a session that started in `cwd`, which can be another project or a folder inside this one. */
-  onLaunch: (session: { id: string; cwd: string }, fork: boolean) => void;
+  onLaunch: (session: { id: string; cwd: string; kind: SessionKind }, fork: boolean) => void;
   /** The focused pane of the open tab, and whether it sits at a shell prompt. Null with no tab open. */
   pane: { idle: boolean } | null;
   /** Types the resume command into that pane, after a `cd` if it isn't in the session's folder. */
-  onResumeHere: (session: { id: string; cwd: string }) => void;
+  onResumeHere: (session: { id: string; cwd: string; kind: SessionKind }) => void;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("project");
@@ -91,6 +102,8 @@ export function HistorySheet(props: {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // Bumped to search again while OpenCode's sessions load.
+  const [poll, setPoll] = useState(0);
   const latest = useRef(0);
   const space = props.space;
   const project = scope === "project" ? (space?.path ?? null) : null;
@@ -119,11 +132,18 @@ export function HistorySheet(props: {
       query ? 150 : 0,
     );
     return () => clearTimeout(timer);
-  }, [props.open, query, project, branch, since, limit]);
+  }, [props.open, query, project, branch, since, limit, poll]);
+
+  const loadingOpencode = props.open && !!results?.opencodeLoading;
+  useEffect(() => {
+    if (!loadingOpencode) return;
+    const timer = setTimeout(() => setPoll((n) => n + 1), 1000);
+    return () => clearTimeout(timer);
+  }, [loadingOpencode, results]);
 
   const copy = (hit: HistoryHit) => {
     const cwd = hit.cwd ?? space?.path;
-    const command = `${cwd ? `cd ${shellQuote(cwd)} && ` : ""}claude --resume ${hit.id}`;
+    const command = `${cwd ? `cd ${shellQuote(cwd)} && ` : ""}${resumeLine(hit.agent, hit.id).trimEnd()}`;
     void navigator.clipboard.writeText(command).then(() => {
       setCopied(hit.id);
       setTimeout(() => setCopied((id) => (id === hit.id ? null : id)), 1500);
@@ -133,13 +153,13 @@ export function HistorySheet(props: {
   const resume = (hit: HistoryHit, fork: boolean) => {
     const cwd = hit.cwd ?? (scope === "project" ? space?.path : null);
     if (!cwd) return;
-    if (!fork && cwd === space?.path) props.onResume(hit.id);
-    else props.onLaunch({ id: hit.id, cwd }, fork);
+    if (!fork && cwd === space?.path) props.onResume({ id: hit.id, kind: hit.agent });
+    else props.onLaunch({ id: hit.id, cwd, kind: hit.agent }, fork);
   };
 
   const resumeHere = (hit: HistoryHit) => {
     const cwd = hit.cwd ?? (scope === "project" ? space?.path : null);
-    if (cwd) props.onResumeHere({ id: hit.id, cwd });
+    if (cwd) props.onResumeHere({ id: hit.id, cwd, kind: hit.agent });
   };
 
   const where = (hit: HistoryHit) => {
@@ -158,7 +178,7 @@ export function HistorySheet(props: {
           <div className="flex flex-col gap-0.5">
             <SheetTitle>Past sessions</SheetTitle>
             <SheetDescription>
-              {project ? `Claude Code sessions in ${space?.name ?? "this project"}.` : "Claude Code sessions in every project."}
+              {project ? `Claude Code and OpenCode sessions in ${space?.name ?? "this project"}.` : "Claude Code and OpenCode sessions in every project."}
             </SheetDescription>
           </div>
           <ToggleGroup
@@ -189,7 +209,7 @@ export function HistorySheet(props: {
               placeholder="Search prompts, replies, titles, files"
               aria-label="Search past sessions"
             />
-            {searching && sessions && (
+            {(searching || loadingOpencode) && sessions && (
               <InputGroupAddon align="inline-end">
                 <Spinner aria-label="Searching" />
               </InputGroupAddon>
@@ -270,13 +290,13 @@ export function HistorySheet(props: {
                 <EmptyMedia variant="icon">
                   <SearchXIcon aria-hidden />
                 </EmptyMedia>
-                <EmptyTitle>{filtered ? "No session matches" : "No Claude sessions yet"}</EmptyTitle>
+                <EmptyTitle>{filtered ? "No session matches" : "No past sessions yet"}</EmptyTitle>
                 <EmptyDescription>
                   {filtered
                     ? "Every word has to appear in the session. Try fewer words, another branch or a longer time."
                     : project
                       ? "Sessions you run in this project show up here."
-                      : "Sessions you run with Claude Code show up here."}
+                      : "Sessions you run with Claude Code or OpenCode show up here."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -290,10 +310,13 @@ export function HistorySheet(props: {
                 return (
                   <li key={s.id} className="group/session flex items-start gap-2 rounded-lg p-2.5 transition-colors duration-150 hover:bg-hover">
                     <div className="min-w-0 flex-1">
-                      <p title={s.title ?? s.firstPrompt ?? undefined} className="truncate text-sm font-medium">{s.title ?? s.firstPrompt ?? "Untitled session"}</p>
+                      <p title={s.title ?? s.firstPrompt ?? undefined} className="flex items-center gap-1.5 text-sm font-medium">
+                        <AgentMark agent={s.agent} />
+                        <span className="truncate">{s.title ?? s.firstPrompt ?? "Untitled session"}</span>
+                      </p>
                       {snippet ? (
                         <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                          <span className="text-foreground/70">{SPEAKER[snippet.role]}: </span>
+                          <span className="text-foreground/70">{speaker(snippet.role, s.agent)}: </span>
                           <Highlight text={snippet.text} terms={terms} />
                         </p>
                       ) : (
@@ -344,10 +367,12 @@ export function HistorySheet(props: {
                               </TooltipContent>
                             )}
                           </Tooltip>
-                          <DropdownMenuItem disabled={!launchable} onClick={() => resume(s, true)}>
-                            <GitForkIcon aria-hidden />
-                            Fork into a new session
-                          </DropdownMenuItem>
+                          {canFork(s.agent) && (
+                            <DropdownMenuItem disabled={!launchable} onClick={() => resume(s, true)}>
+                              <GitForkIcon aria-hidden />
+                              Fork into a new session
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem closeOnClick={false} onClick={() => copy(s)}>
                             {copied === s.id ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />}
                             {copied === s.id ? "Copied" : "Copy resume command"}

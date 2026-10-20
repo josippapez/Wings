@@ -150,6 +150,10 @@ fn plugin_instructions(app: &AppHandle) -> Vec<String> {
 /// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.
 fn builtin(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<ToolResult> {
     let state = app.state::<AppState>();
+    if matches!(name, "search_history" | "read_session") {
+        // The caller can't ask again later, so OpenCode's sessions are loaded before it searches.
+        state.history.sync_opencode();
+    }
     let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)
         .or_else(|| project_info_tool(app, name, arguments, ppid))
         .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, &|| ppid.and_then(|pid| pane_of(app, pid))))?;
