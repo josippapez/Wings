@@ -1,4 +1,4 @@
-// Agents' todo lists: the `todo` tool's writes, and the card each list shows in the corner of its Claude pane.
+// Agents' todo lists: the `todo` tool's writes, and the card each list shows in the corner of its agent's pane.
 
 import { serial } from "wings-plugin-sdk/async";
 import type { ToolContext } from "wings-plugin-sdk/tools";
@@ -44,7 +44,7 @@ const queue = serial();
 export async function runTodo(context: ToolContext, items: TodoItem[] | undefined, key: string | undefined): Promise<string> {
   const { projectId, projectName, actor } = callerOf(context);
   const session = context.session;
-  if (!session) throw new Error("This call has no Claude session yet, so there is no list to keep. Try again in a moment.");
+  if (!session) throw new Error("This call has no agent session yet, so there is no list to keep. Try again in a moment.");
   return queue(async () => {
     const current = await listOf(projectId, session.id);
     if (!items) return formatTodo(current);
@@ -53,7 +53,7 @@ export async function runTodo(context: ToolContext, items: TodoItem[] | undefine
     if (wanted && !issues.some((i) => i.key === wanted)) throw new Error(`No issue ${wanted} in ${projectName}. Use tasks__list to see the keys.`);
     // Without a key the list stays with its issue, or joins the one this session is already linked to.
     const linked = wanted ?? current?.issueKey ?? issues.filter((i) => i.sessions.some((x) => x.id === session.id)).sort((a, b) => b.updatedAt - a.updatedAt)[0]?.key;
-    const next = withItems(current, { sessionId: session.id, sessionName: session.name ?? undefined, projectId }, items, linked, Date.now());
+    const next = withItems(current, { sessionId: session.id, sessionName: session.name ?? undefined, sessionKind: session.kind, projectId }, items, linked, Date.now());
     if (next !== current) {
       await writeTodo(next);
       lists.set(session.id, next);

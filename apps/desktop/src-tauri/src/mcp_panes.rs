@@ -66,7 +66,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "list_sessions",
-            "description": format!("List the terminal panes open in Wings, with each one's project, folder, running program and, for a pane running Claude Code, its state (working, blocked, done or idle), what it is waiting for, session id and name. thisPane marks the pane you run in. Read one pane's output with read_pane. {CROSS_SESSION}"),
+            "description": format!("List the terminal panes open in Wings, with each one's project, folder, running program and, for a pane running an agent (Claude Code or opencode), its kind, state (working, blocked, done or idle), what it is waiting for, session id and name. thisPane marks the pane you run in. Read one pane's output with read_pane. {CROSS_SESSION}"),
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
@@ -153,8 +153,8 @@ fn list_sessions(host: &dyn Host, caller: Option<&str>) -> Value {
         .into_iter()
         .map(|p| {
             let space = spaces.iter().find(|s| s.id == p.space_id);
-            let claude = agents.iter().find(|a| a.pane_id == p.id).map(|a| {
-                json!({ "state": a.state, "waitingFor": a.waiting_for, "sessionId": a.session_id, "name": a.name })
+            let agent = agents.iter().find(|a| a.pane_id == p.id).map(|a| {
+                json!({ "kind": a.kind, "state": a.state, "waitingFor": a.waiting_for, "sessionId": a.session_id, "name": a.name })
             });
             json!({
                 "paneId": p.id,
@@ -163,7 +163,7 @@ fn list_sessions(host: &dyn Host, caller: Option<&str>) -> Value {
                 "cwd": p.cwd,
                 "program": p.command,
                 "title": p.title,
-                "claude": claude,
+                "agent": agent,
                 "thisPane": caller == Some(p.id.as_str()),
             })
         })
@@ -406,9 +406,9 @@ mod tests {
         let listed: Value = serde_json::from_str(&run(&host, "list_sessions", json!({}), Some("p1")).unwrap()).unwrap();
         let first = &listed["panes"][0];
         assert_eq!((first["paneId"].as_str(), first["project"].as_str(), first["thisPane"].as_bool()), (Some("p1"), Some("app"), Some(true)));
-        assert_eq!(first["claude"], json!({ "state": "blocked", "waitingFor": "approval to run rm", "sessionId": "abc", "name": "refactor" }));
+        assert_eq!(first["agent"], json!({ "kind": "claude", "state": "blocked", "waitingFor": "approval to run rm", "sessionId": "abc", "name": "refactor" }));
         let second = &listed["panes"][1];
-        assert!(second["claude"].is_null() && second["project"].is_null() && second["thisPane"] == json!(false));
+        assert!(second["agent"].is_null() && second["project"].is_null() && second["thisPane"] == json!(false));
     }
 
     #[test]

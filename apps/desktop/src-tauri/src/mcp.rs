@@ -291,7 +291,8 @@ fn hook(app: &AppHandle, input: &Value, ppid: Option<u32>) -> Value {
     let (project, session) = caller_of(app, pane_id.as_deref());
     // The pane's agent may not know its session id yet at startup, but the hook's input always does.
     let session = match input.get("session_id").and_then(Value::as_str) {
-        Some(id) => json!({ "id": id, "name": session.get("name").cloned().unwrap_or(Value::Null) }),
+        // Only Claude Code runs hooks.
+        Some(id) => json!({ "id": id, "name": session.get("name").cloned().unwrap_or(Value::Null), "kind": AgentKind::Claude }),
         None => session,
     };
     let answers: Vec<Value> = thread::scope(|scope| {
@@ -328,12 +329,12 @@ fn merge_hook_answers(event: &str, answers: &[Value]) -> Value {
     Value::Object(out)
 }
 
-/// What a plugin's tool handler is told about who called, besides the pane: that pane's project and the Claude session
-/// running in it. Each is null when there is none: a call from outside Wings' panes has neither, and a pane that isn't
-/// running Claude Code, or whose session has no id yet, has no session.
+/// What a plugin's tool handler is told about who called, besides the pane: that pane's project and the agent session
+/// running in it, with the agent's kind. Each is null when there is none: a call from outside Wings' panes has neither,
+/// and a pane that runs no agent, or whose agent has no session id yet, has no session.
 fn caller(space: Option<&Space>, agent: Option<&Agent>) -> (Value, Value) {
     let project = space.map(|s| json!({ "id": s.id, "name": s.name, "path": s.path }));
-    let session = agent.filter(|a| a.kind == AgentKind::Claude).and_then(|a| a.session_id.as_ref().map(|id| json!({ "id": id, "name": a.name })));
+    let session = agent.and_then(|a| a.session_id.as_ref().map(|id| json!({ "id": id, "name": a.name, "kind": a.kind })));
     (project.unwrap_or(Value::Null), session.unwrap_or(Value::Null))
 }
 
@@ -386,14 +387,16 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_call_carries_the_project_of_its_pane_and_the_claude_session_running_there() {
+    fn a_tool_call_carries_the_project_of_its_pane_and_the_agent_session_running_there() {
         let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None };
         let claude = agent(AgentKind::Claude, Some("abc"), Some("fix totals"));
-        assert_eq!(caller(Some(&web), Some(&claude)), (json!({ "id": "s1", "name": "web", "path": "/work/web" }), json!({ "id": "abc", "name": "fix totals" })));
+        assert_eq!(caller(Some(&web), Some(&claude)), (json!({ "id": "s1", "name": "web", "path": "/work/web" }), json!({ "id": "abc", "name": "fix totals", "kind": "claude" })));
         // A session without a name yet is still a session.
-        assert_eq!(caller(Some(&web), Some(&agent(AgentKind::Claude, Some("abc"), None))).1, json!({ "id": "abc", "name": null }));
-        // No session: Claude Code hasn't written its id yet, another agent runs in the pane, or none does.
-        for without_session in [Some(agent(AgentKind::Claude, None, None)), Some(agent(AgentKind::Opencode, Some("abc"), None)), None] {
+        assert_eq!(caller(Some(&web), Some(&agent(AgentKind::Claude, Some("abc"), None))).1, json!({ "id": "abc", "name": null, "kind": "claude" }));
+        // opencode's session is passed the same way, with its kind.
+        assert_eq!(caller(Some(&web), Some(&agent(AgentKind::Opencode, Some("ses_abc"), Some("plan")))).1, json!({ "id": "ses_abc", "name": "plan", "kind": "opencode" }));
+        // No session: the agent hasn't got its id yet, or no agent runs in the pane.
+        for without_session in [Some(agent(AgentKind::Claude, None, None)), Some(agent(AgentKind::Opencode, None, None)), None] {
             assert_eq!(caller(Some(&web), without_session.as_ref()).1, Value::Null);
         }
         // A call from outside every pane has neither.

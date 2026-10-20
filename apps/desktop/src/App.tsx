@@ -54,7 +54,7 @@ import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { isSessionIdOf, isShellCommand, paneCwds, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeCommand, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -183,9 +183,8 @@ function neighborPane(key: string, dir: "left" | "right" | "up" | "down") {
   return best?.key ?? null;
 }
 
-/** Session ids get typed into a shell, so only accept the UUID shape Claude Code uses. */
+/** The history lists Claude Code's sessions only, so its ids are checked as Claude's. */
 const isSessionId = (id: string) => isSessionIdOf("claude", id);
-const forkCommand = (sessionId: string) => `claude --resume ${sessionId} --fork-session\r`;
 
 export default function App() {
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -1127,7 +1126,7 @@ const leftPanel = usePanelRef();
     pluginHost.current?.publishProjectList();
   }, [spaces, git, activeSpaceId]);
 
-  // Plugins see every pane (with its Claude session, if any); badges go away with their pane.
+  // Plugins see every pane (with its agent's session, if any); badges go away with their pane.
   useEffect(() => {
     const list = Object.values(panes).flatMap((meta) => {
       if (!meta.paneId) return [];
@@ -1141,7 +1140,7 @@ const leftPanel = usePanelRef();
           command: info?.command ?? "",
           project: space?.name ?? "",
           projectId: meta.spaceId,
-          session: agent?.kind === "claude" && agent.sessionId ? { sessionId: agent.sessionId, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
+          session: agent?.sessionId ? { sessionId: agent.sessionId, kind: agent.kind, name: agent.name, state: agent.state, startedAt: agent.startedAt } : null,
           focused: meta.paneId === focusedPaneId,
         },
       ];
@@ -1216,7 +1215,7 @@ const leftPanel = usePanelRef();
     const space = holders.sort((a, b) => b.path.length - a.path.length)[0] ?? (await api.spacesAdd(session.cwd));
     setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
     const cd = session.cwd === space.path ? "" : `cd ${shellQuote(session.cwd)} && `;
-    openTab(space.id, cd + (fork ? forkCommand(session.id) : resumeCommand(session.id)), fork ? null : session.id);
+    openTab(space.id, cd + (fork ? forkLine("claude", session.id)! : resumeCommand(session.id)), fork ? null : session.id);
   }
 
   /** Runs `claude --resume` at the prompt of the open tab's focused pane, after a `cd` if it isn't in the session's folder. */
@@ -1268,7 +1267,8 @@ const leftPanel = usePanelRef();
   }
 
   function forkAgent(agent: Agent) {
-    if (agent.kind === "claude" && agent.sessionId && isSessionId(agent.sessionId)) openTab(agent.spaceId, forkCommand(agent.sessionId));
+    const line = agent.sessionId && isSessionIdOf(agent.kind, agent.sessionId) ? forkLine(agent.kind, agent.sessionId) : null;
+    if (line) openTab(agent.spaceId, line);
   }
 
   function closeAgent(agent: Agent) {

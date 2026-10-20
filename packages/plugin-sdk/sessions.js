@@ -50,7 +50,8 @@ export function followSessions({ create, pane, startRun, backlog, entry, gone, c
 
   const offPanes = w.onPanes((list) => {
     const open = new Set(list.map((p) => p.paneId));
-    const next = new Map(list.filter((p) => p.session).map((p) => [p.paneId, p]));
+    // Only Claude Code writes a transcript. Before Wings 0.1.60 a session had no kind and was always Claude's.
+    const next = new Map(list.filter((p) => p.session && (p.session.kind ?? "claude") === "claude").map((p) => [p.paneId, p]));
     for (const [paneId, id] of panes) {
       if (next.get(paneId)?.session.sessionId === id) continue;
       const t = tracked.get(id);

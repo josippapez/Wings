@@ -4,7 +4,8 @@
 import { Fragment, useState } from "react";
 import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
-import { canParent, LIMITS, type Issue } from "../lib/domain";
+import { AGENT_KINDS, AGENTS } from "../lib/commands";
+import { canParent, LIMITS, type AgentKind, type Issue, type SessionRef } from "../lib/domain";
 import type { TodoList } from "../lib/todo";
 import { Activity, Children, Description } from "./issue-body";
 import { Properties } from "./issue-properties";
@@ -29,8 +30,10 @@ export interface IssueViewProps {
   trail?: string[];
   /** Go back to `trail[index]`. */
   onBackTo?: (index: number) => void;
-  onResume: () => void;
-  onStart: () => void;
+  /** Continues one of the issue's sessions in a new terminal, with the agent it ran in. */
+  onResume: (session: SessionRef) => void;
+  /** Starts an agent on the issue in a new terminal. */
+  onStart: (kind: AgentKind) => void;
   onOpenUrl: (url: string) => void;
   /** Open another issue: `newTab` for a middle-click or Cmd/Ctrl+click. */
   onOpenIssue: (key: string, newTab: boolean) => void;
@@ -77,8 +80,8 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
       actions={
         issue ? (
           <>
-            <Button variant="outline" size="sm" disabled={!lastSession(issue)} onClick={onResume} title={lastSession(issue) ? "Open the latest session in a new terminal" : "No session to resume yet"}>Resume</Button>
-            <Button size="sm" onClick={onStart}>Start agent</Button>
+            <Button variant="outline" size="sm" disabled={!lastSession(issue)} onClick={() => onResume(lastSession(issue)!)} title={lastSession(issue) ? "Open the latest session in a new terminal" : "No session to resume yet"}>Resume</Button>
+            <Menu label="Start agent" size="sm" align="end" items={AGENT_KINDS.map((kind) => ({ id: kind, label: AGENTS[kind].label, onSelect: () => onStart(kind) }))} />
             <Menu label="…" aria-label="More" variant="ghost" size="sm" align="end" items={[{ id: "delete", label: "Delete issue", variant: "destructive", onSelect: () => setConfirming(true) }]} />
           </>
         ) : null
@@ -114,7 +117,7 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
           <header className="tk-head">
             <IssueTitle issue={issue} apply={apply} />
           </header>
-          <Properties issue={issue} issues={issues} todos={todos} project={project} apply={apply} send={send} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
+          <Properties issue={issue} issues={issues} todos={todos} project={project} apply={apply} send={send} onResume={onResume} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
           <div className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}

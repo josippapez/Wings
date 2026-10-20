@@ -25,9 +25,9 @@ function setup(backlog = async () => [], changed) {
     },
     { onPanes: subscribe(on.panes), onTranscript: subscribe(on.transcript) },
   );
-  /** Each pane is `[paneId, sessionId, startedAt]`, or `[paneId]` when no session runs in it. */
+  /** Each pane is `[paneId, sessionId, startedAt, kind]`, or `[paneId]` when no session runs in it. No kind is a session from before Wings 0.1.60. */
   const panes = async (...list) => {
-    on.panes.forEach((fn) => fn(list.map(([paneId, sessionId, startedAt]) => ({ paneId, session: sessionId ? { sessionId, name: null, state: "idle", startedAt } : null }))));
+    on.panes.forEach((fn) => fn(list.map(([paneId, sessionId, startedAt, kind]) => ({ paneId, session: sessionId ? { sessionId, ...(kind ? { kind } : {}), name: null, state: "idle", startedAt } : null }))));
     await settle();
   };
   const write = (sessionId, e) => on.transcript.forEach((fn) => fn({ sessionId, paneId: "p1", entry: e }));
@@ -40,6 +40,13 @@ test("a new session loads its backlog, then follows what Claude writes", async (
   f.write("s1", entry("c"));
   assert.deepEqual(f.log, ["start 1000", "backlog 1000", "old a", "old b", "live c"]);
   assert.deepEqual(f.follow.sessions(), [{ id: "s1" }]);
+});
+
+test("only Claude sessions are followed: an opencode session has no transcript", async () => {
+  const f = setup(async () => [entry("a")]);
+  await f.panes(["p1", "s1", 1000, "claude"], ["p2", "ses_abc12345", 1000, "opencode"]);
+  assert.deepEqual(f.log, ["start 1000", "backlog 1000", "old a"]);
+  assert.deepEqual(f.follow.sessions().map((s) => s.id), ["s1"]);
 });
 
 test("entries written while the backlog loads wait for it, and one that is in both is applied once", async () => {

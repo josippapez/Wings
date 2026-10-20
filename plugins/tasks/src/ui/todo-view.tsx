@@ -2,6 +2,7 @@
 // and the earlier versions behind a disclosure. The tab page feeds it from storage, a fixture from made-up data.
 
 import { Badge, Button, Card, Disclosure, Empty, Loading, Meter, Page, Row, Stack, Text, Time, Title, Toolbar } from "wings-plugin-ui";
+import { AGENTS, kindOf } from "../lib/commands";
 import { iso } from "../lib/format";
 import { counts, itemsOf, type TodoList } from "../lib/todo";
 import type { Issue } from "../lib/domain";
@@ -20,7 +21,7 @@ function Session({ list, issue, onOpenIssue }: { list: TodoList; issue?: Issue; 
   const items = itemsOf(list);
   const { done, total } = counts(items);
   const earlier = list.versions.slice(0, -1).reverse();
-  const name = list.sessionName || "Claude session";
+  const name = list.sessionName || `${AGENTS[kindOf({ kind: list.sessionKind })].label} session`;
   return (
     <Card as="section" aria-label={`Todo of ${name}`} className="tk-todo-card">
       <Row gap="m" justify="between" wrap>

@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { api, pagesOf, type AgentKind, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneRail, type PaneRail } from "@/lib/pane-rail";
@@ -77,7 +77,7 @@ export type DiffView = {
   error?: string;
 };
 
-/** Every terminal pane; `session` is set while Claude runs in it. */
+/** Every terminal pane; `session` is set while an agent (Claude Code or opencode) runs in it. */
 export type PluginPane = {
   paneId: string;
   cwd: string;
@@ -85,7 +85,7 @@ export type PluginPane = {
   project: string;
   /** The id of that project, as `wings.project().id` gives it. */
   projectId: string;
-  session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
+  session: { sessionId: string; kind: AgentKind; name: string | null; state: string; startedAt: number } | null;
   /** The focused pane of the tab on screen. */
   focused: boolean;
 };

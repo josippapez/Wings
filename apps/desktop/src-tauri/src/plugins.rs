@@ -1145,6 +1145,8 @@ pub fn may_use_panes(plugin: &Plugin) -> bool {
 }
 
 const PANE_COMMAND_MAX: usize = 1024;
+/// The agent CLIs whose flags a plugin may pass only when its `panes` entry names them.
+const AGENT_PROGRAMS: [&str; 2] = ["claude", "opencode"];
 /// `openPane` `args` together: room for a prompt that names an issue and says what to do with it.
 const PANE_ARGS_MAX: usize = 4096;
 
@@ -1180,11 +1182,11 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
     if let Some(flag) = words[1..].iter().find(|w| is_unsafe_flag(program, w)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
-    // Claude's flags set its permissions, tools and config (--dangerously-skip-permissions, --permission-mode,
-    // --mcp-config, --settings), so a plugin passes only the ones its entry names.
-    if program == "claude" {
+    // An agent's flags set its permissions, tools and config (claude --dangerously-skip-permissions, --mcp-config,
+    // --settings; opencode --auto, --server), so a plugin passes only the ones its entry names.
+    if AGENT_PROGRAMS.contains(&program) {
         if let Some(flag) = words[entry.len()..].iter().find(|w| w.starts_with('-')) {
-            return Err(format!("{id} may not pass {flag} to claude"));
+            return Err(format!("{id} may not pass {flag} to {program}"));
         }
     }
     if args.iter().map(String::len).sum::<usize>() > PANE_ARGS_MAX {
@@ -2310,6 +2312,13 @@ mod tests {
         assert!(pane_input(&claude, Some("claude"), &args(&[&"a".repeat(5000)])).is_err());
         for flag in ["claude --dangerously-skip-permissions", "claude --permission-mode=bypassPermissions", "claude x --mcp-config=a.json", "claude --resume x --settings=s.json", "claude -p x"] {
             assert!(pane_input(&claude, Some(flag), &[]).unwrap_err().contains("may not pass"), "{flag}");
+        }
+        // opencode the same: its prompt and session, but not --auto (approves every permission) or --server.
+        let opencode = with_panes(Some(&["opencode --prompt", "opencode --session"]));
+        assert_eq!(pane_input(&opencode, Some("opencode --session ses_abc12345"), &[]).unwrap().as_deref(), Some("opencode --session 'ses_abc12345'"));
+        assert_eq!(pane_input(&opencode, Some("opencode --prompt"), &args(&["Continue issue A-1."])).unwrap().as_deref(), Some("opencode --prompt 'Continue issue A-1.'"));
+        for flag in ["opencode --prompt --auto", "opencode --session ses_abc12345 --server=http://x", "opencode --session x -c"] {
+            assert!(pane_input(&opencode, Some(flag), &[]).unwrap_err().contains("may not pass"), "{flag}");
         }
 
         // `[]` allows plain shells only; no `panes` allows nothing, not even focus.

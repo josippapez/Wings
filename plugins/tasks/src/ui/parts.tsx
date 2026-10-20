@@ -3,6 +3,7 @@
 import { useEffect, useRef, type ComponentProps } from "react";
 import { Badge, Button, Card, Confirm, Dot, Icon, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
+import { agentLabel } from "../lib/commands";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
@@ -127,7 +128,7 @@ export const openProps = (open: (newTab: boolean) => void) => ({
 export function SessionMarker({ issue }: { issue: Issue }) {
   const last = lastSession(issue);
   if (!last) return null;
-  return <Badge variant="outline" title={`Claude session ${last.name ?? last.id}`}>{last.name ? (last.name.length > 14 ? `${last.name.slice(0, 13)}…` : last.name) : "Claude"}</Badge>;
+  return <Badge variant="outline" title={`${agentLabel(last)} session ${last.name ?? last.id}`}>{last.name ? (last.name.length > 14 ? `${last.name.slice(0, 13)}…` : last.name) : agentLabel(last)}</Badge>;
 }
 
 /** How many of an epic's or feature's children are done, as a short bar and "3/7". */

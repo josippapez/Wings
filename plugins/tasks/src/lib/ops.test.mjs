@@ -64,6 +64,16 @@ test("agent entries are stamped with the session and the issue records it once, 
   assert.equal(s.issues[0].sessions.length, 2);
 });
 
+test("an issue keeps sessions of different agents side by side, each with its kind", () => {
+  let s = create(fresh(), "A", {}, { id: "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11", name: "claude one", kind: "claude" }, 10).store;
+  s = applyOp(s, { kind: "note", key: "WEB-1", text: "x" }, { id: "ses_abc12345", name: "oc one", kind: "opencode" }, 20).store;
+  assert.deepEqual(s.issues[0].sessions, [
+    { id: "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11", name: "claude one", kind: "claude", seen: 10 },
+    { id: "ses_abc12345", name: "oc one", kind: "opencode", seen: 20 },
+  ]);
+  assert.equal(lastSession(s.issues[0]).kind, "opencode");
+});
+
 test("unknown keys, bad status and bad links are errors that say what is wrong", () => {
   const s = create(fresh(), "A").store;
   assert.throws(() => applyOp(s, { kind: "update", key: "WEB-9", status: "done" }), /No issue WEB-9/);

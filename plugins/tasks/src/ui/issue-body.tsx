@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { Badge, Button, Heading, List, ListButton, ListItem, Markdown, Meter, Row, Stack, Text, Textarea, TextInput, Timeline, TimelineCard, TimelineNote, useAction } from "wings-plugin-ui";
-import { actorName, isClaude } from "../lib/actor";
+import { actorName, isAgent } from "../lib/actor";
+import { agentLabel } from "../lib/commands";
 import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type Issue, type LogEntry } from "../lib/domain";
 import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
@@ -133,7 +134,7 @@ export function Activity({ issue, apply }: { issue: Issue; apply: Apply }) {
       <Timeline label={`Activity on ${issue.key}, newest first`}>
         {entries.map((e, i) =>
           e.kind === "note" ? (
-            <TimelineCard key={`${e.at}-${i}`} author={actorName(e.by)} at={iso(e.at)} tag={!isClaude(e.by) || !e.by.name ? undefined : <Badge variant="outline">Claude</Badge>} clamp>
+            <TimelineCard key={`${e.at}-${i}`} author={actorName(e.by)} at={iso(e.at)} tag={!isAgent(e.by) || !e.by.name ? undefined : <Badge variant="outline">{agentLabel(e.by)}</Badge>} clamp>
               <Markdown source={e.text} />
             </TimelineCard>
           ) : (

@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, motion } from "motion/react";
-import { CircleAlertIcon, CircleArrowUpIcon, CircleCheckIcon, FileArchiveIcon, PuzzleIcon, RefreshCwIcon, TrashIcon } from "lucide-react";
+import { CircleAlertIcon, CircleArrowUpIcon, FileArchiveIcon, PuzzleIcon, RefreshCwIcon, TrashIcon } from "lucide-react";
 
+import { AgentConnections } from "@/components/connections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,9 +14,9 @@ import { Markdown } from "@/components/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { TerminalCommandRow } from "@/components/terminal-command";
+import { TerminalCommandConnection } from "@/components/terminal-command";
 import { PluginNeeds } from "@/components/tool-install";
-import { api, type McpStatus, type OpencodeMcpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
+import { api, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { iconMaskStyle } from "@/lib/plugin-icon-mask";
 import { advance, enqueue } from "@/lib/review-queue";
@@ -169,143 +170,6 @@ function Approve(props: { plugin: PluginView | null; step: { at: number; of: num
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** Wings adds itself to Claude Code when it starts: plugin tools for its sessions, and its status line for plugins. */
-function ClaudeConnect({ open }: { open: boolean }) {
-  const [status, setStatus] = useState<McpStatus | null>(null);
-  const [connecting, setConnecting] = useState<"connect" | "disconnect" | "alwaysLoad" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) void api.mcpStatus().then(setStatus, () => {});
-  }, [open]);
-
-  async function run(action: "connect" | "disconnect" | "alwaysLoad", on = false) {
-    setConnecting(action);
-    setError(null);
-    try {
-      await (action === "connect" ? api.mcpConnect() : action === "disconnect" ? api.mcpDisconnect() : api.mcpSetAlwaysLoad(on));
-      setStatus(await api.mcpStatus());
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setConnecting(null);
-    }
-  }
-  const connected = status?.connected && status.statusline;
-
-  if (!status) return null;
-  return (
-    <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
-      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
-        <div className="min-w-0 flex-1 basis-80">
-          <p className="flex items-center gap-1.5 text-[13px] font-medium">
-            Claude Code
-            {connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
-          </p>
-          <p className="text-[12px] leading-snug text-muted-foreground">
-            {!status.claude
-              ? "Install Claude Code to give it plugin tools."
-              : connected
-                ? "Its sessions get plugin tools, and plugins get its usage numbers. Your own status line still shows."
-                : "Connect it so its sessions get plugin tools and plugins get its usage numbers. Your own status line keeps showing."}
-          </p>
-        </div>
-        {status.claude && (
-          <Button variant={connected ? "outline" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
-            {connecting === "connect" && <Spinner />}
-            {connected ? "Reconnect" : "Connect"}
-          </Button>
-        )}
-        {(status.connected || status.statusline) && (
-          <Button variant="ghost" size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("disconnect")}>
-            {connecting === "disconnect" && <Spinner />}
-            Disconnect
-          </Button>
-        )}
-      </div>
-      {status.connected && (
-        <div className="flex items-start gap-3 pt-1">
-          <label htmlFor="mcp-always-load" className="min-w-0 flex-1">
-            <span className="block text-[13px]">Load Wings tools at session start</span>
-            <span className="block text-[12px] leading-snug text-muted-foreground">
-              Claude sees every plugin tool from the first message, instead of only when something tells it to look. Takes more of its context. New sessions only.
-            </span>
-          </label>
-          {connecting === "alwaysLoad" && <Spinner className="mt-1 size-3.5 text-muted-foreground" aria-label="Working" />}
-          <Switch id="mcp-always-load" checked={status.alwaysLoad} disabled={connecting !== null} onCheckedChange={(on) => void run("alwaysLoad", on)} className="mt-1" />
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="text-[12px] text-blocked">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Wings adds itself to OpenCode's global config when it starts, so its sessions get plugin tools. */
-function OpencodeConnect({ open }: { open: boolean }) {
-  const [status, setStatus] = useState<OpencodeMcpStatus | null>(null);
-  const [connecting, setConnecting] = useState<"connect" | "disconnect" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) void api.opencodeMcpStatus().then(setStatus, () => {});
-  }, [open]);
-
-  async function run(action: "connect" | "disconnect") {
-    setConnecting(action);
-    setError(null);
-    try {
-      await (action === "connect" ? api.opencodeMcpConnect() : api.opencodeMcpDisconnect());
-      setStatus(await api.opencodeMcpStatus());
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setConnecting(null);
-    }
-  }
-
-  if (!status) return null;
-  return (
-    <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
-      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
-        <div className="min-w-0 flex-1 basis-80">
-          <p className="flex items-center gap-1.5 text-[13px] font-medium">
-            OpenCode
-            {status.connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
-          </p>
-          <p className="text-[12px] leading-snug text-muted-foreground">
-            {!status.opencode
-              ? "Install OpenCode to give it plugin tools."
-              : status.connected
-                ? "Its sessions get plugin tools."
-                : "Connect it so its sessions get plugin tools."}
-          </p>
-        </div>
-        {status.opencode && (
-          <Button variant={status.connected ? "outline" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
-            {connecting === "connect" && <Spinner />}
-            {status.connected ? "Reconnect" : "Connect"}
-          </Button>
-        )}
-        {status.connected && (
-          <Button variant="ghost" size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("disconnect")}>
-            {connecting === "disconnect" && <Spinner />}
-            Disconnect
-          </Button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="text-[12px] text-blocked">
-          {error}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -508,10 +372,10 @@ export function PluginsSection(props: {
           )}
         </AnimatePresence>
       </div>
-      <div className="shrink-0 [&>div]:px-6">
-        <ClaudeConnect open />
-        <OpencodeConnect open />
-        <TerminalCommandRow open />
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-hairline px-6 py-2.5" role="group" aria-label="Connections">
+        <span className="mr-1 text-[12px] font-medium text-muted-foreground">Connections</span>
+        <AgentConnections open />
+        <TerminalCommandConnection open />
       </div>
 
       <div className="flex min-h-0 flex-1">

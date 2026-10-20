@@ -53,7 +53,8 @@ async function findForPane(pane: WingsPane, local: boolean) {
   if (!isKnown(remote)) return null;
   // A Claude pane's PR is the one Claude Code recorded, for a forge whose links come from there.
   const forge = forgeFor(remote);
-  if (pane.session && forge.fromSession) {
+  // Only Claude Code records one: an opencode session has no transcript. Wings before 0.1.60 sends no kind.
+  if (pane.session && (pane.session.kind ?? "claude") === "claude" && forge.fromSession) {
     const { sessionId } = pane.session;
     if (!sessionLinks.has(sessionId)) sessionLinks.set(sessionId, await forge.fromSession(sessionId));
     const link = sessionLinks.get(sessionId);

@@ -1,4 +1,6 @@
-// An agent's own step list for a piece of work: one list per Claude session, with the earlier versions kept. Nothing here touches Wings.
+// An agent's own step list for a piece of work: one list per agent session, with the earlier versions kept. Nothing here touches Wings.
+
+import type { AgentKind } from "./domain";
 
 export type TodoStatus = "pending" | "in_progress" | "done";
 export interface TodoItem {
@@ -13,6 +15,7 @@ export interface TodoVersion {
 export interface TodoList {
   sessionId: string;
   sessionName?: string;
+  sessionKind?: AgentKind;
   projectId: string;
   /** The issue the list belongs to. */
   issueKey?: string;
@@ -35,12 +38,12 @@ export const currentStep = (items: TodoItem[]): TodoItem | undefined => items.fi
 export const stepsLeft = (list: TodoList): number => itemsOf(list).filter((i) => i.status !== "done").length;
 
 /** `list` with `items` as its newest version, or `list` itself when they are the list's items already. */
-export function withItems(list: TodoList | null, who: { sessionId: string; sessionName?: string; projectId: string }, items: TodoItem[], issueKey: string | undefined, now: number): TodoList {
+export function withItems(list: TodoList | null, who: { sessionId: string; sessionName?: string; sessionKind?: AgentKind; projectId: string }, items: TodoItem[], issueKey: string | undefined, now: number): TodoList {
   const base: TodoList = list ?? { ...who, updatedAt: now, versions: [] };
   const same = JSON.stringify(itemsOf(base)) === JSON.stringify(items);
   if (list && same && (issueKey ?? list.issueKey) === list.issueKey) return list;
   const versions = same ? base.versions : [...base.versions, { at: now, items }].slice(-TODO_LIMITS.versions);
-  return { ...base, ...(who.sessionName ? { sessionName: who.sessionName } : {}), ...(issueKey ? { issueKey } : {}), updatedAt: now, versions };
+  return { ...base, ...(who.sessionName ? { sessionName: who.sessionName } : {}), ...(who.sessionKind ? { sessionKind: who.sessionKind } : {}), ...(issueKey ? { issueKey } : {}), updatedAt: now, versions };
 }
 
 /** The list as text for Claude. */

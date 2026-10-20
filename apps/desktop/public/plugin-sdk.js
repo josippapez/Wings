@@ -184,7 +184,7 @@
   }
 
   window.wings = Object.freeze({
-    /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` is set while Claude runs, `focused` on the focused pane of the tab on screen. Called on every change. */
+    /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` (`{ sessionId, kind, name, state, startedAt }`, `kind` `"claude"` or `"opencode"`) is set while an agent runs, `focused` on the focused pane of the tab on screen. Called on every change. */
     onPanes: (listener) => {
       const off = subscribe(listeners.panes, listener);
       if (panes) queueMicrotask(() => { try { listener(panes); } catch (error) { console.error(error); } });
@@ -209,9 +209,9 @@
     onAction: (listener) => subscribe(listeners.action, listener),
     /**
      * Handles calls to one of the manifest's `contributes.mcpTools`, from the main script. `handler(input, { paneId, project, session })`
-     * gets the arguments Claude sent and returns a string or a JSON value, or a promise of one. `paneId` is the
-     * Wings pane Claude runs in, `project` that pane's `{ id, name, path }` and `session` the Claude session running
-     * in it, `{ id, name }`; each is `null` when there is none.
+     * gets the arguments the agent sent and returns a string or a JSON value, or a promise of one. `paneId` is the
+     * Wings pane the agent runs in, `project` that pane's `{ id, name, path }` and `session` the agent session running
+     * in it, `{ id, name, kind }` with `kind` `"claude"` or `"opencode"`; each is `null` when there is none.
      */
     onTool: (name, handler) => void tools.set(name, handler),
     /**

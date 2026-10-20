@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
-import { isShellCommand, paneCwds, resumeCommand, shellQuote } from "./resume.ts";
+import { canFork, forkLine, isShellCommand, paneCwds, resumeCommand, resumeLine, shellQuote } from "./resume.ts";
 
 const id = "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d";
 
@@ -51,4 +51,12 @@ test("paneCwds keeps each pane's live folder, and the saved one for a pane whose
   };
   const info = { p1: { cwd: "/repo/packages/plugin-ui" }, p3: { cwd: null } };
   assert.deepEqual(paneCwds(panes, info), { ui: "/repo/packages/plugin-ui", sdk: "/repo/packages/plugin-sdk" });
+});
+
+test("each agent resumes with its own CLI, and only Claude Code forks", () => {
+  const id = "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11";
+  assert.equal(resumeLine("opencode", "ses_abc12345", ["--model", "x"]), "opencode --session ses_abc12345\r");
+  assert.equal(forkLine("claude", id), `claude --resume ${id} --fork-session\r`);
+  assert.equal(forkLine("opencode", "ses_abc12345"), null);
+  assert.deepEqual([canFork("claude"), canFork("opencode")], [true, false]);
 });

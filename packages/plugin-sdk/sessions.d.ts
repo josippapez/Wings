@@ -2,7 +2,7 @@
 /** A `claude` process in a pane, as the pane's `session` gives it. A resumed session is a new run, with a later `startedAt`. */
 export type SessionRun = NonNullable<WingsPane["session"]>;
 
-/** A pane that runs a Claude session. */
+/** A pane that runs a Claude session: `followSessions` skips other agents' sessions, which have no transcript. */
 export type SessionPane = WingsPane & { session: SessionRun };
 
 export interface FollowSessionsOptions<S> {

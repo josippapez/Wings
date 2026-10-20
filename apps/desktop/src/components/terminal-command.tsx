@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { CircleCheckIcon } from "lucide-react";
 
+import { Connection } from "@/components/connections";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
@@ -95,8 +95,8 @@ export function TerminalCommandPrompt() {
   );
 }
 
-/** The same choice in the Plugins sheet, for later or after Wings moved. */
-export function TerminalCommandRow({ open }: { open: boolean }) {
+/** The same choice in the Plugins section, as a chip, for later or after Wings moved. */
+export function TerminalCommandConnection({ open }: { open: boolean }) {
   const [status, setStatus] = useState<CliStatus | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,39 +119,31 @@ export function TerminalCommandRow({ open }: { open: boolean }) {
 
   if (!status?.available) return null;
   return (
-    <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
-      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
-        <div className="min-w-0 flex-1 basis-80">
-          <p className="flex items-center gap-1.5 text-[13px] font-medium">
-            Terminal command
-            {status.installed && <CircleCheckIcon className="size-3.5 text-done" aria-label="Added" />}
-          </p>
-          <p className="text-[12px] leading-snug text-muted-foreground">
-            {!status.installed ? (
-              "Add a wings command, so scripts and Claude can install plugins."
-            ) : status.onPath ? (
-              <>
-                Run <code className="font-mono">wings plugin</code> in any terminal.
-              </>
-            ) : (
-              <>
-                It's in ~/.local/bin, which isn't on your PATH. Add <code className="font-mono select-all">{pathLine}</code> to your shell profile.
-              </>
-            )}
-          </p>
-        </div>
-        {!status.installed && (
-          <Button variant="secondary" size="sm" className="h-7 shrink-0" disabled={adding} onClick={() => void add()}>
-            {adding && <Spinner />}
+    <Connection
+      name="Terminal command"
+      state={!status.installed ? "off" : status.onPath ? "connected" : "partly"}
+      busy={adding}
+      error={error}
+      summary={
+        !status.installed ? (
+          "Add a wings command, so scripts and Claude can install plugins."
+        ) : status.onPath ? (
+          <>
+            Run <code className="font-mono">wings plugin</code> in any terminal.
+          </>
+        ) : (
+          <>
+            It's in ~/.local/bin, which isn't on your PATH. Add <code className="font-mono select-all">{pathLine}</code> to your shell profile.
+          </>
+        )
+      }
+      actions={
+        !status.installed && (
+          <Button variant="secondary" size="sm" className="h-7" disabled={adding} onClick={() => void add()}>
             Add
           </Button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="text-[12px] text-blocked">
-          {error}
-        </p>
-      )}
-    </div>
+        )
+      }
+    />
   );
 }

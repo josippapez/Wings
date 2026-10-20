@@ -7,23 +7,36 @@ export function shellQuote(arg: string) {
   return `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
-/** The line typed into a restored pane: `claude --resume <id>` and the flags the session was started with. */
-export function resumeCommand(sessionId: string, args: readonly string[] = []) {
-  // The line is typed into a terminal, where a control character acts as a key press, so those flags stay out.
-  const flags = args.some((a) => /[\x00-\x1f\x7f]/.test(a)) ? [] : args;
-  return ["claude", "--resume", ...[sessionId, ...flags].map(shellQuote)].join(" ") + "\r";
-}
-
 /** Which agent CLI a session belongs to. */
 export type SessionKind = "claude" | "opencode";
 
-/** Session ids get typed into a shell, so only the shapes the CLIs use are accepted: Claude Code's UUID, opencode's `ses_…`. */
-export const isSessionIdOf = (kind: SessionKind, id: string) => (kind === "claude" ? /^[0-9a-f-]{36}$/i.test(id) : /^ses_[A-Za-z0-9]{8,}$/.test(id));
+/**
+ * How each agent CLI continues a session, as argv. Adding an agent is an entry here. `sessionId` is the shape of its
+ * ids, which get typed into a shell, so nothing else is accepted. `fork` is left out when the CLI has no fork.
+ */
+const CLIS: Record<SessionKind, { sessionId: RegExp; resume: (id: string, flags: readonly string[]) => string[]; fork?: (id: string) => string[] }> = {
+  // `--resume` plus the flags the session was started with.
+  claude: { sessionId: /^[0-9a-f-]{36}$/i, resume: (id, flags) => ["claude", "--resume", id, ...flags], fork: (id) => ["claude", "--resume", id, "--fork-session"] },
+  // `opencode --help`: `--session` continues a session. It keeps no start flags worth carrying over.
+  opencode: { sessionId: /^ses_[A-Za-z0-9]{8,}$/, resume: (id) => ["opencode", "--session", id] },
+};
 
-/** The line that continues a session in its pane's shell. opencode: `opencode --session <id>` (`opencode --help`). */
+export const isSessionIdOf = (kind: SessionKind, id: string) => CLIS[kind].sessionId.test(id);
+
+/** The line that continues a session in its pane's shell, with the flags it was started with where the CLI takes them. */
 export function resumeLine(kind: SessionKind, sessionId: string, args: readonly string[] = []) {
-  return kind === "claude" ? resumeCommand(sessionId, args) : `opencode --session ${shellQuote(sessionId)}\r`;
+  // The line is typed into a terminal, where a control character acts as a key press, so those flags stay out.
+  const flags = args.some((a) => /[\x00-\x1f\x7f]/.test(a)) ? [] : args;
+  return CLIS[kind].resume(sessionId, flags).map(shellQuote).join(" ") + "\r";
 }
+
+/** The line typed into a restored pane: `claude --resume <id>` and the flags the session was started with. */
+export const resumeCommand = (sessionId: string, args: readonly string[] = []) => resumeLine("claude", sessionId, args);
+
+/** Whether the agent can copy a session into a new one. */
+export const canFork = (kind: SessionKind) => !!CLIS[kind].fork;
+/** The line that starts a copy of a session, or null when the agent can't fork. */
+export const forkLine = (kind: SessionKind, sessionId: string) => CLIS[kind].fork?.(sessionId).map(shellQuote).join(" ").concat("\r") ?? null;
 
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh"]);
 

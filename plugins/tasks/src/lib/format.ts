@@ -1,10 +1,11 @@
 // An issue as text for Claude: what the tools answer with. And the one way a page turns a time into the ISO string `Time` takes.
 
 import { PRIORITY_LABEL, STATUS_LABEL, keyNumber, canParent, hasContent, type Actor, type Issue, type IssueType, type Status } from "./domain";
+import { agentLabel } from "./commands";
 import { blocksOf, childrenOf, progress } from "./relations";
 import { matchesQuery } from "./search";
 
-const who = (by: Actor) => (by === "you" ? "you" : by === "git" ? "git" : by.name || "Claude");
+const who = (by: Actor) => (by === "you" ? "you" : by === "git" ? "git" : by.name || agentLabel(by));
 /** A time as an ISO string, for the `Time` component. */
 export const iso = (ms: number) => new Date(ms).toISOString();
 /** A time for Claude, to the minute. */
@@ -46,7 +47,7 @@ export function formatIssue(i: Issue, all: Issue[] = []): string {
   if (!l) lines.push("  (none)");
   lines.push("", "Sessions:");
   if (!i.sessions.length) lines.push("  (none)");
-  for (const s of i.sessions) lines.push(`  ${s.id}${s.name ? ` "${s.name}"` : ""} last seen ${stamp(s.seen)}`);
+  for (const s of i.sessions) lines.push(`  ${agentLabel(s)} ${s.id}${s.name ? ` "${s.name}"` : ""} last seen ${stamp(s.seen)}`);
   lines.push("", `Log (${i.log.length}, oldest first):`);
   if (i.log.length > GET_LOG) lines.push(`  (${i.log.length - GET_LOG} earlier entries left out)`);
   for (const e of i.log.slice(-GET_LOG)) lines.push(`  ${stamp(e.at)} ${who(e.by)} ${e.kind}: ${e.text.replace(/\n/g, "\n    ")}`);

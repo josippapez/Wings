@@ -4,7 +4,8 @@
 import { useState } from "react";
 import { Badge, Button, Combobox, copyText, InlineInput, Row, Select, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
-import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type Priority, type Status } from "../lib/domain";
+import { agentLabel } from "../lib/commands";
+import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL, TYPES, type Issue, type Priority, type SessionRef, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
 import { itemsOf, type TodoList } from "../lib/todo";
 import { blocksOf, parentChoices } from "../lib/relations";
@@ -166,7 +167,7 @@ function Links({ issue, issues, send, onOpenIssue }: { issue: Issue; issues: Iss
   );
 }
 
-export function Properties({ issue, issues, todos = [], project, apply, send, onOpenUrl, onOpenIssue }: { issue: Issue; todos?: TodoList[]; issues: Issue[]; project: WingsProject; apply: Apply; send: Send; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
+export function Properties({ issue, issues, todos = [], project, apply, send, onResume, onOpenUrl, onOpenIssue }: { issue: Issue; todos?: TodoList[]; issues: Issue[]; project: WingsProject; apply: Apply; send: Send; onResume: (session: SessionRef) => void; onOpenUrl: (url: string) => void; onOpenIssue: (key: string, newTab: boolean) => void }) {
   const last = lastSession(issue);
   const commits = issue.links?.commits ?? [];
   const todoOf = (sessionId: string) => todos.find((t) => t.sessionId === sessionId);
@@ -206,19 +207,26 @@ export function Properties({ issue, issues, todos = [], project, apply, send, on
         {issue.sessions.length === 0 ? (
           <Text as="span" tone="muted" size="small">None yet</Text>
         ) : (
-          <ul className="tk-sessions" aria-label="Claude sessions">
-            {[...issue.sessions].sort((a, b) => b.seen - a.seen).map((s) => (
-              <li key={s.id} className="tk-session">
-                <Row gap="s">
-                  <Text as="span" size="small" truncate>{s.name || "Claude session"}</Text>
-                  {s.id === last?.id ? <Badge variant="outline">Latest</Badge> : null}
-                </Row>
-                <Text as="span" tone="muted" size="tiny">
-                  <span className="tk-sha" title={s.id}>{s.id.slice(0, 8)}</span> · <Time iso={iso(s.seen)} prefix="seen " />
-                </Text>
-                {todoOf(s.id) ? <TodoItems items={itemsOf(todoOf(s.id)!)} label={`Steps of ${s.name || "Claude session"}`} /> : null}
-              </li>
-            ))}
+          <ul className="tk-sessions" aria-label="Agent sessions">
+            {[...issue.sessions].sort((a, b) => b.seen - a.seen).map((s) => {
+              // An unnamed session goes by its agent, so the line under it doesn't name the agent twice.
+              const name = s.name || agentLabel(s);
+              return (
+                <li key={s.id} className="tk-session">
+                  <Row gap="s" justify="between">
+                    <Row gap="s">
+                      <Text as="span" size="small" truncate>{name}</Text>
+                      {s.id === last?.id ? <Badge variant="outline">Latest</Badge> : null}
+                    </Row>
+                    <Button variant="ghost" size="xs" aria-label={`Resume ${name}`} title={`Open this ${agentLabel(s)} session in a new terminal`} onClick={() => onResume(s)}>Resume</Button>
+                  </Row>
+                  <Text as="span" tone="muted" size="tiny">
+                    {s.name ? `${agentLabel(s)} · ` : ""}<span className="tk-sha" title={s.id}>{s.id.slice(0, 8)}</span> · <Time iso={iso(s.seen)} prefix="seen " />
+                  </Text>
+                  {todoOf(s.id) ? <TodoItems items={itemsOf(todoOf(s.id)!)} label={`Steps of ${name}`} /> : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </Prop>

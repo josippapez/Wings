@@ -1,10 +1,9 @@
 // The Issue tab: one issue of a project, opened with args { key, projectId, trail }; trail is the issues opened before it
 // in this tab, for the breadcrumb back. Edit its title, status, description and
-// links, add a note, resume the last Claude session that worked on it, or start a new agent on it.
+// links, add a note, resume any agent session that worked on it, or start a new agent on it.
 
 import { ProjectGate, useAction, useViewArgs } from "wings-plugin-ui";
 import { IssueView } from "../ui/issue-view";
-import { lastSession } from "../lib/actor";
 import { agentCommand, resumeCommand } from "../lib/commands";
 import type { Op } from "../lib/domain";
 import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
@@ -64,12 +63,9 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       onBack={() => void wings.openView("board", { as: "tab" })}
       trail={trail}
       onBackTo={(i) => openIssue(trail[i], trail.slice(0, i))}
-      onResume={() => {
-        const last = issue && lastSession(issue);
-        if (last) void action.run(() => wings.openPane({ command: resumeCommand(last.id), cwd: project.path }));
-      }}
-      onStart={() => {
-        if (issue) void action.run(() => wings.openPane({ ...agentCommand(issue), cwd: project.path }));
+      onResume={(session) => void action.run(() => wings.openPane({ command: resumeCommand(session), cwd: project.path }))}
+      onStart={(kind) => {
+        if (issue) void action.run(() => wings.openPane({ ...agentCommand(issue, kind), cwd: project.path }));
       }}
       onOpenUrl={(url) => void action.run(() => wings.openUrl(url))}
       onOpenIssue={(key, newTab) => openIssue(key, trailTo(trail, issueKey, key), newTab)}

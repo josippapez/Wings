@@ -52,6 +52,7 @@ import { ProjectSections, type OpenSectionRow } from "@/components/project-secti
 import type { ProjectSections as ProjectSectionsState } from "@/lib/project-sections";
 import type { Phase } from "@/lib/sleep";
 import { trackDrag } from "@/lib/pointer-drag";
+import { canFork } from "@/lib/resume";
 import { shortcutLabel } from "@/lib/terminal";
 import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
 import { cn } from "@/lib/utils";
@@ -479,7 +480,7 @@ export function Sidebar(props: {
                           <SquareTerminalIcon />
                           Go to pane
                         </ContextMenuItem>
-                        <ContextMenuItem disabled={agent.kind !== "claude" || !agent.sessionId} onClick={() => props.onForkAgent(agent)}>
+                        <ContextMenuItem disabled={!canFork(agent.kind) || !agent.sessionId} onClick={() => props.onForkAgent(agent)}>
                           <GitForkIcon />
                           Fork in new tab
                         </ContextMenuItem>

@@ -13,8 +13,12 @@ interface WingsPane {
   project: string;
   /** The id of that project, the same as `project().id`. Needs Wings 0.1.22. */
   projectId: string;
-  /** Set while Claude Code runs in the pane. `startedAt` is when that `claude` started, in ms; a resumed session's transcript also has what came before. */
-  session: { sessionId: string; name: string | null; state: string; startedAt: number } | null;
+  /**
+   * Set while an agent runs in the pane and has a session id. `kind` says which agent: only a `"claude"` session has a
+   * transcript (`kind` is Wings 0.1.60; before it, every session was Claude Code's). `startedAt` is when that agent
+   * process started, in ms; a resumed session's transcript also has what came before.
+   */
+  session: { sessionId: string; kind: WingsAgentKind; name: string | null; state: string; startedAt: number } | null;
   /** The focused pane of the tab on screen. At most one pane has it, and none while no tab is open. */
   focused: boolean;
 }
@@ -263,14 +267,20 @@ interface WingsProjectSectionRow {
   open: { view: string; args?: unknown };
 }
 
-/** What a tool's handler is told about who called it: the Wings pane Claude runs in, that pane's project and its Claude session. */
+/** The agent CLIs Wings follows in its panes. */
+type WingsAgentKind = "claude" | "opencode";
+
+/** What a tool's handler is told about who called it: the Wings pane the agent runs in, that pane's project and the agent's session. */
 interface WingsToolContext {
-  /** The Wings pane Claude runs in, or `null` when the call didn't come from a pane in Wings. */
+  /** The Wings pane the agent runs in, or `null` when the call didn't come from a pane in Wings. */
   paneId: string | null;
   /** The project of that pane, or `null` when there is no pane. Needs Wings 0.1.50. */
   project: { id: string; name: string; path: string } | null;
-  /** The Claude session running in that pane, or `null` when there is no pane or Claude hasn't started its session yet. Needs Wings 0.1.50. */
-  session: { id: string; name: string | null } | null;
+  /**
+   * The agent session running in that pane, Claude Code's or opencode's, or `null` when there is no pane or the agent
+   * has no session id yet. Needs Wings 0.1.50; `kind`, and opencode sessions, need Wings 0.1.60.
+   */
+  session: { id: string; name: string | null; kind: WingsAgentKind } | null;
 }
 
 /** What Claude Code sends a hook, as `wings.onHook` passes it on. `SessionStart` adds `source`; `PreToolUse` adds `tool_name` (always `"Bash"`) and `tool_input`. */
