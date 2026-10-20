@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.59 · 2026-10-20
+
+- **OpenCode gets plugin tools too.** Wings adds its MCP server to OpenCode's global config when it starts, the way it does for Claude Code, and reloads OpenCode so running sessions pick it up. Settings › Plugins has an OpenCode row with Connect and Disconnect. Fields you set on the `wings` entry, like `enabled`, are kept, and a config with comments is left alone.
+
 ## 0.1.58 · 2026-10-17
 
 - **Errors show up where you'll see them.** A failed Add, section or block action on the Project page is a toast, not a line at the bottom of the page. Resume, fork, agent restart, plugin panels, Copy and comment links say when they fail instead of doing nothing.
