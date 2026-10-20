@@ -175,11 +175,32 @@ fn cut_tail(text: &str, chars: usize) -> String {
     text.chars().skip(skip).collect()
 }
 
+/// `text` without the `[Image #4]` markers Claude Code puts where an image was pasted: the model sees the marker,
+/// not the image, and copies it into the summary.
+fn without_image_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("[Image #") {
+        let after = &rest[at + "[Image #".len()..];
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && after[digits..].starts_with(']') {
+            out.push_str(&rest[..at]);
+            rest = &after[digits + 1..];
+        } else {
+            out.push_str(&rest[..at + 1]);
+            rest = &rest[at + 1..];
+        }
+    }
+    out.push_str(rest);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The text the model gets, or None when there is nothing to describe: a model given empty input makes things up.
 fn build_input(task: Task, e: &Excerpt) -> Option<String> {
+    let clean = |t: &str| without_image_markers(t);
     let (prompt, reply) = match task {
-        Task::Name => (cut_head(&e.first_prompt, PROMPT_CHARS), e.first_reply.as_deref().map(|r| cut_head(r, REPLY_CHARS))),
-        Task::Summary => (cut_head(&e.last_prompt, PROMPT_CHARS), e.last_reply.as_deref().map(|r| cut_tail(r, REPLY_CHARS))),
+        Task::Name => (cut_head(&clean(&e.first_prompt), PROMPT_CHARS), e.first_reply.as_deref().map(|r| cut_head(&clean(r), REPLY_CHARS))),
+        Task::Summary => (cut_head(&clean(&e.last_prompt), PROMPT_CHARS), e.last_reply.as_deref().map(|r| cut_tail(&clean(r), REPLY_CHARS))),
     };
     if prompt.is_empty() {
         return None;
@@ -521,6 +542,14 @@ mod tests {
         assert!(build_input(Task::Name, &excerpt("eixt", None)).is_none());
         // A short prompt is fine once the reply says what happened.
         assert!(build_input(Task::Name, &excerpt("fix it", Some("Fixed the redirect after the session expires."))).is_some());
+    }
+
+    #[test]
+    fn image_markers_are_left_out() {
+        assert_eq!(without_image_markers("Which agent posted in [Image #4]? See [Image #12] too"), "Which agent posted in ? See too");
+        assert_eq!(without_image_markers("a [Image #] b [Image #3x] c"), "a [Image #] b [Image #3x] c");
+        let input = build_input(Task::Summary, &excerpt("Check which agent posted in [Image #4] and fix the names", Some("Fixed it."))).unwrap();
+        assert!(!input.contains("[Image"));
     }
 
     #[test]
