@@ -71,6 +71,8 @@ pub struct SessionFile {
     pub status: Option<String>,
     pub waiting_for: Option<String>,
     pub name: Option<String>,
+    /// `"derived"` when Claude Code made the name from the folder, like `wings-b3`, rather than from the work.
+    pub name_source: Option<String>,
     pub status_updated_at: Option<u64>,
 }
 
@@ -228,7 +230,8 @@ impl Detector {
                     (file, state)
                 }
             };
-            let weak_name = kind == AgentKind::Claude && file.name.is_none();
+            // A name made from the folder, or none, gives way to a generated one.
+            let weak_name = kind == AgentKind::Claude && (file.name.is_none() || file.name_source.as_deref() == Some("derived"));
             let name = match kind {
                 AgentKind::Claude => file.name.or_else(|| strip_title_glyph(&pane.title)),
                 AgentKind::Opencode => file.name,
@@ -520,6 +523,11 @@ mod tests {
         assert_eq!(agents[0].state, AgentState::Blocked);
         assert_eq!(agents[0].waiting_for.as_deref(), Some("permission prompt"));
         assert_eq!(agents[0].name.as_deref(), Some("Fix bug"));
+        assert!(!agents[0].weak_name, "a name from the work stays");
+        // A name Claude Code made from the folder gives way to a generated one.
+        fs::write(tmp.join("sessions").join(format!("{pid}.json")), r#"{"sessionId":"abc","status":"idle","name":"wings-b3","nameSource":"derived"}"#).unwrap();
+        let agents = d.scan(std::slice::from_ref(&probe), None).agents;
+        assert!(agents[0].weak_name);
 
         shell.kill().unwrap();
         let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();

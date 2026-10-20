@@ -44,6 +44,9 @@ const AFTER: usize = 140;
 /// A `read_session` page stops near this many bytes of text, about 10k tokens, well under Claude Code's
 /// 25k-token cap on a tool result. A single longer message is cut.
 const PAGE_BYTES: usize = 40_000;
+/// The opening a generated name reads: prompts from the first one on, until this many characters or prompts.
+const OPENING_CHARS: usize = 200;
+const OPENING_PROMPTS: usize = 4;
 const MESSAGE_BYTES: usize = 8_000;
 
 /// OpenCode's service is asked for changes at most this often.
@@ -774,8 +777,9 @@ impl History {
         self.opencode.lock().unwrap().loading = false;
     }
 
-    /// What a session says at its two ends, for the generated names and summaries: the first and the latest
-    /// prompt, each with the reply that follows it. None when the session isn't loaded or has no prompt yet.
+    /// What a session says at its two ends, for the generated names and summaries: its opening prompts and the
+    /// latest one, each with the reply that follows the first. A short first prompt ("exit", "hi") says little, so
+    /// the next prompts join it up to `OPENING_CHARS`. None when the session isn't loaded or has no prompt yet.
     pub fn excerpt(&self, claude_dir: &Path, id: &str) -> Option<Excerpt> {
         let mut index = self.index.lock().unwrap();
         refresh(&mut index, claude_dir);
@@ -788,9 +792,17 @@ impl History {
         let reply_after = |i: usize| s.messages.get(i + 1).filter(|m| m.role == Role::Assistant).map(|_| text(i + 1));
         let first = s.messages.iter().position(|m| m.role == Role::User)?;
         let last = s.messages.iter().rposition(|m| m.role == Role::User)?;
+        let mut opening = text(first);
+        for i in (first + 1..s.messages.len()).filter(|&i| s.messages[i].role == Role::User).take(OPENING_PROMPTS - 1) {
+            if opening.trim().chars().count() >= OPENING_CHARS {
+                break;
+            }
+            opening.push('\n');
+            opening.push_str(&text(i));
+        }
         Some(Excerpt {
             title: s.title().map(String::from),
-            first_prompt: text(first),
+            first_prompt: opening,
             first_reply: reply_after(first),
             last_prompt: text(last),
             last_reply: reply_after(last),
@@ -1115,6 +1127,20 @@ mod tests {
                 assert!(schema["properties"].get(required.as_str().unwrap()).is_some());
             }
         }
+    }
+
+    #[test]
+    fn a_short_first_prompt_is_joined_by_the_next_ones() {
+        let dir = temp_claude_dir("opening");
+        let long = "Now move the resume button into the session list and keep the old one in the toolbar. ".repeat(4).trim_end().to_string();
+        transcript(&dir, "/p", "s1", &[user("/p", "main", "hi"), assistant("Hello."), user("/p", "main", "fix the login redirect"), assistant("Done."), user("/p", "main", &long), user("/p", "main", "never reached")]);
+        let e = History::default().excerpt(&dir, "s1").unwrap();
+        assert_eq!(e.first_prompt, format!("hi\nfix the login redirect\n{long}"));
+        assert_eq!(e.first_reply.as_deref(), Some("Hello."));
+        // A first prompt that says enough stands alone.
+        transcript(&dir, "/p", "s2", &[user("/p", "main", &long), user("/p", "main", "second")]);
+        assert_eq!(History::default().excerpt(&dir, "s2").unwrap().first_prompt, long);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

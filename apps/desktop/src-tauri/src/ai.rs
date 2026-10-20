@@ -33,6 +33,9 @@ const OLLAMA: &str = "http://127.0.0.1:11434";
 /// plus the instructions stay well under 1,000.
 const PROMPT_CHARS: usize = 700;
 const REPLY_CHARS: usize = 700;
+/// Less than this to go on, and the model invents a name ("eixt", with no reply, came back as "Code review"). The
+/// session keeps showing its first prompt until it says more.
+const NAME_MIN_CHARS: usize = 40;
 /// After a failed engine call nothing is queued for this long, so an engine that is off doesn't get hammered.
 const PAUSE: Duration = Duration::from_secs(60);
 /// A session that had nothing to describe yet (no prompt in its transcript) is looked at again after this.
@@ -179,6 +182,10 @@ fn build_input(task: Task, e: &Excerpt) -> Option<String> {
         Task::Summary => (cut_head(&e.last_prompt, PROMPT_CHARS), e.last_reply.as_deref().map(|r| cut_tail(r, REPLY_CHARS))),
     };
     if prompt.is_empty() {
+        return None;
+    }
+    let said = prompt.chars().count() + reply.as_deref().map_or(0, |r| r.chars().count());
+    if task == Task::Name && said < NAME_MIN_CHARS {
         return None;
     }
     let mut input = format!("User request:\n{prompt}");
@@ -508,8 +515,12 @@ mod tests {
         let input = build_input(Task::Summary, &excerpt(&long, Some(&format!("{long}END")))).unwrap();
         assert!(input.chars().count() < PROMPT_CHARS + REPLY_CHARS + 100);
         assert!(input.ends_with("END"), "a summary reads the end of the reply");
-        let named = build_input(Task::Name, &excerpt("fix login", None)).unwrap();
-        assert_eq!(named, "User request:\nfix login");
+        let named = build_input(Task::Name, &excerpt("fix the login redirect on the checkout page", None)).unwrap();
+        assert_eq!(named, "User request:\nfix the login redirect on the checkout page");
+        // Too little to name: a typo with no reply.
+        assert!(build_input(Task::Name, &excerpt("eixt", None)).is_none());
+        // A short prompt is fine once the reply says what happened.
+        assert!(build_input(Task::Name, &excerpt("fix it", Some("Fixed the redirect after the session expires."))).is_some());
     }
 
     #[test]
