@@ -1183,10 +1183,14 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
     // An agent's flags set its permissions, tools and config (claude --dangerously-skip-permissions, --mcp-config,
-    // --settings; opencode --auto, --server), so a plugin passes only the ones its entry names.
+    // --settings; opencode --auto, --server), so a plugin passes only the ones its entry names. And one value at most,
+    // a session id or a prompt: a second word reads as a subcommand (`opencode --session <id> uninstall`).
     if AGENT_PROGRAMS.contains(&program) {
         if let Some(flag) = words[entry.len()..].iter().find(|w| w.starts_with('-')) {
             return Err(format!("{id} may not pass {flag} to {program}"));
+        }
+        if words.len() - entry.len() + args.len() > 1 {
+            return Err(format!("{id} may pass {program} one value after {}, not more", entry.join(" ")));
         }
     }
     if args.iter().map(String::len).sum::<usize>() > PANE_ARGS_MAX {
@@ -2320,6 +2324,11 @@ mod tests {
         for flag in ["opencode --prompt --auto", "opencode --session ses_abc12345 --server=http://x", "opencode --session x -c"] {
             assert!(pane_input(&opencode, Some(flag), &[]).unwrap_err().contains("may not pass"), "{flag}");
         }
+        // A second value would be read as a subcommand, so an agent gets one.
+        assert!(pane_input(&opencode, Some("opencode --session ses_abc12345 uninstall"), &[]).unwrap_err().contains("one value"));
+        assert!(pane_input(&opencode, Some("opencode --session ses_abc12345"), &args(&["uninstall"])).unwrap_err().contains("one value"));
+        assert!(pane_input(&opencode, Some("opencode --prompt"), &args(&["hi", "uninstall"])).unwrap_err().contains("one value"));
+        assert!(pane_input(&claude, Some("claude mcp remove"), &[]).unwrap_err().contains("one value"));
 
         // `[]` allows plain shells only; no `panes` allows nothing, not even focus.
         let shells = with_panes(Some(&[]));
