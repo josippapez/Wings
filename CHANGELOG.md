@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.64 · 2026-10-20
+
+- **Better generated names.** An agent Claude Code named after its folder, like `wings-b3`, now gets a name from its work. A short first prompt is read together with the next ones, and a session with almost nothing in it keeps showing its first prompt instead of a guessed name.
+
 ## 0.1.63 · 2026-10-20
 
 - **Sessions get names and summaries from a local model.** Sessions with no title get a short name in the sidebar, History and Issues, and each agent gets a one-line summary of its last turn under its name. Settings › Agents picks the model: Apple's on-device model (the default), an Ollama model, or off. Nothing leaves your Mac.
