@@ -9,6 +9,7 @@ mod history;
 mod hotkey;
 mod menu;
 mod opencode;
+mod journal_sink;
 mod opencode_config;
 #[cfg(unix)]
 pub mod bridge;
@@ -515,6 +516,7 @@ fn claude_mcp(claude: &std::path::Path, args: &[&str]) -> std::io::Result<std::p
 fn mcp_connect(app: AppHandle) -> Res<()> {
     connect_claude(&app, None)?;
     let _ = std::fs::remove_file(app.path().app_data_dir().map_err(err)?.join(CLAUDE_DISCONNECTED));
+    journal_sync(&app);
     Ok(())
 }
 
@@ -623,7 +625,9 @@ fn mcp_disconnect(app: AppHandle) -> Res<()> {
     }
     let dir = app.path().app_data_dir().map_err(err)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
-    std::fs::write(dir.join(CLAUDE_DISCONNECTED), "").map_err(err)
+    std::fs::write(dir.join(CLAUDE_DISCONNECTED), "").map_err(err)?;
+    journal_sync(&app);
+    Ok(())
 }
 
 /// Wings adds itself to Claude Code when it starts, unless you disconnected it. Only release builds: a dev build
@@ -646,6 +650,29 @@ fn connect_claude_on_start(app: AppHandle) {
     let _ = app;
 }
 
+/// Keeps Wings registered as the agents' change journal sink while either agent is connected: it adds itself, or
+/// repoints its own entry after the app moved, and takes its own entry out once you have disconnected both. A sink
+/// of yours is never touched. Run on start (release builds only, like the agent connections) and after each
+/// Connect or Disconnect.
+fn journal_sync(app: &AppHandle) {
+    #[cfg(unix)]
+    {
+        let Ok(dir) = app.path().app_data_dir() else { return };
+        let both_off = dir.join(CLAUDE_DISCONNECTED).exists() && dir.join(OPENCODE_DISCONNECTED).exists();
+        let path = journal_sink::sink_path();
+        let result = match std::env::current_exe() {
+            Ok(exe) if !both_off => journal_sink::add(&path, &exe),
+            _ if both_off => journal_sink::remove(&path),
+            _ => return,
+        };
+        if let Err(e) = result {
+            eprintln!("[journal] couldn't set the journal sink: {e}");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = app;
+}
+
 /// Whether OpenCode is installed and its global config has the Wings MCP server.
 #[tauri::command(async)]
 fn opencode_mcp_status() -> OpencodeMcpStatus {
@@ -656,6 +683,7 @@ fn opencode_mcp_status() -> OpencodeMcpStatus {
 fn opencode_mcp_connect(app: AppHandle) -> Res<()> {
     connect_opencode(&app)?;
     let _ = std::fs::remove_file(app.path().app_data_dir().map_err(err)?.join(OPENCODE_DISCONNECTED));
+    journal_sync(&app);
     Ok(())
 }
 
@@ -667,7 +695,9 @@ fn opencode_mcp_disconnect(app: AppHandle) -> Res<()> {
     }
     let dir = app.path().app_data_dir().map_err(err)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
-    std::fs::write(dir.join(OPENCODE_DISCONNECTED), "").map_err(err)
+    std::fs::write(dir.join(OPENCODE_DISCONNECTED), "").map_err(err)?;
+    journal_sync(&app);
+    Ok(())
 }
 
 /// Points the Wings server in OpenCode's global config at this binary.
@@ -1524,6 +1554,10 @@ pub fn run() {
                 mcp::start(app.handle().clone(), mcp::socket_path(&data));
                 connect_claude_on_start(app.handle().clone());
                 connect_opencode_on_start(app.handle().clone());
+                if !cfg!(debug_assertions) {
+                    let handle = app.handle().clone();
+                    thread::spawn(move || journal_sync(&handle));
+                }
                 #[cfg(target_os = "macos")]
                 privacy::watch(app.handle().clone());
                 start_detection(app.handle().clone());

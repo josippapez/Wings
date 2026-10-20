@@ -23,6 +23,8 @@ export function formatList(issues: Issue[], filter: Status | undefined, projectN
 
 /** The most log entries `get` prints. The earlier ones stay in the issue. */
 const GET_LOG = 40;
+/** The most changed files `get` prints. */
+const GET_FILES = 30;
 
 /** An issue in full, for an agent that picks it up: description, links, sessions and the end of the log, oldest first. */
 export function formatIssue(i: Issue, all: Issue[] = []): string {
@@ -45,6 +47,11 @@ export function formatIssue(i: Issue, all: Issue[] = []): string {
   if (l?.pr) lines.push(`  pr: ${l.pr}`);
   if (l?.commits?.length) lines.push(`  commits: ${l.commits.join(", ")}`);
   if (!l) lines.push("  (none)");
+  if (i.files?.length) {
+    lines.push("", `Files changed (${i.files.length}):`);
+    for (const f of [...i.files].sort((a, b) => b.at - a.at).slice(0, GET_FILES)) lines.push(`  ${f.path}${f.what ? ` — ${f.what}` : ""} (${[f.session && (f.session.name || agentLabel(f.session)), stamp(f.at)].filter(Boolean).join(", ")})`);
+    if (i.files.length > GET_FILES) lines.push(`  and ${i.files.length - GET_FILES} more`);
+  }
   lines.push("", "Sessions:");
   if (!i.sessions.length) lines.push("  (none)");
   for (const s of i.sessions) lines.push(`  ${agentLabel(s)} ${s.id}${s.name ? ` "${s.name}"` : ""} last seen ${stamp(s.seen)}`);

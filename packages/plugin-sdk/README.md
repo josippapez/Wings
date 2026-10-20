@@ -522,9 +522,9 @@ input: s.object({
 ### Hooks and the pane rail
 
 `wings.onHook` answers a Claude Code hook, so a plugin can add context at session start or refuse a Bash command.
-List the event in `contributes.hooks` (`"SessionStart"` or `"PreToolUse"`) and register the handler in `main`. The
+List the event in `contributes.hooks` (`"SessionStart"`, `"PreToolUse"` or `"Journal"`) and register the handler in `main`. The
 handler gets `WingsHookInput` and `{ paneId, project, session }`, and returns a string, `{ context?, deny? }` or
-nothing (`deny` counts for `PreToolUse` only). `wings.setPaneRail(paneId, { title, items, open? })` floats a card
+nothing (`deny` counts for `PreToolUse` only). `"Journal"` (Wings 0.1.61) isn't a Claude Code hook: it is what `wings journal` sends when an agent's change journal reports a finished turn (Wings registers itself as that sink in `~/.config/journal/sink.json` unless you have a sink of your own there), with `agent`, `prompt`, `files`, `more` and `commits`, and its answer is ignored. `wings.setPaneRail(paneId, { title, items, open? })` floats a card
 with a todo-style list over a pane's terminal, and needs `"rail"` in `contributes.ui`. Both need Wings 0.1.54, so
 set `minWingsVersion` to match. The build checks them as in Build. See [plugins/README.md](https://github.com/josippapez/Wings/blob/main/plugins/README.md) for the limits.
 

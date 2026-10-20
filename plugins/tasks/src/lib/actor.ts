@@ -14,6 +14,11 @@ export function callerOf({ project, session }: ToolContext): { projectId: string
   return { projectId: project.id, projectName: project.name, actor };
 }
 
+/** The agent session a hook came from as an Actor: the session Wings found for the pane, with the id the hook's input gave. */
+export function actorOf(session: ToolContext["session"], sessionId: string): Actor {
+  return { id: sessionId, ...(session?.name ? { name: session.name } : {}), ...(session?.kind ? { kind: session.kind } : {}) };
+}
+
 export const actorName = (by: Actor): string => (by === "you" ? "You" : by === "git" ? "Git" : by.name || agentLabel(by));
 /** True when an agent session wrote the entry, not you or git. */
 export const isAgent = (by: Actor): by is Exclude<Actor, "you" | "git"> => by !== "you" && by !== "git";

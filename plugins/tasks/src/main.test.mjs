@@ -139,3 +139,42 @@ test("the session start line and the commit check answer from storage", async ()
   await wings.storage.set("keepLocal", false);
   assert.equal(await bash('git commit -m "WEB-1 done"'), null, "with the setting off nothing is denied");
 });
+
+test("the journal links a turn's commits and fills Files changed on this session's open issue without writing log notes, and does nothing else", async () => {
+  const sess = { id: "j-1", name: "journal agent", kind: "opencode" };
+  const jctx = { ...ctx, session: sess };
+  const journal = hooks.get("Journal");
+  const readIssues = async () => (await import("./lib/storage.ts")).readStore("proj1", "web").then((s) => s.issues);
+  const open = (await call("create", { title: "Journaled", status: "in_progress" })).match(/WEB-\d+/)[0];
+  const issue = async (key) => (await readIssues()).find((i) => i.key === key);
+  // Put the session on the issue, as a tool call from it would.
+  await handlers.get("log")({ key: open, text: "started" }, jctx);
+  const logBefore = (await issue(open)).log.length;
+
+  const payload = { session_id: "j-1", cwd: "/work/web", agent: "opencode", prompt: "do it", files: [{ path: "src/a.ts", what: "adds the X type" }, { path: "b.md", what: "" }], more: 2, commits: ["abc123def456", "1234567"] };
+  assert.equal(await journal({ hook_event_name: "Journal", ...payload }, jctx), null, "it answers with nothing");
+  let now = await issue(open);
+  assert.deepEqual(now.links.commits, ["abc123d", "1234567"]);
+  assert.equal(now.log.length, logBefore + 2, "only the two commit links, no note for the files");
+  assert.equal(now.log.filter((e) => e.kind === "note").length, 1);
+  assert.deepEqual(now.files.map((f) => [f.path, f.what, f.session]), [["src/a.ts", "adds the X type", sess], ["b.md", "", sess]]);
+
+  // A later turn: the same path keeps one row with the newest description, and the same commits add nothing.
+  await journal({ hook_event_name: "Journal", ...payload, files: [{ path: "src/a.ts", what: "renames X to Y" }] }, jctx);
+  now = await issue(open);
+  assert.equal(now.links.commits.length, 2);
+  assert.equal(now.log.length, logBefore + 2);
+  assert.deepEqual(now.files.map((f) => [f.path, f.what]).sort(), [["b.md", ""], ["src/a.ts", "renames X to Y"]]);
+  assert.match(await call("get", { key: open }), /Files changed \(2\):\n {2}src\/a\.ts — renames X to Y \(journal agent, /);
+
+  // No files: nothing written for them. An unknown session, or an issue that is done, is left alone.
+  await journal({ hook_event_name: "Journal", ...payload, files: [], more: 0 }, jctx);
+  const before = JSON.stringify(await readIssues());
+  await journal({ hook_event_name: "Journal", ...payload, session_id: "nobody", commits: ["fedcba9"] }, { ...jctx, session: { id: "nobody", name: null, kind: "claude" } });
+  assert.equal(JSON.stringify(await readIssues()), before);
+  await handlers.get("update")({ key: open, status: "done" }, jctx);
+  const done = JSON.stringify(await readIssues());
+  await journal({ hook_event_name: "Journal", ...payload, commits: ["fedcba9"] }, jctx);
+  assert.equal(JSON.stringify(await readIssues()), done);
+  assert.equal(await journal({ hook_event_name: "Journal", ...payload }, { ...jctx, project: null }), null);
+});

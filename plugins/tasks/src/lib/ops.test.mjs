@@ -112,3 +112,54 @@ test("an untouched template is stored as no description, and get says to fill it
   assert.equal(s.issues[0].description, undefined);
   assert.match(formatIssue(s.issues[0]), /No description yet; fill Goal, Scope, Done when, Validation/);
 });
+
+test("files: one row per path with the newest description, time and session; past 100 the oldest go; texts are cut; no log entry", () => {
+  const a = { id: "s-a", name: "one", kind: "claude" };
+  const b = { id: "s-b" };
+  let s = create(fresh(), "A", {}, "you", 1).store;
+  s = applyOp(s, { kind: "files", key: "WEB-1", files: [{ path: "x.ts", what: "first" }, { path: "y.ts", what: "why" }] }, a, 10).store;
+  s = applyOp(s, { kind: "files", key: "WEB-1", files: [{ path: "x.ts", what: "second" }, { path: "x.ts", what: "third" }] }, b, 20).store;
+  const issue = s.issues[0];
+  assert.deepEqual(issue.files, [{ path: "x.ts", what: "third", at: 20, session: { id: "s-b" } }, { path: "y.ts", what: "why", at: 10, session: { id: "s-a", name: "one", kind: "claude" } }]);
+  assert.equal(issue.log.length, 1, "no log entry");
+  assert.deepEqual(issue.sessions.map((x) => [x.id, x.seen]), [["s-a", 10], ["s-b", 20]], "the session is recorded and refreshed like any write");
+  assert.equal(applyOp(s, { kind: "files", key: "WEB-1", files: [] }, a, 30).changed, false);
+
+  const many = Array.from({ length: 105 }, (_, i) => ({ path: `f${i}.ts`, what: "w" }));
+  let t = applyOp(create(fresh(), "A").store, { kind: "files", key: "WEB-1", files: many.slice(0, 60) }, a, 1).store;
+  t = applyOp(t, { kind: "files", key: "WEB-1", files: many.slice(60) }, a, 2).store;
+  const files = t.issues[0].files;
+  assert.equal(files.length, LIMITS.files);
+  assert.equal(files.length, 100);
+  assert.deepEqual(files.slice(0, 45).map((f) => f.at), Array(45).fill(2));
+  assert.equal(files.filter((f) => f.at === 1).length, 55);
+
+  const long = applyOp(create(fresh(), "A").store, { kind: "files", key: "WEB-1", files: [{ path: "p".repeat(500), what: "w".repeat(500) }] }, a, 1).store.issues[0].files[0];
+  assert.equal(long.path.length, LIMITS.filePath);
+  assert.equal(long.what.length, LIMITS.fileWhat);
+});
+
+test("an issue with a full log still takes its files, and an old issue without files reads and formats fine", () => {
+  let s = create(fresh(), "A").store;
+  for (let i = 1; i < LIMITS.log; i++) s = applyOp(s, { kind: "note", key: "WEB-1", text: `n${i}` }).store;
+  assert.equal(s.issues[0].log.length, LIMITS.log);
+  const out = applyOp(s, { kind: "files", key: "WEB-1", files: [{ path: "a.ts", what: "x" }] }, { id: "s" }, 5);
+  assert.equal(out.changed, true);
+  assert.equal(out.issue.files.length, 1);
+  assert.equal(out.issue.log.length, LIMITS.log);
+  const old = create(fresh(), "Old").store.issues[0];
+  assert.equal(old.files, undefined);
+  assert.doesNotMatch(formatIssue(old), /Files changed/);
+});
+
+test("the get text lists the newest files first, at most 30, then how many more", () => {
+  const files = Array.from({ length: 35 }, (_, i) => ({ path: `f${i}.ts`, what: i ? "w" : "", at: 1000 + i, session: i % 2 ? { id: "s", name: "agent" } : { id: "t", kind: "opencode" } }));
+  const text = formatIssue({ ...create(fresh(), "A").store.issues[0], files });
+  const section = text.split("\n\nSessions:")[0].split("\n\n").at(-1).split("\n");
+  assert.equal(section[0], "Files changed (35):");
+  assert.match(section[1], /^ {2}f34\.ts — w \(OpenCode, 1970-01-01T00:00/);
+  assert.match(section[2], /^ {2}f33\.ts — w \(agent, /);
+  assert.match(section[30], /^ {2}f5\.ts/);
+  assert.equal(section[31], "  and 5 more");
+  assert.match(formatIssue({ ...create(fresh(), "A").store.issues[0], files: [files[0]] }), /f0\.ts \(OpenCode, /);
+});

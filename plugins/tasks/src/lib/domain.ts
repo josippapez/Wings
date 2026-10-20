@@ -10,7 +10,7 @@
  * A broadcast is limited to 64,000 characters, and none carries issue text from main to a page: it carries ids.
  * `key`, `commit` and `query` only bound what a tool accepts: a key like WEB-12 is 13 characters at most, a commit hash 40.
  */
-export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 20_000, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200 } as const;
+export const LIMITS = { issues: 300, title: 200, description: 20_000, note: 20_000, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200, files: 100, filePath: 300, fileWhat: 300 } as const;
 /** The most one issue's entry may take, in bytes of JSON. */
 export const ISSUE_BUDGET = 1_000_000;
 export const FORMAT_VERSION = 3;
@@ -57,6 +57,15 @@ export interface SessionRef {
   /** When a tool call from this session last touched the issue. */
   seen: number;
 }
+/** One file an agent changed on this issue, as its change journal described it. Another tool's output, so the texts are cut, not refused. */
+export interface FileChange {
+  path: string;
+  what: string;
+  /** When the newest turn that changed it reported it. */
+  at: number;
+  /** The agent session of that turn. */
+  session?: { id: string; name?: string; kind?: AgentKind };
+}
 export interface Issue {
   /** Like `WIN-12`. Never reused. */
   key: string;
@@ -74,6 +83,8 @@ export interface Issue {
   /** The issues that have to finish first. Their `blocks` is worked out from this, not stored. */
   blockedBy?: string[];
   links?: { branch?: string; pr?: string; commits?: string[] };
+  /** One row per path, newest first, up to `LIMITS.files`. Absent on issues no journal reported on; the log stays for people and decisions. */
+  files?: FileChange[];
   /** Append-only and deduped by id. */
   sessions: SessionRef[];
   /** Append-only. Nothing edits or removes an entry. */
@@ -105,6 +116,8 @@ export type Op =
   | { kind: "note"; key: string; text: string }
   /** Records the acting session on the issue without a log entry. Nothing changes when it is already there. */
   | { kind: "touch"; key: string }
+  /** What an agent's journal says a turn changed: one row per path, the newest description wins. Writes no log entry. */
+  | { kind: "files"; key: string; files: { path: string; what: string }[] }
   /** With `children`, its child issues, theirs and so on go too. Otherwise they stay and lose their parent. */
   | { kind: "remove"; key: string; children?: boolean };
 

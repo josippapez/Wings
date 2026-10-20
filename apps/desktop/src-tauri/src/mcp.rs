@@ -291,8 +291,8 @@ fn hook(app: &AppHandle, input: &Value, ppid: Option<u32>) -> Value {
     let (project, session) = caller_of(app, pane_id.as_deref());
     // The pane's agent may not know its session id yet at startup, but the hook's input always does.
     let session = match input.get("session_id").and_then(Value::as_str) {
-        // Only Claude Code runs hooks.
-        Some(id) => json!({ "id": id, "name": session.get("name").cloned().unwrap_or(Value::Null), "kind": AgentKind::Claude }),
+        // Claude Code runs the hooks, but the journal reports for OpenCode too, and says which in `agent`.
+        Some(id) => json!({ "id": id, "name": session.get("name").cloned().unwrap_or(Value::Null), "kind": hook_agent(event, input) }),
         None => session,
     };
     let answers: Vec<Value> = thread::scope(|scope| {
@@ -311,6 +311,14 @@ fn hook(app: &AppHandle, input: &Value, ppid: Option<u32>) -> Value {
             .collect()
     });
     merge_hook_answers(event, &answers)
+}
+
+/// The agent a hook's session belongs to: Claude Code, except for a `Journal` input whose `agent` is `opencode`.
+fn hook_agent(event: &str, input: &Value) -> AgentKind {
+    match (event, input.get("agent").and_then(Value::as_str)) {
+        ("Journal", Some("opencode")) => AgentKind::Opencode,
+        _ => AgentKind::Claude,
+    }
 }
 
 /// The answers of several plugins as one: contexts joined by a blank line, and for `PreToolUse` the reasons to
@@ -384,6 +392,15 @@ mod tests {
     fn agent(kind: AgentKind, session_id: Option<&str>, name: Option<&str>) -> Agent {
         let (session_id, name) = (session_id.map(String::from), name.map(String::from));
         Agent { pane_id: "p1".into(), space_id: "s1".into(), pid: 1, kind, session_id, name, state: AgentState::Idle, waiting_for: None, args: vec![], started_at: 0, state_since: None, direct: true }
+    }
+
+    #[test]
+    fn a_journal_input_names_its_agent_and_other_hooks_are_claude() {
+        let journal = |agent: Value| json!({ "hook_event_name": "Journal", "agent": agent });
+        assert_eq!(hook_agent("Journal", &journal(json!("opencode"))), AgentKind::Opencode);
+        assert_eq!(hook_agent("Journal", &journal(json!("claude-code"))), AgentKind::Claude);
+        assert_eq!(hook_agent("Journal", &json!({ "hook_event_name": "Journal" })), AgentKind::Claude);
+        assert_eq!(hook_agent("SessionStart", &json!({ "agent": "opencode" })), AgentKind::Claude);
     }
 
     #[test]

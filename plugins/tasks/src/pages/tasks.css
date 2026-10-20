@@ -237,6 +237,39 @@
   font-size: 20px;
   font-weight: 600;
 }
+.tk-file {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 12px;
+  width: 100%;
+}
+.tk-file-path {
+  flex: 0 0 36%;
+  min-width: 0;
+}
+.tk-file-what {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tk-file > :last-child {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .tk-file {
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    padding-block: 6px;
+  }
+  .tk-file-path {
+    flex: 1 1 60%;
+  }
+  .tk-file-what {
+    flex: 1 1 100%;
+    order: 3;
+  }
+}
 .tk-description {
   display: flex;
   align-items: flex-start;

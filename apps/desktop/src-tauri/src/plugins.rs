@@ -66,8 +66,9 @@ pub struct Contributes {
     /// use them unprompted. Up to `MAX_MCP_INSTRUCTIONS` characters.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mcp_instructions: String,
-    /// Claude Code hooks it answers with `wings.onHook`: `SessionStart` to add context to a session, `PreToolUse`
-    /// to refuse a Bash command. Needs Wings 0.1.54.
+    /// Hooks it answers with `wings.onHook`: `SessionStart` to add context to a session, `PreToolUse` to refuse a
+    /// Bash command (Wings 0.1.54), `Journal` to get what an agent's change journal reports at the end of a turn,
+    /// sent by `wings journal` (Wings 0.1.61).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<String>,
     /// Web pages it shows in a popover from a title bar button.
@@ -224,8 +225,9 @@ fn empty_schema() -> Value {
 }
 
 const UI_KINDS: [&str; 4] = ["badges", "diff", "rail", "status"];
-/// The Claude Code hooks a plugin can answer. `PreToolUse` only ever sees Bash commands.
-pub const HOOK_EVENTS: [&str; 2] = ["SessionStart", "PreToolUse"];
+/// The hooks a plugin can answer. `PreToolUse` only ever sees Bash commands. `Journal` isn't a Claude Code event: it is
+/// what `wings journal` sends when an agent's change journal reports a finished turn.
+pub const HOOK_EVENTS: [&str; 3] = ["SessionStart", "PreToolUse", "Journal"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1325,6 +1327,21 @@ mod tests {
         assert_eq!(load(&dir).unwrap().manifest.contributes.ui, ["badges", "status"]);
         fs::write(dir.join("wings-plugin.json"), manifest(r#""strip""#)).unwrap();
         assert!(load(&dir).err().unwrap().contains("unknown ui \"strip\""));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hooks_accept_journal_and_refuse_other_events() {
+        assert_eq!(HOOK_EVENTS, ["SessionStart", "PreToolUse", "Journal"]);
+        let dir = std::env::temp_dir().join(format!("wings-hooks-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |hooks: &str| format!(r#"{{ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": {{ "hooks": [{hooks}] }} }}"#);
+        fs::write(dir.join("wings-plugin.json"), manifest(r#""SessionStart", "Journal""#)).unwrap();
+        assert_eq!(load(&dir).unwrap().manifest.contributes.hooks, ["SessionStart", "Journal"]);
+        fs::write(dir.join("wings-plugin.json"), manifest(r#""Stop""#)).unwrap();
+        assert!(load(&dir).err().unwrap().contains("unknown hook \"Stop\""));
         let _ = fs::remove_dir_all(&dir);
     }
 

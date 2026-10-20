@@ -283,19 +283,29 @@ interface WingsToolContext {
   session: { id: string; name: string | null; kind: WingsAgentKind } | null;
 }
 
-/** What Claude Code sends a hook, as `wings.onHook` passes it on. `SessionStart` adds `source`; `PreToolUse` adds `tool_name` (always `"Bash"`) and `tool_input`. */
+/** What Claude Code sends a hook, as `wings.onHook` passes it on. `SessionStart` adds `source`; `PreToolUse` adds `tool_name` (always `"Bash"`) and `tool_input`. `Journal` isn't from Claude Code: it is what an agent's change journal reports at the end of a turn through `wings journal`, and adds `agent`, `prompt`, `files`, `more` and `commits`. */
 interface WingsHookInput {
   session_id: string;
   transcript_path?: string;
   cwd?: string;
   permission_mode?: string;
-  hook_event_name: "SessionStart" | "PreToolUse";
+  hook_event_name: "SessionStart" | "PreToolUse" | "Journal";
   /** SessionStart: `"startup"`, `"resume"`, `"clear"`, `"compact"` or `"fork"`. */
   source?: string;
   /** PreToolUse. */
   tool_name?: string;
   /** PreToolUse: for Bash, `{ command, description?, ... }`. */
   tool_input?: { command?: string; [key: string]: unknown };
+  /** Journal: the agent whose turn it was. */
+  agent?: "claude-code" | "opencode";
+  /** Journal: the first 200 characters of the turn's prompt. */
+  prompt?: string;
+  /** Journal: the files the turn changed, each with a one-line description. */
+  files?: { path: string; what: string }[];
+  /** Journal: how many more files changed than `files` lists. */
+  more?: number;
+  /** Journal: short hashes of the commits the turn made, oldest first. */
+  commits?: string[];
   [key: string]: unknown;
 }
 
@@ -331,10 +341,10 @@ interface Wings {
   /**
    * Answers a Claude Code hook listed in `contributes.hooks` (Wings 0.1.54): `"SessionStart"` adds `context` to the
    * session, `"PreToolUse"` can add context and `deny` a Bash command with a reason Claude sees. Wings runs
-   * `wings hook` for Claude Code once Connect has installed it. An error, a slow answer (1.5 s) or no answer
+   * `wings hook` for Claude Code once Connect has installed it. `"Journal"` (Wings 0.1.61) answers `wings journal`, which an agent's change journal runs at the end of each turn; its answer is ignored. An error, a slow answer (1.5 s) or no answer
    * counts as nothing, so Claude is never held up. `context` is capped at 10,000 characters. Register it in `main`.
    */
-  onHook(event: "SessionStart" | "PreToolUse", handler: (input: WingsHookInput, context: WingsToolContext) => WingsHookAnswer | Promise<WingsHookAnswer>): void;
+  onHook(event: "SessionStart" | "PreToolUse" | "Journal", handler: (input: WingsHookInput, context: WingsToolContext) => WingsHookAnswer | Promise<WingsHookAnswer>): void;
   /** Runs a command from `permissions.exec`, like `git branch --show-current`. Rejects with `Output is larger than 8 MB` (and kills the program) when stdout or stderr passes 8 MB. */
   exec(program: string, args?: string[], options?: WingsExecOptions): Promise<{ code: number | null; stdout: string; stderr: string }>;
   /**

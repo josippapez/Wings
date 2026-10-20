@@ -7,7 +7,7 @@ import { lastSession } from "../lib/actor";
 import { AGENT_KINDS, AGENTS } from "../lib/commands";
 import { canParent, LIMITS, type AgentKind, type Issue, type SessionRef } from "../lib/domain";
 import type { TodoList } from "../lib/todo";
-import { Activity, Children, Description } from "./issue-body";
+import { Activity, Children, Description, FilesChanged } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { DeleteConfirm, ErrorText, TypeIcon, useScrollIntoView, type Apply, type Send } from "./parts";
 
@@ -121,6 +121,7 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
           <div className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}
+            <FilesChanged issue={issue} />
             <Activity issue={issue} apply={apply} />
           </div>
         </div>

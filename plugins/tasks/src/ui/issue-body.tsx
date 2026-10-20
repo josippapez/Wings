@@ -1,10 +1,10 @@
 // The main column of the Issue page: the description, an epic's or feature's child issues, and the activity with its note box.
 
 import { useState } from "react";
-import { Badge, Button, Heading, List, ListButton, ListItem, Markdown, Meter, Row, Stack, Text, Textarea, TextInput, Timeline, TimelineCard, TimelineNote, useAction } from "wings-plugin-ui";
+import { Badge, Button, Disclosure, Heading, List, ListButton, ListItem, Markdown, Meter, Row, Stack, Text, Textarea, TextInput, Time, Timeline, TimelineCard, TimelineNote, useAction } from "wings-plugin-ui";
 import { actorName, isAgent } from "../lib/actor";
 import { agentLabel } from "../lib/commands";
-import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type Issue, type LogEntry } from "../lib/domain";
+import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type FileChange, type Issue, type LogEntry } from "../lib/domain";
 import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
 import { ErrorText, openProps, StatusDot, TypeIcon, type Apply } from "./parts";
@@ -73,6 +73,46 @@ export function Children({ issue, issues, onOpenIssue }: { issue: Issue; issues:
           ))}
         </List>
       )}
+    </Stack>
+  );
+}
+
+/** Rows of Files changed shown before the rest fold away. */
+const FILE_ROWS = 10;
+
+function FileRow({ file }: { file: FileChange }) {
+  return (
+    <ListItem>
+      <div className="tk-file">
+        <Text as="span" mono truncate className="tk-file-path">{file.path}</Text>
+        {file.what ? <Text as="span" tone="muted" size="small" className="tk-file-what">{file.what}</Text> : null}
+        <Text as="span" tone="muted" size="tiny">
+          {file.session ? `${file.session.name || agentLabel(file.session)} · ` : ""}
+          <Time iso={iso(file.at)} />
+        </Text>
+      </div>
+    </ListItem>
+  );
+}
+
+/** The files agents' journals reported for the issue, newest first, with the rows past the first ten folded. */
+export function FilesChanged({ issue }: { issue: Issue }) {
+  const files = [...(issue.files ?? [])].sort((a, b) => b.at - a.at);
+  if (!files.length) return null;
+  const rest = files.slice(FILE_ROWS);
+  return (
+    <Stack gap="s" as="section" aria-label="Files changed">
+      <Heading actions={<Text tone="muted" size="small">{files.length}</Text>}>Files changed</Heading>
+      <List compact aria-label={`Files changed on ${issue.key}, newest first`}>
+        {files.slice(0, FILE_ROWS).map((f) => <FileRow key={f.path} file={f} />)}
+      </List>
+      {rest.length ? (
+        <Disclosure summary={<Text as="span" size="small" tone="muted">{rest.length} more</Text>}>
+          <List compact aria-label={`More files changed on ${issue.key}`}>
+            {rest.map((f) => <FileRow key={f.path} file={f} />)}
+          </List>
+        </Disclosure>
+      ) : null}
     </Stack>
   );
 }

@@ -165,6 +165,34 @@ pub fn hook() -> i32 {
     0
 }
 
+/// `wings journal`, the sink for an agent's per-turn change journal (Claude Code or OpenCode): reads one JSON object
+/// on stdin (`session_id`, `cwd`, `agent`, `prompt`, `files`, `more`, `commits`) and hands it to the running Wings as
+/// a `Journal` hook input, so plugins that answer `Journal` can note the turn on the session's issue. It is not a
+/// Claude Code hook and isn't registered in its settings. It prints nothing and always exits 0.
+pub fn journal() -> i32 {
+    use std::io::{IsTerminal, Read};
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        eprintln!("wings journal is a sink command: it reads the journal's JSON on stdin.");
+        return 2;
+    }
+    let mut input = Vec::new();
+    if stdin.lock().take(HOOK_LIMIT).read_to_end(&mut input).is_err() {
+        return 0;
+    }
+    if let Some(input) = journal_input(&input) {
+        let _ = hook_reply(&input);
+    }
+    0
+}
+
+/// The journal's payload as a hook input, or nothing when it isn't a JSON object.
+fn journal_input(payload: &[u8]) -> Option<Value> {
+    let Value::Object(mut fields) = serde_json::from_slice::<Value>(payload).ok()? else { return None };
+    fields.insert("hook_event_name".into(), json!("Journal"));
+    Some(Value::Object(fields))
+}
+
 /// Wings' answer to a hook input, within `HOOK_WAIT`.
 fn hook_reply(input: &Value) -> Option<Value> {
     let start = std::time::Instant::now();
@@ -289,6 +317,19 @@ mod tests {
         let long = "x".repeat(super::CONTEXT_LIMIT + 5);
         let out = super::hook_output(&start, &json!({ "context": long })).unwrap();
         assert_eq!(out["hookSpecificOutput"]["additionalContext"].as_str().unwrap().len(), super::CONTEXT_LIMIT);
+    }
+
+    #[test]
+    fn the_journal_payload_becomes_a_journal_hook_input() {
+        let input = super::journal_input(br#"{ "session_id": "s1", "cwd": "/r", "agent": "opencode", "files": [{ "path": "a.ts", "what": "x" }], "commits": ["abc123d"] }"#).unwrap();
+        assert_eq!(input["hook_event_name"], "Journal");
+        assert_eq!(input["session_id"], "s1");
+        assert_eq!(input["files"][0]["path"], "a.ts");
+        assert_eq!(input["commits"], json!(["abc123d"]));
+        // Whatever the payload says for the event, it is a Journal.
+        assert_eq!(super::journal_input(br#"{ "hook_event_name": "PreToolUse" }"#).unwrap()["hook_event_name"], "Journal");
+        assert_eq!(super::journal_input(b"not json"), None);
+        assert_eq!(super::journal_input(b"[1]"), None);
     }
 
     #[test]

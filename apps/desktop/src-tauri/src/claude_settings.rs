@@ -296,6 +296,8 @@ mod tests {
         assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert_eq!(settings["hooks"]["SessionStart"][0].get("matcher"), None);
         assert_eq!(settings["hooks"]["PostToolUse"], json!([{ "hooks": [{ "type": "command", "command": "after" }] }]));
+        // `Journal` is a plugin hook event, not a Claude Code one: Wings never registers it there.
+        assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse", "PostToolUse", "SessionStart"]);
         assert!(connected(&path));
         assert!(!add(&path, exe).unwrap(), "a second add changes nothing");
 
