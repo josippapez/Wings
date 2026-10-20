@@ -503,6 +503,7 @@ export function Timeline(props: Props<"ol"> & { label: string }): ReactElement;
  * at the right of that line, and `children` as the body. `quiet` for what a bot or the system wrote; `clamp` cuts a long
  * body until "Show more".
  */
-export function TimelineCard(props: Omit<Props<"li">, "children"> & { author: string; at?: string; tag?: ReactNode; actions?: ReactNode; quiet?: boolean; clamp?: boolean; children?: ReactNode }): ReactElement;
+// `onAuthor` makes the author's name a link-styled button, like one that opens the person's or agent's page; `authorTitle` is its tooltip.
+export function TimelineCard(props: Omit<Props<"li">, "children"> & { author: string; at?: string; tag?: ReactNode; actions?: ReactNode; quiet?: boolean; clamp?: boolean; onAuthor?: () => void; authorTitle?: string; children?: ReactNode }): ReactElement;
 /** A quiet one-line entry of a `Timeline`: a small avatar, the author in bold, `children`, then the time. */
-export function TimelineNote(props: Omit<Props<"li">, "children"> & { author: string; at?: string; children?: ReactNode }): ReactElement;
+export function TimelineNote(props: Omit<Props<"li">, "children"> & { author: string; at?: string; onAuthor?: () => void; authorTitle?: string; children?: ReactNode }): ReactElement;

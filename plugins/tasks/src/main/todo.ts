@@ -20,6 +20,8 @@ const setRail = (paneId: string, rail: Rail | null): Promise<void> =>
 /** Lists as last read or written, by session, so a pane change never reads storage twice for one. */
 const lists = new Map<string, TodoList | null>();
 let panes: WingsPane[] = [];
+/** The pane a session runs in now, if any. */
+export const paneOf = (sessionId: string): WingsPane | undefined => panes.find((p) => p.session?.sessionId === sessionId);
 
 async function listOf(projectId: string, sessionId: string): Promise<TodoList | null> {
   if (!lists.has(sessionId)) lists.set(sessionId, await readTodo(projectId, sessionId));

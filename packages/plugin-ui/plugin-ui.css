@@ -2044,6 +2044,20 @@ button.w-summary-chip:focus-visible {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.w-timeline-author-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--wings-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.w-timeline-author-link:hover {
+  text-decoration: underline;
+}
 .w-timeline-tag {
   padding: 0 6px;
   border: 1px solid var(--wings-hairline-strong);

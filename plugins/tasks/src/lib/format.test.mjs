@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatList } from "./format.ts";
+import { formatIssue, formatList } from "./format.ts";
+import { applyOp } from "./ops.ts";
 import { create, fresh } from "./testing.mjs";
 
 test("list tool: query combines with status and type, and an empty result says what was searched", () => {
@@ -19,4 +20,12 @@ test("list tool: query combines with status and type, and an empty result says w
   assert.match(formatList(s.issues, "done", "web", undefined, "checkout"), /^No done issues in web match "checkout"\./);
   assert.equal(formatList(s.issues, "done", "web"), "No done issues for web.");
   assert.equal(formatList(s.issues, undefined, "web", undefined, undefined).split("\n").length, 4);
+});
+
+test("get names a journal entry as the journal's, under the session's latest name", () => {
+  let s = create(fresh(), "A", {}, { id: "c6", name: "wings-33" }, 10).store;
+  s = applyOp(s, { kind: "update", key: "WEB-1", commit: "81bad15" }, { id: "c6", name: "Fix the login", via: "journal" }, 20).store;
+  const text = formatIssue(s.issues[0]);
+  assert.match(text, /Fix the login \(journal\) link: Commit: 81bad15/);
+  assert.match(text, /Fix the login created: Created/);
 });

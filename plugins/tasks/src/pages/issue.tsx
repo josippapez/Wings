@@ -4,7 +4,8 @@
 
 import { ProjectGate, useAction, useViewArgs } from "wings-plugin-ui";
 import { IssueView } from "../ui/issue-view";
-import { agentCommand, resumeCommand } from "../lib/commands";
+import { agentCommand } from "../lib/commands";
+import { ch } from "../lib/messages";
 import type { Op } from "../lib/domain";
 import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
 import { useIssues } from "../ui/useIssues";
@@ -63,7 +64,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       onBack={() => void wings.openView("board", { as: "tab" })}
       trail={trail}
       onBackTo={(i) => openIssue(trail[i], trail.slice(0, i))}
-      onResume={(session) => void action.run(() => wings.openPane({ command: resumeCommand(session), cwd: project.path }))}
+      onResume={(session) => void action.run(() => ch.ask("openSession", { session, cwd: project.path }))}
       onStart={(kind) => {
         if (issue) void action.run(() => wings.openPane({ ...agentCommand(issue, kind), cwd: project.path }));
       }}

@@ -5,7 +5,7 @@ import { agentLabel } from "./commands";
 import { blocksOf, childrenOf, progress } from "./relations";
 import { matchesQuery } from "./search";
 
-const who = (by: Actor) => (by === "you" ? "you" : by === "git" ? "git" : by.name || agentLabel(by));
+const who = (by: Actor, sessions: Issue["sessions"]) => (by === "you" ? "you" : by === "git" ? "git" : `${sessions.find((s) => s.id === by.id)?.name || by.name || agentLabel(by)}${by.via === "journal" ? " (journal)" : ""}`);
 /** A time as an ISO string, for the `Time` component. */
 export const iso = (ms: number) => new Date(ms).toISOString();
 /** A time for Claude, to the minute. */
@@ -57,6 +57,6 @@ export function formatIssue(i: Issue, all: Issue[] = []): string {
   for (const s of i.sessions) lines.push(`  ${agentLabel(s)} ${s.id}${s.name ? ` "${s.name}"` : ""} last seen ${stamp(s.seen)}`);
   lines.push("", `Log (${i.log.length}, oldest first):`);
   if (i.log.length > GET_LOG) lines.push(`  (${i.log.length - GET_LOG} earlier entries left out)`);
-  for (const e of i.log.slice(-GET_LOG)) lines.push(`  ${stamp(e.at)} ${who(e.by)} ${e.kind}: ${e.text.replace(/\n/g, "\n    ")}`);
+  for (const e of i.log.slice(-GET_LOG)) lines.push(`  ${stamp(e.at)} ${who(e.by, i.sessions)} ${e.kind}: ${e.text.replace(/\n/g, "\n    ")}`);
   return lines.join("\n");
 }

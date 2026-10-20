@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Badge, Button, Disclosure, Heading, List, ListButton, ListItem, Markdown, Meter, Row, Stack, Text, Textarea, TextInput, Time, Timeline, TimelineCard, TimelineNote, useAction } from "wings-plugin-ui";
 import { actorName, isAgent } from "../lib/actor";
 import { agentLabel } from "../lib/commands";
-import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type FileChange, type Issue, type LogEntry } from "../lib/domain";
+import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type FileChange, type Issue, type LogEntry, type SessionRef } from "../lib/domain";
 import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
 import { ErrorText, openProps, StatusDot, TypeIcon, type Apply } from "./parts";
@@ -164,7 +164,13 @@ function Composer({ issue, apply }: { issue: Issue; apply: Apply }) {
   );
 }
 
-export function Activity({ issue, apply }: { issue: Issue; apply: Apply }) {
+export function Activity({ issue, apply, onOpenSession }: { issue: Issue; apply: Apply; onOpenSession: (session: SessionRef) => void }) {
+  // An agent's name opens its session: its pane when it runs, else a resumed one.
+  const sessionOf = (by: LogEntry["by"]) => (isAgent(by) && by.id ? issue.sessions.find((s) => s.id === by.id) : undefined);
+  const authorLink = (by: LogEntry["by"]) => {
+    const session = sessionOf(by);
+    return session ? { onAuthor: () => onOpenSession(session), authorTitle: "Go to this session" } : {};
+  };
   // Newest first, like the rest of the app. The log itself is oldest first.
   const entries: LogEntry[] = [...issue.log].reverse();
   return (
@@ -174,11 +180,11 @@ export function Activity({ issue, apply }: { issue: Issue; apply: Apply }) {
       <Timeline label={`Activity on ${issue.key}, newest first`}>
         {entries.map((e, i) =>
           e.kind === "note" ? (
-            <TimelineCard key={`${e.at}-${i}`} author={actorName(e.by)} at={iso(e.at)} tag={!isAgent(e.by) || !e.by.name ? undefined : <Badge variant="outline">{agentLabel(e.by)}</Badge>} clamp>
+            <TimelineCard key={`${e.at}-${i}`} author={actorName(e.by, issue.sessions)} {...authorLink(e.by)} at={iso(e.at)} tag={!isAgent(e.by) || !e.by.name ? undefined : <Badge variant="outline">{agentLabel(e.by)}</Badge>} clamp>
               <Markdown source={e.text} />
             </TimelineCard>
           ) : (
-            <TimelineNote key={`${e.at}-${i}`} author={actorName(e.by)} at={iso(e.at)}>{e.text}</TimelineNote>
+            <TimelineNote key={`${e.at}-${i}`} author={isAgent(e.by) && e.by.via === "journal" ? `${actorName(e.by, issue.sessions)} · journal` : actorName(e.by, issue.sessions)} {...authorLink(e.by)} at={iso(e.at)}>{e.text}</TimelineNote>
           ),
         )}
       </Timeline>

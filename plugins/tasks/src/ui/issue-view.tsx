@@ -122,7 +122,7 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}
             <FilesChanged issue={issue} />
-            <Activity issue={issue} apply={apply} />
+            <Activity issue={issue} apply={apply} onOpenSession={onResume} />
           </div>
         </div>
       </div>

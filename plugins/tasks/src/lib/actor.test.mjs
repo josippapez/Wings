@@ -13,3 +13,10 @@ test("callerOf maps a tool call's context to its project and agent session, with
   assert.deepEqual(callerOf({ paneId: "p3", project, session: null }).actor, { id: "" });
   assert.throws(() => callerOf({ paneId: null, project: null, session: null }), /Can't tell which project/);
 });
+
+test("an agent goes by its session's latest name, so one session reads as one author after a restart", () => {
+  const sessions = [{ id: "c6", name: "Azure DevOps work item 189501", seen: 3 }];
+  assert.equal(actorName({ id: "c6", name: "sciensus-digital-core-be-33" }, sessions), "Azure DevOps work item 189501");
+  assert.equal(actorName({ id: "other", name: "old name" }, sessions), "old name");
+  assert.equal(actorName("you", sessions), "You");
+});

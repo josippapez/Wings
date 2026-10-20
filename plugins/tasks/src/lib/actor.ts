@@ -15,11 +15,19 @@ export function callerOf({ project, session }: ToolContext): { projectId: string
 }
 
 /** The agent session a hook came from as an Actor: the session Wings found for the pane, with the id the hook's input gave. */
-export function actorOf(session: ToolContext["session"], sessionId: string): Actor {
+export function actorOf(session: ToolContext["session"], sessionId: string): Exclude<Actor, "you" | "git"> {
   return { id: sessionId, ...(session?.name ? { name: session.name } : {}), ...(session?.kind ? { kind: session.kind } : {}) };
 }
 
-export const actorName = (by: Actor): string => (by === "you" ? "You" : by === "git" ? "Git" : by.name || agentLabel(by));
+/**
+ * Who wrote an entry, by name. An agent goes by its session's latest name in `sessions`, so one session reads as one
+ * author after its agent restarts under another name; its name at the time otherwise.
+ */
+export function actorName(by: Actor, sessions: SessionRef[] = []): string {
+  if (by === "you") return "You";
+  if (by === "git") return "Git";
+  return sessions.find((s) => s.id === by.id)?.name || by.name || agentLabel(by);
+}
 /** True when an agent session wrote the entry, not you or git. */
 export const isAgent = (by: Actor): by is Exclude<Actor, "you" | "git"> => by !== "you" && by !== "git";
 

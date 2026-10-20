@@ -1299,7 +1299,13 @@ function Clamped({ children }) {
  * right, and `children` as the body. `quiet` draws it without a fill, for what a bot or the system wrote. `clamp` cuts
  * a long body until "Show more" is pressed.
  */
-export function TimelineCard({ author, at, tag, actions, quiet, clamp, children, className, ...rest }) {
+/** The author's name: a link-styled button when `onAuthor` is given, plain text otherwise. */
+function authorName(author, onAuthor, authorTitle, className) {
+  if (!onAuthor) return h("strong", { className }, author);
+  return h("button", { type: "button", className: cx("w-timeline-author-link", className), title: authorTitle, onClick: onAuthor }, author);
+}
+
+export function TimelineCard({ author, at, tag, actions, quiet, clamp, onAuthor, authorTitle, children, className, ...rest }) {
   return h(
     "li",
     { ...rest, className: cx("w-timeline-item", className), "data-quiet": quiet ? "" : undefined },
@@ -1310,7 +1316,7 @@ export function TimelineCard({ author, at, tag, actions, quiet, clamp, children,
         "div",
         { className: "w-timeline-head" },
         h(Avatar, { name: author }),
-        h("strong", { className: "w-timeline-author" }, author),
+        authorName(author, onAuthor, authorTitle, "w-timeline-author"),
         tag ? h("span", { className: "w-timeline-tag" }, tag) : null,
         h(Time, { iso: at, className: "w-timeline-time" }),
         actions ? h("span", { className: "w-timeline-actions" }, actions) : null,
@@ -1321,12 +1327,12 @@ export function TimelineCard({ author, at, tag, actions, quiet, clamp, children,
 }
 
 /** A quiet one-line entry of a `Timeline`, like "Ada moved it to Active": a small avatar, then `children`, then when. */
-export function TimelineNote({ author, at, children, className, ...rest }) {
+export function TimelineNote({ author, at, onAuthor, authorTitle, children, className, ...rest }) {
   return h(
     "li",
     { ...rest, className: cx("w-timeline-item w-timeline-note", className) },
     h(Avatar, { name: author, size: "small" }),
-    h("span", { className: "w-timeline-note-text" }, h("strong", null, author), " ", children),
+    h("span", { className: "w-timeline-note-text" }, authorName(author, onAuthor, authorTitle), " ", children),
     h(Time, { iso: at, className: "w-timeline-time" }),
   );
 }

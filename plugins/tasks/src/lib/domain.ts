@@ -40,7 +40,7 @@ export const canParent = (type: IssueType): boolean => type === "epic" || type =
  * branch with the issue's key), or the agent session a tool call came from. "git" is its own kind rather than
  * "you" so the log never claims the user did something they didn't do.
  */
-export type Actor = "you" | "git" | { id: string; name?: string; kind?: AgentKind };
+export type Actor = "you" | "git" | { id: string; name?: string; kind?: AgentKind; via?: "journal" };
 /** Which agent CLI a session belongs to. Absent on sessions recorded before there was more than Claude Code. */
 export type AgentKind = WingsAgentKind;
 export type LogKind = "created" | "status" | "note" | "link" | "type" | "priority";
