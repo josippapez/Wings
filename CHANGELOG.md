@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.66 · 2026-10-20
+
+- **Issues shows who wrote what.** An agent's entries all carry its session's current name, even after Claude Code restarts it under another one. Click the name to go to that session's pane, or to resume it when it isn't running. Resume never starts a running session twice. Entries the journal writes say so.
+- **Summaries leave out image markers.** A summary no longer repeats `[Image #4]` from a prompt with a pasted image.
+
 ## 0.1.65 · 2026-10-20
 
 - **Running agents show their session title again.** The sidebar showed the name Claude Code makes from the folder, like `wings-ff`, instead of the session's title. The title comes first now, and a generated name is only used when there is neither.
