@@ -9,6 +9,7 @@ mod history;
 mod hotkey;
 mod menu;
 mod opencode;
+mod opencode_config;
 #[cfg(unix)]
 pub mod bridge;
 #[cfg(unix)]
@@ -433,6 +434,17 @@ struct McpStatus {
 const CLAUDE_DISCONNECTED: &str = "claude-disconnected";
 
 #[derive(serde::Serialize)]
+struct OpencodeMcpStatus {
+    /// OpenCode's CLI is installed.
+    opencode: bool,
+    /// Its global config has the Wings MCP server.
+    connected: bool,
+}
+
+/// You disconnected OpenCode in the Plugins sheet, so Wings doesn't connect it again when it starts.
+const OPENCODE_DISCONNECTED: &str = "opencode-disconnected";
+
+#[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CliStatus {
     /// Release builds on macOS and Linux. A dev build would point the command at its own binary.
@@ -628,6 +640,80 @@ fn connect_claude_on_start(app: AppHandle) {
         let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app, None) };
         if let Err(e) = result {
             eprintln!("[claude] couldn't connect Claude Code: {e}");
+        }
+    });
+    #[cfg(not(unix))]
+    let _ = app;
+}
+
+/// Whether OpenCode is installed and its global config has the Wings MCP server.
+#[tauri::command(async)]
+fn opencode_mcp_status() -> OpencodeMcpStatus {
+    OpencodeMcpStatus { opencode: plugins::find_program("opencode").is_some(), connected: opencode_config::entry(&opencode_config::config_path()).is_some() }
+}
+
+#[tauri::command(async)]
+fn opencode_mcp_connect(app: AppHandle) -> Res<()> {
+    connect_opencode(&app)?;
+    let _ = std::fs::remove_file(app.path().app_data_dir().map_err(err)?.join(OPENCODE_DISCONNECTED));
+    Ok(())
+}
+
+/// Takes the Wings server out of OpenCode's config, and keeps Wings from adding it back when it starts.
+#[tauri::command(async)]
+fn opencode_mcp_disconnect(app: AppHandle) -> Res<()> {
+    if opencode_config::remove(&opencode_config::config_path())? {
+        reload_opencode();
+    }
+    let dir = app.path().app_data_dir().map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    std::fs::write(dir.join(OPENCODE_DISCONNECTED), "").map_err(err)
+}
+
+/// Points the Wings server in OpenCode's global config at this binary.
+fn connect_opencode(app: &AppHandle) -> Res<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = app;
+        return Err("Plugin tools aren't available on Windows yet".into());
+    }
+    #[cfg(unix)]
+    {
+        let exe = std::env::current_exe().map_err(err)?;
+        let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
+        if opencode_config::add(&opencode_config::config_path(), &exe, &socket)? {
+            reload_opencode();
+        }
+        Ok(())
+    }
+}
+
+/// OpenCode's background service only reads its config on start or on reload. Without a running service there's
+/// nothing to reload, and the next one reads the file.
+fn reload_opencode() {
+    let Some(opencode) = plugins::find_program("opencode") else { return };
+    let out = std::process::Command::new(opencode).arg("reload").current_dir(std::env::home_dir().unwrap_or_default()).stdin(std::process::Stdio::null()).output();
+    match out {
+        Ok(out) if !out.status.success() => eprintln!("[opencode] reload failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        Err(e) => eprintln!("[opencode] reload failed: {e}"),
+        Ok(_) => {}
+    }
+}
+
+/// Wings adds itself to OpenCode when it starts, unless you disconnected it or it already points at this binary.
+/// Only release builds: a dev build would point OpenCode at its own binary.
+fn connect_opencode_on_start(app: AppHandle) {
+    #[cfg(unix)]
+    thread::spawn(move || {
+        if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(OPENCODE_DISCONNECTED).exists()) {
+            return;
+        }
+        let (Some(_), Ok(exe)) = (plugins::find_program("opencode"), std::env::current_exe()) else { return };
+        if opencode_config::points_at(&opencode_config::config_path(), &exe) {
+            return;
+        }
+        if let Err(e) = connect_opencode(&app) {
+            eprintln!("[opencode] couldn't connect OpenCode: {e}");
         }
     });
     #[cfg(not(unix))]
@@ -1437,6 +1523,7 @@ pub fn run() {
                 #[cfg(unix)]
                 mcp::start(app.handle().clone(), mcp::socket_path(&data));
                 connect_claude_on_start(app.handle().clone());
+                connect_opencode_on_start(app.handle().clone());
                 #[cfg(target_os = "macos")]
                 privacy::watch(app.handle().clone());
                 start_detection(app.handle().clone());
@@ -1500,6 +1587,9 @@ pub fn run() {
             mcp_connect,
             mcp_set_always_load,
             mcp_disconnect,
+            opencode_mcp_status,
+            opencode_mcp_connect,
+            opencode_mcp_disconnect,
             privacy_open_settings,
             privacy_check,
             cli_status,

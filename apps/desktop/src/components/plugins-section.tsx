@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { TerminalCommandRow } from "@/components/terminal-command";
 import { PluginNeeds } from "@/components/tool-install";
-import { api, type McpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
+import { api, type McpStatus, type OpencodeMcpStatus, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { iconMaskStyle } from "@/lib/plugin-icon-mask";
 import { advance, enqueue } from "@/lib/review-queue";
@@ -247,6 +247,68 @@ function ClaudeConnect({ open }: { open: boolean }) {
   );
 }
 
+/** Wings adds itself to OpenCode's global config when it starts, so its sessions get plugin tools. */
+function OpencodeConnect({ open }: { open: boolean }) {
+  const [status, setStatus] = useState<OpencodeMcpStatus | null>(null);
+  const [connecting, setConnecting] = useState<"connect" | "disconnect" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) void api.opencodeMcpStatus().then(setStatus, () => {});
+  }, [open]);
+
+  async function run(action: "connect" | "disconnect") {
+    setConnecting(action);
+    setError(null);
+    try {
+      await (action === "connect" ? api.opencodeMcpConnect() : api.opencodeMcpDisconnect());
+      setStatus(await api.opencodeMcpStatus());
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setConnecting(null);
+    }
+  }
+
+  if (!status) return null;
+  return (
+    <div className="flex flex-col gap-1.5 border-b border-hairline px-5 py-3">
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+        <div className="min-w-0 flex-1 basis-80">
+          <p className="flex items-center gap-1.5 text-[13px] font-medium">
+            OpenCode
+            {status.connected && <CircleCheckIcon className="size-3.5 text-done" aria-label="Connected" />}
+          </p>
+          <p className="text-[12px] leading-snug text-muted-foreground">
+            {!status.opencode
+              ? "Install OpenCode to give it plugin tools."
+              : status.connected
+                ? "Its sessions get plugin tools."
+                : "Connect it so its sessions get plugin tools."}
+          </p>
+        </div>
+        {status.opencode && (
+          <Button variant={status.connected ? "outline" : "secondary"} size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("connect")}>
+            {connecting === "connect" && <Spinner />}
+            {status.connected ? "Reconnect" : "Connect"}
+          </Button>
+        )}
+        {status.connected && (
+          <Button variant="ghost" size="sm" className="h-7 shrink-0" disabled={connecting !== null} onClick={() => void run("disconnect")}>
+            {connecting === "disconnect" && <Spinner />}
+            Disconnect
+          </Button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="text-[12px] text-blocked">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 const statusOf = (p: PluginView) => (!p.approved ? "Waiting for approval" : p.enabled ? "On" : "Off");
 
 /** The Plugins section of Settings: install at the top, installed plugins on the left, the selected one's page on the right. */
@@ -448,6 +510,7 @@ export function PluginsSection(props: {
       </div>
       <div className="shrink-0 [&>div]:px-6">
         <ClaudeConnect open />
+        <OpencodeConnect open />
         <TerminalCommandRow open />
       </div>
 

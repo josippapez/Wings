@@ -120,6 +120,8 @@ export type ToolStatus = { program: string; name: string; installed: boolean; co
 /** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
 export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean; alwaysLoad: boolean };
+/** Whether OpenCode is installed, and its global config has the Wings MCP server. */
+export type OpencodeMcpStatus = { opencode: boolean; connected: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
 export type CliStatus = { available: boolean; installed: boolean; onPath: boolean; asked: boolean };
 /** A tool call from Claude, and who made it: the Wings pane it runs in, that pane's project and the Claude session there. Each is null when there is none. */
@@ -223,6 +225,10 @@ export const api = {
   mcpDisconnect: () => invoke<void>("mcp_disconnect"),
   /** Re-registers the Wings MCP server so its tools load at session start, or back behind tool search. */
   mcpSetAlwaysLoad: (on: boolean) => invoke<void>("mcp_set_always_load", { on }),
+  opencodeMcpStatus: () => invoke<OpencodeMcpStatus>("opencode_mcp_status"),
+  /** Adds the Wings MCP server to OpenCode's global config, keeping fields you set on it. */
+  opencodeMcpConnect: () => invoke<void>("opencode_mcp_connect"),
+  opencodeMcpDisconnect: () => invoke<void>("opencode_mcp_disconnect"),
   privacyOpenSettings: () => invoke<void>("privacy_open_settings"),
   privacyCheck: (folder: string) => invoke<boolean>("privacy_check", { folder }),
   onPrivacyBlocked: (cb: (blocked: PrivacyBlocked) => void): Promise<UnlistenFn> =>
