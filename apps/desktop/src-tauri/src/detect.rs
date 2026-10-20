@@ -230,10 +230,14 @@ impl Detector {
                     (file, state)
                 }
             };
-            // A name made from the folder, or none, gives way to a generated one.
-            let weak_name = kind == AgentKind::Claude && (file.name.is_none() || file.name_source.as_deref() == Some("derived"));
+            // Claude Code's session title is in the terminal title. A name Claude Code made from the folder
+            // (`wings-ff`) comes after it, and with neither a generated name replaces it.
+            let derived = file.name_source.as_deref() == Some("derived");
+            let titled = (kind == AgentKind::Claude).then(|| strip_title_glyph(&pane.title)).flatten().filter(|t| t != "Claude Code");
+            let weak_name = kind == AgentKind::Claude && titled.is_none() && (file.name.is_none() || derived);
             let name = match kind {
-                AgentKind::Claude => file.name.or_else(|| strip_title_glyph(&pane.title)),
+                AgentKind::Claude if derived => titled.or(file.name),
+                AgentKind::Claude => file.name.or(titled),
                 AgentKind::Opencode => file.name,
             };
             agents.push(Agent {
@@ -528,6 +532,10 @@ mod tests {
         fs::write(tmp.join("sessions").join(format!("{pid}.json")), r#"{"sessionId":"abc","status":"idle","name":"wings-b3","nameSource":"derived"}"#).unwrap();
         let agents = d.scan(std::slice::from_ref(&probe), None).agents;
         assert!(agents[0].weak_name);
+        // The session's title in the terminal title beats the folder name, and needs no generated one.
+        let titled = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: probe.shell_pid, foreground_pid: None, title: "✳ Opencode wings registration error".into() };
+        let agents = d.scan(std::slice::from_ref(&titled), None).agents;
+        assert_eq!((agents[0].name.as_deref(), agents[0].weak_name), (Some("Opencode wings registration error"), false));
 
         shell.kill().unwrap();
         let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();
