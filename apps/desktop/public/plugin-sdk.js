@@ -12,6 +12,7 @@
   const listeners = { panes: [], action: [], broadcast: [] };
   let replyHandler = null;
   listeners.transcript = [];
+  listeners.agentActivity = [];
   listeners.git = [];
   listeners.focus = [];
   listeners.project = [];
@@ -236,6 +237,14 @@
      * started in the pane; `transcript` reads earlier ones. Entries over 256 KB are skipped.
      */
     onTranscript: (listener) => subscribe(listeners.transcript, listener),
+    /**
+     * With `permissions.agentActivity`: what an OpenCode session is doing, as `{ model, context, tokens, cost, items }`:
+     * its newest prompts and tool calls, oldest first, and the session's token totals. Reads one page of the session's
+     * latest messages, a few ms on this machine. Refresh it from `onAgentActivity` rather than polling.
+     */
+    agentActivity: (sessionId) => call("agentActivity", { sessionId }),
+    /** With `permissions.agentActivity`: called with `{ sessionId }` when an OpenCode session starts, ends or does a tool call, at most about once a second per burst. */
+    onAgentActivity: (listener) => subscribe(listeners.agentActivity, listener),
     /** With a `git` exec entry: the ids of the projects whose repo changed (HEAD, index or refs), as `{ projectIds }`. */
     onGitChange: (listener) => subscribe(listeners.git, listener),
     /**

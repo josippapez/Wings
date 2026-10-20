@@ -15,7 +15,7 @@ export function Stats({ s }: { s: SessionView }) {
           { label: "Context", value: s.context == null ? "—" : tokens(s.context) },
         ]}
       />
-      <Text as="p" tone="muted" size="small" className="tokens">{`Tokens this run: ${s.tokens}`}</Text>
+      <Text as="p" tone="muted" size="small" className="tokens">{`${s.agent === "opencode" ? "Tokens" : "Tokens this run"}: ${s.tokens}`}</Text>
     </>
   );
 }

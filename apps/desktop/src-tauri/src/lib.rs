@@ -1,3 +1,5 @@
+mod agent_activity;
+mod ai;
 mod bench;
 mod claude;
 #[cfg(unix)]
@@ -63,6 +65,7 @@ use plugins::{ExecResult, Plugin};
 use spaces::{GitStatus, SpaceStore, SpaceView};
 
 struct AppState {
+    ai: ai::Ai,
     claude_dir: PathBuf,
     history: history::History,
     spaces: Mutex<SpaceStore>,
@@ -630,15 +633,30 @@ fn mcp_disconnect(app: AppHandle) -> Res<()> {
     Ok(())
 }
 
-/// Wings adds itself to Claude Code when it starts, unless you disconnected it. Only release builds: a dev build
-/// would point Claude Code at its own binary.
+/// Whether this is an installed app, `<name>.app/Contents/MacOS/<binary>`, the only copy that may write itself into
+/// the agents' configs on start. A release binary run from `target/` would point them at the build folder.
+fn installed_app(exe: &std::path::Path) -> bool {
+    let mut parents = exe.ancestors().skip(1);
+    let (macos, contents, bundle) = (parents.next(), parents.next(), parents.next());
+    macos.and_then(|p| p.file_name()).is_some_and(|n| n == "MacOS")
+        && contents.and_then(|p| p.file_name()).is_some_and(|n| n == "Contents")
+        && bundle.and_then(|p| p.extension()).is_some_and(|e| e == "app")
+}
+
+/// The binary to write into the agents' configs on start, or `None` when this isn't the installed app.
+fn exe_to_connect() -> Option<std::path::PathBuf> {
+    std::env::current_exe().ok().filter(|exe| installed_app(exe))
+}
+
+/// Wings adds itself to Claude Code when it starts, unless you disconnected it. Only the installed app: a dev build
+/// or a binary in `target/` would point Claude Code at itself.
 fn connect_claude_on_start(app: AppHandle) {
     #[cfg(unix)]
     thread::spawn(move || {
         if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(CLAUDE_DISCONNECTED).exists()) {
             return;
         }
-        let (Some(claude), Ok(exe)) = (plugins::find_program("claude"), std::env::current_exe()) else { return };
+        let (Some(claude), Some(exe)) = (plugins::find_program("claude"), exe_to_connect()) else { return };
         let registered = claude_mcp(&claude, &["get", "wings"])
             .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
         let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app, None) };
@@ -738,7 +756,7 @@ fn connect_opencode_on_start(app: AppHandle) {
         if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(OPENCODE_DISCONNECTED).exists()) {
             return;
         }
-        let (Some(_), Ok(exe)) = (plugins::find_program("opencode"), std::env::current_exe()) else { return };
+        let (Some(_), Some(exe)) = (plugins::find_program("opencode"), exe_to_connect()) else { return };
         if opencode_config::points_at(&opencode_config::config_path(), &exe) {
             return;
         }
@@ -1061,6 +1079,20 @@ fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: Stri
     plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types, last)
 }
 
+/// What an OpenCode session is doing, if the plugin may read it. The service address and password stay here.
+#[tauri::command(async)]
+fn plugin_agent_activity(state: State<AppState>, plugin_id: String, session_id: String) -> Res<agent_activity::Activity> {
+    if !plugins::may_read_agent_activity(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read agent activity"));
+    }
+    let start = std::time::Instant::now();
+    let activity = agent_activity::fetch_live(&session_id);
+    if cfg!(debug_assertions) {
+        eprintln!("[plugin] {plugin_id} agentActivity took {} ms", start.elapsed().as_millis());
+    }
+    activity
+}
+
 /// Your usage limits and each session's context and cache, as Claude Code last told `wings statusline`.
 #[tauri::command]
 fn plugin_statusline(state: State<AppState>, plugin_id: String) -> Res<serde_json::Value> {
@@ -1348,6 +1380,7 @@ fn start_detection(app: AppHandle) {
         let mut detector = Detector::new(&state.claude_dir);
         let mut tailer = tail::Tailer::new(&state.claude_dir);
         opencode::spawn(detector.opencode());
+        forward_agent_activity(&app, &detector.opencode());
         loop {
             let probes: Vec<PaneProbe> = state
                 .panes
@@ -1366,6 +1399,7 @@ fn start_detection(app: AppHandle) {
             let scan = detector.scan(&probes, focused.as_deref());
             let mut agents = scan.agents;
             agents.sort_by(|a, b| (&a.space_id, &a.pane_id).cmp(&(&b.space_id, &b.pane_id)));
+            state.ai.observe(&mut agents);
             // Each lock is let go before anything else runs. `agents_list` and `pane_info` wait for them on the
             // main thread, `tail_transcripts` takes the agents lock again, and asking whether the window is
             // focused waits for the main thread.
@@ -1386,6 +1420,35 @@ fn start_detection(app: AppHandle) {
             }
             tail_transcripts(&app, &mut tailer);
             thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+/// Tells the running plugins that may read agent activity which OpenCode session just did something. Tool calls
+/// come in bursts, so each burst is one event per session, sent a moment after it starts.
+fn forward_agent_activity(app: &AppHandle, opencode: &opencode::Shared) {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    opencode.on_activity(move |session| {
+        let _ = tx.send(session.to_string());
+    });
+    let app = app.clone();
+    thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            thread::sleep(Duration::from_millis(700));
+            let mut sessions = vec![first];
+            sessions.extend(rx.try_iter());
+            sessions.sort();
+            sessions.dedup();
+            let state = app.state::<AppState>();
+            let plugins: Vec<String> = {
+                let store = state.plugins.lock().unwrap();
+                store.list().iter().filter_map(|p| store.active(&p.manifest.id)).filter(plugins::may_read_agent_activity).map(|p| p.manifest.id.clone()).collect()
+            };
+            if plugins.is_empty() {
+                continue;
+            }
+            let events: Vec<plugins::AgentActivityEvent> = sessions.into_iter().map(|session_id| plugins::AgentActivityEvent { session_id, plugins: plugins.clone() }).collect();
+            let _ = app.emit_to("main", "plugin-agent-activity", &events);
         }
     });
 }
@@ -1519,6 +1582,7 @@ pub fn run() {
             let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
             let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
             app.manage(AppState {
+                ai: ai::Ai::new(data.join("ai")),
                 plugins,
                 storage: plugin_storage::Storage::new(data.join("plugin-storage")),
                 project_info: project_info::Store::new(data.join("projects"), data.join("plugin-storage")),
@@ -1554,12 +1618,13 @@ pub fn run() {
                 mcp::start(app.handle().clone(), mcp::socket_path(&data));
                 connect_claude_on_start(app.handle().clone());
                 connect_opencode_on_start(app.handle().clone());
-                if !cfg!(debug_assertions) {
+                if !cfg!(debug_assertions) && exe_to_connect().is_some() {
                     let handle = app.handle().clone();
                     thread::spawn(move || journal_sync(&handle));
                 }
                 #[cfg(target_os = "macos")]
                 privacy::watch(app.handle().clone());
+                ai::start(app.handle().clone());
                 start_detection(app.handle().clone());
                 start_git_status(app.handle().clone());
                 gitwatch::start(app.handle().clone());
@@ -1567,6 +1632,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai::ai_status,
+            ai::ai_set,
             project_info_get,
             project_info_apply,
             project_info_add_image,
@@ -1634,6 +1701,7 @@ pub fn run() {
             plugin_transcript,
             plugin_statusline,
             plugin_ports,
+            plugin_agent_activity,
             plugin_open_url,
             plugin_open_pane,
             plugin_focus_pane,
@@ -1661,6 +1729,16 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_installed_app_connects_the_agents_on_start() {
+        use std::path::Path;
+        assert!(super::installed_app(Path::new("/Applications/Wings.app/Contents/MacOS/wings")));
+        // A release binary in the build folder, the test harness, or a binary copied anywhere else does not.
+        for other in ["/w/apps/desktop/src-tauri/target/release/deps/wings-224b4daf414bfdd7", "/w/target/release/wings", "/usr/local/bin/wings", "/x/MacOS/wings", "wings"] {
+            assert!(!super::installed_app(Path::new(other)), "{other}");
+        }
+    }
+
     #[test]
     fn re_registering_keeps_what_you_set_on_the_server() {
         use serde_json::json;

@@ -51,6 +51,9 @@ pub struct Permissions {
     pub statusline: bool,
     /// Lets the plugin see which local TCP ports the programs in each pane listen on, with `wings.ports`.
     pub ports: bool,
+    /// Lets the plugin read what an OpenCode session is doing, with `wings.agentActivity`, and hear when it
+    /// changes, with `wings.onAgentActivity`.
+    pub agent_activity: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1130,6 +1133,11 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.ports
 }
 
+/// Whether the plugin may read what an OpenCode session is doing.
+pub fn may_read_agent_activity(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.agent_activity
+}
+
 /// A word of a pane command. Pane commands are typed into your shell, so words can't hold spaces, quotes,
 /// backslashes, `$`, globs or operators; single-quoted, such a word reads the same in sh, bash, zsh and fish.
 fn plain_word(word: &str) -> bool {
@@ -1287,6 +1295,15 @@ pub fn transcript_event(running: &[Plugin], line: crate::tail::Line) -> Option<T
     let plugins: Vec<String> =
         running.iter().filter(|p| p.manifest.permissions.transcript.iter().any(|t| is_type(t, &entry))).map(|p| p.manifest.id.clone()).collect();
     (!plugins.is_empty()).then_some(TranscriptEvent { session_id: line.session_id, pane_id: line.pane_id, entry, plugins })
+}
+
+/// An OpenCode session did something, for `wings.onAgentActivity`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActivityEvent {
+    pub session_id: String,
+    /// The running plugins whose `permissions.agentActivity` is on. Only they get it.
+    pub plugins: Vec<String>,
 }
 
 #[cfg(test)]
@@ -2282,6 +2299,22 @@ mod tests {
         assert!(!may_read_ports(&manifest(serde_json::json!({}))));
         assert!(!may_read_ports(&manifest(serde_json::json!({ "exec": ["lsof"], "statusline": true }))));
         assert!(may_read_ports(&manifest(serde_json::json!({ "ports": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agent_activity_needs_its_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-activity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_read_agent_activity(&manifest(serde_json::json!({}))));
+        assert!(!may_read_agent_activity(&manifest(serde_json::json!({ "transcript": ["assistant"], "statusline": true }))));
+        assert!(may_read_agent_activity(&manifest(serde_json::json!({ "agentActivity": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

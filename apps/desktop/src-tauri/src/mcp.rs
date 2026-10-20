@@ -395,7 +395,7 @@ mod tests {
 
     fn agent(kind: AgentKind, session_id: Option<&str>, name: Option<&str>) -> Agent {
         let (session_id, name) = (session_id.map(String::from), name.map(String::from));
-        Agent { pane_id: "p1".into(), space_id: "s1".into(), pid: 1, kind, session_id, name, state: AgentState::Idle, waiting_for: None, args: vec![], started_at: 0, state_since: None, direct: true }
+        Agent { pane_id: "p1".into(), space_id: "s1".into(), pid: 1, kind, session_id, name, state: AgentState::Idle, waiting_for: None, args: vec![], started_at: 0, state_since: None, direct: true, summary: None, weak_name: false }
     }
 
     #[test]

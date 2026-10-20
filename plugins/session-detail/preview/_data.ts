@@ -39,6 +39,7 @@ export const detail = ({ key }: { sessionId: string; key: string }) => {
 
 export const working: SessionView = {
   id: "s1",
+  agent: "claude",
   project: "web",
   name: "checkout redesign",
   state: "working",
@@ -66,3 +67,31 @@ export const working: SessionView = {
 };
 
 export const idle: SessionView = { ...working, id: "s2", name: null, project: "api", state: "idle", running: [], todos: [], files: [], items: items.slice(0, 3), tokens: "12k in · 1k out" };
+
+/** An OpenCode session: its own tool names, no to-do list, and a cost in the token line. */
+export const opencode: SessionView = {
+  id: "ses_oc1",
+  agent: "opencode",
+  project: "web",
+  name: "Add the coupon field",
+  state: "working",
+  model: "gpt-6-luna-fast",
+  context: 48_700,
+  tokens: "310k (in 41k, out 6k, cache 263k) · $0.84",
+  running: [{ name: "shell", summary: "pnpm test -- coupon", at: at(0) }],
+  // Newest first, as the sidebar lists them.
+  items: [
+    { kind: "tool", key: "oc-t6", name: "shell", summary: "pnpm test -- coupon", at: at(0), done: false, tags: [{ kind: "test", label: "Tests" }] },
+    { kind: "tool", key: "oc-t5", name: "shell", summary: "Add a coupon field to the checkout summary", at: at(2), ms: 760, done: true, tags: [{ kind: "commit", label: "Commit" }] },
+    { kind: "tool", key: "oc-t4", name: "read", summary: "coupon.spec.ts", at: at(5), ms: 60, done: true, error: true },
+    { kind: "tool", key: "oc-t3", name: "patch", summary: "CheckoutSummary.tsx, useCoupon.ts", at: at(6), ms: 40, done: true },
+    { kind: "tool", key: "oc-t2", name: "grep", summary: "useCoupon", at: at(8), ms: 210, done: true },
+    { kind: "tool", key: "oc-t1", name: "read", summary: "CheckoutSummary.tsx", at: at(8), ms: 90, done: true },
+    { kind: "prompt", key: "oc-p1", summary: "Add a coupon field under the order summary and keep the totals in sync", at: at(9) },
+  ],
+  todos: [],
+  files: [
+    ["/work/web/src/features/checkout/CheckoutSummary.tsx", 1],
+    ["/work/web/src/features/checkout/hooks/useCoupon.ts", 1],
+  ],
+};

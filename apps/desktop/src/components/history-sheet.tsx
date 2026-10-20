@@ -169,6 +169,12 @@ export function HistorySheet(props: {
   };
 
   const sessions = results?.sessions;
+  // Names the model makes after the search answered.
+  const [generated, setGenerated] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const off = api.onAiNames((names) => setGenerated((all) => ({ ...all, ...names })));
+    return () => void off.then((unlisten) => unlisten());
+  }, []);
   const filtered = Boolean(query.trim() || branch || since !== "any");
 
   return (
@@ -305,14 +311,15 @@ export function HistorySheet(props: {
               {sessions.map((s) => {
                 const live = props.liveSessionIds.has(s.id);
                 const snippet = s.snippets[0];
+                const name = s.title ?? s.name ?? generated[s.id];
                 const place = where(s);
                 const launchable = Boolean(s.cwd ?? (project && space?.path));
                 return (
                   <li key={s.id} className="group/session flex items-start gap-2 rounded-lg p-2.5 transition-colors duration-150 hover:bg-hover">
                     <div className="min-w-0 flex-1">
-                      <p title={s.title ?? s.firstPrompt ?? undefined} className="flex items-center gap-1.5 text-sm font-medium">
+                      <p title={name ?? s.firstPrompt ?? undefined} className="flex items-center gap-1.5 text-sm font-medium">
                         <AgentMark agent={s.agent} />
-                        <span className="truncate">{s.title ?? s.firstPrompt ?? "Untitled session"}</span>
+                        <span className="truncate">{name ?? s.firstPrompt ?? "Untitled session"}</span>
                       </p>
                       {snippet ? (
                         <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
@@ -320,7 +327,7 @@ export function HistorySheet(props: {
                           <Highlight text={snippet.text} terms={terms} />
                         </p>
                       ) : (
-                        s.title &&
+                        name &&
                         s.firstPrompt && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{s.firstPrompt}</p>
                       )}
                       <p title={s.cwd ?? space?.path} className="mt-1 truncate text-xs text-muted-foreground">

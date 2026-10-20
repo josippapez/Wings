@@ -36,6 +36,7 @@ export type ItemView = Omit<Item, "input" | "result" | "text">;
 
 export interface SessionView {
   id: string;
+  agent: "claude" | "opencode";
   project: string;
   name: string | null;
   state: string;

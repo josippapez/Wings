@@ -1,11 +1,13 @@
-// Follows each Claude session in a pane for a sidebar with its recent activity.
+// Follows each Claude Code and OpenCode session in a pane for a sidebar with its recent activity.
 // It reads the newest transcript entries once per run of `claude`, then only what Claude appends. A resumed
-// session's transcript also holds earlier runs, which only count for the model and context.
+// session's transcript also holds earlier runs, which only count for the model and context. OpenCode has no
+// transcript: Wings is asked for a session's latest activity when it changes (see lib/opencode.ts).
 
 import { followSessions } from "wings-plugin-sdk/sessions";
 import { openChanges } from "./lib/diff";
 import { ch } from "./lib/messages";
-import { fresh, ingest, session } from "./lib/session";
+import { followOpencode } from "./lib/opencode";
+import { fresh, ingest, session, type Session } from "./lib/session";
 import type { SessionView } from "./lib/types";
 import { snapshot } from "./lib/view";
 
@@ -13,13 +15,13 @@ import { snapshot } from "./lib/view";
 const BACKLOG = 500;
 
 // The return type is written out because `follow` uses the loader and the loader uses `follow`.
-ch.serve("sessions", (): SessionView[] => snapshot(follow.sessions()), { throttleMs: 300 });
+ch.serve("sessions", (): SessionView[] => snapshot([...follow.sessions(), ...opencode.sessions()]), { throttleMs: 300 });
 
 // A row opens to its detail, which follows the row: a call still running when it opened gets its result.
 ch.serve(
   "detail",
   ({ sessionId, key }) => {
-    const item = follow.get(sessionId)?.items.find((i) => i.key === key);
+    const item = (follow.get(sessionId) ?? opencode.get(sessionId))?.items.find((i) => i.key === key);
     if (!item) throw new Error("That row isn't kept any more.");
     return item;
   },
@@ -37,11 +39,14 @@ const follow = followSessions({
     return entries;
   },
   entry: (s, entry, { thisRun }) => ingest(s, entry, thisRun),
-  changed(s) {
-    ch.refresh("sessions");
-    for (const key of ch.watching("detail")) if (key.sessionId === s.id) ch.refresh("detail", key);
-  },
+  changed,
 });
+const opencode = followOpencode(changed);
+
+function changed(s: Session) {
+  ch.refresh("sessions");
+  for (const key of ch.watching("detail")) if (key.sessionId === s.id) ch.refresh("detail", key);
+}
 
 // A file opens to its diff.
-ch.answer("diff", ({ sessionId, path }) => openChanges(follow.get(sessionId), path));
+ch.answer("diff", ({ sessionId, path }) => openChanges(follow.get(sessionId) ?? opencode.get(sessionId), path));

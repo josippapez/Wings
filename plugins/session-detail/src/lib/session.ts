@@ -44,6 +44,10 @@ interface Run {
 
 export interface Session extends Run {
   id: string;
+  /** Which agent runs it. Claude Code's activity follows its transcript, OpenCode's is asked for from Wings. */
+  agent: "claude" | "opencode";
+  /** USD, as OpenCode reports it. */
+  cost: number;
   project: string;
   name: string | null;
   state: string;
@@ -55,7 +59,7 @@ export interface Session extends Run {
 
 export const fresh = (): Run => ({ items: [], tools: new Map(), files: new Map(), todos: [], tasks: new Map(), creating: new Map(), tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, partial: false });
 
-export const session = (id: string): Session => ({ id, project: "", name: null, state: "idle", model: null, context: null, cwd: null, updated: 0, ...fresh() });
+export const session = (id: string, agent: Session["agent"] = "claude"): Session => ({ id, agent, cost: 0, project: "", name: null, state: "idle", model: null, context: null, cwd: null, updated: 0, ...fresh() });
 
 let nextKey = 1;
 

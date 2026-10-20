@@ -565,7 +565,7 @@ fn opencode_session(info: &Value, messages: &[Value]) -> Session {
         id: text("id").unwrap_or_default(),
         agent: Agent::OpenCode,
         cwd: info.pointer("/location/directory").and_then(Value::as_str).filter(|d| !d.is_empty()).map(String::from),
-        ai_title: text("title"),
+        ai_title: crate::opencode::real_title(text("title")),
         first_time: info.pointer("/time/created").and_then(Value::as_u64).map(iso),
         last_time: info.pointer("/time/updated").and_then(Value::as_u64).map(iso),
         ..Session::default()
@@ -637,6 +637,9 @@ pub struct Hit {
     /// Messages that match the search.
     pub matches: usize,
     pub snippets: Vec<Snippet>,
+    /// A name Wings generated, for a session with no `title`. See `ai.rs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -650,6 +653,17 @@ pub struct Results {
     pub branches: Vec<String>,
     /// OpenCode's sessions are still being fetched, so more may show up on the next search.
     pub opencode_loading: bool,
+}
+
+/// See `History::excerpt`. The texts are whole messages: the caller cuts them to what its model can take.
+#[derive(Debug, Default)]
+pub struct Excerpt {
+    /// The session's own title, if it has one.
+    pub title: Option<String>,
+    pub first_prompt: String,
+    pub first_reply: Option<String>,
+    pub last_prompt: String,
+    pub last_reply: Option<String>,
 }
 
 impl History {
@@ -697,6 +711,7 @@ impl History {
                     messages: s.messages.len(),
                     matches,
                     snippets,
+                    name: None,
                 }
             })
             .collect();
@@ -757,6 +772,29 @@ impl History {
             });
         }
         self.opencode.lock().unwrap().loading = false;
+    }
+
+    /// What a session says at its two ends, for the generated names and summaries: the first and the latest
+    /// prompt, each with the reply that follows it. None when the session isn't loaded or has no prompt yet.
+    pub fn excerpt(&self, claude_dir: &Path, id: &str) -> Option<Excerpt> {
+        let mut index = self.index.lock().unwrap();
+        refresh(&mut index, claude_dir);
+        let opencode = self.opencode.lock().unwrap();
+        let s = index.values().map(|t| &t.session).find(|s| s.id == id).or_else(|| opencode.sessions.get(id).map(|c| &c.session))?;
+        let text = |i: usize| {
+            let (start, end) = s.range(i);
+            s.text[start..end].to_string()
+        };
+        let reply_after = |i: usize| s.messages.get(i + 1).filter(|m| m.role == Role::Assistant).map(|_| text(i + 1));
+        let first = s.messages.iter().position(|m| m.role == Role::User)?;
+        let last = s.messages.iter().rposition(|m| m.role == Role::User)?;
+        Some(Excerpt {
+            title: s.title().map(String::from),
+            first_prompt: text(first),
+            first_reply: reply_after(first),
+            last_prompt: text(last),
+            last_reply: reply_after(last),
+        })
     }
 
     /// One session's summary and a page of its messages, for `read_session`.
@@ -821,7 +859,9 @@ pub fn history_search(app: AppHandle, state: State<AppState>, query: String, fil
     if state.history.begin_opencode() {
         std::thread::spawn(move || app.state::<AppState>().history.run_opencode());
     }
-    state.history.search(&state.claude_dir, &query, &filter, limit)
+    let mut results = state.history.search(&state.claude_dir, &query, &filter, limit);
+    state.ai.name_hits(&mut results.sessions);
+    results
 }
 
 /// The built-in Wings MCP tools, listed before the plugins' tools.

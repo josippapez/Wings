@@ -37,7 +37,7 @@ export default function Sidebar() {
   }
 
   if (sessions === null) return <Loading />;
-  if (sessions.length === 0) return <Empty title="No Claude session in your panes." description="Run claude in a pane and its activity shows here." />;
+  if (sessions.length === 0) return <Empty title="No agent session in your panes." description="Run claude or opencode in a pane and its activity shows here." />;
   const s = sessions.find((x) => x.id === picked) ?? sessions[0];
   return (
     <>

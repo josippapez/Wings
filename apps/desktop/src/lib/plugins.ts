@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type AgentKind, type McpCall, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneRail, type PaneRail } from "@/lib/pane-rail";
@@ -298,6 +298,7 @@ export class PluginHost {
   /** `openPane` calls waiting for their new pane to reach plugins, by Rust pane id. */
   private paneWaiters = new Map<string, () => void>();
   private unlistenTranscript = api.onPluginTranscript((events) => this.publishTranscript(events));
+  private unlistenAgentActivity = api.onPluginAgentActivity((events) => this.publishAgentActivity(events));
   private unlistenGit = api.onGitChanged((projectIds) => this.publishGit(projectIds));
   /** Starts true: Wings opens in front, and the document is checked for focus. */
   private focus = new FocusTracker(document.hasFocus(), (focused) => {
@@ -578,6 +579,13 @@ export class PluginHost {
     }
   }
 
+  /** Each event goes to the pages of the plugins Rust found may read agent activity, if they're running. */
+  private publishAgentActivity(events: PluginAgentActivityEvent[]) {
+    for (const { plugins, ...data } of events) {
+      for (const plugin of this.frames.values()) if (plugin.ready && plugins.includes(plugin.id)) plugin.post({ event: "agentActivity", data });
+    }
+  }
+
   /** A repo moved: the frames of plugins that may run git hear which projects. */
   private publishGit(projectIds: string[]) {
     for (const plugin of gitListeners(this.frames.values())) plugin.post({ event: "git", data: { projectIds } });
@@ -629,6 +637,7 @@ export class PluginHost {
     window.removeEventListener("message", this.onMessage);
     void this.unlistenTools.then((off) => off());
     void this.unlistenTranscript.then((off) => off());
+    void this.unlistenAgentActivity.then((off) => off());
     void this.unlistenGit.then((off) => off());
     void this.unlistenFocus.then((off) => off());
     this.focus.dispose();
@@ -698,6 +707,8 @@ export class PluginHost {
           types: Array.isArray(p.types) ? p.types.map(String) : [],
           last: typeof p.last === "number" && p.last >= 1 ? Math.floor(p.last) : null,
         });
+      case "agentActivity":
+        return invoke("plugin_agent_activity", { pluginId, sessionId: String(p.sessionId) });
       case "statusline":
         return invoke("plugin_statusline", { pluginId });
       case "ports":

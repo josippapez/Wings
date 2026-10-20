@@ -56,6 +56,11 @@ pub struct Agent {
     /// True when the agent's parent is the pane's own shell, so nothing like `npx` or `script` wraps it. Wings
     /// only puts an agent to sleep when it is, since the shell then goes back to its prompt once the agent exits.
     pub direct: bool,
+    /// One line on what the agent just did, generated when a turn ends (see `ai.rs`). Not set by detection.
+    pub summary: Option<String>,
+    /// `name` came from the pane's terminal title, which says little: a generated name may replace it.
+    #[serde(skip)]
+    pub weak_name: bool,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -218,11 +223,12 @@ impl Detector {
                     };
                     let state = self.with_done(&pane.pane_id, raw, focused == Some(pane.pane_id.as_str()));
                     let file = view
-                        .map(|v| SessionFile { session_id: Some(v.session_id), name: v.title, status_updated_at: Some(v.since), ..Default::default() })
+                        .map(|v| SessionFile { session_id: Some(v.session_id), name: opencode::real_title(v.title), status_updated_at: Some(v.since), ..Default::default() })
                         .unwrap_or_default();
                     (file, state)
                 }
             };
+            let weak_name = kind == AgentKind::Claude && file.name.is_none();
             let name = match kind {
                 AgentKind::Claude => file.name.or_else(|| strip_title_glyph(&pane.title)),
                 AgentKind::Opencode => file.name,
@@ -240,6 +246,8 @@ impl Detector {
                 started_at,
                 state_since: file.status_updated_at,
                 direct: direct.get(&pane.pane_id).copied().unwrap_or(false),
+                summary: None,
+                weak_name,
             });
         }
         self.opencode.set_panes(opencode_panes);

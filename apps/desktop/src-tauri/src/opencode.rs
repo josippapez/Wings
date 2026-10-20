@@ -297,6 +297,8 @@ pub enum Update {
     Settled { session: String, id: String },
     /// `session.renamed`
     Renamed { session: String, title: String },
+    /// A tool call or a step of a reply started or finished: the session's activity changed.
+    Activity(String),
     /// Any other event.
     Other,
     /// An event of a kind that is used, without the fields it should have: the picture can't be trusted.
@@ -326,6 +328,11 @@ pub fn parse_event(data: &str) -> (Update, Option<u64>) {
             | "form.cancelled"
             | "session.renamed"
     );
+    if matches!(head.kind.as_str(), "session.tool.called" | "session.tool.success" | "session.tool.failed" | "session.step.ended") {
+        // Only a signal to look again, so one without a session is dropped rather than distrusting the picture.
+        let session = serde_json::from_str::<Value>(data).ok().and_then(|e| e["data"]["sessionID"].as_str().map(str::to_string));
+        return (session.map_or(Update::Other, Update::Activity), created);
+    }
     if !used {
         return (Update::Other, created);
     }
@@ -352,6 +359,12 @@ pub struct SessionInfo {
     pub parent: Option<String>,
     pub title: Option<String>,
     pub directory: Option<String>,
+}
+
+/// `title` unless it is the placeholder opencode gives a session before it has one, "New session - <ISO time>".
+/// Matching a pane by its title still uses the placeholder, since the TUI shows it.
+pub fn real_title(title: Option<String>) -> Option<String> {
+    title.filter(|t| t.strip_prefix("New session - ").is_none_or(|rest| !rest.starts_with(|c: char| c.is_ascii_digit())))
 }
 
 fn session_info(v: &Value) -> Option<SessionInfo> {
@@ -483,7 +496,7 @@ impl Model {
                     info.title = Some(title);
                 }
             }
-            Update::Other | Update::Malformed => {}
+            Update::Activity(_) | Update::Other | Update::Malformed => {}
         }
     }
 
@@ -637,10 +650,14 @@ impl Inner {
     }
 }
 
+type ActivityHook = Box<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Default)]
 pub struct Shared {
     inner: Mutex<Inner>,
     wake: Condvar,
+    /// Told the root session whenever it starts, ends or does a tool call, for plugins that show its activity.
+    on_activity: Mutex<Option<ActivityHook>>,
 }
 
 impl Shared {
@@ -679,7 +696,22 @@ impl Shared {
         self.lock().view.get(pane_id).cloned()
     }
 
+    pub fn on_activity(&self, f: impl Fn(&str) + Send + Sync + 'static) {
+        *self.on_activity.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
+    }
+
+    fn activity(&self, session: &str) {
+        let root = self.lock().model.root_of(session).unwrap_or_else(|| session.to_string());
+        if let Some(f) = &*self.on_activity.lock().unwrap_or_else(|e| e.into_inner()) {
+            f(&root);
+        }
+    }
+
     fn apply(&self, update: Update, at: u64) {
+        let signal = match &update {
+            Update::Started(s) | Update::Ended(s) => Some(s.clone()),
+            _ => None,
+        };
         let mut inner = self.lock();
         let touched = match &update {
             Update::Started(s) | Update::Ended(s) | Update::Pending { session: s, .. } | Update::Settled { session: s, .. } | Update::Renamed { session: s, .. } => Some(s.clone()),
@@ -691,7 +723,11 @@ impl Shared {
         }
         inner.model.apply(update);
         inner.refresh(at);
+        drop(inner);
         self.wake.notify_all();
+        if let Some(session) = signal {
+            self.activity(&session);
+        }
     }
 
     /// Replaces what is known about running and pending sessions with a fresh snapshot.
@@ -798,7 +834,7 @@ fn session_path(id: &str, tail: &str) -> String {
 }
 
 /// A session id goes into a url path, so anything but the characters opencode ids are made of is refused.
-fn plausible_id(id: &str) -> bool {
+pub(crate) fn plausible_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
@@ -858,6 +894,7 @@ fn connection(shared: &Shared) -> Result<bool, (bool, Error)> {
             Ok(Some(Frame::Data(data))) => match parse_event(&data) {
                 (Update::Malformed, _) => shared.install(snapshot(&*client).map_err(fail(true))?, now_ms()),
                 (Update::Other, _) => {}
+                (Update::Activity(session), _) => shared.activity(&session),
                 (update, at) => shared.apply(update, at.unwrap_or_else(now_ms)),
             },
             Ok(Some(Frame::Comment)) => {}
@@ -922,6 +959,14 @@ mod tests {
     };
 
     const SERVICE: &str = r#"{"id":"253f","version":"2.0.27","url":"http://127.0.0.1:49374","pid":31204,"password":"hunter2-secret"}"#;
+
+    #[test]
+    fn a_placeholder_title_is_no_title() {
+        assert_eq!(real_title(Some("New session - 2026-09-15T10:19:53.552Z".into())), None);
+        assert_eq!(real_title(Some("New session - fix the login".into())).as_deref(), Some("New session - fix the login"));
+        assert_eq!(real_title(Some("Wire up the MCP config".into())).as_deref(), Some("Wire up the MCP config"));
+        assert_eq!(real_title(None), None);
+    }
 
     fn session(id: &str, parent: Option<&str>, title: &str, dir: &str) -> SessionInfo {
         SessionInfo { id: id.into(), parent: parent.map(Into::into), title: Some(title.into()), directory: Some(dir.into()) }
@@ -1073,6 +1118,27 @@ mod tests {
         assert_eq!(parse_event(&renamed).0, Update::Renamed { session: "ses_a".into(), title: "New".into() });
         assert_eq!(parse_event(&event("session.text.delta", json!({"sessionID":"ses_a","delta":"hi"}))).0, Update::Other);
         assert_eq!(parse_event(r#"{"id":"e","type":"server.connected","data":{}}"#), (Update::Other, None));
+    }
+
+    #[test]
+    fn tool_events_signal_activity_and_never_distrust_the_picture() {
+        for kind in ["session.tool.called", "session.tool.success", "session.tool.failed", "session.step.ended"] {
+            assert_eq!(parse_event(&event(kind, json!({"sessionID":"ses_a","callID":"c"}))).0, Update::Activity("ses_a".into()), "{kind}");
+            assert_eq!(parse_event(&event(kind, json!({}))).0, Update::Other, "{kind} without a session is dropped, not Malformed");
+        }
+    }
+
+    #[test]
+    fn activity_reaches_the_hook_with_the_root_session() {
+        let shared = Shared::default();
+        shared.lock().model.infos.insert("ses_child".into(), SessionInfo { id: "ses_child".into(), parent: Some("ses_root".into()), title: None, directory: None });
+        shared.lock().model.infos.insert("ses_root".into(), SessionInfo { id: "ses_root".into(), parent: None, title: None, directory: None });
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        shared.on_activity(move |s| sink.lock().unwrap().push(s.to_string()));
+        shared.activity("ses_child");
+        shared.apply(Update::Ended("ses_root".into()), 1);
+        assert_eq!(*heard.lock().unwrap(), ["ses_root", "ses_root"]);
     }
 
     #[test]

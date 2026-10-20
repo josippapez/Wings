@@ -337,6 +337,8 @@ mod tests {
             started_at: 0,
             state_since: None,
             direct: true,
+            summary: None,
+            weak_name: false,
         }
     }
 

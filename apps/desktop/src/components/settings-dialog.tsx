@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { BellIcon, BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
-import type { PluginView } from "@/lib/api";
+import { api, type AiEngine, type AiStatus, type PluginView } from "@/lib/api";
 import { pluginSettingsSection, type NewProjectOpens, type NewTabEntry } from "@/lib/plugin-pages";
 import { playSound, SOUNDS, type SoundSettings } from "@/lib/sound";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
@@ -146,6 +146,56 @@ function EditorSettings() {
       >
         {current && <Choice id="default-editor" items={editors.map((e) => ({ value: e.id, label: e.name }))} value={current.id} onChange={choose} />}
       </Row>
+    </Group>
+  );
+}
+
+const aiEngines: { value: AiEngine; label: string }[] = [
+  { value: "apple", label: "On-device (Apple)" },
+  { value: "ollama", label: "Ollama" },
+  { value: "off", label: "Off" },
+];
+
+/** Which model names untitled sessions and writes each agent's one-line summary. Saved by the app, not the page. */
+function AiSettings() {
+  const [status, setStatus] = useState<AiStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+  const choose = (engine: AiEngine, model: string | null) => {
+    setFailed(false);
+    api
+      .aiSet(engine, model)
+      .then(async (next) => {
+        // Ollama with nothing chosen yet takes the first installed model, so the picker never starts empty.
+        if (next.engine === "ollama" && !next.ollamaModel && next.models.length) return api.aiSet("ollama", next.models[0]);
+        return next;
+      })
+      .then(setStatus)
+      .catch(() => setFailed(true));
+  };
+  useEffect(() => {
+    api.aiStatus().then(setStatus).catch(() => setFailed(true));
+  }, []);
+  const engine = status?.engine ?? "apple";
+  const problem = failed ? "Couldn't read the setting" : status && !status.available ? status.reason : null;
+  return (
+    <Group>
+      <Row
+        id="ai-engine"
+        label="Session names and summaries"
+        hint="Names untitled sessions and sums up each agent's last turn, from your prompt and its reply, with a model on this Mac."
+      >
+        <Choice id="ai-engine" items={aiEngines} value={engine} onChange={(value) => choose(value, status?.ollamaModel ?? null)} />
+      </Row>
+      {engine === "ollama" && status && status.models.length > 0 && (
+        <Row id="ai-model" label="Ollama model" hint="Any model you have pulled. A small one is plenty.">
+          <Choice id="ai-model" items={status.models.map((m) => ({ value: m, label: m }))} value={status.ollamaModel ?? status.models[0]} onChange={(model) => choose("ollama", model)} />
+        </Row>
+      )}
+      {(problem || (!status && !failed)) && (
+        <p role="status" className={cn("px-4 py-2.5 text-[12px] leading-snug", problem ? "text-blocked" : "text-muted-foreground")}>
+          {problem ? `${problem}. Names and summaries stay off until it works.` : "Checking…"}
+        </p>
+      )}
     </Group>
   );
 }
@@ -406,6 +456,7 @@ export function SettingsDialog(props: {
             </TabsContent>
             <TabsContent value="agents" className="flex flex-col gap-3 p-6">
               <h3 className="text-[15px] font-semibold">Agents</h3>
+              <AiSettings />
               <Group>
                 <Row
                   id="sleep-agents"

@@ -6,7 +6,8 @@ import type { Item, ItemView, SessionView } from "./types";
 
 const tokenLine = (s: Session) => {
   const t = s.tokens;
-  return `${tokens(t.input + t.output + t.cacheRead + t.cacheWrite)}${s.partial ? "+" : ""} (in ${tokens(t.input)}, out ${tokens(t.output)}, cache ${tokens(t.cacheRead + t.cacheWrite)})`;
+  const cost = s.cost > 0 ? ` · $${s.cost.toFixed(2)}` : "";
+  return `${tokens(t.input + t.output + t.cacheRead + t.cacheWrite)}${s.partial ? "+" : ""} (in ${tokens(t.input)}, out ${tokens(t.output)}, cache ${tokens(t.cacheRead + t.cacheWrite)})${cost}`;
 };
 const running = (s: Session) => [...s.tools.values()].filter((t) => !t.done);
 /** A row without what it opens to. */
@@ -18,6 +19,7 @@ export function snapshot(sessions: Session[]): SessionView[] {
   const build = (n: number): SessionView[] =>
     list.map((s) => ({
       id: s.id,
+      agent: s.agent,
       project: s.project,
       name: s.name,
       state: s.state,

@@ -9,7 +9,7 @@ import { canSleep, nextResumeDeadline, noResume, phaseOf, planSleep, RESUME_TIME
 
 const id = "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d";
 const agent = (over: Partial<Agent> = {}): Agent => ({
-  paneId: "p", spaceId: "s", pid: 1, kind: "claude", sessionId: id, name: null, state: "idle", waitingFor: null, args: [], startedAt: 0, stateSince: null, direct: true, ...over,
+  paneId: "p", spaceId: "s", pid: 1, kind: "claude", sessionId: id, name: null, state: "idle", waitingFor: null, args: [], startedAt: 0, stateSince: null, direct: true, summary: null, ...over,
 });
 const check = (over: Partial<Parameters<typeof canSleep>[0]> = {}) => canSleep({ agent: agent(), visible: false, draft: false, busy: false, background: false, ...over });
 

@@ -58,7 +58,7 @@ test("isInside matches the folder and what's under it, not a sibling with the sa
 });
 
 const agent = (paneId: string, spaceId: string): Agent => ({
-  paneId, spaceId, pid: 1, kind: "claude", sessionId: null, name: null, state: "idle", waitingFor: null, args: [], startedAt: 0, stateSince: null, direct: true,
+  paneId, spaceId, pid: 1, kind: "claude", sessionId: null, name: null, state: "idle", waitingFor: null, args: [], startedAt: 0, stateSince: null, direct: true, summary: null,
 });
 const spaces = [{ id: "/r", name: "r", path: "/r", branch: null }, { id: "/o", name: "o", path: "/o", branch: null }];
 const base = { spaces, agentName: () => "Claude", paneInfo: { a: { command: "claude", cwd: "/r/sub" }, b: { command: "claude", cwd: "/o" } } };

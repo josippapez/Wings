@@ -1,13 +1,14 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.6.5",
-  "minWingsVersion": "0.1.20",
+  "version": "0.7.0",
+  "minWingsVersion": "0.1.63",
   "icon": "icon.svg",
-  "description": "Shows what each Claude session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
+  "description": "Shows what each Claude Code or OpenCode session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
   "main": "dist/main.js",
   "permissions": {
+    "agentActivity": true,
     "exec": [
       "git diff [-- --no-color --no-ext-diff]",
       "git ls-files [-- --error-unmatch]"

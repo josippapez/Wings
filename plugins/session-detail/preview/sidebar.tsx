@@ -1,6 +1,6 @@
 // The Session sidebar: sessions working and idle, none at all, rows opened for their detail, and what goes wrong there.
 import Sidebar, { page } from "../src/pages/sidebar";
-import { detail, idle, working } from "./_data";
+import { detail, idle, opencode, working } from "./_data";
 import { PressWhenDrawn } from "./_press";
 
 export { page };
@@ -12,7 +12,9 @@ export const states = {
   working: {},
   // An idle session with a short history and nothing running.
   idle: { queries: { sessions: [idle], detail } },
-  // No Claude session in the panes.
+  // An OpenCode session: its tool names and files, and the cost it reports.
+  opencode: { queries: { sessions: [opencode], detail } },
+  // No agent session in the panes.
   none: { queries: { sessions: [], detail } },
   // Rows opened for their detail: your message in full, an edit, a failed test and a call that is still running.
   opened: {

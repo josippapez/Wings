@@ -40,6 +40,20 @@ export type Agent = {
   stateSince: number | null;
   /** True when the pane's own shell started the agent, with nothing wrapped around it. */
   direct: boolean;
+  /** One line on what the agent just did, made when its turn ended; null while Wings has none or the model is off. */
+  summary: string | null;
+};
+
+/** Which model makes session names and summaries. */
+export type AiEngine = "apple" | "ollama" | "off";
+export type AiStatus = {
+  engine: AiEngine;
+  ollamaModel: string | null;
+  available: boolean;
+  /** Why the engine can't run right now, for the setting to show. */
+  reason: string | null;
+  /** Installed Ollama models, when Ollama is chosen and running. */
+  models: string[];
 };
 
 /** Commits to push and pull (as of the last fetch) and changed files, per project. */
@@ -65,6 +79,8 @@ export type PluginPermissions = {
   statusline: boolean;
   /** Sees which local ports the programs in each pane listen on. */
   ports: boolean;
+  /** Reads what an OpenCode session is doing. */
+  agentActivity: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */
@@ -143,6 +159,8 @@ export type McpCall = {
 export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null; run: boolean };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
 export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
+/** An OpenCode session in a pane did something. Only `plugins`, which may read agent activity, get it. */
+export type PluginAgentActivityEvent = { sessionId: string; plugins: string[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
 export type PluginView = {
   id: string;
@@ -182,6 +200,8 @@ export type HistoryHit = {
   agent: SessionKind;
   cwd: string | null;
   title: string | null;
+  /** A name Wings generated for a session with no title, when it has made one. */
+  name?: string;
   firstPrompt: string | null;
   gitBranch: string | null;
   lastActiveMs: number;
@@ -254,6 +274,9 @@ export const api = {
   /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
   onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
     listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),
+  /** OpenCode sessions in panes that started, ended or did a tool call, one event per session per burst. */
+  onPluginAgentActivity: (cb: (events: PluginAgentActivityEvent[]) => void): Promise<UnlistenFn> =>
+    listen<PluginAgentActivityEvent[]>("plugin-agent-activity", (e) => cb(e.payload)),
   /** The ids of the projects whose repo moved (a commit, checkout, pull or ref change), once the writes settle. */
   onGitChanged: (cb: (projectIds: string[]) => void): Promise<UnlistenFn> => listen<string[]>("git-changed", (e) => cb(e.payload)),
   /** `right` and `bottom` are the button's edges in the window, so the panel opens just under it. */
@@ -271,6 +294,11 @@ export const api = {
   /** Past Claude Code sessions, most recent first. Every word or "quoted phrase" in `query` has to match. */
   historySearch: (query: string, filter: HistoryFilter, limit: number) =>
     invoke<HistoryResults>("history_search", { query, filter, limit }),
+  aiStatus: () => invoke<AiStatus>("ai_status"),
+  /** Chooses the engine (and the Ollama model), then answers whether it works. */
+  aiSet: (engine: AiEngine, ollamaModel: string | null) => invoke<AiStatus>("ai_set", { engine, ollamaModel }),
+  /** Names Wings just generated, by session id. */
+  onAiNames: (cb: (names: Record<string, string>) => void): Promise<UnlistenFn> => listen<Record<string, string>>("ai-names", (e) => cb(e.payload)),
   /** Makes `accelerator` (like "Ctrl+Alt+KeyJ") the shortcut that works from any app, or none with null. Rejects if it can't be used. */
   hotkeySet: (accelerator: string | null) => invoke<void>("hotkey_set", { accelerator }),
   /** The global shortcut was pressed; Wings is already in front. */

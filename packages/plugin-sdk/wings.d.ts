@@ -31,6 +31,38 @@ interface WingsTranscriptEvent {
   entry: TranscriptEntry;
 }
 
+/** What an OpenCode session is doing, from `wings.agentActivity`. */
+interface WingsAgentActivity {
+  /** The model of the newest reply. */
+  model: string | null;
+  /** What the newest reply read: input plus cache, tokens. */
+  context: number | null;
+  /** The session's totals, subagents included. */
+  tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number };
+  /** USD. */
+  cost: number;
+  /** The newest prompts and tool calls, oldest first. */
+  items: (
+    | { kind: "prompt"; id: string; at: number; text: string }
+    | {
+        kind: "tool";
+        id: string;
+        /** When the call started, in ms. */
+        at: number;
+        /** OpenCode's tool name: `shell`, `read`, `patch`, `grep`, `subagent`... */
+        name: string;
+        /** The call's input, each value a string cut to 2000 characters. */
+        input: Record<string, string>;
+        status: "running" | "completed" | "error";
+        ms: number | null;
+        /** The start of the result, or the error message. */
+        result: string | null;
+        /** Absolute paths of the files the call changed. */
+        files: string[];
+      }
+  )[];
+}
+
 /** One block of a message's `content`. Which fields it has depends on `type`: `text` has `text`, `tool_use` has `id`, `name` and `input`, `tool_result` has `tool_use_id`, `content` and `is_error`. */
 interface TranscriptBlock {
   type: string;
@@ -361,6 +393,20 @@ interface Wings {
    * To follow the sessions in panes, use `followSessions` from `wings-plugin-sdk/sessions`: it does both, once each.
    */
   onTranscript(listener: (event: WingsTranscriptEvent) => void): () => void;
+  /**
+   * Needs `permissions.agentActivity` and Wings 0.1.63. What an OpenCode session (a pane's `session.kind` is
+   * `"opencode"`) is doing: its newest prompts and tool calls and its token totals. OpenCode has no transcript, so
+   * Wings asks its background service and the plugin never sees the service's address or password. Reads only the
+   * latest messages, a few ms a call: refresh from `onAgentActivity` rather than polling. Rejects when OpenCode's
+   * service is not running or does not know the session.
+   */
+  agentActivity(sessionId: string): Promise<WingsAgentActivity>;
+  /**
+   * Needs `permissions.agentActivity` and Wings 0.1.63. Called with the session's id when an OpenCode session in
+   * a pane starts or ends a run or does a tool call, as one event per burst (at most about one a second). It carries
+   * nothing else: read what changed with `agentActivity`.
+   */
+  onAgentActivity(listener: (event: { sessionId: string }) => void): () => void;
   /**
    * Needs a `git` entry in `permissions.exec`, or it never fires. Wings sends the ids of the projects whose repo
    * moved: a commit, checkout, pull, fetch, push, amend or reset, from a pane or from anywhere else, once the writes
