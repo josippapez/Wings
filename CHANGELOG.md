@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.60 · 2026-10-20
+
+- **Plugin tools work the same in OpenCode as in Claude Code.** A tool call from an OpenCode pane now carries its session, so `tasks__todo` and the Issues tools record OpenCode sessions instead of failing with "no Claude session yet". Plugins see each pane's session with its `kind` (`claude` or `opencode`).
+- **Issues keep sessions from both agents.** Each session on an issue shows its agent and has its own Resume, which runs `claude --resume` or `opencode --session`. Start agent asks which agent to start.
+- **Settings › Plugins is less crowded.** Claude Code, OpenCode and the terminal command are one row of chips. Click one for its status, Connect or Disconnect, and its settings.
+
 ## 0.1.59 · 2026-10-20
 
 - **OpenCode gets plugin tools too.** Wings adds its MCP server to OpenCode's global config when it starts, the way it does for Claude Code, and reloads OpenCode so running sessions pick it up. Settings › Plugins has an OpenCode row with Connect and Disconnect. Fields you set on the `wings` entry, like `enabled`, are kept, and a config with comments is left alone.
