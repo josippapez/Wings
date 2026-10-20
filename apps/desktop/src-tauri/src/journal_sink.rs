@@ -36,10 +36,12 @@ fn write(path: &Path, config: &Map<String, Value>) -> Result<(), String> {
     })
 }
 
-/// Whether `command` is a Wings binary running `journal`, at whatever path.
+/// Whether `command` is a Wings binary running `journal`, at whatever path. Cargo's own copy of a build,
+/// `target/release/deps/wings-<hash>`, counts too, so the installed app repoints a sink a build once wrote.
 fn is_wings(command: Option<&Value>) -> bool {
     let Some(list) = command.and_then(Value::as_array) else { return false };
-    matches!(list.as_slice(), [exe, sub] if sub.as_str() == Some("journal") && exe.as_str().is_some_and(|e| Path::new(e).file_stem().is_some_and(|s| s == "wings")))
+    let wings_stem = |s: &str| s == "wings" || s.strip_prefix("wings-").is_some_and(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()));
+    matches!(list.as_slice(), [exe, sub] if sub.as_str() == Some("journal") && exe.as_str().is_some_and(|e| Path::new(e).file_stem().and_then(|s| s.to_str()).is_some_and(wings_stem)))
 }
 
 /// Whether the sink is Wings' own, at any path.
@@ -112,6 +114,10 @@ mod tests {
         let path = temp("moved", Some(r#"{"command":["/old/Wings.app/Contents/MacOS/wings","journal"],"other":{"a":1}}"#));
         assert!(add(&path, Path::new("/new/wings")).unwrap());
         assert_eq!(json_of(&path), json!({ "command": ["/new/wings", "journal"], "other": { "a": 1 } }));
+        // Written once by a release build from cargo's deps folder.
+        let path = temp("deps", Some(r#"{"command":["/repo/target/release/deps/wings-224b4daf414bfdd7","journal"]}"#));
+        assert!(add(&path, Path::new("/new/wings")).unwrap());
+        assert_eq!(json_of(&path), json!({ "command": ["/new/wings", "journal"] }));
         // Other keys without a command: Wings adds its own and keeps them.
         let path = temp("keys", Some(r#"{"other":true}"#));
         assert!(add(&path, Path::new("/new/wings")).unwrap());

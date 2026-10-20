@@ -678,10 +678,11 @@ fn journal_sync(app: &AppHandle) {
         let Ok(dir) = app.path().app_data_dir() else { return };
         let both_off = dir.join(CLAUDE_DISCONNECTED).exists() && dir.join(OPENCODE_DISCONNECTED).exists();
         let path = journal_sink::sink_path();
-        let result = match std::env::current_exe() {
-            Ok(exe) if !both_off => journal_sink::add(&path, &exe),
+        // Only the installed app: a release build run from `target/` would point the journal at the build folder.
+        let result = match exe_to_connect() {
             _ if both_off => journal_sink::remove(&path),
-            _ => return,
+            Some(exe) => journal_sink::add(&path, &exe),
+            None => return,
         };
         if let Err(e) = result {
             eprintln!("[journal] couldn't set the journal sink: {e}");
