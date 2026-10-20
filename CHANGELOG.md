@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.63 · 2026-10-20
+
+- **Sessions get names and summaries from a local model.** Sessions with no title get a short name in the sidebar, History and Issues, and each agent gets a one-line summary of its last turn under its name. Settings › Agents picks the model: Apple's on-device model (the default), an Ollama model, or off. Nothing leaves your Mac.
+- **The Session sidebar works for OpenCode.** An OpenCode pane shows its model, tokens and cost, what it is doing, the files it edited and its recent tool calls. Plugins read it with `wings.agentActivity`.
+- **Only the installed app connects the agents.** A Wings binary started from a build folder no longer writes itself into Claude Code's or OpenCode's config.
+
 ## 0.1.62 · 2026-10-20
 
 - **Past OpenCode sessions are in History.** They list next to Claude Code's with the agent's icon, search by what was said in them, and Resume runs `opencode --session`. The first load runs in the background and fills in as it goes. `search_history` and `read_session` cover them too.
