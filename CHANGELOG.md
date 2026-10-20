@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.61 · 2026-10-20
+
+- **Agents' change journals reach Issues.** `wings journal` is the sink a change journal runs at the end of each turn, and Wings sets itself up as that sink while Claude Code or OpenCode is connected. A sink you set up yourself is left alone.
+- **Issues keeps a Files changed list.** Each turn's files land on the session's open issue as one row per file with its newest description, on the issue page and in `tasks__get`, and the turn's commits are linked. The log stays for people and decisions.
+- **Session start points at stale work.** Issues mentions open issues unchanged for 3 days or more, and a finished todo whose issue is still open. It never changes a status itself.
+
 ## 0.1.60 · 2026-10-20
 
 - **Plugin tools work the same in OpenCode as in Claude Code.** A tool call from an OpenCode pane now carries its session, so `tasks__todo` and the Issues tools record OpenCode sessions instead of failing with "no Claude session yet". Plugins see each pane's session with its `kind` (`claude` or `opencode`).
