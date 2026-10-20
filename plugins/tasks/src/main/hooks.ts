@@ -31,9 +31,9 @@ async function journal(input: WingsHookInput, context: WingsToolContext) {
   const sessionId = (input as JournalInput).session_id;
   if (!context.project || typeof sessionId !== "string" || !sessionId) return null;
   const { id, name } = context.project;
-  const issue = journalIssue((await readStore(id, name)).issues, sessionId);
+  const { files, commits, started } = journalOf(input as JournalInput);
+  const issue = journalIssue((await readStore(id, name)).issues, sessionId, started);
   if (!issue) return null;
-  const { files, commits } = journalOf(input as JournalInput);
   // Written by the journal at the end of the turn, not by the agent.
   const by = { ...actorOf(context.session, sessionId), via: "journal" as const };
   // One at a time, and one failing (a full log, say, for a commit link) doesn't stop the others.
