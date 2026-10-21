@@ -6,10 +6,10 @@ test("the manifest: tools tell agents to link by hand and keep keys out of git, 
   const m = JSON.parse(readFileSync(new URL("../wings-plugin.json", import.meta.url), "utf8"));
   const text = Object.fromEntries(m.contributes.mcpTools.map((t) => [t.name, t.description]));
   for (const name of ["create", "update", "log"]) assert.match(text[name], /Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions/);
-  assert.match(text.update, /after each commit you make for this issue, call update with its hash \(commit\)/);
+  assert.match(text.update, /set commit only for one you made in another repo/);
   assert.match(text.update, /set pr to its URL/);
   assert.match(text.update, /set branch when you start on a branch/);
-  for (const t of m.contributes.mcpTools) assert.doesNotMatch(t.description, /link themselves|put the key in your commit/);
+  for (const t of m.contributes.mcpTools) assert.doesNotMatch(t.description, /put the key in your commit/);
   assert.deepEqual(Object.keys(m.permissions).sort(), ["openUrl", "panes"]);
 });
 

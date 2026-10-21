@@ -35,7 +35,7 @@ Needs Wings 0.1.54 (`contributes.hooks`, and `rail` in `contributes.ui`); the jo
 
 Issue keys stay in Wings. Nothing reads a commit message or a branch name for a key, and the plugin runs no `git` and reads no transcripts. The agent or you link the work:
 
-- **Agents.** The `update` description tells them to call `update` with the hash (`commit`) after each commit they make for the issue, to set `pr` to the pull request's URL when they open one, and to set `branch` when they start on a branch. The `create`, `update` and `log` descriptions also say never to put an issue key in a commit message, branch name, pull request title or description.
+- **Agents.** The `update` description tells them to pass `commit` only for a commit made in another repo, since the journal links the ones in the project's repo, to set `pr` to the pull request's URL when they open one, and to set `branch` when they start on a branch. The `create`, `update` and `log` descriptions also say never to put an issue key in a commit message, branch name, pull request title or description.
 - **You.** Edit the branch and pull request on the issue page.
 - A commit already on the issue (by hash prefix) is never added twice. Each commit, branch and pull request change writes a `link` entry by whoever made it.
 - 0.6 removed the scan that matched keys in commit messages and branch names (a `git log` and `git branch` per project every minute). The `scan:<projectId>` storage keys it left were deleted on every start until 0.11; nothing reads them.

@@ -1,7 +1,7 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "minWingsVersion": "0.1.61",
   "icon": "icon.svg",
   "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here, a setting keeps issue keys out of its commits and PRs, and tasks__todo is its own step list, shown in a card on its pane and on a Todo tab with the history kept. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update, tasks__log and tasks__todo.",
@@ -233,7 +233,7 @@
       },
       {
         "name": "update",
-        "description": "Changes an issue: its title, description (replaces it), status, priority, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: after each commit you make for this issue, call update with its hash (commit); when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
+        "description": "Changes an issue: its title, description (replaces it), status, priority, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: commits in this project's repo link themselves at the end of the turn, so set commit only for one you made in another repo; when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -288,7 +288,7 @@
               "type": "string",
               "maxLength": 40,
               "pattern": "^[0-9a-fA-F]{7,40}$",
-              "description": "A git commit hash, 7 to 40 hex digits, to add to the issue's commits. Call update with it after each commit you make for the issue."
+              "description": "A git commit hash, 7 to 40 hex digits, to add to the issue's commits. The journal links commits in this project's repo by itself, so pass one only for a commit made in another repo."
             },
             "type": {
               "type": "string",

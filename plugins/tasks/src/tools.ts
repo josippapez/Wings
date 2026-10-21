@@ -36,7 +36,7 @@ const changes = {
   priority: priorityField.describe("How urgent it is: urgent, high, medium, low, or none. none clears it."),
   branch: s.string({ maxLength: LIMITS.branch }).optional().describe("The git branch. An empty string removes it."),
   pr: s.string({ maxLength: LIMITS.pr }).optional().describe("The pull request's https URL. An empty string removes it."),
-  commit: s.string({ maxLength: LIMITS.commit, pattern: "^[0-9a-fA-F]{7,40}$" }).optional().describe("A git commit hash, 7 to 40 hex digits, to add to the issue's commits. Call update with it after each commit you make for the issue."),
+  commit: s.string({ maxLength: LIMITS.commit, pattern: "^[0-9a-fA-F]{7,40}$" }).optional().describe("A git commit hash, 7 to 40 hex digits, to add to the issue's commits. The journal links commits in this project's repo by itself, so pass one only for a commit made in another repo."),
   ...relations,
 };
 const changeNames = Object.keys(changes);
@@ -101,7 +101,7 @@ export const tools = {
   }),
 
   update: tool({
-    description: "Changes an issue: its title, description (replaces it), status, priority, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: after each commit you make for this issue, call update with its hash (commit); when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
+    description: "Changes an issue: its title, description (replaces it), status, priority, type, branch, pull request URL, parent, or its related and blocking issues. Pass the key and only what changes. Set the status as the work moves (in_progress when you start, in_review when it waits for review, done when finished, canceled when dropped); status and link changes write themselves to the log with your session, on both issues for a link. Link the work as you go: commits in this project's repo link themselves at the end of the turn, so set commit only for one you made in another repo; when you open a pull request for it, set pr to its URL; set branch when you start on a branch. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions. To group work, set parent to an epic or feature's key (an empty string removes it).",
     input: s.object({ key: issueKey("The issue's key, like WIN-12."), ...changes }),
     run: async ({ key, title, description, status, priority, branch, pr, commit, ...relation }, context) => {
       if ([title, description, status, priority, branch, pr, commit, ...Object.values(relation)].every((value) => value === undefined)) {
