@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.68 · 2026-10-21
+
+- **Agents read only the part of a past session they need.** `read_session` takes a query and returns the messages that match, each with the one before and after, instead of paging through the whole session.
+
 ## 0.1.67 · 2026-10-21
 
 - **Journal notes land on the right issue.** A turn's changed files and commits go to the issue the agent worked on in that turn, even one it closed or hadn't started, and a task wins over its epic. Needs the journal plugin 0.3.2.
