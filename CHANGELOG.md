@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.67 · 2026-10-21
+
+- **Journal notes land on the right issue.** A turn's changed files and commits go to the issue the agent worked on in that turn, even one it closed or hadn't started, and a task wins over its epic. Needs the journal plugin 0.3.2.
+- **The journal stays pointed at the installed app.** A build run from the repo no longer takes over where the journal sends its notes, and the app puts back an entry a build already changed.
+
 ## 0.1.66 · 2026-10-20
 
 - **Issues shows who wrote what.** An agent's entries all carry its session's current name, even after Claude Code restarts it under another one. Click the name to go to that session's pane, or to resume it when it isn't running. Resume never starts a running session twice. Entries the journal writes say so.
