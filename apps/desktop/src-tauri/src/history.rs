@@ -809,8 +809,9 @@ impl History {
         })
     }
 
-    /// One session's summary and a page of its messages, for `read_session`.
-    pub fn read_session(&self, claude_dir: &Path, id: &str, offset: usize, limit: usize) -> Result<Value, String> {
+    /// One session's summary and a page of its messages, for `read_session`. With a `query`, only the messages that
+    /// match all of it and the one before and after each.
+    pub fn read_session(&self, claude_dir: &Path, id: &str, offset: usize, limit: usize, query: Option<&str>) -> Result<Value, String> {
         let mut index = self.index.lock().unwrap();
         refresh(&mut index, claude_dir);
         let opencode = self.opencode.lock().unwrap();
@@ -820,19 +821,36 @@ impl History {
             .find(|s| s.id == id)
             .or_else(|| opencode.sessions.get(id).map(|c| &c.session))
             .ok_or_else(|| format!("No session {id}"))?;
+        let terms = query.map(terms).filter(|t| !t.is_empty());
+        let hits: Vec<usize> = match &terms {
+            None => vec![],
+            Some(terms) => (0..s.messages.len()).filter(|&i| {
+                let (start, end) = s.range(i);
+                terms.iter().all(|t| s.folded[start..end].contains(t.as_str()))
+            }).collect(),
+        };
+        let shown: Vec<usize> = match &terms {
+            None => (0..s.messages.len()).collect(),
+            Some(_) => {
+                let mut around: Vec<usize> = hits.iter().flat_map(|&i| i.saturating_sub(1)..=(i + 1).min(s.messages.len() - 1)).collect();
+                around.sort_unstable();
+                around.dedup();
+                around
+            }
+        };
         let mut messages = Vec::new();
         let mut used = 0;
-        let mut next = offset.min(s.messages.len());
-        while next < s.messages.len() && messages.len() < limit {
-            let (start, end) = s.range(next);
+        let mut rest = shown.iter().copied().skip_while(|&i| i < offset).peekable();
+        while let Some(&i) = rest.peek() {
+            let (start, end) = s.range(i);
             let text = clip(&s.text[start..end]);
-            if !messages.is_empty() && used + text.len() > PAGE_BYTES {
+            if messages.len() == limit || (!messages.is_empty() && used + text.len() > PAGE_BYTES) {
                 break;
             }
             used += text.len();
-            let m = &s.messages[next];
-            messages.push(json!({ "index": next, "role": m.role, "time": m.time, "text": text }));
-            next += 1;
+            let m = &s.messages[i];
+            messages.push(json!({ "index": i, "role": m.role, "time": m.time, "text": text }));
+            rest.next();
         }
         let files = s.files.len();
         Ok(json!({
@@ -850,8 +868,9 @@ impl History {
                 "lastActive": s.last_time,
                 "messages": s.messages.len(),
             },
+            "matchingMessages": terms.is_some().then_some(hits.len()),
             "messages": messages,
-            "nextOffset": (next < s.messages.len()).then_some(next),
+            "nextOffset": rest.peek(),
         }))
     }
 }
@@ -894,11 +913,12 @@ pub fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "read_session",
-            "description": "Read a past Claude Code or OpenCode session found with search_history: a summary, then the prompts and replies, oldest first. Long sessions come in pages; pass nextOffset back as offset for the next one.",
+            "description": "Read a past Claude Code or OpenCode session found with search_history: a summary, then the prompts and replies, oldest first. Looking for one thing in it? Pass query to get only the messages that match, each with the one before and after. Long sessions come in pages; pass nextOffset back as offset for the next one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string", "description": "The session's id, from search_history." },
+                    "query": { "type": "string", "description": "Words or \"quoted phrases\" a message has to hold, all of them, ignoring case. Leave out to read every message." },
                     "offset": { "type": "integer", "minimum": 0, "default": 0, "description": "Index of the first message to return." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30, "description": "Most messages to return. A page also ends at about 10k tokens." }
                 },
@@ -938,7 +958,7 @@ pub fn call_tool(history: &History, claude_dir: &Path, name: &str, args: &Value)
             None => Err("search_history needs a query".into()),
         },
         "read_session" => match args.get("session_id").and_then(Value::as_str) {
-            Some(id) => history.read_session(claude_dir, id, number("offset", 0, usize::MAX), number("limit", 30, 100).max(1)).map(|v| v.to_string()),
+            Some(id) => history.read_session(claude_dir, id, number("offset", 0, usize::MAX), number("limit", 30, 100).max(1), args.get("query").and_then(Value::as_str)).map(|v| v.to_string()),
             None => Err("read_session needs a session_id".into()),
         },
         _ => return None,
@@ -974,7 +994,7 @@ mod tests {
     }
 
     fn texts(history: &History, claude_dir: &Path, id: &str) -> Vec<(String, String)> {
-        let page = history.read_session(claude_dir, id, 0, 100).unwrap();
+        let page = history.read_session(claude_dir, id, 0, 100, None).unwrap();
         page["messages"].as_array().unwrap().iter().map(|m| (m["role"].as_str().unwrap().to_string(), m["text"].as_str().unwrap().to_string())).collect()
     }
 
@@ -1012,7 +1032,7 @@ mod tests {
             texts(&history, &dir, "s1"),
             [pair("user", "Fix the login bug"), pair("assistant", "Looking.\n\nFixed it."), pair("user", "Now the signup page")]
         );
-        let page = history.read_session(&dir, "s1", 0, 100).unwrap();
+        let page = history.read_session(&dir, "s1", 0, 100, None).unwrap();
         let s = &page["session"];
         assert_eq!(s["title"], "My login fix", "a custom title beats the AI's");
         assert_eq!(s["filesEdited"], json!(["/tmp/proj/src/login.rs"]));
@@ -1047,7 +1067,33 @@ mod tests {
         fs::write(&path, format!("{}\n", user("/tmp/proj", "main", "rewritten"))).unwrap();
         assert_eq!(texts(&history, &dir, "s1"), [pair("user", "rewritten")], "a shrunk file is read again");
         fs::remove_file(&path).unwrap();
-        assert!(history.read_session(&dir, "s1", 0, 10).is_err(), "a deleted transcript drops out");
+        assert!(history.read_session(&dir, "s1", 0, 10, None).is_err(), "a deleted transcript drops out");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_query_reads_only_the_matching_messages_and_their_neighbours() {
+        let dir = temp_claude_dir("read-query");
+        let lines = [
+            user("/tmp/proj", "main", "set up the project"),
+            assistant("Done."),
+            user("/tmp/proj", "main", "measure the Baseline method"),
+            assistant("Used the build durations."),
+            user("/tmp/proj", "main", "now the docs"),
+            assistant("Wrote them."),
+            user("/tmp/proj", "main", "and the baseline again"),
+        ];
+        transcript(&dir, "/tmp/proj", "s1", &lines);
+        let history = History::default();
+        let index = |page: &Value| page["messages"].as_array().unwrap().iter().map(|m| m["index"].as_u64().unwrap()).collect::<Vec<_>>();
+        let page = history.read_session(&dir, "s1", 0, 100, Some("baseline")).unwrap();
+        assert_eq!(index(&page), [1, 2, 3, 5, 6]);
+        assert_eq!(page["matchingMessages"], 2);
+        let first = history.read_session(&dir, "s1", 0, 2, Some("baseline")).unwrap();
+        assert_eq!((index(&first), first["nextOffset"].clone()), (vec![1, 2], json!(3)));
+        assert_eq!(index(&history.read_session(&dir, "s1", 3, 100, Some("baseline")).unwrap()), [3, 5, 6]);
+        assert_eq!(index(&history.read_session(&dir, "s1", 0, 100, Some("\"baseline method\" durations")).unwrap()), Vec::<u64>::new());
+        assert_eq!(history.read_session(&dir, "s1", 0, 100, None).unwrap()["matchingMessages"], Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1342,12 +1388,12 @@ mod tests {
         let service = fake_opencode();
         let history = History::default();
         history.refresh_opencode(&service);
-        let page = history.read_session(&dir, "ses_root1", 0, 1).unwrap();
+        let page = history.read_session(&dir, "ses_root1", 0, 1, None).unwrap();
         assert_eq!((page["session"]["agent"].as_str(), page["session"]["project"].as_str(), page["session"]["messages"].as_u64()), (Some("opencode"), Some("/w/app"), Some(2)));
         assert_eq!((page["messages"][0]["role"].as_str(), page["nextOffset"].as_u64()), (Some("user"), Some(1)));
-        let next = history.read_session(&dir, "ses_root1", 1, 10).unwrap();
+        let next = history.read_session(&dir, "ses_root1", 1, 10, None).unwrap();
         assert_eq!((next["messages"][0]["text"].as_str(), next["nextOffset"].as_u64()), (Some("It is read in Config::load.\n\nDone."), None));
-        assert!(history.read_session(&dir, "ses_child", 0, 10).is_err());
+        assert!(history.read_session(&dir, "ses_child", 0, 10, None).is_err());
         let found: Value = serde_json::from_str(&call_tool(&history, &dir, "search_history", &json!({ "query": "Čakovec" })).unwrap().unwrap()).unwrap();
         assert_eq!((found["sessions"][0]["sessionId"].as_str(), found["sessions"][0]["agent"].as_str()), (Some("ses_root2"), Some("opencode")));
         let _ = fs::remove_dir_all(&dir);
