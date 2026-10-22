@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.71 · 2026-10-22
+
+- **Disk usage counts clones once.** Files that share their blocks as APFS clones count once, the way DaisyDisk counts them, so 78 copies Chrome keeps of itself show as 2.4 GB instead of 118 GB and a scan no longer adds up to more than the disk holds.
+- **Scans don't download cloud files.** A scan never makes macOS download what an iCloud Drive or other cloud folder holds.
+- **Releases clean up after themselves.** Building a release clears the debug build, and publishing clears the release build, which together had grown to 40 GB.
+
 ## 0.1.70 · 2026-10-22
 
 - **Disk usage.** A new plugin shows what takes the space on your disks as a map you click into, like DaisyDisk: your disks, a fast scan of a disk or folder, what is in each folder, the hidden space, and a Collector that moves what you pick to the Trash. Claude can scan with its `disk__*` tools and fill the Collector for you to review.
