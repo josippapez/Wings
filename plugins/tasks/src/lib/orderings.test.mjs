@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boardColumns, boardLanes, issueTree, openIssues, trailTo } from "./orderings.ts";
+import { boardColumns, boardLanes, issueTree, openIssues, sectionIssues, trailTo } from "./orderings.ts";
 
 test("board columns and the open list: to do by key, others by activity, canceled only on request", () => {
   const mk = (n, status, updatedAt) => ({ key: `WEB-${n}`, title: `t${n}`, status, sessions: [], log: [], createdAt: 0, updatedAt });
@@ -64,4 +64,14 @@ test("the breadcrumb trail adds the issue you leave, goes back to one already on
   assert.deepEqual(trailTo(["WIN-12", "WIN-15"], "WIN-20", "WIN-15"), ["WIN-12"]);
   const long = Array.from({ length: 8 }, (_, i) => `WIN-${i + 1}`);
   assert.deepEqual(trailTo(long, "WIN-9", "WIN-10"), [...long.slice(1), "WIN-9"]);
+});
+
+test("the section puts issues an agent works on first, with their epic, then sorts the rest by status or latest change", () => {
+  const issue = (key, status, updatedAt, parent) => ({ key, status, updatedAt, parent, sessions: [] });
+  const issues = [issue("W-1", "todo", 5), issue("W-2", "in_progress", 1), issue("W-3", "todo", 0), issue("W-4", "todo", 9, "W-5"), issue("W-5", "in_review", 2), issue("W-6", "done", 99)];
+  const keys = (working, order) => sectionIssues(issues, (i) => working.includes(i.key), order).map((i) => i.key);
+  assert.deepEqual(keys([], "status"), ["W-2", "W-5", "W-1", "W-3", "W-4"]);
+  assert.deepEqual(keys([], "date"), ["W-4", "W-1", "W-5", "W-2", "W-3"]);
+  assert.deepEqual(keys(["W-4"], "status"), ["W-5", "W-4", "W-2", "W-1", "W-3"], "W-4's parent comes up with it");
+  assert.deepEqual(keys(["W-1", "W-3"], "date"), ["W-1", "W-3", "W-4", "W-5", "W-2"]);
 });

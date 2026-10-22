@@ -8,6 +8,23 @@ export function openIssues(issues: Issue[]): Issue[] {
   return issues.filter((i) => i.status !== "done" && i.status !== "canceled").sort((a, b) => order[a.status] - order[b.status] || keyNumber(a.key) - keyNumber(b.key));
 }
 
+/**
+ * The project section's issues: the open ones an agent works on now first (an epic or feature counts when one under it
+ * does), then the rest, each part by status like `openIssues` or by latest change, newest first.
+ */
+export function sectionIssues(issues: Issue[], working: (issue: Issue) => boolean, order: "status" | "date"): Issue[] {
+  const open = openIssues(issues);
+  const byKey = new Map(open.map((i) => [i.key, i]));
+  const active = new Set<string>();
+  for (const i of open) {
+    if (!working(i)) continue;
+    // Stops at a key already marked, so a loop of parents ends.
+    for (let at: Issue | undefined = i; at && !active.has(at.key); at = at.parent ? byKey.get(at.parent) : undefined) active.add(at.key);
+  }
+  const sorted = order === "date" ? [...open].sort((a, b) => b.updatedAt - a.updatedAt) : open;
+  return [...sorted.filter((i) => active.has(i.key)), ...sorted.filter((i) => !active.has(i.key))];
+}
+
 /** The board's columns: highest priority first, then to do by key and the rest by latest activity. Canceled only when asked for. */
 export function boardColumns(issues: Issue[], showCanceled = false): { status: Status; issues: Issue[] }[] {
   return (showCanceled ? STATUSES : FLOW).map((status) => ({

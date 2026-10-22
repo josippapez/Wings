@@ -1,9 +1,10 @@
-// The Issues page in Wings Settings: which view the Issues tab opens in, picked from a small drawing of each.
+// The Issues page in Wings Settings: which view the Issues tab opens in, picked from a small drawing of each, and how the sidebar sorts.
 
 import type { ReactNode } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
 import { Checkbox, Chips, Heading, Stack, Text } from "wings-plugin-ui";
 import { keepLocal } from "../lib/local-setting";
+import { SECTION_ORDERS, sectionOrder } from "../lib/section-setting";
 import { DEFAULT_VIEWS, defaultView, lastLayout, type DefaultView } from "../lib/view-setting";
 import "./tasks.css";
 
@@ -65,6 +66,7 @@ const PICTURES: Record<DefaultView, { drawing: ReactNode; hint: string }> = {
 export default function IssuesSettings() {
   const [view, setView] = useSetting(defaultView);
   const [local, setLocal] = useSetting(keepLocal);
+  const [order, setOrder] = useSetting(sectionOrder);
   return (
     <Stack gap="s">
       <Heading>Issues board</Heading>
@@ -89,6 +91,9 @@ export default function IssuesSettings() {
           }))}
         />
       )}
+      <Heading>Sidebar</Heading>
+      <Text tone="muted">Issues an agent is working on right now come first under each project. The rest are sorted by this.</Text>
+      {order === null ? null : <Chips label="Sort by" value={order} onChange={(value) => void setOrder(value)} options={SECTION_ORDERS} />}
       <Heading>Commits and pull requests</Heading>
       {local === null ? null : (
         <Checkbox checked={local} onChange={(checked) => void setLocal(checked)}>

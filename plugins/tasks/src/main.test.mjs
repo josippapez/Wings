@@ -144,6 +144,33 @@ test("the todo tool keeps the session's list, links it to the issue, tells the p
   await assert.rejects(call("todo", { items: [{ text: "x", status: "pending" }], key: "WEB-99" }), /No issue WEB-99/);
 });
 
+test("the section puts the issue an agent works on now first, sorts again when its pane goes, and follows the Sidebar order", async () => {
+  const app = { id: "proj5", name: "app", path: "/work/app" };
+  const as = (session) => (name, input) => handlers.get(name)(input, { paneId: "p5", project: app, session });
+  await as(null)("create", { title: "First" });
+  await as({ id: "s-9", name: "agent nine" })("create", { title: "Second" });
+  const keys = () => sections.filter((s) => s.id === "proj5").at(-1).rows.map((r) => r.id);
+  const pane = { paneId: "p5", projectId: "proj5", cwd: "/work/app", command: "claude", project: "app", session: { sessionId: "s-9", name: "agent nine", state: "working", startedAt: 1 }, focused: false };
+  await panes([pane]);
+  await settle();
+  assert.deepEqual(keys(), ["APP-2", "APP-1"]);
+  await panes([{ ...pane, session: null }]);
+  await settle();
+  assert.deepEqual(keys(), ["APP-1", "APP-2"]);
+  // Two edits in one millisecond would tie on latest change.
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await as(null)("update", { key: "APP-1", title: "First, renamed" });
+  assert.deepEqual(keys(), ["APP-1", "APP-2"], "by status, the older key stays first");
+  const { sectionOrder } = await import("./lib/section-setting.ts");
+  await sectionOrder.set("date");
+  await settle();
+  assert.deepEqual(keys(), ["APP-1", "APP-2"]);
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await as(null)("update", { key: "APP-2", title: "Second, renamed" });
+  assert.deepEqual(keys(), ["APP-2", "APP-1"], "by latest change, the newest edit is first");
+  await sectionOrder.set("status");
+});
+
 test("the session start line and the commit check answer from storage", async () => {
   const start = await hooks.get("SessionStart")({ session_id: "s-1" }, ctx);
   assert.match(start, /Wings Issues is the local tracker for web/);

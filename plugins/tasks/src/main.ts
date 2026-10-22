@@ -5,13 +5,17 @@ import { registerTools } from "wings-plugin-sdk/tools";
 import { ch } from "./lib/messages";
 import { registerHooks } from "./main/hooks";
 import { resumeCommand } from "./lib/commands";
+import { onSectionPanes } from "./main/section";
 import { onPaneList, paneOf } from "./main/todo";
 import { loadProject, write } from "./main/write";
 import { tools } from "./tools";
 
 registerTools(tools);
 registerHooks();
-wings.onPanes(onPaneList);
+wings.onPanes((list) => {
+  onPaneList(list);
+  onSectionPanes(list);
+});
 
 ch.answer("op", async ({ projectId, projectName, op }) => {
   await write(projectId, projectName, op, "you");
