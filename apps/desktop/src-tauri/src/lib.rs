@@ -84,6 +84,8 @@ struct AppState {
     notified: Mutex<plugins::NotifyLog>,
     /// What Claude Code last told `wings statusline`.
     statusline: Mutex<statusline::Statusline>,
+    /// Folders outside its project that Claude's `open_pane` is opening a tab in, by project, while that call runs.
+    pane_grants: Mutex<Vec<(String, PathBuf)>>,
 }
 
 type Res<T> = Result<T, String>;
@@ -159,9 +161,13 @@ fn pane_create(
     cwd: Option<String>,
 ) -> Res<String> {
     let root = PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path);
-    // A plugin's pane can start in a subfolder, but never outside the project it belongs to.
+    // A plugin's pane can start in a subfolder, but never outside the project it belongs to. Only a tab Claude's
+    // `open_pane` asked for can.
     let cwd = match cwd {
-        Some(dir) => plugins::pane_cwd(std::path::Path::new(&dir), &[root], Some(0))?.1,
+        Some(dir) => match plugins::pane_cwd(std::path::Path::new(&dir), &[root], Some(0)) {
+            Ok((_, dir)) => dir,
+            Err(e) => plugins::take_grant(&mut state.pane_grants.lock().unwrap(), &space_id, std::path::Path::new(&dir)).ok_or(e)?,
+        },
         None => root,
     };
     let id = format!("p{}", state.next_pane.fetch_add(1, Ordering::Relaxed));
@@ -1600,6 +1606,7 @@ pub fn run() {
                 next_pane: AtomicU64::new(1),
                 notified: Mutex::default(),
                 statusline: Mutex::default(),
+                pane_grants: Mutex::default(),
             });
             if bench_mode() {
                 // Keep the window on screen without taking focus, so rendering is not throttled. A fixed size makes

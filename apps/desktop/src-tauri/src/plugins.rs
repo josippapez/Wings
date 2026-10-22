@@ -1227,6 +1227,14 @@ pub fn pane_cwd(cwd: &Path, projects: &[PathBuf], current: Option<usize>) -> Res
     project.map(|i| (i, dir)).ok_or_else(|| format!("{} isn't inside any of your Wings projects", cwd.display()))
 }
 
+/// Takes the grant `open_pane` left for a tab in `space_id` starting in `dir`, a folder outside that project, so
+/// `pane_create` starts it there. Plugin panes never get one.
+pub fn take_grant(grants: &mut Vec<(String, PathBuf)>, space_id: &str, dir: &Path) -> Option<PathBuf> {
+    let dir = dir.canonicalize().ok()?;
+    let at = grants.iter().position(|(s, d)| s == space_id && *d == dir)?;
+    Some(grants.remove(at).1)
+}
+
 /// Notifications a plugin may show in any minute: enough for a burst of its own updates, too few to flood
 /// Notification Center.
 pub const NOTIFY_LIMIT: usize = 20;
@@ -2660,6 +2668,16 @@ mod tests {
         assert_eq!(plain.settings, None);
         assert!(serde_json::to_value(&plain).unwrap().get("settings").is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_grant_is_for_one_tab_in_one_project_and_folder() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let mut grants = vec![("s1".to_string(), dir.clone())];
+        assert_eq!(take_grant(&mut grants, "s2", &dir), None);
+        assert_eq!(take_grant(&mut grants, "s1", Path::new("/")), None);
+        assert_eq!(take_grant(&mut grants, "s1", &dir), Some(dir.clone()));
+        assert_eq!(take_grant(&mut grants, "s1", &dir), None, "used up");
     }
 
     #[test]

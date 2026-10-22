@@ -83,11 +83,11 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "open_pane",
-            "description": "Open a new tab in one of the user's Wings projects, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. Returns the new pane's id.",
+            "description": "Open a new tab in Wings, in any folder, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. Returns the new pane's id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "cwd": { "type": "string", "description": "Absolute path of the folder to start in. It has to be inside a project in Wings. Leave out for the root of your own project." },
+                    "cwd": { "type": "string", "description": "Absolute path of the folder to start in. A folder inside one of the user's Wings projects opens in that project; any other folder opens in your own project's tab strip. Leave out for the root of your own project." },
                     "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." },
                     "run": { "type": "boolean", "default": false, "description": "Press Enter after the command, if the user's setting allows it." }
                 }
@@ -247,8 +247,8 @@ fn tail(text: &str, lines: usize, max_bytes: usize) -> (String, bool) {
     (kept, start > 0)
 }
 
-/// Which project, folder and keystrokes a new tab gets, or why not. The folder has to be inside a project the user
-/// added: a tool call never adds a project of its own. Enter, which runs the command outside Claude Code's own approval
+/// Which project, folder and keystrokes a new tab gets, or why not. A folder inside a project the user added opens
+/// there. Any other folder opens in the caller's project: a tool call never adds a project of its own. Enter, which runs the command outside Claude Code's own approval
 /// of shell commands, is only pressed by the window and only while the user allows it. A control character is refused:
 /// a newline would press Enter whatever that setting says, and an escape could drive the shell's line editor.
 fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, command: Option<&str>, run: bool) -> Result<OpenPlan, String> {
@@ -265,7 +265,15 @@ fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, comm
     let current = caller.and_then(|p| spaces.iter().position(|s| s.id == p.space_id));
     let (project, dir) = match cwd {
         Some(cwd) => {
-            let (project, dir) = crate::plugins::pane_cwd(std::path::Path::new(cwd), &roots, current)?;
+            let path = std::path::Path::new(cwd);
+            let (project, dir) = match crate::plugins::pane_cwd(path, &roots, current) {
+                Ok(found) => found,
+                Err(e) => match (current, path.canonicalize()) {
+                    (Some(i), Ok(dir)) if dir.is_dir() => (i, dir),
+                    (None, Ok(dir)) if dir.is_dir() => return Err(format!("{e}. Call open_pane from a Wings pane to open it in that pane's project")),
+                    _ => return Err(e),
+                },
+            };
             (project, Some(dir.to_string_lossy().into_owned()))
         }
         None => (current.ok_or("Pass cwd, a folder inside one of the user's Wings projects")?, None),
@@ -414,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn open_pane_runs_only_when_asked_and_allowed_and_stays_inside_projects() {
+    fn open_pane_runs_only_when_asked_and_allowed_and_outside_folders_open_in_the_callers_project() {
         let dir = std::env::temp_dir().join(format!("wings-open-pane-{}", std::process::id()));
         let sub = dir.join("app/src");
         std::fs::create_dir_all(&sub).unwrap();
@@ -438,7 +446,8 @@ mod tests {
         assert_eq!(opened[1].cwd.as_deref(), Some(sub.canonicalize().unwrap().to_str().unwrap()));
         drop(opened);
         for (args, caller, needle) in [
-            (json!({ "cwd": "/" }), Some("p1"), "isn't inside any"),
+            (json!({ "cwd": "/" }), None, "from a Wings pane"),
+            (json!({ "cwd": dir.join("missing").to_str().unwrap() }), Some("p1"), "not a folder"),
             (json!({}), None, "Pass cwd"),
             (json!({ "command": "ls\nrm -rf ~" }), Some("p1"), "control characters"),
             (json!({ "command": "ls\u{1b}[200~" }), Some("p1"), "control characters"),
@@ -448,6 +457,10 @@ mod tests {
             assert!(run(&host, "open_pane", args.clone(), caller).unwrap_err().contains(needle), "{args}");
         }
         assert_eq!(host.opened.borrow().len(), 2, "refused calls open nothing");
+        // A folder outside every project opens in the caller's project.
+        run(&host, "open_pane", json!({ "cwd": dir.to_str().unwrap() }), Some("p1")).unwrap();
+        let outside = OpenPlan { space_id: "s1".into(), cwd: Some(dir.canonicalize().unwrap().to_string_lossy().into_owned()), input: None, run: false };
+        assert_eq!(host.opened.borrow()[2], outside);
         // With the setting on, run presses Enter.
         let allowed = Fake { allow_run: true, ..host };
         let reply: Value = serde_json::from_str(&run(&allowed, "open_pane", json!({ "command": "npm run dev", "run": true }), Some("p1")).unwrap()).unwrap();

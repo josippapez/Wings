@@ -237,7 +237,20 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
 
     fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<crate::mcp_panes::Opened, String> {
         let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input, "run": plan.run });
-        let answer = ask_webview(self.0, "mcp-open-pane", payload)?;
+        // `pane_create` lets this tab start outside its project. The grant goes once the window answers, used or not.
+        let grants = &self.0.state::<AppState>().pane_grants;
+        let grant = plan.cwd.as_ref().map(|dir| (plan.space_id.clone(), PathBuf::from(dir)));
+        if let Some(g) = &grant {
+            grants.lock().unwrap().push(g.clone());
+        }
+        let answer = ask_webview(self.0, "mcp-open-pane", payload);
+        if let Some(g) = grant {
+            let mut grants = grants.lock().unwrap();
+            if let Some(at) = grants.iter().position(|x| *x == g) {
+                grants.remove(at);
+            }
+        }
+        let answer = answer?;
         if answer.is_error {
             return Err(answer.text);
         }
