@@ -28,6 +28,7 @@ import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
 import { newTabAction, firstTabFor, parseNewProjectOpens, type NewProjectOpens, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { parseProjectSort, restoreLastActive, touched, withMissing, type ProjectSort } from "@/lib/project-order";
 import { collapseKey, restoreCollapsed, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
 import { ProjectPageTab } from "@/components/project-page/project-page-tab";
@@ -44,7 +45,7 @@ import { withBadge, withLabel } from "@/lib/badges";
 import { findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
 import { tabTitles } from "@/lib/tab-names";
-import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
+import { requestWorktreeAgent } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
 import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
 import { canGoBack, canGoForward, EMPTY_NAV, goBack, goForward, visit, type NavState, type Place } from "@/lib/nav-history";
@@ -81,6 +82,10 @@ type SavedWorkspace = {
   activeTabBySpace: Record<string, string>;
   /** Project ids in the order you dragged them into. Absent in older files. */
   spaceOrder?: string[];
+  /** How the sidebar orders projects (absent is manual), whether its "Older" group is open, and when each project was last worked on, in ms. Absent in older files. */
+  projectSort?: ProjectSort;
+  olderOpen?: boolean;
+  lastActive?: Record<string, number>;
   sidebarOpen: boolean;
   /** Sidebar widths in pixels, as last dragged. */
   widths?: Widths;
@@ -235,6 +240,10 @@ const leftPanel = usePanelRef();
   /** What plugins show under each project in the sidebar, and which of those you folded shut. */
   const [projectSections, setProjectSections] = useState<ProjectSections>({});
   const [collapsedSections, setCollapsedSections] = useState<string[]>([]);
+  const [projectSort, setProjectSort] = useState<ProjectSort>("manual");
+  const [olderOpen, setOlderOpen] = useState(false);
+  /** When each project was last worked on, for the sidebar's sort and its "Older" group. Written at most once a minute per project. */
+  const [lastActive, setLastActive] = useState<Record<string, number>>({});
   /** The Inbox, newest first; saved with the workspace so it outlasts a restart or an update. */
   const [notifications, notify] = useReducer(notificationsReducer, []);
   const [sidebarLabels, setSidebarLabels] = useState<Record<string, SidebarLabel>>({});
@@ -407,10 +416,22 @@ const leftPanel = usePanelRef();
     setTabs((ts) => ts.map((t) => (t.id === tabId && isPaneTab(t) ? { ...t, ...patch(t) } : t)));
   }, []);
 
+  const touchSpace = useCallback((spaceId: string) => setLastActive((m) => touched(m, [spaceId], Date.now())), []);
+  // Selecting a project, however it happens, counts as working on it.
+  useEffect(() => {
+    if (activeSpaceId) touchSpace(activeSpaceId);
+  }, [activeSpaceId, touchSpace]);
+  // A project that has no time yet (first run with this, or just added) counts as worked on now.
+  useEffect(() => {
+    if (ready) setLastActive((m) => withMissing(m, spaces.map((s) => s.id), Date.now()));
+  }, [ready, spaces]);
+
+  const lastAgentStates = useRef(new Map<string, AgentState>());
   const focusPane = useCallback((key: string) => {
     const tab = tabOfPane(tabsRef.current, key);
     if (tab && tab.focusedPane !== key) updateTab(tab.id, () => ({ focusedPane: key }));
-  }, [updateTab]);
+    if (tab) touchSpace(tab.spaceId);
+  }, [updateTab, touchSpace]);
 
   /** Creates the terminal for a new pane; it starts its shell once its card mounts. */
   const createPane = useCallback(
@@ -670,6 +691,9 @@ const leftPanel = usePanelRef();
       if (saved.newTabPage) setNewTabPage(saved.newTabPage);
       setNewProjectOpens(parseNewProjectOpens(saved.newProjectOpens));
       setCollapsedSections(restoreCollapsed(saved.collapsedSections, list.map((s) => s.id)));
+      setProjectSort(parseProjectSort(saved.projectSort));
+      setOlderOpen(saved.olderOpen === true);
+      setLastActive(restoreLastActive(saved.lastActive, list.map((s) => s.id)));
       notify({ type: "restore", list: restoreNotifications(saved.notifications, new Set(running.values())) });
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       setNotifySound(cleanSound(saved.notifySound));
@@ -724,7 +748,13 @@ const leftPanel = usePanelRef();
     void api.paneInfo().then(setPaneInfo);
     void api.gitStatus().then(setGit);
     const unlisten = [
-      api.onAgents(setAgents),
+      api.onAgents((list) => {
+        setAgents(list);
+        // An agent changing state (not each output chunk) counts as work in its project.
+        const changed = list.filter((a) => lastAgentStates.current.get(a.paneId) !== a.state);
+        lastAgentStates.current = new Map(list.map((a) => [a.paneId, a.state]));
+        for (const id of new Set(changed.map((a) => a.spaceId))) touchSpace(id);
+      }),
       api.onPaneInfo(setPaneInfo),
       api.onGitStatus(setGit),
       api.onPaneExited((paneId) => {
@@ -733,7 +763,7 @@ const leftPanel = usePanelRef();
       }),
     ];
     return () => unlisten.forEach((p) => void p.then((off) => off()));
-  }, [selectSpace, closePane, restore]);
+  }, [selectSpace, closePane, restore, touchSpace]);
 
   // Remember which agent session each pane runs, so a restart or a sleep can resume it. An agent seen in a pane
   // ends its resume: the row has handed over to the live one.
@@ -796,6 +826,9 @@ const leftPanel = usePanelRef();
       newTabPage,
       newProjectOpens,
       collapsedSections,
+      projectSort,
+      olderOpen,
+      lastActive,
       notifications,
       sessionArgs,
       cwds: JSON.parse(cwdsJson),
@@ -808,7 +841,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, newTabPage, newProjectOpens, collapsedSections, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1465,12 +1498,16 @@ const leftPanel = usePanelRef();
         openSectionRow(projectId, plugin.id, button.open, true);
       },
     },
-    onMoveSpace: (id, index) =>
-      setSpaces((list) => {
-        // `index` counts the projects listed at the top level; take the place of the one there now.
-        const slot = nestWorktrees(list).filter((r) => !r.child)[index]?.space.id;
-        return reorder(list, list.findIndex((s) => s.id === id), list.findIndex((s) => s.id === slot));
-      }),
+    onMoveSpace: (id, slot) => setSpaces((list) => reorder(list, list.findIndex((s) => s.id === id), list.findIndex((s) => s.id === slot))),
+    sort: projectSort,
+    onSortChange: setProjectSort,
+    lastActive,
+    olderOpen,
+    onToggleOlder: () => setOlderOpen((open) => !open),
+    onTogglePin: (id, pinned) => {
+      setSpaces((list) => list.map((s) => (s.id === id ? { ...s, pinned } : s)));
+      void api.spacesSetPinned(id, pinned).catch((e) => toast.error("Couldn't pin the project", { description: String(e) }));
+    },
   };
 
   const editors = useEditors();

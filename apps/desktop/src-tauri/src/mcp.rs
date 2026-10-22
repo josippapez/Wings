@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_carries_the_project_of_its_pane_and_the_agent_session_running_there() {
-        let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None };
+        let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None, added_at: None, pinned: false };
         let claude = agent(AgentKind::Claude, Some("abc"), Some("fix totals"));
         assert_eq!(caller(Some(&web), Some(&claude)), (json!({ "id": "s1", "name": "web", "path": "/work/web" }), json!({ "id": "abc", "name": "fix totals", "kind": "claude" })));
         // A session without a name yet is still a session.

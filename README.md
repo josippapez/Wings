@@ -10,7 +10,7 @@ Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed.
 
 ### Know what every agent is doing
 
-The sidebar lists your projects and the agents in each one, and shows whether an agent is working, waiting or needs you. Press ⌘J to jump to the agent that needs you. A global shortcut, ⌃⌥J by default, brings Wings forward and goes there from any app. You can change it in Settings, Keyboard.
+The sidebar lists your projects and the agents in each one, and shows whether an agent is working, waiting or needs you. Sort projects by hand, by when you added them, by when you last worked on them or by name, and pin the ones you want on top; projects you haven't touched for 3 days, with no agent running, fold into an Older group. Press ⌘J to jump to the agent that needs you. A global shortcut, ⌃⌥J by default, brings Wings forward and goes there from any app. You can change it in Settings, Keyboard.
 
 A notification list keeps track of the times an agent needed you or finished.
 

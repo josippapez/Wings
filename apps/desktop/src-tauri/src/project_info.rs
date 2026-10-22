@@ -820,7 +820,7 @@ mod tests {
         app(&j, Op::RemoveFact { key: "other".into(), by: Who::Agent }).unwrap();
         // Through the tools too.
         let (st, _d) = store("factowner");
-        let sp = vec![Space { id: "/p".into(), name: "p".into(), path: "/p".into(), parent: None }];
+        let sp = vec![Space { id: "/p".into(), name: "p".into(), path: "/p".into(), parent: None, added_at: None, pinned: false }];
         st.apply("/p", set("Dev", "mine")).unwrap();
         let run = |n: &str, a: Value| call_tool(&st, &sp, Some("/p"), n, &a, &|_| {}).unwrap();
         assert!(run("project_info_set_fact", json!({ "key": "Dev", "value": "x" })).is_err());
@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     fn spaces() -> Vec<Space> {
-        let sp = |p: &str| Space { id: p.into(), name: p.rsplit('/').next().unwrap().into(), path: p.into(), parent: None };
+        let sp = |p: &str| Space { id: p.into(), name: p.rsplit('/').next().unwrap().into(), path: p.into(), parent: None, added_at: None, pinned: false };
         vec![sp("/work/app"), sp("/work/app/packages/ui"), sp("/work/other")]
     }
 

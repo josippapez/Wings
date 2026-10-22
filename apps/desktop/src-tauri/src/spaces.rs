@@ -4,6 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,16 @@ pub struct Space {
     /// The project this folder is a git worktree of, when Wings made it for a new agent. Shown under that project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// When the project was added, in ms since the epoch. Absent for projects added before Wings kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<u64>,
+    /// Listed above the unpinned projects.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +76,13 @@ impl SpaceStore {
         self.save();
     }
 
+    pub fn set_pinned(&mut self, id: &str, pinned: bool) {
+        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id) {
+            space.pinned = pinned;
+            self.save();
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<&Space> {
         self.spaces.iter().find(|s| s.id == id)
     }
@@ -82,7 +100,8 @@ impl SpaceStore {
 fn new_space(path: &str) -> Space {
     let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     // The path is unique per space, so it doubles as a stable id.
-    Space { id: path.to_string(), name, path: path.to_string(), parent: None }
+    let added_at = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
+    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false }
 }
 
 pub fn view(space: &Space) -> SpaceView {
@@ -153,6 +172,20 @@ fn parse_status(text: &str) -> GitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_files_load_without_added_time_or_pin_and_new_fields_round_trip() {
+        let old: Vec<Space> = serde_json::from_str(r#"[{"id":"/a","name":"a","path":"/a"}]"#).unwrap();
+        assert_eq!((old[0].added_at, old[0].pinned), (None, false));
+        let file = std::env::temp_dir().join(format!("wings-spaces-{}.json", std::process::id()));
+        let mut store = SpaceStore { file: file.clone(), spaces: vec![] };
+        let added = store.add("/x/proj");
+        assert!(added.added_at.is_some_and(|t| t > 0));
+        store.set_pinned("/x/proj", true);
+        let loaded = SpaceStore::load(file.clone());
+        assert_eq!((loaded.spaces[0].added_at, loaded.spaces[0].pinned), (added.added_at, true));
+        let _ = fs::remove_file(&file);
+    }
 
     #[test]
     fn parses_porcelain_v2_status() {

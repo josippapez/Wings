@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
     "spaces_list",
     "spaces_add",
     "spaces_remove",
+    "spaces_set_pinned",
     "worktree_info",
     "worktree_create",
     "editors_list",

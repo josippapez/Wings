@@ -17,6 +17,7 @@
     "allow-spaces-list",
     "allow-spaces-add",
     "allow-spaces-remove",
+    "allow-spaces-set-pinned",
     "allow-worktree-info",
     "allow-worktree-create",
     "allow-editors-list",

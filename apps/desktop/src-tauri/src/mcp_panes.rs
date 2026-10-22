@@ -324,7 +324,7 @@ mod tests {
     }
 
     fn space(id: &str, name: &str, path: &str) -> Space {
-        Space { id: id.into(), name: name.into(), path: path.into(), parent: None }
+        Space { id: id.into(), name: name.into(), path: path.into(), parent: None, added_at: None, pinned: false }
     }
 
     fn row(id: &str, space_id: &str, cwd: &str) -> PaneRow {

@@ -11,6 +11,10 @@ export type Space = {
   branch: string | null;
   /** The project this is a git worktree of, when Wings made it for a new agent. */
   parent?: string;
+  /** When the project was added, in ms. Absent for projects added before Wings kept it. */
+  addedAt?: number;
+  /** Listed above the unpinned projects. Absent when not pinned. */
+  pinned?: boolean;
 };
 
 /** An editor found on this computer. */
@@ -288,6 +292,7 @@ export const api = {
   spacesRemove: (id: string) => invoke<void>("spaces_remove", { id }),
   worktreeInfo: (spaceId: string) => invoke<WorktreeInfo>("worktree_info", { spaceId }),
   /** `git worktree add -b <branch> <folder beside the repo> <base>`, added to the sidebar under the project. Rejects with git's message. */
+  spacesSetPinned: (id: string, pinned: boolean) => invoke<void>("spaces_set_pinned", { id, pinned }),
   worktreeCreate: (spaceId: string, branch: string, base: string) => invoke<Space>("worktree_create", { spaceId, branch, base }),
   editorsList: () => invoke<Editor[]>("editors_list"),
   /** Opens the project's folder in the editor. Rejects with the editor's message. */

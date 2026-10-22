@@ -143,6 +143,11 @@ fn spaces_remove(state: State<AppState>, id: String) {
     gitwatch::resync();
 }
 
+#[tauri::command]
+fn spaces_set_pinned(state: State<AppState>, id: String, pinned: bool) {
+    state.spaces.lock().unwrap().set_pinned(&id, pinned);
+}
+
 #[tauri::command(async)]
 fn sessions_list(state: State<AppState>, space_id: String) -> Res<Vec<SessionSummary>> {
     let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
@@ -1749,6 +1754,7 @@ pub fn run() {
             spaces_list,
             spaces_add,
             spaces_remove,
+            spaces_set_pinned,
             worktree_info,
             worktree_create,
             editors_list,

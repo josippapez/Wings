@@ -6,7 +6,9 @@ import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import {
   ArrowDownIcon,
+  ArrowUpDownIcon,
   ArrowUpIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleDashedIcon,
   CopyIcon,
@@ -19,6 +21,8 @@ import {
   RotateCcwClockIcon,
   SearchIcon,
   SettingsIcon,
+  PinIcon,
+  PinOffIcon,
   PlusIcon,
   RefreshCwIcon,
   SquareTerminalIcon,
@@ -27,7 +31,7 @@ import {
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -35,6 +39,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Item } from "@/components/ui/item";
 import { NotificationBell } from "@/components/notification-bell";
@@ -51,10 +56,11 @@ import type { Agent, AgentKind, AgentState, GitStatus, PluginView, Space } from 
 import { ProjectSections, type OpenSectionRow } from "@/components/project-sections";
 import type { ProjectSections as ProjectSectionsState } from "@/lib/project-sections";
 import type { Phase } from "@/lib/sleep";
+import { orderProjects, parseProjectSort, projectSorts, type ProjectRow, type ProjectSort } from "@/lib/project-order";
 import { trackDrag } from "@/lib/pointer-drag";
 import { canFork } from "@/lib/resume";
 import { shortcutLabel } from "@/lib/terminal";
-import { nestWorktrees, requestWorktreeAgent } from "@/lib/worktree-agent";
+import { requestWorktreeAgent } from "@/lib/worktree-agent";
 import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
@@ -122,8 +128,17 @@ export function Sidebar(props: {
   onCloseAgent: (agent: Agent) => void;
   onAddSpace: (path: string) => void;
   onRemoveSpace: (id: string) => void;
-  /** Moves a project to a place among the projects listed at the top level (worktrees follow their project). */
-  onMoveSpace: (id: string, index: number) => void;
+  /** Moves a project to the place of the top-level project `slot` (worktrees follow their project). */
+  onMoveSpace: (id: string, slot: string) => void;
+  /** How projects are ordered; dragging reorders only in "manual". */
+  sort: ProjectSort;
+  onSortChange: (sort: ProjectSort) => void;
+  /** When each project was last worked on, in ms. */
+  lastActive: Record<string, number>;
+  /** Whether the "Older" group (projects idle for 3 days) is open. */
+  olderOpen: boolean;
+  onToggleOlder: () => void;
+  onTogglePin: (id: string, pinned: boolean) => void;
   /** The command palette. */
   onSearch: () => void;
   onHistory: () => void;
@@ -143,8 +158,15 @@ export function Sidebar(props: {
   const [refreshing, setRefreshing] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const list = useRef<HTMLElement>(null);
-  const rows = nestWorktrees(spaces);
-  const tops = rows.filter((r) => !r.child).map((r) => r.space.id);
+  // A project with an agent (or a session waiting to resume) is never filed under Older.
+  const busy = new Set([...agents.map((a) => a.spaceId), ...props.pending.map((p) => p.spaceId)]);
+  const { shown, older } = orderProjects(spaces, { sort: props.sort, lastActive: props.lastActive, now: Date.now(), activeId: props.activeSpaceId, busy });
+  // Only the listed projects take part in dragging and Move up/down; the ones under Older stay put.
+  const tops = shown.filter((r) => !r.child).map((r) => r.space.id);
+  const manual = props.sort === "manual";
+  // A drag moves the project more than once, so each step reads the list as the last move left it.
+  const topsNow = useRef(tops);
+  topsNow.current = tops;
 
   /** Dragging a project up or down: it follows the pointer, and the others make room as it passes them. */
   function dragSpace(e: React.PointerEvent, id: string) {
@@ -176,11 +198,11 @@ export function Sidebar(props: {
         if (next === at) return;
         at = next;
         // Committed now, so the slot is where it will stay before the offset is worked out again.
-        flushSync(() => props.onMoveSpace(id, next));
+        flushSync(() => props.onMoveSpace(id, topsNow.current[next]));
         place(dy);
       },
       onEnd: (_, cancelled) => {
-        if (cancelled && at !== from) flushSync(() => props.onMoveSpace(id, from));
+        if (cancelled && at !== from) flushSync(() => props.onMoveSpace(id, topsNow.current[from]));
         document.body.style.cursor = "";
         inner.style.transition = "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)";
         inner.style.transform = "translateY(0)";
@@ -206,57 +228,7 @@ export function Sidebar(props: {
     if (typeof path === "string") props.onAddSpace(path);
   }
 
-  return (
-    <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open}>
-      {/* At least the narrowest width, so closing clips the list rather than squeezing it. */}
-      <div className="flex h-full min-w-[200px] flex-col pb-2">
-        <nav aria-label="Wings" className="flex shrink-0 flex-col gap-px px-2 pb-2">
-          <SidebarNavRow icon={<SearchIcon />} label="Search" trailing={<RowHint>{shortcutLabel.palette}</RowHint>} onClick={props.onSearch} />
-          {/* Only the docked copy listens for the show-notifications command, so the peeking copy doesn't open a second popover. */}
-          <NotificationBell {...props.notifications} listen={!props.floating} />
-          <SidebarNavRow icon={<RotateCcwClockIcon />} label="Past sessions" onClick={props.onHistory} disabled={props.activeSpaceId === null} />
-        </nav>
-
-        <div className="flex h-8 items-center justify-between pr-2 pl-4">
-          <h2 className="text-[12px] font-medium text-muted-foreground">Projects</h2>
-          <span className="flex items-center">
-            <IconButton
-              label={refreshing ? "Checking git status…" : "Refresh git status"}
-              side="right"
-              onClick={() => void refreshGit()}
-              disabled={refreshing}
-              className="size-6 [&_svg]:size-3.5"
-            >
-              <RefreshCwIcon className={cn(refreshing && "motion-safe:animate-spin")} />
-            </IconButton>
-            <IconButton label="Add project" side="right" onClick={() => void chooseFolder()} className="size-6">
-              <PlusIcon />
-            </IconButton>
-          </span>
-        </div>
-
-        <ScrollArea className="min-h-0 flex-1">
-          <LayoutGroup id={props.floating ? "projects-floating" : "projects"}>
-            <nav ref={list} aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
-              {spaces.length === 0 && (
-                <Empty className="items-start p-2 text-left">
-                  <EmptyHeader className="items-start text-left">
-                    <EmptyDescription className="text-[13px]">Add a project folder to open a terminal in it.</EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent className="items-start">
-                    <motion.button
-                      type="button"
-                      whileTap={{ scale: 0.96 }}
-                      onClick={() => void chooseFolder()}
-                      className={cn(buttonVariants({ size: "sm" }), "rounded-full px-3 text-[12px]")}
-                    >
-                      <FolderOpenIcon aria-hidden />
-                      Add project
-                    </motion.button>
-                  </EmptyContent>
-                </Empty>
-              )}
-              {rows.map(({ space, child }) => {
+  function renderRow({ space, child }: ProjectRow<Space>, older = false) {
                 const top = tops.indexOf(space.id);
                 const active = space.id === props.activeSpaceId;
                 const spaceAgents = agents.filter((a) => a.spaceId === space.id);
@@ -265,7 +237,7 @@ export function Sidebar(props: {
                 const branch = status?.branch ?? space.branch;
                 return (
                   <ContextMenu key={space.id}>
-                  <ContextMenuTrigger render={<motion.div data-row-top={child ? undefined : ""} layout={dragId === space.id ? false : "position"} transition={spring} className="group/row relative" />}>
+                  <ContextMenuTrigger render={<motion.div data-row-top={child || older ? undefined : ""} layout={dragId === space.id ? false : "position"} transition={spring} className="group/row relative" />}>
                     <div data-row-inner className="relative">
                     {active && (
                       <motion.span
@@ -278,16 +250,16 @@ export function Sidebar(props: {
                       size="xs"
                       render={<motion.button type="button" whileTap={{ scale: 0.985 }} />}
                       onClick={() => props.onSelectSpace(space.id)}
-                      onPointerDown={child ? undefined : (e) => dragSpace(e, space.id)}
+                      onPointerDown={child || older || !manual ? undefined : (e) => dragSpace(e, space.id)}
                       aria-current={active ? "page" : undefined}
                       title={space.path}
-                      className={cn("relative flex-nowrap gap-2.5 py-1.5 pr-8 pl-2 text-left group-focus-within/row:pr-[3.75rem] group-hover/row:pr-[3.75rem] outline-none focus-visible:ring-2 focus-visible:ring-ring/50", child && "pl-6", !active && "hover:bg-hover")}
+                      className={cn("relative flex-nowrap gap-2.5 py-[3px] pr-8 pl-2 text-left group-focus-within/row:pr-[3.75rem] group-hover/row:pr-[3.75rem] outline-none focus-visible:ring-2 focus-visible:ring-ring/50", child && "pl-6", !active && "hover:bg-hover")}
                     >
                       <span className="flex size-4 shrink-0 items-center justify-center">
                         {state ? <StatusDot state={state} /> : child ? <GitBranchIcon className="size-4 text-muted-foreground" /> : <FolderIcon className="size-4 text-muted-foreground" />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className={cn("block truncate text-[13px]", active ? "font-semibold" : "font-medium")}>
+                        <span className={cn("block truncate text-[13px] leading-[18px]", active ? "font-semibold" : "font-medium")}>
                           {space.name}
                         </span>
                         {branch && (
@@ -308,10 +280,12 @@ export function Sidebar(props: {
                       </span>
                     </Item>
                     <span className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
-                      {spaceAgents.length > 0 && (
+                      {spaceAgents.length > 0 ? (
                         <span className="px-1 text-[11px] text-muted-foreground tabular-nums group-hover/row:hidden">
                           {spaceAgents.length}
                         </span>
+                      ) : (
+                        space.pinned && <PinIcon className="mx-1 size-3 text-muted-foreground/70 group-hover/row:hidden" aria-label="Pinned" />
                       )}
                       <IconButton
                         label="Project page"
@@ -369,14 +343,22 @@ export function Sidebar(props: {
                     {!child && (
                       <>
                         <ContextMenuSeparator />
-                        <ContextMenuItem disabled={top === 0} onClick={() => props.onMoveSpace(space.id, top - 1)}>
-                          <ArrowUpIcon />
-                          Move up
+                        <ContextMenuItem onClick={() => props.onTogglePin(space.id, !space.pinned)}>
+                          {space.pinned ? <PinOffIcon /> : <PinIcon />}
+                          {space.pinned ? "Unpin" : "Pin to top"}
                         </ContextMenuItem>
-                        <ContextMenuItem disabled={top === tops.length - 1} onClick={() => props.onMoveSpace(space.id, top + 1)}>
-                          <ArrowDownIcon />
-                          Move down
-                        </ContextMenuItem>
+                        {manual && !older && (
+                          <>
+                            <ContextMenuItem disabled={top === 0} onClick={() => props.onMoveSpace(space.id, tops[top - 1])}>
+                              <ArrowUpIcon />
+                              Move up
+                            </ContextMenuItem>
+                            <ContextMenuItem disabled={top === tops.length - 1} onClick={() => props.onMoveSpace(space.id, tops[top + 1])}>
+                              <ArrowDownIcon />
+                              Move down
+                            </ContextMenuItem>
+                          </>
+                        )}
                       </>
                     )}
                     <ContextMenuSeparator />
@@ -387,7 +369,93 @@ export function Sidebar(props: {
                   </ContextMenuContent>
                   </ContextMenu>
                 );
-              })}
+  }
+
+  return (
+    <aside className={cn("h-full transition-opacity duration-200", !props.open && "opacity-0")} aria-hidden={!props.open}>
+      {/* At least the narrowest width, so closing clips the list rather than squeezing it. */}
+      <div className="flex h-full min-w-[200px] flex-col pb-2">
+        <nav aria-label="Wings" className="flex shrink-0 flex-col gap-px px-2 pb-2">
+          <SidebarNavRow icon={<SearchIcon />} label="Search" trailing={<RowHint>{shortcutLabel.palette}</RowHint>} onClick={props.onSearch} />
+          {/* Only the docked copy listens for the show-notifications command, so the peeking copy doesn't open a second popover. */}
+          <NotificationBell {...props.notifications} listen={!props.floating} />
+          <SidebarNavRow icon={<RotateCcwClockIcon />} label="Past sessions" onClick={props.onHistory} disabled={props.activeSpaceId === null} />
+        </nav>
+
+        <div className="flex h-8 items-center justify-between pr-2 pl-4">
+          <h2 className="text-[12px] font-medium text-muted-foreground">Projects</h2>
+          <span className="flex items-center">
+            <IconButton
+              label={refreshing ? "Checking git status…" : "Refresh git status"}
+              side="right"
+              onClick={() => void refreshGit()}
+              disabled={refreshing}
+              className="size-6 [&_svg]:size-3.5"
+            >
+              <RefreshCwIcon className={cn(refreshing && "motion-safe:animate-spin")} />
+            </IconButton>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="ghost" size="icon-sm" aria-label="Sort projects" title="Sort projects" className="size-6 text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5" />}
+              >
+                <ArrowUpDownIcon aria-hidden />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuLabel>Sort projects</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={props.sort} onValueChange={(v) => props.onSortChange(parseProjectSort(v))}>
+                  {projectSorts.map((m) => (
+                    <DropdownMenuRadioItem key={m.value} value={m.value}>
+                      {m.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <IconButton label="Add project" side="right" onClick={() => void chooseFolder()} className="size-6">
+              <PlusIcon />
+            </IconButton>
+          </span>
+        </div>
+
+        <ScrollArea className="min-h-0 flex-1">
+          <LayoutGroup id={props.floating ? "projects-floating" : "projects"}>
+            <nav ref={list} aria-label="Projects" className="flex flex-col gap-px px-2 pb-2">
+              {spaces.length === 0 && (
+                <Empty className="items-start p-2 text-left">
+                  <EmptyHeader className="items-start text-left">
+                    <EmptyDescription className="text-[13px]">Add a project folder to open a terminal in it.</EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent className="items-start">
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => void chooseFolder()}
+                      className={cn(buttonVariants({ size: "sm" }), "rounded-full px-3 text-[12px]")}
+                    >
+                      <FolderOpenIcon aria-hidden />
+                      Add project
+                    </motion.button>
+                  </EmptyContent>
+                </Empty>
+              )}
+              {shown.map((row) => renderRow(row))}
+              {older.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    aria-expanded={props.olderOpen}
+                    aria-controls="older-projects"
+                    title={`Older, ${older.filter((r) => !r.child).length}`}
+                    onClick={props.onToggleOlder}
+                    className="mt-1 flex h-6 w-full items-center gap-1 rounded-md px-2 text-left text-[11px] text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+                  >
+                    <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none", props.olderOpen && "rotate-90")} aria-hidden />
+                    <span className="truncate">Older</span>
+                    <span className="tabular-nums">{older.filter((r) => !r.child).length}</span>
+                  </button>
+                  {props.olderOpen && <div id="older-projects" className="flex flex-col gap-px">{older.map((row) => renderRow(row, true))}</div>}
+                </>
+              )}
             </nav>
           </LayoutGroup>
         </ScrollArea>
