@@ -5979,6 +5979,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "keyring",
+ "libc",
  "notify",
  "notify-rust",
  "portable-pty",

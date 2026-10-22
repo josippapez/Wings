@@ -13,7 +13,7 @@ Shows what takes the space on your disks as a map you click into, like DaisyDisk
 ## Limits
 
 - It scans this Mac's disks and folders. It doesn't scan cloud storage or network shares, and it doesn't scan as administrator: a folder that needs more than your own access, or that macOS keeps private, shows as No access and counts as 0. Give Wings Full Disk Access in System Settings, under Privacy & Security, to see them.
-- A size is what a file takes on disk, with a file that has several hard links counted once. APFS clones count in full, so two clones of one file count twice.
+- A size is what a file takes on disk, with a file that has several hard links counted once. On Wings 0.1.71 and newer the blocks a file of 64 KB or more shares with its APFS clones count once, the way DaisyDisk counts them; before that, and for smaller files, each clone counts in full, as with `du`.
 - A scan stays on one volume and never follows a symbolic link. Scanning `/` leaves out `/System/Volumes`, which the root already reaches through its firmlinks.
 - A scan keeps at most 30,000 entries; the rest of each folder is in its smaller items.
 - Moving to the Trash, Quick Look and local snapshots are macOS only, and the Trash needs macOS 15 or newer, which is where the `trash` command first appeared.

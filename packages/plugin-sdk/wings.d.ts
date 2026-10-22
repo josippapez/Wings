@@ -67,7 +67,7 @@ interface WingsAgentActivity {
 interface WingsDiskEntry {
   /** Its name. The scan's root has its real path instead, with `..` and every link on the way resolved. */
   name: string;
-  /** Bytes it takes on disk: allocated blocks, with a file that has several hard links counted once. A folder's has everything in it. */
+  /** Bytes it takes on disk: allocated blocks, with a file that has several hard links counted once, and on macOS the blocks a file of 64 KB or more shares with its APFS clones counted once too (Wings 0.1.71). A folder's has everything in it. */
   size: number;
   /** `link` is a symbolic link, never followed. `other` is anything else, like a socket. */
   kind: "dir" | "file" | "link" | "other";

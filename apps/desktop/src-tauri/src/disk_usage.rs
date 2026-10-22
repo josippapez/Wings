@@ -27,6 +27,9 @@ pub const MAX_ENTRIES: usize = 100_000;
 pub const MAX_FOUND: usize = 10_000;
 /// Measured on /Applications on an SSD: 4, 8 and 16 threads take about the same, and one takes three times as long.
 const MAX_THREADS: usize = 8;
+/// Files smaller than this aren't asked whether they share blocks with a clone, see `counted`.
+#[cfg(target_os = "macos")]
+const CLONE_CHECK_MIN: u64 = 64 * 1024;
 const REPORT_EVERY: Duration = Duration::from_millis(200);
 const STOPPED: &str = "The scan was stopped";
 
@@ -139,6 +142,9 @@ struct Walk<'a> {
     /// Files with several hard links that were already counted, by volume and inode.
     #[cfg(unix)]
     linked: Mutex<HashSet<(u64, u64)>>,
+    /// APFS clone ids already counted in full, see `cloned`.
+    #[cfg(target_os = "macos")]
+    clones: Mutex<HashSet<u64>>,
     pulse: Pulse,
 }
 
@@ -192,6 +198,8 @@ impl<'a> Walk<'a> {
             skip: skipped(root),
             #[cfg(unix)]
             linked: Mutex::new(HashSet::new()),
+            #[cfg(target_os = "macos")]
+            clones: Mutex::new(HashSet::new()),
             pulse: Pulse::new(1, allocated(meta)),
         }
     }
@@ -233,7 +241,7 @@ impl<'a> Walk<'a> {
                 subdirs.push((path, own));
                 continue;
             }
-            let size = self.counted(&meta);
+            let size = self.counted(&entry.path(), &meta);
             (seen, bytes) = (seen + 1, bytes + size);
             out.size += size;
             out.items += 1;
@@ -263,18 +271,66 @@ impl<'a> Walk<'a> {
 
     /// What a file adds to the total: a file with several hard links only the first time one of them is seen.
     #[cfg(unix)]
-    fn counted(&self, meta: &Metadata) -> u64 {
+    fn counted(&self, #[allow(unused_variables)] path: &Path, meta: &Metadata) -> u64 {
         if meta.nlink() > 1 && !self.linked.lock().unwrap().insert((meta.dev(), meta.ino())) {
             return 0;
+        }
+        // One more call per file doubled a scan, and small files hold little of what clones share.
+        #[cfg(target_os = "macos")]
+        if meta.is_file() && allocated(meta) >= CLONE_CHECK_MIN {
+            if let Some(clone) = cloned(path) {
+                // The blocks a file shares with its clones count once, with the first of them seen. du counts them
+                // every time, so 78 clones of a 1.5 GB app came to 118 GB.
+                return if self.clones.lock().unwrap().insert(clone.id) { allocated(meta) } else { clone.private };
+            }
         }
         allocated(meta)
     }
 
     #[cfg(not(unix))]
-    fn counted(&self, meta: &Metadata) -> u64 {
+    fn counted(&self, _path: &Path, meta: &Metadata) -> u64 {
         allocated(meta)
     }
 
+}
+
+/// An APFS file that may share blocks with a clone: the id its pure clones share, and its bytes no clone shares.
+#[cfg(target_os = "macos")]
+struct Shared {
+    id: u64,
+    private: u64,
+}
+
+/// What APFS says about `path`'s shared blocks, or `None` when it shares none or the volume can't tell (`getattrlist`
+/// with `ATTR_CMNEXT_EXT_FLAGS`, `ATTR_CMNEXT_CLONEID` and `ATTR_CMNEXT_PRIVATESIZE`, see `man getattrlist`).
+#[cfg(target_os = "macos")]
+fn cloned(path: &Path) -> Option<Shared> {
+    use std::os::unix::ffi::OsStrExt;
+    /// `sys/stat.h`: the file may share blocks with another file, like a clone.
+    const EF_MAY_SHARE_BLOCKS: u64 = 0x1;
+    let want = libc::ATTR_CMNEXT_PRIVATESIZE | libc::ATTR_CMNEXT_CLONEID | libc::ATTR_CMNEXT_EXT_FLAGS;
+    let mut list = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_RETURNED_ATTRS,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: want,
+    };
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // u32 length, the five returned attribute groups, then each value in bit order: private size, clone id, flags.
+    let mut buf = [0u8; 4 + 20 + 3 * 8];
+    let options = libc::FSOPT_NOFOLLOW | libc::FSOPT_ATTR_CMN_EXTENDED | libc::FSOPT_PACK_INVAL_ATTRS;
+    // SAFETY: `list` and `buf` are live for the call and `buf.len()` is the buffer's size.
+    let r = unsafe { libc::getattrlist(c_path.as_ptr(), (&raw mut list).cast(), buf.as_mut_ptr().cast(), buf.len(), options) };
+    if r != 0 {
+        return None;
+    }
+    let word = |at: usize| u64::from_ne_bytes(buf[at..at + 8].try_into().unwrap());
+    let returned = u32::from_ne_bytes(buf[20..24].try_into().unwrap());
+    let (private, id, flags) = (word(24), word(32), word(40));
+    (returned & want == want && flags & EF_MAY_SHARE_BLOCKS != 0).then_some(Shared { id, private })
 }
 
 /// Bytes a file takes on disk, like `du`: its allocated blocks.
@@ -921,5 +977,20 @@ mod tests {
         for mount in ["/", "/Volumes/Backup", "/System", "/System/Library", "/SystemVolumes/Data", "/Users/me/System/Volumes/Data"] {
             assert!(!is_internal(Path::new(mount)), "{mount}");
         }
+    }
+
+    /// `cp -c` makes an APFS clone: both files report their full blocks, but they share them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_clone_counts_its_shared_blocks_once() {
+        let tree = Tree::new("clone");
+        let first = tree.file("one.bin", 512);
+        let status = std::process::Command::new("cp").arg("-c").arg(&first).arg(tree.0.join("two.bin")).status().unwrap();
+        assert!(status.success());
+        let scan = tree.scan(keep_all());
+        let file = own(&first);
+        assert_eq!(own(&tree.0.join("two.bin")), file, "each clone reports all its blocks");
+        assert_eq!(scan.root.size, own(&tree.0) + file, "the shared blocks count once");
+        assert_eq!(scan.root.items, 2);
     }
 }

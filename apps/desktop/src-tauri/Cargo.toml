@@ -48,6 +48,8 @@ rayon = "1.12.0"
 # Clicking a system notification focuses its pane: the plugin's builder can't wait for the click, notify-rust can.
 [target.'cfg(target_os = "macos")'.dependencies]
 notify-rust = "4.18"
+# The disk scan asks APFS which files share blocks with a clone (getattrlist).
+libc = "0.2"
 
 # Self-update: desktop only (the plugins have no mobile support).
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
