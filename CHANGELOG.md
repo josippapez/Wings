@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.74 · 2026-10-22
+
+- **Terminals keep their output across restarts.** When Wings quits, each pane saves what it showed, and shows it again above a fresh prompt when Wings starts. Closed panes' output is deleted at the next start.
+
 ## 0.1.73 · 2026-10-22
 
 - **Sort, pin and fold projects.** A menu in the Projects header sorts projects by hand, by when they were added, by when you last worked on them, or by name. Pin a project from its right-click menu to keep it on top. Projects you haven't worked on for 3 days, with no agent running, fold into a collapsed Older group at the bottom.
