@@ -59,9 +59,13 @@ fs.writeFileSync(process.argv[1], JSON.stringify(latest, null, 2) + "\n");
 PACKED=$(sh scripts/pack-plugins.sh "$DIR")
 PLUGINS=$(printf '%s\n' "$PACKED" | while read -r f; do printf ' "%s"' "$f"; done)
 
+# The debug build keeps every old copy of the app's own code and grew to 29 GB between two releases. The release
+# build holds the files to publish, so the printed command cleans it once they are uploaded.
+(cd src-tauri && cargo clean --profile dev)
+
 echo
 echo "Built Wings $VERSION. Publish it with:"
 echo
 # Notes go in a file: pasted inside quotes, a backtick in them would run as a command.
 printf '%s\n' "$NOTES" > "$DIR/notes.md"
-echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --target main --title \"Wings $VERSION\" --notes-file \"$PWD/$DIR/notes.md\""
+echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --target main --title \"Wings $VERSION\" --notes-file \"$PWD/$DIR/notes.md\" && (cd \"$PWD/src-tauri\" && cargo clean --release)"
