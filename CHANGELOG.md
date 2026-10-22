@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.73 · 2026-10-22
+
+- **Sort, pin and fold projects.** A menu in the Projects header sorts projects by hand, by when they were added, by when you last worked on them, or by name. Pin a project from its right-click menu to keep it on top. Projects you haven't worked on for 3 days, with no agent running, fold into a collapsed Older group at the bottom.
+- **Shorter project rows.** Each project in the sidebar takes less height.
+
 ## 0.1.72 · 2026-10-22
 
 - **No stray Wings in Claude Code's settings.** A copy of Wings from a build folder that had added itself to Claude Code's status line and hooks is now taken out when Wings connects, instead of being kept beside the app. Once the build folder was cleaned, it left the status line without input and made every session start report a hook error.
