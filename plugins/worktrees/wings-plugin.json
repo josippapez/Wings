@@ -1,10 +1,10 @@
 {
   "id": "worktrees",
   "name": "Worktrees",
-  "version": "0.4.2",
-  "minWingsVersion": "0.1.50",
+  "version": "0.5.0",
+  "minWingsVersion": "0.1.70",
   "icon": "icon.svg",
-  "description": "Lists the git worktrees of your open projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm.",
+  "description": "Lists the git worktrees of your projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm. It can also look across the whole Mac for repos outside your projects that have worktrees.",
   "api": 1,
   "main": "dist/main.js",
   "permissions": {
@@ -18,7 +18,8 @@
       "git branch --list [--list --merged --format]",
       "git branch -d [-d]"
     ],
-    "panes": []
+    "panes": [],
+    "diskUsage": true
   },
   "contributes": {
     "sidebars": [

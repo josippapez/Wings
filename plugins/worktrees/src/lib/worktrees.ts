@@ -39,6 +39,9 @@ export function parseWorktrees(text: string): Worktree[] {
   return out;
 }
 
+/** Whether a repo has anything to manage besides its own checkout: a linked worktree, or a record whose folder is gone. */
+export const hasWorktrees = (list: readonly Worktree[]) => list.length > 1 || list.some((wt) => wt.prunable !== null);
+
 /** What `git status` and `git log` said about one worktree. */
 export interface Probe {
   /** null when git couldn't say. */
@@ -68,6 +71,8 @@ export interface Row {
   atDefault: boolean;
   gone: boolean;
   dirty: boolean | null;
+  /** It could be removed, but its repo is outside your projects, so `git status` wasn't run there and nothing says whether it has changes. */
+  unchecked: boolean;
   locked: boolean;
   inPane: boolean;
   lastCommit: number | null;
@@ -90,8 +95,13 @@ export const contains = (root: string, path: string) => {
 /** The default branch's own name, `main` for `origin/main`. */
 const localName = (ref: string) => ref.replace(/^origin\//, "");
 
-/** Decides what each worktree is. A pane belongs to the deepest worktree that holds its folder. */
-export function describe(list: Worktree[], facts: Facts, probes: ReadonlyMap<string, Probe>, paneCwds: readonly string[]): Row[] {
+/**
+ * Decides what each worktree is. A pane belongs to the deepest worktree that holds its folder. `skipped` is for a repo
+ * outside your projects, where `git status` and `git log` weren't run because a repo's own settings can make them run
+ * programs: whether a worktree has changes isn't known then, which doesn't stop it from being removed one at a time
+ * (git itself refuses one that has changes), but keeps it out of "Remove all merged & clean".
+ */
+export function describe(list: Worktree[], facts: Facts, probes: ReadonlyMap<string, Probe>, paneCwds: readonly string[], skipped = false): Row[] {
   const open = new Set<string>();
   for (const cwd of paneCwds) {
     let best: Worktree | null = null;
@@ -105,10 +115,10 @@ export function describe(list: Worktree[], facts: Facts, probes: ReadonlyMap<str
     const inDefault = !wt.main && wt.branch !== null && wt.branch !== defaultName && facts.merged.has(wt.branch);
     const atDefault = inDefault && wt.head !== null && wt.head === facts.defaultTip;
     const merged = inDefault && !atDefault;
-    const dirty = missing || wt.bare ? false : (probe?.dirty ?? null);
+    const dirty = missing || wt.bare ? false : skipped ? null : (probe?.dirty ?? null);
     const locked = wt.locked !== null;
     const inPane = open.has(wt.path);
-    const why = wt.main ? "The main worktree stays." : locked ? "Locked." : missing ? "Its folder is gone: prune it." : inPane ? "Open in a pane." : dirty === null ? "Couldn't read its status." : dirty ? "Has uncommitted changes." : null;
+    const why = wt.main ? "The main worktree stays." : locked ? "Locked." : missing ? "Its folder is gone: prune it." : inPane ? "Open in a pane." : dirty === null && !skipped ? "Couldn't read its status." : dirty ? "Has uncommitted changes." : null;
     const removable = why === null;
     return {
       wt,
@@ -117,12 +127,13 @@ export function describe(list: Worktree[], facts: Facts, probes: ReadonlyMap<str
       atDefault,
       gone: wt.branch !== null && facts.gone.has(wt.branch),
       dirty,
+      unchecked: removable && skipped,
       locked,
       inPane,
       lastCommit: probe?.lastCommit ?? null,
       removable,
       why,
-      bulk: removable && merged,
+      bulk: removable && merged && !skipped,
     };
   });
 }

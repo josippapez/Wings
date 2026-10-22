@@ -19,8 +19,12 @@
 .repo-actions {
   margin-bottom: 6px;
 }
+/* Its action sits at the right whether or not "Open in new pane" is at the left. */
 .item-actions {
-  justify-content: space-between;
+  justify-content: flex-end;
+}
+.open-pane {
+  margin-right: auto;
 }
 .confirm-list {
   margin: 0;
@@ -30,4 +34,13 @@
 }
 .note {
   margin: 4px 0;
+}
+/* Repos outside your projects, set off from the ones above. */
+.elsewhere {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wings-hairline);
+}
+.elsewhere-note {
+  margin: 2px 0 10px;
 }

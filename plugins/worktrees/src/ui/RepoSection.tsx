@@ -21,14 +21,15 @@ export function RepoSection(p: {
   onAsk: (c: Ask) => void;
   onConfirm: () => Promise<unknown>;
   onCancel: () => void;
-  onOpen: (path: string) => void;
+  /** Opens a worktree in a pane. Left out for a repo outside your projects, where Wings won't open one: no button then. */
+  onOpen?: (path: string) => void;
 }) {
-  const { repo, rows, asked, working } = p;
+  const { repo, rows, asked, working, onOpen } = p;
   const bulk = rows.filter((r) => r.bulk);
   const missing = rows.filter((r) => r.missing && !r.locked);
   const name = basename(repo.root);
   const card = (ask: Ask, branch: string | null) => (
-    <ConfirmCard ask={ask} branch={branch} deleteBranch={p.deleteBranch} onDeleteBranch={p.onDeleteBranch} onConfirm={p.onConfirm} onCancel={p.onCancel} />
+    <ConfirmCard ask={ask} branch={branch} outside={!repo.checked} deleteBranch={p.deleteBranch} onDeleteBranch={p.onDeleteBranch} onConfirm={p.onConfirm} onCancel={p.onCancel} />
   );
   return (
     <section aria-label={name}>
@@ -59,7 +60,7 @@ export function RepoSection(p: {
             row={row}
             working={working}
             confirm={asked?.kind === "remove" && asked.paths[0] === row.wt.path ? card(asked, row.wt.branch) : null}
-            onOpen={() => p.onOpen(row.wt.path)}
+            onOpen={onOpen ? () => onOpen(row.wt.path) : undefined}
             onAsk={() => p.onAsk({ kind: "remove", root: repo.root, paths: [row.wt.path] })}
           />
         ))}

@@ -11,7 +11,8 @@ export function WorktreeItem(p: {
   working: boolean;
   /** The card asking to remove this worktree, which takes the place of its buttons. */
   confirm: ReactNode;
-  onOpen: () => void;
+  /** Opens it in a pane. Without it there is no button. */
+  onOpen?: () => void;
   onAsk: () => void;
 }) {
   const { row } = p;
@@ -23,6 +24,7 @@ export function WorktreeItem(p: {
   if (row.atDefault) flags.push({ label: "no commits of its own", title: "Its branch is at the default branch's commit" });
   if (row.gone) flags.push({ label: "upstream gone", tone: "warn" });
   if (row.dirty) flags.push({ label: "uncommitted", tone: "warn" });
+  if (row.unchecked) flags.push({ label: "changes not checked", title: "A repo outside your projects can make git run programs, so Wings doesn't run git status in it. git itself refuses to remove a worktree that has changes." });
   if (row.locked) flags.push({ label: "locked", tone: "warn", title: wt.locked || undefined });
   if (row.inPane) flags.push({ label: "open in a pane", tone: "info" });
   // git prints seconds; ago wants milliseconds.
@@ -53,8 +55,8 @@ export function WorktreeItem(p: {
       ) : null}
       {p.confirm ?? (
         <Row gap="s" className="item-actions">
-          {!row.missing ? (
-            <Button variant="ghost" size="xs" onClick={p.onOpen}>
+          {!row.missing && p.onOpen ? (
+            <Button variant="ghost" size="xs" className="open-pane" onClick={p.onOpen}>
               Open in new pane
             </Button>
           ) : null}

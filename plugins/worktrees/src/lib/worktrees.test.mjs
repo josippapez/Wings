@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { contains, describe, goneBranches, parseWorktrees, shortenPath } from "./worktrees.ts";
+import { contains, describe, goneBranches, hasWorktrees, parseWorktrees, shortenPath } from "./worktrees.ts";
 
 const PORCELAIN = `worktree /Users/me/dev/app
 HEAD 1111111111111111111111111111111111111111
@@ -124,4 +124,23 @@ test("paths are shortened with ~, gone upstreams are found", () => {
   assert.equal(shortenPath("/Users/mex"), "~");
   assert.equal(shortenPath("/srv/app"), "/srv/app");
   assert.deepEqual([...goneBranches("a\t[gone]\nb\t[ahead 1]\nc\t\nd\t[gone]\n")], ["a", "d"]);
+});
+
+test("a repo has worktrees to manage when it has another checkout, or a record whose folder is gone", () => {
+  assert.equal(hasWorktrees(parseWorktrees("worktree /r\nHEAD 1\nbranch refs/heads/main\n")), false);
+  assert.equal(hasWorktrees(parseWorktrees("worktree /r\nHEAD 1\n\nworktree /r-x\nHEAD 2\n")), true);
+  assert.equal(hasWorktrees(parseWorktrees("worktree /r\nHEAD 1\nprunable gitdir file points to non-existent location\n")), true);
+  assert.equal(hasWorktrees([]), false);
+});
+
+test("in a repo outside your projects nothing says whether a worktree has changes: it can be removed one at a time, never as part of the merged & clean", () => {
+  const rows = describe(parseWorktrees(PORCELAIN), facts(), new Map(), [], true);
+  const r = byBranch(rows, "feature/x");
+  assert.deepEqual([r.dirty, r.unchecked, r.removable, r.merged, r.bulk], [null, true, true, true, false]);
+  // What stops a worktree anywhere still stops it, and those aren't called unchecked.
+  assert.deepEqual(
+    rows.map((row) => [row.removable, row.unchecked]),
+    [[false, false], [true, true], [true, true], [false, false], [false, false]],
+  );
+  assert.ok(rows.every((row) => !row.bulk));
 });
