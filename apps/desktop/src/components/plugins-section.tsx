@@ -96,7 +96,7 @@ function Source({ plugin: p }: { plugin: PluginView }) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports, agentActivity } = plugin.permissions;
+  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports, agentActivity, diskUsage } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars, views, settings, hooks = [] } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
@@ -114,6 +114,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Read your Claude usage limits and each session's context and cache, from Claude Code's status line", items: [], on: statusline },
     { title: "Read what your OpenCode sessions are doing: their latest prompts, tool calls and token use", items: [], on: agentActivity },
     { title: "See which local ports the programs in your terminals listen on", items: [], on: ports },
+    { title: "Read the names and sizes of the files and folders on your disks", items: [], on: diskUsage },
     { title: "Open links that start with", items: openUrl },
   ].filter((g) => g.items.length > 0 || g.on);
   if (groups.length === 0) return <p className="text-[13px] text-muted-foreground">It doesn't ask for any access beyond showing things in Wings.</p>;

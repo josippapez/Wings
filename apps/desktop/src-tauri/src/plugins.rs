@@ -54,6 +54,9 @@ pub struct Permissions {
     /// Lets the plugin read what an OpenCode session is doing, with `wings.agentActivity`, and hear when it
     /// changes, with `wings.onAgentActivity`.
     pub agent_activity: bool,
+    /// Lets the plugin read the names and sizes of the files and folders on your disks, with `wings.diskUsage`, look
+    /// for them by name, with `wings.diskFind`, and list the disks, with `wings.disks`.
+    pub disk_usage: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1136,6 +1139,11 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
 /// Whether the plugin may read what an OpenCode session is doing.
 pub fn may_read_agent_activity(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.agent_activity
+}
+
+/// Whether the plugin may scan the disks for the names and sizes of their files and folders, and list them.
+pub fn may_scan_disks(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.disk_usage
 }
 
 /// A word of a pane command. Pane commands are typed into your shell, so words can't hold spaces, quotes,
@@ -2323,6 +2331,22 @@ mod tests {
         assert!(!may_read_agent_activity(&manifest(serde_json::json!({}))));
         assert!(!may_read_agent_activity(&manifest(serde_json::json!({ "transcript": ["assistant"], "statusline": true }))));
         assert!(may_read_agent_activity(&manifest(serde_json::json!({ "agentActivity": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disk_usage_needs_its_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-diskusage-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_scan_disks(&manifest(serde_json::json!({}))));
+        assert!(!may_scan_disks(&manifest(serde_json::json!({ "exec": ["df"], "ports": true }))));
+        assert!(may_scan_disks(&manifest(serde_json::json!({ "diskUsage": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

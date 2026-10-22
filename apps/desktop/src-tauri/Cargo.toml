@@ -41,6 +41,8 @@ notify = "8"
 # Only for the Rust-parsed canvas renderer prototype in the benchmark (`--features bench-canvas`).
 wings-bench-grid = { path = "bench-grid", optional = true }
 sha2 = "0.11"
+# The disk scan walks folders on a work-stealing pool, which std has none of.
+rayon = "1.12.0"
 
 
 # Clicking a system notification focuses its pane: the plugin's builder can't wait for the click, notify-rust can.

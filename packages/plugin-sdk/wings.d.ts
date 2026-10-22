@@ -63,6 +63,75 @@ interface WingsAgentActivity {
   )[];
 }
 
+/** A file or folder in a `wings.diskUsage` scan. */
+interface WingsDiskEntry {
+  /** Its name. The scan's root has its full path instead. */
+  name: string;
+  /** Bytes it takes on disk: allocated blocks, with a file that has several hard links counted once. A folder's has everything in it. */
+  size: number;
+  /** `link` is a symbolic link, never followed. `other` is anything else, like a socket. */
+  kind: "dir" | "file" | "link" | "other";
+  /** A folder's files and folders at any depth, kept or folded. 0 for a file. */
+  items: number;
+  /** A folder's entries of at least the scan's `floor`, biggest first, down to the scan's `depth`. */
+  children?: WingsDiskEntry[];
+  /** A folder's entries under the floor or past the depth, together, like DaisyDisk's "smaller objects". */
+  smaller?: { size: number; items: number };
+  /** A folder Wings couldn't open, for its permissions or macOS privacy: its size is unknown and counted as 0. It stays in `children` under the floor too, unless `maxEntries` folds it away. */
+  restricted?: true;
+}
+
+/** What `wings.diskUsage` found. */
+interface WingsDiskScan {
+  root: WingsDiskEntry;
+  /** The least size an entry needed to be kept: `minBytes`, or more when over `maxEntries` entries passed it. */
+  floor: number;
+  /** Files and folders scanned. */
+  entries: number;
+  /** Folders that couldn't be opened. */
+  restricted: number;
+  /** How long the scan took, in ms. */
+  ms: number;
+}
+
+/** How far a `wings.diskUsage` scan or a `wings.diskFind` search has got, about five times a second. */
+interface WingsDiskScanProgress {
+  entries: number;
+  /** Bytes counted so far. A `diskFind` doesn't size anything, so it is 0 there. */
+  bytes: number;
+  /** A folder it's reading now. */
+  path: string;
+}
+
+/** What `wings.diskFind` found. */
+interface WingsDiskFind {
+  /** The full paths of what has one of the names, sorted. At most 10,000: with that many, the search stopped and there may be more. */
+  paths: string[];
+  /** Files and folders looked at. */
+  entries: number;
+  /** Folders that couldn't be opened. */
+  restricted: number;
+  /** How long the search took, in ms. */
+  ms: number;
+}
+
+/** A mounted disk, from `wings.disks`. */
+interface WingsDisk {
+  /** The volume's name, like `Macintosh HD`. */
+  name: string;
+  /** Where it's mounted, like `/` or `/Volumes/Backup`. */
+  mount: string;
+  /** Its file system, like `apfs`. */
+  fs: string;
+  kind: "ssd" | "hdd" | "unknown";
+  removable: boolean;
+  readOnly: boolean;
+  /** Bytes. */
+  total: number;
+  /** Bytes free, counting what macOS can purge on its own as free, the way Finder does. */
+  free: number;
+}
+
 /** One block of a message's `content`. Which fields it has depends on `type`: `text` has `text`, `tool_use` has `id`, `name` and `input`, `tool_result` has `tool_use_id`, `content` and `is_error`. */
 interface TranscriptBlock {
   type: string;
@@ -442,6 +511,46 @@ interface Wings {
    * reaches. About 20 ms a call, so poll slowly.
    */
   ports(): Promise<{ paneId: string; pid: number; name: string; port: number; startedAt: number }[]>;
+  /**
+   * Needs `permissions.diskUsage` and Wings 0.1.70. Scans a folder or a disk in Wings, on several threads, and
+   * resolves a tree of what takes the space, pruned to the entries of at least `floor` bytes. `path` is absolute, or
+   * starts with `~` for your home folder. The scan stays on the volume `path` is on and never follows symbolic links;
+   * scanning `/` on macOS skips `/System/Volumes`, which the root already reaches through its firmlinks. Rejects with
+   * `The scan was stopped` once `signal` aborts.
+   */
+  diskUsage(
+    path: string,
+    options?: {
+      /** Entries smaller than this are folded into their folder's `smaller`. 1 MiB by default. */
+      minBytes?: number;
+      /** Levels kept under the root, 0 to 64: 1 keeps only its own entries. 64 by default. */
+      depth?: number;
+      /** At most this many entries come back, 1 to 100,000: past it the floor goes up. 20,000 by default. */
+      maxEntries?: number;
+      onProgress?: (progress: WingsDiskScanProgress) => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<WingsDiskScan>;
+  /**
+   * Needs `permissions.diskUsage` and Wings 0.1.70. Looks under a folder or a disk, on several threads, for files,
+   * folders and links called exactly one of `names`, like `.git`, and resolves their full paths. It reads folder
+   * listings only, never goes into a match, a folder named in `skip`, a symbolic link or another volume, and doesn't
+   * test the name of `path` itself. `path`, the volume rule and `/System/Volumes` are as in `diskUsage`. Rejects with
+   * `The scan was stopped` once `signal` aborts.
+   */
+  diskFind(
+    path: string,
+    options: {
+      /** 1 to 16 names, each 1 to 255 characters with no `/`. */
+      names: string[];
+      /** Folders with these names are left alone, wherever they are: 0 to 32 names, like `node_modules`. */
+      skip?: string[];
+      onProgress?: (progress: WingsDiskScanProgress) => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<WingsDiskFind>;
+  /** Needs `permissions.diskUsage` and Wings 0.1.70. The mounted disks Finder shows, the startup disk first. */
+  disks(): Promise<WingsDisk[]>;
   /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], that starts with a prefix in `permissions.openUrl`. */
   openUrl(url: string): Promise<void>;
   /**

@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
+import { diskFindRequest, diskToken, diskUsageRequest } from "@/lib/plugin-disk";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneRail, type PaneRail } from "@/lib/pane-rail";
 import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
@@ -713,6 +714,14 @@ export class PluginHost {
         return invoke("plugin_statusline", { pluginId });
       case "ports":
         return invoke("plugin_ports", { pluginId });
+      case "diskUsage":
+        return invoke("plugin_disk_usage", { pluginId, request: diskUsageRequest(p), onProgress: new Channel<string>(output) });
+      case "diskFind":
+        return invoke("plugin_disk_find", { pluginId, request: diskFindRequest(p), onProgress: new Channel<string>(output) });
+      case "diskUsageCancel":
+        return invoke("plugin_disk_usage_cancel", { pluginId, token: diskToken(p.token) });
+      case "disks":
+        return invoke("plugin_disks", { pluginId });
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
       case "post":

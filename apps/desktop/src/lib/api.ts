@@ -81,6 +81,8 @@ export type PluginPermissions = {
   ports: boolean;
   /** Reads what an OpenCode session is doing. */
   agentActivity: boolean;
+  /** Reads the names and sizes of the files and folders on your disks, and lists the disks. */
+  diskUsage: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */

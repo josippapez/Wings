@@ -184,6 +184,20 @@
     call("toolDone", { token, text, isError });
   }
 
+  // A scan or a search: a call that `signal` can stop and that reports progress as JSON lines. Its token names it for `diskUsageCancel`.
+  const diskCall = (method, params, { onProgress, signal }) => {
+    if (signal?.aborted) return Promise.reject(new Error("The scan was stopped"));
+    const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const stop = () => {
+      call("diskUsageCancel", { token }).catch(() => {});
+    };
+    signal?.addEventListener("abort", stop, { once: true });
+    const stream = typeof onProgress === "function";
+    return call(method, { ...params, token, stream }, stream ? (line) => onProgress(JSON.parse(line)) : undefined).finally(() =>
+      signal?.removeEventListener("abort", stop),
+    );
+  };
+
   window.wings = Object.freeze({
     /** Every terminal pane `{ paneId, cwd, command, project, session, focused }`; `session` (`{ sessionId, kind, name, state, startedAt }`, `kind` `"claude"` or `"opencode"`) is set while an agent runs, `focused` on the focused pane of the tab on screen. Called on every change. */
     onPanes: (listener) => {
@@ -258,6 +272,25 @@
      * `{ paneId, pid, name, port, startedAt }[]`. Only ports `localhost` reaches. Costs about 20 ms: poll slowly.
      */
     ports: () => call("ports", {}),
+    /**
+     * With `permissions.diskUsage`: scans a folder or a disk in Wings, on several threads, and resolves
+     * `{ root, floor, entries, restricted, ms }`. `root` is a tree of `{ name, size, kind, items, children?, smaller?, restricted? }`
+     * with `size` in bytes on disk, kept only for entries of at least `floor` bytes: `minBytes` (1 MiB by default), or more when
+     * over `maxEntries` (20,000 by default). `depth` is how many levels it keeps (0 to 64). `onProgress({ entries, bytes, path })`
+     * is called about five times a second. When `signal` aborts, the scan stops and the call rejects with "The scan was stopped".
+     */
+    diskUsage: (path, { minBytes, depth, maxEntries, onProgress, signal } = {}) =>
+      diskCall("diskUsage", { path, minBytes, depth, maxEntries }, { onProgress, signal }),
+    /**
+     * With `permissions.diskUsage`: looks under a folder or a disk, on several threads, for files, folders and links called
+     * exactly one of `names` (1 to 16), and resolves `{ paths, entries, restricted, ms }`: their full paths, sorted, at most
+     * 10,000. It never goes into a match or a folder named in `skip` (up to 32), and reads folder listings only.
+     * `onProgress({ entries, bytes: 0, path })` is called about five times a second. When `signal` aborts, the search
+     * stops and the call rejects with "The scan was stopped".
+     */
+    diskFind: (path, { names, skip, onProgress, signal } = {}) => diskCall("diskFind", { path, names, skip }, { onProgress, signal }),
+    /** With `permissions.diskUsage`: the mounted disks as `{ name, mount, fs, kind, removable, readOnly, total, free }[]`, the startup disk first. */
+    disks: () => call("disks", {}),
     /** Shows a badge in a pane's header, or removes it with `null`. Sending what this frame last sent for the pane does nothing. */
     setBadge: (paneId, badge) => sendChanged(sentBadges, paneId, badge, "setBadge", { paneId, badge }),
     /**

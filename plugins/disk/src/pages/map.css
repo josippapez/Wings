@@ -1,0 +1,366 @@
+/* The Disk usage tab's own layout. plugin-ui.css styles the components; this places the tab's blocks. */
+
+/* ---------- Disks (the overview) ---------- */
+.dk-wrap {
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 6px 0 24px;
+  gap: 20px;
+}
+.dk-disk {
+  gap: 12px;
+}
+.dk-place,
+.dk-scan-item,
+.dk-collector-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dk-place-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.dk-star {
+  font-size: 15px;
+}
+.dk-star[aria-pressed="true"] {
+  color: var(--wings-warning);
+}
+/* The path field and its button share a line, and an error under the field doesn't push the button down. */
+.dk-scan-form {
+  margin-top: 4px;
+  padding: 10px 6px 2px;
+  border-top: 1px solid var(--wings-hairline);
+}
+.dk-scan-field {
+  flex: 1;
+  min-width: 0;
+}
+.dk-scan-item {
+  gap: 12px;
+}
+.dk-scan-size,
+.dk-scan-when {
+  flex: none;
+  min-width: 72px;
+  text-align: right;
+}
+@media (max-width: 700px) {
+  .dk-scan-when {
+    display: none;
+  }
+}
+
+/* ---------- A scan that runs, failed or is gone: a card in the middle of the page ---------- */
+.dk-center {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+.dk-scan-card {
+  width: min(520px, 100%);
+  gap: 14px;
+}
+
+.dk-notice {
+  flex: none;
+  min-width: 0;
+}
+.dk-notice .w-notice {
+  flex: 1;
+  min-width: 0;
+}
+.dk-map-page .w-page-body > .dk-notice {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--wings-hairline);
+}
+
+/* ---------- The map's toolbar ---------- */
+.dk-toolbar .w-toolbar-main {
+  gap: 4px;
+}
+.dk-history {
+  display: flex;
+  flex: none;
+}
+.dk-back svg {
+  transform: rotate(90deg);
+}
+.dk-forward svg {
+  transform: rotate(-90deg);
+}
+.dk-crumbs {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.dk-crumb-item {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+.dk-crumb-item > .w-text {
+  min-width: 0;
+}
+/* The folder you are in is text, not a button: it gets a button's padding so the separators sit evenly. */
+.dk-crumb-current {
+  padding: 0 10px;
+}
+/* The way back lines its text up with the page's edge, as the buttons around it keep their hover room. */
+.dk-toolbar .w-toolbar-main > .dk-disks.w-button {
+  margin-left: -8px;
+}
+.dk-sep {
+  flex: none;
+  padding: 0 2px;
+  color: var(--wings-muted);
+}
+.dk-crumb.w-button {
+  flex-shrink: 1;
+  max-width: 180px;
+  min-width: 0;
+}
+.dk-trunc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dk-wide {
+  display: flex;
+  gap: 6px;
+}
+.dk-narrow {
+  display: none;
+}
+@media (max-width: 760px) {
+  .dk-wide {
+    display: none;
+  }
+  .dk-narrow {
+    display: inline-block;
+  }
+}
+
+/* ---------- The map: the list on the left, the circle filling the rest ---------- */
+.dk-list-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Whatever the map draws fills its pane. */
+.dk-map {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.dk-map > * {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.dk-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.dk-list-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--wings-hairline);
+}
+.dk-list-sub {
+  min-height: 18px;
+}
+.dk-list-back.w-button {
+  align-self: flex-start;
+  margin: 0 0 2px -6px;
+}
+.dk-list-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 12px;
+  overflow-y: auto;
+}
+.dk-hint {
+  display: block;
+  padding: 8px 6px;
+}
+
+/* The rows are as tall as their count says, and each sits where the list's script puts it: only the ones in view exist. */
+.dk-rows {
+  position: relative;
+  margin-top: 6px;
+}
+/* A row: the button that picks it, and its menu, which waits until you are on the row. */
+.dk-row.w-list-item {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+}
+.dk-row:hover,
+.dk-row:focus-within,
+.dk-row[data-pointed] {
+  background: var(--wings-hover);
+}
+.dk-row[data-selected] {
+  background: var(--wings-pressed);
+}
+.dk-row-main.w-list-button {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 6px;
+}
+.dk-row-main.w-list-button:hover {
+  background: none;
+}
+.dk-row .w-dot {
+  width: 10px;
+  height: 10px;
+}
+/* In the Collector: the swatch fades, as the wedge does, and the name goes quiet. Text keeps its contrast: a check says it too. */
+.dk-row[data-collected] .dk-row-main > .w-dot {
+  opacity: 0.5;
+}
+.dk-row[data-collected] .dk-row-main > .w-text[data-truncate] {
+  color: var(--wings-muted);
+}
+.dk-collected {
+  color: var(--wings-info);
+}
+.dk-row[data-kind="extra"] .dk-row-main {
+  padding-left: 24px;
+}
+.dk-size {
+  flex: none;
+  min-width: 56px;
+  text-align: right;
+  white-space: nowrap;
+}
+.dk-chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--wings-muted);
+  transform: rotate(-90deg);
+}
+.dk-chevron[data-open] {
+  transform: none;
+}
+.dk-chevron-space {
+  flex: none;
+  width: 12px;
+}
+.dk-row-menu {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+@media (hover: hover) {
+  .dk-row-menu .w-button {
+    opacity: 0;
+    transition: opacity 150ms;
+  }
+  .dk-row:hover .dk-row-menu .w-button,
+  .dk-row:focus-within .dk-row-menu .w-button,
+  .dk-row[data-selected] .dk-row-menu .w-button,
+  .dk-row-menu .w-button[aria-expanded="true"] {
+    opacity: 1;
+  }
+}
+/* A part of the hidden space: its name, size and action on one line, and what it is across the whole width under them. */
+.dk-part.w-list-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 6px;
+}
+.dk-part .w-dot {
+  width: 10px;
+  height: 10px;
+}
+.dk-part-note {
+  grid-column: 2 / -1;
+}
+
+/* ---------- The Collector ---------- */
+.dk-collector {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--wings-hairline);
+  background: var(--wings-surface);
+  transition: background-color 150ms;
+}
+/* Something is being dragged over it. */
+.dk-collector[data-over] {
+  background: color-mix(in srgb, var(--wings-info) 14%, transparent);
+  outline: 2px dashed color-mix(in srgb, var(--wings-info) 60%, transparent);
+  outline-offset: -4px;
+}
+.dk-collector-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.dk-collector-text {
+  flex: 1;
+  min-width: 0;
+}
+.dk-fold svg {
+  transform: rotate(180deg);
+  transition: transform 150ms;
+}
+.dk-fold[aria-expanded="true"] svg {
+  transform: none;
+}
+.dk-collector-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dk-collector-list {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.dk-collector-empty {
+  display: block;
+}
+.dk-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

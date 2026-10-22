@@ -1,0 +1,127 @@
+{
+  "id": "disk",
+  "name": "Disk usage",
+  "version": "0.1.0",
+  "minWingsVersion": "0.1.70",
+  "icon": "icon.svg",
+  "description": "Shows what takes the space on your disks as a map you click into, like DaisyDisk: scan a disk or a folder, find the biggest folders and files, gather them in the Collector and move them to the Trash. Claude can scan too, with its disk tools.",
+  "api": 1,
+  "main": "dist/main.js",
+  "permissions": {
+    "diskUsage": true,
+    "exec": [
+      "df -k -P [-k -P]",
+      "open -R [-R]",
+      "qlmanage -p [-p]",
+      "trash",
+      "tmutil listlocalsnapshotdates",
+      "tmutil deletelocalsnapshots",
+      "tmutil thinlocalsnapshots"
+    ]
+  },
+  "contributes": {
+    "mcpInstructions": "Disk usage (disk__*): when the user asks what takes space on a disk or in a folder, why the disk is full, or how big a folder is, use disk__folder_usage (a folder's or disk's size and biggest items, scanned fast in Wings), disk__largest_files and disk__list_disks (free space per disk) instead of du, find or df. To clean up, put candidates in the Collector with disk__collect: the user reviews them in the Disk usage tab and moves them to the Trash.",
+    "views": [
+      {
+        "id": "map",
+        "title": "Disk usage",
+        "page": "dist/map.html",
+        "opens": [
+          "tab"
+        ],
+        "newTab": true
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "list_disks",
+        "description": "Lists the disks mounted on this Mac: name, mount point, kind, and total, used and free space (each in bytes and as text), the purgeable space macOS can free on its own, like local snapshots and caches, which Finder counts as free, and the other volumes that share the disk's space. Fast, and read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "folder_usage",
+        "description": "Shows what takes the space in a folder or on a whole disk, scanned in Wings, much faster than du: its size, and its biggest files and folders, `depth` levels down (1 to 4, 2 by default) with the `limit` biggest in each folder (1 to 50, 15 by default). Folders open biggest first until about 300 entries are in the answer, so a folder with no `children` was cut short, or is empty: ask about it by its path. In a folder, `others` is what `limit` left out and `smaller` is what the scan didn't keep one by one. `restricted` marks a folder Wings couldn't open (permissions, or macOS privacy) whose size isn't counted. For `/` or another disk's mount point it also gives `hidden`: the used space no folder explains, like purgeable space, other volumes and local snapshots. A scan under 30 minutes old that holds the path is reused, and a folder it only scanned coarsely is scanned again in more detail first; `fresh` scans again instead. A first scan of a whole disk takes up to a minute. A call is cut off after 120 seconds, and a scan still running then goes on and is used by the next call. The scan also shows in the Disk usage tab. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "An absolute path to a folder or a file, or one that starts with ~ for the home folder. `/` or a disk's mount point is a whole disk."
+            },
+            "depth": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4,
+              "description": "How many levels of folders to list. 2 by default."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "The most entries to list in each folder, biggest first. 15 by default."
+            },
+            "fresh": {
+              "type": "boolean",
+              "description": "Scan again even when a scan under 30 minutes old holds this path."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "largest_files",
+        "description": "Lists the biggest files under a folder or on a whole disk, biggest first, with their full paths and sizes. It uses the same scan as folder_usage (one under 30 minutes old that holds the path is reused, a coarse folder is scanned in more detail first, and a first scan of a whole disk takes up to a minute), so it lists only the files the scan kept: the answer says the size under which files aren't listed one by one. `limit` is 1 to 100, 25 by default. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "An absolute path to a folder or a file, or one that starts with ~ for the home folder. `/` or a disk's mount point is a whole disk."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "How many files to list. 25 by default."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "collect",
+        "description": "Puts files and folders in the Collector of the Disk usage tab, the list the user reviews and moves to the Trash from there. This never moves anything to the Trash. A folder takes out what is collected inside it, and a path already collected or inside a collected folder is left as it is. Disks, system folders, home folders and their standard folders (Library, Desktop, Documents, Downloads, Applications, Movies, Music, Pictures, Public) are refused, and each refusal says why; what is inside them may be collected. Sizes come from a scan that holds the path, else are measured now, which takes a while for a big folder. Up to 200 paths, each absolute or starting with ~.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 200,
+              "description": "The files and folders to collect."
+            }
+          },
+          "required": [
+            "paths"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

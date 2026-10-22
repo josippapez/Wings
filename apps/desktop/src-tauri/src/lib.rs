@@ -5,6 +5,7 @@ mod claude;
 #[cfg(unix)]
 mod claude_settings;
 mod detect;
+mod disk_usage;
 mod editors;
 mod gitwatch;
 mod history;
@@ -1124,6 +1125,105 @@ fn plugin_ports(state: State<AppState>, plugin_id: String) -> Res<Vec<ports::Pan
     found
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskUsageRequest {
+    path: String,
+    min_bytes: Option<u64>,
+    depth: Option<u32>,
+    max_entries: Option<usize>,
+    /// Names the scan, so `plugin_disk_usage_cancel` can stop it.
+    token: String,
+    /// Send how far the scan has got to `on_progress`, as JSON.
+    stream: bool,
+}
+
+/// Scans a folder or a disk for what takes the space, if the plugin may read disk usage.
+#[tauri::command(async)]
+fn plugin_disk_usage(state: State<AppState>, plugin_id: String, request: DiskUsageRequest, on_progress: Channel<String>) -> Res<disk_usage::Scan> {
+    if !plugins::may_scan_disks(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read disk usage"));
+    }
+    let DiskUsageRequest { path, min_bytes, depth, max_entries, token, stream } = request;
+    let defaults = disk_usage::Options::default();
+    let options = disk_usage::Options {
+        min_bytes: min_bytes.unwrap_or(defaults.min_bytes),
+        depth: depth.map_or(defaults.depth, |d| d.min(disk_usage::MAX_DEPTH)),
+        max_entries: max_entries.map_or(defaults.max_entries, |n| n.clamp(1, disk_usage::MAX_ENTRIES)),
+    };
+    let start = std::time::Instant::now();
+    let running = disk_usage::Running::new(format!("{plugin_id}:{token}"));
+    let scan = disk_usage::scan(&path, options, running.flag(), |progress| {
+        if stream {
+            if let Ok(line) = serde_json::to_string(progress) {
+                let _ = on_progress.send(line);
+            }
+        }
+    });
+    if cfg!(debug_assertions) {
+        eprintln!("[plugin] {plugin_id} diskUsage took {} ms", start.elapsed().as_millis());
+    }
+    scan
+}
+
+/// Stops a scan the plugin started with that token. One that has already finished is nothing to stop.
+#[tauri::command]
+fn plugin_disk_usage_cancel(state: State<AppState>, plugin_id: String, token: String) -> Res<()> {
+    if !plugins::may_scan_disks(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read disk usage"));
+    }
+    disk_usage::stop(&format!("{plugin_id}:{token}"));
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskFindRequest {
+    path: String,
+    names: Vec<String>,
+    skip: Vec<String>,
+    /// Names the search, so `plugin_disk_usage_cancel` can stop it.
+    token: String,
+    /// Send how far the search has got to `on_progress`, as JSON.
+    stream: bool,
+}
+
+/// Looks under a folder or a disk for entries with certain names, if the plugin may read disk usage.
+#[tauri::command(async)]
+fn plugin_disk_find(state: State<AppState>, plugin_id: String, request: DiskFindRequest, on_progress: Channel<String>) -> Res<disk_usage::Found> {
+    if !plugins::may_scan_disks(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read disk usage"));
+    }
+    let DiskFindRequest { path, names, skip, token, stream } = request;
+    let start = std::time::Instant::now();
+    let running = disk_usage::Running::new(format!("{plugin_id}:{token}"));
+    let found = disk_usage::find(&path, &names, &skip, running.flag(), |progress| {
+        if stream {
+            if let Ok(line) = serde_json::to_string(progress) {
+                let _ = on_progress.send(line);
+            }
+        }
+    });
+    if cfg!(debug_assertions) {
+        eprintln!("[plugin] {plugin_id} diskFind took {} ms", start.elapsed().as_millis());
+    }
+    found
+}
+
+/// The mounted disks, if the plugin may read disk usage.
+#[tauri::command(async)]
+fn plugin_disks(state: State<AppState>, plugin_id: String) -> Res<Vec<disk_usage::Disk>> {
+    if !plugins::may_scan_disks(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read disk usage"));
+    }
+    let start = std::time::Instant::now();
+    let found = disk_usage::disks();
+    if cfg!(debug_assertions) {
+        eprintln!("[plugin] {plugin_id} disks took {} ms", start.elapsed().as_millis());
+    }
+    Ok(found)
+}
+
 #[tauri::command]
 fn plugin_open_url(app: AppHandle, state: State<AppState>, plugin_id: String, url: String) -> Res<()> {
     let plugin = plugin(&state, &plugin_id)?;
@@ -1710,6 +1810,10 @@ pub fn run() {
             plugin_statusline,
             plugin_ports,
             plugin_agent_activity,
+            plugin_disk_usage,
+            plugin_disk_usage_cancel,
+            plugin_disk_find,
+            plugin_disks,
             plugin_open_url,
             plugin_open_pane,
             plugin_focus_pane,
