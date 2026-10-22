@@ -135,6 +135,8 @@ type Callbacks = {
   projects: () => PluginProject[];
   /** A plugin set, or with null cleared, one of its sections under a project in the sidebar. */
   setProjectSection: (pluginId: string, projectId: string, sectionId: string, rows: ProjectSectionRow[] | null) => void;
+  /** A plugin said which of a section's sorts its rows are in. */
+  setSectionSort: (pluginId: string, sectionId: string, sort: string) => void;
   /** The state a view tab saved with `setTabState`, if the tab is still open. */
   tabState: (tabId: string) => unknown;
   setTabState: (tabId: string, state: unknown) => void;
@@ -592,6 +594,11 @@ export class PluginHost {
     for (const plugin of gitListeners(this.frames.values())) plugin.post({ event: "git", data: { projectIds } });
   }
 
+  /** The user picked an order in a section's header menu: the plugin's main script sorts its rows. */
+  sendSectionSort(pluginId: string, sectionId: string, sort: string) {
+    for (const plugin of this.frames.values()) if (plugin.ready && plugin.id === pluginId && plugin.kind === "main") plugin.post({ event: "sectionSort", data: { sectionId, sort } });
+  }
+
   /** Resolves when the plugin has finished handling the action, so the button can show progress. */
   sendAction(pluginId: string, paneId: string, actionId: string): Promise<void> {
     return this.ask(pluginId, "action", { paneId, actionId });
@@ -876,6 +883,14 @@ export class PluginHost {
         const tabViews = plugin.plugin.contributes.views.filter((v) => v.opens.includes("tab")).map((v) => v.id);
         const rows = p.rows === null ? null : cleanSectionRows(p.rows, tabViews);
         this.callbacks.setProjectSection(pluginId, projectId, sectionId, rows);
+        return null;
+      }
+      case "setSectionSort": {
+        const sectionId = String(p.sectionId);
+        const sort = String(p.sort);
+        const section = plugin.plugin.contributes.projectSections?.find((s) => s.id === sectionId);
+        if (!section?.sorts?.some((o) => o.id === sort)) throw new Error(`${pluginId}'s project section ${sectionId} has no sort ${sort}. Declare it in its sorts`);
+        this.callbacks.setSectionSort(pluginId, sectionId, sort);
         return null;
       }
       case "tabState":

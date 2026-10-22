@@ -17,6 +17,7 @@
   listeners.focus = [];
   listeners.project = [];
   listeners.projects = [];
+  listeners.sectionSort = [];
   // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
   // Wings sets `focused` in the init of a block, which can mount out of view; every other page starts in front.
   let focused = init.focused ?? true;
@@ -431,6 +432,13 @@
      * section you didn't declare or a view that doesn't open as a tab. Sections are kept in memory and go when the plugin
      * stops, so fill them again on start. Sending what this frame last sent for the project and section does nothing.
      */
+    /**
+     * Shows which of a section's `sorts` (from the manifest) its rows are in, checked in the menu on the section's header.
+     * The same for every project. Send it on start and whenever the order changes.
+     */
+    setSectionSort: (sectionId, sort) => call("setSectionSort", { sectionId, sort }),
+    /** In the main script: called with `{ sectionId, sort }` when the user picks an order in a section's header menu. Sort the rows and call `setSectionSort`. */
+    onSectionSort: (listener) => subscribe(listeners.sectionSort, listener),
     setProjectSection: (projectId, sectionId, rows) => sendChanged(sentSections, `${projectId}\0${sectionId}`, rows, "setProjectSection", { projectId, sectionId, rows }),
     /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. */
     tabState: () => call("tabState", {}),

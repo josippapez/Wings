@@ -190,6 +190,15 @@ pub struct ProjectSection {
     /// A view that opens as a tab and lists everything, not just the rows: the section's All button opens it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub all: String,
+    /// The orders the section's header menu offers. The plugin sorts the rows itself: it hears the pick with `onSectionSort`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sorts: Vec<SectionSort>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SectionSort {
+    pub id: String,
+    pub label: String,
 }
 
 pub const VIEW_PLACES: [&str; 4] = ["sidebar", "modal", "window", "tab"];
@@ -449,6 +458,10 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         }
         if !section.all.is_empty() && !manifest.contributes.views.iter().any(|v| v.id == section.all && v.opens.iter().any(|o| o == "tab")) {
             return Err(format!("project section {:?} names {:?} as its all view, which isn't one of the views that open as a tab", section.id, section.all));
+        }
+        let sort_ok = |(j, o): (usize, &SectionSort)| valid_id(&o.id) && !o.label.is_empty() && o.label.len() <= 40 && !section.sorts[..j].iter().any(|p| p.id == o.id);
+        if section.sorts.len() > 8 || !section.sorts.iter().enumerate().all(sort_ok) {
+            return Err(format!("project section {:?} sorts: at most 8, each with its own id like a plugin id and a label up to 40 characters", section.id));
         }
     }
     if manifest.contributes.blocks.len() > MAX_BLOCKS {
@@ -2590,6 +2603,9 @@ mod tests {
         let icon = PANEL_ICONS[0].clone();
         let ok = manifest(serde_json::json!([{ "id": "prs", "title": "Pull requests", "icon": icon }, { "id": "notes", "title": "Notes" }])).unwrap();
         let sections = &ok.manifest.contributes.project_sections;
+        let sorted = manifest(serde_json::json!([{ "id": "a", "title": "S", "sorts": [{ "id": "status", "label": "Status" }] }])).unwrap();
+        assert_eq!(serde_json::to_value(&sorted.manifest.contributes).unwrap()["projectSections"][0]["sorts"][0]["label"], "Status");
+        assert!(serde_json::to_value(&ok.manifest.contributes).unwrap()["projectSections"][0].get("sorts").is_none());
         assert_eq!((sections[0].id.as_str(), sections[1].icon.as_str()), ("prs", ""));
         assert_eq!(serde_json::to_value(&ok.manifest.contributes).unwrap()["projectSections"][0]["title"], "Pull requests");
         // A section without `all` serializes as before, so its approval stays.
@@ -2605,6 +2621,8 @@ mod tests {
             (serde_json::json!([{ "id": "a", "title": "S", "icon": "nope" }]), "icon"),
             // `all` must be a view that opens as a tab; this manifest has no views at all.
             (serde_json::json!([{ "id": "a", "title": "S", "all": "list" }]), "all view"),
+            (serde_json::json!([{ "id": "a", "title": "S", "sorts": [{ "id": "x", "label": "X" }, { "id": "x", "label": "Y" }] }]), "sorts"),
+            (serde_json::json!([{ "id": "a", "title": "S", "sorts": [{ "id": "x", "label": "" }] }]), "sorts"),
         ] {
             assert!(manifest(bad.clone()).err().unwrap().contains(error), "{bad}");
         }

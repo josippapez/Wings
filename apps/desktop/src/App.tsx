@@ -29,7 +29,7 @@ import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
 import { newTabAction, firstTabFor, parseNewProjectOpens, type NewProjectOpens, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
 import { parseProjectSort, restoreLastActive, touched, withMissing, type ProjectSort } from "@/lib/project-order";
-import { collapseKey, restoreCollapsed, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
+import { collapseKey, restoreCollapsed, sectionId, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
 import { ProjectPageTab } from "@/components/project-page/project-page-tab";
 import { PROJECT_PAGE_FIND } from "@/components/project-page/search";
@@ -242,6 +242,8 @@ const leftPanel = usePanelRef();
   const [peekedSidebar, setPeekedSidebar] = useState<string | null>(null);
   /** What plugins show under each project in the sidebar, and which of those you folded shut. */
   const [projectSections, setProjectSections] = useState<ProjectSections>({});
+  /** The sort each plugin section's rows are in, by `sectionId(pluginId, section)`, as the plugin last said. */
+  const [sectionSorts, setSectionSorts] = useState<Record<string, string>>({});
   const [collapsedSections, setCollapsedSections] = useState<string[]>([]);
   const [projectSort, setProjectSort] = useState<ProjectSort>("manual");
   const [olderOpen, setOlderOpen] = useState(false);
@@ -1103,6 +1105,7 @@ const leftPanel = usePanelRef();
       },
       projects: () => spacesRef.current.map(pluginProject),
       setProjectSection: (pluginId, projectId, sectionId, rows) => setProjectSections((all) => withSection(all, projectId, pluginId, sectionId, rows)),
+      setSectionSort: (pluginId, section, sort) => setSectionSorts((all) => (all[sectionId(pluginId, section)] === sort ? all : { ...all, [sectionId(pluginId, section)]: sort })),
       tabState: (tabId) => {
         const tab = tabsRef.current.find((t) => t.id === tabId);
         return tab && isViewTab(tab) ? tab.state : undefined;
@@ -1479,6 +1482,11 @@ const leftPanel = usePanelRef();
     onNewTab: (id) => openTab(id),
     onOpenProjectPage: showProjectPage,
     projectSections,
+    sectionSorts,
+    onSortSection: (pluginId: string, section: string, sort: string) => {
+      setSectionSorts((all) => ({ ...all, [sectionId(pluginId, section)]: sort }));
+      pluginHost.current?.sendSectionSort(pluginId, section, sort);
+    },
     plugins: activePlugins,
     collapsedSections,
     onToggleSection: toggleSection,

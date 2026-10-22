@@ -691,6 +691,17 @@ interface Wings {
    * the list is forgotten, so one added again is filled again. Needs Wings 0.1.23; skipping a repeat needs 0.1.50.
    */
   setProjectSection(projectId: string, sectionId: string, rows: WingsProjectSectionRow[] | null): Promise<void>;
+  /**
+   * Checks `sort`, one of the section's `sorts` in `contributes.projectSections`, in the menu on the section's header, for
+   * every project. Send it on start and whenever the order changes. Rejects for a sort the section didn't declare.
+   * Needs Wings 0.1.75.
+   */
+  setSectionSort(sectionId: string, sort: string): Promise<void>;
+  /**
+   * In the main script: called when the user picks an order in a section's header menu. Wings doesn't sort the rows: sort
+   * them, send them again with `setProjectSection` and confirm with `setSectionSort`. Needs Wings 0.1.75.
+   */
+  onSectionSort(listener: (event: { sectionId: string; sort: string }) => void): () => void;
   /** In a tab page: the state it last saved with `setTabState`, or `null`. Outside a tab it is `null`. Opening the tab with new `args` clears it. Needs Wings 0.1.22. */
   tabState<T = unknown>(): Promise<T | null>;
   /**

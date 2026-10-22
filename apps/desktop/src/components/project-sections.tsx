@@ -1,7 +1,8 @@
-import { ChevronRightIcon, CircleCheckIcon, CircleDotDashedIcon, CircleDotIcon, CircleIcon, CircleXIcon } from "lucide-react";
+import { ArrowUpDownIcon, ChevronRightIcon, CircleCheckIcon, CircleDotDashedIcon, CircleDotIcon, CircleIcon, CircleXIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { iconFor, toneClass } from "@/components/pane-badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { PluginView } from "@/lib/api";
 import { wantsNewTab } from "@/lib/plugin-pages";
 import { collapseKey, nestRows, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow, type SectionIcon } from "@/lib/project-sections";
@@ -36,6 +37,8 @@ export const ProjectSections = memo(function ProjectSections({
   collapsed,
   onToggle,
   onOpen,
+  sorts,
+  onSort,
 }: {
   projectId: string;
   sections: Record<string, ProjectSectionRow[]> | undefined;
@@ -44,6 +47,9 @@ export const ProjectSections = memo(function ProjectSections({
   collapsed: string[];
   onToggle: (projectId: string, key: string) => void;
   onOpen: OpenSectionRow;
+  /** The sort each section's plugin last confirmed, by section key. */
+  sorts: Record<string, string>;
+  onSort: (pluginId: string, sectionId: string, sort: string) => void;
 }) {
   const groups = useMemo(() => sectionGroups(sections, plugins), [sections, plugins]);
   /** Sections whose full list is showing. Kept for the session, not saved. */
@@ -73,6 +79,27 @@ export const ProjectSections = memo(function ProjectSections({
               <span className="truncate">{group.title}</span>
               <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none", open ? "hidden rotate-90 group-hover/sections:block group-focus-visible/header:block" : "block")} aria-hidden />
             </button>
+            {group.sorts && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label={`Sort ${group.title.toLowerCase()}`}
+                  title={`Sort ${group.title.toLowerCase()}`}
+                  className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <ArrowUpDownIcon className="size-3" aria-hidden />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuRadioGroup value={sorts[group.key] ?? null} onValueChange={(v) => onSort(group.pluginId, group.sectionId, String(v))}>
+                    <DropdownMenuLabel>Sort {group.title.toLowerCase()}</DropdownMenuLabel>
+                    {group.sorts.map((o) => (
+                      <DropdownMenuRadioItem key={o.id} value={o.id}>
+                        {o.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {group.all && (
               <button
                 type="button"
