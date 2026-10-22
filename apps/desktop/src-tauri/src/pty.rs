@@ -15,6 +15,8 @@ pub struct Pane {
     pub shell_pid: Option<u32>,
     /// The folder the shell started in.
     pub cwd: PathBuf,
+    /// Names the file its output is saved to when Wings quits, and read back from when it starts again.
+    pub history_id: Option<String>,
     /// Latest OSC 0/2 window title the program set. Claude Code puts its state glyph here.
     pub title: Arc<Mutex<String>>,
     output: Arc<Mutex<Output>>,
@@ -29,6 +31,9 @@ pub struct SpawnRequest<'a> {
     pub cwd: &'a Path,
     pub cols: u16,
     pub rows: u16,
+    pub history_id: Option<String>,
+    /// Output saved from this pane before Wings restarted, shown above the new shell.
+    pub history: Vec<u8>,
 }
 
 /// Variables the dev host (a Claude Code or Herdr session) would otherwise leak into every pane.
@@ -79,12 +84,22 @@ impl Pane {
             space_id: req.space_id,
             shell_pid: child.process_id(),
             cwd: req.cwd.to_path_buf(),
+            history_id: req.history_id,
             title: Arc::new(Mutex::new(String::new())),
             output: Arc::new(Mutex::new(Output { channel: Some(output), ..Output::default() })),
             writer: Mutex::new(pair.master.take_writer()?),
             child: Mutex::new(child),
             master: Mutex::new(pair.master),
         });
+
+        if !req.history.is_empty() {
+            let mut output = pane.output.lock().unwrap();
+            output.push(&mut vte::Parser::new(), &pane.title, &req.history);
+            let end = output.history_end();
+            output.push(&mut vte::Parser::new(), &pane.title, &end);
+            // The old program's title isn't the new shell's.
+            pane.title.lock().unwrap().clear();
+        }
 
         let mut reader = pane.master.lock().unwrap().try_clone_reader()?;
         let title = pane.title.clone();
@@ -252,6 +267,18 @@ impl Output {
         Ok(())
     }
 
+    /// Ends output from before a restart: the modes it left on go off, so the new shell starts as in a fresh terminal.
+    fn history_end(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (mode, on) in MODES.iter().zip(self.modes) {
+            if on != (*mode == 25) {
+                out.extend_from_slice(format!("\x1b[?{mode}{}", if on { 'l' } else { 'h' }).as_bytes());
+            }
+        }
+        out.extend_from_slice(b"\x1b[0m\r\n");
+        out
+    }
+
     /// What a fresh terminal needs to catch up: the modes in force if the ring has dropped where they were set,
     /// then the output kept.
     fn replay(&self) -> Vec<u8> {
@@ -384,11 +411,28 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_started_again_shows_its_saved_output_with_the_modes_it_left_on_turned_off() {
+        let (channel, got) = recorder();
+        let dir = std::env::temp_dir();
+        let history = b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output".to_vec();
+        let pane = Pane::spawn(
+            SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history },
+            channel,
+            |_| {},
+        )
+        .unwrap();
+        let sent = got.lock().unwrap().clone();
+        assert!(sent.starts_with(b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output\x1b[?1049l\x1b[?2004l\x1b[0m\r\n"), "{:?}", String::from_utf8_lossy(&sent));
+        assert!(pane.recent_output().starts_with(b"\x1b]0;old"), "saved again on the next quit");
+        pane.kill();
+    }
+
+    #[test]
     fn a_running_pane_reattaches_with_its_output() {
         let (first, _) = recorder();
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
-            SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24 },
+            SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() },
             first,
             |_| {},
         )
@@ -439,7 +483,7 @@ mod bench {
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
-            SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40 },
+            SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() },
             channel,
             move |_| tx.send(Instant::now()).unwrap(),
         )

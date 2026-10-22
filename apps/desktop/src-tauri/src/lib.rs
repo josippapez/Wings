@@ -165,6 +165,7 @@ fn pane_create(
     initial_input: Option<String>,
     on_output: Channel<InvokeResponseBody>,
     cwd: Option<String>,
+    history_id: Option<String>,
 ) -> Res<String> {
     let root = PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path);
     // A plugin's pane can start in a subfolder, but never outside the project it belongs to. Only a tab Claude's
@@ -182,7 +183,7 @@ fn pane_create(
     }
     let exit_app = app.clone();
     let pane = Pane::spawn(
-        SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows },
+        SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).unwrap_or_default(), history_id },
         on_output,
         move |pane_id| {
             exit_app.state::<AppState>().panes.lock().unwrap().remove(pane_id);
@@ -1342,6 +1343,39 @@ fn serve_plugin_file(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -
     }
 }
 
+/// The file a pane's output is kept in across a restart. The id comes from the UI, so only a plain name is one.
+fn history_file(app: &AppHandle, id: &str) -> Option<PathBuf> {
+    let plain = !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    plain.then(|| app.path().app_data_dir().ok().map(|d| d.join("scrollback").join(id))).flatten()
+}
+
+fn saved_history(app: &AppHandle, id: &str) -> Option<Vec<u8>> {
+    std::fs::read(history_file(app, id)?).ok()
+}
+
+/// On quit: each pane's kept output, for the same pane when Wings starts again.
+fn save_histories(app: &AppHandle) {
+    let panes: Vec<Arc<Pane>> = app.state::<AppState>().panes.lock().unwrap().values().cloned().collect();
+    for pane in panes {
+        let Some(file) = pane.history_id.as_deref().and_then(|id| history_file(app, id)) else { continue };
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(file, pane.recent_output());
+    }
+}
+
+/// Called when the UI loads: deletes saved output no pane in the saved workspace will show.
+#[tauri::command]
+fn histories_keep(app: AppHandle, keep: Vec<String>) {
+    let Ok(dir) = app.path().app_data_dir().map(|d| d.join("scrollback")) else { return };
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if !keep.iter().any(|k| entry.file_name() == k.as_str()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The UI's tabs and splits, saved as opaque JSON so a restart can rebuild them.
 #[tauri::command]
 fn workspace_load(app: AppHandle) -> Option<String> {
@@ -1767,6 +1801,7 @@ pub fn run() {
             pane_resize,
             pane_close,
             panes_reset,
+            histories_keep,
             panes_list,
             pane_attach,
             pane_focus,
@@ -1835,13 +1870,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
-            #[cfg(target_os = "macos")]
+        .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                save_histories(app);
+                #[cfg(target_os = "macos")]
                 privacy::stop();
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = event;
         });
 }
 

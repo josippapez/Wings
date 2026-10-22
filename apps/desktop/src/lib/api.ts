@@ -328,7 +328,9 @@ export const api = {
     onOutput: Channel<ArrayBuffer>,
     /** A folder inside the project to start in, instead of its root. */
     cwd: string | null = null,
-  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd }),
+    /** Names the pane's output saved across a restart: it starts with what that pane showed before. */
+    historyId: string | null = null,
+  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd, historyId }),
   /** Keys you type (the terminal's input). Remembered per pane, so Wings can tell a draft is waiting in one. */
   paneWrite: (id: string, data: string) => {
     paneInput.note(id, data);
@@ -343,6 +345,8 @@ export const api = {
   paneAttach: (id: string, onOutput: Channel<ArrayBuffer>) => invoke<void>("pane_attach", { id, onOutput }),
   /** Kills every pane but `keep`, the ones this UI attaches to again. */
   panesReset: (keep: string[]) => invoke<void>("panes_reset", { keep }),
+  /** Deletes saved output from before a restart that none of `keep` will show. */
+  historiesKeep: (keep: string[]) => invoke<void>("histories_keep", { keep }),
   workspaceLoad: () => invoke<string | null>("workspace_load"),
   workspaceSave: (json: string) => invoke<void>("workspace_save", { json }),
   paneFocus: (id: string | null) => invoke<void>("pane_focus", { id }),

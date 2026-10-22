@@ -255,6 +255,8 @@ export class TerminalSession {
     private attachTo: string | null = null,
     /** The folder the pane was in before Wings restarted: its shell starts there, or in the root if it's gone. */
     private savedCwd: string | null = null,
+    /** Names the output saved for this pane when Wings quits. */
+    private historyId: string | null = null,
   ) {
     this.el.className = "h-full w-full";
     this.term.loadAddon(this.fit);
@@ -371,8 +373,8 @@ export class TerminalSession {
 
   private create(initialInput: string | null, output: () => Channel<ArrayBuffer>) {
     const { cols, rows } = this.term;
-    if (this.cwd || !this.savedCwd) return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.cwd);
-    return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.savedCwd).catch(() => api.paneCreate(this.spaceId, cols, rows, initialInput, output(), null));
+    if (this.cwd || !this.savedCwd) return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.cwd, this.historyId);
+    return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.savedCwd, this.historyId).catch(() => api.paneCreate(this.spaceId, cols, rows, initialInput, output(), null, this.historyId));
   }
 
   /**

@@ -72,9 +72,10 @@ const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => i
 /**
  * `sessionId` is the agent session last seen in the pane, of agent `kind`, `name` its title; `live` once Wings has seen
  * it running this launch; `args` its flags. `asleep`, `resumeAt` and `resumeFailed` are the sleep and resume state (`sleep.ts`).
- * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one.
+ * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one. `historyId` names the output
+ * Wings keeps for it across a restart.
  */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null };
+type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null; historyId: string };
 
 type SavedWorkspace = {
   version: 1;
@@ -128,6 +129,8 @@ type SavedWorkspace = {
   cwds?: Record<string, string>;
   /** The Rust pane behind each pane, by the same keys. Still running only after a webview reload. */
   paneIds?: Record<string, string>;
+  /** Each pane's `historyId`. Absent in older files. */
+  histories?: Record<string, string>;
 };
 
 function parseSaved(json: string | null): SavedWorkspace | null {
@@ -444,8 +447,10 @@ const leftPanel = usePanelRef();
       attachTo: string | null = null,
       kind: SessionKind = "claude",
       savedCwd: string | null = null,
+      historyId: string | null = null,
     ) => {
       const key = crypto.randomUUID();
+      historyId ??= key;
       // A pane that starts with a resume line: its agent isn't detected for a moment after the pane starts, and the
       // Agents row holds its place as "starting" until it is.
       const resuming = !!sessionId && !!initialInput && !attachTo;
@@ -461,10 +466,11 @@ const leftPanel = usePanelRef();
           cwd,
           attachTo,
           savedCwd,
+          historyId,
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -710,7 +716,7 @@ const leftPanel = usePanelRef();
             const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
             // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null);
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null);
             // Still asleep until opened, as Wings left it.
             if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
@@ -740,6 +746,7 @@ const leftPanel = usePanelRef();
       const running = stillRunning(saved, live, list);
       // Before any pane starts, so only panes from before a reload that nothing shows again are killed.
       await api.panesReset([...running.values()]);
+      void api.historiesKeep(Object.values(saved?.histories ?? {}));
       setSpaces(sortByOrder(list, saved?.spaceOrder));
       if (!restore(list, saved, running) && list[0]) selectSpace(list[0].id);
       setReady(true);
@@ -833,6 +840,7 @@ const leftPanel = usePanelRef();
       sessionArgs,
       cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
+      histories: Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.historyId])),
     };
     const json = JSON.stringify(saved);
     unsaved.current = json;
