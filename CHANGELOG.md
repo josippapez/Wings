@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.70 · 2026-10-22
+
+- **Disk usage.** A new plugin shows what takes the space on your disks as a map you click into, like DaisyDisk: your disks, a fast scan of a disk or folder, what is in each folder, the hidden space, and a Collector that moves what you pick to the Trash. Claude can scan with its `disk__*` tools and fill the Collector for you to review.
+- **Plugins can scan disks.** `wings.diskUsage`, `wings.diskFind` and `wings.disks`, behind the new `diskUsage` permission, walk folders in Wings on several threads.
+- **Worktrees sees every project.** It lists the worktrees of every project in the sidebar, not only those with a terminal open, and Scan this Mac finds repos with worktrees anywhere on your disks.
+- **Child issues sit under their epic.** A project's Issues in the sidebar show each epic's or feature's children indented under it.
+
 ## 0.1.69 · 2026-10-22
 
 - **Agents can open a tab in any folder.** `open_pane` takes a folder outside your Wings projects and opens it as a tab in the calling pane's project. Plugin panes still stay inside their own project.
