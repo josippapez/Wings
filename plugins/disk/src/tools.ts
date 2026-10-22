@@ -98,6 +98,13 @@ async function measure(raw: string): Promise<Collected> {
   return { path: root.name, size: root.size, kind: root.kind };
 }
 
+/** Whether `real`, the path Wings named, is the one `raw` reads as: a `~` path by what follows the `~`. macOS ignores case. */
+function readsAs(raw: string, real: string): boolean {
+  const full = resolve(raw);
+  const wanted = (full ?? raw.replace(/^~/, "")).toLowerCase();
+  return full !== null ? real.toLowerCase() === wanted : real.toLowerCase().endsWith(wanted);
+}
+
 export const tools = {
   list_disks: tool({
     description:
@@ -181,7 +188,13 @@ export const tools = {
           return null;
         }
         try {
-          return await measure(raw);
+          const item = await measure(raw);
+          // Wings names the real path, with every link on the way followed, and the Trash would act on that one.
+          if (!readsAs(raw, item.path)) {
+            refused.push({ path: raw, reason: `${raw} is a link or goes through one. Its real path is ${item.path}: collect that instead.` });
+            return null;
+          }
+          return item;
         } catch (error) {
           refused.push({ path: raw, reason: `${raw} couldn't be measured: ${errorMessage(error)}` });
           return null;

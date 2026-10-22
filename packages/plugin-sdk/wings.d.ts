@@ -65,7 +65,7 @@ interface WingsAgentActivity {
 
 /** A file or folder in a `wings.diskUsage` scan. */
 interface WingsDiskEntry {
-  /** Its name. The scan's root has its full path instead. */
+  /** Its name. The scan's root has its real path instead, with `..` and every link on the way resolved. */
   name: string;
   /** Bytes it takes on disk: allocated blocks, with a file that has several hard links counted once. A folder's has everything in it. */
   size: number;

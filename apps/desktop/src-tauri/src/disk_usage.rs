@@ -346,16 +346,16 @@ fn threads() -> usize {
 /// The file or folder `path` names, with its metadata. A link given as the root, like `/tmp`, is the folder it points
 /// to. Links inside are never followed.
 fn resolve(path: &str) -> Result<(PathBuf, Metadata), String> {
-    let mut root = expand(path)?;
+    let asked = expand(path)?;
     let unreadable = |root: &Path, e: io::Error| match e.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => format!("There's no file or folder at {}", root.display()),
         _ => format!("Couldn't read {}: {e}", root.display()),
     };
-    let mut meta = fs::symlink_metadata(&root).map_err(|e| unreadable(&root, e))?;
-    if meta.file_type().is_symlink() {
-        root = fs::canonicalize(&root).map_err(|e| unreadable(&root, e))?;
-        meta = fs::symlink_metadata(&root).map_err(|e| unreadable(&root, e))?;
-    }
+    // The real path, with `..` and every link on the way resolved, and a link given as the root, like `/tmp`, followed:
+    // a plugin acts on the paths a scan names, so they have to name what the system would act on. Links inside are
+    // never followed.
+    let root = fs::canonicalize(&asked).map_err(|e| unreadable(&asked, e))?;
+    let meta = fs::symlink_metadata(&root).map_err(|e| unreadable(&root, e))?;
     Ok((root, meta))
 }
 
@@ -664,7 +664,8 @@ mod tests {
             let dir = std::env::temp_dir().join(format!("wings-disk-{name}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
-            Self(dir)
+            // A scan names its root by its real path, and macOS's temp folder is under `/var`, a link to `/private/var`.
+            Self(fs::canonicalize(&dir).unwrap())
         }
 
         /// A file of `kib` KiB at `path` under the tree, with the folders above it.
@@ -817,6 +818,22 @@ mod tests {
         assert_eq!(scan.root.kind, Kind::Dir);
         assert_eq!(scan.root.name, fs::canonicalize(tree.0.join("real")).unwrap().to_str().unwrap());
         assert_eq!(scan.root.children.len(), 1);
+    }
+
+    /// `link/..` is the folder above where the link points, not the folder the link sits in, as it reads.
+    #[cfg(unix)]
+    #[test]
+    fn the_root_is_named_by_its_real_path_after_links_and_dot_dot() {
+        let tree = Tree::new("real-path");
+        tree.file("real/inner/a.bin", 8);
+        tree.file("real/b.bin", 8);
+        std::os::unix::fs::symlink(tree.0.join("real/inner"), tree.0.join("link")).unwrap();
+        let path = format!("{}/link/..", tree.0.display());
+        let scan = scan(&path, keep_all(), &AtomicBool::new(false), |_| {}).unwrap();
+        assert_eq!(scan.root.name, fs::canonicalize(tree.0.join("real")).unwrap().to_str().unwrap());
+        let mut names: Vec<_> = scan.root.children.iter().map(|c| c.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["b.bin", "inner"]);
     }
 
     #[test]

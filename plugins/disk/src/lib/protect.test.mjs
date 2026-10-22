@@ -16,6 +16,9 @@ test("disks, system folders, home folders and relative paths are refused, each w
   for (const path of ["/Users/ada/Documents/../Downloads/..", "//Library//", "/library", "/Users/ada/library/", "/var/db/dslocal", "/tmp/../etc"]) {
     assert.notEqual(protectedReason(path, mounts), null, path);
   }
+  // Read as text this is ~/Code/Desktop, but through a link `..` can land in the real home folder.
+  assert.equal(protectedReason("/Users/ada/Code/link/../Desktop", mounts), "/Users/ada/Code/link/../Desktop has . or .. in it: use its real path.");
+  assert.notEqual(protectedReason("/Users/ada/Code/./x", mounts), null);
 });
 
 test("what is inside a folder that is only refused itself, and inside /usr/local, may be collected", () => {
