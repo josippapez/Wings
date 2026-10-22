@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.72 · 2026-10-22
+
+- **No stray Wings in Claude Code's settings.** A copy of Wings from a build folder that had added itself to Claude Code's status line and hooks is now taken out when Wings connects, instead of being kept beside the app. Once the build folder was cleaned, it left the status line without input and made every session start report a hook error.
+
 ## 0.1.71 · 2026-10-22
 
 - **Disk usage counts clones once.** Files that share their blocks as APFS clones count once, the way DaisyDisk counts them, so 78 copies Chrome keeps of itself show as 2.4 GB instead of 118 GB and a scan no longer adds up to more than the disk holds.
