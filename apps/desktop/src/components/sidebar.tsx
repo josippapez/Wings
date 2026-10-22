@@ -119,6 +119,8 @@ export function Sidebar(props: {
   onOpenProjectPage: (spaceId: string) => void;
   /** What plugins list under each project, the plugins that are on, and the sections folded shut. */
   projectSections: ProjectSectionsState;
+  sectionSorts: Record<string, string>;
+  onSortSection: (pluginId: string, sectionId: string, sort: string) => void;
   plugins: PluginView[];
   collapsedSections: string[];
   onToggleSection: (projectId: string, key: string) => void;
@@ -312,6 +314,8 @@ export function Sidebar(props: {
                       collapsed={props.collapsedSections}
                       onToggle={props.onToggleSection}
                       onOpen={props.onOpenSectionRow}
+                      sorts={props.sectionSorts}
+                      onSort={props.onSortSection}
                     />
                   </ContextMenuTrigger>
                   <ContextMenuContent>
@@ -401,8 +405,9 @@ export function Sidebar(props: {
                 <ArrowUpDownIcon aria-hidden />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Sort projects</DropdownMenuLabel>
                 <DropdownMenuRadioGroup value={props.sort} onValueChange={(v) => props.onSortChange(parseProjectSort(v))}>
+                  {/* Base UI throws for a group label outside its group. */}
+                  <DropdownMenuLabel>Sort projects</DropdownMenuLabel>
                   {projectSorts.map((m) => (
                     <DropdownMenuRadioItem key={m.value} value={m.value}>
                       {m.label}
