@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.69 · 2026-10-22
+
+- **Agents can open a tab in any folder.** `open_pane` takes a folder outside your Wings projects and opens it as a tab in the calling pane's project. Plugin panes still stay inside their own project.
+
 ## 0.1.68 · 2026-10-21
 
 - **Agents read only the part of a past session they need.** `read_session` takes a query and returns the messages that match, each with the one before and after, instead of paging through the whole session.
