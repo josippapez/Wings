@@ -4,14 +4,14 @@ import { memo, useMemo, useState } from "react";
 import { iconFor, toneClass } from "@/components/pane-badge";
 import type { PluginView } from "@/lib/api";
 import { wantsNewTab } from "@/lib/plugin-pages";
-import { collapseKey, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow, type SectionIcon } from "@/lib/project-sections";
+import { collapseKey, nestRows, rowName, rowRef, rowTitle, sectionGroups, SECTION_ROWS_SHOWN, type ProjectSectionRow, type SectionIcon } from "@/lib/project-sections";
 import { cn } from "@/lib/utils";
 
 export type OpenSectionRow = (projectId: string, pluginId: string, open: ProjectSectionRow["open"], newTab?: boolean) => void;
 
 /**
  * What plugins list under a project: one collapsible section each, with a one-line row per item (a dot in the badge's tone,
- * the label, the short reference). The badge text and detail are in the tooltip and the accessible name. Memoized per project,
+ * the label, the short reference), indented under its `parent` row when it names one. The badge text and detail are in the tooltip and the accessible name. Memoized per project,
  * so a pane-info tick, which re-renders the sidebar, doesn't touch a project whose sections, plugins and collapsed list are the same.
  */
 /** A row's icon: a pull request's state, or a work status (to do, in progress, in review, done, canceled). */
@@ -23,6 +23,11 @@ const rowIcon: Record<SectionIcon, typeof CircleIcon> = {
   done: CircleCheckIcon,
   canceled: CircleXIcon,
 };
+
+/** `px-1.5` in px, the indent a level of nesting adds, and half an icon's width (`size-3.5`): a child's guide line runs down its ancestors' icon centres. */
+const ROW_PAD = 6;
+const INDENT = 14;
+const ICON_CENTER = 7;
 
 export const ProjectSections = memo(function ProjectSections({
   projectId,
@@ -50,8 +55,9 @@ export const ProjectSections = memo(function ProjectSections({
         const open = !collapsed.includes(collapseKey(projectId, group.key));
         const listId = `section-${projectId}-${group.key}`.replace(/[^a-zA-Z0-9_-]/g, "_");
         const all = expanded.includes(group.key);
-        const rows = all ? group.rows : group.rows.slice(0, SECTION_ROWS_SHOWN);
-        const hidden = group.rows.length - rows.length;
+        const nested = nestRows(group.rows);
+        const rows = all ? nested : nested.slice(0, SECTION_ROWS_SHOWN);
+        const hidden = nested.length - rows.length;
         return (
           <section key={group.key} aria-label={group.title}>
             <div className="group/head flex items-center">
@@ -86,7 +92,7 @@ export const ProjectSections = memo(function ProjectSections({
             </div>
             {open && (
               <ul id={listId} className="flex flex-col">
-                {rows.map((row) => {
+                {rows.map(({ row, depth }) => {
                   const { ref } = rowRef(row.detail);
                   const name = rowName(row);
                   const t = row.badge?.tone ?? "neutral";
@@ -94,7 +100,10 @@ export const ProjectSections = memo(function ProjectSections({
                   const filled = t === "success" || t === "danger" || t === "merged";
                   const Icon = row.icon ? rowIcon[row.icon] : null;
                   return (
-                    <li key={row.id}>
+                    <li key={row.id} className="relative">
+                      {Array.from({ length: depth }, (_, level) => (
+                        <span key={level} className="pointer-events-none absolute inset-y-0 w-px bg-border" style={{ left: ROW_PAD + level * INDENT + ICON_CENTER }} aria-hidden />
+                      ))}
                       <button
                         type="button"
                         onClick={(e) => onOpen(projectId, group.pluginId, row.open, wantsNewTab(e))}
@@ -106,6 +115,7 @@ export const ProjectSections = memo(function ProjectSections({
                         title={name}
                         aria-label={name}
                         data-testid="section-row"
+                        style={depth ? { paddingLeft: ROW_PAD + depth * INDENT } : undefined}
                         className="group/row flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
                       >
                         {Icon ? (

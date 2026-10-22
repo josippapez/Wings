@@ -10,6 +10,8 @@ export type ProjectSectionRow = {
   badge?: { text: string; tone: Tone };
   /** Drawn in the badge's tone in place of the plain dot. */
   icon?: SectionIcon;
+  /** The id of another row in the section that this one sits under, indented. A parent that isn't listed leaves the row at the top. */
+  parent?: string;
   open: { view: string; args?: unknown };
 };
 
@@ -27,8 +29,9 @@ const text = (v: unknown, max: number) => (typeof v === "string" && v ? v.slice(
 
 /**
  * Plugin data is untrusted: keeps up to 50 rows with known fields and bounded text. A row with no usable id or label is
- * left out, and so is a second row with an id already seen. Throws when `rows` isn't a list, or a row opens a view that isn't
- * in `tabViews` (the plugin's views that open as a tab) or its args are over 16 KB, as `openView` would.
+ * left out, and so is a second row with an id already seen. A `parent` is kept when it is a string of 1 to 64 characters that
+ * isn't the row's own id; `nestRows` deals with one that names no row. Throws when `rows` isn't a list, or a row opens a view
+ * that isn't in `tabViews` (the plugin's views that open as a tab) or its args are over 16 KB, as `openView` would.
  */
 export function cleanSectionRows(rows: unknown, tabViews: string[]): ProjectSectionRow[] {
   if (!Array.isArray(rows)) throw new Error("setProjectSection rows must be a list, or null to remove the section");
@@ -40,6 +43,7 @@ export function cleanSectionRows(rows: unknown, tabViews: string[]): ProjectSect
     const id = typeof r.id === "string" && r.id.length <= 64 ? r.id : undefined;
     const label = text(r.label, 120);
     if (!id || !label || seen.has(id)) continue;
+    const parent = typeof r.parent === "string" && r.parent.length <= 64 && r.parent !== id ? r.parent : undefined;
     const open = r.open && typeof r.open === "object" ? (r.open as Record<string, unknown>) : {};
     if (typeof open.view !== "string" || !tabViews.includes(open.view)) {
       throw new Error(`Row ${id} opens ${String(open.view)}, which isn't one of the plugin's views that open as a tab`);
@@ -54,6 +58,7 @@ export function cleanSectionRows(rows: unknown, tabViews: string[]): ProjectSect
       ...(text(r.detail, 120) ? { detail: text(r.detail, 120) } : {}),
       ...(badgeText ? { badge: { text: badgeText, tone: Object.hasOwn(tones, String(b?.tone)) ? (b?.tone as Tone) : "neutral" } } : {}),
       ...(Object.hasOwn(icons, String(r.icon)) ? { icon: r.icon as SectionIcon } : {}),
+      ...(parent ? { parent } : {}),
       open: { view: open.view, ...(hasArgs ? { args: JSON.parse(boundedJson(open.args, VIEW_ARGS_MAX, "Row args")) } : {}) },
     });
   }
@@ -125,6 +130,36 @@ export const withoutProjectCollapsed = (collapsed: string[], projectId: string) 
 
 /** Rows a section lists before "Show more". */
 export const SECTION_ROWS_SHOWN = 5;
+
+/** A row draws at most this many levels in. Rows nested deeper draw here too, still in tree order. */
+export const SECTION_DEPTH_MAX = 3;
+
+/**
+ * The rows in the order they draw, each followed by the rows that name it as their `parent` and theirs, siblings in the order
+ * the plugin sent them. A row whose parent isn't in `rows` is a top-level row. Rows in or under a loop of parents start at
+ * the top instead, in the order sent, so every row appears exactly once.
+ */
+export function nestRows(rows: ProjectSectionRow[]): { row: ProjectSectionRow; depth: number }[] {
+  const ids = new Set(rows.map((r) => r.id));
+  const below = new Map<string, ProjectSectionRow[]>();
+  const top: ProjectSectionRow[] = [];
+  for (const r of rows) {
+    if (r.parent && r.parent !== r.id && ids.has(r.parent)) below.set(r.parent, [...(below.get(r.parent) ?? []), r]);
+    else top.push(r);
+  }
+  const out: { row: ProjectSectionRow; depth: number }[] = [];
+  const seen = new Set<ProjectSectionRow>();
+  const walk = (row: ProjectSectionRow, depth: number) => {
+    if (seen.has(row)) return;
+    seen.add(row);
+    out.push({ row, depth: Math.min(depth, SECTION_DEPTH_MAX) });
+    for (const child of below.get(row.id) ?? []) walk(child, depth + 1);
+  };
+  for (const r of top) walk(r, 0);
+  // What no top-level row reaches is in or under a loop of parents.
+  for (const r of rows) walk(r, 0);
+  return out;
+}
 
 /**
  * A row's short reference and what's left of its detail: `#6399 · needs your review` is `#6399` and `needs your review`,

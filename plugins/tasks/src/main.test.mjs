@@ -109,6 +109,22 @@ test("the project's section shows its open issues after a change, and is filled 
   assert.equal(sections.filter((s) => s.id === "proj2").at(-1).rows, null, "a project with no issues has no section");
 });
 
+test("the project's section lists children after their epic or feature and names it as their parent, unless it isn't open", async () => {
+  const docs = (op) => page.ask("op", { projectId: "proj3", projectName: "docs", op });
+  const keys = () => sections.filter((s) => s.id === "proj3").at(-1).rows.map((r) => r.id);
+  const parents = () => Object.fromEntries(sections.filter((s) => s.id === "proj3").at(-1).rows.filter((r) => "parent" in r).map((r) => [r.id, r.parent]));
+  for (const issue of [{ title: "Plain" }, { title: "Epic", type: "epic" }, { title: "Feature", type: "feature", parent: "DOC-2" }, { title: "Started", status: "in_progress", parent: "DOC-2" }, { title: "Lone", status: "in_progress" }, { title: "Deep", parent: "DOC-3" }]) {
+    await docs({ kind: "create", ...issue });
+  }
+  // Open issues run in progress first, then by key (4, 5, 1, 2, 3, 6); each one's children follow it, and theirs follow them.
+  assert.deepEqual(keys(), ["DOC-5", "DOC-1", "DOC-2", "DOC-4", "DOC-3", "DOC-6"]);
+  assert.deepEqual(parents(), { "DOC-4": "DOC-2", "DOC-3": "DOC-2", "DOC-6": "DOC-3" });
+  // With the epic done, its children are top-level rows again, with no parent to name.
+  await docs({ kind: "update", key: "DOC-2", status: "done" });
+  assert.deepEqual(keys(), ["DOC-4", "DOC-5", "DOC-1", "DOC-3", "DOC-6"]);
+  assert.deepEqual(parents(), { "DOC-6": "DOC-3" });
+});
+
 const ctx = { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } };
 
 test("the todo tool keeps the session's list, links it to the issue, tells the pages and shows the card on the session's pane", async () => {

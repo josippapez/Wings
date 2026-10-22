@@ -364,6 +364,8 @@ interface WingsProjectSectionRow {
    * like Linear's: `todo` an empty circle, `in-progress`, `in-review`, `done` a checked circle, `canceled` (Wings 0.1.40).
    */
   icon?: "pr-open" | "pr-merged" | "pr-closed" | "pr-draft" | "todo" | "in-progress" | "in-review" | "done" | "canceled";
+  /** The id of another row in this section that this row sits under, indented. A row whose parent isn't listed shows at the top. Wings 0.1.70; older Wings ignore it. */
+  parent?: string;
   /** Clicking the row opens `view`, one of the plugin's `contributes.views` that lists `tab` in `opens`, as a tab in the row's project, with `args` (JSON, up to 16 KB) as `viewArgs()`. */
   open: { view: string; args?: unknown };
 }

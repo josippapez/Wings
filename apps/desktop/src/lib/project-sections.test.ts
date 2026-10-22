@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { PluginView } from "./api.ts";
-import { cleanSectionRows, collapseKey, restoreCollapsed, rowName, rowTitle, rowRef, sectionGroups, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection } from "./project-sections.ts";
+import { cleanSectionRows, collapseKey, nestRows, restoreCollapsed, rowName, rowTitle, rowRef, sectionGroups, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSectionRow } from "./project-sections.ts";
 
 const views = ["board", "item"];
 const row = (extra: Record<string, unknown> = {}) => ({ id: "a", label: "A", open: { view: "board" }, ...extra });
@@ -33,6 +33,24 @@ test("rows are bounded: 50 rows, label and detail 120, id 64, badge 24", () => {
 
 test("a repeated row id keeps the first row", () => {
   assert.deepEqual(cleanSectionRows([row({ label: "first" }), row({ label: "second" })], views).map((r) => r.label), ["first"]);
+});
+
+test("a row's parent is kept when it is 1 to 64 characters and not the row's own id", () => {
+  const rows = cleanSectionRows(
+    [row({ id: "a" }), row({ id: "b", parent: "a" }), row({ id: "c", parent: "c" }), row({ id: "d", parent: 7 }), row({ id: "e", parent: "p".repeat(65) }), row({ id: "f", parent: "p".repeat(64) }), row({ id: "g", parent: "" }), row({ id: "h", parent: "nobody" })],
+    views,
+  );
+  const rest = { label: "A", open: { view: "board" } };
+  assert.deepEqual(rows, [
+    { id: "a", ...rest },
+    { id: "b", parent: "a", ...rest },
+    { id: "c", ...rest },
+    { id: "d", ...rest },
+    { id: "e", ...rest },
+    { id: "f", parent: "p".repeat(64), ...rest },
+    { id: "g", ...rest },
+    { id: "h", parent: "nobody", ...rest },
+  ]);
 });
 
 test("a row must open one of the plugin's tab views, and its args are copied and limited to 16 KB", () => {
@@ -128,4 +146,29 @@ test("rowTitle drops leading [tags] only", () => {
   assert.equal(rowTitle("Fix [the] thing"), "Fix [the] thing");
   assert.equal(rowTitle("[Only] [tags]"), "[Only] [tags]");
   assert.equal(rowTitle("Plain"), "Plain");
+});
+
+const node = (id: string, parent?: string): ProjectSectionRow => ({ id, label: id, open: { view: "board" }, ...(parent ? { parent } : {}) });
+/** The rows in drawing order as `id:depth`. */
+const tree = (rows: ProjectSectionRow[]) => nestRows(rows).map(({ row, depth }) => `${row.id}:${depth}`);
+
+test("nestRows puts a row's children right after it at every depth, siblings in the order sent, and a row with an unknown parent on top", () => {
+  // A child is sent before its parent, and a grandchild before its own parent.
+  const rows = [node("c1", "a"), node("a"), node("x", "gone"), node("g1", "c2"), node("c2", "a"), node("b"), node("g2", "c1"), node("b1", "b")];
+  assert.deepEqual(tree(rows), ["a:0", "c1:1", "g2:2", "c2:1", "g1:2", "x:0", "b:0", "b1:1"]);
+  assert.deepEqual(tree([node("a"), node("b")]), ["a:0", "b:0"], "rows with no parent keep their order");
+  assert.deepEqual(tree([]), []);
+});
+
+test("nestRows lists every row once when parents loop, and starts a looping row on top", () => {
+  assert.deepEqual(tree([node("a", "b"), node("b", "a")]), ["a:0", "b:1"]);
+  assert.deepEqual(tree([node("a", "a"), node("b")]), ["a:0", "b:0"]);
+  // c hangs off the loop, d is a plain row and e is its own parent: all five show once.
+  const rows = [node("c", "b"), node("d"), node("a", "b"), node("b", "a"), node("e", "e")];
+  assert.deepEqual(nestRows(rows).map((n) => n.row.id).sort(), ["a", "b", "c", "d", "e"]);
+});
+
+test("nestRows draws rows deeper than 3 levels at depth 3, still in tree order", () => {
+  const chain = [node("a"), node("b", "a"), node("c", "b"), node("d", "c"), node("e", "d"), node("f", "e"), node("g", "b")];
+  assert.deepEqual(tree(chain), ["a:0", "b:1", "c:2", "d:3", "e:3", "f:3", "g:2"]);
 });
