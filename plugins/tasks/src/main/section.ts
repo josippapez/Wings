@@ -1,10 +1,11 @@
 // A project's section in the sidebar: its open issues, the ones an agent works on now first, then by status or latest change,
-// each epic's or feature's children under it. Wings skips rows identical to the last ones.
+// each epic's or feature's children under it. Wings skips rows identical to the last ones. The order is picked in the
+// section header's menu or on the settings page.
 
 import { canParent, STATUS_LABEL, TYPE_LABEL, type Issue } from "../lib/domain";
 import { sectionIssues } from "../lib/orderings";
 import { childrenOf, progress } from "../lib/relations";
-import { sectionOrder } from "../lib/section-setting";
+import { SECTION_ORDERS, sectionOrder, type SectionOrder } from "../lib/section-setting";
 
 const SECTION = "tasks";
 /** The project section shows this many rows. */
@@ -52,7 +53,17 @@ const shown = new Map<string, Issue[]>();
 let running = new Set<string>();
 
 const resort = () => Promise.all([...shown].map(([projectId, issues]) => pushSection(projectId, issues)));
-sectionOrder.onChange(() => void resort());
+const showOrder = (order: SectionOrder) => void wings.setSectionSort(SECTION, order).catch(console.error);
+sectionOrder.onChange((order) => {
+  showOrder(order);
+  void resort();
+});
+void sectionOrder.get().then(showOrder);
+// The menu on the section's header sets the same setting as the settings page.
+wings.onSectionSort(({ sectionId, sort }) => {
+  const order = SECTION_ORDERS.find((o) => o.value === sort)?.value;
+  if (sectionId === SECTION && order) void sectionOrder.set(order);
+});
 
 /** Called with every pane on each change: sorts the sections again when an agent session starts or stops. */
 export function onSectionPanes(panes: WingsPane[]): void {

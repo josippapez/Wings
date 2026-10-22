@@ -14,6 +14,8 @@ let projects;
 let panes;
 const hooks = new Map();
 const rails = [];
+const sectionSorts = [];
+let onSort;
 
 globalThis.wings = {
   storage: {
@@ -30,6 +32,8 @@ globalThis.wings = {
   onHook: (event, handler) => hooks.set(event, handler),
   setPaneRail: async (paneId, rail) => void rails.push({ paneId, rail }),
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
+  setSectionSort: async (section, sort) => void sectionSorts.push({ section, sort }),
+  onSectionSort: (listener) => (onSort = listener),
 };
 await import("./main.ts");
 const { slotOf } = await import("./lib/storage.ts");
@@ -220,4 +224,16 @@ test("the journal links a turn's commits and fills Files changed on this session
   await journal({ hook_event_name: "Journal", ...payload, commits: ["fedcba9"] }, jctx);
   assert.equal(JSON.stringify(await readIssues()), done);
   assert.equal(await journal({ hook_event_name: "Journal", ...payload }, { ...jctx, project: null }), null);
+});
+
+test("an order picked in the section header's menu is saved as the setting and confirmed to Wings", async () => {
+  await settle();
+  assert.deepEqual(sectionSorts.at(0), { section: "tasks", sort: "status" }, "the saved order is shown on start");
+  onSort({ sectionId: "tasks", sort: "date" });
+  await settle();
+  assert.equal(storage.get("sectionOrder"), "date");
+  assert.deepEqual(sectionSorts.at(-1), { section: "tasks", sort: "date" });
+  onSort({ sectionId: "tasks", sort: "bogus" });
+  await settle();
+  assert.equal(storage.get("sectionOrder"), "date", "an order it doesn't know changes nothing");
 });
