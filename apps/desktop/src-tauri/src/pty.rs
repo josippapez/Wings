@@ -32,7 +32,8 @@ pub struct SpawnRequest<'a> {
     pub cols: u16,
     pub rows: u16,
     pub history_id: Option<String>,
-    /// Output saved from this pane before Wings restarted, shown above the new shell.
+    /// Output saved from this pane before Wings restarted, as `restored` gives it. It goes in the kept output only: the UI
+    /// writes it into the terminal itself, before it listens for input.
     pub history: Vec<u8>,
 }
 
@@ -86,19 +87,20 @@ impl Pane {
             cwd: req.cwd.to_path_buf(),
             history_id: req.history_id,
             title: Arc::new(Mutex::new(String::new())),
-            output: Arc::new(Mutex::new(Output { channel: Some(output), ..Output::default() })),
+            output: Arc::new(Mutex::new(Output::default())),
             writer: Mutex::new(pair.master.take_writer()?),
             child: Mutex::new(child),
             master: Mutex::new(pair.master),
         });
 
-        if !req.history.is_empty() {
-            let mut output = pane.output.lock().unwrap();
-            output.push(&mut vte::Parser::new(), &pane.title, &req.history);
-            let end = output.history_end();
-            output.push(&mut vte::Parser::new(), &pane.title, &end);
-            // The old program's title isn't the new shell's.
-            pane.title.lock().unwrap().clear();
+        {
+            let mut kept = pane.output.lock().unwrap();
+            if !req.history.is_empty() {
+                kept.push(&mut vte::Parser::new(), &pane.title, &req.history);
+                // The old program's title isn't the new shell's.
+                pane.title.lock().unwrap().clear();
+            }
+            kept.channel = Some(output);
         }
 
         let mut reader = pane.master.lock().unwrap().try_clone_reader()?;
@@ -224,6 +226,14 @@ impl Ring {
         }
         out
     }
+}
+
+/// Output saved before a restart, ended so the new shell starts as in a fresh terminal: the modes it left on go off.
+pub fn restored(mut history: Vec<u8>) -> Vec<u8> {
+    let mut output = Output::default();
+    output.push(&mut vte::Parser::new(), &Mutex::new(String::new()), &history);
+    history.extend(output.history_end());
+    history
 }
 
 /// DEC private modes a program set long ago, like Claude Code's bracketed paste and mouse reporting, that the replay
@@ -411,18 +421,19 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_started_again_shows_its_saved_output_with_the_modes_it_left_on_turned_off() {
+    fn saved_output_ends_with_its_modes_off_and_is_kept_without_reaching_the_terminal() {
+        let history = restored(b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output".to_vec());
+        assert_eq!(history, b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output\x1b[?1049l\x1b[?2004l\x1b[0m\r\n");
         let (channel, got) = recorder();
         let dir = std::env::temp_dir();
-        let history = b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output".to_vec();
         let pane = Pane::spawn(
             SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history },
             channel,
             |_| {},
         )
         .unwrap();
-        let sent = got.lock().unwrap().clone();
-        assert!(sent.starts_with(b"\x1b]0;old\x07\x1b[?2004h\x1b[?1049hold output\x1b[?1049l\x1b[?2004l\x1b[0m\r\n"), "{:?}", String::from_utf8_lossy(&sent));
+        // Its queries would be answered into the new shell, so the terminal gets it from the UI before it listens.
+        assert!(!got.lock().unwrap().starts_with(b"\x1b]0;old"), "not sent to the terminal");
         assert!(pane.recent_output().starts_with(b"\x1b]0;old"), "saved again on the next quit");
         pane.kill();
     }

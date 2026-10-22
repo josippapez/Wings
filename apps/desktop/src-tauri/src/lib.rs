@@ -183,7 +183,7 @@ fn pane_create(
     }
     let exit_app = app.clone();
     let pane = Pane::spawn(
-        SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).unwrap_or_default(), history_id },
+        SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(pty::restored).unwrap_or_default(), history_id },
         on_output,
         move |pane_id| {
             exit_app.state::<AppState>().panes.lock().unwrap().remove(pane_id);
@@ -1353,6 +1353,12 @@ fn saved_history(app: &AppHandle, id: &str) -> Option<Vec<u8>> {
     std::fs::read(history_file(app, id)?).ok()
 }
 
+/// A pane's output from before the restart, for the UI to write before the new shell starts.
+#[tauri::command]
+fn history_load(app: AppHandle, id: String) -> tauri::ipc::Response {
+    tauri::ipc::Response::new(saved_history(&app, &id).map(pty::restored).unwrap_or_default())
+}
+
 /// On quit: each pane's kept output, for the same pane when Wings starts again.
 fn save_histories(app: &AppHandle) {
     let panes: Vec<Arc<Pane>> = app.state::<AppState>().panes.lock().unwrap().values().cloned().collect();
@@ -1802,6 +1808,7 @@ pub fn run() {
             pane_close,
             panes_reset,
             histories_keep,
+            history_load,
             panes_list,
             pane_attach,
             pane_focus,

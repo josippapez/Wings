@@ -356,6 +356,10 @@ export class TerminalSession {
     const output = () => new Channel<ArrayBuffer>((buf) => this.receive(new Uint8Array(buf)));
     const attachTo = this.attachTo;
     const attached = attachTo !== null && (await api.paneAttach(attachTo, output()).then(() => true, () => false));
+    // Written before `onData` has a listener: the old program's queries in it (Claude Code asks the terminal's colors and
+    // version) get answers that would otherwise be typed into the new shell.
+    const history = attached || !this.historyId ? null : await api.historyLoad(this.historyId);
+    if (history?.byteLength) await new Promise<void>((done) => this.term.write(new Uint8Array(history), done));
     // The pane exited during the reload: start over, as after a restart (a Claude pane resumes its session).
     this.paneId = attached
       ? attachTo

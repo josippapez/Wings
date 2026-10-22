@@ -346,6 +346,8 @@ export const api = {
   /** Kills every pane but `keep`, the ones this UI attaches to again. */
   panesReset: (keep: string[]) => invoke<void>("panes_reset", { keep }),
   /** Deletes saved output from before a restart that none of `keep` will show. */
+  /** A pane's output saved before Wings restarted, empty when there is none. */
+  historyLoad: (id: string) => invoke<ArrayBuffer>("history_load", { id }),
   historiesKeep: (keep: string[]) => invoke<void>("histories_keep", { keep }),
   workspaceLoad: () => invoke<string | null>("workspace_load"),
   workspaceSave: (json: string) => invoke<void>("workspace_save", { json }),

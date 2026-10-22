@@ -28,6 +28,8 @@
     "allow-pane-resize",
     "allow-pane-close",
     "allow-panes-reset",
+    "allow-histories-keep",
+    "allow-history-load",
     "allow-panes-list",
     "allow-pane-attach",
     "allow-pane-focus",
