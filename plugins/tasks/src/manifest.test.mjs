@@ -18,7 +18,8 @@ test("the manifest: the instructions line sends Claude to the tools unprompted, 
   const line = m.contributes.mcpInstructions;
   assert.ok(line.length <= 500);
   for (const name of ["create", "list", "get", "update", "log", "todo"]) assert.match(line, new RegExp(`tasks__${name}\\b`));
-  assert.match(line, /for every piece of work, not only when asked/);
+  assert.match(line, /For work that changes files, even unasked/);
+  assert.match(line, /A question, check or review gets no issue/);
   assert.deepEqual(m.contributes.hooks, ["SessionStart", "PreToolUse", "Journal"]);
   assert.equal(m.contributes.settings.page, "dist/settings.html");
   assert.ok(m.contributes.mcpTools.find((t) => t.name === "list").inputSchema.properties.query);

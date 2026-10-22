@@ -8,7 +8,8 @@ test("the session start line names the linked issue and the steps left, or asks 
   assert.match(linked, /WEB-4 "Checkout summary" \(In progress\)/);
   assert.match(linked, /3 steps left; tasks__todo with no items reads it/);
   const fresh = sessionStartText({ projectName: "web", keepLocal: true });
-  assert.match(fresh, /^Do this first, before any other tool call/m);
+  assert.match(fresh, /^When a task will change files/m);
+  assert.match(fresh, /A question, a check, a review or a lookup gets no issue/);
   assert.match(fresh, /tasks__list or create one with tasks__create/);
   assert.doesNotMatch(fresh, /steps? left/);
   assert.doesNotMatch(sessionStartText({ projectName: "web", keepLocal: false }), /never go in commits/);

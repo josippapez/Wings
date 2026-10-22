@@ -18,7 +18,7 @@ export function sessionStartText(o: { projectName: string; keepLocal: boolean; i
     lines.push(`This session is on ${o.issue.key} "${o.issue.title}" (${STATUS_LABEL[o.issue.status]}). Keep it current: set the status with tasks__update as the work moves and add a tasks__log note before you stop.`);
     if (o.todoLeft) lines.push(`Your todo has ${o.todoLeft} ${o.todoLeft === 1 ? "step" : "steps"} left; tasks__todo with no items reads it.`);
   } else {
-    lines.push("Do this first, before any other tool call on a task: find its issue with tasks__list or create one with tasks__create, then write your steps with tasks__todo. Reading or investigating first is no reason to wait, and if you already started without an issue, open it now.");
+    lines.push("When a task will change files, find its issue with tasks__list or create one with tasks__create before you edit, then write your steps with tasks__todo. If you already started editing without an issue, open it now. A question, a check, a review or a lookup gets no issue and no todo: read issues with tasks__get or tasks__list when the answer needs them.");
     if (o.todoLeft) lines.push(`Your todo has ${o.todoLeft} ${o.todoLeft === 1 ? "step" : "steps"} left; tasks__todo with no items reads it.`);
   }
   if (o.finished) lines.push(`Your todo is all done, but ${o.finished.key} is still ${STATUS_LABEL[o.finished.status]}: worth checking whether it is finished.`);
