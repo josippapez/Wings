@@ -415,12 +415,32 @@ fn resolve(path: &str) -> Result<(PathBuf, Metadata), String> {
     Ok((root, meta))
 }
 
+/// Keeps a scan thread from making macOS download a cloud folder's files (iCloud Drive, a File Provider) just to list
+/// them, as `du` does before it walks: a scan shouldn't change what is on the disk. The thread's own policy, so the rest of
+/// Wings is left as it is.
+#[cfg(target_os = "macos")]
+fn no_downloads() {
+    // sys/resource.h; the libc crate doesn't bind setiopolicy_np.
+    const IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES: libc::c_int = 3;
+    const IOPOL_SCOPE_THREAD: libc::c_int = 1;
+    const IOPOL_MATERIALIZE_DATALESS_FILES_OFF: libc::c_int = 1;
+    extern "C" {
+        fn setiopolicy_np(iotype: libc::c_int, scope: libc::c_int, policy: libc::c_int) -> libc::c_int;
+    }
+    // SAFETY: plain integers in, and it only sets the calling thread's policy.
+    unsafe { setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF) };
+}
+
+#[cfg(not(target_os = "macos"))]
+fn no_downloads() {}
+
 /// Runs `work` on a pool of scan threads, and calls `progress` with what `pulse` says about five times a second
 /// while it runs.
 fn on_pool<T: Send>(pulse: &Pulse, progress: &(impl Fn(&Progress) + Sync), work: impl FnOnce() -> T + Send) -> Result<T, String> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads())
         .thread_name(|i| format!("disk-scan-{i}"))
+        .start_handler(|_| no_downloads())
         .build()
         .map_err(|e| format!("Couldn't start the scan: {e}"))?;
     let (done, finished) = mpsc::channel::<()>();
