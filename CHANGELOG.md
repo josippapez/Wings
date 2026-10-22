@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.75 · 2026-10-22
+
+- **No stray text after a restart.** A restored terminal no longer types the answers to the old program's terminal queries into the new shell's prompt.
+- **Project sorting opens again.** The sort button in the Projects header crashed the app.
+- **Sort issues from the sidebar.** The Issues section under a project has a sort button on its header, with the same orders as its setting. Plugins can offer orders for their own sections with `sorts` and `wings.onSectionSort`.
+
 ## 0.1.74 · 2026-10-22
 
 - **Terminals keep their output across restarts.** When Wings quits, each pane saves what it showed, and shows it again above a fresh prompt when Wings starts. Closed panes' output is deleted at the next start.
