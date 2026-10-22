@@ -20,6 +20,13 @@ fn unquote(s: &str) -> Option<String> {
     Some(s.strip_prefix('\'')?.strip_suffix('\'')?.replace(r"'\''", "'"))
 }
 
+/// Whether `exe` is a Wings program: `wings`, or a copy Cargo keeps in `target/*/deps` as `wings-<hash>`. Such a copy
+/// once wrote itself in, and read as someone else's command it stayed there, wrapped, after `cargo clean` removed it.
+fn is_wings(exe: &str) -> bool {
+    let Some(stem) = Path::new(exe).file_stem().and_then(|s| s.to_str()) else { return false };
+    stem == "wings" || stem.strip_prefix("wings-").is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// The command Wings writes. Yours goes in a `{ }` group so it runs in Claude Code's own shell, unchanged.
 fn wrap(exe: &Path, yours: Option<&str>) -> String {
     let wings = quote(&exe.to_string_lossy());
@@ -36,7 +43,15 @@ fn unwrap(command: &str) -> Option<(String, Option<String>)> {
         None => (command.strip_suffix(" statusline")?, None),
     };
     let exe = unquote(wings)?;
-    (Path::new(&exe).file_stem()? == "wings").then_some((exe, yours))
+    is_wings(&exe).then_some((exe, yours))
+}
+
+/// Your status line with any Wings wrappers peeled off it: one Wings in front is all it needs.
+fn yours_only(mut yours: Option<String>) -> Option<String> {
+    while let Some((_, inner)) = yours.as_deref().and_then(unwrap) {
+        yours = inner;
+    }
+    yours
 }
 
 fn read(path: &Path) -> Result<Map<String, Value>, String> {
@@ -75,7 +90,7 @@ const HOOK_TIMEOUT: u64 = 5;
 /// The Wings program in a hook command Wings wrote.
 fn hook_exe(command: &str) -> Option<String> {
     let exe = unquote(command.strip_suffix(" hook")?)?;
-    (Path::new(&exe).file_stem()? == "wings").then_some(exe)
+    is_wings(&exe).then_some(exe)
 }
 
 /// The hooks of `event`'s entries that run `wings hook`.
@@ -102,8 +117,8 @@ fn add_statusline(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool,
         Some(_) => {
             let current = command(settings).ok_or("Claude Code's statusLine isn't a command, so Wings left it alone")?;
             match unwrap(current) {
-                Some((was, _)) if Path::new(&was) == exe => return Ok(false),
-                Some((_, yours)) => wrap(exe, yours.as_deref()),
+                Some((was, yours)) if Path::new(&was) == exe && yours_only(yours.clone()) == yours => return Ok(false),
+                Some((_, yours)) => wrap(exe, yours_only(yours).as_deref()),
                 None => wrap(exe, Some(current)),
             }
         }
@@ -120,11 +135,17 @@ fn add_hooks(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, Stri
     for (event, matcher) in HOOKS {
         let found = hook_commands(settings, event);
         if !found.is_empty() {
-            for hook in found {
-                if hook["command"] != ours.as_str() {
-                    hook["command"] = Value::String(ours.clone());
+            // The first stays, repointed; any other Wings hook would run Wings twice, or a program that is gone.
+            let extra = found.len() > 1;
+            if let Some(first) = found.into_iter().next() {
+                if first["command"] != ours.as_str() {
+                    first["command"] = Value::String(ours.clone());
                     changed = true;
                 }
+            }
+            if extra {
+                drop_extra_hooks(settings, event);
+                changed = true;
             }
             continue;
         }
@@ -145,6 +166,23 @@ fn add_hooks(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, Stri
         changed = true;
     }
     Ok(changed)
+}
+
+/// Leaves only the first `wings hook` of `event`, and drops an entry that held only one of the others.
+fn drop_extra_hooks(settings: &mut Map<String, Value>, event: &str) {
+    let Some(Value::Array(entries)) = settings.get_mut("hooks").and_then(|h| h.get_mut(event)) else { return };
+    let mut seen = false;
+    for entry in entries.iter_mut() {
+        if let Some(list) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+            list.retain(|hook| {
+                let ours = hook.get("command").and_then(Value::as_str).and_then(hook_exe).is_some();
+                let keep = !ours || !seen;
+                seen |= ours;
+                keep
+            });
+        }
+    }
+    entries.retain(|entry| entry.get("hooks").and_then(Value::as_array).is_none_or(|list| !list.is_empty()));
 }
 
 /// Takes `wings hook` out of each event, and an entry or event that held only that. Yours stay as they were.
@@ -320,6 +358,32 @@ mod tests {
         assert_eq!(read(&path).unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"], "'/a/wings' hook");
         remove(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\n  \"model\": \"opus\"\n}\n");
+    }
+
+    /// What a build in `target/release/deps` left behind: wrapped inside the app's status line and in a hook of
+    /// its own, both running a program `cargo clean` had removed.
+    #[test]
+    fn a_build_copy_left_in_the_settings_is_taken_out() {
+        let app = Path::new("/Applications/Wings.app/Contents/MacOS/wings");
+        let build = "/w/target/release/deps/wings-224b4daf414bfdd7";
+        let nested = format!("'{}'{PASS}'{build}'{PASS}{HUD}\n}}\n}}", app.display());
+        let hook = |exe: &str| json!({ "hooks": [{ "type": "command", "command": format!("'{exe}' hook"), "timeout": 5 }] });
+        let bash = |exe: &str| json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("'{exe}' hook"), "timeout": 5 }] });
+        let path = file(
+            "build-copy",
+            &json!({
+                "statusLine": { "type": "command", "command": nested },
+                "hooks": { "SessionStart": [hook(build), hook(&app.to_string_lossy())], "PreToolUse": [bash(build), bash(&app.to_string_lossy())] }
+            })
+            .to_string(),
+        );
+        assert!(add(&path, app).unwrap());
+        let settings = read(&path).unwrap();
+        assert_eq!(command(&settings), Some(format!("'{}'{PASS}{HUD}\n}}", app.display()).as_str()));
+        assert_eq!(settings["hooks"]["SessionStart"], json!([hook(&app.to_string_lossy())]));
+        assert_eq!(settings["hooks"]["PreToolUse"], json!([bash(&app.to_string_lossy())]));
+        assert!(!add(&path, app).unwrap(), "a second start changes nothing");
+        assert!(!is_wings("/usr/bin/wingspan") && !is_wings("/x/wings-tool") && is_wings("/x/wings-0af"));
     }
 
     #[test]
