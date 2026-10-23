@@ -43,6 +43,9 @@ const RETRY_EMPTY: Duration = Duration::from_secs(10);
 const RETRY_FAILED: Duration = Duration::from_secs(60);
 /// Names asked for by one History search, and names waiting in the queue; the oldest request is dropped.
 const NAMES_PER_SEARCH: usize = 12;
+/// A turn the agent worked on for less than this gets no summary: a quick answer says little the prompt doesn't, and
+/// each summary costs the model about a second.
+const SUMMARY_MIN_TURN: Duration = Duration::from_secs(15);
 const QUEUE_NAMES: usize = 24;
 const NAME_WORDS: usize = 8;
 const SUMMARY_WORDS: usize = 12;
@@ -150,8 +153,8 @@ pub struct Ai {
     failed: Mutex<Option<Instant>>,
     /// Sessions not to ask about again before this time.
     retry: Mutex<HashMap<(Task, String), Instant>>,
-    /// Each pane's last state, to see a turn end.
-    seen: Mutex<HashMap<String, AgentState>>,
+    /// Each pane's last state and when it began, to see a turn end and how long it took.
+    seen: Mutex<HashMap<String, (AgentState, Instant)>>,
     /// One compile at a time.
     build: Mutex<()>,
 }
@@ -162,6 +165,12 @@ fn active_engine(chosen: Engine, failed: Option<Instant>, now: Instant) -> Engin
         Some(at) if now.duration_since(at) < PAUSE => Engine::Off,
         _ => chosen,
     }
+}
+
+/// Whether a pane that was `before` and is `state` now just ended a turn long enough to summarize: working, then idle
+/// or done, after at least `SUMMARY_MIN_TURN`.
+fn long_turn_ended(before: Option<(AgentState, Instant)>, state: AgentState, now: Instant) -> bool {
+    matches!(before, Some((AgentState::Working, since)) if now.duration_since(since) >= SUMMARY_MIN_TURN) && matches!(state, AgentState::Done | AgentState::Idle)
 }
 
 fn cut_head(text: &str, chars: usize) -> String {
@@ -278,15 +287,17 @@ impl Ai {
             return;
         }
         let summaries = self.summaries.lock().unwrap();
+        let now = Instant::now();
         for agent in agents.iter_mut() {
-            let before = seen.insert(agent.pane_id.clone(), agent.state);
+            let before = seen.get(&agent.pane_id).copied();
+            let since = before.filter(|(state, _)| *state == agent.state).map_or(now, |(_, since)| since);
+            seen.insert(agent.pane_id.clone(), (agent.state, since));
             let Some(id) = agent.session_id.clone() else { continue };
             let kind = match agent.kind {
                 crate::detect::AgentKind::Claude => history::Agent::Claude,
                 crate::detect::AgentKind::Opencode => history::Agent::OpenCode,
             };
-            // The turn just ended: working, then idle or done.
-            if before == Some(AgentState::Working) && matches!(agent.state, AgentState::Done | AgentState::Idle) {
+            if long_turn_ended(before, agent.state, now) {
                 self.enqueue(Task::Summary, &id, kind);
             }
             if agent.name.is_none() || agent.weak_name {
@@ -576,6 +587,18 @@ mod tests {
         assert_eq!(active_engine(Engine::Apple, Some(now), now + Duration::from_secs(5)), Engine::Off);
         assert_eq!(active_engine(Engine::Apple, Some(now), now + PAUSE), Engine::Apple);
         assert_eq!(active_engine(Engine::Off, None, now), Engine::Off);
+    }
+
+    #[test]
+    fn only_a_turn_of_at_least_15_seconds_gets_a_summary() {
+        let start = Instant::now();
+        let worked = |secs| Some((AgentState::Working, start - Duration::from_secs(secs)));
+        assert!(long_turn_ended(worked(15), AgentState::Idle, start));
+        assert!(long_turn_ended(worked(90), AgentState::Done, start));
+        assert!(!long_turn_ended(worked(14), AgentState::Idle, start), "a quick answer");
+        assert!(!long_turn_ended(worked(90), AgentState::Working, start), "still working");
+        assert!(!long_turn_ended(Some((AgentState::Idle, start - Duration::from_secs(90))), AgentState::Idle, start));
+        assert!(!long_turn_ended(None, AgentState::Idle, start));
     }
 
     #[test]
