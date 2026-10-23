@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.76 · 2026-10-23
+
+- **Plugins find gh and az after a slow start.** When your shell took too long to start as Wings opened, as it can right after the Mac starts, Wings missed programs installed with Homebrew until it was restarted. It now tries again, so Try again works.
+
 ## 0.1.75 · 2026-10-22
 
 - **No stray text after a restart.** A restored terminal no longer types the answers to the old program's terminal queries into the new shell's prompt.
