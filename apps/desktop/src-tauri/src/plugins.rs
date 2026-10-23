@@ -10,7 +10,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
+        Arc,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -694,20 +694,38 @@ fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on
     Ok(ExecResult { code: status.code(), stdout, stderr })
 }
 
-/// GUI apps don't get the shell's PATH on macOS and Linux, so ask the login shell once.
-pub(crate) fn search_path() -> &'static str {
-    static PATH: OnceLock<String> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let inherited = std::env::var("PATH").unwrap_or_default();
-        #[cfg(unix)]
-        {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            if let Some(path) = login_shell_path(&shell, Duration::from_secs(5)) {
-                return format!("{path}:{inherited}");
-            }
+/// GUI apps don't get the shell's PATH on macOS and Linux, so ask the login shell, until it answers.
+pub(crate) fn search_path() -> String {
+    static CACHE: std::sync::Mutex<ShellPath> = std::sync::Mutex::new(ShellPath { found: None, tried: None });
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        if let Some(path) = CACHE.lock().unwrap().get(Instant::now(), || login_shell_path(&shell, Duration::from_secs(5))) {
+            return format!("{path}:{inherited}");
         }
-        inherited
-    })
+    }
+    inherited
+}
+
+/// How long a login shell that didn't answer in time waits before it's asked again, so a Try again a little later works.
+const SHELL_PATH_RETRY: Duration = Duration::from_secs(10);
+
+/// The login shell's PATH once found. A shell that was too slow, as one can be right after the Mac starts, is asked
+/// again after `SHELL_PATH_RETRY` instead of leaving Wings without Homebrew's programs until it restarts.
+struct ShellPath {
+    found: Option<String>,
+    tried: Option<Instant>,
+}
+
+impl ShellPath {
+    fn get(&mut self, now: Instant, ask: impl FnOnce() -> Option<String>) -> Option<String> {
+        if self.found.is_none() && self.tried.is_none_or(|t| now.duration_since(t) >= SHELL_PATH_RETRY) {
+            self.tried = Some(now);
+            self.found = ask();
+        }
+        self.found.clone()
+    }
 }
 
 /// The PATH a login shell sets up, or `None` when that takes longer than `timeout`. A profile that runs
@@ -748,7 +766,7 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
         return None;
     }
     let names: Vec<String> = if cfg!(windows) { vec![format!("{program}.exe"), format!("{program}.cmd")] } else { vec![program.into()] };
-    std::env::split_paths(search_path())
+    std::env::split_paths(&search_path())
         .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
         .find(|p| p.is_file())
 }
@@ -1417,6 +1435,16 @@ mod tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn a_login_shell_too_slow_at_start_is_asked_again_later() {
+        let mut cache = ShellPath { found: None, tried: None };
+        let start = Instant::now();
+        assert_eq!(cache.get(start, || None), None);
+        assert_eq!(cache.get(start + Duration::from_secs(1), || panic!("asked again too soon")), None);
+        assert_eq!(cache.get(start + SHELL_PATH_RETRY, || Some("/opt/homebrew/bin".into())).as_deref(), Some("/opt/homebrew/bin"));
+        assert_eq!(cache.get(start + SHELL_PATH_RETRY * 4, || panic!("found paths are kept")).as_deref(), Some("/opt/homebrew/bin"));
     }
 
     #[test]
