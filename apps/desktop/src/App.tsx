@@ -1454,6 +1454,7 @@ const leftPanel = usePanelRef();
       layout: t.layout,
       focusedPane: t.focusedPane,
       state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
+      running: [...new Set(paneIds(t.layout).flatMap((key) => labels[key]?.running ?? []))],
     };
   });
 
