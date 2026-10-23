@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.77 · 2026-10-23
+
+- **Issues close when their pull request merges.** An issue in progress or in review with a linked GitHub or Azure DevOps pull request moves to Done once the PR is merged, with a note saying so. One with open child issues stays open, and a PR closed without merging only leaves a note. Issues asks to be approved again, since it now reads PR states with `gh` and `az`.
+- **Issues in review get settled.** While a session's issue is in review, each message you send reminds the agent to set it Done if you say it works, or back to In progress if you report a problem. Plugins can answer each message with the `UserPromptSubmit` hook.
+- **Fewer summaries.** A turn under 15 seconds no longer runs the on-device model for a summary.
+
 ## 0.1.76 · 2026-10-23
 
 - **Plugins find gh and az after a slow start.** When your shell took too long to start as Wings opened, as it can right after the Mac starts, Wings missed programs installed with Homebrew until it was restarted. It now tries again, so Try again works.
