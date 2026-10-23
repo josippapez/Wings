@@ -1,6 +1,6 @@
 //! Puts `wings statusline` in Claude Code's `statusLine` setting without taking it over: the status line you
 //! already had runs after Wings, on the same input, so it still shows. It also adds `wings hook` to the
-//! `SessionStart` and `PreToolUse` hooks, after the hooks you have. Removing Wings puts yours back as it was.
+//! `SessionStart`, `PreToolUse` and `UserPromptSubmit` hooks, after the hooks you have. Removing Wings puts yours back as it was.
 
 use std::path::{Path, PathBuf};
 
@@ -82,8 +82,8 @@ fn command(settings: &Map<String, Value>) -> Option<&str> {
 }
 
 /// The hooks Wings adds, with the matcher each one has. `PreToolUse` is only for Bash: Wings starts in 20 to
-/// 60 ms, which every tool call shouldn't wait for.
-const HOOKS: [(&str, Option<&str>); 2] = [("SessionStart", None), ("PreToolUse", Some("Bash"))];
+/// 60 ms, which every tool call shouldn't wait for. Once per message you send is fine.
+const HOOKS: [(&str, Option<&str>); 3] = [("SessionStart", None), ("PreToolUse", Some("Bash")), ("UserPromptSubmit", None)];
 /// Claude Code's own cap is 600 s; Wings answers within 2 s or says nothing.
 const HOOK_TIMEOUT: u64 = 5;
 
@@ -335,7 +335,8 @@ mod tests {
         assert_eq!(settings["hooks"]["SessionStart"][0].get("matcher"), None);
         assert_eq!(settings["hooks"]["PostToolUse"], json!([{ "hooks": [{ "type": "command", "command": "after" }] }]));
         // `Journal` is a plugin hook event, not a Claude Code one: Wings never registers it there.
-        assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse", "PostToolUse", "SessionStart"]);
+        assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse", "PostToolUse", "SessionStart", "UserPromptSubmit"]);
+        assert_eq!(settings["hooks"]["UserPromptSubmit"], json!([{ "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] }]));
         assert!(connected(&path));
         assert!(!add(&path, exe).unwrap(), "a second add changes nothing");
 

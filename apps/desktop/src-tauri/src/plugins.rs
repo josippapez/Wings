@@ -240,9 +240,10 @@ fn empty_schema() -> Value {
 }
 
 const UI_KINDS: [&str; 4] = ["badges", "diff", "rail", "status"];
-/// The hooks a plugin can answer. `PreToolUse` only ever sees Bash commands. `Journal` isn't a Claude Code event: it is
-/// what `wings journal` sends when an agent's change journal reports a finished turn.
-pub const HOOK_EVENTS: [&str; 3] = ["SessionStart", "PreToolUse", "Journal"];
+/// The hooks a plugin can answer. `PreToolUse` only ever sees Bash commands. `UserPromptSubmit` runs on each message to
+/// the agent. `Journal` isn't a Claude Code event: it is what `wings journal` sends when an agent's change journal
+/// reports a finished turn.
+pub const HOOK_EVENTS: [&str; 4] = ["SessionStart", "PreToolUse", "UserPromptSubmit", "Journal"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1396,7 +1397,7 @@ mod tests {
 
     #[test]
     fn hooks_accept_journal_and_refuse_other_events() {
-        assert_eq!(HOOK_EVENTS, ["SessionStart", "PreToolUse", "Journal"]);
+        assert_eq!(HOOK_EVENTS, ["SessionStart", "PreToolUse", "UserPromptSubmit", "Journal"]);
         let dir = std::env::temp_dir().join(format!("wings-hooks-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

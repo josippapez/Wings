@@ -143,7 +143,7 @@ const CONTEXT_LIMIT: usize = 10_000;
 /// How long `wings hook` waits for Wings, in all, before it says nothing.
 const HOOK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// `wings hook`, for Claude Code's `SessionStart` and `PreToolUse` hooks. Hands the hook's input to the running
+/// `wings hook`, for Claude Code's `SessionStart`, `PreToolUse` and `UserPromptSubmit` hooks. Hands the hook's input to the running
 /// Wings, which asks the plugins that answer that event, and prints what they said as Claude Code expects it.
 /// It never holds Claude up: with Wings closed, slow, or with nothing to say, it prints nothing and exits 0.
 pub fn hook() -> i32 {

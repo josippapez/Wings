@@ -117,7 +117,7 @@ export type PluginContributes = {
   /** A line telling Claude when to use `mcpTools`, added to the Wings MCP server's instructions; absent when none. */
   mcpInstructions?: string;
   /** Claude Code hooks it answers with `wings.onHook`; absent when none. */
-  hooks?: ("SessionStart" | "PreToolUse")[];
+  hooks?: ("SessionStart" | "PreToolUse" | "UserPromptSubmit" | "Journal")[];
   panels: PluginPanel[];
   sidebars: PluginSidebar[];
   views: PluginPage[];

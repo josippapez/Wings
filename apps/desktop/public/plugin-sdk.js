@@ -232,9 +232,9 @@
     onTool: (name, handler) => void tools.set(name, handler),
     /**
      * Answers a Claude Code hook the manifest lists in `contributes.hooks`, from the main script: `"SessionStart"` to
-     * add context to a session, `"PreToolUse"` to refuse a Bash command. `handler(input, { paneId, project, session })`
-     * gets the hook's input from Claude Code (`session_id`, `cwd`, `hook_event_name`, and `source` for SessionStart or
-     * `tool_name` and `tool_input` for PreToolUse) and returns a string (context), `{ context?, deny? }`, or nothing,
+     * add context to a session, `"PreToolUse"` to refuse a Bash command, `"UserPromptSubmit"` to add context to each
+     * message. `handler(input, { paneId, project, session })` gets the hook's input from Claude Code (`session_id`, `cwd`,
+     * `hook_event_name`, and `source` for SessionStart, `tool_name` and `tool_input` for PreToolUse, or `prompt` for UserPromptSubmit) and returns a string (context), `{ context?, deny? }`, or nothing,
      * or a promise of one. A thrown error or a slow answer (1.5 s) counts as nothing, so Claude is never held up.
      */
     onHook: (event, handler) => void hooks.set(event, handler),
