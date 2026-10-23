@@ -10,7 +10,9 @@ test("the manifest: tools tell agents to link by hand and keep keys out of git, 
   assert.match(text.update, /set pr to its URL/);
   assert.match(text.update, /set branch when you start on a branch/);
   for (const t of m.contributes.mcpTools) assert.doesNotMatch(t.description, /put the key in your commit/);
-  assert.deepEqual(Object.keys(m.permissions).sort(), ["openUrl", "panes"]);
+  assert.deepEqual(Object.keys(m.permissions).sort(), ["exec", "openUrl", "panes"]);
+  // Only a linked pull request's state, never git.
+  assert.deepEqual(m.permissions.exec, ["gh pr view [--json --jq]", "az repos pr show [--id --organization --query --output]"]);
 });
 
 test("the manifest: the instructions line sends Claude to the tools unprompted, and the settings page is declared", async () => {
@@ -20,7 +22,7 @@ test("the manifest: the instructions line sends Claude to the tools unprompted, 
   for (const name of ["create", "list", "get", "update", "log", "todo"]) assert.match(line, new RegExp(`tasks__${name}\\b`));
   assert.match(line, /For work that changes files, even unasked/);
   assert.match(line, /A question, check or review gets no issue/);
-  assert.deepEqual(m.contributes.hooks, ["SessionStart", "PreToolUse", "Journal"]);
+  assert.deepEqual(m.contributes.hooks, ["SessionStart", "PreToolUse", "UserPromptSubmit", "Journal"]);
   assert.equal(m.contributes.settings.page, "dist/settings.html");
   assert.ok(m.contributes.mcpTools.find((t) => t.name === "list").inputSchema.properties.query);
 });

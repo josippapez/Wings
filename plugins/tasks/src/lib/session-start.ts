@@ -12,6 +12,10 @@ const DAY = 24 * 60 * 60 * 1000;
 /** The issues in progress or in review untouched for `STALE_DAYS` or more, longest first. */
 export const staleIssues = (issues: Issue[], now: number): Issue[] => issues.filter((i) => isLive(i) && now - i.updatedAt >= STALE_DAYS * DAY).sort((a, b) => a.updatedAt - b.updatedAt);
 
+/** Added to each message in a session whose issue waits in review, which the user often settles in their next message. */
+export const inReviewText = (issue: Issue): string =>
+  `This session's ${issue.key} "${issue.title}" is In review. If this message says the work is done or works, set it Done with tasks__update; if it reports a problem with it, set it back to In progress.`;
+
 export function sessionStartText(o: { projectName: string; keepLocal: boolean; issue?: Issue; todoLeft?: number; stale?: Issue[]; finished?: Issue; now?: number }): string {
   const lines = [`Wings Issues is the local tracker for ${o.projectName}, kept on this computer for the user and you${o.keepLocal ? ", and its keys never go in commits, branches or PRs" : ""}.`];
   if (o.issue) {

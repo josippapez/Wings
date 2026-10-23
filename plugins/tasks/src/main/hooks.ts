@@ -5,7 +5,7 @@ import { journalIssue, isLive, journalOf, type JournalInput } from "../lib/journ
 import { keepLocal } from "../lib/local-setting";
 import { localOnlyDenial, writesToHistory } from "../lib/local-only";
 import { readStore } from "../lib/storage";
-import { sessionStartText, staleIssues } from "../lib/session-start";
+import { inReviewText, sessionStartText, staleIssues } from "../lib/session-start";
 import { readTodo } from "../lib/todo-store";
 import { itemsOf, stepsLeft } from "../lib/todo";
 import { write } from "./write";
@@ -24,6 +24,14 @@ async function sessionStart(input: WingsHookInput, context: WingsToolContext) {
   const linked = todo?.issueKey ? issues.find((i) => i.key === todo.issueKey) : undefined;
   const finished = items.length && !stepsLeft(todo!) && linked && isLive(linked) ? linked : undefined;
   return sessionStartText({ projectName: name, keepLocal: local, issue, todoLeft: todo ? stepsLeft(todo) : 0, stale: staleIssues(issues, Date.now()), finished });
+}
+
+/** Each message in a session: when the session's issue is in review, asks the agent to settle it from what the user says. */
+async function promptSubmit(input: WingsHookInput, context: WingsToolContext) {
+  if (!context.project) return null;
+  const { issues } = await readStore(context.project.id, context.project.name);
+  const issue = issues.filter((i) => i.sessions.some((s) => s.id === input.session_id)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  return issue?.status === "in_review" ? inReviewText(issue) : null;
 }
 
 /** An agent's journal for a finished turn: links its commits to this session's open issue and records its files in the issue's Files changed. Says nothing back. */
@@ -57,5 +65,6 @@ async function commandCheck(input: WingsHookInput, context: WingsToolContext) {
 export function registerHooks(): void {
   wings.onHook("SessionStart", sessionStart);
   wings.onHook("PreToolUse", commandCheck);
+  wings.onHook("UserPromptSubmit", promptSubmit);
   wings.onHook("Journal", journal);
 }

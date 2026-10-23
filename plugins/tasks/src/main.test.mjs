@@ -34,6 +34,8 @@ globalThis.wings = {
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
   setSectionSort: async (section, sort) => void sectionSorts.push({ section, sort }),
   onSectionSort: (listener) => (onSort = listener),
+  focused: false,
+  onFocus: () => () => {},
 };
 await import("./main.ts");
 const { slotOf } = await import("./lib/storage.ts");
@@ -236,4 +238,18 @@ test("an order picked in the section header's menu is saved as the setting and c
   onSort({ sectionId: "tasks", sort: "bogus" });
   await settle();
   assert.equal(storage.get("sectionOrder"), "date", "an order it doesn't know changes nothing");
+});
+
+test("each message in a session whose issue is in review asks the agent to settle it; other statuses and sessions get nothing", async () => {
+  const sess = { id: "r-1", name: "review agent", kind: "claude" };
+  const rctx = { ...ctx, session: sess };
+  const say = (session_id) => hooks.get("UserPromptSubmit")({ session_id, prompt: "it works, done" }, { ...rctx, session: { ...sess, id: session_id } });
+  const made = await handlers.get("create")({ title: "Wait for the user" }, rctx);
+  const key = made.match(/Created (WEB-\d+)/)[1];
+  assert.equal(await say("r-1"), null, "to do");
+  await handlers.get("update")({ key, status: "in_review" }, rctx);
+  assert.match(await say("r-1"), new RegExp(`^This session's ${key} "Wait for the user" is In review\\. If this message says the work is done`));
+  assert.equal(await say("someone-else"), null);
+  await handlers.get("update")({ key, status: "done" }, rctx);
+  assert.equal(await say("r-1"), null, "done");
 });
