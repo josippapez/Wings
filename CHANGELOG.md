@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.78 · 2026-10-23
+
+- **Tabs show what's running.** A terminal tab gets a pulsing green dot after its title while one of its panes runs a program, like a dev server or a build, instead of sitting at the prompt. Hover the tab to see which programs.
+
 ## 0.1.77 · 2026-10-23
 
 - **Issues close when their pull request merges.** An issue in progress or in review with a linked GitHub or Azure DevOps pull request moves to Done once the PR is merged, with a note saying so. One with open child issues stays open, and a PR closed without merging only leaves a note. Issues asks to be approved again, since it now reads PR states with `gh` and `az`.
