@@ -1,7 +1,10 @@
 import type { PluginView } from "@/lib/api";
 
-/** A page the + menu offers: a view that opens as a tab and sets `newTab`. `key` is `pluginId:viewId`. */
-export type NewTabEntry = { key: string; pluginId: string; viewId: string; title: string; icon: string; iconSvg: string | null; multiple: boolean };
+/** The `spaceId` of a tab opened with no project on screen. It is no project's id, so the tab shows only then and is not restored. */
+export const NO_PROJECT = "no-project";
+
+/** A page the + menu offers: a view that opens as a tab and sets `newTab`. `key` is `pluginId:viewId`. `noProject` is a view that also opens with no project on screen. */
+export type NewTabEntry = { key: string; pluginId: string; viewId: string; title: string; icon: string; iconSvg: string | null; multiple: boolean; noProject: boolean };
 
 /** The + menu's plugin pages, in plugin order, from plugins that are on and approved. */
 export const newTabEntries = (plugins: PluginView[]): NewTabEntry[] =>
@@ -10,7 +13,7 @@ export const newTabEntries = (plugins: PluginView[]): NewTabEntry[] =>
     .flatMap((p) =>
       p.contributes.views
         .filter((v) => v.newTab && v.opens.includes("tab"))
-        .map((v) => ({ key: `${p.id}:${v.id}`, pluginId: p.id, viewId: v.id, title: v.title, icon: v.icon, iconSvg: p.iconSvg, multiple: v.multiple === true })),
+        .map((v) => ({ key: `${p.id}:${v.id}`, pluginId: p.id, viewId: v.id, title: v.title, icon: v.icon, iconSvg: p.iconSvg, multiple: v.multiple === true, noProject: v.noProject === true })),
     );
 
 /**

@@ -102,6 +102,8 @@ export type PluginPage = { id: string; title: string; icon: string; page: string
   newTab?: boolean;
   /** Opening it as a tab always opens a new one, instead of showing the project's existing tab. */
   multiple?: boolean;
+  /** Works with no project on screen: the + menu opens it as a tab then too; needs `tab` in `opens`. */
+  noProject?: boolean;
   /** `false`: no title bar button, for a page that shows one item opened from a row. */
   button?: boolean;
 };

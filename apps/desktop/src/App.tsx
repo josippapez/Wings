@@ -27,7 +27,7 @@ import { pluginsUsing } from "@/lib/tool-install";
 import { usePluginUpdates } from "@/lib/plugin-updates";
 import { SIDEBAR_UNLOAD_MS, TAB_PAGE_UNLOAD_MS } from "@/lib/idle-unload";
 import { useIdleUnload } from "@/lib/use-idle-unload";
-import { newTabAction, firstTabFor, parseNewProjectOpens, type NewProjectOpens, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
+import { newTabAction, firstTabFor, NO_PROJECT, parseNewProjectOpens, type NewProjectOpens, isProjectTab, isViewTab, newTabEntries, openProjectTab, openViewTab, pluginSettingsSection, restoreTabs, saveTabs, settingsPlugins, shownSection, staleViewTabs, type NewTabEntry, type ProjectTab, type SavedProjectTab, type SavedViewTab, type ViewTab } from "@/lib/plugin-pages";
 import { parseProjectSort, restoreLastActive, touched, withMissing, type ProjectSort } from "@/lib/project-order";
 import { collapseKey, restoreCollapsed, sectionId, toggleCollapsed, withoutPlugin, withoutProject, withoutProjectCollapsed, withSection, type ProjectSections } from "@/lib/project-sections";
 import { PluginTab } from "@/components/plugin-tab";
@@ -343,8 +343,10 @@ const leftPanel = usePanelRef();
   paneInfoRef.current = paneInfo;
 
   const activeSpace = spaces.find((s) => s.id === activeSpaceId) ?? null;
-  const spaceTabs = tabs.filter((t) => t.spaceId === activeSpaceId);
-  const activeTabId = activeSpaceId ? (activeTabBySpace[activeSpaceId] ?? spaceTabs[0]?.id ?? null) : null;
+  /** Whose tabs show: the project's, or the ones opened with no project on screen. */
+  const tabSpaceId = activeSpace?.id ?? NO_PROJECT;
+  const spaceTabs = tabs.filter((t) => t.spaceId === tabSpaceId);
+  const activeTabId = activeTabBySpace[tabSpaceId] ?? spaceTabs[0]?.id ?? null;
   const shownTab = tabs.find((t) => t.id === activeTabId) ?? null;
   /** The terminal tab on screen; null while a plugin view's tab shows. */
   const activeTab = shownTab && isPaneTab(shownTab) ? shownTab : null;
@@ -540,13 +542,19 @@ const leftPanel = usePanelRef();
     });
   }, []);
   const closeTab = useCallback((tabId: string) => closeTabs([tabId]), [closeTabs]);
+  // A project on screen takes over, so the pages opened without one are closed rather than left hidden.
+  useEffect(() => {
+    if (!activeSpace) return;
+    const strays = tabsRef.current.filter((t) => t.spaceId === NO_PROJECT);
+    if (strays.length) closeTabs(strays.map((t) => t.id));
+  }, [activeSpace, closeTabs]);
 
   /** Shows a plugin view's tab in a project, opening it if it isn't there yet. */
   const showViewTab = useCallback((spaceId: string, pluginId: string, viewId: string, options?: { multiple: boolean; args?: unknown; newTab?: boolean }) => {
     const opened = openViewTab(tabsRef.current, spaceId, { pluginId, viewId }, crypto.randomUUID(), options);
     if (opened.tabs !== tabsRef.current) setTabs(opened.tabs);
     setActiveTabBySpace((m) => ({ ...m, [spaceId]: opened.id }));
-    setActiveSpaceId(spaceId);
+    if (spaceId !== NO_PROJECT) setActiveSpaceId(spaceId);
   }, []);
 
   /** Shows a project's Project page, opening its tab if it isn't there yet. */
@@ -1546,7 +1554,7 @@ const leftPanel = usePanelRef();
   const stepTab = (by: -1 | 1) => {
     const at = spaceTabs.findIndex((t) => t.id === activeTabId);
     const tab = spaceTabs[(at + by + spaceTabs.length) % spaceTabs.length];
-    if (activeSpaceId && tab) setActiveTabBySpace((m) => ({ ...m, [activeSpaceId]: tab.id }));
+    if (tab) setActiveTabBySpace((m) => ({ ...m, [tabSpaceId]: tab.id }));
   };
   const jumpToAgent = (back: boolean) => {
     const next = nextNeedingYou(agents, focusedPaneId, back);
@@ -1604,9 +1612,11 @@ const leftPanel = usePanelRef();
   /** The pages the + menu offers besides a terminal, and opening one (or a terminal for null) in the project on screen. */
   const newTabs = useMemo(() => newTabEntries(plugins), [plugins]);
   const openNewTab = (entry: NewTabEntry | null, newTab?: boolean) => {
-    if (!activeSpace) return;
-    if (entry) showViewTab(activeSpace.id, entry.pluginId, entry.viewId, { multiple: entry.multiple, newTab });
-    else openTab(activeSpace.id);
+    if (!entry) {
+      if (activeSpace) openTab(activeSpace.id);
+      return;
+    }
+    if (activeSpace || entry.noProject) showViewTab(tabSpaceId, entry.pluginId, entry.viewId, { multiple: entry.multiple, newTab });
   };
 
   /** What the palette searches besides past sessions. Built only while it is open. */
@@ -1620,7 +1630,7 @@ const leftPanel = usePanelRef();
       items.push({ id: `project-page:${s.id}`, kind: "command", title: `Project page: ${s.name}`, keywords: "notes facts info", run: () => showProjectPage(s.id) });
     }
     for (const entry of newTabs) {
-      items.push({ id: `new-tab:${entry.key}`, kind: "command", title: `New tab: ${entry.title}`, keywords: "plugin page", disabled: !activeSpace, run: () => openNewTab(entry) });
+      items.push({ id: `new-tab:${entry.key}`, kind: "command", title: `New tab: ${entry.title}`, keywords: "plugin page", disabled: !activeSpace && !entry.noProject, run: () => openNewTab(entry) });
     }
     for (const s of spaces) {
       items.push({ id: `project:${s.id}`, kind: "project", title: s.name, subtitle: s.path.replace(/^\/Users\/[^/]+/, "~"), keywords: s.path, run: () => selectSpace(s.id) });
@@ -1710,7 +1720,7 @@ const leftPanel = usePanelRef();
             canGoForward={canForward}
             onGoBack={() => navigate(goBack)}
             onGoForward={() => navigate(goForward)}
-            onSelect={(id) => activeSpace && setActiveTabBySpace((m) => ({ ...m, [activeSpace.id]: id }))}
+            onSelect={(id) => setActiveTabBySpace((m) => ({ ...m, [tabSpaceId]: id }))}
             onClose={closeTab}
             onRename={renameTab}
             onMove={moveTabTo}
@@ -1818,7 +1828,7 @@ const leftPanel = usePanelRef();
                   />
                   ),
                 )}
-                {!activeSpace && (
+                {!activeSpace && !activeTabId && (
                   <Welcome
                     paletteKey={shortcutOf("palette", isMac)}
                     jumpKey={shortcutOf("next-agent", isMac)}

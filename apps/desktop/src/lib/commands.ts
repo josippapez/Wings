@@ -95,7 +95,7 @@ export type CommandContext = {
 export function createCommands(ctx: CommandContext, commands: CommandMeta[] = COMMAND_META): Command[] {
   const needs: Record<string, boolean> = {
     "new-tab": ctx.project,
-    "close-tab": ctx.project && ctx.tabs > 0,
+    "close-tab": ctx.tabs > 0,
     "next-tab": ctx.tabs > 1,
     "previous-tab": ctx.tabs > 1,
     "split-right": ctx.terminalTab,
