@@ -110,6 +110,9 @@ test("a command is enabled when the app can do it now", () => {
   assert.equal(empty["split-right"], false);
   assert.equal(empty["toggle-sidebar"], true);
   assert.equal(empty.reload, false);
+  assert.equal(empty["close-tab"], false);
+  // A page opened with no project on screen is a tab to close.
+  assert.equal(by({ project: false, terminalTab: false, tabs: 1, canGoBack: false, canGoForward: false, dev: false, run })["close-tab"], true);
   const one = by({ project: true, terminalTab: true, tabs: 1, canGoBack: false, canGoForward: false, dev: true, run });
   assert.equal(one["new-tab"], true);
   assert.equal(one["split-right"], true);

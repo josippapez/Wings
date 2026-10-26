@@ -169,6 +169,9 @@ pub struct View {
     /// Opening it as a tab always opens a new tab, instead of showing the project's existing one. Needs `tab` in `opens`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multiple: bool,
+    /// The page works with no project on screen, so the + menu opens it as a tab then too. Needs `tab` in `opens`.
+    #[serde(default, rename = "noProject", skip_serializing_if = "std::ops::Not::not")]
+    pub no_project: bool,
     /// `false` leaves it out of the title bar's plugin buttons: a page that shows one item, opened from a row
     /// with its args, is empty from a button.
     #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
@@ -439,8 +442,8 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if view.opens.is_empty() || !unique || view.opens.iter().any(|o| !VIEW_PLACES.contains(&o.as_str())) {
             return Err(format!("view {:?} opens must list some of {VIEW_PLACES:?}, each once", view.id));
         }
-        if (view.new_tab || view.multiple) && !view.opens.iter().any(|o| o == "tab") {
-            return Err(format!("view {:?} sets newTab or multiple, which need \"tab\" in opens", view.id));
+        if (view.new_tab || view.multiple || view.no_project) && !view.opens.iter().any(|o| o == "tab") {
+            return Err(format!("view {:?} sets newTab, multiple or noProject, which need \"tab\" in opens", view.id));
         }
         resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
     }
@@ -2603,14 +2606,17 @@ mod tests {
         let view = &ok.manifest.contributes.views[0];
         assert!(view.new_tab && view.multiple);
         assert_eq!(serde_json::to_value(view).unwrap()["newTab"], true);
-        for extra in [serde_json::json!({ "newTab": true }), serde_json::json!({ "multiple": true })] {
+        for extra in [serde_json::json!({ "newTab": true }), serde_json::json!({ "multiple": true }), serde_json::json!({ "noProject": true })] {
             assert!(manifest(extra, serde_json::json!(["modal"])).err().unwrap().contains("need \"tab\" in opens"));
         }
+        let free = manifest(serde_json::json!({ "noProject": true }), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
+        assert!(free.no_project);
+        assert_eq!(serde_json::to_value(&free).unwrap()["noProject"], true);
         // Without them a view serializes as before, so plugins approved earlier keep their grant.
         let plain = manifest(serde_json::json!({}), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
-        assert!(!plain.new_tab && !plain.multiple);
+        assert!(!plain.new_tab && !plain.multiple && !plain.no_project);
         let json = serde_json::to_value(&plain).unwrap();
-        assert!(json.get("newTab").is_none() && json.get("multiple").is_none() && json.get("button").is_none());
+        assert!(json.get("newTab").is_none() && json.get("multiple").is_none() && json.get("noProject").is_none() && json.get("button").is_none());
         assert!(plain.button);
         // `button: false` keeps a one-item page out of the title bar, and is kept when saved.
         let item = manifest(serde_json::json!({ "multiple": true, "button": false }), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();

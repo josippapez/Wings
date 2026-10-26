@@ -29,7 +29,8 @@
         "opens": [
           "tab"
         ],
-        "newTab": true
+        "newTab": true,
+        "noProject": true
       }
     ],
     "mcpTools": [

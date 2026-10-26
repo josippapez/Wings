@@ -410,7 +410,7 @@ export function TitleBar(props: {
               <ChevronDownIcon className="size-3" aria-hidden />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" anchor={props.newAsk ? plus : undefined}>
-              <DropdownMenuItem onClick={props.onNewTerminal}>
+              <DropdownMenuItem onClick={props.onNewTerminal} disabled={!props.hasSpace}>
                 <TerminalIcon aria-hidden />
                 <span className="flex-1 whitespace-nowrap">Terminal</span>
               </DropdownMenuItem>
@@ -421,6 +421,7 @@ export function TitleBar(props: {
               {props.newTabEntries.map((entry) => (
                 <DropdownMenuItem
                   key={entry.key}
+                  disabled={!props.hasSpace && !entry.noProject}
                   onClick={(e) => props.onNewPage(entry, wantsNewTab(e))}
                   onAuxClick={(e) => {
                     if (e.button !== 1) return;
