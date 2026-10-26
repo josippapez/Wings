@@ -148,7 +148,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id().as_ref() {
-        id @ ("close-pane" | "check-updates") => {
+        id @ ("close-pane" | "check-updates" | "settings") => {
             let _ = app.emit("menu", id);
         }
         id if id.starts_with("cmd:") => {
