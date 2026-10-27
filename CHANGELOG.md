@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.79 · 2026-10-27
+
+- **Settings opens from the menu again.** Wings > Settings… and Cmd+, did nothing. They open Settings now.
+- **Disk usage with no project.** With no project open, the + menu and the command palette offer Disk usage as a tab. The tab closes once you add a project.
+
 ## 0.1.78 · 2026-10-23
 
 - **Tabs show what's running.** A terminal tab gets a pulsing green dot after its title while one of its panes runs a program, like a dev server or a build, instead of sitting at the prompt. Hover the tab to see which programs.
