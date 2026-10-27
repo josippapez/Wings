@@ -136,6 +136,43 @@ pub fn statusline(pass: bool) -> i32 {
     0
 }
 
+/// A new tab may still be loading its shell when the command is typed, so `wait` gives it this long to start.
+const START_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `wings wait <pane>`: returns once the pane's command has finished and its shell is back at the prompt, then
+/// prints the end of its output. Claude runs it in the background after `open_pane`, and Claude Code tells it
+/// when it exits.
+pub fn wait(args: &[String]) -> i32 {
+    let [pane] = args else {
+        eprintln!("Usage: wings wait <pane id>");
+        return 2;
+    };
+    let busy = || ask("pane_busy", json!({ "pane": pane })).map(|r| r["busy"] == true);
+    if let Err(e) = wait_until_done(busy, std::time::Duration::from_secs(1), START_GRACE) {
+        return fail(&e);
+    }
+    let output = ask("call", json!({ "name": "read_pane", "arguments": { "pane_id": pane, "lines": 30 } }));
+    println!("Pane {pane} finished its command.");
+    if let Some(text) = output.ok().as_ref().and_then(|r| r.pointer("/content/0/text")).and_then(Value::as_str) {
+        println!("\n{text}");
+    }
+    0
+}
+
+/// Polls `busy` until the command has started and ended, or never started within `grace`.
+fn wait_until_done(mut busy: impl FnMut() -> Result<bool, String>, poll: std::time::Duration, grace: std::time::Duration) -> Result<(), String> {
+    let since = std::time::Instant::now();
+    let mut started = false;
+    loop {
+        match busy()? {
+            true => started = true,
+            false if started || since.elapsed() >= grace => return Ok(()),
+            false => {}
+        }
+        std::thread::sleep(poll);
+    }
+}
+
 /// A hook input is the session, the tool and its input: a Bash command can be long, a file's contents aren't in it.
 const HOOK_LIMIT: u64 = 1024 * 1024;
 /// Claude Code's own cap on a hook's `additionalContext`.
@@ -297,6 +334,21 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn wait_returns_once_a_started_command_ends_or_one_never_starts() {
+        use std::time::Duration;
+        let polls = |states: Vec<Result<bool, String>>, grace: Duration| {
+            let mut states = states.into_iter();
+            let mut count = 0;
+            let result = super::wait_until_done(|| { count += 1; states.next().unwrap() }, Duration::ZERO, grace);
+            (result, count)
+        };
+        // A shell still loading isn't the command finishing.
+        assert_eq!(polls(vec![Ok(false), Ok(true), Ok(true), Ok(false)], Duration::from_secs(60)), (Ok(()), 4));
+        assert_eq!(polls(vec![Ok(false)], Duration::ZERO), (Ok(()), 1));
+        assert_eq!(polls(vec![Ok(true), Err("No pane p9".into())], Duration::from_secs(60)), (Err("No pane p9".into()), 2));
+    }
 
     #[test]
     fn hook_output_is_what_claude_code_reads_or_nothing() {

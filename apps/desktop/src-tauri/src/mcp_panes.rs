@@ -83,7 +83,7 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "open_pane",
-            "description": "Open a new tab in Wings, in any folder, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. Returns the new pane's id.",
+            "description": "Open a new tab in Wings, in any folder, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. When it ran, the reply has a waitCommand: run it with Bash in the background and it exits, printing the end of the output, once the command finishes. Returns the new pane's id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -128,6 +128,9 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
                 let typed = plan.input.is_some();
                 let opened = host.open(plan)?;
                 let mut reply = json!({ "paneId": opened.pane_id, "commandTyped": typed, "commandRun": opened.ran });
+                if let (true, Ok(exe)) = (opened.ran, std::env::current_exe()) {
+                    reply["waitCommand"] = json!(format!("'{}' wait {}", exe.display(), opened.pane_id));
+                }
                 if run && !opened.ran {
                     reply["note"] = json!("Running commands in new tabs is off in Wings Settings, Agents, so the command waits for the user to press Enter. To start it now, run it yourself in the background.");
                 }
@@ -464,7 +467,8 @@ mod tests {
         // With the setting on, run presses Enter.
         let allowed = Fake { allow_run: true, ..host };
         let reply: Value = serde_json::from_str(&run(&allowed, "open_pane", json!({ "command": "npm run dev", "run": true }), Some("p1")).unwrap()).unwrap();
-        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true, "commandRun": true }));
+        let wait = format!("'{}' wait p9", std::env::current_exe().unwrap().display());
+        assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true, "commandRun": true, "waitCommand": wait }));
         let _ = std::fs::remove_dir_all(dir);
     }
 

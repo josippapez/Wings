@@ -61,6 +61,15 @@ pub fn handle(app: &AppHandle, op: &str, request: &Value) -> Option<Res<Value>> 
                 Value::Null
             })
         }
+        // From `wings wait`: whether the pane runs a command rather than sitting at its shell prompt.
+        "pane_busy" => {
+            let id = arg("pane");
+            let pane = app.state::<AppState>().panes.lock().unwrap().get(&id).cloned();
+            match pane {
+                Some(pane) => Ok(json!({ "busy": pane.foreground_pid().is_some_and(|fg| Some(fg) != pane.shell_pid) })),
+                None => Err(format!("No pane {id}. It was closed.")),
+            }
+        }
         // From `wings statusline`, each time Claude Code updates its status line.
         "statusline" => {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);

@@ -11,6 +11,7 @@ fn main() {
             Some("--mcp") => std::process::exit(wings_lib::bridge::run(args.get(1).cloned())),
             Some("plugin") => std::process::exit(wings_lib::cli::run(&args[1..])),
             Some("hook") => std::process::exit(wings_lib::cli::hook()),
+            Some("wait") => std::process::exit(wings_lib::cli::wait(&args[1..])),
             Some("journal") => std::process::exit(wings_lib::cli::journal()),
             Some("statusline") => std::process::exit(wings_lib::cli::statusline(args.get(1).is_some_and(|a| a == "--pass"))),
             _ => {}
