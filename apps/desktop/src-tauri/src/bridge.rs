@@ -22,7 +22,10 @@ use serde_json::{json, Value};
 const PROTOCOLS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const INSTRUCTIONS: &str = "Tools from Wings, the terminal app this session may run in. search_history and read_session \
 find and read past Claude Code and OpenCode sessions on this computer. list_sessions, read_pane, open_pane and notify see and use \
-Wings' open terminal panes. Tools from the plugins turned on in Wings are named \
+Wings' open terminal panes. Run anything that takes more than a few seconds (a dev server, \
+a watcher, a long build or test run) with open_pane and run, not Bash in the background, so the user sees it in a tab and can \
+stop it. Read its output with read_pane, and list_sessions shows the pane's program back at the shell once it has finished. \
+Keep Bash for quick commands. Tools from the plugins turned on in Wings are named \
 <plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
 /// Claude Code cuts a server's instructions at this many characters.
 const MAX_INSTRUCTIONS: usize = 4096;
