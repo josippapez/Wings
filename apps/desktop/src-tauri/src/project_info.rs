@@ -1,6 +1,6 @@
 //! The Project page's data: facts, sections and plugin blocks for each project, kept as one JSON file per
 //! project in the app data folder (`projects/<id>/info.json`), with pasted images beside it. This is the
-//! Notes plugin's model (plugins/notes/src/lib/model.ts) moved into Wings, with the same rules: an agent
+//! retired Notes plugin's model moved into Wings, with the same rules: an agent
 //! can't replace a section the user wrote, an agent's append never removes text, and a user's edit keeps what
 //! an agent appended meanwhile. Every change is an `Op` applied under one lock to what is on disk, so
 //! concurrent callers (the page, an agent's tool call) never lose each other's writes. The logic is plain
