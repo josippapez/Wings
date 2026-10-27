@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.82 · 2026-10-27
+
+- **Claude hears when a tab finishes.** When Claude starts a command in a new tab, it gets a `wings wait` command that returns once the command ends, with the end of its output. It no longer has to keep checking the tab.
+
 ## 0.1.81 · 2026-10-27
 
 - **Long commands open in a tab.** Claude now starts dev servers, watchers and long builds or test runs in a new Wings tab instead of in the background, so you can watch and stop them. Quick commands still run in place.
