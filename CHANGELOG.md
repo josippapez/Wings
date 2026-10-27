@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.81 · 2026-10-27
+
+- **Long commands open in a tab.** Claude now starts dev servers, watchers and long builds or test runs in a new Wings tab instead of in the background, so you can watch and stop them. Quick commands still run in place.
+
 ## 0.1.80 · 2026-10-27
 
 - **Plugins wait for you in Settings.** Settings, Plugins lists every plugin from the Wings repo that you haven't installed under Available, each with an Install button. When a new one comes out, Wings tells you once.
