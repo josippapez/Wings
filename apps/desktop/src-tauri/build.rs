@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "plugin_install_github",
     "plugin_update",
     "plugin_latest_version",
+    "plugins_available",
     "plugin_readme",
     "plugin_set_enabled",
     "plugin_remove",

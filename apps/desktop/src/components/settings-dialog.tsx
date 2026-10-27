@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { BellIcon, BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
-import { api, type AiEngine, type AiStatus, type PluginView } from "@/lib/api";
+import { api, type AiEngine, type AiStatus, type AvailablePlugin, type PluginView } from "@/lib/api";
 import { pluginSettingsSection, type NewProjectOpens, type NewTabEntry } from "@/lib/plugin-pages";
 import { playSound, SOUNDS, type SoundSettings } from "@/lib/sound";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
@@ -250,6 +250,7 @@ export type PluginsProps = {
   onReviewHandled: () => void;
   onChanged: (plugins: PluginView[], restart?: string) => void;
   updates: Record<string, string>;
+  available: AvailablePlugin[];
   checking: boolean;
   onCheck: () => void;
 };

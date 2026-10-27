@@ -170,6 +170,9 @@ export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: 
 /** An OpenCode session in a pane did something. Only `plugins`, which may read agent activity, get it. */
 export type PluginAgentActivityEvent = { sessionId: string; plugins: string[] };
 /** A plugin as the manager shows it. It runs only while `enabled` and `approved` are both true. */
+/** A plugin in the Wings repo that Settings offers to install. `link` is what `pluginInstallGithub` takes. */
+export type AvailablePlugin = { id: string; name: string; description: string; version: string; link: string };
+
 export type PluginView = {
   id: string;
   name: string;
@@ -238,6 +241,8 @@ export const api = {
   /** A plugin notification's link button; Rust checks it against the plugin's `openUrl` permission. */
   pluginOpenUrl: (pluginId: string, url: string) => invoke<void>("plugin_open_url", { pluginId, url }),
   pluginLatestVersion: (id: string) => invoke<string | null>("plugin_latest_version", { id }),
+  /** The plugins in the Wings repo that run on this Wings, installed or not. */
+  pluginsAvailable: () => invoke<AvailablePlugin[]>("plugins_available"),
   /** The command-line tools the plugin runs that Wings can install, and whether each is installed. */
   pluginTools: (id: string) => invoke<ToolStatus[]>("plugin_tools", { id }),
   /** The plugin's README.md, if it has one. */

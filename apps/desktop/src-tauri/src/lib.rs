@@ -386,6 +386,15 @@ fn plugin_latest_version(state: State<AppState>, id: String) -> Res<Option<Strin
     plugin_store::latest_version(&repo, folder.as_deref())
 }
 
+/// The plugins in the Wings repo, installed or not, for Settings to offer.
+#[tauri::command(async)]
+fn plugins_available() -> Res<Vec<plugin_store::Available>> {
+    if cfg!(windows) {
+        return Ok(Vec::new());
+    }
+    plugin_store::available()
+}
+
 /// The README.md of an installed plugin, for its page in Settings. Works whether or not the plugin is on.
 #[tauri::command(async)]
 fn plugin_readme(state: State<AppState>, id: String) -> Res<Option<String>> {
@@ -1824,6 +1833,7 @@ pub fn run() {
             plugin_install_github,
             plugin_update,
             plugin_latest_version,
+            plugins_available,
             plugin_readme,
             plugin_set_enabled,
             plugin_remove,

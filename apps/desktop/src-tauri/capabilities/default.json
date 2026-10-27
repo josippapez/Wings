@@ -45,6 +45,7 @@
     "allow-plugin-install-github",
     "allow-plugin-update",
     "allow-plugin-latest-version",
+    "allow-plugins-available",
     "allow-plugin-readme",
     "allow-plugin-set-enabled",
     "allow-plugin-remove",

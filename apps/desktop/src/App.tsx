@@ -1964,6 +1964,7 @@ const leftPanel = usePanelRef();
               pluginHost.current?.sync(list, restart);
             },
             updates: pluginUpdates.updates,
+            available: pluginUpdates.available,
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}

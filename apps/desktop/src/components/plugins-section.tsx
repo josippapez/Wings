@@ -16,7 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { TerminalCommandConnection } from "@/components/terminal-command";
 import { PluginNeeds } from "@/components/tool-install";
-import { api, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
+import { api, type AvailablePlugin, type PluginPage, type PluginSidebar, type PluginView } from "@/lib/api";
 import { newerVersion } from "@/lib/plugin-updates";
 import { iconMaskStyle } from "@/lib/plugin-icon-mask";
 import { advance, enqueue } from "@/lib/review-queue";
@@ -193,11 +193,14 @@ export function PluginsSection(props: {
   onChanged: (plugins: PluginView[], restart?: string) => void;
   /** Newer versions found by the update check, by plugin id (empty string: none). */
   updates: Record<string, string>;
+  /** The Wings repo's plugins; the ones not installed are offered under Available. */
+  available: AvailablePlugin[];
   checking: boolean;
   onCheck: () => void;
 }) {
   const [link, setLink] = useState("");
-  const [installing, setInstalling] = useState<"link" | "file" | null>(null);
+  /** "link", "file", or the id of an Available plugin being installed. */
+  const [installing, setInstalling] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [rowError, setRowError] = useState<Record<string, string>>({});
@@ -230,7 +233,7 @@ export function PluginsSection(props: {
     }
   }
 
-  async function install(kind: "link" | "file", run: () => Promise<PluginView>) {
+  async function install(kind: string, run: () => Promise<PluginView>) {
     setInstalling(kind);
     setError(null);
     try {
@@ -323,6 +326,7 @@ export function PluginsSection(props: {
   }
 
   const hasGithub = props.plugins.some((p) => p.source?.kind === "github");
+  const offered = props.available.filter((a) => !props.plugins.some((p) => p.id === a.id));
   const pending = current ? busy.has(current.id) : false;
   const currentUpdate = current && updateOf(current);
   const currentReadme = current && readme?.id === current.id && readme.version === current.version ? readme.text : null;
@@ -400,7 +404,9 @@ export function PluginsSection(props: {
           <ScrollArea className="min-h-0 flex-1">
             <ul className="flex flex-col gap-0.5 px-2 pb-2" aria-label="Installed plugins">
               {props.plugins.length === 0 && (
-                <li className="px-2 py-4 text-[12px] text-muted-foreground">No plugins yet. Paste a GitHub link or drop a .wings-plugin file to add one.</li>
+                <li className="px-2 py-4 text-[12px] text-muted-foreground">
+                  {offered.length > 0 ? "No plugins yet. Install one from Available below." : "No plugins yet. Paste a GitHub link or drop a .wings-plugin file to add one."}
+                </li>
               )}
               {props.plugins.map((p) => {
                 const selected = p.id === current?.id;
@@ -444,6 +450,38 @@ export function PluginsSection(props: {
                 );
               })}
             </ul>
+            {offered.length > 0 && (
+              <>
+                <p className="px-4 pt-3 pb-1 text-[12px] font-medium text-muted-foreground">Available</p>
+                <ul className="flex flex-col gap-0.5 px-2 pb-2" aria-label="Available plugins">
+                  {offered.map((a) => (
+                    <li key={a.id} data-testid={`plugin-available-${a.id}`} className="flex items-start gap-2.5 rounded-lg px-2.5 py-2">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.06]">
+                        <PuzzleIcon className="size-1/2" aria-hidden />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-2">
+                          <span className="truncate text-[13px] font-medium">{a.name}</span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{a.version}</span>
+                        </span>
+                        <span className="line-clamp-2 text-[12px] text-muted-foreground">{a.description}</span>
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-7 shrink-0"
+                        disabled={installing !== null}
+                        onClick={() => void install(a.id, () => api.pluginInstallGithub(a.link))}
+                        aria-label={`Install ${a.name}`}
+                      >
+                        {installing === a.id && <Spinner />}
+                        Install
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </ScrollArea>
         </div>
 
@@ -455,7 +493,9 @@ export function PluginsSection(props: {
                   <PuzzleIcon />
                 </EmptyMedia>
                 <EmptyTitle>No plugins yet</EmptyTitle>
-                <EmptyDescription>Paste a GitHub link or drop a .wings-plugin file to add one.</EmptyDescription>
+                <EmptyDescription>
+                  {offered.length > 0 ? "Install one from Available, paste a GitHub link, or drop a .wings-plugin file." : "Paste a GitHub link or drop a .wings-plugin file to add one."}
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (

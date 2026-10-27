@@ -539,6 +539,48 @@ pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>
     Ok(manifest_version(&text))
 }
 
+/// The repo whose `plugins/` folder Settings offers to install from.
+const OFFICIAL_REPO: &str = "josippapez/Wings";
+
+/// A plugin in the official repo, as Settings offers it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Available {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    /// What the GitHub install takes.
+    pub link: String,
+}
+
+/// Every plugin in the official repo's `plugins/` folder that runs on this Wings, from the default branch.
+pub fn available() -> Result<Vec<Available>, String> {
+    #[derive(Deserialize)]
+    struct Item {
+        name: String,
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    let token = access();
+    let mut response = get(&format!("{API}repos/{OFFICIAL_REPO}/contents/plugins"), JSON, token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
+    let items: Vec<Item> = serde_json::from_str(&response.body_mut().read_to_string().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut list = Vec::new();
+    for item in items.into_iter().filter(|i| i.kind == "dir") {
+        let folder = format!("plugins/{}", item.name);
+        let mut response = get(&manifest_url(OFFICIAL_REPO, &folder), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
+        let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
+        list.extend(available_from(&folder, &text));
+    }
+    Ok(list)
+}
+
+fn available_from(folder: &str, manifest_text: &str) -> Option<Available> {
+    let version = manifest_version(manifest_text)?;
+    let manifest: serde_json::Value = serde_json::from_str(manifest_text).ok()?;
+    let text = |key: &str| manifest[key].as_str().unwrap_or_default().to_string();
+    Some(Available { id: manifest["id"].as_str()?.to_string(), name: text("name"), description: text("description"), version, link: format!("github.com/{OFFICIAL_REPO}/{folder}") })
+}
+
 fn manifest_url(repo: &str, folder: &str) -> String {
     format!("{API}repos/{repo}/contents/{folder}/wings-plugin.json")
 }
@@ -893,6 +935,15 @@ mod tests {
         let (mut s, _dir) = store();
         let err = s.install(&package(&[("wings-plugin.json", &with_min("999.0.0")), ("main.js", "")]), Source::File, None).unwrap_err();
         assert!(err.contains("needs Wings 999.0.0 or newer"), "{err}");
+    }
+
+    #[test]
+    fn settings_offers_official_plugins_that_run_on_this_wings() {
+        let offered = available_from("plugins/hud", &manifest("hud", &[])).unwrap();
+        assert_eq!((offered.id.as_str(), offered.version.as_str(), offered.link.as_str()), ("hud", "1.0.0", "github.com/josippapez/Wings/plugins/hud"));
+        assert_eq!(parse_github(&offered.link), Some(("josippapez/Wings".into(), Some("plugins/hud".into()))));
+        let newer = manifest("hud", &[]).replacen('{', "{ \"minWingsVersion\": \"999.0.0\",", 1);
+        assert_eq!(available_from("plugins/hud", &newer), None);
     }
     /// A plugin folder like an author's: the manifest and a main.js.
     fn folder(dir: &Path, manifest: &str) -> PathBuf {
