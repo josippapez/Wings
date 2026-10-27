@@ -89,6 +89,9 @@ pub struct PaneInfo {
     pub command: String,
     /// Where that process is now, so `cd` in the shell moves the pane with it.
     pub cwd: Option<String>,
+    /// Running something rather than sitting at its prompt. A script or a `( … ) | tee` is busy too, though its
+    /// `command` is a shell.
+    pub busy: bool,
 }
 
 pub struct PaneProbe {
@@ -177,9 +180,11 @@ impl Detector {
         let processes = self.system.processes();
         let infos: Vec<PaneInfo> = found
             .iter()
-            .map(|(pid, _)| PaneInfo {
+            .zip(panes)
+            .map(|((pid, _), pane)| PaneInfo {
                 command: pid.map(|p| name_of(processes, p)).unwrap_or_default(),
                 cwd: pid.and_then(|p| processes.get(&p)?.cwd()).map(|c| c.to_string_lossy().into_owned()),
+                busy: pid.is_some_and(|p| Some(p.as_u32()) != pane.shell_pid),
             })
             .collect();
 
@@ -658,6 +663,19 @@ mod tests {
         assert!(!is_background_work("node", &argv(&["node", "/x/server.js"])));
         assert!(!is_background_work("npm", &argv(&["npm", "exec", "@some/server"])));
         assert!(!is_background_work("tool", &argv(&["tool", "/x/standalone-mcp.cjs"])));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_running_in_front_of_the_panes_own_shell_is_busy() {
+        let spawn = || Command::new("/bin/sh").args(["-c", "sleep 30; true"]).spawn().unwrap();
+        let (mut shell, mut script) = (spawn(), spawn());
+        std::thread::sleep(Duration::from_millis(300));
+        let probe = |id: &str, foreground: u32| PaneProbe { pane_id: id.into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: Some(foreground), title: String::new() };
+        let scan = Detector::new(&std::env::temp_dir()).scan(&[probe("prompt", shell.id()), probe("script", script.id())], None);
+        assert_eq!((scan.panes["prompt"].command.as_str(), scan.panes["prompt"].busy), ("sh", false));
+        assert_eq!((scan.panes["script"].command.as_str(), scan.panes["script"].busy), ("sh", true));
+        let _ = (shell.kill(), script.kill());
     }
 
     /// The Unix path: the PTY's foreground process is `claude`, found without a full process scan.

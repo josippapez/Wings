@@ -61,7 +61,7 @@ const agent = (paneId: string, spaceId: string): Agent => ({
   paneId, spaceId, pid: 1, kind: "claude", sessionId: null, name: null, state: "idle", waitingFor: null, args: [], startedAt: 0, stateSince: null, direct: true, summary: null,
 });
 const spaces = [{ id: "/r", name: "r", path: "/r", branch: null }, { id: "/o", name: "o", path: "/o", branch: null }];
-const base = { spaces, agentName: () => "Claude", paneInfo: { a: { command: "claude", cwd: "/r/sub" }, b: { command: "claude", cwd: "/o" } } };
+const base = { spaces, agentName: () => "Claude", paneInfo: { a: { command: "claude", cwd: "/r/sub", busy: true }, b: { command: "claude", cwd: "/o", busy: true } } };
 
 test("the only agent inside the diff's folder is preselected, and its siblings come after", () => {
   const r = reviewTargets({ ...base, agents: [agent("b", "/o"), agent("a", "/r")] }, "/r");
@@ -70,14 +70,14 @@ test("the only agent inside the diff's folder is preselected, and its siblings c
 });
 
 test("two agents in the folder, none, or no folder: nothing is preselected", () => {
-  const two = { ...base, agents: [agent("a", "/r"), agent("b", "/r")], paneInfo: { a: { command: "claude", cwd: "/r" }, b: { command: "claude", cwd: "/r/x" } } };
+  const two = { ...base, agents: [agent("a", "/r"), agent("b", "/r")], paneInfo: { a: { command: "claude", cwd: "/r", busy: true }, b: { command: "claude", cwd: "/r/x", busy: true } } };
   assert.equal(reviewTargets(two, "/r").preferred, null);
   assert.equal(reviewTargets({ ...base, agents: [agent("b", "/o")] }, "/r").preferred, null);
   assert.equal(reviewTargets({ ...base, agents: [agent("a", "/r")] }).preferred, null);
 });
 
 test("a plain terminal is never a target: the quoted code would run there on Enter", () => {
-  const r = reviewTargets({ ...base, agents: [], paneInfo: { t: { command: "zsh", cwd: "/r" } } }, "/r");
+  const r = reviewTargets({ ...base, agents: [], paneInfo: { t: { command: "zsh", cwd: "/r", busy: false } } }, "/r");
   assert.deepEqual(r.targets, []);
   assert.equal(r.preferred, null);
 });

@@ -5,7 +5,6 @@ import { OpencodeIcon } from "@/components/opencode-icon";
 import { StatusDot } from "@/components/status-dot";
 import { paneGlyph } from "@/lib/agents";
 import type { Agent, AgentKind, PaneInfo, Space } from "@/lib/api";
-import { isShellCommand } from "@/lib/resume";
 
 /** `/Users/me/x` → `~/x` (also `/home/me` and `C:\Users\me`). */
 export function tildify(path: string) {
@@ -23,7 +22,7 @@ export function agentLabel(kind: AgentKind) {
 export function paneLabel(agent: Agent | undefined, info: PaneInfo | undefined, space: Space | undefined): PaneLabelInfo {
   if (agent) return { title: agent.name ?? agentLabel(agent.kind), detail: space?.name ?? "", agent };
   const cwd = info?.cwd ?? space?.path;
-  const running = info?.command && !isShellCommand(info.command) ? info.command : undefined;
+  const running = info?.busy && info.command ? info.command : undefined;
   return { title: info?.command || "shell", detail: cwd ? tildify(cwd) : "", agent, running };
 }
 

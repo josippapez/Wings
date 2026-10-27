@@ -14,13 +14,13 @@ test("an install is over once brew ran and the shell prompt is back", () => {
   let step = settleInstalls(watches, {});
   assert.equal(step.done.length, 0);
   watches = step.running;
-  step = settleInstalls(watches, { p1: { command: "zsh", cwd: "/w" } });
+  step = settleInstalls(watches, { p1: { command: "zsh", cwd: "/w", busy: false } });
   assert.equal(step.done.length, 0, "the typed line hasn't started");
   watches = step.running;
-  step = settleInstalls(watches, { p1: { command: "brew", cwd: "/w" } });
+  step = settleInstalls(watches, { p1: { command: "brew", cwd: "/w", busy: true } });
   assert.equal(step.done.length, 0);
   watches = step.running;
-  step = settleInstalls(watches, { p1: { command: "zsh", cwd: "/w" } });
+  step = settleInstalls(watches, { p1: { command: "zsh", cwd: "/w", busy: false } });
   assert.deepEqual(step.done.map((w) => w.paneId), ["p1"]);
   assert.equal(step.running.length, 0);
 });
