@@ -104,14 +104,13 @@ pub struct Block {
     #[serde(default)]
     pub icon: String,
     pub page: String,
-    /// The least height in CSS pixels, within `BLOCK_MIN_HEIGHT`. Absent means `BLOCK_MIN_HEIGHT_DEFAULT`.
+    /// The least height in CSS pixels, within `BLOCK_MIN_HEIGHT`. Absent means 160, which the UI fills in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_height: Option<u32>,
 }
 
 pub const MAX_MCP_INSTRUCTIONS: usize = 500;
 pub const BLOCK_MIN_HEIGHT: (u32, u32) = (80, 800);
-pub const BLOCK_MIN_HEIGHT_DEFAULT: u32 = 160;
 pub const MAX_BLOCKS: usize = 8;
 
 /// A plugin's page in Wings Settings: an HTML file in the plugin, sandboxed like its sidebars.

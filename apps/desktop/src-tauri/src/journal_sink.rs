@@ -44,11 +44,6 @@ fn is_wings(command: Option<&Value>) -> bool {
     matches!(list.as_slice(), [exe, sub] if sub.as_str() == Some("journal") && exe.as_str().is_some_and(|e| Path::new(e).file_stem().and_then(|s| s.to_str()).is_some_and(wings_stem)))
 }
 
-/// Whether the sink is Wings' own, at any path.
-pub fn is_ours(path: &Path) -> bool {
-    read(path).is_ok_and(|c| is_wings(c.get("command")))
-}
-
 /// Makes `exe journal` the sink when there is none or the one there is Wings' (repointed). Returns whether the file changed.
 /// A sink of yours, or a file that isn't a JSON object, is left as it is.
 pub fn add(path: &Path, exe: &Path) -> Result<bool, String> {
@@ -103,7 +98,6 @@ mod tests {
         let path = temp("absent", None);
         assert!(add(&path, Path::new("/Applications/Wings.app/Contents/MacOS/wings")).unwrap());
         assert_eq!(json_of(&path), json!({ "command": ["/Applications/Wings.app/Contents/MacOS/wings", "journal"] }));
-        assert!(is_ours(&path));
         assert!(!add(&path, Path::new("/Applications/Wings.app/Contents/MacOS/wings")).unwrap(), "a second add changes nothing");
         let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1, "no temp file stays");
