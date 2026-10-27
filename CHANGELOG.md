@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.80 · 2026-10-27
+
+- **Plugins wait for you in Settings.** Settings, Plugins lists every plugin from the Wings repo that you haven't installed under Available, each with an Install button. When a new one comes out, Wings tells you once.
+
 ## 0.1.79 · 2026-10-27
 
 - **Settings opens from the menu again.** Wings > Settings… and Cmd+, did nothing. They open Settings now.
