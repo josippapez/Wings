@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.83 · 2026-10-27
+
+- **The running dot shows for scripts too.** A tab running a shell script or a wrapped command, like `( … ) | tee`, looked idle. It shows the green dot now.
+
 ## 0.1.82 · 2026-10-27
 
 - **Claude hears when a tab finishes.** When Claude starts a command in a new tab, it gets a `wings wait` command that returns once the command ends, with the end of its output. It no longer has to keep checking the tab.
