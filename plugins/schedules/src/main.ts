@@ -1,17 +1,18 @@
 // The Schedules main script: a timer that starts the agents that are due, and the changes the Schedules page asks for.
-// Every read-then-write of the schedules goes through `queue`, so two ticks, or a tick and an edit, never interleave.
+// Every read-then-write of the schedules goes through `queue` (main/schedules.ts), so two ticks, or a tick and an edit, never interleave.
 // The "assigned" entries have their own timer and queue in main/assigned.ts.
 
-import { errorMessage, serial } from "wings-plugin-sdk/async";
+import { errorMessage } from "wings-plugin-sdk/async";
+import { registerTools } from "wings-plugin-sdk/tools";
 import { ch, type State } from "./lib/messages";
 import { currentSignInCode, pollAssigned, serveAssigned } from "./main/assigned";
+import { queue, removeSchedule } from "./main/schedules";
 import { readSchedules as read, readWatches, syncSections, writeSchedules as write } from "./main/store";
 import { AGENTS, claim, cleanDraft, dueAt, nameOf, onStart, type Run, type Schedule } from "./lib/schedule";
+import { tools } from "./tools";
 
 /** A tick is a few comparisons, so it runs while Wings is in the background too: that is when a run is wanted. */
 const TICK_MS = 30_000;
-
-const queue = serial();
 
 /** Starts the agent for `s`, in a new tab in its project. Never throws: a failure is the run's result. */
 async function start(s: Schedule): Promise<Run> {
@@ -75,6 +76,7 @@ wings.onProjects(() => {
   void syncSections();
 });
 serveAssigned();
+registerTools(tools);
 
 ch.answer("save", ({ id, draft }) =>
   queue(async () => {
@@ -95,9 +97,7 @@ ch.answer("toggle", ({ id }) =>
   }),
 );
 
-ch.answer("remove", ({ id }) =>
-  queue(async () => write((await read()).filter((s) => s.id !== id))),
-);
+ch.answer("remove", ({ id }) => removeSchedule(id));
 
 ch.answer("runNow", async ({ id }) => {
   const s = (await read()).find((x) => x.id === id);

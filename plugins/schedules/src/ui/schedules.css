@@ -13,3 +13,7 @@
 .sc-heading {
   padding-inline: 6px;
 }
+/* A ticket under an entry: room between rows, since they are two lines each. */
+.sc-ticket {
+  padding-block: 6px;
+}

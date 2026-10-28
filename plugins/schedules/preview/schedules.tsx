@@ -91,6 +91,19 @@ const waitingWatches: WatchView[] = [
   { ...watches[1], lastCheck: { at: now - 2 * 60_000, ok: true, count: 1 }, waiting: [] },
 ];
 
+const azure = { kind: "azure" as const, org: "https://dev.azure.com/acme", project: "Shop" };
+const ticket = (id: string, title: string, state: string, type: string) => ({ id, title, state, type, url: `https://dev.azure.com/acme/Shop/_workitems/edit/${id}` });
+// Six assigned, as Azure DevOps names their states: two of them are not started.
+const assigned = [
+  ticket("1204", "Review the order export rewrite", "In Code Review", "Tech Story"),
+  ticket("1198", "Move the invoice job to the new queue", "In Progress", "User Story"),
+  ticket("1211", "Show the delivery estimate on the cart", "Ready for Development", "User Story"),
+  ticket("1187", "Fix the broken filter chips on mobile", "Ready for Peer Review/QA", "FE Task"),
+  ticket("1190", "Align the footer links with the new design", "Ready for Peer Review/QA", "FE Task"),
+  ticket("1215", "Add retry to the shipping rates call", "New", "Tech Story"),
+];
+const assignedWatches: WatchView[] = [{ ...watches[0], projectId: "p2", agent: "claude", source: azure, lastCheck: { at: now - 2 * 60_000, ok: true, count: 6 }, states: ["Ready for Development", "New"], tickets: assigned }];
+
 const noop = () => Promise.resolve();
 const base: ViewProps = {
   state: { schedules, watches, projects, signInCode: null },
@@ -110,6 +123,7 @@ const base: ViewProps = {
   onInstall: noop,
   onOpenUrl: noop,
 };
+const assignedState = { schedules: [], watches: assignedWatches, projects, signInCode: null };
 const waitingState = { schedules, watches: waitingWatches, projects, signInCode: null };
 
 export const states = {
@@ -119,6 +133,8 @@ export const states = {
   error: { element: <ScheduleView {...base} state={null} error="Wings didn't answer. Try again." /> },
   add: { element: <Steps steps={[{ click: "Add entry" }]}><ScheduleView {...base} /></Steps> },
   waiting: { element: <ScheduleView {...base} state={waitingState} /> },
+  assigned: { element: <Steps steps={[{ click: "Assigned to you (6)" }]}><ScheduleView {...base} state={assignedState} /></Steps> },
+  "edit-assigned": { element: <Steps steps={[{ click: "Edit When something is assigned to me in acme-api" }]}><ScheduleView {...base} state={assignedState} /></Steps> },
   "add-assigned": { element: <Steps steps={[{ click: "Add entry" }, { click: "When something is assigned to me" }]}><ScheduleView {...base} /></Steps> },
   "not-enough-disk": {
     element: (

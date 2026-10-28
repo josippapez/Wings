@@ -1,11 +1,12 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minWingsVersion": "0.1.93",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
   "api": 1,
+  "mcpInstructions": "Schedules (schedules__*): list shows every schedule and every assigned entry with the tickets assigned to the user and their state; add_assigned starts watching a project for assigned tickets; remove deletes an entry. Use them when the user asks what is assigned to them or in which state, or wants an agent offered on newly assigned tickets in a project.",
   "main": "dist/main.js",
   "permissions": {
     "panes": [
@@ -49,6 +50,83 @@
         "id": "schedules",
         "title": "Schedules",
         "all": "schedules"
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "list",
+        "description": "Lists every schedule and every assigned entry, one line each: id, kind, project, agent, enabled, and for an assigned entry its source, last check, the states it asks about and the tickets assigned to the user with their state and whether each is asked about. Then the tickets waiting for the user's answer. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "add_assigned",
+        "description": "Adds an entry that watches a project's Azure DevOps, GitHub or GitLab for tickets assigned to the user and offers to start an agent on each in a new worktree. It checks once and returns what it found. One entry per project. Nothing starts until the user presses Start on the Schedules page.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "A Wings project's name or its folder path."
+            },
+            "agent": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "opencode"
+              ],
+              "description": "claude (default) or opencode."
+            },
+            "prompt": {
+              "type": "string",
+              "maxLength": 4000,
+              "description": "What the agent is told. {id}, {title} and {url} become the ticket's number, title and link. Leave out for the default."
+            },
+            "min_free_gb": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Wings won't make a worktree when the disk has less free space than this. 10 by default."
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "maxItems": 50,
+              "description": "The ticket states to ask about, like New or Ready for development. Leave out to pick the not-started ones after the first check."
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "remove",
+        "description": "Removes a schedule or an assigned entry by its id from list. What it was waiting to ask about goes with it. Tabs it already started stay open.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "The id of the entry, from list."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
       }
     ]
   }

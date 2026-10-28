@@ -9,7 +9,7 @@ import { ch } from "../lib/messages";
 import { AGENTS, type Run } from "../lib/schedule";
 import {
   applyCheck, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sourceOf, SOURCE_LABELS, UNSUPPORTED,
-  type Check, type Source, type Ticket, type Watch,
+  type AssignedTicket, type Check, type Source, type Watch, type WatchDraft,
 } from "../lib/assigned";
 import { readWatches, writeWatches } from "./store";
 
@@ -54,14 +54,14 @@ const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "er
 };
 
 /** Looks for what is assigned to you in one entry's project and records what it found. */
-async function checkOne(id: string): Promise<void> {
+export async function checkOne(id: string): Promise<void> {
   const w = (await readWatches()).find((x) => x.id === id);
   if (!w) return;
   const project = (await wings.projects()).find((p) => p.id === w.projectId);
   const at = Date.now();
   let check: Check;
   let source = w.source;
-  let tickets: Ticket[] | null = null;
+  let tickets: AssignedTicket[] | null = null;
   if (!project) {
     check = { at, ok: false, error: "The project is no longer in Wings." };
   } else {
@@ -117,6 +117,20 @@ const find = async (id: string) => {
   return w;
 };
 
+/** Adds an entry that has checked nothing yet. `onlyOne` refuses a project that already has one. */
+export const addWatch = (draft: WatchDraft, onlyOne = false) =>
+  queue(async () => {
+    const clean = cleanWatchDraft(draft);
+    const list = await readWatches();
+    if (onlyOne && list.some((w) => w.projectId === clean.projectId)) throw new Error("That project already has an assigned entry. Remove it first, or change it on the Schedules page.");
+    sources.clear();
+    const saved: Watch = { ...clean, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, enabled: true, primed: false, seen: [], waiting: [] };
+    await writeWatches([...list, saved]);
+    return saved;
+  });
+
+export const removeWatch = (id: string) => queue(async () => writeWatches((await readWatches()).filter((w) => w.id !== id)));
+
 const starting = new Set<string>();
 
 /** Makes the worktree for a waiting ticket and opens the agent in it, in a tab behind the one on screen. */
@@ -171,26 +185,25 @@ const cliOf = async (id: string) => {
 };
 
 export function serveAssigned() {
-  ch.answer("saveWatch", ({ id, draft }) =>
-    queue(async () => {
+  ch.answer("saveWatch", async ({ id, draft }) => {
+    if (id === null) {
+      const saved = await addWatch(draft);
+      void checkOne(saved.id).catch(console.error);
+      return;
+    }
+    await queue(async () => {
       const clean = cleanWatchDraft(draft);
       const list = await readWatches();
       sources.clear();
-      let saved: Watch;
-      if (id === null) {
-        saved = { ...clean, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, enabled: true, primed: false, seen: [], waiting: [] };
-        await writeWatches([...list, saved]);
-      } else {
-        const old = list.find((w) => w.id === id);
-        if (!old) throw new Error("That entry is gone.");
-        // Another project has other tickets, so it starts over: nothing it already has is asked about.
-        const moved = old.projectId !== clean.projectId;
-        saved = { ...old, ...clean, ...(moved ? { primed: false, seen: [], waiting: [], source: undefined, lastCheck: undefined } : {}) };
-        await writeWatches(list.map((w) => (w.id === id ? saved : w)));
-      }
+      const old = list.find((w) => w.id === id);
+      if (!old) throw new Error("That entry is gone.");
+      // Another project has other tickets, so it starts over: nothing it already has is asked about.
+      const moved = old.projectId !== clean.projectId;
+      const saved: Watch = { ...old, ...clean, ...(moved ? { primed: false, seen: [], waiting: [], states: clean.states, tickets: undefined, source: undefined, lastCheck: undefined } : {}) };
+      await writeWatches(list.map((w) => (w.id === id ? saved : w)));
       if (saved.enabled) void checkOne(saved.id).catch(console.error);
-    }),
-  );
+    });
+  });
 
   ch.answer("toggleWatch", ({ id }) =>
     queue(async () => {
@@ -203,7 +216,7 @@ export function serveAssigned() {
     }),
   );
 
-  ch.answer("removeWatch", ({ id }) => queue(async () => writeWatches((await readWatches()).filter((w) => w.id !== id))));
+  ch.answer("removeWatch", ({ id }) => removeWatch(id));
   ch.answer("checkWatch", async ({ id }) => {
     sources.clear();
     await find(id);

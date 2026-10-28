@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheck, assignedWiql, branchName, diskProblem, fillPrompt, listCommand, parseTickets, pickDisk, sourceOf } from "./assigned.ts";
+import { applyCheck, askedAbout, assignedWiql, branchName, defaultStates, diskProblem, fillPrompt, listCommand, parseTickets, pickDisk, resolveProject, sourceOf } from "./assigned.ts";
 
 const GB = 1024 ** 3;
 const watch = (extra = {}) => ({ id: "w", projectId: "p", agent: "claude", prompt: "x", minFreeGb: 10, enabled: true, primed: false, seen: [], waiting: [], ...extra });
@@ -26,12 +26,55 @@ test("each forge gets one command, and Azure's query quotes the project", () => 
   assert.equal(listCommand({ kind: "unsupported" }), null);
 });
 
-test("each CLI's JSON becomes id, title and url", () => {
+test("each CLI's JSON becomes id, title, url, state and type", () => {
   const azure = { kind: "azure", org: "https://acme.visualstudio.com", project: "Shop Web" };
-  assert.deepEqual(parseTickets(azure, [{ id: 42, fields: { "System.Title": "Fix login" } }]), [{ id: "42", title: "Fix login", url: "https://dev.azure.com/acme/Shop%20Web/_workitems/edit/42" }]);
-  assert.deepEqual(parseTickets({ kind: "github", host: "github.com" }, [{ number: 7, title: "Crash", url: "https://github.com/a/b/issues/7" }]), [{ id: "7", title: "Crash", url: "https://github.com/a/b/issues/7" }]);
-  assert.deepEqual(parseTickets({ kind: "gitlab", host: "gitlab.com" }, [{ iid: 3, id: 999, title: "Slow", web_url: "https://gitlab.com/a/b/-/issues/3" }]), [{ id: "3", title: "Slow", url: "https://gitlab.com/a/b/-/issues/3" }]);
-  assert.throws(() => parseTickets({ kind: "github", host: "github.com" }, { message: "nope" }), /list/);
+  const row = { id: 42, fields: { "System.Id": 42, "System.Title": "Fix login", "System.State": "Ready for Peer Review/QA", "System.WorkItemType": "Tech Story" }, rev: 3 };
+  assert.deepEqual(parseTickets(azure, [row]), [{ id: "42", title: "Fix login", url: "https://dev.azure.com/acme/Shop%20Web/_workitems/edit/42", state: "Ready for Peer Review/QA", type: "Tech Story" }]);
+  const github = { kind: "github", host: "github.com" };
+  const issue = { number: 7, title: "Crash", url: "https://github.com/a/b/issues/7", labels: [{ name: "bug", color: "d73a4a" }] };
+  assert.deepEqual(parseTickets(github, [{ ...issue, closedByPullRequestsReferences: [] }]), [{ id: "7", title: "Crash", url: issue.url, state: "Open", type: "bug" }]);
+  assert.equal(parseTickets(github, [{ ...issue, closedByPullRequestsReferences: [{ number: 9 }] }])[0].state, "In review");
+  const gitlab = { kind: "gitlab", host: "gitlab.com" };
+  const web = "https://gitlab.com/a/b/-/issues/3";
+  assert.deepEqual(parseTickets(gitlab, [{ iid: 3, id: 999, title: "Slow", web_url: web, labels: ["bug"] }]), [{ id: "3", title: "Slow", url: web, state: "Open", type: "bug" }]);
+  assert.deepEqual(parseTickets(gitlab, [{ iid: 3, title: "Slow", web_url: web, labels: ["bug", "workflow::doing"] }]).map((x) => [x.state, x.type]), [["workflow::doing", "bug"]]);
+  assert.throws(() => parseTickets(github, { message: "nope" }), /list/);
+});
+
+const AZURE = { kind: "azure", org: "https://dev.azure.com/acme", project: "Shop" };
+const at = (id, state) => ({ ...t(id), state });
+const seenStates = ["In Code Review", "In Progress", "Ready for Development", "Ready for Peer Review/QA", "New"].map((st, i) => at(String(i), st));
+
+test("a new entry asks about the not-started states it sees, or everything", () => {
+  assert.deepEqual(defaultStates(AZURE, seenStates), ["Ready for Development", "New"]);
+  assert.deepEqual(defaultStates(AZURE, [at("1", "Active")]), []);
+  assert.deepEqual(defaultStates({ kind: "github", host: "github.com" }, []), ["Open"]);
+  assert.deepEqual(defaultStates({ kind: "gitlab", host: "gitlab.com" }, []), ["Open"]);
+  assert.equal(askedAbout([], "Anything"), true);
+  assert.equal(askedAbout(["New"], "Active"), false);
+});
+
+test("a ticket is asked about the first time it is in a state that is asked about", () => {
+  const first = applyCheck(watch({ source: AZURE }), seenStates, 1);
+  assert.deepEqual(first.watch.states, ["Ready for Development", "New"]);
+  assert.equal(first.watch.tickets.length, 5);
+  assert.deepEqual(first.fresh, []);
+  // Still working on "0", which the first check left unseen because its state isn't asked about: it moves into one.
+  const moved = applyCheck(first.watch, seenStates.map((x) => (x.id === "0" ? { ...x, state: "New" } : x)), 2);
+  assert.deepEqual(moved.fresh.map((x) => x.id), ["0"]);
+  assert.deepEqual(applyCheck(moved.watch, seenStates.map((x) => ({ ...x, state: "New" })), 3).fresh.map((x) => x.id), ["1", "3"]);
+  // A ticket asked about before isn't asked about again when it moves to another state and back, nor when the filter changes.
+  const again = applyCheck({ ...moved.watch, states: ["In Progress"] }, seenStates.map((x) => (x.id === "0" ? { ...x, state: "In Progress" } : x)), 4);
+  assert.deepEqual(again.fresh.map((x) => x.id), ["1"]);
+});
+
+test("a project is found by path or name, and a miss lists the projects", () => {
+  const projects = [{ id: "p1", name: "acme-web", path: "/code/acme-web" }, { id: "p2", name: "api", path: "/code/api" }, { id: "p3", name: "api", path: "/work/api" }];
+  assert.equal(resolveProject(projects, "ACME-web").id, "p1");
+  assert.equal(resolveProject(projects, "/code/acme-web/").id, "p1");
+  assert.equal(resolveProject(projects, "/work/api").id, "p3");
+  assert.throws(() => resolveProject(projects, "api"), /2 projects are named "api".*\/code\/api/);
+  assert.throws(() => resolveProject(projects, "nope"), /No project "nope".*acme-web, api, api/);
 });
 
 test("the first check only records what is assigned, then new ids wait once", () => {

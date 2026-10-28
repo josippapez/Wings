@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Button, Card, Chip, Chips, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
-import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, type WatchDraft } from "../lib/assigned";
+import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
 import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
 import "./schedules.css";
@@ -31,6 +31,7 @@ export function ScheduleForm({ schedule, watch, projects, busy, error, onSave, o
   const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
   const [template, setTemplate] = useState(watch?.prompt ?? DEFAULT_PROMPT);
   const [minFree, setMinFree] = useState(String(watch?.minFreeGb ?? DEFAULT_MIN_FREE_GB));
+  const [states, setStates] = useState<string[] | undefined>(watch?.states);
   const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
   const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
@@ -38,10 +39,13 @@ export function ScheduleForm({ schedule, watch, projects, busy, error, onSave, o
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree) });
+    // Another project has other states, so it picks its own at its first check.
+    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states });
     onSave({ name, projectId, agent, prompt, when: mode === "every" ? { kind: "every", hours } : { kind: "daily", time, days } });
   };
   const toggleDay = (n: number) => setDays(days.includes(n) ? days.filter((d) => d !== n) : [...days, n]);
+  const toggleState = (name: string) => setStates((states ?? []).includes(name) ? (states ?? []).filter((x) => x !== name) : [...(states ?? []), name]);
+  const stateNames = watch ? stateOptions({ states, tickets: watch.tickets }) : [];
 
   return (
     <Card as="form" className="sc-form" onSubmit={submit} aria-label={schedule || watch ? "Edit entry" : "New entry"}>
@@ -129,6 +133,24 @@ export function ScheduleForm({ schedule, watch, projects, busy, error, onSave, o
             <Field label="Keep free" hint="In GB. Wings won't make the worktree when the disk it goes on has less room than this.">
               <TextInput type="number" min={0} step={1} value={minFree} onChange={(e) => setMinFree(e.target.value)} required />
             </Field>
+            <FieldGroup
+              label="Ask about tickets in these states"
+              hint={
+                stateNames.length
+                  ? "Tickets in other states are listed but not asked about. A ticket is asked about once, and one that moves into these states later is asked about then. Leave all off to ask about every state."
+                  : "The states show up after the first check. Wings then picks the ones that mean nobody has started: Open on GitHub and GitLab, and New, To Do, Ready for Development and the like on Azure DevOps."
+              }
+            >
+              {stateNames.length ? (
+                <Row gap="s" wrap>
+                  {stateNames.map((name) => (
+                    <Chip key={name} pressed={(states ?? []).includes(name)} onClick={() => toggleState(name)}>
+                      {name}
+                    </Chip>
+                  ))}
+                </Row>
+              ) : null}
+            </FieldGroup>
             <Notice>Wings asks the project's Azure DevOps, GitHub or GitLab what is assigned to you every 5 minutes, using its origin remote. You are asked first: nothing starts until you press Start.</Notice>
           </>
         )}

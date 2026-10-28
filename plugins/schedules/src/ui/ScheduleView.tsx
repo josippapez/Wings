@@ -1,8 +1,8 @@
 // The Schedules tab: what is waiting for you, the saved entries with what each does next and last did, and the form to add or change one.
 
 import { useState } from "react";
-import { Badge, Button, Card, Confirm, Empty, Heading, Icon, ListItem, List, Loading, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
-import { describeCheck, SOURCE_LABELS, type Waiting, type WatchDraft } from "../lib/assigned";
+import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
+import { askedAbout, describeCheck, SOURCE_LABELS, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
 import { ScheduleForm } from "./ScheduleForm";
@@ -170,6 +170,7 @@ export function ScheduleView({ state, error, now, focusWatch, onSave, onToggle, 
                   onCheck={() => void action.run(() => onCheckWatch(w.id))}
                   onSignIn={() => void action.run(() => onSignIn(w.id))}
                   onInstall={() => void action.run(() => onInstall(w.id))}
+                  onOpen={(url) => void action.run(() => onOpenUrl(url))}
                 />
               ))}
             </List>
@@ -244,15 +245,18 @@ interface WatchItemProps {
   onCheck: () => void;
   onSignIn: () => void;
   onInstall: () => void;
+  onOpen: (url: string) => void;
 }
 
-function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck, onSignIn, onInstall }: WatchItemProps) {
+function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck, onSignIn, onInstall, onOpen }: WatchItemProps) {
   const check = w.lastCheck;
   const label = `${WATCH_NAME} in ${project}`;
   const unsupported = w.source?.kind === "unsupported";
+  const tickets = w.tickets ?? [];
   return (
     <ListItem align="start">
       <Card className="sc-item">
+        <Stack gap="m">
         <Row gap="l" justify="between" wrap grow>
           <Stack gap="xs" grow>
             <Row gap="m" wrap>
@@ -308,7 +312,41 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck,
             </Button>
           </Row>
         </Row>
+        {tickets.length ? (
+          <Disclosure summary={`Assigned to you (${tickets.length})`}>
+            <List compact>
+              {tickets.map((t) => (
+                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} onOpen={() => onOpen(t.url)} />
+              ))}
+            </List>
+          </Disclosure>
+        ) : null}
+        </Stack>
       </Card>
+    </ListItem>
+  );
+}
+
+function TicketRow({ t, asked, onOpen }: { t: AssignedTicket; asked: boolean; onOpen: () => void }) {
+  return (
+    <ListItem align="start" className="sc-ticket">
+      <Row gap="m" justify="between" wrap grow>
+        <Stack gap="xs" grow>
+          <Text tone={asked ? undefined : "muted"} truncate>
+            {t.title}
+          </Text>
+          <Text tone="muted" size="small">
+            #{t.id}
+            {t.type ? ` · ${t.type}` : ""}
+          </Text>
+        </Stack>
+        <Row gap="s" wrap align="start">
+          {asked ? <Badge size="sm" variant="secondary">{t.state}</Badge> : <Badge size="sm" variant="outline">Not asked: {t.state}</Badge>}
+          <Button variant="ghost" size="sm" onClick={onOpen} aria-label={`Open ${t.title}`}>
+            Open
+          </Button>
+        </Row>
+      </Row>
     </ListItem>
   );
 }
