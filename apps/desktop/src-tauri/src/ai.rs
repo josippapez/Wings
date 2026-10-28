@@ -623,10 +623,21 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            // The body can come in a later packet than the headers: read until Content-Length bytes of it are in.
+            let mut got = Vec::new();
             let mut buf = [0u8; 8192];
-            let n = stream.read(&mut buf).unwrap();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got);
+                let Some(end) = text.find("\r\n\r\n") else { continue };
+                let length = text[..end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok())).unwrap_or(0);
+                if n == 0 || got.len() >= end + 4 + length {
+                    break;
+                }
+            }
             let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-            String::from_utf8_lossy(&buf[..n]).into_owned()
+            String::from_utf8_lossy(&got).into_owned()
         });
         (base, handle)
     }
