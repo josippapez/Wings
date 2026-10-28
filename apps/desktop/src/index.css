@@ -178,3 +178,17 @@
     transition: none;
   }
 }
+
+/* The Inbox count beats three times when something new arrives. Transform and opacity only. */
+@keyframes inbox-pulse {
+  0%, 100% { transform: scale(1); }
+  40% { transform: scale(1.35); }
+}
+.inbox-count[data-pulse] {
+  animation: inbox-pulse 700ms var(--ease-out-soft) 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .inbox-count[data-pulse] {
+    animation: none;
+  }
+}

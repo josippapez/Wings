@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { InboxIcon, PuzzleIcon } from "lucide-react";
 
 import { SidebarNavRow } from "@/components/sidebar-nav-row";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { unreadCount, type NotificationButton, type NotificationEvent } from "@/lib/notifications";
+import { unreadCount, unreadPluginCount, type NotificationButton, type NotificationEvent } from "@/lib/notifications";
 import { OPEN_NOTIFICATIONS } from "@/lib/ui-events";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +44,14 @@ export function NotificationBell({
   /** What was unread when the list opened, so those rows stay marked while you look at them. */
   const [fresh, setFresh] = useState<Set<string>>(() => new Set());
   const unread = unreadCount(events);
+  const accent = unreadPluginCount(events) > 0;
+  // Each new unread arrival restarts a short pulse on the count (CSS, three beats, then still).
+  const [pulse, setPulse] = useState(0);
+  const last = useRef(unread);
+  useEffect(() => {
+    if (unread > last.current) setPulse((n) => n + 1);
+    last.current = unread;
+  }, [unread]);
 
   const show = (next: boolean) => {
     if (next) {
@@ -69,7 +77,15 @@ export function NotificationBell({
             aria-label={unread ? `Inbox, ${unread} unread` : "Inbox"}
             trailing={
               unread > 0 && (
-                <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.1] px-1 text-[10px] leading-none font-medium text-foreground tabular-nums" aria-hidden>
+                <span
+                  key={pulse}
+                  data-pulse={pulse > 0 || undefined}
+                  className={cn(
+                    "inbox-count flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] leading-none font-medium tabular-nums",
+                    accent ? "bg-chart-1 text-primary-foreground" : "bg-white/[0.1] text-foreground",
+                  )}
+                  aria-hidden
+                >
                   {unread > 99 ? "99+" : unread}
                 </span>
               )

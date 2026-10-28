@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanButtons, MAX_NOTIFICATIONS, notificationsReducer, restoreNotifications, unreadCount, type NotificationEvent } from "./notifications.ts";
+import { cleanButtons, MAX_NOTIFICATIONS, notificationsReducer, restoreNotifications, shouldToastPlugin, unreadCount, unreadPluginCount, type NotificationEvent } from "./notifications.ts";
 
 const event = (id: string, over: Partial<NotificationEvent> = {}): NotificationEvent => ({
   id, at: Number(id) || 0, kind: "done", title: "Claude finished", project: "p", detail: "", paneId: "pane", read: false, ...over,
@@ -77,4 +77,14 @@ test("the saved list comes back, and Go to pane only for a pane that still runs"
   assert.deepEqual(list.map((e) => [e.id, e.paneId, e.read]), [["2", null, false], ["1", "p7", true]]);
   assert.deepEqual(restoreNotifications(undefined, new Set()), []);
   assert.deepEqual(restoreNotifications("x", new Set()), []);
+});
+
+test("a plugin notification toasts only while Wings is in front", () => {
+  assert.equal(shouldToastPlugin(true), true);
+  assert.equal(shouldToastPlugin(false), false);
+});
+
+test("counts only unread plugin events", () => {
+  const list = [event("1", { kind: "plugin" }), event("2", { kind: "plugin", read: true }), event("3", { kind: "done" })];
+  assert.equal(unreadPluginCount(list), 1);
 });

@@ -52,6 +52,12 @@ export function notificationsReducer(list: NotificationEvent[], action: Notifica
   }
 }
 
+/** A plugin's notification is a toast while Wings is in front: macOS shows no system banner for the frontmost app. */
+export const shouldToastPlugin = (windowFocused: boolean) => windowFocused;
+
+/** Unread notifications from plugins, which the Inbox count shows in an accent color. */
+export const unreadPluginCount = (list: NotificationEvent[]) => list.reduce((n, e) => n + (!e.read && e.kind === "plugin" ? 1 : 0), 0);
+
 export const unreadCount = (list: NotificationEvent[]) => list.reduce((n, e) => n + (e.read ? 0 : 1), 0);
 
 /**

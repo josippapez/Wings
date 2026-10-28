@@ -6,7 +6,8 @@ import { MotionConfig } from "motion/react";
 
 import { CommandPalette } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
-import { notificationsReducer, restoreNotifications, type NotificationEvent } from "@/lib/notifications";
+import { notificationsReducer, restoreNotifications, shouldToastPlugin, type NotificationButton, type NotificationEvent } from "@/lib/notifications";
+import { PuzzleIcon } from "lucide-react";
 import { reviewTargets, sendToPane } from "@/lib/review";
 import { HistorySheet } from "@/components/history-sheet";
 import { PluginModal, type ModalRef } from "@/components/plugin-modal";
@@ -1257,7 +1258,32 @@ const leftPanel = usePanelRef();
       },
       notified: (pluginName, title, body, plugin) => {
         notificationSound();
-        notify({ type: "add", event: { id: `plugin:${pluginName}:${Date.now()}`, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false, plugin } });
+        const id = `plugin:${pluginName}:${Date.now()}`;
+        // The system banner only shows while Wings is in the background, so in front it's a toast.
+        const inFront = shouldToastPlugin(document.hasFocus());
+        notify({ type: "add", event: { id, at: Date.now(), kind: "plugin", title: title || pluginName, project: pluginName, detail: body, paneId: null, read: false, plugin } });
+        if (!inFront) return;
+        toast(title || pluginName, {
+          id,
+          onDismiss: () => notify({ type: "read", id }),
+          icon: <PuzzleIcon className="size-4" aria-hidden />,
+          description: [pluginName, body].filter(Boolean).join(": "),
+          duration: 8000,
+          action: plugin.buttons[0] && {
+            label: plugin.buttons[0].label,
+            onClick: () => {
+              notify({ type: "read", id });
+              runNotificationButtonRef.current(plugin, plugin.buttons[0]);
+            },
+          },
+          cancel: plugin.buttons[1] && {
+            label: plugin.buttons[1].label,
+            onClick: () => {
+              notify({ type: "read", id });
+              runNotificationButtonRef.current(plugin, plugin.buttons[1]);
+            },
+          },
+        });
       },
       openSettings: (pluginId) => {
         setSettingsSection(pluginSettingsSection(pluginId));
@@ -1683,6 +1709,16 @@ const leftPanel = usePanelRef();
     },
     [showViewTab],
   );
+  const runNotificationButton = (plugin: NonNullable<NotificationEvent["plugin"]>, button: NotificationButton) => {
+    if ("url" in button) return void api.pluginOpenUrl(plugin.id, button.url).catch((e) => toast.error(String(e)));
+    const projectId = plugin.projectId ?? activeSpaceIdRef.current;
+    if (!projectId) return void toast("Open a project first", { duration: 2000 });
+    openSectionRow(projectId, plugin.id, button.open, true);
+  };
+  // The plugin host is built once, so its notified callback reaches the latest handler through this.
+  const runNotificationButtonRef = useRef(runNotificationButton);
+  runNotificationButtonRef.current = runNotificationButton;
+
   const sidebarProps: Omit<ComponentProps<typeof Sidebar>, "open"> = {
     spaces,
     git,
@@ -1725,12 +1761,7 @@ const leftPanel = usePanelRef();
         if (agent) selectAgent(agent);
         else toast("That pane has closed", { duration: 2000 });
       },
-      onButton: (plugin, button) => {
-        if ("url" in button) return void api.pluginOpenUrl(plugin.id, button.url).catch((e) => toast.error(String(e)));
-        const projectId = plugin.projectId ?? activeSpaceIdRef.current;
-        if (!projectId) return void toast("Open a project first", { duration: 2000 });
-        openSectionRow(projectId, plugin.id, button.open, true);
-      },
+      onButton: runNotificationButton,
     },
     onMoveSpace: (id, slot) => setSpaces((list) => reorder(list, list.findIndex((s) => s.id === id), list.findIndex((s) => s.id === slot))),
     sort: projectSort,
