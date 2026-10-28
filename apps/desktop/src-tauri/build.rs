@@ -60,6 +60,7 @@ const COMMANDS: &[&str] = &[
     "mcp_connect", "mcp_set_always_load",
     "mcp_disconnect",
     "opencode_mcp_status",
+    "harnesses_status",
     "opencode_mcp_connect",
     "opencode_mcp_disconnect",
     "privacy_open_settings",

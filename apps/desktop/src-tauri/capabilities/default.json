@@ -95,6 +95,7 @@
     "allow-mcp-set-always-load",
     "allow-mcp-disconnect",
     "allow-opencode-mcp-status",
+    "allow-harnesses-status",
     "allow-opencode-mcp-connect",
     "allow-opencode-mcp-disconnect",
     "allow-privacy-open-settings",
