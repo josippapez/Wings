@@ -1,10 +1,10 @@
-// The three tools Claude, and `wings schedules <tool> key=value`, call. The build writes these descriptions and schemas into the
+// The tools Claude, and `wings schedules <tool> key=value`, call. The build writes these descriptions and schemas into the
 // manifest's mcpTools. The build loads this file in Node with a wings that does nothing, so nothing here runs at the top level.
 
 import { s, tool } from "wings-plugin-sdk/tools";
 import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, describeCheck, resolveProject } from "./lib/assigned";
 import { formatList } from "./lib/format";
-import { addWatch, checkOne, removeWatch } from "./main/assigned";
+import { addWatch, checkOne, removeWatch, startTicket } from "./main/assigned";
 import { removeSchedule } from "./main/schedules";
 import { readSchedules, readWatches } from "./main/store";
 
@@ -33,6 +33,39 @@ export const tools = {
       const w = (await readWatches()).find((x) => x.id === saved.id);
       const asks = w?.states === undefined ? "" : w.states.length ? ` It asks about: ${w.states.join(", ")}.` : " It asks about every state.";
       return `Added ${saved.id} for ${found.name}. ${describeCheck(w?.lastCheck, w?.source)}.${asks}`;
+    },
+  }),
+
+  check: tool({
+    description: "Checks for assigned tickets now, in one assigned entry or in every enabled one, and returns what each found. Use it after a ticket was assigned, instead of waiting for the next check.",
+    input: s.object({ id: s.string({ maxLength: 100 }).optional().describe("The id of an assigned entry, from list. Leave out to check every enabled one.") }),
+    run: async ({ id }) => {
+      const all = await readWatches();
+      const picked = id ? all.filter((w) => w.id === id) : all.filter((w) => w.enabled);
+      if (id && !picked.length) throw new Error(`No assigned entry ${id}. Use list to see the ids.`);
+      if (id && !picked[0].enabled) throw new Error("That entry is paused. Resume it on the Schedules page first.");
+      if (!picked.length) return "No assigned entries are enabled.";
+      const projects = await wings.projects();
+      const lines: string[] = [];
+      for (const w of picked) {
+        await checkOne(w.id).catch(console.error);
+        const now = (await readWatches()).find((x) => x.id === w.id);
+        lines.push(`${w.id} · ${projects.find((p) => p.id === w.projectId)?.name ?? "missing project"} · ${describeCheck(now?.lastCheck, now?.source)}${now?.waiting.length ? ` · ${now.waiting.length} waiting` : ""}`);
+      }
+      return lines.join("\n");
+    },
+  }),
+
+  start: tool({
+    description: "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch needs force.",
+    input: s.object({
+      id: s.string({ minLength: 1, maxLength: 100 }).describe("The id of the assigned entry, from list."),
+      ticket: s.string({ minLength: 1, maxLength: 100 }).describe("The ticket's number, as list shows it without the #."),
+      force: s.boolean().optional().describe("Start a ticket in a state the entry doesn't ask about, or one that already has a branch."),
+    }),
+    run: async ({ id, ticket, force }) => {
+      const { title, target } = await startTicket(id, ticket.replace(/^#/, ""), force);
+      return `Started ${title} on ${target}.`;
     },
   }),
 

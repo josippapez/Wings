@@ -2,13 +2,13 @@
 // that is new, and Start, which makes the worktree and opens the agent in it.
 // Every read-then-write of the entries goes through `queue`, so a tick, a manual check and an edit never interleave.
 
-import { errorMessage, serial, singleFlight } from "wings-plugin-sdk/async";
+import { errorMessage, mapLimit, serial, singleFlight } from "wings-plugin-sdk/async";
 import { cli, CliError, lastLine, type Cli } from "wings-plugin-sdk/cli";
 import { gitOk } from "wings-plugin-sdk/git";
 import { ch } from "../lib/messages";
 import { AGENTS, type Run } from "../lib/schedule";
 import {
-  applyCheck, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sourceOf, SOURCE_LABELS, UNSUPPORTED,
+  applyCheck, askedAbout, branchMatching, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
   type AssignedTicket, type Check, type Source, type Watch, type WatchDraft,
 } from "../lib/assigned";
 import { readWatches, writeWatches } from "./store";
@@ -47,6 +47,24 @@ async function sourceFor(project: { id: string; path: string }): Promise<Source>
   return source;
 }
 
+/** The tickets, with the branch of each that has one in a project of the same source: one for-each-ref in each such project. */
+async function markBranches(source: Source, tickets: AssignedTicket[], projects: { id: string; name: string; path: string }[], firstId: string): Promise<AssignedTicket[]> {
+  const sorted = [...projects].sort((a, b) => Number(b.id === firstId) - Number(a.id === firstId));
+  const found = await mapLimit(sorted, 4, async (p) => {
+    if (!sameSource(await sourceFor(p), source)) return null;
+    const refs = (await gitOk(p.path, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"])) ?? "";
+    return { project: p.name, branches: refs.split("\n").filter(Boolean) };
+  });
+  const sets = found.filter((x) => x !== null);
+  return tickets.map((t) => {
+    for (const { project, branches } of sets) {
+      const name = branchMatching(t.id, branches);
+      if (name) return { ...t, branch: { name, project } };
+    }
+    return t;
+  });
+}
+
 const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "error" | "problem"> => {
   if (e instanceof CliError && e.kind === "missing") return { error: `The ${program} command isn't installed.`, problem: "missing" };
   if (e instanceof CliError && e.kind === "signed-out") return { error: `Sign in to ${SOURCE_LABELS[source.kind]} to see what is assigned to you.`, problem: "signed-out" };
@@ -57,7 +75,8 @@ const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "er
 export async function checkOne(id: string): Promise<void> {
   const w = (await readWatches()).find((x) => x.id === id);
   if (!w) return;
-  const project = (await wings.projects()).find((p) => p.id === w.projectId);
+  const projects = await wings.projects();
+  const project = projects.find((p) => p.id === w.projectId);
   const at = Date.now();
   let check: Check;
   let source = w.source;
@@ -72,6 +91,7 @@ export async function checkOne(id: string): Promise<void> {
     } else {
       try {
         tickets = parseTickets(source, await CLIS[command.program].json(command.args, { key: keyOf(source), cwd: project.path, empty: [] }));
+        tickets = await markBranches(source, tickets, projects, project.id);
         check = { at, ok: true, count: tickets.length };
       } catch (e) {
         check = { at, ok: false, ...problemOf(e, source, command.program) };
@@ -93,7 +113,10 @@ export async function checkOne(id: string): Promise<void> {
           title: `Assigned: ${t.title}`,
           body: `${project?.name ?? "A project"} · Start ${AGENTS[w.agent].label} on it in a new worktree?`,
           projectId: project?.id,
-          actions: [{ label: "Review", open: { view: "schedules", args: { waiting: id } } }],
+          actions: [
+            { label: "Start", open: { view: "schedules", args: { start: { entry: id, ticket: t.id } } } },
+            { label: "Review", open: { view: "schedules", args: { waiting: id } } },
+          ],
         })
         .catch(console.error);
     }
@@ -133,15 +156,25 @@ export const removeWatch = (id: string) => queue(async () => writeWatches((await
 
 const starting = new Set<string>();
 
-/** Makes the worktree for a waiting ticket and opens the agent in it, in a tab behind the one on screen. */
-async function startWaiting(id: string, ticketId: string): Promise<void> {
+/**
+ * Makes the worktree for a ticket and opens the agent in it, in a tab behind the one on screen. The ticket is one that is
+ * waiting, or one the last check listed in a state that is asked about (`force` skips that), and never one already started.
+ */
+export async function startTicket(id: string, ticketId: string, force = false): Promise<{ title: string; target: string }> {
   const key = `${id}\n${ticketId}`;
   if (starting.has(key)) throw new Error("That one is already starting.");
   starting.add(key);
   try {
     const w = await find(id);
-    const ticket = w.waiting.find((t) => t.id === ticketId);
-    if (!ticket) throw new Error("That ticket isn't waiting any more.");
+    if (w.started?.[ticketId]) throw new Error("That ticket was already started.");
+    const waiting = w.waiting.find((t) => t.id === ticketId);
+    const listed = w.tickets?.find((t) => t.id === ticketId);
+    const ticket = waiting ?? listed;
+    if (!ticket) throw new Error("That ticket isn't waiting or assigned to you any more.");
+    if (listed?.branch && !force) throw new Error(`There is already a branch for it: ${listed.branch.name} in ${listed.branch.project}. Pass force=true to start it anyway.`);
+    if (!waiting && listed && !force && !askedAbout(w.states, listed.state)) {
+      throw new Error(`This entry doesn't ask about tickets in ${listed.state}. Pass force=true to start it anyway.`);
+    }
     const at = Date.now();
     let run: Run;
     let madeWorktree = false;
@@ -164,11 +197,13 @@ async function startWaiting(id: string, ticketId: string): Promise<void> {
       run = { at, ok: false, error: madeWorktree ? `Made the worktree, but couldn't start the agent: ${errorMessage(e)}` : errorMessage(e) };
     }
     // A ticket whose worktree exists isn't offered again: Start would only fail on the branch.
-    await update(id, (x) => ({ ...x, lastRun: run, waiting: run.ok || madeWorktree ? x.waiting.filter((t) => t.id !== ticketId) : x.waiting }));
+    const done = run.ok || madeWorktree;
+    await update(id, (x) => ({ ...x, lastRun: run, waiting: done ? x.waiting.filter((t) => t.id !== ticketId) : x.waiting, ...(done ? { started: withStarted(x.started, ticketId, at) } : {}) }));
     if (!run.ok) throw new Error(run.error);
     wings
       .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}`, projectId, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
       .catch(console.error);
+    return { title: ticket.title, target };
   } finally {
     starting.delete(key);
   }
@@ -222,7 +257,7 @@ export function serveAssigned() {
     await find(id);
     await checkOne(id);
   });
-  ch.answer("startWaiting", ({ id, ticketId }) => startWaiting(id, ticketId));
+  ch.answer("startTicket", async ({ id, ticketId, force }) => void (await startTicket(id, ticketId, force)));
   ch.answer("dismissWaiting", ({ id, ticketId }) => update(id, (w) => ({ ...w, waiting: w.waiting.filter((t) => t.id !== ticketId) })));
 
   ch.answer("install", async ({ id }) => void (await (await cliOf(id)).cli.install()));

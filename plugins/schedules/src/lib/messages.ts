@@ -30,8 +30,8 @@ export const ch = channel<
     removeWatch: { request: { id: string }; response: void };
     /** Looks for new tickets now. */
     checkWatch: { request: { id: string }; response: void };
-    /** Makes the worktree and starts the agent for a waiting ticket. Resolves once its tab is open. */
-    startWaiting: { request: { id: string; ticketId: string }; response: void };
+    /** Makes the worktree and starts the agent for a waiting or listed ticket. Resolves once its tab is open. */
+    startTicket: { request: { id: string; ticketId: string; force?: boolean }; response: void };
     dismissWaiting: { request: { id: string; ticketId: string }; response: void };
     /** Runs the entry's CLI login, or installs the CLI. */
     signIn: { request: { id: string }; response: void };

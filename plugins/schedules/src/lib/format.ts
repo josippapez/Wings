@@ -14,7 +14,7 @@ export function formatList(schedules: Schedule[], watches: Watch[], projectName:
     const asks = w.states === undefined ? "states not picked yet" : w.states.length ? `asks about ${w.states.join(", ")}` : "asks about every state";
     lines.push(`${w.id} · assigned · ${projectName(w.projectId)} · ${w.agent} · ${w.enabled ? "enabled" : "paused"} · ${w.source ? SOURCE_LABELS[w.source.kind] : "source not read yet"} · ${checked} · ${asks}`);
     for (const t of w.tickets ?? []) {
-      lines.push(`  #${t.id} · ${t.title} · ${t.type ? `${t.type} · ` : ""}${t.state} · ${askedAbout(w.states, t.state) ? "asked about" : "not asked about"}`);
+      lines.push(`  #${t.id} · ${t.title} · ${t.type ? `${t.type} · ` : ""}${t.state} · ${askedAbout(w.states, t.state) ? "asked about" : "not asked about"}${t.branch ? ` · started: ${t.branch.name} (${t.branch.project})` : ""}${w.started?.[t.id] ? " · started here" : ""}`);
     }
   }
   for (const w of watches) {

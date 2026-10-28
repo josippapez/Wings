@@ -15,6 +15,7 @@
     ],
     "exec": [
       "git remote get-url",
+      "git for-each-ref [--format]",
       "az boards query [--wiql --organization --project -o]",
       "gh issue list [--assignee --state --json --limit]",
       "glab issue list [--assignee --output --per-page]",
@@ -105,6 +106,51 @@
           },
           "required": [
             "project"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "check",
+        "description": "Checks for assigned tickets now, in one assigned entry or in every enabled one, and returns what each found. Use it after a ticket was assigned, instead of waiting for the next check.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 100,
+              "description": "The id of an assigned entry, from list. Leave out to check every enabled one."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "start",
+        "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch needs force.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "The id of the assigned entry, from list."
+            },
+            "ticket": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "The ticket's number, as list shows it without the #."
+            },
+            "force": {
+              "type": "boolean",
+              "description": "Start a ticket in a state the entry doesn't ask about, or one that already has a branch."
+            }
+          },
+          "required": [
+            "id",
+            "ticket"
           ],
           "additionalProperties": false
         }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheck, askedAbout, assignedWiql, branchName, defaultStates, diskProblem, fillPrompt, listCommand, parseTickets, pickDisk, resolveProject, sourceOf } from "./assigned.ts";
+import { applyCheck, askedAbout, assignedWiql, branchMatching, branchName, defaultStates, diskProblem, fillPrompt, listCommand, parseTickets, pickDisk, resolveProject, sameSource, sourceOf } from "./assigned.ts";
 
 const GB = 1024 ** 3;
 const watch = (extra = {}) => ({ id: "w", projectId: "p", agent: "claude", prompt: "x", minFreeGb: 10, enabled: true, primed: false, seen: [], waiting: [], ...extra });
@@ -8,8 +8,8 @@ const t = (id, title = `Ticket ${id}`) => ({ id, title, url: `https://example.te
 
 test("the forge comes from the origin remote, and any other host is unsupported", () => {
   assert.deepEqual(sourceOf("git@ssh.dev.azure.com:v3/acme/Shop/web"), { kind: "azure", org: "https://dev.azure.com/acme", project: "Shop" });
-  assert.deepEqual(sourceOf("https://github.com/acme/web.git"), { kind: "github", host: "github.com" });
-  assert.deepEqual(sourceOf("git@gitlab.com:acme/group/web.git"), { kind: "gitlab", host: "gitlab.com" });
+  assert.deepEqual(sourceOf("https://github.com/acme/web.git"), { kind: "github", host: "github.com", path: "acme/web" });
+  assert.deepEqual(sourceOf("git@gitlab.com:acme/group/web.git"), { kind: "gitlab", host: "gitlab.com", path: "acme/group/web" });
   assert.deepEqual(sourceOf("https://bitbucket.org/acme/web.git"), { kind: "unsupported" });
   assert.deepEqual(sourceOf("git@git.corp.example:acme/web.git"), { kind: "unsupported" });
   assert.deepEqual(sourceOf(null), { kind: "unsupported" });
@@ -66,6 +66,41 @@ test("a ticket is asked about the first time it is in a state that is asked abou
   // A ticket asked about before isn't asked about again when it moves to another state and back, nor when the filter changes.
   const again = applyCheck({ ...moved.watch, states: ["In Progress"] }, seenStates.map((x) => (x.id === "0" ? { ...x, state: "In Progress" } : x)), 4);
   assert.deepEqual(again.fresh.map((x) => x.id), ["1"]);
+});
+
+test("a branch has the ticket's id as a whole number in its name", () => {
+  const branches = ["main", "feature/12345-other", "origin/feature/189806-memory-only-query-cache", "1234-fix", "fix/x-1234", "feature/1234"];
+  assert.equal(branchMatching("1234", branches), "1234-fix");
+  assert.equal(branchMatching("1234", ["feature/12345-other", "feature/91234"]), undefined);
+  assert.equal(branchMatching("189806", branches), "origin/feature/189806-memory-only-query-cache");
+  assert.equal(branchMatching("1234", ["fix/x-1234"]), "fix/x-1234");
+  assert.equal(branchMatching("1234", ["feature/1234"]), "feature/1234");
+});
+
+test("projects share tickets when they share an Azure project or a repo", () => {
+  const nx = sourceOf("git@ssh.dev.azure.com:v3/acme/Shop/nx");
+  assert.equal(sameSource(nx, sourceOf("https://acme@dev.azure.com/acme/Shop/_git/be")), true);
+  assert.equal(sameSource(nx, sourceOf("git@ssh.dev.azure.com:v3/acme/Other/nx")), false);
+  assert.equal(sameSource(sourceOf("https://github.com/acme/web.git"), sourceOf("git@github.com:acme/web.git")), true);
+  assert.equal(sameSource(sourceOf("https://github.com/acme/web.git"), sourceOf("https://github.com/acme/api.git")), false);
+  assert.equal(sameSource({ kind: "unsupported" }, { kind: "unsupported" }), false);
+});
+
+test("a ticket that already has a branch is never asked about, even in an asked state", () => {
+  const w = watch({ source: AZURE, primed: true, states: ["New"] });
+  const started = { ...at("1", "New"), branch: { name: "feature/1-x", project: "acme-web" } };
+  const { watch: next, fresh } = applyCheck(w, [started, at("2", "New")], 5);
+  assert.deepEqual(fresh.map((x) => x.id), ["2"]);
+  assert.deepEqual(next.seen, ["1", "2"]);
+  assert.deepEqual(next.tickets[0].branch, started.branch);
+});
+
+test("an entry from before states, with six ids seen, gets its states and tickets at the next check and asks about none of them", () => {
+  const old = watch({ source: AZURE, primed: true, seen: ["0", "1", "2", "3", "4"] });
+  const { watch: next, fresh } = applyCheck(old, seenStates, 9);
+  assert.deepEqual(next.states, ["Ready for Development", "New"]);
+  assert.equal(next.tickets.length, 5);
+  assert.deepEqual(fresh, []);
 });
 
 test("a project is found by path or name, and a miss lists the projects", () => {

@@ -7,8 +7,8 @@ import { cleanPrompt, AGENTS, type Agent, type Run } from "./schedule";
 export type Source =
   /** `org` is the organization's URL, which `az` takes as `--organization`. */
   | { kind: "azure"; org: string; project: string }
-  | { kind: "github"; host: string }
-  | { kind: "gitlab"; host: string }
+  | { kind: "github"; host: string; path: string }
+  | { kind: "gitlab"; host: string; path: string }
   /** The remote is on another host, or there is none. */
   | { kind: "unsupported" };
 
@@ -23,6 +23,8 @@ export interface AssignedTicket extends Ticket {
   state: string;
   /** Azure's work item type, or a GitHub or GitLab label. */
   type?: string;
+  /** A branch that has the ticket's id in its name, and the project it is in: someone already started on it. */
+  branch?: { name: string; project: string };
 }
 
 export interface Waiting extends Ticket {
@@ -55,6 +57,8 @@ export interface Watch {
   waiting: Waiting[];
   /** The states to ask about. Empty asks about every state; unset until the first check picks them (see `defaultStates`). */
   states?: string[];
+  /** Tickets an agent was started on, with when. */
+  started?: Record<string, number>;
   /** What the last check that worked found. */
   tickets?: AssignedTicket[];
   source?: Source;
@@ -76,8 +80,8 @@ const GB = 1024 ** 3;
 export function sourceOf(remoteUrl: string | null): Source {
   const remote = remoteUrl ? parseRemote(remoteUrl) : null;
   if (remote?.kind === "azure") return { kind: "azure", org: remote.org, project: remote.project };
-  if (remote?.kind === "github") return { kind: "github", host: remote.host };
-  if (remote?.kind === "gitlab") return { kind: "gitlab", host: remote.host };
+  if (remote?.kind === "github") return { kind: "github", host: remote.host, path: remote.path };
+  if (remote?.kind === "gitlab") return { kind: "gitlab", host: remote.host, path: remote.path };
   return { kind: "unsupported" };
 }
 
@@ -170,9 +174,10 @@ export function applyCheck(w: Watch, tickets: AssignedTicket[], now: number): { 
   const states = w.states ?? defaultStates(w.source, tickets);
   const current = new Set(tickets.map((t) => t.id));
   const known = new Set(w.seen);
-  const asked = tickets.filter((t) => !known.has(t.id) && askedAbout(states, t.state));
+  // One that already has a branch is never asked about, and counts as seen so that deleting the branch doesn't ask later.
+  const asked = tickets.filter((t) => !known.has(t.id) && !t.branch && askedAbout(states, t.state));
   const fresh = w.primed ? asked.map((t) => ({ ...t, at: now })) : [];
-  const nowSeen = tickets.filter((t) => known.has(t.id) || asked.includes(t)).map((t) => t.id);
+  const nowSeen = tickets.filter((t) => known.has(t.id) || asked.includes(t) || t.branch).map((t) => t.id);
   // What is assigned now goes last, so the cap drops the oldest ids that aren't.
   const seen = [...w.seen.filter((id) => !current.has(id)), ...nowSeen].slice(-SEEN_CAP);
   return { watch: { ...w, primed: true, states, tickets: tickets.slice(0, FETCH_LIMIT), seen, waiting: [...w.waiting, ...fresh] }, fresh };
@@ -244,4 +249,23 @@ export function resolveProject<P extends { id: string; name: string; path: strin
   if (named.length === 1) return named[0];
   if (named.length > 1) throw new Error(`${named.length} projects are named "${want}". Pass the path of one: ${named.map((p) => p.path).join(", ")}.`);
   throw new Error(`No project "${want}" in Wings. The projects are: ${projects.map((p) => p.name).join(", ") || "none yet"}.`);
+}
+
+const STARTED_CAP = 200;
+
+/** `started` with `id` added, keeping the latest few. */
+export const withStarted = (started: Record<string, number> | undefined, id: string, at: number): Record<string, number> =>
+  Object.fromEntries(Object.entries({ ...started, [id]: at }).sort((a, b) => a[1] - b[1]).slice(-STARTED_CAP));
+
+/** True when both name the same place tickets live: an Azure DevOps project, or a GitHub or GitLab repo. */
+export function sameSource(a: Source, b: Source): boolean {
+  if (a.kind === "azure" && b.kind === "azure") return a.org === b.org && a.project === b.project;
+  if ((a.kind === "github" && b.kind === "github") || (a.kind === "gitlab" && b.kind === "gitlab")) return a.host === b.host && a.path === b.path;
+  return false;
+}
+
+/** The first branch with the ticket's id in its name as a whole number, so 1234 isn't in `feature/12345-x`. */
+export function branchMatching(id: string, branches: string[]): string | undefined {
+  const re = new RegExp(`(^|[^0-9])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^0-9]|$)`);
+  return branches.find((name) => re.test(name));
 }

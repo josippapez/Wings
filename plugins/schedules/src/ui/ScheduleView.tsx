@@ -8,6 +8,14 @@ import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type R
 import { ScheduleForm } from "./ScheduleForm";
 import "./schedules.css";
 
+/** The ticket a notification's Start button asked for, and how starting it went. */
+export interface InboxStart {
+  entry: string;
+  ticket: string;
+  status: "starting" | "started" | "failed";
+  error?: string;
+}
+
 export interface ViewProps {
   /** Null while it loads. */
   state: State | null;
@@ -16,6 +24,7 @@ export interface ViewProps {
   now: number;
   /** The entry a notification sent you here for: its waiting tickets come first. */
   focusWatch?: string | null;
+  inbox?: InboxStart | null;
   onSave: (id: string | null, draft: Draft) => Promise<unknown>;
   onToggle: (id: string) => Promise<unknown>;
   onRemove: (id: string) => Promise<unknown>;
@@ -24,18 +33,19 @@ export interface ViewProps {
   onToggleWatch: (id: string) => Promise<unknown>;
   onRemoveWatch: (id: string) => Promise<unknown>;
   onCheckWatch: (id: string) => Promise<unknown>;
-  onStart: (id: string, ticketId: string) => Promise<unknown>;
+  onStart: (id: string, ticketId: string, force?: boolean) => Promise<unknown>;
   onDismiss: (id: string, ticketId: string) => Promise<unknown>;
   onSignIn: (id: string) => Promise<unknown>;
   onInstall: (id: string) => Promise<unknown>;
   onOpenUrl: (url: string) => Promise<unknown>;
 }
 
-export function ScheduleView({ state, error, now, focusWatch, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl }: ViewProps) {
+export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl }: ViewProps) {
   // `false` is the list, `null` a new entry, else the schedule or "assigned" entry being changed.
   const [editing, setEditing] = useState<string | null | false>(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const action = useAction();
+  const [checking, setChecking] = useState<string | null>(null);
 
   if (error && !state) {
     return (
@@ -101,6 +111,11 @@ export function ScheduleView({ state, error, now, focusWatch, onSave, onToggle, 
       <Stack gap="l">
         {action.error ? <Notice tone="danger">{action.error}</Notice> : null}
         {error ? <Notice tone="warn">{error}</Notice> : null}
+        {inbox ? (
+          <Notice tone={inbox.status === "failed" ? "danger" : inbox.status === "started" ? "success" : "info"}>
+            {inbox.status === "failed" ? inbox.error : `${inbox.status === "started" ? "Started" : "Starting"} ${ticketTitle(watches.find((w) => w.id === inbox.entry), inbox.ticket)}.`}
+          </Notice>
+        ) : null}
         {signInCode ? <Notice>Your GitHub code is {signInCode}. It is on your clipboard: paste it in the browser to finish signing in.</Notice> : null}
         {doomedSchedule || doomedWatch ? (
           <Confirm
@@ -167,7 +182,9 @@ export function ScheduleView({ state, error, now, focusWatch, onSave, onToggle, 
                   onEdit={() => (action.clear(), setEditing(w.id))}
                   onToggle={() => void action.run(() => onToggleWatch(w.id))}
                   onDelete={() => setDeleting(w.id)}
-                  onCheck={() => void action.run(() => onCheckWatch(w.id))}
+                  checking={checking === w.id}
+                  onCheck={() => (setChecking(w.id), void action.run(() => onCheckWatch(w.id)).finally(() => setChecking(null)))}
+                  onStartTicket={(ticketId, force) => void action.run(() => onStart(w.id, ticketId, force))}
                   onSignIn={() => void action.run(() => onSignIn(w.id))}
                   onInstall={() => void action.run(() => onInstall(w.id))}
                   onOpen={(url) => void action.run(() => onOpenUrl(url))}
@@ -242,13 +259,15 @@ interface WatchItemProps {
   onEdit: () => void;
   onToggle: () => void;
   onDelete: () => void;
+  checking: boolean;
   onCheck: () => void;
+  onStartTicket: (ticketId: string, force: boolean) => void;
   onSignIn: () => void;
   onInstall: () => void;
   onOpen: (url: string) => void;
 }
 
-function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck, onSignIn, onInstall, onOpen }: WatchItemProps) {
+function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking, onCheck, onStartTicket, onSignIn, onInstall, onOpen }: WatchItemProps) {
   const check = w.lastCheck;
   const label = `${WATCH_NAME} in ${project}`;
   const unsupported = w.source?.kind === "unsupported";
@@ -296,9 +315,9 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck,
                 Install
               </Button>
             ) : null}
-            {w.enabled && check && !check.ok && !unsupported ? (
-              <Button variant="outline" size="sm" onClick={onCheck} disabled={busy} aria-label={`Try ${label} again`}>
-                Try again
+            {w.enabled && !unsupported ? (
+              <Button variant="outline" size="sm" onClick={onCheck} disabled={busy} busy={checking} aria-label={`${check && !check.ok ? "Try" : "Check"} ${label} ${check && !check.ok ? "again" : "now"}`}>
+                {check && !check.ok ? "Try again" : "Check now"}
               </Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={onEdit} aria-label={`Edit ${label}`}>
@@ -316,7 +335,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck,
           <Disclosure summary={`Assigned to you (${tickets.length})`}>
             <List compact>
               {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} onOpen={() => onOpen(t.url)} />
+                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !!t.branch)} onOpen={() => onOpen(t.url)} />
               ))}
             </List>
           </Disclosure>
@@ -327,7 +346,18 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, onCheck,
   );
 }
 
-function TicketRow({ t, asked, onOpen }: { t: AssignedTicket; asked: boolean; onOpen: () => void }) {
+interface TicketRowProps {
+  t: AssignedTicket;
+  asked: boolean;
+  /** When Wings started an agent on it. */
+  startedAt: number | undefined;
+  now: number;
+  busy: boolean;
+  onStart: () => void;
+  onOpen: () => void;
+}
+
+function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRowProps) {
   return (
     <ListItem align="start" className="sc-ticket">
       <Row gap="m" justify="between" wrap grow>
@@ -339,17 +369,34 @@ function TicketRow({ t, asked, onOpen }: { t: AssignedTicket; asked: boolean; on
             #{t.id}
             {t.type ? ` · ${t.type}` : ""}
           </Text>
+          {t.branch ? (
+            <Text tone="muted" size="small" truncate>
+              Started: {t.branch.name} ({t.branch.project})
+            </Text>
+          ) : null}
         </Stack>
         <Row gap="s" wrap align="start">
           {asked ? <Badge size="sm" variant="secondary">{t.state}</Badge> : <Badge size="sm" variant="outline">Not asked: {t.state}</Badge>}
           <Button variant="ghost" size="sm" onClick={onOpen} aria-label={`Open ${t.title}`}>
             Open
           </Button>
+          {startedAt ? (
+            <Text tone="muted" size="small" as="span">
+              <Time iso={new Date(startedAt).toISOString()} prefix="Started " now={now} />
+            </Text>
+          ) : asked ? (
+            <Button size="sm" variant={t.branch ? "outline" : "default"} onClick={onStart} disabled={busy} aria-label={`${t.branch ? "Start anyway" : "Start"} ${t.title}`}>
+              {t.branch ? "Start anyway" : "Start"}
+            </Button>
+          ) : null}
         </Row>
       </Row>
     </ListItem>
   );
 }
+
+/** A ticket's title from what the entry waits on or listed, else its number. */
+const ticketTitle = (w: WatchView | undefined, id: string) => w?.waiting.find((t) => t.id === id)?.title ?? w?.tickets?.find((t) => t.id === id)?.title ?? `#${id}`;
 
 interface WaitingItemProps {
   w: WatchView;
