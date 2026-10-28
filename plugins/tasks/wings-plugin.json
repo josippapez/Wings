@@ -1,7 +1,7 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "minWingsVersion": "0.1.98",
   "icon": "icon.svg",
   "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here, a setting keeps issue keys out of its commits and PRs, and tasks__todo is its own step list, shown in a card on its pane and on a Todo tab with the history kept. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update, tasks__log and tasks__todo.",
@@ -133,6 +133,12 @@
               "type": "string",
               "maxLength": 200,
               "description": "Words to search for, case-insensitive, over key, title, description and log notes. Every word has to match, so use a few distinctive ones. Combines with status and type. Leave out for all."
+            },
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Another Wings project to read, by name or folder path. Leave out for this terminal's project. Only reading works across projects."
             }
           },
           "additionalProperties": false
@@ -149,6 +155,12 @@
               "minLength": 1,
               "maxLength": 20,
               "description": "The issue's key, like WIN-12. Get it from list."
+            },
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Another Wings project to read, by name or folder path. Leave out for this terminal's project. Only reading works across projects."
             }
           },
           "required": [

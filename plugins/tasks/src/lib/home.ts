@@ -23,3 +23,14 @@ export async function homeIdOf(id: string): Promise<string> {
   const project = projects.find((p) => p.id === id);
   return project ? homeIn(project, projects).id : id;
 }
+
+/** The project `ref` names, by folder path, id or name (any case), for reading another project's issues. */
+export function pickProject<P extends ProjectRef & { path: string }>(projects: readonly P[], ref: string): P {
+  const want = ref.trim().replace(/\/+$/, "");
+  const found = projects.find((p) => p.path.replace(/\/+$/, "") === want || p.id === want);
+  if (found) return found;
+  const named = projects.filter((p) => !p.parentId && p.name.toLowerCase() === want.toLowerCase());
+  if (named.length === 1) return named[0];
+  if (named.length > 1) throw new Error(`${named.length} projects are named "${want}". Pass the folder path of one: ${named.map((p) => p.path).join(", ")}.`);
+  throw new Error(`No project "${want}" in Wings. The projects are: ${projects.filter((p) => !p.parentId).map((p) => p.name).join(", ") || "none yet"}.`);
+}

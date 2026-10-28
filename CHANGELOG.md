@@ -5,6 +5,7 @@ What changed in each Wings release, newest first.
 ## 0.1.100 · 2026-10-28
 
 - **Delete a worktree from the sidebar.** The X on a worktree now asks: remove it from the sidebar only, or delete the worktree folder too. Its branch goes with it when it's merged, and stays, with a note, when it isn't. A worktree with uncommitted changes needs "Delete anyway".
+- **Agents can read another project's issues.** Issues' list and get take a project name or folder path; creating and changing issues stays in the agent's own project.
 
 ## 0.1.99 · 2026-10-28
 
