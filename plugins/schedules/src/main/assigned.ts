@@ -47,6 +47,14 @@ async function sourceFor(project: { id: string; path: string }): Promise<Source>
   return source;
 }
 
+/** The projects an entry's tickets can start in: the ones with its source, its own first, without the worktrees Wings made (`<repo>-worktrees/<branch>`). */
+export async function targetsOf(w: Pick<Watch, "projectId" | "source">, projects: { id: string; name: string; path: string }[]): Promise<{ id: string; name: string }[]> {
+  const own = projects.filter((p) => p.id === w.projectId);
+  const others = [];
+  if (w.source) for (const p of projects) if (p.id !== w.projectId && !p.path.includes("-worktrees/") && sameSource(await sourceFor(p), w.source)) others.push(p);
+  return [...own, ...others].map(({ id, name }) => ({ id, name }));
+}
+
 /** The tickets, with the branch of each that has one in a project of the same source: one for-each-ref in each such project. */
 async function markBranches(source: Source, tickets: AssignedTicket[], projects: { id: string; name: string; path: string }[], firstId: string): Promise<AssignedTicket[]> {
   const sorted = [...projects].sort((a, b) => Number(b.id === firstId) - Number(a.id === firstId));
@@ -184,15 +192,16 @@ const starting = new Set<string>();
 
 /**
  * Makes the worktree for a ticket and opens the agent in it, in a tab behind the one on screen. The ticket is one that is
- * waiting, or one the last check listed in a state that is asked about (`force` skips that), and never one already started.
+ * waiting, or one the last check listed in a state that is asked about, and not one already started (`force` skips both).
+ * It starts in `projectId`, one of the entry's `targetsOf`, or in the entry's own project.
  */
-export async function startTicket(id: string, ticketId: string, force = false): Promise<{ title: string; target: string }> {
+export async function startTicket(id: string, ticketId: string, force = false, projectId?: string): Promise<{ title: string; target: string }> {
   const key = `${id}\n${ticketId}`;
   if (starting.has(key)) throw new Error("That one is already starting.");
   starting.add(key);
   try {
     const w = await find(id);
-    if (w.started?.[ticketId]) throw new Error("That ticket was already started.");
+    if (w.started?.[ticketId] && !force) throw new Error("That ticket was already started. Pass force=true to start it again.");
     const waiting = w.waiting.find((t) => t.id === ticketId);
     const listed = w.tickets?.find((t) => t.id === ticketId);
     const ticket = waiting ?? listed;
@@ -205,9 +214,12 @@ export async function startTicket(id: string, ticketId: string, force = false): 
     let run: Run;
     let madeWorktree = false;
     let target = "";
-    let projectId: string | undefined;
+    let madeIn: string | undefined;
     try {
-      const project = (await wings.projects()).find((p) => p.id === w.projectId);
+      const projects = await wings.projects();
+      const want = projectId ?? w.projectId;
+      if (!(await targetsOf(w, projects)).some((p) => p.id === want)) throw new Error("That project isn't one this entry's tickets can start in.");
+      const project = projects.find((p) => p.id === want);
       if (!project) throw new Error("The project is no longer in Wings.");
       const problem = diskProblem(await wings.disks(), project.path, w.minFreeGb);
       if (problem) throw new Error(problem);
@@ -215,7 +227,7 @@ export async function startTicket(id: string, ticketId: string, force = false): 
       const branch = branchName(ticket);
       const made = await wings.createWorktree({ projectId: project.id, branch });
       madeWorktree = true;
-      projectId = made.projectId;
+      madeIn = made.projectId;
       target = branch;
       const { paneId } = await wings.openPane({ command: AGENTS[w.agent].command, args: [prompt], cwd: made.path, focus: false });
       run = { at, paneId, ok: true };
@@ -227,7 +239,7 @@ export async function startTicket(id: string, ticketId: string, force = false): 
     await update(id, (x) => ({ ...x, lastRun: run, waiting: done ? x.waiting.filter((t) => t.id !== ticketId) : x.waiting, ...(done ? { started: withStarted(x.started, ticketId, at) } : {}) }));
     if (!run.ok) throw new Error(run.error);
     wings
-      .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}`, projectId, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
+      .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}`, projectId: madeIn, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
       .catch(console.error);
     return { title: ticket.title, target };
   } finally {
@@ -283,7 +295,7 @@ export function serveAssigned() {
     await find(id);
     await checkOne(id);
   });
-  ch.answer("startTicket", async ({ id, ticketId, force }) => void (await startTicket(id, ticketId, force)));
+  ch.answer("startTicket", async ({ id, ticketId, force, projectId }) => void (await startTicket(id, ticketId, force, projectId)));
   ch.answer("dismissWaiting", ({ id, ticketId }) => update(id, (w) => ({ ...w, waiting: w.waiting.filter((t) => t.id !== ticketId) })));
 
   ch.answer("install", async ({ id }) => void (await (await cliOf(id)).cli.install()));

@@ -59,7 +59,7 @@ export default function SchedulesPage() {
       onToggleWatch={(id) => ch.ask("toggleWatch", { id })}
       onRemoveWatch={(id) => ch.ask("removeWatch", { id })}
       onCheckWatch={(id) => ch.ask("checkWatch", { id })}
-      onStart={(id, ticketId, force) => ch.ask("startTicket", { id, ticketId, force }, { timeoutMs: START_TIMEOUT_MS })}
+      onStart={(id, ticketId, force, projectId) => ch.ask("startTicket", { id, ticketId, force, projectId }, { timeoutMs: START_TIMEOUT_MS })}
       onDismiss={(id, ticketId) => ch.ask("dismissWaiting", { id, ticketId })}
       onSignIn={(id) => ch.ask("signIn", { id }, { timeoutMs: SIGN_IN_TIMEOUT_MS })}
       onInstall={(id) => ch.ask("install", { id }, { timeoutMs: SIGN_IN_TIMEOUT_MS })}

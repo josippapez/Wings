@@ -6,7 +6,8 @@ import type { Watch, WatchDraft } from "./assigned";
 import type { Draft, Schedule } from "./schedule";
 
 /** An "assigned" entry as the page sees it: without the ids it has already seen. */
-export type WatchView = Omit<Watch, "seen">;
+/** `targets` are the projects its tickets can start in, its own first. */
+export type WatchView = Omit<Watch, "seen"> & { targets: { id: string; name: string }[] };
 
 export interface State {
   schedules: Schedule[];
@@ -31,7 +32,7 @@ export const ch = channel<
     /** Looks for new tickets now. */
     checkWatch: { request: { id: string }; response: void };
     /** Makes the worktree and starts the agent for a waiting or listed ticket. Resolves once its tab is open. */
-    startTicket: { request: { id: string; ticketId: string; force?: boolean }; response: void };
+    startTicket: { request: { id: string; ticketId: string; force?: boolean; projectId?: string }; response: void };
     dismissWaiting: { request: { id: string; ticketId: string }; response: void };
     /** Runs the entry's CLI login, or installs the CLI. */
     signIn: { request: { id: string }; response: void };

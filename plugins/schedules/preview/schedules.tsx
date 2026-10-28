@@ -55,6 +55,7 @@ const PROMPT = "Work on {url}: {title}. Read the ticket first, then make the cha
 const watches: WatchView[] = [
   {
     id: "w1",
+    targets: [projects[0]],
     projectId: "p1",
     agent: "claude",
     prompt: PROMPT,
@@ -68,6 +69,7 @@ const watches: WatchView[] = [
   },
   {
     id: "w2",
+    targets: [projects[1]],
     projectId: "p2",
     agent: "opencode",
     prompt: PROMPT,
@@ -106,7 +108,7 @@ const assigned = [
   { ...ticket("1215", "Add retry to the shipping rates call", "New", "Tech Story"), issue: { key: "API-42", status: "in_progress", project: "acme-api" } },
 ];
 const assignedWatches: WatchView[] = [
-  { ...watches[0], projectId: "p2", agent: "claude", source: azure, lastCheck: { at: now - 2 * 60_000, ok: true, count: 6 }, states: ["Ready for Development", "New"], tickets: assigned, started: { "1190": now - 12 * 60_000 } },
+  { ...watches[0], projectId: "p2", agent: "claude", source: azure, lastCheck: { at: now - 2 * 60_000, ok: true, count: 6 }, states: ["Ready for Development", "New"], tickets: assigned, started: { "1190": now - 12 * 60_000 }, targets: [projects[1], projects[0]] },
 ];
 
 const noop = () => Promise.resolve();

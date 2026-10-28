@@ -57,14 +57,16 @@ export const tools = {
   }),
 
   start: tool({
-    description: "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch needs force.",
+    description: "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it, in the entry's project or another project of the same repo host and project. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch, or was started before, needs force.",
     input: s.object({
       id: s.string({ minLength: 1, maxLength: 100 }).describe("The id of the assigned entry, from list."),
       ticket: s.string({ minLength: 1, maxLength: 100 }).describe("The ticket's number, as list shows it without the #."),
-      force: s.boolean().optional().describe("Start a ticket in a state the entry doesn't ask about, or one that already has a branch."),
+      force: s.boolean().optional().describe("Start a ticket in a state the entry doesn't ask about, one that already has a branch, or one started before."),
+      project: s.string({ minLength: 1, maxLength: 1000 }).optional().describe("Where to start it: a Wings project's name or folder path. Leave out for the entry's project."),
     }),
-    run: async ({ id, ticket, force }) => {
-      const { title, target } = await startTicket(id, ticket.replace(/^#/, ""), force);
+    run: async ({ id, ticket, force, project }) => {
+      const projectId = project ? resolveProject(await wings.projects(), project).id : undefined;
+      const { title, target } = await startTicket(id, ticket.replace(/^#/, ""), force, projectId);
       return `Started ${title} on ${target}.`;
     },
   }),

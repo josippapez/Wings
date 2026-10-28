@@ -5,7 +5,7 @@
 import { errorMessage } from "wings-plugin-sdk/async";
 import { registerTools } from "wings-plugin-sdk/tools";
 import { ch, type State } from "./lib/messages";
-import { currentSignInCode, pollAssigned, serveAssigned } from "./main/assigned";
+import { currentSignInCode, targetsOf, pollAssigned, serveAssigned } from "./main/assigned";
 import { queue, removeSchedule } from "./main/schedules";
 import { readSchedules as read, readWatches, syncSections, writeSchedules as write } from "./main/store";
 import { AGENTS, claim, cleanDraft, dueAt, nameOf, onStart, type Run, type Schedule } from "./lib/schedule";
@@ -66,7 +66,7 @@ ch.serve("state", async (): Promise<State> => {
   const [schedules, watches, projects] = await Promise.all([read(), readWatches(), wings.projects()]);
   return {
     schedules,
-    watches: watches.map(({ seen, ...rest }) => rest),
+    watches: await Promise.all(watches.map(async ({ seen, ...rest }) => ({ ...rest, targets: await targetsOf(rest, projects) }))),
     projects: projects.map(({ id, name }) => ({ id, name })),
     signInCode: currentSignInCode(),
   };

@@ -1,7 +1,7 @@
 // The Schedules tab: what is waiting for you, the saved entries with what each does next and last did, and the form to add or change one.
 
 import { useState } from "react";
-import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
+import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Menu, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
 import { askedAbout, describeCheck, SOURCE_LABELS, startedElsewhere, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
@@ -33,7 +33,7 @@ export interface ViewProps {
   onToggleWatch: (id: string) => Promise<unknown>;
   onRemoveWatch: (id: string) => Promise<unknown>;
   onCheckWatch: (id: string) => Promise<unknown>;
-  onStart: (id: string, ticketId: string, force?: boolean) => Promise<unknown>;
+  onStart: (id: string, ticketId: string, force?: boolean, projectId?: string) => Promise<unknown>;
   onDismiss: (id: string, ticketId: string) => Promise<unknown>;
   onSignIn: (id: string) => Promise<unknown>;
   onInstall: (id: string) => Promise<unknown>;
@@ -184,7 +184,7 @@ export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onT
                   onDelete={() => setDeleting(w.id)}
                   checking={checking === w.id}
                   onCheck={() => (setChecking(w.id), void action.run(() => onCheckWatch(w.id)).finally(() => setChecking(null)))}
-                  onStartTicket={(ticketId, force) => void action.run(() => onStart(w.id, ticketId, force))}
+                  onStartTicket={(ticketId, force, projectId) => void action.run(() => onStart(w.id, ticketId, force, projectId))}
                   onSignIn={() => void action.run(() => onSignIn(w.id))}
                   onInstall={() => void action.run(() => onInstall(w.id))}
                   onOpen={(url) => void action.run(() => onOpenUrl(url))}
@@ -261,7 +261,7 @@ interface WatchItemProps {
   onDelete: () => void;
   checking: boolean;
   onCheck: () => void;
-  onStartTicket: (ticketId: string, force: boolean) => void;
+  onStartTicket: (ticketId: string, force: boolean, projectId?: string) => void;
   onSignIn: () => void;
   onInstall: () => void;
   onOpen: (url: string) => void;
@@ -335,7 +335,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
           <Disclosure summary={`Assigned to you (${tickets.length})`}>
             <List compact>
               {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !askedAbout(w.states, t.state) || !!startedElsewhere(t))} onOpen={() => onOpen(t.url)} />
+                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} targets={w.targets} onStart={(projectId) => onStartTicket(t.id, !askedAbout(w.states, t.state) || !!startedElsewhere(t) || !!w.started?.[t.id], projectId)} onOpen={() => onOpen(t.url)} />
               ))}
             </List>
           </Disclosure>
@@ -353,11 +353,15 @@ interface TicketRowProps {
   startedAt: number | undefined;
   now: number;
   busy: boolean;
-  onStart: () => void;
+  /** The projects it can start in: with more than one, Start asks which. */
+  targets: { id: string; name: string }[];
+  onStart: (projectId?: string) => void;
   onOpen: () => void;
 }
 
-function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRowProps) {
+function TicketRow({ t, asked, startedAt, now, busy, targets, onStart, onOpen }: TicketRowProps) {
+  const label = startedAt ? "Start again" : asked && !startedElsewhere(t) ? "Start" : "Start anyway";
+  const variant = label === "Start" ? "default" : "outline";
   return (
     <ListItem align="start" className="sc-ticket">
       <Row gap="m" justify="between" wrap grow>
@@ -384,9 +388,12 @@ function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRo
             <Text tone="muted" size="small" as="span">
               <Time iso={new Date(startedAt).toISOString()} prefix="Started " now={now} />
             </Text>
+          ) : null}
+          {targets.length > 1 ? (
+            <Menu size="sm" variant={variant} align="end" label={label} disabled={busy} aria-label={`${label} ${t.title}`} items={targets.map((p) => ({ id: p.id, label: `In ${p.name}`, onSelect: () => onStart(p.id) }))} />
           ) : (
-            <Button size="sm" variant={asked && !startedElsewhere(t) ? "default" : "outline"} onClick={onStart} disabled={busy} aria-label={`${asked && !startedElsewhere(t) ? "Start" : "Start anyway"} ${t.title}`}>
-              {asked && !startedElsewhere(t) ? "Start" : "Start anyway"}
+            <Button size="sm" variant={variant} onClick={() => onStart()} disabled={busy} aria-label={`${label} ${t.title}`}>
+              {label}
             </Button>
           )}
         </Row>

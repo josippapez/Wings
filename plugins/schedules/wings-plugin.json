@@ -1,7 +1,7 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "minWingsVersion": "0.1.94",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
@@ -131,7 +131,7 @@
       },
       {
         "name": "start",
-        "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch needs force.",
+        "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it, in the entry's project or another project of the same repo host and project. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch, or was started before, needs force.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -149,7 +149,13 @@
             },
             "force": {
               "type": "boolean",
-              "description": "Start a ticket in a state the entry doesn't ask about, or one that already has a branch."
+              "description": "Start a ticket in a state the entry doesn't ask about, one that already has a branch, or one started before."
+            },
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "Where to start it: a Wings project's name or folder path. Leave out for the entry's project."
             }
           },
           "required": [
