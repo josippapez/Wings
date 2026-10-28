@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "deps": "pnpm -C ../packages/plugin-sdk install --frozen-lockfile && pnpm -C ../packages/plugin-ui install --frozen-lockfile && pnpm install --frozen-lockfile",
     "build": "node build.mjs",
     "shot": "node shot.mjs",
     "check": "tsc --noEmit && node build.mjs --check",

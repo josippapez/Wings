@@ -94,7 +94,7 @@ A page default-exports its component and says where it shows with `export const 
 
 ```sh
 cd plugins
-pnpm install
+pnpm run deps   # installs plugin-sdk, plugin-ui and the plugins, each has its own lockfile
 pnpm build   # writes each plugin's dist/
 pnpm check   # type-checks, and fails if a committed file in dist/ is out of date
 pnpm test    # runs the tests in every plugin's src/, which can import any module there
