@@ -373,7 +373,7 @@ const leftPanel = usePanelRef();
   const pluginsRef = useRef(plugins);
   pluginsRef.current = plugins;
   /** A project as plugins see it: its branch as it is now. */
-  const pluginProject = useCallback((space: Space) => ({ id: space.id, name: space.name, path: space.path, branch: gitRef.current[space.id]?.branch ?? space.branch }), []);
+  const pluginProject = useCallback((space: Space) => ({ id: space.id, name: space.name, path: space.path, branch: gitRef.current[space.id]?.branch ?? space.branch, ...(space.parent ? { parentId: space.parent } : {}) }), []);
   const paneInfoRef = useRef(paneInfo);
   paneInfoRef.current = paneInfo;
 

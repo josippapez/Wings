@@ -28,6 +28,7 @@ globalThis.wings = {
   onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
   onTool: (name, handler) => handlers.set(name, handler),
   onProjects: (listener) => (projects = listener),
+  projects: async () => [],
   onPanes: (listener) => (panes = listener),
   onHook: (event, handler) => hooks.set(event, handler),
   setPaneRail: async (paneId, rail) => void rails.push({ paneId, rail }),

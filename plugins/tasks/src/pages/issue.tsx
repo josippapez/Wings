@@ -2,7 +2,8 @@
 // in this tab, for the breadcrumb back. Edit its title, status, description and
 // links, add a note, resume any agent session that worked on it, or start a new agent on it.
 
-import { ProjectGate, useAction, useViewArgs } from "wings-plugin-ui";
+import { useAction, useViewArgs } from "wings-plugin-ui";
+import { HomeGate } from "../ui/HomeGate";
 import { IssueView } from "../ui/issue-view";
 import { agentCommand } from "../lib/commands";
 import { ch } from "../lib/messages";
@@ -17,9 +18,9 @@ export const page = { place: "tab", fill: true };
 
 export default function IssuePage() {
   return (
-    <ProjectGate loading="Loading issue" empty={{ description: "Open a project to see its issues." }}>
+    <HomeGate loading="Loading issue" empty={{ description: "Open a project to see its issues." }}>
       {(project) => <ProjectIssue project={project} />}
-    </ProjectGate>
+    </HomeGate>
   );
 }
 

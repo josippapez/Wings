@@ -1,7 +1,7 @@
 // The Issues block of a Project page: counts and the project's open issues, compact. Add an issue on the line above,
 // open one to read it, or open the board tab for the rest.
 
-import { ProjectGate } from "wings-plugin-ui";
+import { HomeGate } from "../ui/HomeGate";
 import { BlockView } from "../ui/block-view";
 import type { Issue } from "../lib/domain";
 import { useIssues } from "../ui/useIssues";
@@ -11,9 +11,9 @@ export const page = { place: "block" };
 
 export default function BlockPage() {
   return (
-    <ProjectGate loading="Loading issues" empty={{ description: "Open a project to see its issues." }}>
+    <HomeGate loading="Loading issues" empty={{ description: "Open a project to see its issues." }}>
       {(project) => <ProjectBlock project={project} />}
-    </ProjectGate>
+    </HomeGate>
   );
 }
 

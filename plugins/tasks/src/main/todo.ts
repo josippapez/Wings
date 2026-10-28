@@ -4,6 +4,7 @@ import { serial } from "wings-plugin-sdk/async";
 import type { ToolContext } from "wings-plugin-sdk/tools";
 import { callerOf } from "../lib/actor";
 import { normalizeKey } from "../lib/domain";
+import { homeIdOf } from "../lib/home";
 import { ch } from "../lib/messages";
 import { readStore } from "../lib/storage";
 import { readTodo, writeTodo } from "../lib/todo-store";
@@ -30,7 +31,7 @@ async function listOf(projectId: string, sessionId: string): Promise<TodoList | 
 
 async function showOn(pane: WingsPane): Promise<void> {
   if (!pane.session) return;
-  const list = await listOf(pane.projectId, pane.session.sessionId);
+  const list = await listOf(await homeIdOf(pane.projectId), pane.session.sessionId);
   await setRail(pane.paneId, list ? railOf(list, VIEW) : null);
 }
 
@@ -44,7 +45,7 @@ const queue = serial();
 
 /** Replaces the calling session's list with `items`, or reads it when `items` is left out. */
 export async function runTodo(context: ToolContext, items: TodoItem[] | undefined, key: string | undefined): Promise<string> {
-  const { projectId, projectName, actor } = callerOf(context);
+  const { projectId, projectName, actor } = await callerOf(context);
   const session = context.session;
   if (!session) throw new Error("This call has no agent session yet, so there is no list to keep. Try again in a moment.");
   return queue(async () => {

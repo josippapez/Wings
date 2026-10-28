@@ -3,15 +3,18 @@
 import type { ToolContext } from "wings-plugin-sdk/tools";
 import { agentLabel } from "./commands";
 import type { Actor, Issue, SessionRef } from "./domain";
+import { homeOf } from "./home";
 
 // ---------- who wrote it ----------
 
-/** The project a tool call came from, and its agent session as an Actor, from what Wings tells the handler. */
-export function callerOf({ project, session }: ToolContext): { projectId: string; projectName: string; actor: Actor } {
+/** The project (its main project, for a worktree) a tool call came from, and its agent session as an Actor, from what Wings tells the handler. */
+export async function callerOf({ project, session }: ToolContext): Promise<{ projectId: string; projectName: string; actor: Actor }> {
   if (!project) throw new Error("Can't tell which project this call comes from. Call it from a terminal in Wings.");
   // A tool call comes from an agent, so a call with no session is a race at startup: still an agent, just without an id.
   const actor: Actor = session ? { id: session.id, ...(session.name ? { name: session.name } : {}), ...(session.kind ? { kind: session.kind } : {}) } : { id: "" };
-  return { projectId: project.id, projectName: project.name, actor };
+  // A worktree Wings made works in its main project's issues.
+  const home = await homeOf(project);
+  return { projectId: home.id, projectName: home.name, actor };
 }
 
 /** The agent session a hook came from as an Actor: the session Wings found for the pane, with the id the hook's input gave. */

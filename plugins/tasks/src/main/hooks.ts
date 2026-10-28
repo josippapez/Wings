@@ -1,6 +1,7 @@
 // The hooks: what a session is told as it starts, the check that keeps issue keys out of commits and PRs, and the agent's change journal, which links the turn's commits and notes its files on the session's issue.
 
 import { actorOf } from "../lib/actor";
+import { homeOf } from "../lib/home";
 import { journalIssue, isLive, journalOf, type JournalInput } from "../lib/journal";
 import { keepLocal } from "../lib/local-setting";
 import { localOnlyDenial, writesToHistory } from "../lib/local-only";
@@ -16,7 +17,7 @@ export const rememberPrefix = (projectId: string, prefix: string, issues: number
 
 async function sessionStart(input: WingsHookInput, context: WingsToolContext) {
   if (!context.project) return null;
-  const { id, name } = context.project;
+  const { id, name } = await homeOf(context.project);
   const [{ issues }, local, todo] = await Promise.all([readStore(id, name), keepLocal.get(), readTodo(id, input.session_id)]);
   const issue = issues.filter((i) => i.sessions.some((s) => s.id === input.session_id)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   // A todo with every step done on an issue that is still open is worth a look; the hook only says so.
@@ -29,7 +30,8 @@ async function sessionStart(input: WingsHookInput, context: WingsToolContext) {
 /** Each message in a session: when the session's issue is in review, asks the agent to settle it from what the user says. */
 async function promptSubmit(input: WingsHookInput, context: WingsToolContext) {
   if (!context.project) return null;
-  const { issues } = await readStore(context.project.id, context.project.name);
+  const home = await homeOf(context.project);
+  const { issues } = await readStore(home.id, home.name);
   const issue = issues.filter((i) => i.sessions.some((s) => s.id === input.session_id)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return issue?.status === "in_review" ? inReviewText(issue) : null;
 }
@@ -38,7 +40,7 @@ async function promptSubmit(input: WingsHookInput, context: WingsToolContext) {
 async function journal(input: WingsHookInput, context: WingsToolContext) {
   const sessionId = (input as JournalInput).session_id;
   if (!context.project || typeof sessionId !== "string" || !sessionId) return null;
-  const { id, name } = context.project;
+  const { id, name } = await homeOf(context.project);
   const { files, commits, started } = journalOf(input as JournalInput);
   const issue = journalIssue((await readStore(id, name)).issues, sessionId, started);
   if (!issue) return null;
@@ -54,9 +56,10 @@ async function journal(input: WingsHookInput, context: WingsToolContext) {
 async function commandCheck(input: WingsHookInput, context: WingsToolContext) {
   const command = input.tool_input?.command;
   if (typeof command !== "string" || !writesToHistory(command) || !(await keepLocal.get())) return null;
-  if (context.project && !prefixes.has(context.project.id)) {
-    const { prefix, issues } = await readStore(context.project.id, context.project.name);
-    rememberPrefix(context.project.id, prefix, issues.length);
+  const home = context.project ? await homeOf(context.project) : null;
+  if (home && !prefixes.has(home.id)) {
+    const { prefix, issues } = await readStore(home.id, home.name);
+    rememberPrefix(home.id, prefix, issues.length);
   }
   const reason = localOnlyDenial(command, [...new Set(prefixes.values())]);
   return reason ? { deny: reason } : null;

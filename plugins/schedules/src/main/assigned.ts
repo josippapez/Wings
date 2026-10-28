@@ -8,8 +8,8 @@ import { gitOk } from "wings-plugin-sdk/git";
 import { ch } from "../lib/messages";
 import { AGENTS, type Run } from "../lib/schedule";
 import {
-  applyCheck, asks, branchMatching, mentionsTicket, startedElsewhere, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
-  type AssignedTicket, type Check, type Source, type Watch, type WatchDraft,
+  applyCheck, asks, branchMatching, createdKey, issueDescription, issueTypeOf, mentionsTicket, openIssueKeys, withIssueKey, startedElsewhere, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
+  type AssignedTicket, type Check, type Source, type Ticket, type Watch, type WatchDraft,
 } from "../lib/assigned";
 import { readWatches, writeWatches } from "./store";
 
@@ -94,6 +94,38 @@ async function markIssues(tickets: AssignedTicket[], projects: { id: string; nam
     }
     return t;
   });
+}
+
+/**
+ * Opens the Wings issue for a ticket that is being started, in the project the ticket starts in (not the worktree, whose
+ * issues are kept there anyway): an open issue that names the ticket is set in progress on the branch, else one is created.
+ * Never throws: Issues being off, or any of its calls failing, comes back as `problem` and the agent starts without a key.
+ */
+async function trackIssue(projectId: string, ticket: Ticket & { type?: string }, branch: string): Promise<{ key?: string; problem?: string }> {
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const r = await wings.callTool(name, args, { project: projectId });
+    if (r.isError) throw new Error(lastLine(r.text) || `${name} failed`);
+    return r.text;
+  };
+  try {
+    let key: string | undefined;
+    for (const k of openIssueKeys(await call("tasks__list", { query: ticket.id })).slice(0, ISSUES_READ)) {
+      if (mentionsTicket(ticket.id, await call("tasks__get", { key: k }))) {
+        key = k;
+        break;
+      }
+    }
+    if (key) {
+      await call("tasks__update", { key, status: "in_progress", branch });
+    } else {
+      key = createdKey(await call("tasks__create", { title: ticket.title, type: issueTypeOf(ticket), status: "in_progress", description: issueDescription(ticket) }));
+      if (!key) throw new Error("Issues didn't say which key it made.");
+      await call("tasks__update", { key, branch });
+    }
+    return { key };
+  } catch (e) {
+    return { problem: `Couldn't open a Wings issue (${lastLine(errorMessage(e)) || "Issues is off"})` };
+  }
 }
 
 const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "error" | "problem"> => {
@@ -215,6 +247,7 @@ export async function startTicket(id: string, ticketId: string, force = false, p
     let madeWorktree = false;
     let target = "";
     let madeIn: string | undefined;
+    let issueProblem: string | undefined;
     try {
       const projects = await wings.projects();
       const want = projectId ?? w.projectId;
@@ -223,13 +256,16 @@ export async function startTicket(id: string, ticketId: string, force = false, p
       if (!project) throw new Error("The project is no longer in Wings.");
       const problem = diskProblem(await wings.disks(), project.path, w.minFreeGb);
       if (problem) throw new Error(problem);
-      const prompt = fillPrompt(w.prompt, ticket);
       const branch = branchName(ticket);
       // The base is a branch of the entry's own repo: another project starts from its default.
       const made = await wings.createWorktree({ projectId: project.id, branch, ...(w.base && project.id === w.projectId ? { base: w.base } : {}) });
       madeWorktree = true;
       madeIn = made.projectId;
       target = branch;
+      const issue = await trackIssue(project.id, ticket, branch);
+      issueProblem = issue.problem;
+      const filled = fillPrompt(w.prompt, ticket);
+      const prompt = issue.key ? withIssueKey(filled, issue.key) : filled;
       const { paneId } = await wings.openPane({ command: AGENTS[w.agent].command, args: [prompt], cwd: made.path, focus: false });
       run = { at, paneId, ok: true };
     } catch (e) {
@@ -240,7 +276,7 @@ export async function startTicket(id: string, ticketId: string, force = false, p
     await update(id, (x) => ({ ...x, lastRun: run, waiting: done ? x.waiting.filter((t) => t.id !== ticketId) : x.waiting, ...(done ? { started: withStarted(x.started, ticketId, at) } : {}) }));
     if (!run.ok) throw new Error(run.error);
     wings
-      .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}`, projectId: madeIn, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
+      .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}${issueProblem ? `. ${issueProblem}.` : ""}`, projectId: madeIn, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
       .catch(console.error);
     return { title: ticket.title, target };
   } finally {

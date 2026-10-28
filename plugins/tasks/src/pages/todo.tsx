@@ -1,6 +1,6 @@
 // The Todo tab: the agent sessions of this project that keep a step list, with their steps and history. Read-only.
 
-import { ProjectGate } from "wings-plugin-ui";
+import { HomeGate } from "../ui/HomeGate";
 import { TodoView } from "../ui/todo-view";
 import { useIssues } from "../ui/useIssues";
 import { useTodos } from "../ui/useTodos";
@@ -10,9 +10,9 @@ export const page = { place: "tab", fill: true };
 
 export default function TodoPage() {
   return (
-    <ProjectGate loading="Loading todo lists" empty={{ description: "Open a project to see its todo lists." }}>
+    <HomeGate loading="Loading todo lists" empty={{ description: "Open a project to see its todo lists." }}>
       {(project) => <ProjectTodo project={project} />}
-    </ProjectGate>
+    </HomeGate>
   );
 }
 

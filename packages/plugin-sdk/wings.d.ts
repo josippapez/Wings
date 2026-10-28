@@ -347,6 +347,8 @@ interface WingsProject {
   name: string;
   path: string;
   branch: string | null;
+  /** The id of the project this is a git worktree of, when Wings made it for a new agent. Absent otherwise. Needs Wings 0.1.98. */
+  parentId?: string;
 }
 
 /** A line in a plugin's section under a project in the sidebar. Needs Wings 0.1.23. */
@@ -378,7 +380,7 @@ interface WingsToolContext {
   /** The Wings pane the agent runs in, or `null` when the call didn't come from a pane in Wings. */
   paneId: string | null;
   /** The project of that pane, or `null` when there is no pane. Needs Wings 0.1.50. */
-  project: { id: string; name: string; path: string } | null;
+  project: { id: string; name: string; path: string; parentId?: string } | null;
   /**
    * The agent session running in that pane, Claude Code's or opencode's, or `null` when there is no pane or the agent
    * has no session id yet. Needs Wings 0.1.50; `kind`, and opencode sessions, need Wings 0.1.60.

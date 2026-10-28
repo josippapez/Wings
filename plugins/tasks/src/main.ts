@@ -32,5 +32,6 @@ ch.answer("openSession", async ({ session, cwd }) => {
 
 /** Picks up every project as soon as Wings tells us which exist, and again when that changes. */
 wings.onProjects((list) => {
-  for (const { id, name } of list) loadProject(id, name).catch(console.error);
+  // A worktree Wings made has no store of its own: its issues are in its main project, which is listed too.
+  for (const { id, name } of list.filter((p) => !p.parentId)) loadProject(id, name).catch(console.error);
 });

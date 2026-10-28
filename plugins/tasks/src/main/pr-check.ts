@@ -19,7 +19,8 @@ async function stateOf(url: string): Promise<PrState | null> {
 
 export async function checkPrs(): Promise<void> {
   const states = new Map<string, Promise<PrState | null>>();
-  for (const { id, name } of await wings.projects()) {
+  for (const { id, name, parentId } of await wings.projects()) {
+    if (parentId) continue;
     const { issues } = await readStore(id, name);
     for (const issue of issues.filter((i) => isLive(i) && i.links?.pr)) {
       const url = issue.links!.pr!;

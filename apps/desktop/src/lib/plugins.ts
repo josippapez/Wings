@@ -92,7 +92,7 @@ export type PluginPane = {
 };
 
 /** The project a page is about: `wings.project()`. */
-export type PluginProject = { id: string; name: string; path: string; branch: string | null };
+export type PluginProject = { id: string; name: string; path: string; branch: string | null; parentId?: string };
 /** Where a page shows, as `wings.placement()` reports it. */
 export type PagePlacement = "sidebar" | "tab" | "modal" | "window" | "block";
 /** A page open as a tab: its tab, and the project the tab belongs to. */

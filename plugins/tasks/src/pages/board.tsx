@@ -5,7 +5,8 @@
 // box filters what's shown.
 
 import { useEffect, useState } from "react";
-import { Loading, ProjectGate, useAction, useTabState } from "wings-plugin-ui";
+import { Loading, useAction, useTabState } from "wings-plugin-ui";
+import { HomeGate } from "../ui/HomeGate";
 import { BoardView } from "../ui/board-view";
 import type { Issue, Op } from "../lib/domain";
 import { useIssues } from "../ui/useIssues";
@@ -16,9 +17,9 @@ export const page = { place: "tab", fill: true };
 
 export default function BoardPage() {
   return (
-    <ProjectGate loading="Loading issues" empty={{ description: "Open a project to see its issues." }}>
+    <HomeGate loading="Loading issues" empty={{ description: "Open a project to see its issues." }}>
       {(project) => <ProjectBoard project={project} />}
-    </ProjectGate>
+    </HomeGate>
   );
 }
 

@@ -376,7 +376,13 @@ fn merge_hook_answers(event: &str, answers: &[Value]) -> Value {
 /// running in it, with the agent's kind. Each is null when there is none: a call from outside Wings' panes has neither,
 /// and a pane that runs no agent, or whose agent has no session id yet, has no session.
 fn caller(space: Option<&Space>, agent: Option<&Agent>) -> (Value, Value) {
-    let project = space.map(|s| json!({ "id": s.id, "name": s.name, "path": s.path }));
+    let project = space.map(|s| {
+        let mut project = json!({ "id": s.id, "name": s.name, "path": s.path });
+        if let Some(parent) = &s.parent {
+            project["parentId"] = json!(parent);
+        }
+        project
+    });
     let session = agent.and_then(|a| a.session_id.as_ref().map(|id| json!({ "id": id, "name": a.name, "kind": a.kind })));
     (project.unwrap_or(Value::Null), session.unwrap_or(Value::Null))
 }
@@ -451,6 +457,9 @@ mod tests {
         for without_session in [Some(agent(AgentKind::Claude, None, None)), Some(agent(AgentKind::Opencode, None, None)), None] {
             assert_eq!(caller(Some(&web), without_session.as_ref()).1, Value::Null);
         }
+        // A worktree Wings made names the project it belongs to.
+        let tree = Space { id: "s2".into(), name: "web-fix".into(), path: "/work/web-fix".into(), parent: Some("s1".into()), added_at: None, pinned: false, worktree_include: None, worktree_setup: None };
+        assert_eq!(caller(Some(&tree), None).0, json!({ "id": "s2", "name": "web-fix", "path": "/work/web-fix", "parentId": "s1" }));
         // A call from outside every pane has neither.
         assert_eq!(caller(None, None), (Value::Null, Value::Null));
     }
