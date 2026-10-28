@@ -265,7 +265,19 @@ pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
             out.skipped += 1;
             continue;
         }
-        let copied = dest.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::copy(&src, &dest).map(|_| ()));
+        // A folder on the way that is a symlink, tracked in the repo, would take the copy outside the worktree.
+        let parent = dest.parent().unwrap_or(to);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            if out.errors.len() < 20 {
+                out.errors.push(format!("{rel}: {e}"));
+            }
+            continue;
+        }
+        if !within(parent, to) || !within(src.parent().unwrap_or(root), root) {
+            out.skipped += 1;
+            continue;
+        }
+        let copied = std::fs::copy(&src, &dest).map(|_| ());
         match copied {
             Ok(()) => out.copied += 1,
             Err(e) if out.errors.len() < 20 => out.errors.push(format!("{rel}: {e}")),
@@ -273,6 +285,11 @@ pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
         }
     }
     out
+}
+
+/// Whether `path`, with its symlinks resolved, is inside `root`.
+fn within(path: &Path, root: &Path) -> bool {
+    matches!((path.canonicalize(), root.canonicalize()), (Ok(p), Ok(r)) if p.starts_with(&r))
 }
 
 /// Makes the worktree and returns its folder, with the project's gitignored local setup copied into it (`include`
@@ -356,6 +373,18 @@ mod tests {
         assert!(validate_base("-b").is_err());
         assert!(validate_base("a b").is_err());
         assert!(validate_base("").is_err());
+    }
+
+    #[test]
+    fn a_symlinked_folder_out_of_the_root_is_not_within_it() {
+        let base = std::env::temp_dir().join(format!("wings-within-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("root/inside")).unwrap();
+        std::fs::create_dir_all(base.join("outside")).unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("root/link")).unwrap();
+        assert!(within(&base.join("root/inside"), &base.join("root")));
+        assert!(!within(&base.join("root/link"), &base.join("root")));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
