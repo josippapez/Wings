@@ -13,9 +13,9 @@ const s1 = { id: "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11", name: "checkout summary
 const s2 = { id: "b04e77d2-91aa-4c3f-8e65-0d2f9c6a3e42", name: "fix the totals" };
 const s3 = { id: "e8d3a1c5-27f4-4b90-b1d6-7a5c0e9f2b38" };
 const longFiles: FileChange[] = ([
-  ["src/checkout/Summary.tsx", "adds the summary card built from useCart", 2, s3],
-  ["src/checkout/summary.test.tsx", "tests the totals for the fixture baskets", 2, s3],
-  ["src/checkout/round.ts", "rounds once on the sum", 12, { id: "ses_7Hq2LmPx9aB4", name: "Checkout copy pass", kind: "opencode" as const }],
+  ["src/checkout/Summary.tsx", "changed (+120 -4)", 2, s3],
+  ["src/checkout/summary.test.tsx", "changed (+64 -0)", 2, s3],
+  ["src/checkout/round.ts", "changed (+9 -3)", 12, { id: "ses_7Hq2LmPx9aB4", name: "Checkout copy pass", kind: "opencode" as const }],
   ["src/checkout/useCart.ts", "exposes shipping and tax from the order response", 30, s2],
   ["src/checkout/Summary.css", "folds the items into a list under 640px", 31, s1],
   ["src/api/order.ts", "adds the tax field to the response type", 33, s1],

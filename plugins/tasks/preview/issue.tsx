@@ -9,7 +9,7 @@ export { page };
 const noop = () => {};
 /** The Issue page with every action doing nothing: a state says only which issue it is about. */
 const view = (props: Pick<IssueViewProps, "issue" | "issueKey"> & Partial<IssueViewProps>) => (
-  <IssueView project={project} issues={issues} todos={todos} error={null} apply={() => Promise.resolve()} send={() => Promise.resolve()} onBack={noop} onResume={noop} onStart={noop} onOpenUrl={noop} onOpenIssue={noop} {...props} />
+  <IssueView project={project} issues={issues} todos={todos} error={null} apply={() => Promise.resolve()} send={() => Promise.resolve()} onBack={noop} onResume={noop} onOpenFile={noop} onStart={noop} onOpenUrl={noop} onOpenIssue={noop} {...props} />
 );
 
 const refuse = (message: string) => () => Promise.reject(new Error(message));

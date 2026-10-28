@@ -10,6 +10,7 @@ import type { Op } from "../lib/domain";
 import { findIssue, trailTo, TRAIL_LENGTH } from "../lib/orderings";
 import { useIssues } from "../ui/useIssues";
 import { useTodos } from "../ui/useTodos";
+import { openFileDiff } from "../lib/diff";
 import "./tasks.css";
 
 export const page = { place: "tab", fill: true };
@@ -65,6 +66,7 @@ function ProjectIssue({ project }: { project: WingsProject }) {
       trail={trail}
       onBackTo={(i) => openIssue(trail[i], trail.slice(0, i))}
       onResume={(session) => void action.run(() => ch.ask("openSession", { session, cwd: project.path }))}
+      onOpenFile={(file) => issue && void action.run(() => openFileDiff(issue, file, project.path))}
       onStart={(kind) => {
         if (issue) void action.run(() => wings.openPane({ ...agentCommand(issue, kind), cwd: project.path }));
       }}

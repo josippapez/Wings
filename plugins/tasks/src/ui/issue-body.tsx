@@ -5,6 +5,7 @@ import { Badge, Button, Disclosure, Heading, List, ListButton, ListItem, Markdow
 import { actorName, isAgent } from "../lib/actor";
 import { agentLabel } from "../lib/commands";
 import { DESCRIPTION_TEMPLATE, keyNumber, LIMITS, STATUS_LABEL, visibleDescription, type FileChange, type Issue, type LogEntry, type SessionRef } from "../lib/domain";
+import { lineCounts } from "../lib/diff";
 import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
 import { ErrorText, openProps, StatusDot, TypeIcon, type Apply } from "./parts";
@@ -80,23 +81,36 @@ export function Children({ issue, issues, onOpenIssue }: { issue: Issue; issues:
 /** Rows of Files changed shown before the rest fold away. */
 const FILE_ROWS = 10;
 
-function FileRow({ file }: { file: FileChange }) {
+/** The file's name first and its folder after, so a long path that's cut still shows which file it is. Click for its diff. */
+function FileRow({ file, onOpen }: { file: FileChange; onOpen: (file: FileChange) => void }) {
+  const slash = file.path.lastIndexOf("/");
+  const counts = file.what ? lineCounts(file.what) : null;
   return (
     <ListItem>
-      <div className="tk-file">
-        <Text as="span" mono truncate className="tk-file-path">{file.path}</Text>
-        {file.what ? <Text as="span" tone="muted" size="small" className="tk-file-what">{file.what}</Text> : null}
-        <Text as="span" tone="muted" size="tiny">
+      <ListButton className="tk-file" onClick={() => onOpen(file)} title={`Open the diff of ${file.path}`}>
+        <span className="tk-file-path">
+          <Text as="span" mono className="tk-file-name">{file.path.slice(slash + 1)}</Text>
+          {slash > 0 ? <Text as="span" mono tone="muted" size="small" truncate className="tk-file-dir">{file.path.slice(0, slash)}</Text> : null}
+        </span>
+        {counts ? (
+          <span className="tk-file-counts" aria-label={`${counts.added} lines added, ${counts.removed} removed`}>
+            <Text as="span" size="small" tone="success">+{counts.added}</Text>
+            <Text as="span" size="small" tone="danger">−{counts.removed}</Text>
+          </span>
+        ) : file.what ? (
+          <Text as="span" tone="muted" size="small" truncate className="tk-file-what">{file.what}</Text>
+        ) : null}
+        <Text as="span" tone="muted" size="tiny" truncate className="tk-file-when">
           {file.session ? `${file.session.name || agentLabel(file.session)} · ` : ""}
           <Time iso={iso(file.at)} />
         </Text>
-      </div>
+      </ListButton>
     </ListItem>
   );
 }
 
 /** The files agents' journals reported for the issue, newest first, with the rows past the first ten folded. */
-export function FilesChanged({ issue }: { issue: Issue }) {
+export function FilesChanged({ issue, onOpen }: { issue: Issue; onOpen: (file: FileChange) => void }) {
   const files = [...(issue.files ?? [])].sort((a, b) => b.at - a.at);
   if (!files.length) return null;
   const rest = files.slice(FILE_ROWS);
@@ -104,12 +118,12 @@ export function FilesChanged({ issue }: { issue: Issue }) {
     <Stack gap="s" as="section" aria-label="Files changed">
       <Heading actions={<Text tone="muted" size="small">{files.length}</Text>}>Files changed</Heading>
       <List compact aria-label={`Files changed on ${issue.key}, newest first`}>
-        {files.slice(0, FILE_ROWS).map((f) => <FileRow key={f.path} file={f} />)}
+        {files.slice(0, FILE_ROWS).map((f) => <FileRow key={f.path} file={f} onOpen={onOpen} />)}
       </List>
       {rest.length ? (
         <Disclosure summary={<Text as="span" size="small" tone="muted">{rest.length} more</Text>}>
           <List compact aria-label={`More files changed on ${issue.key}`}>
-            {rest.map((f) => <FileRow key={f.path} file={f} />)}
+            {rest.map((f) => <FileRow key={f.path} file={f} onOpen={onOpen} />)}
           </List>
         </Disclosure>
       ) : null}

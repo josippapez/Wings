@@ -5,7 +5,7 @@ import { Fragment, useState } from "react";
 import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { AGENT_KINDS, AGENTS } from "../lib/commands";
-import { canParent, LIMITS, type AgentKind, type Issue, type SessionRef } from "../lib/domain";
+import { canParent, LIMITS, type AgentKind, type FileChange, type Issue, type SessionRef } from "../lib/domain";
 import type { TodoList } from "../lib/todo";
 import { Activity, Children, Description, FilesChanged } from "./issue-body";
 import { Properties } from "./issue-properties";
@@ -32,6 +32,8 @@ export interface IssueViewProps {
   onBackTo?: (index: number) => void;
   /** Continues one of the issue's sessions in a new terminal, with the agent it ran in. */
   onResume: (session: SessionRef) => void;
+  /** Opens the diff of one of the issue's changed files. */
+  onOpenFile: (file: FileChange) => void;
   /** Starts an agent on the issue in a new terminal. */
   onStart: (kind: AgentKind) => void;
   onOpenUrl: (url: string) => void;
@@ -59,7 +61,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   );
 }
 
-export function IssueView({ project, issue, issues, todos, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
+export function IssueView({ project, issue, issues, todos, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onOpenFile, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
   const noticesRef = useScrollIntoView<HTMLDivElement>(confirming || error);
   const crumb = (
@@ -121,7 +123,7 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
           <div className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}
-            <FilesChanged issue={issue} />
+            <FilesChanged issue={issue} onOpen={onOpenFile} />
             <Activity issue={issue} apply={apply} onOpenSession={onResume} />
           </div>
         </div>

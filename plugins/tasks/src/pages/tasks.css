@@ -240,34 +240,53 @@
 .tk-file {
   display: flex;
   align-items: baseline;
-  gap: 4px 12px;
+  gap: 4px 16px;
   width: 100%;
 }
 .tk-file-path {
-  flex: 0 0 36%;
-  min-width: 0;
-}
-.tk-file-what {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
 }
-.tk-file > :last-child {
+.tk-file-name {
   flex: none;
-  margin-left: auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tk-file-dir {
+  min-width: 0;
+}
+.tk-file-counts {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.tk-file-what {
+  flex: 0 1 30%;
+  min-width: 0;
+}
+.tk-file-when {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 34%;
+  text-align: right;
 }
 @media (max-width: 700px) {
   .tk-file {
     flex-wrap: wrap;
     gap: 2px 12px;
-    padding-block: 6px;
   }
   .tk-file-path {
-    flex: 1 1 60%;
-  }
-  .tk-file-what {
     flex: 1 1 100%;
-    order: 3;
+  }
+  .tk-file-when {
+    max-width: none;
+    margin-left: auto;
   }
 }
 .tk-description {
