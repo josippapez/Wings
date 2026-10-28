@@ -90,6 +90,18 @@ test("the terminal's replies to a program starting up are not typing", () => {
   assert.ok(!input.hasDraft("p"));
 });
 
+test("a message left unsent keeps the agent awake but is no draft of yours, and Enter or Ctrl-C clears it", () => {
+  const input = new PaneInput();
+  input.noteMessage("p");
+  assert.ok(input.hasDraft("p") && !input.hasTyped("p"));
+  input.note("p", "\x03");
+  assert.ok(!input.hasDraft("p"));
+  input.noteMessage("p");
+  input.note("p", "x");
+  input.sent("p");
+  assert.ok(!input.hasDraft("p") && !input.hasTyped("p"), "sending sends your typing with it");
+});
+
 test("a paste that ends in Enter is still a draft", () => {
   const input = new PaneInput();
   input.note("p", "\x1b[200~one\ntwo\r");

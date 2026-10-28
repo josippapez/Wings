@@ -628,11 +628,13 @@ const leftPanel = usePanelRef();
     const agent = agentsRef.current.find((a) => a.paneId === paneId);
     if (!agent) throw new Error(`Pane ${paneId} isn't running an agent, so Wings won't type into it: a shell would run the text.`);
     if (agent.state === "blocked") throw new Error(`The agent in pane ${paneId} is waiting for ${agent.waitingFor ?? "an answer"}. Try again once it's past that.`);
-    if (paneInput.hasDraft(paneId)) throw new Error(`Someone typed into the prompt of the agent in pane ${paneId} and hasn't sent it. Wings won't type over it.`);
+    if (paneInput.hasTyped(paneId)) throw new Error(`Someone typed into the prompt of the agent in pane ${paneId} and hasn't sent it. Wings won't type over it.`);
     const submit = agentsMessageRef.current;
-    await sendToPane(api.paneWrite, paneId, text, submit);
-    // Left in the prompt, it's a draft like one you typed: sleep keeps the agent, and the next message waits.
-    if (!submit) paneInput.note(paneId, text);
+    // Written as Wings' own input, so it doesn't count as your typing. Another message left unsent stays above it,
+    // and Enter sends them together. Left unsent, it keeps the agent from going to sleep.
+    await sendToPane(api.paneSend, paneId, text, submit);
+    if (submit) paneInput.sent(paneId);
+    else paneInput.noteMessage(paneId);
     return submit;
   }
 

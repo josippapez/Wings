@@ -575,7 +575,7 @@ interface Wings {
    * Needs `permissions.sendToAgents` and Wings 0.1.87. Pastes `text` into the prompt of the agent (Claude Code or
    * opencode) running in a pane, after a first line naming your plugin. Wings presses Enter only while the user turned
    * on "Let agents message each other"; `submitted` says whether it did. Rejects for a pane without an agent, an agent
-   * waiting on a permission prompt, or one with unsent text in its prompt. Up to 8 KB; newlines and tabs are fine.
+   * waiting on a permission prompt, or one with text the user typed and has not sent. Up to 8 KB; newlines and tabs are fine.
    */
   sendToAgent(paneId: string, text: string): Promise<{ submitted: boolean }>;
   /**
