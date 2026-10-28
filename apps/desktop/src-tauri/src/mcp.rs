@@ -28,6 +28,8 @@ use crate::{
 /// Tool names are `<plugin id>__<tool>`, so Claude can tell which plugin a tool comes from.
 const SEPARATOR: &str = "__";
 /// A slow plugin call (one that waits on a network API, say) still gets an answer back to Claude.
+/// What `ask_webview_within` says when the window doesn't answer in time.
+const TIMED_OUT: &str = "Wings didn't answer in time";
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a plugin has to answer a Claude Code hook. `wings hook` gives up on Wings after 2 s.
 const HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -191,7 +193,7 @@ fn ask_webview_within(app: &AppHandle, event: &str, mut payload: Value, timeout:
         state.mcp.pending.lock().unwrap().remove(&call_id);
         return Err(e.to_string());
     }
-    let result = answer.recv_timeout(timeout).map_err(|_| "Wings didn't answer in time".to_string());
+    let result = answer.recv_timeout(timeout).map_err(|_| TIMED_OUT.to_string());
     state.mcp.pending.lock().unwrap().remove(&call_id);
     result
 }
@@ -232,6 +234,24 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
 
     fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
         crate::set_worktree_setup(self.0, space_id, include, setup)
+    }
+
+    fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String> {
+        let focused = self.0.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+        if !focused {
+            // So the user comes back to answer; a refused one (rate limit) doesn't stop the prompt.
+            let _ = crate::mcp_panes::Host::notify(self, "Claude: Setup command".into(), crate::plugins::clip(&format!("An agent asks to set the setup command for {project}"), 200));
+        }
+        let wait = crate::mcp_panes::SETUP_APPROVAL_WAIT;
+        let payload = json!({ "project": project, "pane": pane, "current": current, "proposed": proposed, "timeoutMs": wait.as_millis() as u64 });
+        let answer = ask_webview_within(self.0, "mcp-setup-approval", payload, wait).map_err(|e| {
+            if e == TIMED_OUT { "The user didn't answer".to_string() } else { e }
+        })?;
+        if answer.is_error {
+            return Err(answer.text);
+        }
+        let reply: Value = serde_json::from_str(&answer.text).map_err(|e| e.to_string())?;
+        Ok(reply["allow"] == true)
     }
 
     fn output(&self, pane_id: &str) -> Option<Vec<u8>> {

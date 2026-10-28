@@ -198,6 +198,8 @@ export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null;
 export type McpClosePane = { callId: number; paneId: string };
 /** Claude asked Wings (`send_to_agent`) to type into another agent's prompt. Answer with `mcpToolResult`: `{ submitted }`, or the error. */
 export type McpSendToAgent = { callId: number; paneId: string; text: string };
+/** An agent (`worktree_setup`) proposes a project's setup command. Answer with `mcpToolResult`: `{ allow }`. The call gives up after `timeoutMs`. */
+export type McpSetupApproval = { callId: number; project: string; pane: string; current: string | null; proposed: string; timeoutMs: number };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
 export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
 /** An OpenCode session in a pane did something. Only `plugins`, which may read agent activity, get it. */
@@ -321,6 +323,7 @@ export const api = {
   onMcpOpenPane: (cb: (call: McpOpenPane) => void): Promise<UnlistenFn> => listen<McpOpenPane>("mcp-open-pane", (e) => cb(e.payload)),
   onMcpClosePane: (cb: (call: McpClosePane) => void): Promise<UnlistenFn> => listen<McpClosePane>("mcp-close-pane", (e) => cb(e.payload)),
   onMcpSendToAgent: (cb: (call: McpSendToAgent) => void): Promise<UnlistenFn> => listen<McpSendToAgent>("mcp-send-to-agent", (e) => cb(e.payload)),
+  onMcpSetupApproval: (cb: (ask: McpSetupApproval) => void): Promise<UnlistenFn> => listen<McpSetupApproval>("mcp-setup-approval", (e) => cb(e.payload)),
   /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
   onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
     listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),

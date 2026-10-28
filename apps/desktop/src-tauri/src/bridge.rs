@@ -31,6 +31,8 @@ should keep it, like a dev server they're using. worktree_setup reads and change
 /// Claude Code cuts a server's instructions at this many characters.
 const MAX_INSTRUCTIONS: usize = 4096;
 /// How long `initialize` waits for Wings to hand over its plugins' lines before answering with the static text.
+/// Longer than the longest wait inside Wings: a worktree_setup change waits up to 5 minutes for the user.
+const TOOL_WAIT: Duration = Duration::from_secs(310);
 const INSTRUCTIONS_WAIT: Duration = Duration::from_secs(2);
 
 struct Bridge {
@@ -169,7 +171,7 @@ fn handle(bridge: &Bridge, message: Value) {
                 "arguments": message["params"].get("arguments").cloned().unwrap_or_else(|| json!({})),
                 "ppid": std::os::unix::process::parent_id(),
             });
-            Ok(match bridge.ask(request, Duration::from_secs(130)) {
+            Ok(match bridge.ask(request, TOOL_WAIT) {
                 Some(reply) => reply.get("result").cloned().unwrap_or_else(|| {
                     let error = reply.get("error").and_then(Value::as_str).unwrap_or("Wings couldn't run the tool");
                     json!({ "content": [{ "type": "text", "text": error }], "isError": true })

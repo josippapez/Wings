@@ -60,6 +60,7 @@ import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuo
 import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
+import { SetupApprovalDialog } from "@/components/setup-approval-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
 import { WorktreeSetupDialog } from "@/components/worktree-setup-dialog";
@@ -2259,6 +2260,7 @@ const leftPanel = usePanelRef();
           }}
         />
         <WorktreeSetupDialog spaces={spaces} />
+        <SetupApprovalDialog />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}

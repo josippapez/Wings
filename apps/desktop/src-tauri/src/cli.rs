@@ -174,11 +174,11 @@ pub fn plugin_tool(args: &[String]) -> i32 {
     call_tool(&name, rest)
 }
 
-/// `wings worktree-setup [project=<name|path>] [include='["a","b"]']`: Wings' own `worktree_setup`
+/// `wings worktree-setup [project=<name|path>] [include='["a","b"]'] [setup=<command>]`: Wings' own `worktree_setup`
 /// tool. With neither include nor setup it prints the project's settings; with them it changes them.
 pub fn worktree_setup(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Usage: wings worktree-setup [project=<name or folder>] [include='[\"pattern\", ...]']\n\nWithout include it prints what the project's new worktrees get. include replaces the list of gitignored files copied in (an empty list resets it to the default; patterns use .gitignore syntax, ! leaves files out). The setup command, run in a new worktree before its agent starts, is shown but only you change it, in Worktree setup… or a Schedules entry. project defaults to the project of the pane you run in.");
+        println!("Usage: wings worktree-setup [project=<name or folder>] [include='[\"pattern\", ...]'] [setup='<command>']\n\nWithout include or setup it prints what the project's new worktrees get. include replaces the list of gitignored files copied in (an empty list resets it to the default; patterns use .gitignore syntax, ! leaves files out). setup proposes the command run in every new worktree before its agent starts (an empty value clears it): Wings asks you to allow it in a dialog and the command waits up to 5 minutes for your answer, saving nothing if you decline. project defaults to the project of the pane you run in.");
         return 0;
     }
     call_tool("worktree_setup", args)
