@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import { rowsOf, type Repo } from "../src/lib/git";
 import { parseWorktrees } from "../src/lib/worktrees";
+import Sidebar from "../src/pages/sidebar";
 import { Elsewhere, type Scanning } from "../src/ui/Elsewhere";
 import { RepoSection } from "../src/ui/RepoSection";
 import type { Ask } from "../src/ui/ConfirmCard";
@@ -147,6 +148,15 @@ const around = (props: { at: number; scanning?: Scanning | null; found?: number 
 
 export { page } from "../src/pages/sidebar";
 export const states = {
+  // The real page, fed projects by wings.onProjects. The stub's exec answers nothing, so it finds no repo: it leaves Loading
+  // and shows its empty state.
+  page: {
+    element: <Sidebar />,
+    projects: [
+      { id: "p1", name: "acme-web", path: "/Users/me/dev/acme-web", branch: "main" },
+      { id: "p2", name: "acme-api", path: "/Users/me/dev/acme-api", branch: "main" },
+    ],
+  },
   // Two repos: the second asking to remove its merged worktrees.
   rest: {
     element: (

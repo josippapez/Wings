@@ -569,7 +569,7 @@ state or several. It writes `<plugin>-<file>-<state>-<width>.png` at 1000 and 64
 `CHROME=/path/to/chrome` if it isn't in the usual place), Node 22.4 or newer, and `wings-plugin-ui` and React installed in
 the plugin: the page and its CSS are found from the plugin's folder, like in a build. It exits 1 when a fixture throws
 or logs a console error. The header of `shot.mjs` lists the fields a fixture exports (`page`, `queries`, `answers`,
-`storage`, `project`, `args` and `states`). From a script, `shot(args, folders)` in `wings-plugin-sdk/shot` draws the
+`storage`, `project`, `args`, `focused`, `panes`, `projects` and `states`). From a script, `shot(args, folders)` in `wings-plugin-sdk/shot` draws the
 fixtures of several plugin folders at once.
 
 ## Dev

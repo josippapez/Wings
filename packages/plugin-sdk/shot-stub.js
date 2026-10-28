@@ -1,5 +1,6 @@
 // A stand-in for `window.wings` in `wings-plugin shot`'s page: enough that a plugin page mounts and draws, and nothing it asks
-// of Wings does anything. A fixture can say more through its exports (see the header of shot.mjs): `project`, `args`, `storage`, and
+// of Wings does anything. A fixture can say more through its exports (see the header of shot.mjs): `project`, `args`, `storage`,
+// `focused`, `panes` and `projects` (which `onFocus`, `onPanes` and `onProjects` hand their listener once, as Wings does), and
 // `answers` and `queries` for pages that use wings-plugin-sdk/messages.
 
 import { channel } from "./messages.js";
@@ -27,9 +28,15 @@ export function installWings(fx) {
   for (const [name, query] of Object.entries(fx.queries ?? {})) mainCh.serve(name, typeof query === "function" ? query : () => query);
   // What `wings.storage` holds: the fixture's `storage` to start with, then whatever the page sets.
   const stored = new Map(Object.entries(fx.storage ?? {}));
+  // A listener is called once, right after it subscribes, like Wings does: the page has run its first effects by then.
+  const once = (listener, value) => (queueMicrotask(() => listener(copy(value))), () => {});
+  const projects = () => fx.projects ?? [];
   const known = {
     project: () => Promise.resolve(fx.project === undefined ? { id: "p1", name: "web", path: "/work/acme/web", branch: "main" } : fx.project),
-    projects: () => Promise.resolve([]),
+    projects: () => Promise.resolve(copy(projects())),
+    get focused() {
+      return fx.focused ?? true;
+    },
     viewArgs: () => fx.args ?? null,
     placement: () => "tab",
     onBroadcast: (l) => (listeners.add(l), () => listeners.delete(l)),
@@ -39,9 +46,9 @@ export function installWings(fx) {
       return ok();
     },
     onProject: (l) => (Promise.resolve().then(() => known.project()).then(l), () => {}),
-    onProjects: () => () => {},
-    onPanes: () => () => {},
-    onFocus: () => () => {},
+    onProjects: (l) => once(l, projects()),
+    onPanes: (l) => once(l, fx.panes ?? []),
+    onFocus: (l) => once(l, { focused: fx.focused ?? true }),
     tabState: () => Promise.resolve(state.tab),
     blockState: () => Promise.resolve(state.block),
     setTabState: (s) => ((state.tab = s), ok()),

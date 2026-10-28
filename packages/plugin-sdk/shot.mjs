@@ -15,6 +15,9 @@
 //             Without it the PNG is as tall as the page. A state can set its own `page`
 //   project   what `wings.project()` answers (default: a project "web"; null for none)
 //   args      what `wings.viewArgs()` answers (default: null)
+//   focused   what `wings.focused` is and `wings.onFocus` reports once: true (default), or false for a page out of view
+//   panes     what `wings.onPanes` hands its listener once: [{ paneId, cwd, command, project, projectId, session, focused }] (default: none)
+//   projects  what `wings.projects()` answers and `wings.onProjects` hands its listener once: [{ id, name, path, branch }] (default: none)
 //   storage   { key: value }: what `wings.storage` holds at the start, and keeps what the page sets
 //   answers   { name: (request) => response }: what main answers an `ask` with
 //   queries   { name: (key) => value, or a value for every key }: what main serves a `useQuery` or `subscribe` with
