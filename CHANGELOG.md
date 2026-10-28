@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.99 · 2026-10-28
+
+- **Agents can set up worktrees.** The `worktree_setup` tool and `wings worktree-setup` read and change a project's files to copy into new worktrees and its setup command, the same settings as "Worktree setup…".
+- **Worktree setup in Schedules.** An "assigned to me" entry shows and edits its project's worktree files and setup command.
+- **For plugin authors:** `wings.worktreeSetup` and `wings.setWorktreeSetup`, with `permissions.worktrees`.
+
 ## 0.1.98 · 2026-10-28
 
 - **Merged PRs close their issues.** When a PR you track is merged, the Issues issue for it goes to done right away, matched by its PR link or its branch. An issue with only a branch now finds its PR too. Nothing outside Wings is changed.
