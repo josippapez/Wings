@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.96 · 2026-10-28
+
+- **Pick the starting branch from a list.** In a Schedules entry, "Start branches from" lists the project's branches, and still takes one you type.
+
 ## 0.1.95 · 2026-10-28
 
 - **Schedules fits each project.** The Schedules page shows the entries of the project you open it in, with All projects for the rest. An entry can ask only about tickets whose title starts with FE, BE or any prefixes you give it.
