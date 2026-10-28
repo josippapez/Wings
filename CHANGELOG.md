@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.97 · 2026-10-28
+
+- **Worktrees bring your local setup.** A worktree Wings makes gets a copy of the main checkout's gitignored setup: `.claude` rules, agents, skills, hooks and commands, `.mcp.json` and `.env` files. Pick other files, or leave some out with `!`, under "Worktree setup…" in a project's right-click menu. A `.worktreeinclude` in the repo takes precedence.
+- **A setup command for new worktrees.** Set one there, like `pnpm install` or a script of your own, and it runs in a new worktree before the agent starts.
+
 ## 0.1.96 · 2026-10-28
 
 - **Pick the starting branch from a list.** In a Schedules entry, "Start branches from" lists the project's branches, and still takes one you type.
