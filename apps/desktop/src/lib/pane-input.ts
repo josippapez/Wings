@@ -3,12 +3,20 @@
  * submitted. Wings puts an idle agent to sleep only when nothing is waiting, because ending it would lose the draft.
  * Backspace and cursor keys aren't followed, so a draft you deleted again still counts: when in doubt it is a draft.
  */
+/**
+ * One or more replies xterm sends for a program, like Claude Code asking at start: device attributes (`ESC[?6c`,
+ * `ESC[>0;276;0c`), a status or mode report (`ESC[0n`, `ESC[?2026;2$y`), and OSC or DCS answers such as a color.
+ */
+const TERMINAL_REPLY = /^(?:\x1b\[[?>][\d;]*c|\x1b\[\d*n|\x1b\[\??[\d;]*\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/;
+
 export class PaneInput {
   private drafts = new Set<string>();
 
   note(paneId: string, data: string) {
     // The terminal reports focus changes and mouse moves as input too; those are not typing.
     if (/^\x1b\[[IO]$/.test(data) || /^(\x1b\[<[\d;]*[Mm])+$/.test(data) || /^\x1b\[M[\s\S]{3}$/.test(data)) return;
+    // The terminal's answers to a program's questions (its version, colors, a mode) reach the pane as input too.
+    if (TERMINAL_REPLY.test(data)) return;
     // A lone Escape interrupts or closes a menu, it adds nothing to the prompt.
     if (data === "\x1b") return;
     // Enter submits what is typed, Ctrl-C clears it. A paste that ends in Enter is still a paste.

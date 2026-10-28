@@ -83,6 +83,13 @@ test("focus reports, mouse reports and a lone Escape are not typing", () => {
   assert.ok(input.hasDraft("p"), "history recall fills the prompt");
 });
 
+test("the terminal's replies to a program starting up are not typing", () => {
+  const input = new PaneInput();
+  for (const data of ["\x1b[?6c", "\x1b[>0;276;0c", "\x1b[0n", "\x1b[?2026;2$y", "\x1b]11;rgb:1414/1212/1717\x1b\\", "\x1b]10;rgb:ffff/ffff/ffff\x07", "\x1bP>|xterm.js(5.5.0)\x1b\\", "\x1b[?6c\x1b[0n"])
+    input.note("p", data);
+  assert.ok(!input.hasDraft("p"));
+});
+
 test("a paste that ends in Enter is still a draft", () => {
   const input = new PaneInput();
   input.note("p", "\x1b[200~one\ntwo\r");
