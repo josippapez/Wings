@@ -47,6 +47,8 @@ wings plugin link ~/code/my-plugin   # load a plugin folder in place, for develo
 wings plugin enable cyclops  # also update, disable, remove
 ```
 
+Every plugin tool is also a command (Wings 0.1.94): `wings tools` lists them, and `wings <plugin> <tool> key=value…` runs one and prints its answer, like `wings tasks list status=todo`. A value that reads as JSON (a number, `true`, `false`, a `[list]`) goes as that, anything else as text. `--help` after a command shows its arguments.
+
 A plugin installed this way still waits for you to approve its access in Wings, which opens the approval. On first start Wings offers to add the `wings` command to `~/.local/bin`, and the Plugins sheet offers it later. With no arguments the command opens Wings rather than starting a second copy.
 
 Plugins start and stop as you turn them on and off, with no restart. Installed plugins live in `<app data>/plugins/<id>/` (on macOS `~/Library/Application Support/dev.wings.app/plugins/`). Dev builds also load this repo's `plugins/` folder at startup, always on.
@@ -231,7 +233,7 @@ Reach for these before writing your own. Each is a module of `wings-plugin-sdk`:
 
 ### Tools
 
-Claude's tools are written once, in `src/tools.ts`, which exports `tools`: an object of `tool()` definitions keyed by the tool's name. `s` builds the input's schema, which is plain JSON Schema, and the type of `input` comes from it. The main script answers all of them with `registerTools(tools)` from `wings-plugin-sdk/tools`. The build writes `contributes.mcpTools` of the manifest from `tools`, so the two can't differ. `mcpInstructions`, the line that says when Claude should reach for them, stays in the manifest.
+Claude's tools, which are also `wings <plugin> <tool>` commands, are written once, in `src/tools.ts`, which exports `tools`: an object of `tool()` definitions keyed by the tool's name. `s` builds the input's schema, which is plain JSON Schema, and the type of `input` comes from it. The main script answers all of them with `registerTools(tools)` from `wings-plugin-sdk/tools`. The build writes `contributes.mcpTools` of the manifest from `tools`, so the two can't differ. `mcpInstructions`, the line that says when Claude should reach for them, stays in the manifest.
 
 ```ts
 // src/tools.ts

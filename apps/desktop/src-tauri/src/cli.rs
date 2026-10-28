@@ -100,9 +100,96 @@ fn ask(op: &str, mut request: Value) -> Result<Value, String> {
         if let Some(error) = message.get("error").and_then(Value::as_str) {
             return Err(error.to_string());
         }
-        return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+        // `list` answers with its fields at the top, not under `result`.
+        return Ok(message.get("result").cloned().unwrap_or(message));
     }
     Err("Wings closed the connection".into())
+}
+
+/// A plugin tool's name on the socket: `<plugin>__<tool>`, as Claude sees it.
+const SEPARATOR: &str = "__";
+
+/// `wings tools`: the commands the plugins that are on add, which are their MCP tools, one per line.
+pub fn tools() -> i32 {
+    let reply = match ask("list", json!({})) {
+        Ok(reply) => reply,
+        Err(e) => return fail(&e),
+    };
+    let mut rows: Vec<(String, String)> = reply["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let (plugin, tool) = t["name"].as_str()?.split_once(SEPARATOR)?;
+            let first = t["description"].as_str().unwrap_or_default().split(". ").next().unwrap_or_default().trim_end_matches('.').to_string();
+            Some((format!("wings {plugin} {tool}"), first))
+        })
+        .collect();
+    if rows.is_empty() {
+        println!("No plugin that's on adds commands.");
+        return 0;
+    }
+    rows.sort();
+    let width = rows.iter().map(|(c, _)| c.len()).max().unwrap_or(0);
+    for (command, about) in rows {
+        println!("{command:<width$}  {about}");
+    }
+    println!("\nRun one with key=value arguments, like `wings tasks list status=todo`. `wings <plugin> <tool> --help` shows its arguments.");
+    0
+}
+
+/// A `key=value` argument as JSON: a number, true, false or a list as such, anything else as text.
+fn argument(value: &str) -> Value {
+    match serde_json::from_str::<Value>(value) {
+        Ok(v @ (Value::Number(_) | Value::Bool(_) | Value::Array(_) | Value::Object(_))) => v,
+        _ => json!(value),
+    }
+}
+
+/// `wings <plugin> <tool> [key=value ...]`: runs a plugin's tool, the one Claude can call as `<plugin>__<tool>`, and
+/// prints its answer. Exits 1 when the tool says it failed.
+pub fn plugin_tool(args: &[String]) -> i32 {
+    let [plugin, tool, rest @ ..] = args else {
+        eprintln!("Usage: wings <plugin> <tool> [key=value ...]. `wings tools` lists them.");
+        return 2;
+    };
+    let name = format!("{plugin}{SEPARATOR}{tool}");
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        let reply = match ask("list", json!({})) {
+            Ok(reply) => reply,
+            Err(e) => return fail(&e),
+        };
+        let Some(found) = reply["tools"].as_array().into_iter().flatten().find(|t| t["name"] == json!(name)) else {
+            return fail(&format!("{plugin} has no command {tool}, or it's off. `wings tools` lists them."));
+        };
+        println!("{}\n", found["description"].as_str().unwrap_or_default());
+        let required: Vec<&str> = found["inputSchema"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        for (key, schema) in found["inputSchema"]["properties"].as_object().into_iter().flatten() {
+            let kind = schema["type"].as_str().unwrap_or("value");
+            let need = if required.contains(&key.as_str()) { " (required)" } else { "" };
+            println!("  {key}=<{kind}>{need}  {}", schema["description"].as_str().unwrap_or_default());
+        }
+        return 0;
+    }
+    let mut arguments = serde_json::Map::new();
+    for arg in rest {
+        let Some((key, value)) = arg.split_once('=') else {
+            return fail(&format!("{arg} isn't key=value"));
+        };
+        arguments.insert(key.to_string(), argument(value));
+    }
+    let request = json!({ "name": name, "arguments": arguments, "ppid": std::os::unix::process::parent_id() });
+    match ask("call", request) {
+        Ok(result) => {
+            let text = result.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default();
+            if result["isError"] == true {
+                return fail(text);
+            }
+            println!("{text}");
+            0
+        }
+        Err(e) => fail(&e),
+    }
 }
 
 /// Claude Code's status JSON is a few KB.
@@ -347,6 +434,17 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_command_argument_reads_as_json_when_it_is_a_number_bool_or_list_else_as_text() {
+        use super::argument;
+        assert_eq!(argument("5"), json!(5));
+        assert_eq!(argument("true"), json!(true));
+        assert_eq!(argument(r#"["New","Ready"]"#), json!(["New", "Ready"]));
+        assert_eq!(argument("todo"), json!("todo"));
+        assert_eq!(argument("\"quoted\""), json!("\"quoted\""), "a JSON string stays the text as typed");
+        assert_eq!(argument(""), json!(""));
+    }
+
     use serde_json::json;
 
     #[test]
