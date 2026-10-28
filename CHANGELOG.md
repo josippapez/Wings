@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.87 · 2026-10-28
+
+- **Agents can message each other.** An agent can send a message to the agent in another pane, for example to hand it a task, and then wait for it to finish its turn. Plugins can do the same. Wings presses Enter for them only if you turn on "Let agents message each other" in Settings > Agents. Otherwise the message waits in that agent's prompt for you.
+- **Fewer leftover tabs.** When an agent runs a command in a tab, its next command goes to the same tab once nothing runs there, instead of opening another one. Agents can also close the tabs they opened. Those tabs show a small agent mark, and agents can't close yours.
+- **Schedules.** A new plugin starts an agent with a prompt by itself, every few hours or at a set time on the days you pick. Install it from Settings > Plugins. Wings has to be running, and the run opens in front of you.
+
 ## 0.1.86 · 2026-10-28
 
 - **The coding agents list loads.** Settings > Agents showed "Command harnesses_status not allowed by ACL" instead of your agents. It lists them now.
