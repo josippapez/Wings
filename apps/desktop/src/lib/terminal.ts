@@ -242,6 +242,10 @@ export class TerminalSession {
     clearTimeout(this.settle);
     this.settle = setTimeout(() => this.refit(), 80);
   });
+  /** Starts its shell even while hidden, for a pane an agent opened in a tab you're not looking at. */
+  background = false;
+  /** What the pane was last told: shown or hidden. */
+  private shown = false;
   private resolveStarted!: (paneId: string | null) => void;
   /** The Rust pane id once the shell has started, or null if it couldn't start. */
   readonly whenStarted = new Promise<string | null>((resolve) => (this.resolveStarted = resolve));
@@ -397,6 +401,13 @@ export class TerminalSession {
    * `keepRenderer` lets a hidden pane keep its WebGL renderer for `RENDERER_KEEP_MS`, for the tab shown just before.
    */
   setVisible(visible: boolean, keepRenderer = false) {
+    this.shown = visible;
+    if (!visible && !this.started && this.background) {
+      this.started = true;
+      // Starting shows it to xterm; once the shell runs it goes back to hidden like any other pane, unless it was shown meanwhile.
+      void this.start(this.initialInput).then(() => !this.shown && this.setVisible(false));
+      return;
+    }
     if (visible && !this.started) {
       this.started = true;
       void this.start(this.initialInput);

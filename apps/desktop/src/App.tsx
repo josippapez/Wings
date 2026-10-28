@@ -499,12 +499,17 @@ const leftPanel = usePanelRef();
   );
 
   const openTab = useCallback(
-    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null, kind: SessionKind = "claude") => {
+    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null, kind: SessionKind = "claude", show = true) => {
       const key = createPane(spaceId, initialInput, sessionId, cwd, [], null, kind);
       const id = crypto.randomUUID();
       setTabs((ts) => [...ts, { id, spaceId, layout: pane(key), focusedPane: key, zoomedPane: null }]);
-      setActiveTabBySpace((m) => ({ ...m, [spaceId]: id }));
-      setActiveSpaceId(spaceId);
+      if (show) {
+        setActiveTabBySpace((m) => ({ ...m, [spaceId]: id }));
+        setActiveSpaceId(spaceId);
+      } else {
+        const session = terminals.get(key);
+        if (session) session.background = true;
+      }
       return key;
     },
     [createPane],
@@ -658,8 +663,11 @@ const leftPanel = usePanelRef();
           // last, so the agent's pane doesn't shrink with each command.
           const beside = [...agentTabs.current].filter(([, at]) => at.owner === owner).flatMap(([id]) => keyOf(id) ?? []).filter((k) => paneIds(ownerTab.layout).includes(k)).at(-1);
           key = createPane(call.spaceId, input, null, call.cwd);
+          // Its tab may be one you're not looking at: the shell starts there anyway.
+          const session = terminals.get(key);
+          if (session) session.background = true;
           updateTab(ownerTab.id, (t) => ({ layout: beside ? split(t.layout, beside, "row", key) : split(t.layout, ownerKey, "column", key, 0.65), zoomedPane: null }));
-        } else key = openTab(call.spaceId, input, null, call.cwd);
+        } else key = openTab(call.spaceId, input, null, call.cwd, undefined, false);
         const paneId = await terminals.get(key)?.whenStarted;
         if (!paneId) throw new Error("The pane didn't start");
         agentTabs.current.set(paneId, { spaceId: call.spaceId, cwd: call.cwd, owner });
