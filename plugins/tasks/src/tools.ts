@@ -86,7 +86,7 @@ export const tools = {
   }),
 
   create: tool({
-    description: "Creates an issue in this terminal's project and returns its key. Use it when you start work that changes files and has no issue yet, whether or not the user asked, and for a follow-up worth keeping for a later session. Never for a question, a check, a review or a lookup. In the description fill Goal, Scope, Done when (a checklist) and Validation (the commands or checks that prove it). Check list first so you don't duplicate one. To group work, create an epic (type epic) and pass its key as parent when you create the pieces; use type bug for defects and related or blocked_by_add to tie issues together. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
+    description: "Creates an issue in this terminal's project and returns its key. Use it when you start work that changes files and has no issue yet, whether or not the user asked, and for a follow-up worth keeping for a later session. Never for a question, a check or recheck, a review, a lookup or drafting a message. In the description fill Goal, Scope, Done when (a checklist) and Validation (the commands or checks that prove it). Check list first so you don't duplicate one. To group work, create an epic (type epic) and pass its key as parent when you create the pieces; use type bug for defects and related or blocked_by_add to tie issues together. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
     input: s.object({
       title: s.string({ minLength: 1, maxLength: LIMITS.title }).describe(`A short title, up to ${n(LIMITS.title)} characters.`),
       description: s.string({ maxLength: LIMITS.description }).optional().describe(`Markdown spec: goal, scope, acceptance criteria. Up to ${n(LIMITS.description)} characters.`),
@@ -113,7 +113,7 @@ export const tools = {
   }),
 
   log: tool({
-    description: "Adds a note to an issue's activity log, stamped with your session and the time. Write what you did and what is next, at meaningful steps and always before you stop, so the next session or the user can pick the work up. Notes can't be edited or removed afterwards. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
+    description: "Adds a note to an issue's activity log, stamped with your session and the time. Write what you changed and what is next when a turn changed files or finished, paused or blocked the work, so the next session or the user can pick it up. Not for a turn that only rechecked, reviewed, answered a question, drafted a message or made a decision without changing files. Notes can't be edited or removed afterwards. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
     input: s.object({
       key: issueKey("The issue's key, like WIN-12."),
       text: s.string({ minLength: 1, maxLength: LIMITS.note }).describe(`What you did and what's next, up to ${n(LIMITS.note)} characters. Markdown works.`),

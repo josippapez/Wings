@@ -1,7 +1,7 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "minWingsVersion": "0.1.77",
   "icon": "icon.svg",
   "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here, a setting keeps issue keys out of its commits and PRs, and tasks__todo is its own step list, shown in a card on its pane and on a Todo tab with the history kept. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update, tasks__log and tasks__todo.",
@@ -23,7 +23,7 @@
     ]
   },
   "contributes": {
-    "mcpInstructions": "Issues (tasks__*): the local tracker for this project, kept on this computer and never named in commits, branches or PRs. For work that changes files, even unasked: find its issue with tasks__list or open one with tasks__create; keep your steps in tasks__todo (send the whole list each time); set the status with tasks__update as work moves and add a tasks__log note before you stop. A question, check or review gets no issue: just read with tasks__get or tasks__list.",
+    "mcpInstructions": "Issues (tasks__*): the local tracker for this project, never named in commits, branches or PRs. For work that changes files, even unasked: find its issue with tasks__list or open one with tasks__create; keep steps in tasks__todo; set the status with tasks__update, and add a tasks__log note when a turn changed files or finished or blocked the work. A question, check or review gets no issue, and rechecking, answering or deciding something gets no log note. Read with tasks__get or tasks__list.",
     "ui": [
       "rail"
     ],
@@ -151,7 +151,7 @@
       },
       {
         "name": "create",
-        "description": "Creates an issue in this terminal's project and returns its key. Use it when you start work that changes files and has no issue yet, whether or not the user asked, and for a follow-up worth keeping for a later session. Never for a question, a check, a review or a lookup. In the description fill Goal, Scope, Done when (a checklist) and Validation (the commands or checks that prove it). Check list first so you don't duplicate one. To group work, create an epic (type epic) and pass its key as parent when you create the pieces; use type bug for defects and related or blocked_by_add to tie issues together. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
+        "description": "Creates an issue in this terminal's project and returns its key. Use it when you start work that changes files and has no issue yet, whether or not the user asked, and for a follow-up worth keeping for a later session. Never for a question, a check or recheck, a review, a lookup or drafting a message. In the description fill Goal, Scope, Done when (a checklist) and Validation (the commands or checks that prove it). Check list first so you don't duplicate one. To group work, create an epic (type epic) and pass its key as parent when you create the pieces; use type bug for defects and related or blocked_by_add to tie issues together. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -365,7 +365,7 @@
       },
       {
         "name": "log",
-        "description": "Adds a note to an issue's activity log, stamped with your session and the time. Write what you did and what is next, at meaningful steps and always before you stop, so the next session or the user can pick the work up. Notes can't be edited or removed afterwards. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
+        "description": "Adds a note to an issue's activity log, stamped with your session and the time. Write what you changed and what is next when a turn changed files or finished, paused or blocked the work, so the next session or the user can pick it up. Not for a turn that only rechecked, reviewed, answered a question, drafted a message or made a decision without changing files. Notes can't be edited or removed afterwards. Issue keys are local to Wings: never put them in commit messages, branch names, pull request titles or descriptions.",
         "inputSchema": {
           "type": "object",
           "properties": {

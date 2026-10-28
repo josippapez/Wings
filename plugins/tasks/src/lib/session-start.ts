@@ -19,7 +19,7 @@ export const inReviewText = (issue: Issue): string =>
 export function sessionStartText(o: { projectName: string; keepLocal: boolean; issue?: Issue; todoLeft?: number; stale?: Issue[]; finished?: Issue; now?: number }): string {
   const lines = [`Wings Issues is the local tracker for ${o.projectName}, kept on this computer for the user and you${o.keepLocal ? ", and its keys never go in commits, branches or PRs" : ""}.`];
   if (o.issue) {
-    lines.push(`This session is on ${o.issue.key} "${o.issue.title}" (${STATUS_LABEL[o.issue.status]}). Keep it current: set the status with tasks__update as the work moves and add a tasks__log note before you stop.`);
+    lines.push(`This session is on ${o.issue.key} "${o.issue.title}" (${STATUS_LABEL[o.issue.status]}). Keep it current: set the status with tasks__update as the work moves, and add a tasks__log note when a turn changed files or finished, paused or blocked the work. A turn that only rechecks, reviews, answers or decides something needs no note.`);
     if (o.todoLeft) lines.push(`Your todo has ${o.todoLeft} ${o.todoLeft === 1 ? "step" : "steps"} left; tasks__todo with no items reads it.`);
   } else {
     lines.push("When a task will change files, find its issue with tasks__list or create one with tasks__create before you edit, then write your steps with tasks__todo. If you already started editing without an issue, open it now. A question, a check, a review or a lookup gets no issue and no todo: read issues with tasks__get or tasks__list when the answer needs them.");
