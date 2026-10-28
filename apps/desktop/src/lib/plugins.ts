@@ -300,7 +300,8 @@ export class PluginHost {
   private actions = new Map<string, { pluginId: string; done: () => void; fail: (error: Error) => void }>();
   private nextDiff = 1;
   /** MCP tool calls a plugin is running, by the token it answers with. */
-  private tools = new Map<string, { pluginId: string; callId: number }>();
+  /** Tool calls a plugin is running: from Claude (answered with `callId`) or from another plugin (`answer`). */
+  private tools = new Map<string, { pluginId: string; callId: number; answer?: (result: { text: string; isError: boolean }) => void }>();
   private unlistenTools = api.onMcpCall((call) => this.runTool(call));
   /** `openPane` calls waiting for their new pane to reach plugins, by Rust pane id. */
   private paneWaiters = new Map<string, () => void>();
@@ -514,7 +515,8 @@ export class PluginHost {
     for (const [token, tool] of this.tools) {
       if (tool.pluginId !== running.id) continue;
       this.tools.delete(token);
-      void api.mcpToolResult(tool.callId, `${running.id} was turned off in Wings`, true);
+      if (tool.answer) tool.answer({ text: `${running.id} was turned off in Wings`, isError: true });
+      else void api.mcpToolResult(tool.callId, `${running.id} was turned off in Wings`, true);
     }
     this.callbacks.clearPlugin(running.id);
   }
@@ -766,6 +768,21 @@ export class PluginHost {
         await this.listed(paneId);
         return { paneId };
       }
+      case "callTool": {
+        const [target, tool] = String(p.name ?? "").split("__");
+        if (!target || !tool) throw new Error('callTool takes a name like "tasks__list"');
+        const args = p.arguments && typeof p.arguments === "object" && !Array.isArray(p.arguments) ? (p.arguments as Record<string, unknown>) : {};
+        // Rust checks both are Wings' own plugins, the caller's callTools permission, and that the tool exists.
+        await invoke("plugin_call_tool_check", { pluginId, target, tool });
+        const entry = [...this.frames].find(([, f]) => f.id === target && f.kind === "main" && f.ready);
+        if (!entry) throw new Error(`${target} is still starting in Wings. Try again in a moment.`);
+        const project = p.project == null ? this.projectFor(plugin) : this.callbacks.projectOf(String(p.project));
+        if (p.project != null && !project) throw new Error(`no project ${String(p.project)}`);
+        const token = crypto.randomUUID();
+        const result = new Promise<{ text: string; isError: boolean }>((answer) => this.tools.set(token, { pluginId: target, callId: -1, answer }));
+        entry[1].post({ event: "tool", data: { token, name: tool, hook: false, arguments: args, paneId: null, project, session: null } });
+        return result;
+      }
       case "createWorktree": {
         const branch = typeof p.branch === "string" ? p.branch : "";
         if (p.base != null && typeof p.base !== "string") throw new Error("createWorktree base must be a branch name");
@@ -987,7 +1004,9 @@ export class PluginHost {
         if (!tool || tool.pluginId !== pluginId) throw new Error("unknown tool call");
         this.tools.delete(String(p.token));
         // About 25k tokens, Claude Code's default cap on what one MCP tool returns.
-        return api.mcpToolResult(tool.callId, String(p.text ?? "").slice(0, 100_000), p.isError === true);
+        const text = String(p.text ?? "").slice(0, 100_000);
+        if (tool.answer) return tool.answer({ text, isError: p.isError === true });
+        return api.mcpToolResult(tool.callId, text, p.isError === true);
       }
       case "openDiff": {
         needs("diff");

@@ -187,6 +187,11 @@ impl Store {
         self.entries.get(id).map(|e| e.source.clone())
     }
 
+    /// One of Wings' own plugins: installed from a folder of the Wings repo's `plugins/`, or loaded from it by a dev build.
+    pub fn is_builtin(&self, id: &str) -> bool {
+        self.dev.contains(id) || matches!(self.source(id), Some(Source::Github { repo, folder: Some(folder) }) if repo.eq_ignore_ascii_case(OFFICIAL_REPO) && folder.starts_with("plugins/"))
+    }
+
     /// Unpacks a package and installs it, replacing an older version. The previous approval carries over only
     /// for a reinstall from the same GitHub repo, and still only counts if the new version asks for the same
     /// access and adds the same things. A file can come from anyone, so a file install always asks again.
@@ -631,6 +636,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), new_scope()));
         fs::create_dir_all(&dir).unwrap();
         (Store::load(dir.join("plugins"), dir.join("plugins.json"), None), dir)
+    }
+
+    #[test]
+    fn only_a_plugin_from_the_wings_repo_plugins_folder_is_builtin() {
+        let (mut s, dir) = store();
+        let pkg = |id: &str| package(&[("wings-plugin.json", &manifest(id, &[])), ("main.js", "")]);
+        s.install(&pkg("ours"), Source::Github { repo: "josippapez/Wings".into(), folder: Some("plugins/ours".into()) }, None).unwrap();
+        s.install(&pkg("fork"), Source::Github { repo: "someone/Wings".into(), folder: Some("plugins/fork".into()) }, None).unwrap();
+        s.install(&pkg("file"), Source::File, None).unwrap();
+        assert!(s.is_builtin("ours"));
+        assert!(!s.is_builtin("fork") && !s.is_builtin("file") && !s.is_builtin("missing"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

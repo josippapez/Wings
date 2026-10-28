@@ -63,6 +63,9 @@ pub struct Permissions {
     /// Lets the plugin make a git worktree of one of your projects with `wings.createWorktree`: a new branch in a
     /// folder beside the repo, added to Wings as a project.
     pub worktrees: bool,
+    /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
+    /// `<plugin> <tool>` for one, like `tasks list`.
+    pub call_tools: Vec<String>,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1177,6 +1180,14 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
 }
 
 /// Whether the plugin may read what an OpenCode session is doing.
+/// Whether the plugin's `callTools` names this tool, or every tool of its plugin.
+pub fn may_call_tool(plugin: &Plugin, target: &str, tool: &str) -> bool {
+    plugin.manifest.permissions.call_tools.iter().any(|e| match e.split_once(' ') {
+        Some((p, t)) => p == target && t == tool,
+        None => e == target,
+    })
+}
+
 pub fn may_create_worktrees(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.worktrees
 }
@@ -2390,6 +2401,10 @@ mod tests {
         assert!(may_send_to_agents(&manifest(serde_json::json!({ "sendToAgents": true }))));
         assert!(!may_create_worktrees(&manifest(serde_json::json!({ "sendToAgents": true }))));
         assert!(may_create_worktrees(&manifest(serde_json::json!({ "worktrees": true }))));
+        let caller = manifest(serde_json::json!({ "callTools": ["tasks list", "changes"] }));
+        assert!(may_call_tool(&caller, "tasks", "list") && may_call_tool(&caller, "changes", "recent_commits"));
+        assert!(!may_call_tool(&caller, "tasks", "create") && !may_call_tool(&caller, "disk", "collect"));
+        assert!(!may_call_tool(&manifest(serde_json::json!({})), "tasks", "list"));
         let _ = fs::remove_dir_all(&dir);
     }
 

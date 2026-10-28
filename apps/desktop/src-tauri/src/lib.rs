@@ -1343,6 +1343,25 @@ fn plugin_worktree_create(state: State<AppState>, plugin_id: String, space_id: S
     Ok(view)
 }
 
+/// A plugin calls another plugin's tool: both have to be Wings' own plugins, it needs `callTools` naming the tool, and
+/// the other plugin has to be on and have it. The window then runs it like an agent's call.
+#[tauri::command]
+fn plugin_call_tool_check(state: State<AppState>, plugin_id: String, target: String, tool: String) -> Res<()> {
+    {
+        let store = state.plugins.lock().unwrap();
+        if !store.is_builtin(&plugin_id) || !store.is_builtin(&target) {
+            return Err("Only Wings' own plugins can call each other's tools".into());
+        }
+    }
+    if !plugins::may_call_tool(&plugin(&state, &plugin_id)?, &target, &tool) {
+        return Err(format!("{plugin_id} may not call {target}'s {tool}"));
+    }
+    if !plugin(&state, &target)?.manifest.contributes.mcp_tools.iter().any(|t| t.name == tool) {
+        return Err(format!("{target} has no tool {tool}"));
+    }
+    Ok(())
+}
+
 /// A plugin wants to type into an agent's pane: it needs the permission, and the pane has to be open. The window
 /// checks the rest, as it does for an agent's `send_to_agent`.
 #[tauri::command]
@@ -1914,6 +1933,7 @@ pub fn run() {
             plugin_focus_pane,
             plugin_send_to_agent,
             plugin_worktree_create,
+            plugin_call_tool_check,
             plugin_notify,
             plugin_tools,
             plugin_tool,

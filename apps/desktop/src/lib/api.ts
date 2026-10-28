@@ -91,6 +91,8 @@ export type PluginPermissions = {
   sendToAgents: boolean;
   /** Makes git worktrees of your projects. */
   worktrees: boolean;
+  /** Other plugins' tools it calls: a plugin id, or `<plugin> <tool>`. Only between Wings' own plugins. */
+  callTools: string[];
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */

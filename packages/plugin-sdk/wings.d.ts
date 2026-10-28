@@ -587,6 +587,12 @@ interface Wings {
    */
   createWorktree(options: { projectId?: string; branch: string; base?: string }): Promise<{ projectId: string; path: string }>;
   /**
+   * Needs `permissions.callTools` naming the tool or its plugin, and Wings 0.1.94. Only between Wings' own plugins
+   * (installed from the Wings repo's `plugins/`). Runs another plugin's tool, `name` like `tasks__list`, as if Claude
+   * called it in `project` (the frame's project without it), and resolves its text and whether it failed.
+   */
+  callTool(name: string, args?: Record<string, unknown>, options?: { project?: string }): Promise<{ text: string; isError: boolean }>;
+  /**
    * After `exec` rejected with "<program> is not installed or not on PATH": Wings asks you, installs it in a new tab
    * and restarts the plugin once it's there. Only `az`, `gh` and `glab`, and only ones `permissions.exec` names.
    * Resolves true once the install started (or it's already installed), false if you cancelled.
