@@ -25,10 +25,11 @@ export const tools = {
       prompt: s.string({ maxLength: 4000 }).optional().describe("What the agent is told. {id}, {title} and {url} become the ticket's number, title and link. Leave out for the default."),
       min_free_gb: s.integer({ minimum: 0, maximum: 10_000 }).optional().describe("Wings won't make a worktree when the disk has less free space than this. 10 by default."),
       states: s.array(s.string({ maxLength: 100 }), { maxItems: 50 }).optional().describe("The ticket states to ask about, like New or Ready for development. Leave out to pick the not-started ones after the first check."),
+      title_prefixes: s.array(s.string({ maxLength: 40 }), { maxItems: 20 }).optional().describe("Ask only about tickets whose title starts with one of these, like FE or BE, when the project's tickets carry a prefix for each repo. Leave out for every title."),
     }),
-    run: async ({ project, agent, prompt, min_free_gb, states }) => {
+    run: async ({ project, agent, prompt, min_free_gb, states, title_prefixes }) => {
       const found = resolveProject(await wings.projects(), project);
-      const saved = await addWatch({ projectId: found.id, agent: agent ?? "claude", prompt: prompt ?? DEFAULT_PROMPT, minFreeGb: min_free_gb ?? DEFAULT_MIN_FREE_GB, ...(states ? { states } : {}) }, true);
+      const saved = await addWatch({ projectId: found.id, agent: agent ?? "claude", prompt: prompt ?? DEFAULT_PROMPT, minFreeGb: min_free_gb ?? DEFAULT_MIN_FREE_GB, ...(states ? { states } : {}), prefixes: title_prefixes }, true);
       await checkOne(saved.id).catch(console.error);
       const w = (await readWatches()).find((x) => x.id === saved.id);
       const asks = w?.states === undefined ? "" : w.states.length ? ` It asks about: ${w.states.join(", ")}.` : " It asks about every state.";

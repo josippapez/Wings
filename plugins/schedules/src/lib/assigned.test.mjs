@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheck, askedAbout, assignedWiql, branchMatching, branchName, defaultStates, diskProblem, fillPrompt, listCommand, mentionsTicket, parseTickets, pickDisk, resolveProject, sameSource, sourceOf } from "./assigned.ts";
+import { applyCheck, askedAbout, assignedWiql, branchMatching, branchName, defaultStates, diskProblem, fillPrompt, listCommand, mentionsTicket, titleWanted, parseTickets, pickDisk, resolveProject, sameSource, sourceOf } from "./assigned.ts";
 
 const GB = 1024 ** 3;
 const watch = (extra = {}) => ({ id: "w", projectId: "p", agent: "claude", prompt: "x", minFreeGb: 10, enabled: true, primed: false, seen: [], waiting: [], ...extra });
@@ -174,4 +174,13 @@ test("an issue names a ticket by its id alone, after #, or at the end of its lin
   assert.ok(mentionsTicket("12", "Work on #12"));
   assert.ok(mentionsTicket("12", "https://github.com/acme/web/issues/12"));
   assert.ok(!mentionsTicket("12", "WIN-12 [done] updated 2026-10-12T09:12Z, see #123"));
+});
+
+test("a title prefix is a word at the start, in any case", () => {
+  assert.ok(titleWanted(["FE"], "FE: move caching to memory"));
+  assert.ok(titleWanted(["fe", "BE"], "BE - Ordering aggregate root"));
+  assert.ok(titleWanted(["FE"], "[FE] Add events"));
+  assert.ok(!titleWanted(["FE"], "Feature flags for the cart"));
+  assert.ok(!titleWanted(["BE"], "FE: something"));
+  assert.ok(titleWanted([], "Anything"));
 });

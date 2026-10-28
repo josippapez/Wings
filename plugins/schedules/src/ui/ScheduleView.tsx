@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Menu, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
-import { askedAbout, describeCheck, SOURCE_LABELS, startedElsewhere, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
+import { asks, describeCheck, SOURCE_LABELS, startedElsewhere, titleWanted, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
 import { ScheduleForm } from "./ScheduleForm";
@@ -363,7 +363,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
           <Disclosure summary={`Assigned to you (${tickets.length})`}>
             <List compact>
               {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} targets={w.targets} onStart={(projectId) => onStartTicket(t.id, !askedAbout(w.states, t.state) || !!startedElsewhere(t) || !!w.started?.[t.id], projectId)} onOpen={() => onOpen(t.url)} />
+                <TicketRow key={t.id} t={t} asked={asks(w, t)} titleOk={titleWanted(w.prefixes, t.title)} startedAt={w.started?.[t.id]} now={now} busy={busy} targets={w.targets} onStart={(projectId) => onStartTicket(t.id, !asks(w, t) || !!startedElsewhere(t) || !!w.started?.[t.id], projectId)} onOpen={() => onOpen(t.url)} />
               ))}
             </List>
           </Disclosure>
@@ -377,6 +377,8 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
 interface TicketRowProps {
   t: AssignedTicket;
   asked: boolean;
+  /** False when the entry wants other title prefixes: the ticket is for another project. */
+  titleOk: boolean;
   /** When Wings started an agent on it. */
   startedAt: number | undefined;
   now: number;
@@ -387,7 +389,7 @@ interface TicketRowProps {
   onOpen: () => void;
 }
 
-function TicketRow({ t, asked, startedAt, now, busy, targets, onStart, onOpen }: TicketRowProps) {
+function TicketRow({ t, asked, titleOk, startedAt, now, busy, targets, onStart, onOpen }: TicketRowProps) {
   const label = startedAt ? "Start again" : asked && !startedElsewhere(t) ? "Start" : "Start anyway";
   const variant = label === "Start" ? "default" : "outline";
   return (
@@ -408,7 +410,7 @@ function TicketRow({ t, asked, startedAt, now, busy, targets, onStart, onOpen }:
           ) : null}
         </Stack>
         <Row gap="s" wrap align="start">
-          {asked ? <Badge size="sm" variant="secondary">{t.state}</Badge> : <Badge size="sm" variant="outline">Not asked: {t.state}</Badge>}
+          {asked ? <Badge size="sm" variant="secondary">{t.state}</Badge> : <Badge size="sm" variant="outline">{titleOk ? `Not asked: ${t.state}` : "Other project"}</Badge>}
           <Button variant="ghost" size="sm" onClick={onOpen} aria-label={`Open ${t.title}`}>
             Open
           </Button>

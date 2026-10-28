@@ -34,6 +34,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const [template, setTemplate] = useState(watch?.prompt ?? DEFAULT_PROMPT);
   const [minFree, setMinFree] = useState(String(watch?.minFreeGb ?? DEFAULT_MIN_FREE_GB));
   const [states, setStates] = useState<string[] | undefined>(watch?.states);
+  const [prefixes, setPrefixes] = useState((watch?.prefixes ?? []).join(", "));
   const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
   const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
@@ -42,7 +43,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const submit = (e: FormEvent) => {
     e.preventDefault();
     // Another project has other states, so it picks its own at its first check.
-    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states });
+    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()) });
     onSave({ name, projectId, agent, prompt, when: mode === "every" ? { kind: "every", hours } : { kind: "daily", time, days } });
   };
   const toggleDay = (n: number) => setDays(days.includes(n) ? days.filter((d) => d !== n) : [...days, n]);
@@ -153,6 +154,9 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
                 </Row>
               ) : null}
             </FieldGroup>
+            <Field label="Only titles starting with" hint="Optional, separated by commas, like FE or BE. Other tickets are listed as for another project and not asked about. Empty asks about every title.">
+              <TextInput value={prefixes} onChange={(e) => setPrefixes(e.target.value)} maxLength={200} placeholder="FE, BE" />
+            </Field>
             <Notice>Wings asks the project's Azure DevOps, GitHub or GitLab what is assigned to you every 5 minutes, using its origin remote. You are asked first: nothing starts until you press Start.</Notice>
           </>
         )}

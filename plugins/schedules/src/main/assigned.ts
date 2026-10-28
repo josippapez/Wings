@@ -8,7 +8,7 @@ import { gitOk } from "wings-plugin-sdk/git";
 import { ch } from "../lib/messages";
 import { AGENTS, type Run } from "../lib/schedule";
 import {
-  applyCheck, askedAbout, branchMatching, mentionsTicket, startedElsewhere, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
+  applyCheck, asks, branchMatching, mentionsTicket, startedElsewhere, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
   type AssignedTicket, type Check, type Source, type Watch, type WatchDraft,
 } from "../lib/assigned";
 import { readWatches, writeWatches } from "./store";
@@ -207,8 +207,8 @@ export async function startTicket(id: string, ticketId: string, force = false, p
     const ticket = waiting ?? listed;
     if (!ticket) throw new Error("That ticket isn't waiting or assigned to you any more.");
     if (listed && startedElsewhere(listed) && !force) throw new Error(`It was already started: ${startedElsewhere(listed)}. Pass force=true to start it anyway.`);
-    if (!waiting && listed && !force && !askedAbout(w.states, listed.state)) {
-      throw new Error(`This entry doesn't ask about tickets in ${listed.state}. Pass force=true to start it anyway.`);
+    if (!waiting && listed && !force && !asks(w, listed)) {
+      throw new Error(`This entry doesn't ask about tickets in ${listed.state}${w.prefixes?.length ? ` or titles not starting with ${w.prefixes.join(", ")}` : ""}. Pass force=true to start it anyway.`);
     }
     const at = Date.now();
     let run: Run;
