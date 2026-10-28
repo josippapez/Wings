@@ -335,7 +335,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
           <Disclosure summary={`Assigned to you (${tickets.length})`}>
             <List compact>
               {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !!startedElsewhere(t))} onOpen={() => onOpen(t.url)} />
+                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !askedAbout(w.states, t.state) || !!startedElsewhere(t))} onOpen={() => onOpen(t.url)} />
               ))}
             </List>
           </Disclosure>
@@ -384,11 +384,11 @@ function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRo
             <Text tone="muted" size="small" as="span">
               <Time iso={new Date(startedAt).toISOString()} prefix="Started " now={now} />
             </Text>
-          ) : asked ? (
-            <Button size="sm" variant={startedElsewhere(t) ? "outline" : "default"} onClick={onStart} disabled={busy} aria-label={`${startedElsewhere(t) ? "Start anyway" : "Start"} ${t.title}`}>
-              {startedElsewhere(t) ? "Start anyway" : "Start"}
+          ) : (
+            <Button size="sm" variant={asked && !startedElsewhere(t) ? "default" : "outline"} onClick={onStart} disabled={busy} aria-label={`${asked && !startedElsewhere(t) ? "Start" : "Start anyway"} ${t.title}`}>
+              {asked && !startedElsewhere(t) ? "Start" : "Start anyway"}
             </Button>
-          ) : null}
+          )}
         </Row>
       </Row>
     </ListItem>
