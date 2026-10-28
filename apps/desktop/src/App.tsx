@@ -654,7 +654,11 @@ const leftPanel = usePanelRef();
         const show = () => ownerTab && updateTab(ownerTab.id, (t) => (t.zoomedPane === ownerKey ? { zoomedPane: null } : {}));
         const idle = idleAgentTab(agentTabs.current, { spaceId: call.spaceId, cwd: call.cwd, owner }, live, paneInfoRef.current, agentsRef.current);
         if (idle && input !== null) {
-          await api.paneWrite(idle, input);
+          // Its shell may sit in another folder of the project: it goes to the one asked for first.
+          const dir = call.cwd ?? spacesRef.current.find((s) => s.id === call.spaceId)?.path;
+          const here = paneInfoRef.current[idle]?.cwd;
+          await api.paneWrite(idle, dir && here && here !== dir ? `cd ${shellQuote(dir)} && ${input}` : input);
+          agentTabs.current.set(idle, { spaceId: call.spaceId, cwd: call.cwd, owner });
           if (owner) show();
           void api.mcpToolResult(call.callId, JSON.stringify({ paneId: idle, ran, reused: true }), false);
           return;

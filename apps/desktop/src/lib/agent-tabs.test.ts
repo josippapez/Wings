@@ -17,6 +17,7 @@ test("a command goes to an agent's tab in the same folder that sits at its promp
   const info = { p1: shell(true), p2: shell(false), p3: shell(false) };
   assert.equal(idleAgentTab(tabs, { spaceId: "s1", cwd: null, owner: null }, open, info, []), "p3", "p1 still runs its command");
   assert.equal(idleAgentTab(tabs, { spaceId: "s1", cwd: "/r/app", owner: null }, open, info, []), "p2");
+  assert.equal(idleAgentTab(tabs, { spaceId: "s1", cwd: "/r/other", owner: null }, open, info, []), "p2", "another folder of the project reuses an idle pane, which cds there");
   assert.equal(idleAgentTab(tabs, { spaceId: "s2", cwd: null, owner: null }, open, info, []), undefined, "another project");
 });
 
