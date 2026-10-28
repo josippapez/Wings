@@ -70,6 +70,7 @@
     "allow-plugin-send-to-agent",
     "allow-plugin-worktree-create",
     "allow-plugin-call-tool-check",
+    "allow-plugin-event-check",
     "allow-plugin-notify",
     "allow-plugin-tools",
     "allow-plugin-tool",

@@ -98,6 +98,8 @@ export type PluginPermissions = {
   worktrees: boolean;
   /** Other plugins' tools it calls: a plugin id, or `<plugin> <tool>`. Only between Wings' own plugins. */
   callTools: string[];
+  /** Events of other plugins it hears: `<plugin> <event>`. Only between Wings' own plugins. */
+  events: string[];
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */

@@ -16,6 +16,8 @@ const hooks = new Map();
 const rails = [];
 const sectionSorts = [];
 let onSort;
+let onEvent;
+let listed = [];
 
 globalThis.wings = {
   storage: {
@@ -28,7 +30,8 @@ globalThis.wings = {
   onBroadcast: (listener) => (listeners.main.add(listener), () => listeners.main.delete(listener)),
   onTool: (name, handler) => handlers.set(name, handler),
   onProjects: (listener) => (projects = listener),
-  projects: async () => [],
+  projects: async () => listed,
+  onEvent: (listener) => (onEvent = listener),
   onPanes: (listener) => (panes = listener),
   onHook: (event, handler) => hooks.set(event, handler),
   setPaneRail: async (paneId, rail) => void rails.push({ paneId, rail }),
@@ -253,4 +256,22 @@ test("each message in a session whose issue is in review asks the agent to settl
   assert.equal(await say("someone-else"), null);
   await handlers.get("update")({ key, status: "done" }, rctx);
   assert.equal(await say("r-1"), null, "done");
+});
+
+test("a pr-state event from the PR tracker finishes the live issue on that branch, links the PR, and ignores other senders and other branches", async () => {
+  listed = [{ id: "proj1", name: "web", path: "/work/web" }, { id: "wt1", name: "web-x", path: "/work/web-worktrees/x", parentId: "proj1" }];
+  await ask({ kind: "create", title: "Merged elsewhere", status: "in_progress", branch: "feature/merged" });
+  await ask({ kind: "create", title: "Other branch", status: "in_progress", branch: "feature/other" });
+  const stored = (title) => [...storage].map(([, v]) => v).find((v) => v?.title === title);
+  const url = "https://github.com/acme/web/pull/9";
+  const data = { url, state: "merged", sourceBranch: "feature/merged", projectId: "wt1" };
+  onEvent({ from: "someone-else", name: "pr-state", data });
+  await settle();
+  assert.equal(stored("Merged elsewhere").status, "in_progress");
+  onEvent({ from: "pr-tracker", name: "pr-state", data });
+  await settle();
+  assert.equal(stored("Merged elsewhere").status, "done");
+  assert.equal(stored("Merged elsewhere").links.pr, url);
+  assert.equal(stored("Other branch").status, "in_progress");
+  listed = [];
 });

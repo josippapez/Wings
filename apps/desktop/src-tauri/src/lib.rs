@@ -1405,6 +1405,22 @@ fn plugin_call_tool_check(state: State<AppState>, plugin_id: String, target: Str
     Ok(())
 }
 
+/// A plugin's event reaches another plugin: both have to be Wings' own plugins and the receiver has to have declared
+/// `<emitter> <event>` in its `events`. Asked once per receiver before the window delivers it.
+#[tauri::command]
+fn plugin_event_check(state: State<AppState>, plugin_id: String, receiver: String, name: String) -> Res<()> {
+    {
+        let store = state.plugins.lock().unwrap();
+        if !store.is_builtin(&plugin_id) || !store.is_builtin(&receiver) {
+            return Err("Only Wings' own plugins can send each other events".into());
+        }
+    }
+    if !plugins::may_hear_event(&plugin(&state, &receiver)?, &plugin_id, &name) {
+        return Err(format!("{receiver} didn't ask to hear {plugin_id}'s {name}"));
+    }
+    Ok(())
+}
+
 /// A plugin wants to type into an agent's pane: it needs the permission, and the pane has to be open. The window
 /// checks the rest, as it does for an agent's `send_to_agent`.
 #[tauri::command]
@@ -1979,6 +1995,7 @@ pub fn run() {
             plugin_send_to_agent,
             plugin_worktree_create,
             plugin_call_tool_check,
+            plugin_event_check,
             plugin_notify,
             plugin_tools,
             plugin_tool,

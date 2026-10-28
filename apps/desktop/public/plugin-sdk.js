@@ -17,6 +17,7 @@
   listeners.focus = [];
   listeners.project = [];
   listeners.projects = [];
+  listeners["plugin-event"] = [];
   listeners.sectionSort = [];
   // Whether the user is in Wings. Wings sends it as soon as the frame is ready; until then, true.
   // Wings sets `focused` in the init of a block, which can mount out of view; every other page starts in front.
@@ -328,6 +329,10 @@
     createWorktree: (options) => call("createWorktree", options),
     /** With `permissions.callTools`, between Wings' own plugins: runs another plugin's tool, like `tasks__list`, and resolves `{ text, isError }`. */
     callTool: (name, args, options) => call("callTool", { name, arguments: args ?? {}, project: options?.project ?? null }),
+    /** Between Wings' own plugins: sends the event `name` with JSON `data` (up to 16 KB) to every plugin that declared `<this plugin> <name>` in `permissions.events`. */
+    emit: (name, data) => call("emit", { name, data: data ?? null }),
+    /** With `permissions.events`, between Wings' own plugins: calls `listener({ from, name, data })` for each event the plugin declared. Returns a function that removes it. */
+    onEvent: (listener) => subscribe(listeners["plugin-event"], listener),
     /**
      * Asks Wings to install a command-line tool the plugin runs, like "gh", when `exec` rejected with
      * "<program> is not installed or not on PATH". Wings shows its own confirmation and installs it the vendor's

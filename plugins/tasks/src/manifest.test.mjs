@@ -10,9 +10,10 @@ test("the manifest: tools tell agents to link by hand and keep keys out of git, 
   assert.match(text.update, /set pr to its URL/);
   assert.match(text.update, /set branch when you start on a branch/);
   for (const t of m.contributes.mcpTools) assert.doesNotMatch(t.description, /put the key in your commit/);
-  assert.deepEqual(Object.keys(m.permissions).sort(), ["exec", "openUrl", "panes"]);
-  // A linked pull request's state, and the diff of a changed file you click; commits come from the journal, never from git.
-  assert.deepEqual(m.permissions.exec, ["gh pr view [--json --jq]", "az repos pr show [--id --organization --query --output]", "git diff [-- --no-color --no-ext-diff]"]);
+  assert.deepEqual(Object.keys(m.permissions).sort(), ["events", "exec", "openUrl", "panes"]);
+  // A linked pull request's state, the PR of a branch, and the diff of a changed file you click; commits come from the journal, never from git.
+  assert.deepEqual(m.permissions.exec, ["gh pr view [--json --jq]", "az repos pr show [--id --organization --query --output]", "git diff [-- --no-color --no-ext-diff]", "git remote get-url", "gh pr list [--head --state --limit --json]", "az repos pr list [--organization --project --repository --source-branch --status --top --output]"]);
+  assert.deepEqual(m.permissions.events, ["pr-tracker pr-state"]);
 });
 
 test("the manifest: the instructions line sends Claude to the tools unprompted, and the settings page is declared", async () => {

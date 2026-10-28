@@ -2,11 +2,12 @@
 import { cached, singleFlight } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { argsOf } from "../lib/args";
-import { forgeFor, isKnown } from "../lib/forges/registry";
+import { forgeFor, forgeOf, isKnown } from "../lib/forges/registry";
 import { refOf } from "../lib/providers";
 import type { PullsAnswer } from "../lib/messages";
 import { BLOCK_ROWS, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
+import { eventFor, finalState, retry, settle, type Tracked } from "../lib/finished";
 import { newPulls, notesFor } from "../lib/watch";
 import { checkMentions, markRead, pruneMentions } from "./inbox";
 import { answered, explains, shownProblem } from "./problems";
@@ -39,6 +40,8 @@ const seen = new Map<string, number>();
 const activity = new Map<string, number>();
 /** repo → the urls of its open PRs on the last check, to tell which are new. */
 const opened = new Map<string, Set<string>>();
+/** repo → its open PRs on the last check, as `settle` keeps them, to tell which merged or closed. */
+const tracked = new Map<string, Map<string, Tracked>>();
 /** A check interval is set in Settings, so new PRs get a notification. */
 let watching = false;
 /** `seen` as last saved. */
@@ -104,7 +107,10 @@ const runProjects = singleFlight(async () => {
         const remote = await remoteFor(project.path);
         const items = isKnown(remote) ? await listFor(project.path, remote, !fresh) : [];
         remember(items);
-        if (isKnown(remote)) announce(project, forgeFor(remote).repoKey(remote), items);
+        if (isKnown(remote)) {
+          announce(project, forgeFor(remote).repoKey(remote), items);
+          void announceFinished(project, forgeFor(remote).repoKey(remote), items);
+        }
         items.forEach((i) => live.add(i.link.url));
         // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
         for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
@@ -149,6 +155,27 @@ function announce(project: WingsProject, repo: string, items: ListedPr[]) {
   const fresh = newPulls(opened.get(repo), items).map((i) => ({ title: i.title, author: i.author, url: i.link.url, args: argsOf(i.link, i.title, project.path) }));
   opened.set(repo, new Set(items.map((i) => i.link.url)));
   if (watching) for (const note of notesFor(project.name, fresh)) void wings.notify({ ...note, projectId: project.id }).catch(console.error);
+}
+
+/**
+ * Tells the other built-in plugins (Issues) about a PR that left the repo's open list because it merged or closed. The
+ * list can't say which, so each gone PR's own status is read once; one that can't be read is tried again on the next lists.
+ */
+async function announceFinished(project: WingsProject, repo: string, items: ListedPr[]) {
+  const { next, gone } = settle(tracked.get(repo), items, { projectId: project.id, cwd: project.path });
+  tracked.set(repo, next);
+  for (const t of gone) {
+    try {
+      const forge = forgeOf(t.link);
+      const link = await forge.linkOf(argsOf(t.link, t.title, t.cwd));
+      const st = await forge.status(link);
+      const final = finalState(st.icon);
+      if (final) await wings.emit("pr-state", eventFor(t, final));
+    } catch (error) {
+      console.error(error);
+      retry(next, t);
+    }
+  }
 }
 
 /** Sign-in or Try again: the lists that failed, or came back empty for lack of it, are fetched again. */

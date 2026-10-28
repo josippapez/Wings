@@ -66,6 +66,8 @@ pub struct Permissions {
     /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
     /// `<plugin> <tool>` for one, like `tasks list`.
     pub call_tools: Vec<String>,
+    /// Events from other plugins the plugin hears with `wings.onEvent`: `<plugin> <event>`, like `pr-tracker pr-state`.
+    pub events: Vec<String>,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1186,6 +1188,11 @@ pub fn may_call_tool(plugin: &Plugin, target: &str, tool: &str) -> bool {
         Some((p, t)) => p == target && t == tool,
         None => e == target,
     })
+}
+
+/// Whether the plugin's `events` names this event of this plugin.
+pub fn may_hear_event(plugin: &Plugin, from: &str, name: &str) -> bool {
+    plugin.manifest.permissions.events.iter().any(|e| e.split_once(' ').is_some_and(|(p, n)| p == from && n == name))
 }
 
 pub fn may_create_worktrees(plugin: &Plugin) -> bool {
@@ -2405,6 +2412,10 @@ mod tests {
         assert!(may_call_tool(&caller, "tasks", "list") && may_call_tool(&caller, "changes", "recent_commits"));
         assert!(!may_call_tool(&caller, "tasks", "create") && !may_call_tool(&caller, "disk", "collect"));
         assert!(!may_call_tool(&manifest(serde_json::json!({})), "tasks", "list"));
+        let hearer = manifest(serde_json::json!({ "events": ["pr-tracker pr-state"] }));
+        assert!(may_hear_event(&hearer, "pr-tracker", "pr-state"));
+        assert!(!may_hear_event(&hearer, "pr-tracker", "other") && !may_hear_event(&hearer, "disk", "pr-state"));
+        assert!(!may_hear_event(&manifest(serde_json::json!({})), "pr-tracker", "pr-state"));
         let _ = fs::remove_dir_all(&dir);
     }
 

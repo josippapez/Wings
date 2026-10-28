@@ -783,6 +783,20 @@ export class PluginHost {
         entry[1].post({ event: "tool", data: { token, name: tool, hook: false, arguments: args, paneId: null, project, session: null } });
         return result;
       }
+      case "emit": {
+        const name = typeof p.name === "string" ? p.name : "";
+        if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) throw new Error("emit takes an event name of lowercase letters, digits and dashes");
+        const data = p.data === undefined ? null : p.data;
+        const json = JSON.stringify(data);
+        if (json === undefined || new TextEncoder().encode(json).length > 16 * 1024) throw new Error("emit data is up to 16 KB of JSON");
+        // Rust checks, per receiver, that both plugins are Wings' own and that the receiver declared `<plugin> <name>`.
+        for (const [, frame] of this.frames) {
+          if (frame.kind !== "main" || !frame.ready || frame.id === pluginId) continue;
+          const allowed = await invoke("plugin_event_check", { pluginId, receiver: frame.id, name }).then(() => true, () => false);
+          if (allowed) frame.post({ event: "plugin-event", data: { from: pluginId, name, data: JSON.parse(json) } });
+        }
+        return null;
+      }
       case "createWorktree": {
         const branch = typeof p.branch === "string" ? p.branch : "";
         if (p.base != null && typeof p.base !== "string") throw new Error("createWorktree base must be a branch name");

@@ -595,6 +595,18 @@ interface Wings {
    */
   callTool(name: string, args?: Record<string, unknown>, options?: { project?: string }): Promise<{ text: string; isError: boolean }>;
   /**
+   * Needs Wings 0.1.98. Only between Wings' own plugins. Sends the event `name` (lowercase letters, digits and dashes)
+   * with JSON `data` (up to 16 KB) to every other plugin that declared `<this plugin's id> <name>` in `permissions.events`
+   * and is running. Resolves once it is delivered; a plugin that didn't declare it never hears it.
+   */
+  emit(name: string, data?: unknown): Promise<void>;
+  /**
+   * Needs `permissions.events` and Wings 0.1.98. Only between Wings' own plugins. Calls the listener with each event
+   * another plugin sent that this one declared, like `{ from: "pr-tracker", name: "pr-state", data }`. Main script only.
+   * Returns a function that removes the listener.
+   */
+  onEvent(listener: (event: { from: string; name: string; data: unknown }) => void): () => void;
+  /**
    * After `exec` rejected with "<program> is not installed or not on PATH": Wings asks you, installs it in a new tab
    * and restarts the plugin once it's there. Only `az`, `gh` and `glab`, and only ones `permissions.exec` names.
    * Resolves true once the install started (or it's already installed), false if you cancelled.
