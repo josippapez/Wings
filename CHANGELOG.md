@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.91 · 2026-10-28
+
+- **New versions stay in sight.** When an update is out, the sidebar shows "Update to Wings …" above Settings until you install it, even after you close its notice. Click it to see what's new and install.
+
 ## 0.1.90 · 2026-10-28
 
 - **Agents don't pull you away.** When an agent opens a terminal for a command, you stay on the tab and project you're in. Its terminal starts in the background, below the agent or in its own tab, and is there when you go look.
