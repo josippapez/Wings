@@ -96,7 +96,7 @@ function Source({ plugin: p }: { plugin: PluginView }) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports, agentActivity, diskUsage, sendToAgents } = plugin.permissions;
+  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports, agentActivity, diskUsage, sendToAgents, worktrees } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars, views, settings, hooks = [] } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
@@ -111,6 +111,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Start these commands in a new terminal, as you", items: panes ?? [] },
     { title: "Show desktop notifications, up to 20 a minute", items: [], on: notify },
     { title: "Type messages into the prompts of the agents in your terminals", items: [], on: sendToAgents },
+    { title: "Make git worktrees of your projects, on new branches beside the repo", items: [], on: worktrees },
     { title: "Read these parts of your Claude Code sessions", items: transcript },
     { title: "Read your Claude usage limits and each session's context and cache, from Claude Code's status line", items: [], on: statusline },
     { title: "Read what your OpenCode sessions are doing: their latest prompts, tool calls and token use", items: [], on: agentActivity },

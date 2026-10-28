@@ -89,6 +89,8 @@ export type PluginPermissions = {
   diskUsage: boolean;
   /** Types messages into the prompts of the agents in your panes. */
   sendToAgents: boolean;
+  /** Makes git worktrees of your projects. */
+  worktrees: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */

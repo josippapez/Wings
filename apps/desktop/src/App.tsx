@@ -1238,9 +1238,9 @@ const leftPanel = usePanelRef();
         tabsRef.current = set(tabsRef.current);
         setTabs(set);
       },
-      openPane: async ({ spaceId, cwd, input, placement }) => {
+      openPane: async ({ spaceId, cwd, input, placement, background }) => {
         let key: string | undefined;
-        if (placement === "tab") key = openTab(spaceId, input, null, cwd);
+        if (placement === "tab") key = openTab(spaceId, input, null, cwd, undefined, !background);
         else {
           const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
           if (!tab || !isPaneTab(tab)) throw new Error('There is no pane to split. Use placement "tab".');
@@ -1253,6 +1253,7 @@ const leftPanel = usePanelRef();
         return paneId;
       },
       sendToAgent: (paneId, text) => sendToAgent(paneId, text),
+      addProject: (space) => setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space])),
       focusPane: (paneId) => {
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         const tab = key && tabOfPane(tabsRef.current, key);

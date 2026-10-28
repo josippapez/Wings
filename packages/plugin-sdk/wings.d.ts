@@ -568,6 +568,8 @@ interface Wings {
     args?: string[];
     cwd?: string;
     placement?: "tab" | "right" | "down";
+    /** Wings 0.1.93: false opens a new tab behind the one on screen, without taking the keyboard. */
+    focus?: boolean;
   }): Promise<{ paneId: string }>;
   /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
   focusPane(paneId: string): Promise<void>;
@@ -578,6 +580,12 @@ interface Wings {
    * waiting on a permission prompt, or one with text the user typed and has not sent. Up to 8 KB; newlines and tabs are fine.
    */
   sendToAgent(paneId: string, text: string): Promise<{ submitted: boolean }>;
+  /**
+   * Needs `permissions.worktrees` and Wings 0.1.93. Makes a git worktree of a project (the one on screen without
+   * `projectId`) on a new `branch` from `base`, or from the repo's default branch, in `<repo>-worktrees/<branch>`
+   * beside the repo, and adds it to Wings as a project under that one. Rejects when the branch or folder exists.
+   */
+  createWorktree(options: { projectId?: string; branch: string; base?: string }): Promise<{ projectId: string; path: string }>;
   /**
    * After `exec` rejected with "<program> is not installed or not on PATH": Wings asks you, installs it in a new tab
    * and restarts the plugin once it's there. Only `az`, `gh` and `glab`, and only ones `permissions.exec` names.

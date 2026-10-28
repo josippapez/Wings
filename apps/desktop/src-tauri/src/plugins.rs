@@ -60,6 +60,9 @@ pub struct Permissions {
     /// Lets the plugin type a message into the prompt of an agent running in a pane, with `wings.sendToAgent`. Enter
     /// is only pressed while the user lets agents message each other.
     pub send_to_agents: bool,
+    /// Lets the plugin make a git worktree of one of your projects with `wings.createWorktree`: a new branch in a
+    /// folder beside the repo, added to Wings as a project.
+    pub worktrees: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1174,6 +1177,10 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
 }
 
 /// Whether the plugin may read what an OpenCode session is doing.
+pub fn may_create_worktrees(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.worktrees
+}
+
 pub fn may_send_to_agents(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.send_to_agents
 }
@@ -2381,6 +2388,8 @@ mod tests {
         };
         assert!(!may_send_to_agents(&manifest(serde_json::json!({ "panes": ["claude"] }))));
         assert!(may_send_to_agents(&manifest(serde_json::json!({ "sendToAgents": true }))));
+        assert!(!may_create_worktrees(&manifest(serde_json::json!({ "sendToAgents": true }))));
+        assert!(may_create_worktrees(&manifest(serde_json::json!({ "worktrees": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

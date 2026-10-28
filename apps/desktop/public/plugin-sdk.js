@@ -324,6 +324,8 @@
     focusPane: (paneId) => call("focusPane", { paneId }),
     /** With `permissions.sendToAgents`: pastes a message into the prompt of the agent in a pane, and resolves `{ submitted }`. */
     sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
+    /** With `permissions.worktrees`: makes a worktree on a new branch and adds it as a project; resolves `{ projectId, path }`. */
+    createWorktree: (options) => call("createWorktree", options),
     /**
      * Asks Wings to install a command-line tool the plugin runs, like "gh", when `exec` rejected with
      * "<program> is not installed or not on PATH". Wings shows its own confirmation and installs it the vendor's

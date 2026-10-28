@@ -1324,6 +1324,25 @@ fn plugin_focus_pane(state: State<AppState>, plugin_id: String, pane_id: String)
     pane(&state, &pane_id).map(|_| ())
 }
 
+/// A plugin makes a worktree of one of your projects, on a new branch from `base` or the repo's default branch, and
+/// adds it to Wings as a project under that one, as the New agent in worktree dialog does.
+#[tauri::command(async)]
+fn plugin_worktree_create(state: State<AppState>, plugin_id: String, space_id: String, branch: String, base: Option<String>) -> Res<SpaceView> {
+    if !plugins::may_create_worktrees(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not create worktrees"));
+    }
+    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("No such project in Wings")?.path.clone();
+    let dir = std::path::Path::new(&path);
+    let base = match base {
+        Some(base) => base,
+        None => worktree::info(dir)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
+    };
+    let folder = worktree::create(dir, &branch, &base)?;
+    let view = spaces::view(&state.spaces.lock().unwrap().add_worktree(&folder.to_string_lossy(), &space_id));
+    gitwatch::resync();
+    Ok(view)
+}
+
 /// A plugin wants to type into an agent's pane: it needs the permission, and the pane has to be open. The window
 /// checks the rest, as it does for an agent's `send_to_agent`.
 #[tauri::command]
@@ -1894,6 +1913,7 @@ pub fn run() {
             plugin_open_pane,
             plugin_focus_pane,
             plugin_send_to_agent,
+            plugin_worktree_create,
             plugin_notify,
             plugin_tools,
             plugin_tool,

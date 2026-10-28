@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type Space, type ToolStatus, type ViewPlace } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { diskFindRequest, diskToken, diskUsageRequest } from "@/lib/plugin-disk";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
@@ -102,7 +102,7 @@ export type PageTab = { tabId: string; spaceId: string; args?: unknown };
 export type PanePlacement = "tab" | "right" | "down";
 const placements: unknown[] = ["tab", "right", "down"] satisfies PanePlacement[];
 /** Where Rust approved a plugin's pane: its project, a folder inside it, and the line to type into its shell. */
-export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement };
+export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement; /** A new tab that opens behind the one on screen. */ background?: boolean };
 
 
 type Callbacks = {
@@ -124,6 +124,8 @@ type Callbacks = {
   focusPane: (paneId: string) => void;
   /** Pastes a message into the prompt of the agent in a pane; whether Enter was pressed. Rejects for a pane without an agent. */
   sendToAgent: (paneId: string, text: string) => Promise<boolean>;
+  /** A worktree a plugin made became a project in Wings. */
+  addProject: (space: Space) => void;
   /**
    * Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself.
    * For a tab, `multiple` always opens a new one, `newTab` does so for any view, and `args` is what the page reads with `viewArgs`.
@@ -759,9 +761,20 @@ export class PluginHost {
           pluginId,
           request: { command: text("command"), args, cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
         });
-        const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement });
+        if (p.focus !== undefined && typeof p.focus !== "boolean") throw new Error("openPane focus must be true or false");
+        const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement, background: p.focus === false });
         await this.listed(paneId);
         return { paneId };
+      }
+      case "createWorktree": {
+        const branch = typeof p.branch === "string" ? p.branch : "";
+        if (p.base != null && typeof p.base !== "string") throw new Error("createWorktree base must be a branch name");
+        const spaceId = p.projectId == null ? this.callbacks.currentProject() : String(p.projectId);
+        if (!spaceId) throw new Error("No project is open in Wings");
+        // Rust checks the permission and the branch, and makes the worktree beside the repo.
+        const space = await invoke<Space>("plugin_worktree_create", { pluginId, spaceId, branch, base: p.base ?? null });
+        this.callbacks.addProject(space);
+        return { projectId: space.id, path: space.path };
       }
       case "sendToAgent": {
         const paneId = String(p.paneId);
