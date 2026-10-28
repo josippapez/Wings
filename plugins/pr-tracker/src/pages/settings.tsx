@@ -7,6 +7,7 @@ import { useSetting } from "wings-plugin-sdk/react";
 import { Button, Checkbox, Confirm, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
 import { mentionsOn } from "../lib/inbox";
 import { ch } from "../lib/messages";
+import { tellAgents } from "../lib/news";
 import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
 
 export const page = { place: "settings" };
@@ -102,11 +103,24 @@ function MentionsField() {
   );
 }
 
+function AgentsField() {
+  const [on, setOn] = useSetting(tellAgents);
+
+  return (
+    <Stack gap="s">
+      <Heading>Agents</Heading>
+      <Text tone="muted">When a coding agent works on a pull request's branch, send it a message when the pull request's checks fail, someone else comments on it or it gets merge conflicts. It checks those pull requests every 2 minutes, in the background too, and sends at most 5 messages an hour for each. Wings presses Enter for you only while "Let agents message each other" is on in Settings, Agents.</Text>
+      {on === null ? null : <Checkbox checked={on} onChange={(checked) => void setOn(checked)}>Tell the agent on a PR's branch about failed checks and new review comments</Checkbox>}
+    </Stack>
+  );
+}
+
 export default function PrTrackerSettings() {
   return (
     <Stack gap="l">
       <WatchField />
       <MentionsField />
+      <AgentsField />
       <Heading>Pull request hosts</Heading>
       <Text tone="muted">GitHub (including GitHub Enterprise), GitLab and Azure DevOps use the gh, glab and az sign-in. Bitbucket Cloud and Codeberg use a token saved here.</Text>
       {HOSTS.map((h) => <TokenField key={h.secret} host={h} />)}

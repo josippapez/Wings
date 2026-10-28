@@ -20,6 +20,7 @@ import { problemOf } from "./main/problems";
 import { pullsFor, refreshProjects, setWatching } from "./main/projects";
 import { remoteFor, remotes } from "./main/remote";
 import { connectClis, install, retry, signIn } from "./main/retry";
+import { startNews } from "./main/news";
 import { links, state, sync } from "./main/state";
 import { refreshStatus } from "./main/status";
 import { serveTab } from "./main/tab";
@@ -95,6 +96,9 @@ void watchMinutes.get().then((m) => ((minutes = m), watch()));
 watchMinutes.onChange((m) => ((minutes = m), watch()));
 void mentionsOn.get().then((on) => ((mentions = on), watch()));
 mentionsOn.onChange((on) => ((mentions = on), watch()));
+
+// An agent on a PR's branch hears about its failed checks, new comments and conflicts, when the setting is on.
+startNews();
 
 registerTools(tools);
 
