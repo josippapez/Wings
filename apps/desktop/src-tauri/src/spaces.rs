@@ -156,11 +156,18 @@ pub fn include_text(lines: &[String]) -> Result<String, String> {
 /// A setup command as stored text: one shell line, or "" to clear it.
 pub fn setup_text(setup: &str) -> Result<String, String> {
     let setup = setup.trim();
-    if setup.chars().any(|c| c.is_control() && c != '\t') {
-        return Err("The setup command is one line, with no control characters".into());
+    // What the approval prompt shows has to be what runs: no invisible, look-alike or right-to-left characters.
+    if !setup.chars().all(|c| c == ' ' || c.is_ascii_graphic()) {
+        return Err("The setup command is one line of plain ASCII characters".into());
+    }
+    if setup.len() > SETUP_MAX {
+        return Err(format!("The setup command is at most {SETUP_MAX} characters"));
     }
     Ok(setup.to_string())
 }
+
+/// So the approval prompt shows the whole command at once.
+pub const SETUP_MAX: usize = 500;
 
 /// What a project's worktrees get, as plugins and tools show it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -264,6 +271,16 @@ fn parse_status(text: &str) -> GitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_setup_line_is_plain_ascii_that_fits_in_the_prompt() {
+        assert_eq!(setup_text("  pnpm install  ").unwrap(), "pnpm install");
+        // Zero-width space, right-to-left override, a Cyrillic look-alike, a tab: shown differently from how they run.
+        for bad in ["pnpm\u{200B} install", "echo \u{202E}lmth.x", "pnpm іnstall", "pnpm\tinstall"] {
+            assert!(setup_text(bad).unwrap_err().contains("plain ASCII"), "{bad:?}");
+        }
+        assert!(setup_text(&"a".repeat(SETUP_MAX + 1)).unwrap_err().contains("at most"));
+    }
 
     #[test]
     fn old_files_load_without_added_time_or_pin_and_new_fields_round_trip() {

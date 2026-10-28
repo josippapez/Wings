@@ -237,6 +237,22 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
     }
 
     fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String> {
+        // One prompt per project at a time, so a second request can't take the place of the one the user is reading.
+        static WAITING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        struct Waiting(String);
+        impl Drop for Waiting {
+            fn drop(&mut self) {
+                WAITING.lock().unwrap().retain(|p| p != &self.0);
+            }
+        }
+        let _waiting = {
+            let mut waiting = WAITING.lock().unwrap();
+            if waiting.iter().any(|p| p == project) {
+                return Err(format!("A setup command for {project} is already waiting for the user. Try again after they answer."));
+            }
+            waiting.push(project.to_string());
+            Waiting(project.to_string())
+        };
         let focused = self.0.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
         if !focused {
             // So the user comes back to answer; a refused one (rate limit) doesn't stop the prompt.
