@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.92 · 2026-10-28
+
+- **Messages between agents queue up.** With "Let agents message each other" off, a message left in an agent's prompt blocked every later one until you pressed Enter or Ctrl+C there. Now they wait in the prompt together and go when you press Enter. Only text you typed yourself still stops a message.
+
 ## 0.1.91 · 2026-10-28
 
 - **New versions stay in sight.** When an update is out, the sidebar shows "Update to Wings …" above Settings until you install it, even after you close its notice. Click it to see what's new and install.
