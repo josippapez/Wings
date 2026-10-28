@@ -17,6 +17,15 @@ case "$(uname -m)" in
 esac
 REPO=josippapez/Wings
 
+# Checks before the build, which takes minutes: a release is what's committed, its tests pass, and each plugin's
+# committed built files match its source (`pnpm check` compares the content of each built file).
+[ -z "$(git status --porcelain)" ] || { echo "Commit or stash your changes first: a release builds what's in the tree." >&2; git status --short >&2; exit 1; }
+pnpm test
+(cd src-tauri && cargo test --lib --quiet)
+(cd ../../packages/plugin-sdk && pnpm install --frozen-lockfile >/dev/null)
+(cd ../../packages/plugin-ui && pnpm install --frozen-lockfile >/dev/null)
+(cd ../../plugins && pnpm install --frozen-lockfile >/dev/null && pnpm check)
+
 # Read the key into the build's environment only. Tauri signs the update archive with it; it is never written elsewhere.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}"
@@ -48,11 +57,6 @@ const latest = {
 };
 fs.writeFileSync(process.argv[1], JSON.stringify(latest, null, 2) + "\n");
 ' "$DIR/latest.json"
-
-# Plugins ship their committed built files, so a release stops if one no longer matches its source (`pnpm check` compares the content of each built file).
-(cd ../../packages/plugin-sdk && pnpm install --frozen-lockfile >/dev/null)
-(cd ../../packages/plugin-ui && pnpm install --frozen-lockfile >/dev/null)
-(cd ../../plugins && pnpm install --frozen-lockfile >/dev/null && pnpm check)
 
 # Each official plugin as <id>.wings-plugin, for installing from a file. A github.com/josippapez/Wings/plugins/<id> link
 # installs that folder from the default branch instead (plugin_store.rs, pick).
