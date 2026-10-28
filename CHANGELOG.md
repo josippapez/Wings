@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.84 · 2026-10-28
+
+- **Diffs open beside your work.** A diff from the PR tab, a pane badge or the session panel opens in a split to the right of that tab, so the PR page or the terminal stays in view. Drag the edge to resize it. The expand button fills the window with it, as before, and the button there docks it back. The diff only shows on the tab you opened it from.
+
 ## 0.1.83 · 2026-10-27
 
 - **The running dot shows for scripts too.** A tab running a shell script or a wrapped command, like `( … ) | tee`, looked idle. It shows the green dot now.
