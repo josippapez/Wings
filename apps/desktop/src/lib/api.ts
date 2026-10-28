@@ -180,7 +180,7 @@ export type McpCall = {
 };
 /** Claude asked Wings (the `open_pane` tool) for a new tab. Answer with `mcpToolResult`: the pane id, or the error. */
 /** `run`: Claude asked for Enter after `input`, which the window presses only while the user allows it. */
-export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null; run: boolean };
+export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null; run: boolean; /** The calling agent's pane, to split below. */ nextTo: string | null };
 /** Claude asked Wings (`close_pane`) to close a pane. Answer with `mcpToolResult`. */
 export type McpClosePane = { callId: number; paneId: string };
 /** Claude asked Wings (`send_to_agent`) to type into another agent's prompt. Answer with `mcpToolResult`: `{ submitted }`, or the error. */

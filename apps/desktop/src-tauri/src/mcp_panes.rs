@@ -45,6 +45,8 @@ pub struct OpenPlan {
     pub input: Option<String>,
     /// Claude asked for Enter after `input`. The window presses it only while the user's setting allows it.
     pub run: bool,
+    /// The caller's pane, to open as a split below it in its tab rather than as a new tab.
+    pub next_to: Option<String>,
 }
 
 /// What the window did with an `OpenPlan`.
@@ -96,13 +98,14 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "open_pane",
-            "description": "Open a new tab in Wings, in any folder, and optionally type a command in it, like a dev server to keep running there. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. When it ran, the reply has a waitCommand: run it with Bash in the background and it exits, printing the end of the output, once the command finishes. A command goes to a tab an agent opened before in the same folder when nothing runs there (reusedTab), instead of opening another. Returns the pane's id. Close the tab with close_pane once you're done with it, unless it runs something the user should keep, like a dev server they're using.",
+            "description": "Open a terminal in Wings, in any folder, and optionally type a command in it, like a build, a test run or a dev server. Called from a Wings pane, it opens as a split below your pane, which the user can hide and show; with new_tab, or for a folder in another project, it opens as a new tab instead, which suits something the user should keep, like a dev server they're using. With run, Wings also presses Enter, but only if the user turned on \"Let Claude run commands in new tabs\" in Wings Settings, Agents; otherwise the command waits for the user. The reply says whether it ran (commandRun), so don't wait on a command that didn't. When it ran, the reply has a waitCommand: run it with Bash in the background and it exits, printing the end of the output, once the command finishes. A command goes to a terminal you opened before in the same folder when nothing runs there (reusedTab), instead of opening another. Returns the pane's id. Close it with close_pane once you're done with it, unless it runs something the user should keep.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "cwd": { "type": "string", "description": "Absolute path of the folder to start in. A folder inside one of the user's Wings projects opens in that project; any other folder opens in your own project's tab strip. Leave out for the root of your own project." },
                     "command": { "type": "string", "description": "One line, up to 1 KB, no control characters." },
-                    "run": { "type": "boolean", "default": false, "description": "Press Enter after the command, if the user's setting allows it." }
+                    "run": { "type": "boolean", "default": false, "description": "Press Enter after the command, if the user's setting allows it." },
+                    "new_tab": { "type": "boolean", "default": false, "description": "Open a new tab instead of a split below your pane." }
                 }
             }
         }),
@@ -158,7 +161,10 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
         "open_pane" => {
             let caller_pane = caller().and_then(|id| host.panes().into_iter().find(|p| p.id == id));
             let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
-            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command"), run).and_then(|plan| {
+            let new_tab = args.get("new_tab").and_then(Value::as_bool).unwrap_or(false);
+            plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command"), run).and_then(|mut plan| {
+                // From a pane, in its own project: a split below the caller, which the user can hide and show.
+                plan.next_to = caller_pane.filter(|p| !new_tab && p.space_id == plan.space_id).map(|p| p.id);
                 let typed = plan.input.is_some();
                 let opened = host.open(plan)?;
                 let mut reply = json!({ "paneId": opened.pane_id, "commandTyped": typed, "commandRun": opened.ran });
@@ -364,7 +370,7 @@ fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, comm
         }
         None => (current.ok_or("Pass cwd, a folder inside one of the user's Wings projects")?, None),
     };
-    Ok(OpenPlan { space_id: spaces[project].id.clone(), cwd: dir, input, run })
+    Ok(OpenPlan { space_id: spaces[project].id.clone(), cwd: dir, input, run, next_to: None })
 }
 
 #[cfg(test)]
@@ -565,7 +571,7 @@ mod tests {
         assert_eq!(reply["commandRun"], false);
         assert!(reply["note"].as_str().unwrap().contains("Settings, Agents"), "{reply}");
         let opened = host.opened.borrow();
-        assert_eq!(opened[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("npm test".into()), run: false });
+        assert_eq!(opened[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("npm test".into()), run: false, next_to: Some("p1".into()) });
         assert_eq!(opened[1].input.as_deref(), Some("ls"));
         assert!(opened[1].run);
         assert_eq!(opened[1].cwd.as_deref(), Some(sub.canonicalize().unwrap().to_str().unwrap()));
@@ -584,8 +590,11 @@ mod tests {
         assert_eq!(host.opened.borrow().len(), 2, "refused calls open nothing");
         // A folder outside every project opens in the caller's project.
         run(&host, "open_pane", json!({ "cwd": dir.to_str().unwrap() }), Some("p1")).unwrap();
-        let outside = OpenPlan { space_id: "s1".into(), cwd: Some(dir.canonicalize().unwrap().to_string_lossy().into_owned()), input: None, run: false };
+        let outside = OpenPlan { space_id: "s1".into(), cwd: Some(dir.canonicalize().unwrap().to_string_lossy().into_owned()), input: None, run: false, next_to: Some("p1".into()) };
         assert_eq!(host.opened.borrow()[2], outside);
+        // new_tab, or no calling pane: a tab, not a split.
+        run(&host, "open_pane", json!({ "command": "npm run dev", "new_tab": true }), Some("p1")).unwrap();
+        assert_eq!(host.opened.borrow()[3].next_to, None);
         // With the setting on, run presses Enter.
         let allowed = Fake { allow_run: true, ..host };
         let reply: Value = serde_json::from_str(&run(&allowed, "open_pane", json!({ "command": "npm run dev", "run": true }), Some("p1")).unwrap()).unwrap();

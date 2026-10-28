@@ -10,12 +10,12 @@ export function paneIds(node: LayoutNode): string[] {
 }
 
 /** Puts `newId` beside `target`: to the right for "row", below for "column". */
-export function split(node: LayoutNode, target: string, dir: "row" | "column", newId: string): LayoutNode {
+export function split(node: LayoutNode, target: string, dir: "row" | "column", newId: string, ratio = 0.5): LayoutNode {
   if (node.kind === "pane") {
     if (node.id !== target) return node;
-    return { kind: "split", id: crypto.randomUUID(), dir, ratio: 0.5, a: node, b: pane(newId) };
+    return { kind: "split", id: crypto.randomUUID(), dir, ratio, a: node, b: pane(newId) };
   }
-  return { ...node, a: split(node.a, target, dir, newId), b: split(node.b, target, dir, newId) };
+  return { ...node, a: split(node.a, target, dir, newId, ratio), b: split(node.b, target, dir, newId, ratio) };
 }
 
 /** Removes a pane; its sibling takes the parent's place. Returns null when the last pane goes. */

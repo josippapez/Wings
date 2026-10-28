@@ -50,6 +50,8 @@ type GridProps = {
   onOpenStatus: (pluginId: string, page: string) => void;
   /** The cards plugins float over each pane's terminal. A click on a card's title opens its page, like a status. */
   rails: Record<string, PaneRailEntry[]>;
+  /** Terminals an agent opened as splits below its own pane, by the agent's pane key: they hide and show together. */
+  commands: Record<string, number>;
   actions: PaneActions;
 };
 
@@ -233,6 +235,20 @@ function PaneCard(props: GridProps & { paneKey: string }) {
           </span>
         )}
         {label?.detail && <span className="min-w-0 truncate text-[12px] text-muted-foreground">{label.detail}</span>}
+        {props.commands[paneKey] > 0 && (
+          // Hiding is zooming the agent's pane: the terminals below it keep running out of sight.
+          <Button
+            variant="secondary"
+            size="xs"
+            onClick={() => actions.toggleZoom(paneKey)}
+            aria-pressed={!zoomed}
+            title={zoomed ? "Show the terminals this agent opened below it" : "Hide the terminals this agent opened below it. They keep running."}
+            className="h-6 shrink-0 gap-1 rounded-full px-2 text-[12px] text-muted-foreground hover:text-foreground"
+          >
+            <SquareTerminalIcon className="size-3.5" aria-hidden />
+            {props.commands[paneKey]} {zoomed ? "hidden" : props.commands[paneKey] === 1 ? "terminal" : "terminals"}
+          </Button>
+        )}
         <div className="flex min-w-0 flex-1 pl-2">
           <OverflowRow
             items={props.badges[paneKey] ?? []}

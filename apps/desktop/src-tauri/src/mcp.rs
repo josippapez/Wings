@@ -236,7 +236,7 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
     }
 
     fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<crate::mcp_panes::Opened, String> {
-        let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input, "run": plan.run });
+        let payload = json!({ "spaceId": plan.space_id, "cwd": plan.cwd, "input": plan.input, "run": plan.run, "nextTo": plan.next_to });
         // `pane_create` lets this tab start outside its project. The grant goes once the window answers, used or not.
         let grants = &self.0.state::<AppState>().pane_grants;
         let grant = plan.cwd.as_ref().map(|dir| (plan.space_id.clone(), PathBuf::from(dir)));

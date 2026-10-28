@@ -315,8 +315,8 @@ const leftPanel = usePanelRef();
   agentsMessageRef.current = agentsMessage;
   /** Panes an agent opened with `open_pane`, by Rust pane id: the only ones it may reuse or close. */
   const agentTabs = useRef(new Map<string, AgentTab>());
-  /** The same panes, for the mark on their tabs. */
-  const [agentPaneIds, setAgentPaneIds] = useState<ReadonlySet<string>>(new Set());
+  /** The same panes and their owners, for the mark on their tabs and the hide/show chip on the agent's pane. */
+  const [agentPanes, setAgentPanes] = useState<ReadonlyMap<string, string | null>>(new Map());
   const [sleepTick, setSleepTick] = useState(0);
   const [newTabPage, setNewTabPage] = useState<string>("terminal");
   const [newProjectOpens, setNewProjectOpens] = useState<NewProjectOpens>("terminal");
@@ -639,17 +639,31 @@ const leftPanel = usePanelRef();
         const ran = call.run && call.input !== null && agentsRunRef.current;
         const input = ran ? `${call.input}\r` : call.input;
         const live = new Set(Object.values(panesRef.current).flatMap((m) => (m.paneId ? [m.paneId] : [])));
-        const idle = idleAgentTab(agentTabs.current, { spaceId: call.spaceId, cwd: call.cwd }, live, paneInfoRef.current, agentsRef.current);
+        const keyOf = (id: string) => Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === id);
+        const ownerKey = call.nextTo ? keyOf(call.nextTo) : undefined;
+        const ownerTab = ownerKey ? tabOfPane(tabsRef.current, ownerKey) : undefined;
+        const owner = ownerKey && ownerTab?.spaceId === call.spaceId ? call.nextTo : null;
+        // Its splits come back into view for a new command, if you had hidden them.
+        const show = () => ownerTab && updateTab(ownerTab.id, (t) => (t.zoomedPane === ownerKey ? { zoomedPane: null } : {}));
+        const idle = idleAgentTab(agentTabs.current, { spaceId: call.spaceId, cwd: call.cwd, owner }, live, paneInfoRef.current, agentsRef.current);
         if (idle && input !== null) {
           await api.paneWrite(idle, input);
+          if (owner) show();
           void api.mcpToolResult(call.callId, JSON.stringify({ paneId: idle, ran, reused: true }), false);
           return;
         }
-        const key = openTab(call.spaceId, input, null, call.cwd);
+        let key: string;
+        if (owner && ownerKey && ownerTab) {
+          // Below the agent, a third of its height, and the keyboard stays with the agent. Its next ones go beside the
+          // last, so the agent's pane doesn't shrink with each command.
+          const beside = [...agentTabs.current].filter(([, at]) => at.owner === owner).flatMap(([id]) => keyOf(id) ?? []).filter((k) => paneIds(ownerTab.layout).includes(k)).at(-1);
+          key = createPane(call.spaceId, input, null, call.cwd);
+          updateTab(ownerTab.id, (t) => ({ layout: beside ? split(t.layout, beside, "row", key) : split(t.layout, ownerKey, "column", key, 0.65), zoomedPane: null }));
+        } else key = openTab(call.spaceId, input, null, call.cwd);
         const paneId = await terminals.get(key)?.whenStarted;
         if (!paneId) throw new Error("The pane didn't start");
-        agentTabs.current.set(paneId, { spaceId: call.spaceId, cwd: call.cwd });
-        setAgentPaneIds(new Set(agentTabs.current.keys()));
+        agentTabs.current.set(paneId, { spaceId: call.spaceId, cwd: call.cwd, owner });
+        setAgentPanes(new Map([...agentTabs.current].map(([id, at]) => [id, at.owner])));
         void api.mcpToolResult(call.callId, JSON.stringify({ paneId, ran, reused: false }), false);
       } catch (e) {
         void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
@@ -662,7 +676,7 @@ const leftPanel = usePanelRef();
         return void api.mcpToolResult(call.callId, why, true);
       }
       agentTabs.current.delete(call.paneId);
-      setAgentPaneIds(new Set(agentTabs.current.keys()));
+      setAgentPanes(new Map([...agentTabs.current].map(([id, at]) => [id, at.owner])));
       closePane(key);
       void api.mcpToolResult(call.callId, "{}", false);
     });
@@ -675,7 +689,7 @@ const leftPanel = usePanelRef();
       }
     });
     return () => void Promise.all([off, offClose, offSend]).then((all) => all.forEach((unlisten) => unlisten()));
-  }, [openTab, closePane]);
+  }, [openTab, closePane, createPane, updateTab]);
 
   const splitPane = useCallback(
     (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null) => {
@@ -1537,6 +1551,13 @@ const leftPanel = usePanelRef();
 
   /** Each tab's title: your name, or the automatic one with what tells it from a tab that would read the same. */
   const shown = tabTitles(spaceTabs.flatMap((t) => (isPaneTab(t) ? [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }] : [])));
+  /** How many terminals each agent opened as splits below its own pane, by the agent's pane key. */
+  const commandCounts: Record<string, number> = {};
+  const keyOfPaneId = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : [])));
+  for (const [id, owner] of agentPanes) {
+    const ownerKey = owner ? keyOfPaneId[owner] : undefined;
+    if (ownerKey && keyOfPaneId[id]) commandCounts[ownerKey] = (commandCounts[ownerKey] ?? 0) + 1;
+  }
   const tabViews: TabView[] = spaceTabs.map((t) => {
     if (isProjectTab(t)) return { id: t.id, project: { title: "Project page" } };
     if (isViewTab(t)) {
@@ -1553,7 +1574,7 @@ const leftPanel = usePanelRef();
       focusedPane: t.focusedPane,
       state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
       running: [...new Set(paneIds(t.layout).flatMap((key) => labels[key]?.running ?? []))],
-      byAgent: paneIds(t.layout).some((key) => agentPaneIds.has(panes[key]?.paneId ?? "")),
+      byAgent: paneIds(t.layout).some((key) => agentPanes.get(panes[key]?.paneId ?? "") === null),
     };
   });
 
@@ -1928,6 +1949,7 @@ const leftPanel = usePanelRef();
                     statuses={paneStatuses}
                     rails={paneRails}
                     onOpenStatus={onOpenStatus}
+                    commands={commandCounts}
                     actions={actions}
                   />
                   ),
