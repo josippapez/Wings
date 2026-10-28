@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.93 · 2026-10-28
+
+- **Start on what's assigned to you.** In Schedules, add an entry "When something is assigned to me" for a project. Every 5 minutes it checks Azure DevOps, GitHub or GitLab for tickets newly assigned to you, and asks before doing anything. Start makes a worktree on a new branch for the ticket, if there's enough free disk, and opens your agent there in the background.
+- **Plugins can make worktrees and open tabs in the background.** For plugin authors: `wings.createWorktree` and `openPane({ focus: false })`.
+
 ## 0.1.92 · 2026-10-28
 
 - **Messages between agents queue up.** With "Let agents message each other" off, a message left in an agent's prompt blocked every later one until you pressed Enter or Ctrl+C there. Now they wait in the prompt together and go when you press Enter. Only text you typed yourself still stops a message.
