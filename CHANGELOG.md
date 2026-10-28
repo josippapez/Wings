@@ -5,6 +5,7 @@ What changed in each Wings release, newest first.
 ## 0.1.95 · 2026-10-28
 
 - **Schedules fits each project.** The Schedules page shows the entries of the project you open it in, with All projects for the rest. An entry can ask only about tickets whose title starts with FE, BE or any prefixes you give it.
+- **Pick the branch work starts from.** An entry's "Start branches from", like origin/develop, for repos whose default branch isn't where work starts. Agents can change an entry with `schedules__update`, or `wings schedules update` on the command line.
 - **Start where you want, and again.** Start asks which project when the ticket's board feeds more than one, and a started ticket can be started again. Tickets in a state the entry doesn't ask about get Start anyway.
 - **Agents a plugin started say so.** The Agents list shows a badge like "Schedules" next to an agent a plugin opened.
 - **Tidier worktrees in the sidebar.** A worktree shows its branch once, and no longer repeats its project's pull requests and issues.
