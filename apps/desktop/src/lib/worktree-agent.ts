@@ -25,6 +25,14 @@ export function baseChoices(info: { defaultBranch: string | null; branches: stri
   return info.defaultBranch ? [info.defaultBranch, ...info.branches.filter((b) => b !== info.defaultBranch)] : info.branches;
 }
 
+/** The folder name Wings gives a worktree for `branch`: anything but letters, digits, `.`, `_` and `-` becomes `-`, and none starts or ends with `-` or `.` (same as `slug` in worktree.rs). */
+export const worktreeFolder = (branch: string) => branch.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+
+/** What a worktree row is titled and whether it still needs a branch line: a folder that is just the branch spelled as a path says nothing more, so the branch alone is the title. */
+export function worktreeTitle(name: string, branch: string | null | undefined): { title: string; subtitle: string | null } {
+  return branch && worktreeFolder(branch) === name ? { title: branch, subtitle: null } : { title: name, subtitle: branch || null };
+}
+
 /** Projects in the order shown, each worktree Wings made right after the project it belongs to. A worktree whose project is gone stays in its place as a project. */
 export function nestWorktrees<T extends { id: string; parent?: string | null }>(spaces: T[]): { space: T; child: boolean }[] {
   const ids = new Set(spaces.map((s) => s.id));

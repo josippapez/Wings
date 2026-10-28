@@ -76,7 +76,7 @@ const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => i
  * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one. `historyId` names the output
  * Wings keeps for it across a restart.
  */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null; historyId: string };
+type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null; historyId: string; /** The plugin whose `openPane` opened it. */ openedBy?: string };
 
 type SavedWorkspace = {
   version: 1;
@@ -134,6 +134,8 @@ type SavedWorkspace = {
   paneIds?: Record<string, string>;
   /** Each pane's `historyId`. Absent in older files. */
   histories?: Record<string, string>;
+  /** The plugin that opened each pane, by the same keys. Absent in older files. */
+  openedBy?: Record<string, string>;
 };
 
 function parseSaved(json: string | null): SavedWorkspace | null {
@@ -472,6 +474,7 @@ const leftPanel = usePanelRef();
       kind: SessionKind = "claude",
       savedCwd: string | null = null,
       historyId: string | null = null,
+      openedBy?: string,
     ) => {
       const key = crypto.randomUUID();
       historyId ??= key;
@@ -494,7 +497,7 @@ const leftPanel = usePanelRef();
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId, openedBy } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -838,7 +841,7 @@ const leftPanel = usePanelRef();
             const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
             // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null);
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null, saved.openedBy?.[old]);
             // Still asleep until opened, as Wings left it.
             if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
@@ -965,6 +968,7 @@ const leftPanel = usePanelRef();
       cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
       histories: Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.historyId])),
+      openedBy: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.openedBy ? [[key, meta.openedBy]] : []))),
     };
     const json = JSON.stringify(saved);
     unsaved.current = json;
@@ -1260,7 +1264,7 @@ const leftPanel = usePanelRef();
         tabsRef.current = set(tabsRef.current);
         setTabs(set);
       },
-      openPane: async ({ spaceId, cwd, input, placement, background }) => {
+      openPane: async ({ spaceId, cwd, input, placement, background, pluginId }) => {
         let key: string | undefined;
         if (placement === "tab") key = openTab(spaceId, input, null, cwd, undefined, !background);
         else {
@@ -1270,6 +1274,7 @@ const leftPanel = usePanelRef();
           if (tab.spaceId !== spaceId) throw new Error("A split opens beside the focused pane, so its cwd must be in the project on screen");
           key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd);
         }
+        if (key && pluginId) setPanes((p) => (p[key] ? { ...p, [key]: { ...p[key], openedBy: pluginId } } : p));
         const paneId = key && (await terminals.get(key)?.whenStarted);
         if (!paneId) throw new Error("The pane didn't start");
         return paneId;
@@ -1639,6 +1644,7 @@ const leftPanel = usePanelRef();
     onSelectPending: resumePane,
     paneKeyOf: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : []))),
     paneOrder: Object.fromEntries(Object.keys(panes).map((key, i) => [key, i])),
+    openedBy: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.openedBy ? [[key, activePlugins.find((p) => p.id === meta.openedBy)?.name ?? meta.openedBy]] : []))),
     onNewTab: (id) => openTab(id),
     onOpenProjectPage: showProjectPage,
     projectSections,

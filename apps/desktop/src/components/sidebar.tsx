@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -62,7 +63,7 @@ import { trackDrag } from "@/lib/pointer-drag";
 import { availableUpdate, showUpdate } from "@/lib/updater";
 import { canFork } from "@/lib/resume";
 import { shortcutLabel } from "@/lib/terminal";
-import { requestWorktreeAgent } from "@/lib/worktree-agent";
+import { requestWorktreeAgent, worktreeTitle } from "@/lib/worktree-agent";
 import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
@@ -116,6 +117,8 @@ export function Sidebar(props: {
   /** The pane key of each live agent's pane, by pane id, and each pane key's place in creation order. A row keeps its key and its place when the agent takes over from a pending row. */
   paneKeyOf: Record<string, string>;
   paneOrder: Record<string, number>;
+  /** The name of the plugin that opened a pane, by pane key, for the badge on its Agents row. */
+  openedBy: Record<string, string>;
   onNewTab: (spaceId: string) => void;
   /** Opens the project's Project page as a tab. */
   onOpenProjectPage: (spaceId: string) => void;
@@ -240,6 +243,18 @@ export function Sidebar(props: {
                 const state = rollUp(spaceAgents.map((a) => a.state));
                 const status = props.git[space.id];
                 const branch = status?.branch ?? space.branch;
+                // A worktree is titled by its branch when its folder only repeats it, so the branch isn't shown twice.
+                const { title, subtitle } = child ? worktreeTitle(space.name, branch) : { title: space.name, subtitle: branch || null };
+                const counts = status && (
+                  <GitCounts
+                    tinted
+                    counts={[
+                      { icon: "changed" as const, value: status.changed },
+                      { icon: "push" as const, value: status.ahead },
+                      { icon: "pull" as const, value: status.behind },
+                    ].filter((c) => c.value > 0)}
+                  />
+                );
                 return (
                   <ContextMenu key={space.id}>
                   <ContextMenuTrigger render={<motion.div data-row-top={child || older ? undefined : ""} layout={dragId === space.id ? false : "position"} transition={spring} className="group/row relative" />}>
@@ -264,22 +279,14 @@ export function Sidebar(props: {
                         {state ? <StatusDot state={state} /> : child ? <GitBranchIcon className="size-4 text-muted-foreground" /> : <FolderIcon className="size-4 text-muted-foreground" />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className={cn("block truncate text-[13px] leading-[18px]", active ? "font-semibold" : "font-medium")}>
-                          {space.name}
+                        <span className="flex items-center gap-2">
+                          <span className={cn("min-w-0 flex-1 truncate text-[13px] leading-[18px]", active ? "font-semibold" : "font-medium")}>{title}</span>
+                          {!subtitle && counts}
                         </span>
-                        {branch && (
+                        {subtitle && (
                           <span className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate text-[11px] leading-4 text-muted-foreground">{branch}</span>
-                            {status && (
-                              <GitCounts
-                                tinted
-                                counts={[
-                                  { icon: "changed" as const, value: status.changed },
-                                  { icon: "push" as const, value: status.ahead },
-                                  { icon: "pull" as const, value: status.behind },
-                                ].filter((c) => c.value > 0)}
-                              />
-                            )}
+                            <span className="min-w-0 flex-1 truncate text-[11px] leading-4 text-muted-foreground">{subtitle}</span>
+                            {counts}
                           </span>
                         )}
                       </span>
@@ -310,16 +317,19 @@ export function Sidebar(props: {
                       </IconButton>
                     </span>
                     </div>
-                    <ProjectSections
-                      projectId={space.id}
-                      sections={props.projectSections[space.id]}
-                      plugins={props.plugins}
-                      collapsed={props.collapsedSections}
-                      onToggle={props.onToggleSection}
-                      onOpen={props.onOpenSectionRow}
-                      sorts={props.sectionSorts}
-                      onSort={props.onSortSection}
-                    />
+                    {/* Issues, pull requests and schedules belong to the repo, which lists them above its worktrees; a worktree's own would repeat them. */}
+                    {!child && (
+                      <ProjectSections
+                        projectId={space.id}
+                        sections={props.projectSections[space.id]}
+                        plugins={props.plugins}
+                        collapsed={props.collapsedSections}
+                        onToggle={props.onToggleSection}
+                        onOpen={props.onOpenSectionRow}
+                        sorts={props.sectionSorts}
+                        onSort={props.onSortSection}
+                      />
+                    )}
                   </ContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => props.onNewTab(space.id)}>
@@ -542,7 +552,14 @@ export function Sidebar(props: {
                         <PaneIcon agent={agent} />
                       </span>
                       <span className="min-w-0 flex-1" title={`${agent.name ?? agentLabel(agent.kind)}\n${spaceName(agent.spaceId)}, ${agentStatus(agent)}${agent.summary ? `\n${agent.summary}` : ""}`}>
-                        <span className="block truncate text-[13px] font-medium">{agent.name ?? agentLabel(agent.kind)}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="min-w-0 truncate text-[13px] font-medium">{agent.name ?? agentLabel(agent.kind)}</span>
+                          {props.openedBy[id] && (
+                            <Badge variant="secondary" className="h-4 shrink-0 px-1.5 text-[10px]" title={`Started by the ${props.openedBy[id]} plugin`}>
+                              {props.openedBy[id]}
+                            </Badge>
+                          )}
+                        </span>
                         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
                           {spaceName(agent.spaceId)}, {agentStatus(agent)}
                           {agent.state === "working" && agent.stateSince && <Elapsed since={agent.stateSince} />}

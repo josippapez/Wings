@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { agentInput, baseChoices, clearWorktreeAgentRequest, nestWorktrees, requestWorktreeAgent, suggestBranch, worktreeAgentStore } from "./worktree-agent.ts";
+import { agentInput, baseChoices, clearWorktreeAgentRequest, nestWorktrees, requestWorktreeAgent, suggestBranch, worktreeAgentStore, worktreeTitle } from "./worktree-agent.ts";
 
 test("the agent is started by typing its command; a shell is left alone", () => {
   assert.equal(agentInput("claude"), "claude\r");
@@ -40,4 +40,14 @@ test("requesting the dialog tells subscribers which project", () => {
   assert.equal(worktreeAgentStore.get(), null);
   assert.equal(calls, 2);
   off();
+});
+
+test("a worktree whose folder only repeats its branch is titled by the branch alone", () => {
+  assert.deepEqual(worktreeTitle("feature-190597-search", "feature/190597-search"), { title: "feature/190597-search", subtitle: null });
+  assert.deepEqual(worktreeTitle("wings-fix-login", "wings/fix-login"), { title: "wings/fix-login", subtitle: null });
+});
+
+test("a worktree renamed or on another branch keeps its name and shows the branch", () => {
+  assert.deepEqual(worktreeTitle("my-checkout", "feature/x"), { title: "my-checkout", subtitle: "feature/x" });
+  assert.deepEqual(worktreeTitle("my-checkout", null), { title: "my-checkout", subtitle: null });
 });

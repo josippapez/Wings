@@ -102,7 +102,7 @@ export type PageTab = { tabId: string; spaceId: string; args?: unknown };
 export type PanePlacement = "tab" | "right" | "down";
 const placements: unknown[] = ["tab", "right", "down"] satisfies PanePlacement[];
 /** Where Rust approved a plugin's pane: its project, a folder inside it, and the line to type into its shell. */
-export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement; /** A new tab that opens behind the one on screen. */ background?: boolean };
+export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement; /** The plugin that asked for it. */ pluginId?: string; /** A new tab that opens behind the one on screen. */ background?: boolean };
 
 
 type Callbacks = {
@@ -764,7 +764,7 @@ export class PluginHost {
           request: { command: text("command"), args, cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
         });
         if (p.focus !== undefined && typeof p.focus !== "boolean") throw new Error("openPane focus must be true or false");
-        const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement, background: p.focus === false });
+        const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement, background: p.focus === false, pluginId });
         await this.listed(paneId);
         return { paneId };
       }
