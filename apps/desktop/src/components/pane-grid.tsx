@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Columns2Icon, Maximize2Icon, Minimize2Icon, PencilIcon, Rows2Icon, SquarePlusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { Columns2Icon, EyeOffIcon, Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon, PencilIcon, PictureInPicture2Icon, Rows2Icon, SquarePlusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 
 import { FindBar } from "@/components/find-bar";
+import { FloatingTerminals } from "@/components/floating-terminals";
 import { IconButton } from "@/components/icon-button";
 import { InlineName } from "@/components/inline-name";
 import { OverflowRow } from "@/components/overflow-row";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PaneIcon, type PaneLabelInfo } from "@/components/pane-label";
-import { paneNames, type LayoutNode } from "@/lib/layout";
+import { agentSplit, paneIds, paneNames, without, type LayoutNode } from "@/lib/layout";
 import type { Badge } from "@/lib/plugins";
 import { trackDrag } from "@/lib/pointer-drag";
 import { shortcutLabel, terminals } from "@/lib/terminal";
@@ -29,6 +30,8 @@ export type PaneActions = {
   rename: (paneKey: string, name: string) => void;
   /** Moves the pane into another tab of the same project, or into a new one. */
   moveTo: (paneKey: string, tabId: string | "new") => void;
+  /** Where the terminals an agent opened sit: split below its pane, split beside it, or floating over it. "split" brings a floated one back to the split it left. */
+  agentView: (ownerKey: string, view: "below" | "right" | "float" | "split") => void;
 };
 
 type GridProps = {
@@ -52,6 +55,10 @@ type GridProps = {
   rails: Record<string, PaneRailEntry[]>;
   /** Terminals an agent opened as splits below its own pane, by the agent's pane key: they hide and show together. */
   commands: Record<string, number>;
+  /** The agent pane that opened each of those terminals, by the terminal's pane key. */
+  openedBy: Record<string, string>;
+  /** Agent panes whose terminals float over them instead of sitting in the split. */
+  floated: ReadonlySet<string>;
   actions: PaneActions;
 };
 
@@ -60,7 +67,9 @@ type GridProps = {
  * tab's shells start the first time it's shown.
  */
 export function PaneGrid(props: GridProps) {
-  const root = props.zoomedPane ? ({ kind: "pane", id: props.zoomedPane } as const) : props.layout;
+  // A floated terminal stays in the tree (so the layout keeps its place for it) but isn't a pane of the grid.
+  const floating = new Set(Object.keys(props.openedBy).filter((key) => props.floated.has(props.openedBy[key]) && paneIds(props.layout).includes(props.openedBy[key])));
+  const root = props.zoomedPane ? ({ kind: "pane", id: props.zoomedPane } as const) : floating.size ? without(props.layout, floating) : props.layout;
   return (
     <div
       data-pane-grid
@@ -115,7 +124,9 @@ function Split(props: GridProps & { node: Extract<LayoutNode, { kind: "split" }>
       >
         <span
           className={cn(
-            "absolute rounded-full bg-white/0 transition-colors duration-150 group-hover/divider:bg-white/25 group-active/divider:bg-white/40",
+            "absolute rounded-full transition-colors duration-150 group-hover/divider:bg-white/25 group-active/divider:bg-white/40",
+            // The line between an agent and the terminals it opened shows at rest, so it reads as something to drag.
+            paneIds(node.b).some((key) => props.openedBy[key]) ? "bg-white/10" : "bg-white/0",
             row ? "inset-y-6 left-[3px] w-0.5" : "inset-x-6 top-[3px] h-0.5",
           )}
         />
@@ -139,6 +150,10 @@ function PaneCard(props: GridProps & { paneKey: string }) {
   const renameAfterMenu = useRef(false);
   const named = paneKey in paneNames(props.layout);
   const others = props.moveTargets.filter((t) => t.id !== props.tabId);
+  const owner = props.openedBy[paneKey];
+  const ownerTitle = owner ? (props.labels[owner]?.title ?? "its agent") : "";
+  const ownerSplit = owner ? agentSplit(props.layout, owner, new Set(Object.keys(props.openedBy))) : null;
+  const floatedHere = props.floated.has(paneKey) ? Object.keys(props.openedBy).filter((key) => props.openedBy[key] === paneKey && paneIds(props.layout).includes(key)) : [];
 
   /**
    * Drag the pane by its header onto another tab, or onto + for a new one. The ghost and the drop highlight are set
@@ -235,7 +250,13 @@ function PaneCard(props: GridProps & { paneKey: string }) {
           </span>
         )}
         {label?.detail && <span className="min-w-0 truncate text-[12px] text-muted-foreground">{label.detail}</span>}
-        {props.commands[paneKey] > 0 && (
+        {owner && (
+          <span title={`This terminal was opened by ${ownerTitle}`} className="flex h-5 max-w-40 shrink-0 items-center gap-1 rounded-full bg-hover px-2 text-[11px] text-muted-foreground">
+            <span aria-hidden>↑</span>
+            <span className="truncate">Opened by {ownerTitle}</span>
+          </span>
+        )}
+        {props.commands[paneKey] > 0 && !props.floated.has(paneKey) && (
           // Hiding is zooming the agent's pane: the terminals below it keep running out of sight.
           <Button
             variant="secondary"
@@ -271,6 +292,22 @@ function PaneCard(props: GridProps & { paneKey: string }) {
             )}
           />
         </div>
+        {owner && (
+          <div className="flex items-center gap-0.5">
+            <IconButton label={`Hide. It keeps running, and comes back from the button on ${ownerTitle}`} onClick={() => actions.toggleZoom(owner)}>
+              <EyeOffIcon />
+            </IconButton>
+            <IconButton
+              label={ownerSplit?.dir === "row" ? "Move below" : "Move to the right"}
+              onClick={() => actions.agentView(owner, ownerSplit?.dir === "row" ? "below" : "right")}
+            >
+              {ownerSplit?.dir === "row" ? <PanelBottomIcon /> : <PanelRightIcon />}
+            </IconButton>
+            <IconButton label="Float over the agent" onClick={() => actions.agentView(owner, "float")}>
+              <PictureInPicture2Icon />
+            </IconButton>
+          </div>
+        )}
         <div
           className={cn(
             "flex items-center gap-0.5 transition-opacity duration-150",
@@ -325,6 +362,18 @@ function PaneCard(props: GridProps & { paneKey: string }) {
       </ContextMenu>
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div ref={host} className="min-h-0 flex-1 pr-1 pb-0.5 pl-3.5" />
+        {floatedHere.length > 0 && (
+          <FloatingTerminals
+            ownerKey={paneKey}
+            ownerTitle={label?.title ?? "its agent"}
+            commands={floatedHere}
+            labels={props.labels}
+            visible={props.visible}
+            keepRenderer={props.keepRenderer}
+            initialInputs={props.initialInputs}
+            onDock={() => actions.agentView(paneKey, "split")}
+          />
+        )}
         {!!props.rails[paneKey]?.length && <PaneRails paneKey={paneKey} entries={props.rails[paneKey]} onOpen={props.onOpenStatus} />}
       </div>
       {!!props.statuses[paneKey]?.length && <PaneStatusStrip entries={props.statuses[paneKey]} onOpen={props.onOpenStatus} />}

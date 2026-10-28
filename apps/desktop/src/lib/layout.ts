@@ -70,3 +70,21 @@ export function insertPane(node: LayoutNode, target: string, dir: "row" | "colum
   }
   return { ...node, a: insertPane(node.a, target, dir, leaf), b: insertPane(node.b, target, dir, leaf) };
 }
+
+export function setDir(node: LayoutNode, splitId: string, dir: "row" | "column"): LayoutNode {
+  if (node.kind === "pane") return node;
+  if (node.id === splitId) return { ...node, dir };
+  return { ...node, a: setDir(node.a, splitId, dir), b: setDir(node.b, splitId, dir) };
+}
+
+/** The split that holds an agent's own pane on one side and the terminals it opened on the other, or null. */
+export function agentSplit(node: LayoutNode, owner: string, commands: Set<string>): Extract<LayoutNode, { kind: "split" }> | null {
+  if (node.kind === "pane") return null;
+  if (node.a.kind === "pane" && node.a.id === owner && paneIds(node.b).some((id) => commands.has(id))) return node;
+  return agentSplit(node.a, owner, commands) ?? agentSplit(node.b, owner, commands);
+}
+
+/** The tree without these panes. At least one pane must stay. */
+export function without(node: LayoutNode, panes: Set<string>): LayoutNode {
+  return paneIds(node).reduce<LayoutNode>((tree, id) => (panes.has(id) ? (remove(tree, id) ?? tree) : tree), node);
+}

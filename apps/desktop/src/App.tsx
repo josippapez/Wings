@@ -42,7 +42,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
-import { findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setRatio, split, type LayoutNode } from "@/lib/layout";
+import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
 import { tabTitles } from "@/lib/tab-names";
 import { requestWorktreeAgent } from "@/lib/worktree-agent";
@@ -316,6 +316,9 @@ const leftPanel = usePanelRef();
   /** Panes an agent opened with `open_pane`, by Rust pane id: the only ones it may reuse or close. */
   const agentTabs = useRef(new Map<string, AgentTab>());
   /** The same panes and their owners, for the mark on their tabs and the hide/show chip on the agent's pane. */
+  /** Agent panes whose terminals float over them: a view you chose for this session, not part of the layout. */
+  const [floatedAgents, setFloatedAgents] = useState<ReadonlySet<string>>(new Set());
+  const openedByRef = useRef<Record<string, string>>({});
   const [agentPanes, setAgentPanes] = useState<ReadonlyMap<string, string | null>>(new Map());
   const [sleepTick, setSleepTick] = useState(0);
   const [newTabPage, setNewTabPage] = useState<string>("terminal");
@@ -772,6 +775,21 @@ const leftPanel = usePanelRef();
         if (tab) updateTab(tab.id, (t) => ({ layout: renamePane(t.layout, key, name) }));
       },
       moveTo: movePane,
+      agentView: (owner, view) => {
+        const tab = tabOfPane(tabsRef.current, owner);
+        if (!tab) return;
+        setFloatedAgents((all) => {
+          const next = new Set(all);
+          if (view === "float") next.add(owner);
+          else next.delete(owner);
+          return next;
+        });
+        if (view === "float" || view === "split") return;
+        updateTab(tab.id, (t) => {
+          const at = agentSplit(t.layout, owner, new Set(Object.keys(openedByRef.current)));
+          return at ? { layout: setDir(t.layout, at.id, view === "right" ? "row" : "column") } : {};
+        });
+      },
       resize: (splitId, ratio) => {
         const tab = tabsRef.current.find((t) => t.id === activeTabId);
         if (tab) updateTab(tab.id, (t) => ({ layout: setRatio(t.layout, splitId, ratio) }));
@@ -1569,11 +1587,16 @@ const leftPanel = usePanelRef();
   const shown = tabTitles(spaceTabs.flatMap((t) => (isPaneTab(t) ? [{ id: t.id, name: t.name, title: labels[t.focusedPane]?.title ?? "", detail: labels[t.focusedPane]?.detail ?? "" }] : [])));
   /** How many terminals each agent opened as splits below its own pane, by the agent's pane key. */
   const commandCounts: Record<string, number> = {};
+  const openedBy: Record<string, string> = {};
   const keyOfPaneId = Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.paneId ? [[meta.paneId, key]] : [])));
   for (const [id, owner] of agentPanes) {
     const ownerKey = owner ? keyOfPaneId[owner] : undefined;
-    if (ownerKey && keyOfPaneId[id]) commandCounts[ownerKey] = (commandCounts[ownerKey] ?? 0) + 1;
+    if (ownerKey && keyOfPaneId[id]) {
+      commandCounts[ownerKey] = (commandCounts[ownerKey] ?? 0) + 1;
+      openedBy[keyOfPaneId[id]] = ownerKey;
+    }
   }
+  openedByRef.current = openedBy;
   const tabViews: TabView[] = spaceTabs.map((t) => {
     if (isProjectTab(t)) return { id: t.id, project: { title: "Project page" } };
     if (isViewTab(t)) {
@@ -1966,6 +1989,8 @@ const leftPanel = usePanelRef();
                     rails={paneRails}
                     onOpenStatus={onOpenStatus}
                     commands={commandCounts}
+                    openedBy={openedBy}
+                    floated={floatedAgents}
                     actions={actions}
                   />
                   ),
