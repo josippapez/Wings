@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.89 · 2026-10-28
+
+- **Agents take messages and go to sleep again.** Wings took the terminal's own answers to Claude Code starting up for text you had typed and not sent. So every agent looked busy with a draft: it never went to sleep, and other agents couldn't message it.
+- **Git status shows for every project.** The sidebar could leave a project without its branch status until you opened it. It shows for all of them from the start now.
+
 ## 0.1.88 · 2026-10-28
 
 - **An agent's commands run below it.** When an agent runs a build or tests in a terminal, it opens as a split below the agent's pane instead of a new tab, and your typing stays with the agent. A chip on the agent's pane, like "1 terminal", hides and shows them. They keep running while hidden, and a new command shows them again. A dev server the agent opens for you still gets its own tab.
