@@ -23,6 +23,8 @@ export const states = {
   long: { element: view({ issue: longIssue, issueKey: "WEB-4" }) },
   // A new issue: no links, no sessions, one log entry.
   short: { element: view({ issue: shortIssue, issueKey: "WEB-1" }) },
+  // The project is on a long branch the issue doesn't have yet: the offer to use it stays inside its column.
+  "long-branch": { element: view({ issue: shortIssue, issueKey: "WEB-1", project: { ...project, branch: "feature/190599-be-ordering-aggregate-root-data-structures" } }) },
   // An issue with nothing filled in: no description, links or sessions, one log entry.
   empty: { element: view({ issue: emptyIssue, issueKey: "WEB-11" }) },
   // An epic: child issues with progress.

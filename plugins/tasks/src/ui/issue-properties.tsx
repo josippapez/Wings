@@ -58,7 +58,9 @@ function Branch({ issue, project, apply, send }: { issue: Issue; project: WingsP
         <Text as="span" tone="muted" size="small">None</Text>
       )}
       {!editing && project.branch && project.branch !== branch ? (
-        <Button size="xs" variant="ghost" className="tk-prop-use" onClick={() => void send({ kind: "update", key: issue.key, branch: project.branch ?? "" })}>Use {project.branch}</Button>
+        <Button size="xs" variant="ghost" className="tk-prop-use" title={`Use ${project.branch}`} onClick={() => void send({ kind: "update", key: issue.key, branch: project.branch ?? "" })}>
+          Use <Text as="span" mono size="small" truncate>{project.branch}</Text>
+        </Button>
       ) : null}
     </Prop>
   );
