@@ -9,7 +9,7 @@ import { Html } from "./Html";
 import { TypeIcon } from "./TypeIcon";
 import { allLinkIds, lastSegment, linkIds, prStatus, summaryOf, tagsOf, type Activity, type Change, type Comment, type Fields, type ItemArgs, type LinkedItem, type PrLink, type Relation, type Revision } from "../lib/item";
 import { stateTone } from "../lib/sections";
-import { nextStates, type TypeState } from "../lib/view";
+import { otherStates, type TypeState } from "../lib/view";
 
 export interface Shown {
   id: number;
@@ -147,7 +147,7 @@ export function ItemView(props: ItemViewProps) {
 function Header({ item, states, moving, onMove, onOpenItem, parentId, parentTitle }: ItemViewProps & { parentId: number | null; parentTitle?: string }) {
   const f = item.fields;
   const state = f["System.State"];
-  const next = nextStates({ state, states });
+  const next = otherStates({ state, states });
   const tone = toneOf(state);
   const who = f["System.AssignedTo"]?.displayName;
   const sprint = lastSegment(f["System.IterationPath"]);

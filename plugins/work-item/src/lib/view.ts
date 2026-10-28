@@ -54,6 +54,11 @@ export function nextStates(item: Pick<WorkItem, "state" | "states">) {
   return forward.slice(at + 1, at + 3).map((s) => s.name).filter((name) => name.length <= 32);
 }
 
+/** Every other state of the type, in workflow order, as Azure DevOps' own state menu offers them. */
+export function otherStates(item: Pick<WorkItem, "state" | "states">) {
+  return item.states.map((s) => s.name).filter((name) => name !== item.state);
+}
+
 export function badgeFor(ref: Ref, item: Exclude<Item, { missing: true }> | undefined): WingsBadge {
   const refresh = { id: "refresh", label: "Refresh" };
   const label = `#${ref.id}`;

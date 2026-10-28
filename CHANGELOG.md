@@ -6,6 +6,7 @@ What changed in each Wings release, newest first.
 
 - **Notifications you can't miss.** While Wings is in front, a plugin's notification pops up as a toast with its buttons, like Start for a newly assigned ticket, and the Inbox count pulses and takes an accent colour until you read it.
 - **Agents can propose a setup command.** An agent asks with `worktree_setup`, and Wings shows you the exact line, the project and who asked. It's saved only when you click Allow. A setup command is plain ASCII, up to 500 characters.
+- **Every state in the work item tab.** The state menu lists all of the type's states, as Azure DevOps does, not just the next two.
 
 ## 0.1.100 · 2026-10-28
 

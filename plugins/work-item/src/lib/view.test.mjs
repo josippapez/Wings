@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dropClosed } from "./view.ts";
+import { dropClosed, otherStates } from "./view.ts";
 
 const ref = (id) => ({ org: "https://dev.azure.com/o", id, key: `https://dev.azure.com/o ${id}` });
 
@@ -17,4 +17,10 @@ test("a closed pane's ref goes, and so does an item no ref points at, so nothing
   assert.deepEqual([...items.keys()], [b.key]);
   dropClosed(refs, items, []);
   assert.equal(refs.size + items.size, 0);
+});
+
+test("the item tab offers every other state of the type, not just the next two", () => {
+  const states = ["New", "Approved", "Under Analysis", "In Progress", "Done", "Removed"].map((name) => ({ name, category: "InProgress" }));
+  assert.deepEqual(otherStates({ state: "New", states }), ["Approved", "Under Analysis", "In Progress", "Done", "Removed"]);
+  assert.deepEqual(otherStates({ state: "In Progress", states }), ["New", "Approved", "Under Analysis", "Done", "Removed"]);
 });
