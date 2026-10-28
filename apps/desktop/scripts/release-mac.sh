@@ -22,9 +22,7 @@ REPO=josippapez/Wings
 [ -z "$(git status --porcelain)" ] || { echo "Commit or stash your changes first: a release builds what's in the tree." >&2; git status --short >&2; exit 1; }
 pnpm test
 (cd src-tauri && cargo test --lib --quiet)
-(cd ../../packages/plugin-sdk && pnpm install --frozen-lockfile >/dev/null)
-(cd ../../packages/plugin-ui && pnpm install --frozen-lockfile >/dev/null)
-(cd ../../plugins && pnpm install --frozen-lockfile >/dev/null && pnpm check)
+(cd ../../plugins && pnpm run deps >/dev/null && pnpm check)
 # Installed Wings takes a plugin's update only when its version goes up, so a plugin changed since the last release
 # without a bump would never reach anyone.
 LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
