@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.100 · 2026-10-28
+
+- **Delete a worktree from the sidebar.** The X on a worktree now asks: remove it from the sidebar only, or delete the worktree folder too. Its branch goes with it when it's merged, and stays, with a note, when it isn't. A worktree with uncommitted changes needs "Delete anyway".
+
 ## 0.1.99 · 2026-10-28
 
 - **Agents can set up worktrees.** The `worktree_setup` tool and `wings worktree-setup` read a project's worktree setup and change the files copied into new worktrees, the same settings as "Worktree setup…". The setup command only you change, since it runs in every new worktree.
