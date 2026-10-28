@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.98 · 2026-10-28
+
+- **Merged PRs close their issues.** When a PR you track is merged, the Issues issue for it goes to done right away, matched by its PR link or its branch. An issue with only a branch now finds its PR too. Nothing outside Wings is changed.
+- **Issues from a worktree go to its project.** An agent working in a worktree files its issues under the main project, where you see them.
+- **Schedules opens the issue when it starts a ticket.** Start creates the ticket's Wings issue, or picks up the one that names it, and tells the agent its key.
+- **Safer worktree setup.** Local files are never copied through a symlinked folder.
+- **Plugins can hear each other.** For Wings' own plugins: `wings.emit` and `wings.onEvent`, with `permissions.events`.
+
 ## 0.1.97 · 2026-10-28
 
 - **Worktrees bring your local setup.** A worktree Wings makes gets a copy of the main checkout's gitignored setup: `.claude` rules, agents, skills, hooks and commands, `.mcp.json` and `.env` files. Pick other files, or leave some out with `!`, under "Worktree setup…" in a project's right-click menu. A `.worktreeinclude` in the repo takes precedence.
