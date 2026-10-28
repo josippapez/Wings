@@ -9,6 +9,21 @@ const TOAST_ID = "update";
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
 let installing = false;
+/** The newest release found, kept after its toast is gone so the sidebar can still offer it. */
+let available: Update | null = null;
+const listeners = new Set<() => void>();
+const setAvailable = (update: Update | null) => {
+  available = update;
+  for (const fn of listeners) fn();
+};
+/** For `useSyncExternalStore`: the update waiting to be installed, or null. */
+export const availableUpdate = {
+  subscribe: (fn: () => void) => (listeners.add(fn), () => void listeners.delete(fn)),
+  get: () => available,
+};
+/** Opens the update dialog for `update`. */
+export const showUpdate = (update: Update) => showDetails?.(update);
+
 let showDetails: ((update: Update) => void) | null = null;
 
 /** The update dialog registers here to be opened by the toast's What's new and by a manual check. Returns an unregister function. */
@@ -37,6 +52,7 @@ export async function checkForUpdate({ manual = false } = {}) {
   if (manual) toast.loading("Checking for updates", { id: TOAST_ID, duration: Infinity });
   try {
     const update = await check();
+    setAvailable(update);
     if (!update) {
       if (manual) toast.success("Wings is up to date", { id: TOAST_ID, duration: 4000 });
       return;

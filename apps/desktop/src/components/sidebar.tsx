@@ -2,7 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import {
   ArrowDownIcon,
@@ -21,6 +21,7 @@ import {
   RotateCcwClockIcon,
   SearchIcon,
   SettingsIcon,
+  CircleArrowUpIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -58,6 +59,7 @@ import type { ProjectSections as ProjectSectionsState } from "@/lib/project-sect
 import type { Phase } from "@/lib/sleep";
 import { orderProjects, parseProjectSort, projectSorts, type ProjectRow, type ProjectSort } from "@/lib/project-order";
 import { trackDrag } from "@/lib/pointer-drag";
+import { availableUpdate, showUpdate } from "@/lib/updater";
 import { canFork } from "@/lib/resume";
 import { shortcutLabel } from "@/lib/terminal";
 import { requestWorktreeAgent } from "@/lib/worktree-agent";
@@ -148,6 +150,7 @@ export function Sidebar(props: {
   /** The Inbox row's popover: agent events, newest first. */
   notifications: Pick<ComponentProps<typeof NotificationBell>, "events" | "onOpen" | "onClear" | "onGoToPane" | "onButton">;
 }) {
+  const update = useSyncExternalStore(availableUpdate.subscribe, availableUpdate.get);
   const { spaces, agents } = props;
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? id;
   // One list, so a pending row and the live agent that replaces it sit in the same place under the same key.
@@ -577,6 +580,15 @@ export function Sidebar(props: {
           </ScrollArea>
         </section>
         <div className="mx-2 mt-1 shrink-0">
+          {update && (
+            <SidebarNavRow
+              icon={<CircleArrowUpIcon className="text-done" />}
+              label={`Update to Wings ${update.version}`}
+              title="See what's new and install it"
+              onClick={() => showUpdate(update)}
+              className="text-foreground"
+            />
+          )}
           <SidebarNavRow icon={<SettingsIcon />} label="Settings" trailing={<RowHint>{shortcutLabel.settings}</RowHint>} onClick={props.onSettings} />
         </div>
       </div>
