@@ -4,6 +4,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { paneInput } from "./pane-input.ts";
 import type { SessionKind } from "./resume.ts";
 
+export type WorktreeState = { path: string; branch: string | null; changes: string[] };
+
 export type Space = {
   id: string;
   name: string;
@@ -336,6 +338,9 @@ export const api = {
   /** `git worktree add -b <branch> <folder beside the repo> <base>`, added to the sidebar under the project. Rejects with git's message. */
   spacesSetPinned: (id: string, pinned: boolean) => invoke<void>("spaces_set_pinned", { id, pinned }),
   worktreeCreate: (spaceId: string, branch: string, base: string) => invoke<WorktreeMade>("worktree_create", { spaceId, branch, base }),
+  worktreeStatus: (spaceId: string) => invoke<WorktreeState>("worktree_status", { spaceId }),
+  /** Removes the worktree's folder and, when merged, its branch. Rejects with git's message; `force` also drops uncommitted changes. */
+  worktreeDelete: (spaceId: string, force: boolean) => invoke<{ keptBranch: string | null }>("worktree_delete", { spaceId, force }),
   worktreeLocal: (spaceId: string) => invoke<WorktreeLocal>("worktree_local", { spaceId }),
   /** Blank means unset. */
   worktreeLocalSet: (spaceId: string, include: string, setup: string) => invoke<void>("worktree_local_set", { spaceId, include, setup }),

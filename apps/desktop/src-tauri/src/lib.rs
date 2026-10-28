@@ -150,6 +150,28 @@ fn worktree_create(state: State<AppState>, space_id: String, branch: String, bas
     make_worktree(&state, &space_id, &branch, Some(&base))
 }
 
+/// The worktree behind a project Wings made: its folder, branch and uncommitted changes. Refuses a project that
+/// isn't a worktree of another one.
+fn worktree_target(state: &AppState, space_id: &str) -> Res<(std::path::PathBuf, std::path::PathBuf)> {
+    let store = state.spaces.lock().unwrap();
+    let space = store.get(space_id).ok_or("No such project in Wings")?;
+    let parent = space.parent.as_deref().and_then(|p| store.get(p)).ok_or("This project isn't a worktree Wings made")?;
+    Ok((std::path::PathBuf::from(&parent.path), std::path::PathBuf::from(&space.path)))
+}
+
+#[tauri::command(async)]
+fn worktree_status(state: State<AppState>, space_id: String) -> Res<worktree::WorktreeState> {
+    let (repo, path) = worktree_target(&state, &space_id)?;
+    worktree::inspect(&repo, &path)
+}
+
+/// Removes the worktree's folder and its branch (when merged). It leaves the sidebar to the caller.
+#[tauri::command(async)]
+fn worktree_delete(state: State<AppState>, space_id: String, force: bool) -> Res<worktree::Deleted> {
+    let (repo, path) = worktree_target(&state, &space_id)?;
+    worktree::delete(&repo, &path, force)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WorktreeLocal {
@@ -1959,6 +1981,8 @@ pub fn run() {
             spaces_set_pinned,
             worktree_info,
             worktree_create,
+            worktree_status,
+            worktree_delete,
             worktree_local,
             worktree_local_set,
             plugin_worktree_setup,

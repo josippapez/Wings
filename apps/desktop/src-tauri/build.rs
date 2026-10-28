@@ -8,6 +8,8 @@ const COMMANDS: &[&str] = &[
     "spaces_set_pinned",
     "worktree_info",
     "worktree_create",
+    "worktree_status",
+    "worktree_delete",
     "worktree_local",
     "worktree_local_set",
     "editors_list",

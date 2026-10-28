@@ -39,7 +39,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Toaster } from "@/components/ui/sonner";
 import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space, type WorktreeMade } from "@/lib/api";
+import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space, type WorktreeMade, type WorktreeState } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
 import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
@@ -1454,9 +1454,19 @@ const leftPanel = usePanelRef();
   }
 
   /** Removing a project closes its tabs, running agents included, so one with tabs open asks first. */
-  const [removeAsk, setRemoveAsk] = useState<{ id: string; name: string; tabs: number } | null>(null);
+  const [removeAsk, setRemoveAsk] = useState<{ id: string; name: string; tabs: number; worktree?: { state: WorktreeState | null; error: string | null } } | null>(null);
   function askRemoveSpace(spaceId: string) {
     const tabs = tabsRef.current.filter((t) => t.spaceId === spaceId).length;
+    const space = spaces.find((s) => s.id === spaceId);
+    // A worktree Wings made also has a folder and a branch to offer to delete, so it always asks.
+    if (space?.parent) {
+      setRemoveAsk({ id: spaceId, name: space.name, tabs, worktree: { state: null, error: null } });
+      api
+        .worktreeStatus(spaceId)
+        .then((state) => setRemoveAsk((a) => (a?.id === spaceId ? { ...a, worktree: { state, error: null } } : a)))
+        .catch((e) => setRemoveAsk((a) => (a?.id === spaceId ? { ...a, worktree: { state: null, error: String(e) } } : a)));
+      return;
+    }
     if (tabs === 0) return void removeSpace(spaceId).catch((e) => toast.error("Couldn't remove the project", { description: String(e) }));
     setRemoveAsk({ id: spaceId, name: spaces.find((s) => s.id === spaceId)?.name ?? "this project", tabs });
   }
@@ -1472,6 +1482,20 @@ const leftPanel = usePanelRef();
       if (rest[0]) selectSpace(rest[0].id);
       else setActiveSpaceId(null);
     }
+  }
+
+  /** Closes the worktree's tabs, removes its folder and branch, then drops it from the sidebar. */
+  async function deleteWorktree(spaceId: string, force: boolean) {
+    closeTabs(tabsRef.current.flatMap((t) => (t.spaceId === spaceId ? [t.id] : [])));
+    const branch = removeAsk?.worktree?.state?.branch;
+    try {
+      const done = await api.worktreeDelete(spaceId, force);
+      if (done.keptBranch) toast.warning(`Kept branch ${done.keptBranch}`, { description: `It has commits not merged. Delete it with git branch -D ${done.keptBranch}` });
+      else if (branch) toast.success(`Deleted the worktree and branch ${branch}`);
+    } catch (e) {
+      return void toast.error("Couldn't delete the worktree", { description: String(e) });
+    }
+    await removeSpace(spaceId).catch((e) => toast.error("Couldn't remove the project", { description: String(e) }));
   }
 
   function selectAgent(agent: Agent) {
@@ -2138,26 +2162,60 @@ const leftPanel = usePanelRef();
         <Toaster position="bottom-right" />
         <UpdateDialog />
         <Dialog open={removeAsk !== null} onOpenChange={(open) => !open && setRemoveAsk(null)}>
-          <DialogContent className="max-w-sm">
+          <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>Remove {removeAsk?.name}?</DialogTitle>
+              <DialogTitle>{removeAsk?.worktree ? `Remove the worktree ${removeAsk.name}?` : `Remove ${removeAsk?.name}?`}</DialogTitle>
               <DialogDescription>
-                {removeAsk?.tabs === 1 ? "Its open tab" : `Its ${removeAsk?.tabs} open tabs`} will close, and any agent running there stops. The folder stays on disk.
+                {removeAsk?.tabs ? `${removeAsk.tabs === 1 ? "Its open tab" : `Its ${removeAsk.tabs} open tabs`} will close, and any agent running there stops. ` : ""}
+                {removeAsk?.worktree ? "Remove it from the sidebar and keep the folder, or delete the folder and its branch." : "The folder stays on disk."}
               </DialogDescription>
             </DialogHeader>
+            {removeAsk?.worktree && (
+              <div className="flex flex-col gap-1.5 text-sm">
+                {removeAsk.worktree.error ? (
+                  <p className="text-destructive">{removeAsk.worktree.error}</p>
+                ) : removeAsk.worktree.state ? (
+                  <>
+                    <p className="break-all font-mono text-xs text-muted-foreground">{removeAsk.worktree.state.path}</p>
+                    {removeAsk.worktree.state.branch && <p className="text-xs text-muted-foreground">Branch {removeAsk.worktree.state.branch}</p>}
+                    {removeAsk.worktree.state.changes.length > 0 && (
+                      <p className="text-destructive">
+                        {removeAsk.worktree.state.changes.length === 1 ? "1 file has" : `${removeAsk.worktree.state.changes.length} files have`} uncommitted or untracked changes that deleting would lose.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Checking the folder...</p>
+                )}
+              </div>
+            )}
             <DialogFooter>
               <Button variant="ghost" onClick={() => setRemoveAsk(null)}>
                 Keep
               </Button>
+              {removeAsk?.worktree && (
+                <Button
+                  variant="destructive"
+                  disabled={!removeAsk.worktree.state}
+                  onClick={() => {
+                    const id = removeAsk.id;
+                    const force = (removeAsk.worktree?.state?.changes.length ?? 0) > 0;
+                    setRemoveAsk(null);
+                    void deleteWorktree(id, force);
+                  }}
+                >
+                  {(removeAsk.worktree.state?.changes.length ?? 0) > 0 ? "Delete anyway" : "Delete worktree"}
+                </Button>
+              )}
               <Button
-                variant="destructive"
+                variant={removeAsk?.worktree ? "outline" : "destructive"}
                 onClick={() => {
                   const id = removeAsk?.id;
                   setRemoveAsk(null);
                   if (id) void removeSpace(id).catch((e) => toast.error("Couldn't remove the project", { description: String(e) }));
                 }}
               >
-                Remove
+                {removeAsk?.worktree ? "Remove from sidebar" : "Remove"}
               </Button>
             </DialogFooter>
           </DialogContent>

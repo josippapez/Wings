@@ -324,6 +324,86 @@ pub fn create(dir: &Path, branch: &str, base: &str, include: Option<&str>) -> Re
     Ok(Created { path, local })
 }
 
+/// What the delete dialog shows about a worktree.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeState {
+    pub path: String,
+    pub branch: Option<String>,
+    /// Uncommitted and untracked changes, as `git status --porcelain` lines (gitignored files don't show).
+    pub changes: Vec<String>,
+}
+
+/// What a delete did: the branch it kept, when git wouldn't delete it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deleted {
+    pub kept_branch: Option<String>,
+}
+
+/// The linked worktrees of `repo` as (folder, branch), the main checkout left out.
+fn linked(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>, String> {
+    let text = git(repo, &["worktree", "list", "--porcelain"])?;
+    let mut out: Vec<(PathBuf, Option<String>)> = Vec::new();
+    for block in text.split("\n\n") {
+        let mut path = None;
+        let mut branch = None;
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                path = Some(PathBuf::from(p));
+            } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+                branch = Some(b.to_string());
+            }
+        }
+        if let Some(path) = path {
+            out.push((path, branch));
+        }
+    }
+    // The first entry is always the main checkout.
+    Ok(out.into_iter().skip(1).collect())
+}
+
+/// `path` as a linked worktree of `repo`, or why it isn't one. A main checkout is never one.
+fn registered(repo: &Path, path: &Path) -> Result<(PathBuf, Option<String>), String> {
+    let want = path.canonicalize().map_err(|_| format!("{} isn't on disk any more", path.display()))?;
+    linked(repo)?
+        .into_iter()
+        .find(|(p, _)| p.canonicalize().map(|p| p == want).unwrap_or(false))
+        .map(|(_, branch)| (want, branch))
+        .ok_or_else(|| format!("{} isn't a git worktree of {}", path.display(), repo.display()))
+}
+
+/// The worktree's branch and uncommitted changes, after checking it's a linked worktree of `repo`.
+pub fn inspect(repo: &Path, path: &Path) -> Result<WorktreeState, String> {
+    let (path, branch) = registered(repo, path)?;
+    let status = git(&path, &["status", "--porcelain"])?;
+    Ok(WorktreeState { path: path.to_string_lossy().into_owned(), branch, changes: status.lines().map(str::to_string).collect() })
+}
+
+/// Removes the worktree folder, then deletes its branch when git considers it merged (`branch -d`). Refuses a
+/// worktree with changes unless `force`, and anything that isn't a linked worktree of `repo`.
+pub fn delete(repo: &Path, path: &Path, force: bool) -> Result<Deleted, String> {
+    let state = inspect(repo, path)?;
+    if !force && !state.changes.is_empty() {
+        return Err("The worktree has uncommitted changes".to_string());
+    }
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(&state.path);
+    git(repo, &args)?;
+    let kept_branch = match &state.branch {
+        Some(b) if git(repo, &["branch", "-d", b]).is_err() => Some(b.clone()),
+        _ => None,
+    };
+    // `<repo>-worktrees` goes with its last worktree. `remove_dir` leaves a folder that still has something in it.
+    if let Some(dir) = Path::new(&state.path).parent().filter(|d| d.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("-worktrees"))) {
+        let _ = std::fs::remove_dir(dir);
+    }
+    Ok(Deleted { kept_branch })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +599,62 @@ mod tests {
         assert!(has_include_file(&repo));
         let made = create(&repo, "wings/c", "main", Some(".env.local")).unwrap();
         assert!(made.path.join(".env").is_file() && !made.path.join(".env.local").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn deletes_a_worktree_and_its_merged_branch_only_when_safe() {
+        if find_program("git").is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("wings-wt-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+                .args(args)
+                .current_dir(dir)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{args:?}");
+        };
+        run(&repo, &["init"]);
+        run(&repo, &["commit", "--allow-empty", "-m", "first"]);
+        let has_branch = |b: &str| git_ok(&repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")]);
+
+        // A main checkout, or a folder that isn't a worktree, is refused.
+        assert!(delete(&repo, &repo, true).unwrap_err().contains("isn't a git worktree"));
+        assert!(repo.exists());
+        let stray = base.join("stray");
+        std::fs::create_dir_all(&stray).unwrap();
+        assert!(delete(&repo, &stray, true).is_err());
+        assert!(stray.exists());
+
+        // Clean: the folder, the branch and the then-empty `app-worktrees` go.
+        let one = create(&repo, "wings/one", "main", None).unwrap().path;
+        assert!(inspect(&repo, &one).unwrap().changes.is_empty());
+        assert_eq!(delete(&repo, &one, false).unwrap().kept_branch, None);
+        assert!(!one.exists() && !has_branch("wings/one") && !base.join("app-worktrees").exists());
+
+        // Dirty: refused without force, deleted with it.
+        let two = create(&repo, "wings/two", "main", None).unwrap().path;
+        std::fs::write(two.join("note.txt"), "x").unwrap();
+        assert_eq!(inspect(&repo, &two).unwrap().changes.len(), 1);
+        assert!(delete(&repo, &two, false).unwrap_err().contains("uncommitted"));
+        assert!(two.exists());
+        assert_eq!(delete(&repo, &two, true).unwrap().kept_branch, None);
+        assert!(!two.exists() && !has_branch("wings/two"));
+
+        // Unmerged: the folder goes, the branch stays and is reported.
+        let three = create(&repo, "wings/three", "main", None).unwrap().path;
+        run(&three, &["commit", "--allow-empty", "-m", "work"]);
+        assert_eq!(delete(&repo, &three, false).unwrap().kept_branch.as_deref(), Some("wings/three"));
+        assert!(!three.exists() && has_branch("wings/three"));
         let _ = std::fs::remove_dir_all(&base);
     }
 }
