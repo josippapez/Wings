@@ -6,6 +6,7 @@ What changed in each Wings release, newest first.
 
 - **Agents can set up worktrees.** The `worktree_setup` tool and `wings worktree-setup` read a project's worktree setup and change the files copied into new worktrees, the same settings as "Worktree setup…". The setup command only you change, since it runs in every new worktree.
 - **Worktree setup in Schedules.** An "assigned to me" entry shows and edits its project's worktree files and setup command.
+- **Pick where agent terminals open.** Settings, Agents, "Agent terminals open": below the agent, right of it, or floating over it.
 - **For plugin authors:** `wings.worktreeSetup` and `wings.setWorktreeSetup`, with `permissions.worktrees`.
 
 ## 0.1.98 · 2026-10-28
