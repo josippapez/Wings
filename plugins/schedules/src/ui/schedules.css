@@ -1,0 +1,11 @@
+/* The Schedules tab's own layout. plugin-ui.css styles the components; this holds what is only here. */
+
+.sc-form {
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+}
+.sc-item {
+  flex: 1;
+  min-width: 0;
+}

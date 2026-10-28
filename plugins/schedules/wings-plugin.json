@@ -1,0 +1,31 @@
+{
+  "id": "schedules",
+  "name": "Schedules",
+  "version": "0.1.0",
+  "minWingsVersion": "0.1.45",
+  "icon": "icon.svg",
+  "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
+  "api": 1,
+  "main": "dist/main.js",
+  "permissions": {
+    "panes": [
+      "claude",
+      "opencode --prompt"
+    ],
+    "notify": true
+  },
+  "contributes": {
+    "views": [
+      {
+        "id": "schedules",
+        "title": "Schedules",
+        "page": "dist/schedules.html",
+        "opens": [
+          "tab"
+        ],
+        "newTab": true,
+        "multiple": false
+      }
+    ]
+  }
+}
