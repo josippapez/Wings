@@ -24,15 +24,11 @@ Each project has tabs, and each tab can split into panes. Rename, reorder and mo
 
 ![The command palette listing agents that need you, agents and commands with their shortcuts](docs/images/palette.png)
 
-### Issues, and the agent's todo
+### Issues
 
 The Issues plugin keeps a local tracker for each project, with types, specs, priorities, links to commits and PRs, and an activity log. See the issues on a board, as rows by epic, or as a list. Claude Code reads and writes them through tools, and a session start line tells it to track its work there. A setting keeps issue keys out of its commits and PRs.
 
 ![The Issues board for a project with columns for to do, in progress, in review and done](docs/images/issues.png)
-
-The agent also keeps its own step list with `tasks__todo`. It shows as a card floating over its pane, and on a Todo tab with the history kept.
-
-![A Claude Code pane with a card listing its steps and which one is in progress](docs/images/todo.png)
 
 ### Review and history
 

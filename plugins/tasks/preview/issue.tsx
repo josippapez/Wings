@@ -2,14 +2,14 @@
 import IssuePage, { page } from "../src/pages/issue";
 import { IssueView, type IssueViewProps } from "../src/ui/issue-view";
 import { Steps, type Step } from "./_steps";
-import { bugIssue, emptyIssue, epicIssue, issues, longIssue, project, shortIssue, storage, todos } from "./_data";
+import { bugIssue, emptyIssue, epicIssue, issues, longIssue, project, shortIssue, storage } from "./_data";
 
 export { page };
 
 const noop = () => {};
 /** The Issue page with every action doing nothing: a state says only which issue it is about. */
 const view = (props: Pick<IssueViewProps, "issue" | "issueKey"> & Partial<IssueViewProps>) => (
-  <IssueView project={project} issues={issues} todos={todos} error={null} apply={() => Promise.resolve()} send={() => Promise.resolve()} onBack={noop} onResume={noop} onOpenFile={noop} onStart={noop} onOpenUrl={noop} onOpenIssue={noop} {...props} />
+  <IssueView project={project} issues={issues} error={null} apply={() => Promise.resolve()} send={() => Promise.resolve()} onBack={noop} onResume={noop} onOpenFile={noop} onStart={noop} onOpenUrl={noop} onOpenIssue={noop} {...props} />
 );
 
 const refuse = (message: string) => () => Promise.reject(new Error(message));

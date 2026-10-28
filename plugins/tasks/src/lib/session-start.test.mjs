@@ -2,20 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { sessionStartText, staleIssues } from "./session-start.ts";
 
-test("the session start line names the linked issue and the steps left, or asks for an issue", () => {
+test("the session start line names the linked issue, or asks for an issue", () => {
   const issue = { key: "WEB-4", title: "Checkout summary", status: "in_progress" };
-  const linked = sessionStartText({ projectName: "web", keepLocal: true, issue, todoLeft: 3 });
+  const linked = sessionStartText({ projectName: "web", keepLocal: true, issue });
   assert.match(linked, /WEB-4 "Checkout summary" \(In progress\)/);
-  assert.match(linked, /3 steps left; tasks__todo with no items reads it/);
   const fresh = sessionStartText({ projectName: "web", keepLocal: true });
   assert.match(fresh, /^When a task will change files/m);
   assert.match(fresh, /A question, a check, a review or a lookup gets no issue/);
   assert.match(fresh, /tasks__list or create one with tasks__create/);
-  assert.doesNotMatch(fresh, /steps? left/);
+  assert.doesNotMatch(fresh, /tasks__todo/);
   assert.doesNotMatch(sessionStartText({ projectName: "web", keepLocal: false }), /never go in commits/);
 });
 
-test("an issue in progress or in review is listed as stale from 3 days, not at 2, and a finished todo is named", () => {
+test("an issue in progress or in review is listed as stale from 3 days, not at 2", () => {
   const DAY = 24 * 60 * 60 * 1000;
   const now = 100 * DAY;
   const issue = (key, status, days) => ({ key, title: key, status, updatedAt: now - days * DAY, sessions: [] });
@@ -29,9 +28,4 @@ test("an issue in progress or in review is listed as stale from 3 days, not at 2
   assert.doesNotMatch(two, /unchanged/);
   const many = staleIssues(Array.from({ length: 5 }, (_, i) => issue(`WEB-${i}`, "in_progress", 4 + i)), now);
   assert.match(sessionStartText({ projectName: "web", keepLocal: true, stale: many, now }), /And 2 more\.$/);
-
-  const finished = sessionStartText({ projectName: "web", keepLocal: true, issue: issue("WEB-1", "in_progress", 0), finished: issue("WEB-1", "in_progress", 0), stale: [issue("WEB-1", "in_progress", 6)], now });
-  assert.match(finished, /Your todo is all done, but WEB-1 is still In progress: worth checking whether it is finished\./);
-  assert.doesNotMatch(finished, /unchanged/, "the finished issue is not listed twice");
-  assert.doesNotMatch(sessionStartText({ projectName: "web", keepLocal: true }), /Your todo is all done|Worth checking/);
 });

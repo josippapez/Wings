@@ -6,7 +6,6 @@ import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Tit
 import { lastSession } from "../lib/actor";
 import { AGENT_KINDS, AGENTS } from "../lib/commands";
 import { canParent, LIMITS, type AgentKind, type FileChange, type Issue, type SessionRef } from "../lib/domain";
-import type { TodoList } from "../lib/todo";
 import { Activity, Children, Description, FilesChanged } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { DeleteConfirm, ErrorText, TypeIcon, useScrollIntoView, type Apply, type Send } from "./parts";
@@ -17,8 +16,6 @@ export interface IssueViewProps {
   issue: Issue | null | undefined;
   /** Every issue of the project, for the parent, related and blocking pickers and the child list. */
   issues: Issue[];
-  /** The project's todo lists, for the steps shown under each session. */
-  todos?: TodoList[];
   /** The key the tab was opened for, for the not-found page. */
   issueKey: string;
   error: string | null;
@@ -61,7 +58,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   );
 }
 
-export function IssueView({ project, issue, issues, todos, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onOpenFile, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
+export function IssueView({ project, issue, issues, issueKey, error, apply, send, onBack, trail = [], onBackTo, onResume, onOpenFile, onStart, onOpenUrl, onOpenIssue }: IssueViewProps) {
   const [confirming, setConfirming] = useState(false);
   const noticesRef = useScrollIntoView<HTMLDivElement>(confirming || error);
   const crumb = (
@@ -119,7 +116,7 @@ export function IssueView({ project, issue, issues, todos, issueKey, error, appl
           <header className="tk-head">
             <IssueTitle issue={issue} apply={apply} />
           </header>
-          <Properties issue={issue} issues={issues} todos={todos} project={project} apply={apply} send={send} onResume={onResume} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
+          <Properties issue={issue} issues={issues} project={project} apply={apply} send={send} onResume={onResume} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
           <div className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}

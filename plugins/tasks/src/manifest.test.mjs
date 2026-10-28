@@ -20,7 +20,7 @@ test("the manifest: the instructions line sends Claude to the tools unprompted, 
   const m = JSON.parse(readFileSync(new URL("../wings-plugin.json", import.meta.url), "utf8"));
   const line = m.contributes.mcpInstructions;
   assert.ok(line.length <= 500);
-  for (const name of ["create", "list", "get", "update", "log", "todo"]) assert.match(line, new RegExp(`tasks__${name}\\b`));
+  for (const name of ["create", "list", "get", "update", "log"]) assert.match(line, new RegExp(`tasks__${name}\\b`));
   assert.match(line, /For work that changes files, even unasked/);
   assert.match(line, /A question, check or review gets no issue/);
   assert.match(line, /deciding something gets no log note/);

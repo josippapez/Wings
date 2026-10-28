@@ -115,7 +115,6 @@ export type Op =
   | ({ kind: "update"; key: string; title?: string; description?: string; status?: Status; priority?: Priority; branch?: string; pr?: string; commit?: string } & Relations)
   | { kind: "note"; key: string; text: string }
   /** Records the acting session on the issue without a log entry. Nothing changes when it is already there. */
-  | { kind: "touch"; key: string }
   /** What an agent's journal says a turn changed: one row per path, the newest description wins. Writes no log entry. */
   | { kind: "files"; key: string; files: { path: string; what: string }[] }
   /** With `children`, its child issues, theirs and so on go too. Otherwise they stay and lose their parent. */

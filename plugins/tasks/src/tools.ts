@@ -8,8 +8,6 @@ import { homeIn, pickProject } from "./lib/home";
 import { LIMITS, MAX_LINKS, normalizeKey, PRIORITIES, STATUSES, TYPES, type IssueType, type Op, type Relations } from "./lib/domain";
 import { formatIssue, formatList } from "./lib/format";
 import { readStore } from "./lib/storage";
-import { TODO_LIMITS, TODO_STATUSES } from "./lib/todo";
-import { runTodo } from "./main/todo";
 import { write } from "./main/write";
 
 /** A limit as the descriptions write it: 20,000. */
@@ -134,17 +132,5 @@ export const tools = {
       const { issue } = await edit(context, { kind: "note", key, text });
       return `Logged on ${issue.key}.`;
     },
-  }),
-
-  todo: tool({
-    description: `Your own step list for the work in hand, kept local to Wings: the user sees it in a card on your terminal and on the Todo tab, and you can read it back after a resume or compaction. Send the whole list each time (items replaces it), and update it as steps finish: at most one in_progress at a time. Call it with no items to read the list. It links to the issue this session is on, or to key.`,
-    input: s.object({
-      items: s
-        .array(s.object({ text: s.string({ minLength: 1, maxLength: TODO_LIMITS.text }).describe(`The step, up to ${TODO_LIMITS.text} characters.`), status: s.enum(TODO_STATUSES) }), { maxItems: TODO_LIMITS.items })
-        .optional()
-        .describe(`The whole list, up to ${TODO_LIMITS.items} steps. Leave out to read the current list.`),
-      key: s.string({ maxLength: LIMITS.key }).optional().describe("The issue to link the list to. Defaults to the issue this session is on."),
-    }),
-    run: ({ items, key }, context) => runTodo(context, items, key),
   }),
 };

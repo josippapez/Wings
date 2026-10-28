@@ -2,13 +2,11 @@
 
 import { actorOf } from "../lib/actor";
 import { homeOf } from "../lib/home";
-import { journalIssue, isLive, journalOf, type JournalInput } from "../lib/journal";
+import { journalIssue, journalOf, type JournalInput } from "../lib/journal";
 import { keepLocal } from "../lib/local-setting";
 import { localOnlyDenial, writesToHistory } from "../lib/local-only";
 import { readStore } from "../lib/storage";
 import { inReviewText, sessionStartText, staleIssues } from "../lib/session-start";
-import { readTodo } from "../lib/todo-store";
-import { itemsOf, stepsLeft } from "../lib/todo";
 import { write } from "./write";
 
 /** The key prefix of each project that has issues, as main last saw it. */
@@ -18,13 +16,9 @@ export const rememberPrefix = (projectId: string, prefix: string, issues: number
 async function sessionStart(input: WingsHookInput, context: WingsToolContext) {
   if (!context.project) return null;
   const { id, name } = await homeOf(context.project);
-  const [{ issues }, local, todo] = await Promise.all([readStore(id, name), keepLocal.get(), readTodo(id, input.session_id)]);
+  const [{ issues }, local] = await Promise.all([readStore(id, name), keepLocal.get()]);
   const issue = issues.filter((i) => i.sessions.some((s) => s.id === input.session_id)).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  // A todo with every step done on an issue that is still open is worth a look; the hook only says so.
-  const items = todo ? itemsOf(todo) : [];
-  const linked = todo?.issueKey ? issues.find((i) => i.key === todo.issueKey) : undefined;
-  const finished = items.length && !stepsLeft(todo!) && linked && isLive(linked) ? linked : undefined;
-  return sessionStartText({ projectName: name, keepLocal: local, issue, todoLeft: todo ? stepsLeft(todo) : 0, stale: staleIssues(issues, Date.now()), finished });
+  return sessionStartText({ projectName: name, keepLocal: local, issue, stale: staleIssues(issues, Date.now()) });
 }
 
 /** Each message in a session: when the session's issue is in review, asks the agent to settle it from what the user says. */

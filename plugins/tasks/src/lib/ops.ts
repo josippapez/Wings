@@ -1,7 +1,6 @@
 // The operations a page or a tool asks for, applied to a store: `applyOp` gives the changed copy, or throws an Error that says
 // what was wrong. Nothing is saved here.
 
-import { isAgent } from "./actor";
 import { hasContent, isPriority, isStatus, isType, LIMITS, normalizeKey, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPES, type Actor, type Issue, type LogEntry, type Op, type Relations, type Store } from "./domain";
 import { upsertFiles } from "./files";
 import { append, appendLoose, touch } from "./log";
@@ -127,10 +126,7 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
   let entries: LogEntry[] = [];
   let changed = false;
   let others: Issue[] | null = null;
-  if (op.kind === "touch") {
-    // Only records the session on the issue, once: a todo list linked to it.
-    changed = isAgent(by) && !!by.id && !next.sessions.some((x) => x.id === by.id);
-  } else if (op.kind === "files") {
+  if (op.kind === "files") {
     // No log entry: the log is for people and decisions, and this can't fail on its limit.
     const files = upsertFiles(next.files, Array.isArray(op.files) ? op.files : [], by, now);
     if (JSON.stringify(files) !== JSON.stringify(next.files ?? [])) ((next.files = files), (changed = true));

@@ -13,7 +13,6 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 let projects;
 let panes;
 const hooks = new Map();
-const rails = [];
 const sectionSorts = [];
 let onSort;
 let onEvent;
@@ -34,7 +33,6 @@ globalThis.wings = {
   onEvent: (listener) => (onEvent = listener),
   onPanes: (listener) => (panes = listener),
   onHook: (event, handler) => hooks.set(event, handler),
-  setPaneRail: async (paneId, rail) => void rails.push({ paneId, rail }),
   setProjectSection: async (id, section, rows) => void sections.push({ id, section, rows }),
   setSectionSort: async (section, sort) => void sectionSorts.push({ section, sort }),
   onSectionSort: (listener) => (onSort = listener),
@@ -47,8 +45,6 @@ const { slotOf } = await import("./lib/storage.ts");
 const page = channel({ wings: { broadcast: async (message) => send("main", message), onBroadcast: (listener) => (listeners.page.add(listener), () => listeners.page.delete(listener)) } });
 const told = [];
 page.on("issues", (m) => told.push(m));
-const todoTold = [];
-page.on("todo", (m) => todoTold.push(m));
 const call = async (name, input) => handlers.get(name)(input, { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } });
 const ask = (op) => page.ask("op", { projectId: "proj1", projectName: "web", op });
 
@@ -136,23 +132,6 @@ test("the project's section lists children after their epic or feature and names
 });
 
 const ctx = { paneId: "p1", project: { id: "proj1", name: "web", path: "/work/web" }, session: { id: "s-1", name: "agent one" } };
-
-test("the todo tool keeps the session's list, links it to the issue, tells the pages and shows the card on the session's pane", async () => {
-  await panes([{ paneId: "p1", projectId: "proj1", cwd: "/work/web", command: "claude", project: "web", session: { sessionId: "s-1", name: "agent one", state: "idle", startedAt: 1 }, focused: true }]);
-  await settle();
-  assert.equal(rails.at(-1).rail, null, "no list, no card");
-  assert.match(await call("todo", {}), /No todo list/);
-  const out = await call("todo", { items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], key: "web-1" });
-  assert.match(out, /\(WEB-1\): 1 of 2 done\.\n\[x\] read\n\[~\] write/);
-  await settle();
-  assert.deepEqual(todoTold, [{ projectId: "proj1" }]);
-  assert.deepEqual(rails.at(-1), { paneId: "p1", rail: { title: "Todo · WEB-1", items: [{ text: "read", status: "done" }, { text: "write", status: "in_progress" }], open: "todo" } });
-  assert.equal(JSON.parse(JSON.stringify([...storage].find(([k]) => k.startsWith("todo/"))[1])).versions.length, 1);
-  await call("todo", { items: [{ text: "read", status: "done" }, { text: "write", status: "done" }] });
-  assert.equal(rails.at(-1).rail, null, "all done clears the card");
-  await assert.rejects(handlers.get("todo")({}, { ...ctx, session: null }), /no agent session/);
-  await assert.rejects(call("todo", { items: [{ text: "x", status: "pending" }], key: "WEB-99" }), /No issue WEB-99/);
-});
 
 test("the section puts the issue an agent works on now first, sorts again when its pane goes, and follows the Sidebar order", async () => {
   const app = { id: "proj5", name: "app", path: "/work/app" };

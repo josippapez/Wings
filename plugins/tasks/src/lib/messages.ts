@@ -12,5 +12,5 @@ export const ch = channel<
     // Goes to a session's pane when it runs in one, else resumes it in a new terminal in `cwd`.
     openSession: { request: { session: SessionRef; cwd: string }; response: void };
   },
-  { issues: { projectId: string }; todo: { projectId: string } }
+  { issues: { projectId: string } }
 >();

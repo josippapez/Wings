@@ -1,10 +1,10 @@
 {
   "id": "tasks",
   "name": "Issues",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "minWingsVersion": "0.1.98",
   "icon": "icon.svg",
-  "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here, a setting keeps issue keys out of its commits and PRs, and tasks__todo is its own step list, shown in a card on its pane and on a Todo tab with the history kept. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update, tasks__log and tasks__todo.",
+  "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here and a setting keeps issue keys out of its commits and PRs. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update and tasks__log.",
   "api": 1,
   "main": "dist/main.js",
   "permissions": {
@@ -30,10 +30,9 @@
     ]
   },
   "contributes": {
-    "mcpInstructions": "Issues (tasks__*): the local tracker for this project, never named in commits, branches or PRs. For work that changes files, even unasked: find its issue with tasks__list or open one with tasks__create; keep steps in tasks__todo; set the status with tasks__update, and add a tasks__log note when a turn changed files or finished or blocked the work. A question, check or review gets no issue, and rechecking, answering or deciding something gets no log note. Read with tasks__get or tasks__list.",
+    "mcpInstructions": "Issues (tasks__*): the local tracker for this project, never named in commits, branches or PRs. For work that changes files, even unasked: find its issue with tasks__list or open one with tasks__create; set the status with tasks__update, and add a tasks__log note when a turn changed files or finished or blocked the work. A question, check or review gets no issue, and rechecking, answering or deciding something gets no log note. Read with tasks__get or tasks__list.",
     "ui": [
-      "diff",
-      "rail"
+      "diff"
     ],
     "hooks": [
       "SessionStart",
@@ -49,16 +48,6 @@
         "id": "board",
         "title": "Issues",
         "page": "dist/board.html",
-        "opens": [
-          "tab"
-        ],
-        "newTab": true,
-        "multiple": false
-      },
-      {
-        "id": "todo",
-        "title": "Todo",
-        "page": "dist/todo.html",
         "opens": [
           "tab"
         ],
@@ -406,50 +395,6 @@
             "key",
             "text"
           ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "todo",
-        "description": "Your own step list for the work in hand, kept local to Wings: the user sees it in a card on your terminal and on the Todo tab, and you can read it back after a resume or compaction. Send the whole list each time (items replaces it), and update it as steps finish: at most one in_progress at a time. Call it with no items to read the list. It links to the issue this session is on, or to key.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 200,
-                    "description": "The step, up to 200 characters."
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "pending",
-                      "in_progress",
-                      "done"
-                    ]
-                  }
-                },
-                "required": [
-                  "text",
-                  "status"
-                ],
-                "additionalProperties": false
-              },
-              "maxItems": 30,
-              "description": "The whole list, up to 30 steps. Leave out to read the current list."
-            },
-            "key": {
-              "type": "string",
-              "maxLength": 20,
-              "description": "The issue to link the list to. Defaults to the issue this session is on."
-            }
-          },
           "additionalProperties": false
         }
       }

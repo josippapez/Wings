@@ -17,7 +17,7 @@ export async function homeOf(project: ProjectRef): Promise<{ id: string; name: s
   return project.parentId ? homeIn(project, await wings.projects()) : { id: project.id, name: project.name };
 }
 
-/** The id of the project whose store holds the issues and todo lists of project `id` (a pane's project, say). */
+/** The id of the project whose store holds the issues of project `id` (a pane's project, say). */
 export async function homeIdOf(id: string): Promise<string> {
   const projects = await wings.projects();
   const project = projects.find((p) => p.id === id);
