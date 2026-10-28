@@ -25,6 +25,19 @@ pnpm test
 (cd ../../packages/plugin-sdk && pnpm install --frozen-lockfile >/dev/null)
 (cd ../../packages/plugin-ui && pnpm install --frozen-lockfile >/dev/null)
 (cd ../../plugins && pnpm install --frozen-lockfile >/dev/null && pnpm check)
+# Installed Wings takes a plugin's update only when its version goes up, so a plugin changed since the last release
+# without a bump would never reach anyone.
+LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+if [ -n "$LAST" ]; then
+  stale=""
+  for m in ../../plugins/*/wings-plugin.json; do
+    d=${m%/wings-plugin.json}
+    git diff --quiet "$LAST" HEAD -- "$d" && continue
+    was=$(git show "$LAST:${d#../../}/wings-plugin.json" 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{}})')
+    [ -n "$was" ] && [ "$was" = "$(node -p "require('$m').version")" ] && stale="$stale ${d#../../}"
+  done
+  [ -z "$stale" ] || { echo "Changed since $LAST without a version bump:$stale" >&2; exit 1; }
+fi
 
 # Read the key into the build's environment only. Tauri signs the update archive with it; it is never written elsewhere.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
