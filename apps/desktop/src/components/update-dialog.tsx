@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { parseNotes } from "@/lib/release-notes";
+import { Markdown } from "@/components/markdown";
 import { installUpdate, onShowUpdate } from "@/lib/updater";
 
 /** What an update brings, shown before installing it. Opened from the updater's toast and by Check for Updates…. */
@@ -20,7 +20,7 @@ export function UpdateDialog() {
   );
   if (!update) return null;
 
-  const notes = parseNotes(update.body);
+  const notes = update.body?.trim() ?? "";
   const releaseUrl = `https://github.com/josippapez/Wings/releases/tag/v${update.version}`;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -31,8 +31,8 @@ export function UpdateDialog() {
             {update.currentVersion} → {update.version}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto text-[13px] leading-snug" data-testid="update-notes">
-          {notes.length === 0 ? (
+        <div className="max-h-[50vh] overflow-y-auto" data-testid="update-notes">
+          {!notes ? (
             <p className="text-muted-foreground">
               No release notes for this version.{" "}
               <a
@@ -47,17 +47,8 @@ export function UpdateDialog() {
               </a>
             </p>
           ) : (
-            notes.map((n, i) =>
-              n.list ? (
-                <ul key={i} className="list-disc space-y-1 pl-5">
-                  {n.items.map((item, j) => (
-                    <li key={j}>{item}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p key={i}>{n.text}</p>
-              ),
-            )
+            // The notes are this version's CHANGELOG.md section, written in Markdown.
+            <Markdown source={notes} className="leading-snug" />
           )}
         </div>
         <DialogFooter>
