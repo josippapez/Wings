@@ -284,6 +284,12 @@ export function serveAssigned() {
     await saveWatch(id, draft);
   });
 
+  ch.answer("branches", async ({ projectId }) => {
+    const project = (await wings.projects()).find((p) => p.id === projectId);
+    const refs = project ? ((await gitOk(project.path, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"])) ?? "") : "";
+    return refs.split("\n").filter((b) => b && b !== "origin" && b !== "origin/HEAD");
+  });
+
   ch.answer("toggleWatch", ({ id }) =>
     queue(async () => {
       const list = await readWatches();

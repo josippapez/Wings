@@ -40,9 +40,10 @@ export interface ViewProps {
   onSignIn: (id: string) => Promise<unknown>;
   onInstall: (id: string) => Promise<unknown>;
   onOpenUrl: (url: string) => Promise<unknown>;
+  loadBranches?: (projectId: string) => Promise<string[]>;
 }
 
-export function ScheduleView({ state, error, now, here = null, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl }: ViewProps) {
+export function ScheduleView({ state, error, now, here = null, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl, loadBranches }: ViewProps) {
   // `false` is the list, `null` a new entry, else the schedule or "assigned" entry being changed.
   const [editing, setEditing] = useState<string | null | false>(false);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -92,6 +93,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
           watch={watch}
           projects={projects}
           here={here}
+          loadBranches={loadBranches}
           busy={action.busy}
           error={action.error}
           onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}

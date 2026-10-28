@@ -15,6 +15,8 @@ const CLOCK_MS = 30_000;
 const START_TIMEOUT_MS = 120_000;
 const SIGN_IN_TIMEOUT_MS = 320_000;
 
+const loadBranches = (projectId: string) => ch.ask("branches", { projectId });
+
 export default function SchedulesPage() {
   const { data, error } = useQuery(ch, "state", undefined);
   const here = useProject()?.id ?? null;
@@ -66,6 +68,7 @@ export default function SchedulesPage() {
       onSignIn={(id) => ch.ask("signIn", { id }, { timeoutMs: SIGN_IN_TIMEOUT_MS })}
       onInstall={(id) => ch.ask("install", { id }, { timeoutMs: SIGN_IN_TIMEOUT_MS })}
       onOpenUrl={(url) => wings.openUrl(url)}
+      loadBranches={loadBranches}
     />
   );
 }

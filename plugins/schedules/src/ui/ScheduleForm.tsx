@@ -1,7 +1,7 @@
 // The form that adds or changes a schedule, or an entry that waits for something to be assigned to you.
 
-import { useState, type FormEvent } from "react";
-import { Button, Card, Chip, Chips, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
+import { useEffect, useState, type FormEvent } from "react";
+import { Button, Card, Chip, Chips, Combobox, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
 import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
 import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
@@ -20,11 +20,13 @@ interface Props {
   onSave: (draft: Draft) => void;
   onSaveWatch: (draft: WatchDraft) => void;
   onCancel: () => void;
+  /** The project's branches, for the branch to start from. */
+  loadBranches?: (projectId: string) => Promise<string[]>;
 }
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
 
-export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel }: Props) {
+export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel, loadBranches }: Props) {
   // An entry keeps its kind: only a new one picks it.
   const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
   const [name, setName] = useState(schedule?.name ?? "");
@@ -36,6 +38,13 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const [states, setStates] = useState<string[] | undefined>(watch?.states);
   const [prefixes, setPrefixes] = useState((watch?.prefixes ?? []).join(", "));
   const [base, setBase] = useState(watch?.base ?? "");
+  const [branches, setBranches] = useState<string[]>([]);
+  useEffect(() => {
+    if (kind !== "assigned" || !projectId || !loadBranches) return;
+    let live = true;
+    loadBranches(projectId).then((b) => live && setBranches(b), () => live && setBranches([]));
+    return () => void (live = false);
+  }, [kind, projectId, loadBranches]);
   const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
   const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
@@ -155,8 +164,8 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
                 </Row>
               ) : null}
             </FieldGroup>
-            <Field label="Start branches from" hint="Optional, a branch of this project's repo, like origin/develop. Empty starts from the repo's default branch.">
-              <TextInput value={base} onChange={(e) => setBase(e.target.value)} maxLength={200} placeholder="origin/develop" />
+            <Field label="Start branches from" hint="Pick one of this project's branches or type one, like origin/develop. Empty starts from the repo's default branch.">
+              <Combobox label="Start branches from" freeText value={base} onInput={setBase} onPick={(o) => setBase(o.value)} options={branches.map((b) => ({ value: b, label: b }))} maxLength={200} placeholder="The default branch" />
             </Field>
             <Field label="Only titles starting with" hint="Optional, separated by commas, like FE or BE. Other tickets are listed as for another project and not asked about. Empty asks about every title.">
               <TextInput value={prefixes} onChange={(e) => setPrefixes(e.target.value)} maxLength={200} placeholder="FE, BE" />

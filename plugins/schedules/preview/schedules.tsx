@@ -112,6 +112,7 @@ const assignedWatches: WatchView[] = [
 ];
 
 const noop = () => Promise.resolve();
+const branches = () => Promise.resolve(["main", "develop", "origin/main", "origin/develop", "origin/release/2.4"]);
 const base: ViewProps = {
   state: { schedules, watches, projects, signInCode: null },
   error: null,
@@ -146,6 +147,7 @@ export const states = {
   "inbox-started": { element: <ScheduleView {...base} state={assignedState} inbox={{ entry: "w1", ticket: "1211", status: "started" }} /> },
   "inbox-failed": { element: <ScheduleView {...base} state={assignedState} inbox={{ entry: "w1", ticket: "1211", status: "failed", error: "Only 6.2 GB is free on Macintosh HD, and you asked for at least 10 GB. Free up some space, then start it again." }} /> },
   "edit-assigned": { element: <Steps steps={[{ click: "Edit When something is assigned to me in acme-api" }]}><ScheduleView {...base} state={assignedState} /></Steps> },
+  "pick-branch": { element: <Steps steps={[{ click: "Edit When something is assigned to me in acme-api" }, { type: ["Start branches from", "origin"] }]}><ScheduleView {...base} state={assignedState} loadBranches={branches} /></Steps> },
   "add-assigned": { element: <Steps steps={[{ click: "Add entry" }, { click: "When something is assigned to me" }]}><ScheduleView {...base} /></Steps> },
   "not-enough-disk": {
     element: (

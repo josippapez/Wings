@@ -37,6 +37,8 @@ export const ch = channel<
     /** Runs the entry's CLI login, or installs the CLI. */
     signIn: { request: { id: string }; response: void };
     install: { request: { id: string }; response: void };
+    /** A project's local and origin branches, for the branch a ticket's branch starts from. */
+    branches: { request: { projectId: string }; response: string[] };
   },
   {},
   { state: { key: void; value: State } }
