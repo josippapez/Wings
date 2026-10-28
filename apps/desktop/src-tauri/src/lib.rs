@@ -178,6 +178,41 @@ fn worktree_local_set(state: State<AppState>, space_id: String, include: String,
     Ok(())
 }
 
+/// Changes the worktree settings of the project `space_id` belongs to, in memory and in spaces.json, the way the
+/// Worktree setup dialog does, and tells the window so an open dialog shows it. Blank means unset; `None` leaves one as it is.
+fn set_worktree_setup(app: &AppHandle, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let owner = {
+        let mut store = state.spaces.lock().unwrap();
+        store.update_worktree_settings(space_id, include, setup)?;
+        store.settings_owner(space_id).map(|s| s.id.clone())
+    };
+    let _ = app.emit("worktree-setup-changed", serde_json::json!({ "spaceId": owner }));
+    Ok(())
+}
+
+/// What a plugin with `worktrees` may read: the project's include list (null for the default), the defaults,
+/// whether a `.worktreeinclude` takes over, and the setup command.
+#[tauri::command]
+fn plugin_worktree_setup(state: State<AppState>, plugin_id: String, space_id: String) -> Res<spaces::WorktreeSetup> {
+    if !plugins::may_create_worktrees(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not read worktree setup"));
+    }
+    spaces::worktree_setup(&state.spaces.lock().unwrap().spaces, &space_id).ok_or_else(|| "unknown space".to_string())
+}
+
+/// A plugin with `worktrees` changes the project's worktree setup: `include` lines (empty resets to the default
+/// list) and `setup` (empty clears it), each only when given.
+#[tauri::command]
+fn plugin_worktree_setup_set(app: AppHandle, state: State<AppState>, plugin_id: String, space_id: String, include: Option<Vec<String>>, setup: Option<String>) -> Res<()> {
+    if !plugins::may_create_worktrees(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not change worktree setup"));
+    }
+    let include = include.map(|lines| spaces::include_text(&lines)).transpose()?;
+    let setup = setup.map(|s| spaces::setup_text(&s)).transpose()?;
+    set_worktree_setup(&app, &space_id, include.as_deref(), setup.as_deref())
+}
+
 #[tauri::command(async)]
 fn editors_list() -> Vec<editors::EditorView> {
     editors::list()
@@ -1922,6 +1957,8 @@ pub fn run() {
             worktree_create,
             worktree_local,
             worktree_local_set,
+            plugin_worktree_setup,
+            plugin_worktree_setup_set,
             editors_list,
             editor_open,
             sessions_list,

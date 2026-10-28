@@ -4,6 +4,7 @@
 import { channel } from "wings-plugin-sdk/messages";
 import type { Watch, WatchDraft } from "./assigned";
 import type { Draft, Schedule } from "./schedule";
+import type { WorktreeChange, WorktreeSetup } from "./worktree-setup";
 
 /** An "assigned" entry as the page sees it: without the ids it has already seen. */
 /** `targets` are the projects its tickets can start in, its own first. */
@@ -25,8 +26,10 @@ export const ch = channel<
     remove: { request: { id: string }; response: void };
     /** Starts the agent now, without moving the next run. Resolves once its tab is open. */
     runNow: { request: { id: string }; response: void };
-    /** Adds an "assigned" entry, or changes the one `id` names. */
-    saveWatch: { request: { id: string | null; draft: WatchDraft }; response: void };
+    /** Adds an "assigned" entry, or changes the one `id` names. `worktree` changes the project's worktree setup first. */
+    saveWatch: { request: { id: string | null; draft: WatchDraft; worktree?: { projectId: string; change: WorktreeChange } }; response: void };
+    /** What a project's new worktrees get, from Wings: the project's own setting, which Worktree setup in the sidebar shows too. */
+    worktreeSetup: { request: { projectId: string }; response: WorktreeSetup };
     toggleWatch: { request: { id: string }; response: void };
     removeWatch: { request: { id: string }; response: void };
     /** Looks for new tickets now. */

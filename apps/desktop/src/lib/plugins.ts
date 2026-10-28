@@ -807,6 +807,23 @@ export class PluginHost {
         this.callbacks.addProject(made);
         return { projectId: made.space.id, path: made.space.path };
       }
+      case "worktreeSetup": {
+        const spaceId = p.projectId == null ? this.callbacks.currentProject() : String(p.projectId);
+        if (!spaceId) throw new Error("No project is open in Wings");
+        return invoke("plugin_worktree_setup", { pluginId, spaceId });
+      }
+      case "setWorktreeSetup": {
+        const spaceId = p.projectId == null ? this.callbacks.currentProject() : String(p.projectId);
+        if (!spaceId) throw new Error("No project is open in Wings");
+        const lines = (p.include ?? undefined) as unknown;
+        if (lines !== undefined && (!Array.isArray(lines) || lines.some((l) => typeof l !== "string"))) throw new Error("setWorktreeSetup include is an array of strings, or null for the default list");
+        if (p.setup != null && typeof p.setup !== "string") throw new Error("setWorktreeSetup setup is a shell line, or null to clear it");
+        // Absent leaves a setting as it is; null resets the list (an empty one) or clears the line (an empty one).
+        const include = p.include === undefined ? null : p.include === null ? [] : lines;
+        const setup = p.setup === undefined ? null : p.setup === null ? "" : p.setup;
+        await invoke("plugin_worktree_setup_set", { pluginId, spaceId, include, setup });
+        return null;
+      }
       case "sendToAgent": {
         const paneId = String(p.paneId);
         const text = typeof p.text === "string" ? p.text.trim() : "";

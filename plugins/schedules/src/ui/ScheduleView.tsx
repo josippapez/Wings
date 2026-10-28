@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Menu, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
 import { asks, describeCheck, SOURCE_LABELS, startedElsewhere, titleWanted, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
+import type { WorktreeChange, WorktreeSetup } from "../lib/worktree-setup";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
 import { ScheduleForm } from "./ScheduleForm";
 import "./schedules.css";
@@ -31,7 +32,7 @@ export interface ViewProps {
   onToggle: (id: string) => Promise<unknown>;
   onRemove: (id: string) => Promise<unknown>;
   onRun: (id: string) => Promise<unknown>;
-  onSaveWatch: (id: string | null, draft: WatchDraft) => Promise<unknown>;
+  onSaveWatch: (id: string | null, draft: WatchDraft, worktree?: { projectId: string; change: WorktreeChange }) => Promise<unknown>;
   onToggleWatch: (id: string) => Promise<unknown>;
   onRemoveWatch: (id: string) => Promise<unknown>;
   onCheckWatch: (id: string) => Promise<unknown>;
@@ -41,9 +42,10 @@ export interface ViewProps {
   onInstall: (id: string) => Promise<unknown>;
   onOpenUrl: (url: string) => Promise<unknown>;
   loadBranches?: (projectId: string) => Promise<string[]>;
+  loadWorktreeSetup?: (projectId: string) => Promise<WorktreeSetup>;
 }
 
-export function ScheduleView({ state, error, now, here = null, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl, loadBranches }: ViewProps) {
+export function ScheduleView({ state, error, now, here = null, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl, loadBranches, loadWorktreeSetup }: ViewProps) {
   // `false` is the list, `null` a new entry, else the schedule or "assigned" entry being changed.
   const [editing, setEditing] = useState<string | null | false>(false);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -94,10 +96,11 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
           projects={projects}
           here={here}
           loadBranches={loadBranches}
+          loadWorktreeSetup={loadWorktreeSetup}
           busy={action.busy}
           error={action.error}
           onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
-          onSaveWatch={(draft) => void action.run(() => onSaveWatch(watch?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
+          onSaveWatch={(draft, worktree) => void action.run(() => onSaveWatch(watch?.id ?? null, draft, worktree)).then((ok) => ok && setEditing(false))}
           onCancel={() => (action.clear(), setEditing(false))}
         />
       </Page>

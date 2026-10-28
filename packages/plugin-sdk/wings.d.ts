@@ -589,6 +589,19 @@ interface Wings {
    */
   createWorktree(options: { projectId?: string; branch: string; base?: string }): Promise<{ projectId: string; path: string }>;
   /**
+   * Needs `permissions.worktrees` and Wings 0.1.99. What a project's new worktrees get (a worktree means its project;
+   * the one on screen without `projectId`): `include` the project's pattern lines, or null for the default list
+   * (`defaults`), `hasIncludeFile` when the repo has a `.worktreeinclude`, which is used instead of `include`, and the
+   * `setup` shell line, or null. The same settings as Worktree setup in the sidebar.
+   */
+  worktreeSetup(projectId?: string): Promise<{ include: string[] | null; defaults: string[]; hasIncludeFile: boolean; setup: string | null }>;
+  /**
+   * Needs `permissions.worktrees` and Wings 0.1.99. Changes the project's worktree setup, only the fields given: `include`
+   * (null resets to the default list) and `setup` (null clears it). Patterns use .gitignore syntax and `!` leaves
+   * files out; a custom list replaces the defaults. Rejects a pattern or setup line with a newline.
+   */
+  setWorktreeSetup(projectId: string | undefined, options: { include?: string[] | null; setup?: string | null }): Promise<void>;
+  /**
    * Needs `permissions.callTools` naming the tool or its plugin, and Wings 0.1.94. Only between Wings' own plugins
    * (installed from the Wings repo's `plugins/`). Runs another plugin's tool, `name` like `tasks__list`, as if Claude
    * called it in `project` (the frame's project without it), and resolves its text and whether it failed.

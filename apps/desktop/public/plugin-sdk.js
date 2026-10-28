@@ -327,6 +327,10 @@
     sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
     /** With `permissions.worktrees`: makes a worktree on a new branch and adds it as a project; resolves `{ projectId, path }`. */
     createWorktree: (options) => call("createWorktree", options),
+    /** With `permissions.worktrees`: what a project's new worktrees get, `{ include, defaults, hasIncludeFile, setup }`. */
+    worktreeSetup: (projectId) => call("worktreeSetup", { projectId: projectId ?? null }),
+    /** With `permissions.worktrees`: changes the project's worktree setup; a field left out stays, null resets the list or clears the line. */
+    setWorktreeSetup: (projectId, options) => call("setWorktreeSetup", { projectId: projectId ?? null, include: options?.include, setup: options?.setup }),
     /** With `permissions.callTools`, between Wings' own plugins: runs another plugin's tool, like `tasks__list`, and resolves `{ text, isError }`. */
     callTool: (name, args, options) => call("callTool", { name, arguments: args ?? {}, project: options?.project ?? null }),
     /** Between Wings' own plugins: sends the event `name` with JSON `data` (up to 16 KB) to every plugin that declared `<this plugin> <name>` in `permissions.events`. */

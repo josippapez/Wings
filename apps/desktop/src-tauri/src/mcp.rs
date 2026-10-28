@@ -230,6 +230,10 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
         self.0.state::<AppState>().spaces.lock().unwrap().spaces.clone()
     }
 
+    fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
+        crate::set_worktree_setup(self.0, space_id, include, setup)
+    }
+
     fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
         let pane = self.0.state::<AppState>().panes.lock().unwrap().get(pane_id).cloned()?;
         Some(pane.recent_output())

@@ -1,5 +1,5 @@
 //! Wings' built-in MCP tools about the panes themselves: `list_sessions`, `read_pane`, `open_pane`, `close_pane`,
-//! `send_to_agent` and `notify`.
+//! `send_to_agent`, `notify` and `worktree_setup`.
 //! They let one Claude session see and use the others. Everything reaches this code through the `0600` socket in
 //! mcp.rs, so only processes of this user can call it, and the first three are described to Claude as the
 //! cross-session reach they are. The logic works on plain data behind `Host`, so the tests need no app.
@@ -73,6 +73,9 @@ pub trait Host {
     /// Pastes `text` into an agent's prompt through the window, which presses Enter only while the user lets agents
     /// message each other. Whether it pressed Enter.
     fn send(&self, pane_id: &str, text: &str) -> Result<bool, String>;
+    /// Saves worktree settings for the project `space_id` belongs to (see `spaces::update_worktree_settings`) in
+    /// memory and on disk, and tells the window.
+    fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String>;
 }
 
 const CROSS_SESSION: &str = "Any Claude Code session on this computer can call this, so it can see what your other sessions show.";
@@ -142,6 +145,18 @@ pub fn tools() -> Vec<Value> {
                 "required": ["title"]
             }
         }),
+        json!({
+            "name": "worktree_setup",
+            "description": "Read or change what a project's new worktrees get: the gitignored local files copied in, and a setup command. Without include and setup it only reads. Returns the project, hasIncludeFile (a .worktreeinclude in the repo, which takes precedence over the include list), the effective include list with whether it is the default or custom (includeIsDefault), the defaults, and the setup command. Patterns use .gitignore syntax and only files the repo ignores are copied, never tracked ones; a line starting with ! removes files. A custom list replaces the defaults, so include the default lines you still want. Files are copied, not linked, so leave big folders (node_modules, build output) out. The setup command is one shell line that runs in a new worktree's folder, in the first terminal opened there, before the agent starts. The Worktree setup dialog and Schedules show the same settings and pick up a change at once.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "A project's name or folder path (a worktree means its project). Leave out for your own project." },
+                    "include": { "type": "array", "items": { "type": "string" }, "description": "Pattern lines replacing the include list. An empty array resets it to the default list." },
+                    "setup": { "type": "string", "description": "A shell line. An empty string clears it." }
+                }
+            }
+        }),
     ]
 }
 
@@ -195,8 +210,59 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
             }
             None => Err("notify needs a title".into()),
         },
+        "worktree_setup" => worktree_setup(host, caller().as_deref(), args),
         _ => return None,
     })
+}
+
+/// Reads, or changes, the worktree settings of a project: the one named, else the caller's. The same code path as the
+/// Worktree setup dialog writes through.
+fn worktree_setup(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result<String, String> {
+    let spaces = host.spaces();
+    let id = match args.get("project").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) {
+        Some(name) => {
+            let named: Vec<&Space> = spaces.iter().filter(|s| s.id == name || s.path == name.trim_end_matches('/') || s.name == name).collect();
+            match named.as_slice() {
+                [one] => one.id.clone(),
+                [] => return Err(format!("No project {name} in Wings. Pass a project's name or folder path.")),
+                _ => return Err(format!("More than one project is called {name}. Pass its folder path.")),
+            }
+        }
+        None => {
+            let pane = caller.and_then(|id| host.panes().into_iter().find(|p| p.id == id));
+            pane.map(|p| p.space_id).ok_or("Call this from a Wings pane, or pass project")?
+        }
+    };
+    let include = match args.get("include") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) => {
+            let lines: Vec<String> = items.iter().map(|i| i.as_str().map(str::to_string).ok_or("include is an array of strings")).collect::<Result<_, _>>()?;
+            Some(crate::spaces::include_text(&lines)?)
+        }
+        Some(_) => return Err("include is an array of strings".into()),
+    };
+    let setup = match args.get("setup") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(crate::spaces::setup_text(s)?),
+        Some(_) => return Err("setup is a string".into()),
+    };
+    let changed = include.is_some() || setup.is_some();
+    if changed {
+        host.set_worktree_setup(&id, include.as_deref(), setup.as_deref())?;
+    }
+    let now = crate::spaces::worktree_setup(&host.spaces(), &id).ok_or("unknown project")?;
+    Ok(json!({
+        "project": now.project,
+        "path": now.path,
+        "changed": changed,
+        "hasIncludeFile": now.has_include_file,
+        "includeIsDefault": now.include.is_none(),
+        "include": now.include.as_ref().unwrap_or(&now.defaults),
+        "defaults": now.defaults,
+        "setup": now.setup,
+        "note": now.has_include_file.then_some("This repo has a .worktreeinclude, so that file is used and the include list is ignored."),
+    })
+    .to_string())
 }
 
 fn list_sessions(host: &dyn Host, caller: Option<&str>) -> Value {
@@ -383,7 +449,7 @@ mod tests {
     struct Fake {
         panes: Vec<PaneRow>,
         agents: Vec<Agent>,
-        spaces: Vec<Space>,
+        spaces: RefCell<Vec<Space>>,
         output: HashMap<String, Vec<u8>>,
         opened: RefCell<Vec<OpenPlan>>,
         /// The user's "Let Claude run commands in new tabs" setting, and "Let agents message each other".
@@ -400,7 +466,10 @@ mod tests {
             self.agents.clone()
         }
         fn spaces(&self) -> Vec<Space> {
-            self.spaces.clone()
+            self.spaces.borrow().clone()
+        }
+        fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
+            crate::spaces::update_worktree_settings(&mut self.spaces.borrow_mut(), space_id, include, setup)
         }
         fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
             self.output.get(pane_id).cloned()
@@ -459,7 +528,7 @@ mod tests {
     fn tools_have_valid_shapes_and_other_names_are_left_alone() {
         let tools = tools();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify"]);
+        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "worktree_setup"]);
         for tool in &tools {
             assert!(!tool["name"].as_str().unwrap().contains("__"));
             assert!(tool["description"].as_str().unwrap().len() < 2048);
@@ -511,7 +580,7 @@ mod tests {
         let host = Fake {
             panes: vec![row("p1", "s1", "/work/app"), row("p2", "gone", "/tmp")],
             agents: vec![agent("p1", AgentState::Blocked)],
-            spaces: vec![space("s1", "app", "/work/app")],
+            spaces: vec![space("s1", "app", "/work/app")].into(),
             ..Fake::default()
         };
         let listed: Value = serde_json::from_str(&run(&host, "list_sessions", json!({}), Some("p1")).unwrap()).unwrap();
@@ -560,7 +629,7 @@ mod tests {
         let root = dir.join("app").canonicalize().unwrap();
         let host = Fake {
             panes: vec![row("p1", "s1", root.to_str().unwrap())],
-            spaces: vec![space("s1", "app", root.to_str().unwrap())],
+            spaces: vec![space("s1", "app", root.to_str().unwrap())].into(),
             ..Fake::default()
         };
         // From a pane, with no folder: that pane's project, command typed but not run.
@@ -613,5 +682,36 @@ mod tests {
         assert_eq!(sent[0].1.chars().count(), NOTIFY_BODY_MAX);
         assert_eq!(sent[1].0.chars().count(), "Claude: ".len() + NOTIFY_TITLE_MAX);
         assert!(run(&host, "notify", json!({ "title": "  " }), None).is_err());
+    }
+
+    #[test]
+    fn worktree_setup_reads_sets_resets_and_clears_through_the_project() {
+        let tree = Space { parent: Some("s1".into()), ..space("s2", "app-fix", "/work/app-worktrees/fix") };
+        let host = Fake { panes: vec![row("p1", "s2", "/work/app-worktrees/fix")], spaces: vec![space("s1", "app", "/nonexistent/app"), tree].into(), ..Fake::default() };
+        let call = |args: Value| serde_json::from_str::<Value>(&run(&host, "worktree_setup", args, Some("p1"))?).map_err(|e| e.to_string());
+        // Read only, from a worktree: its project's settings, the default list.
+        let read = call(json!({})).unwrap();
+        assert_eq!((read["project"].as_str(), read["changed"].as_bool(), read["includeIsDefault"].as_bool(), read["setup"].is_null()), (Some("app"), Some(false), Some(true), true));
+        assert_eq!(read["include"], read["defaults"]);
+        // A custom list and a setup line, by name, written to the project.
+        let set = call(json!({ "project": "app", "include": [" .env ", "", "!big/"], "setup": "pnpm install" })).unwrap();
+        assert_eq!((set["include"].clone(), set["includeIsDefault"].as_bool(), set["setup"].as_str(), set["changed"].as_bool()), (json!([".env", "!big/"]), Some(false), Some("pnpm install"), Some(true)));
+        assert_eq!(host.spaces.borrow()[0].worktree_include.as_deref(), Some(".env\n!big/"));
+        assert!(host.spaces.borrow()[1].worktree_include.is_none());
+        // Only the field given changes.
+        assert_eq!(call(json!({ "setup": "make" })).unwrap()["include"], json!([".env", "!big/"]));
+        // The default list given back, or an empty array, resets the include list; an empty setup clears it.
+        let defaults = read["defaults"].clone();
+        assert_eq!(call(json!({ "include": defaults })).unwrap()["includeIsDefault"], true);
+        call(json!({ "include": ["x"] })).unwrap();
+        let reset = call(json!({ "include": [], "setup": "" })).unwrap();
+        assert_eq!((reset["includeIsDefault"].as_bool(), reset["setup"].is_null()), (Some(true), true));
+        assert!(host.spaces.borrow()[0].worktree_include.is_none() && host.spaces.borrow()[0].worktree_setup.is_none());
+        // Bad input.
+        assert!(call(json!({ "project": "nope" })).unwrap_err().contains("No project nope"));
+        assert!(call(json!({ "include": "a" })).unwrap_err().contains("array of strings"));
+        assert!(call(json!({ "include": ["a\nb"] })).unwrap_err().contains("one line"));
+        assert!(call(json!({ "setup": "a\nb" })).unwrap_err().contains("one line"));
+        assert!(run(&host, "worktree_setup", json!({}), None).unwrap_err().contains("from a Wings pane"));
     }
 }

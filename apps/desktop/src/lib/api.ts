@@ -401,6 +401,8 @@ export const api = {
   /** A system notification was clicked: go to that pane. */
   onFocusPane: (cb: (paneId: string) => void): Promise<UnlistenFn> => listen<string>("focus-pane", (e) => cb(e.payload)),
   onMenu: (cb: (id: string) => void): Promise<UnlistenFn> => listen<string>("menu", (e) => cb(e.payload)),
+  /** The worktree setup of a project (the one worktrees use) was changed from outside the dialog, by Claude or a plugin. */
+  onWorktreeSetupChanged: (cb: () => void): Promise<UnlistenFn> => listen("worktree-setup-changed", () => cb()),
   onPaneExited: (cb: (paneId: string) => void): Promise<UnlistenFn> =>
     listen<string>("pane-exited", (e) => cb(e.payload)),
 };

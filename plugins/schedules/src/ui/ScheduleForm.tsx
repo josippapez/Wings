@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Button, Card, Chip, Chips, Combobox, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
 import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
+import { includeText, worktreeChange, type WorktreeChange, type WorktreeSetup } from "../lib/worktree-setup";
 import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
 import "./schedules.css";
 
@@ -18,15 +19,17 @@ interface Props {
   /** What the last save failed with. */
   error: string | null;
   onSave: (draft: Draft) => void;
-  onSaveWatch: (draft: WatchDraft) => void;
+  onSaveWatch: (draft: WatchDraft, worktree?: { projectId: string; change: WorktreeChange }) => void;
   onCancel: () => void;
   /** The project's branches, for the branch to start from. */
   loadBranches?: (projectId: string) => Promise<string[]>;
+  /** The project's worktree setting, which Wings keeps. */
+  loadWorktreeSetup?: (projectId: string) => Promise<WorktreeSetup>;
 }
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
 
-export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel, loadBranches }: Props) {
+export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel, loadBranches, loadWorktreeSetup }: Props) {
   // An entry keeps its kind: only a new one picks it.
   const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
   const [name, setName] = useState(schedule?.name ?? "");
@@ -45,6 +48,25 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
     loadBranches(projectId).then((b) => live && setBranches(b), () => live && setBranches([]));
     return () => void (live = false);
   }, [kind, projectId, loadBranches]);
+  // The project's own setting, loaded for the project picked; the fields start from it and only a change is saved.
+  const [loaded, setLoaded] = useState<{ projectId: string; setup: WorktreeSetup } | null>(null);
+  const [includeField, setIncludeField] = useState("");
+  const [setupField, setSetupField] = useState("");
+  useEffect(() => {
+    setLoaded(null);
+    if (kind !== "assigned" || !projectId || !loadWorktreeSetup) return;
+    let live = true;
+    loadWorktreeSetup(projectId).then(
+      (setup) => {
+        if (!live) return;
+        setLoaded({ projectId, setup });
+        setIncludeField(includeText(setup));
+        setSetupField(setup.setup ?? "");
+      },
+      () => {},
+    );
+    return () => void (live = false);
+  }, [kind, projectId, loadWorktreeSetup]);
   const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
   const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
@@ -53,7 +75,13 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const submit = (e: FormEvent) => {
     e.preventDefault();
     // Another project has other states, so it picks its own at its first check.
-    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()), base });
+    if (kind === "assigned") {
+      const change = loaded && worktreeChange(loaded.setup, includeField, setupField);
+      return onSaveWatch(
+        { projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()), base },
+        loaded && change ? { projectId: loaded.projectId, change } : undefined,
+      );
+    }
     onSave({ name, projectId, agent, prompt, when: mode === "every" ? { kind: "every", hours } : { kind: "daily", time, days } });
   };
   const toggleDay = (n: number) => setDays(days.includes(n) ? days.filter((d) => d !== n) : [...days, n]);
@@ -170,6 +198,19 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
             <Field label="Only titles starting with" hint="Optional, separated by commas, like FE or BE. Other tickets are listed as for another project and not asked about. Empty asks about every title.">
               <TextInput value={prefixes} onChange={(e) => setPrefixes(e.target.value)} maxLength={200} placeholder="FE, BE" />
             </Field>
+            <FieldGroup label="New worktrees" hint="The project's own settings, shared with Worktree setup in the sidebar: a change here changes it there too.">
+              <Stack gap="m">
+                <Field
+                  label="Copy into new worktrees"
+                  hint={`One pattern per line, .gitignore syntax: only files the repo ignores are copied, and a line starting with ! leaves files out. They are copied, not linked, so leave big folders out.${loaded?.setup.hasIncludeFile ? " This repo has a .worktreeinclude, so that file is used and this list is ignored." : ""}`}
+                >
+                  <Textarea value={includeField} onChange={(e) => setIncludeField(e.target.value)} rows={6} disabled={!loaded} spellCheck={false} />
+                </Field>
+                <Field label="Setup command" hint="One shell line, like pnpm install. It runs in the new worktree before the agent starts, and the agent starts once it succeeds.">
+                  <TextInput value={setupField} onChange={(e) => setSetupField(e.target.value)} disabled={!loaded} spellCheck={false} placeholder="pnpm install" />
+                </Field>
+              </Stack>
+            </FieldGroup>
             <Notice>Wings asks the project's Azure DevOps, GitHub or GitLab what is assigned to you every 5 minutes, using its origin remote. You are asked first: nothing starts until you press Start.</Notice>
           </>
         )}

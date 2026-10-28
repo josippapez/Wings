@@ -171,12 +171,28 @@ pub fn plugin_tool(args: &[String]) -> i32 {
         }
         return 0;
     }
+    call_tool(&name, rest)
+}
+
+/// `wings worktree-setup [project=<name|path>] [include='["a","b"]'] [setup="..."]`: Wings' own `worktree_setup`
+/// tool. With neither include nor setup it prints the project's settings; with them it changes them.
+pub fn worktree_setup(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage: wings worktree-setup [project=<name or folder>] [include='[\"pattern\", ...]'] [setup=\"shell line\"]\n\nWithout include and setup it prints what the project's new worktrees get. include replaces the list of gitignored files copied in (an empty list resets it to the default; patterns use .gitignore syntax, ! leaves files out). setup is a shell line run in a new worktree before its agent starts (empty clears it). project defaults to the project of the pane you run in.");
+        return 0;
+    }
+    call_tool("worktree_setup", args)
+}
+
+/// Calls the tool `name` with `key=value` arguments and prints its answer. Exits 1 when the tool says it failed.
+fn call_tool(name: &str, rest: &[String]) -> i32 {
     let mut arguments = serde_json::Map::new();
     for arg in rest {
         let Some((key, value)) = arg.split_once('=') else {
             return fail(&format!("{arg} isn't key=value"));
         };
-        arguments.insert(key.to_string(), argument(value));
+        // A project like `2024` is a name, not a number.
+        arguments.insert(key.to_string(), if key == "project" { json!(value) } else { argument(value) });
     }
     let request = json!({ "name": name, "arguments": arguments, "ppid": std::os::unix::process::parent_id() });
     match ask("call", request) {

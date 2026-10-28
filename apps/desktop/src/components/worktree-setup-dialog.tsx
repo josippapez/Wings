@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
@@ -16,21 +16,36 @@ function Form({ space }: { space: Space }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // What the form was last filled with, so a change from outside only replaces fields nobody has edited.
+  const loaded = useRef({ include: "", setup: "" });
+  const current = useRef({ include, setup });
+  current.current = { include, setup };
+
+  const load = useCallback(
+    (isGone: () => boolean) =>
+      api
+        .worktreeLocal(space.id)
+        .then((got) => {
+          if (isGone()) return;
+          const next = { include: got.include ?? got.defaultInclude, setup: got.setup ?? "" };
+          setLocal(got);
+          if (current.current.include === loaded.current.include) setInclude(next.include);
+          if (current.current.setup === loaded.current.setup) setSetup(next.setup);
+          loaded.current = next;
+        })
+        .catch((e) => !isGone() && setError(String(e))),
+    [space.id],
+  );
+
   useEffect(() => {
     let gone = false;
-    api
-      .worktreeLocal(space.id)
-      .then((got) => {
-        if (gone) return;
-        setLocal(got);
-        setInclude(got.include ?? got.defaultInclude);
-        setSetup(got.setup ?? "");
-      })
-      .catch((e) => !gone && setError(String(e)));
+    void load(() => gone);
+    const off = api.onWorktreeSetupChanged(() => void load(() => gone));
     return () => {
       gone = true;
+      void off.then((unlisten) => unlisten());
     };
-  }, [space.id]);
+  }, [load]);
 
   async function save() {
     if (!local || busy) return;

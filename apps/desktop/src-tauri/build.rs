@@ -87,6 +87,8 @@ const COMMANDS: &[&str] = &[
     "plugin_focus_pane",
     "plugin_send_to_agent",
     "plugin_worktree_create",
+    "plugin_worktree_setup",
+    "plugin_worktree_setup_set",
     "plugin_call_tool_check",
     "plugin_event_check",
     "plugin_notify",

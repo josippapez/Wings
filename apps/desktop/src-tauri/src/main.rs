@@ -14,6 +14,7 @@ fn main() {
             Some("wait") => std::process::exit(wings_lib::cli::wait(&args[1..])),
             Some("journal") => std::process::exit(wings_lib::cli::journal()),
             Some("statusline") => std::process::exit(wings_lib::cli::statusline(args.get(1).is_some_and(|a| a == "--pass"))),
+            Some("worktree-setup") => std::process::exit(wings_lib::cli::worktree_setup(&args[1..])),
             Some("tools") => std::process::exit(wings_lib::cli::tools()),
             // A plugin's id, like `tasks`: one of its commands. Anything starting with `-` is left to the app.
             Some(id) if id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && !id.starts_with('-') => {

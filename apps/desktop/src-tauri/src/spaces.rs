@@ -92,18 +92,21 @@ impl SpaceStore {
 
     /// The project whose worktree settings apply to `id`: a worktree uses its project's.
     pub fn settings_owner(&self, id: &str) -> Option<&Space> {
-        let space = self.get(id)?;
-        space.parent.as_deref().and_then(|p| self.get(p)).or(Some(space))
+        settings_owner_in(&self.spaces, id)
     }
 
     /// Blank means unset.
     pub fn set_worktree_settings(&mut self, id: &str, include: &str, setup: &str) {
-        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id) {
-            let keep = |t: &str| (!t.trim().is_empty()).then(|| t.trim().to_string());
-            space.worktree_include = keep(include);
-            space.worktree_setup = keep(setup);
+        if update_worktree_settings(&mut self.spaces, id, Some(include), Some(setup)).is_ok() {
             self.save();
         }
+    }
+
+    /// Changes only the settings given, on the project `id` belongs to. Blank means unset.
+    pub fn update_worktree_settings(&mut self, id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
+        update_worktree_settings(&mut self.spaces, id, include, setup)?;
+        self.save();
+        Ok(())
     }
 
     pub fn get(&self, id: &str) -> Option<&Space> {
@@ -118,6 +121,72 @@ impl SpaceStore {
             let _ = fs::write(&self.file, json);
         }
     }
+}
+
+/// The project whose worktree settings apply to `id`: a worktree uses its project's.
+pub fn settings_owner_in<'a>(spaces: &'a [Space], id: &str) -> Option<&'a Space> {
+    let space = spaces.iter().find(|s| s.id == id)?;
+    space.parent.as_deref().and_then(|p| spaces.iter().find(|s| s.id == p)).or(Some(space))
+}
+
+/// Sets the given worktree settings (blank unsets one) on the project `id` belongs to; the other one stays.
+pub fn update_worktree_settings(spaces: &mut [Space], id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
+    let owner = settings_owner_in(spaces, id).ok_or("unknown space")?.id.clone();
+    let space = spaces.iter_mut().find(|s| s.id == owner).ok_or("unknown space")?;
+    let keep = |t: &str| (!t.trim().is_empty()).then(|| t.trim().to_string());
+    if let Some(include) = include {
+        space.worktree_include = keep(include);
+    }
+    if let Some(setup) = setup {
+        space.worktree_setup = keep(setup);
+    }
+    Ok(())
+}
+
+/// The include list as stored text, or "" for the default: no lines, or exactly the default lines, stay unset so a
+/// later change to the default reaches the project. Refuses a line a list file can't hold.
+pub fn include_text(lines: &[String]) -> Result<String, String> {
+    let lines: Vec<&str> = lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    if let Some(bad) = lines.iter().find(|l| l.chars().any(char::is_control)) {
+        return Err(format!("A pattern is one line with no control characters: {bad:?}"));
+    }
+    Ok(if lines == crate::worktree::DEFAULT_INCLUDE { String::new() } else { lines.join("\n") })
+}
+
+/// A setup command as stored text: one shell line, or "" to clear it.
+pub fn setup_text(setup: &str) -> Result<String, String> {
+    let setup = setup.trim();
+    if setup.chars().any(|c| c.is_control() && c != '\t') {
+        return Err("The setup command is one line, with no control characters".into());
+    }
+    Ok(setup.to_string())
+}
+
+/// What a project's worktrees get, as plugins and tools show it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSetup {
+    pub project: String,
+    pub path: String,
+    /// The patterns the project keeps, or null for the default list.
+    pub include: Option<Vec<String>>,
+    pub defaults: Vec<String>,
+    /// The repo has a `.worktreeinclude`, which is used instead of `include`.
+    pub has_include_file: bool,
+    pub setup: Option<String>,
+}
+
+pub fn worktree_setup(spaces: &[Space], id: &str) -> Option<WorktreeSetup> {
+    let owner = settings_owner_in(spaces, id)?;
+    let lines = |t: &str| t.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    Some(WorktreeSetup {
+        project: owner.name.clone(),
+        path: owner.path.clone(),
+        include: owner.worktree_include.as_deref().map(lines),
+        defaults: crate::worktree::DEFAULT_INCLUDE.iter().map(|s| s.to_string()).collect(),
+        has_include_file: crate::worktree::has_include_file(Path::new(&owner.path)),
+        setup: owner.worktree_setup.clone(),
+    })
 }
 
 fn new_space(path: &str) -> Space {

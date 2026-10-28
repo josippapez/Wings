@@ -311,7 +311,10 @@ const cliOf = async (id: string) => {
 };
 
 export function serveAssigned() {
-  ch.answer("saveWatch", async ({ id, draft }) => {
+  ch.answer("worktreeSetup", ({ projectId }) => wings.worktreeSetup(projectId));
+
+  ch.answer("saveWatch", async ({ id, draft, worktree }) => {
+    if (worktree) await wings.setWorktreeSetup(worktree.projectId, worktree.change);
     if (id === null) {
       const saved = await addWatch(draft);
       void checkOne(saved.id).catch(console.error);

@@ -16,6 +16,7 @@ const START_TIMEOUT_MS = 120_000;
 const SIGN_IN_TIMEOUT_MS = 320_000;
 
 const loadBranches = (projectId: string) => ch.ask("branches", { projectId });
+const loadWorktreeSetup = (projectId: string) => ch.ask("worktreeSetup", { projectId });
 
 export default function SchedulesPage() {
   const { data, error } = useQuery(ch, "state", undefined);
@@ -59,7 +60,7 @@ export default function SchedulesPage() {
       onToggle={(id) => ch.ask("toggle", { id })}
       onRemove={(id) => ch.ask("remove", { id })}
       onRun={(id) => ch.ask("runNow", { id })}
-      onSaveWatch={(id, draft) => ch.ask("saveWatch", { id, draft })}
+      onSaveWatch={(id, draft, worktree) => ch.ask("saveWatch", { id, draft, worktree })}
       onToggleWatch={(id) => ch.ask("toggleWatch", { id })}
       onRemoveWatch={(id) => ch.ask("removeWatch", { id })}
       onCheckWatch={(id) => ch.ask("checkWatch", { id })}
@@ -69,6 +70,7 @@ export default function SchedulesPage() {
       onInstall={(id) => ch.ask("install", { id }, { timeoutMs: SIGN_IN_TIMEOUT_MS })}
       onOpenUrl={(url) => wings.openUrl(url)}
       loadBranches={loadBranches}
+      loadWorktreeSetup={loadWorktreeSetup}
     />
   );
 }
