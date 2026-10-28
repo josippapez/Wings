@@ -155,10 +155,10 @@ function stillRunning(saved: SavedWorkspace | null, live: LivePane[], spaces: Sp
   return running;
 }
 
-type Widths = { left: number; right: number };
+type Widths = { left: number; right: number; diff: number };
 
-/** Sidebar sizes in pixels. The right one closes once it's dragged below its minimum. */
-const SIDES = { left: { min: 200, max: 420, initial: 248 }, right: { min: 250, max: 640, initial: 360 } } as const;
+/** Sidebar and docked diff sizes in pixels. The right sidebar and the diff close once dragged below their minimum. */
+const SIDES = { left: { min: 200, max: 420, initial: 248 }, right: { min: 250, max: 640, initial: 360 }, diff: { min: 360, max: 1600, initial: 620 } } as const;
 /** A saved width out of range, like a near-zero one WebKit can report while a panel collapses, falls back. */
 const fit = (side: keyof Widths, width: number) => (width >= SIDES[side].min && width <= SIDES[side].max ? width : SIDES[side].initial);
 
@@ -203,7 +203,7 @@ export default function App() {
   const [activeTabBySpace, setActiveTabBySpace] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pinnedButtons, setPinnedButtons] = useState<string[]>([]);
-  const [widths, setWidths] = useState<Widths>({ left: SIDES.left.initial, right: SIDES.right.initial });
+  const [widths, setWidths] = useState<Widths>({ left: SIDES.left.initial, right: SIDES.right.initial, diff: SIDES.diff.initial });
   const frame = useRef<HTMLDivElement>(null);
   const mainBox = useRef<HTMLDivElement>(null);
   // The title bar's tabs line up with the main pane. Its edges go to CSS variables straight from a ResizeObserver, so
@@ -228,6 +228,10 @@ const leftPanel = usePanelRef();
   const rightPanel = usePanelRef();
   const panelGroup = useRef<HTMLDivElement>(null);
   const placed = useRef(false);
+  const diffPanel = usePanelRef();
+  const diffGroup = useRef<HTMLDivElement>(null);
+  /** Where a docked diff draws itself: the card in the panel beside the tabs. */
+  const [diffDock, setDiffDock] = useState<HTMLDivElement | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   /** The first plugins list arrived, so a view tab whose plugin isn't in it is gone for good. */
@@ -326,6 +330,9 @@ const leftPanel = usePanelRef();
   /** Plugin rails (the card over a terminal) by Rust pane id, then plugin id. */
   const [rails, setRails] = useState<Record<string, Record<string, PaneRail>>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
+  /** The tab on screen when the diff opened: it docks beside that tab. Null shows it full-window. */
+  const [diffTab, setDiffTab] = useState<string | null>(null);
+  const [diffExpanded, setDiffExpanded] = useState(false);
   const pluginHost = useRef<PluginHost | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -741,7 +748,7 @@ const leftPanel = usePanelRef();
       setTabs(all);
       setActiveTabBySpace(Object.fromEntries(Object.entries(saved.activeTabBySpace).filter(([, id]) => tabIds.has(id))));
       setSidebarOpen(saved.sidebarOpen);
-      if (saved.widths) setWidths({ left: fit("left", saved.widths.left), right: fit("right", saved.widths.right) });
+      if (saved.widths) setWidths({ left: fit("left", saved.widths.left), right: fit("right", saved.widths.right), diff: fit("diff", saved.widths.diff) });
       setActiveSpaceId(saved.activeSpaceId && known.has(saved.activeSpaceId) ? saved.activeSpaceId : all[0].spaceId);
       return true;
     },
@@ -875,6 +882,23 @@ const leftPanel = usePanelRef();
     const timer = setTimeout(() => group && delete group.dataset.sliding, 340);
     return () => clearTimeout(timer);
   }, [ready, sidebarOpen, rightRef !== null]);
+
+  // A diff docks beside the tab it was opened from and only shows on that tab. It slides in and out like a sidebar,
+  // but appears at once when you come back to its tab, as the tab itself does.
+  const diffDocked = diff !== null && !diffExpanded && diffTab !== null && diffTab === activeTabId;
+  const diffShownOn = useRef(activeTabId);
+  useEffect(() => {
+    const group = diffGroup.current;
+    const slide = diffShownOn.current === activeTabId;
+    diffShownOn.current = activeTabId;
+    if (group && slide) group.dataset.sliding = "";
+    place(diffPanel.current, diffDocked, widths.diff, false);
+    const timer = setTimeout(() => group && delete group.dataset.sliding, 340);
+    return () => clearTimeout(timer);
+  }, [diffDocked, activeTabId]);
+  useEffect(() => {
+    if (diffTab !== null && !tabs.some((t) => t.id === diffTab)) setDiff(null);
+  }, [tabs, diffTab]);
 
   // A pane only counts as seen while the window has focus, so "done" survives you switching apps.
   useEffect(() => {
@@ -1058,7 +1082,12 @@ const leftPanel = usePanelRef();
       setBadge: (pluginId, paneId, badge) => setBadges((all) => withBadge(all, paneId, pluginId, badge)),
       setPaneStatus: (pluginId, paneId, status) => setStatuses((all) => withBadge(all, paneId, pluginId, status)),
       setPaneRail: (pluginId, paneId, rail) => setRails((all) => withBadge(all, paneId, pluginId, rail)),
-      openDiff: setDiff,
+      openDiff: (view) => {
+        setDiff(view);
+        setDiffTab(activeTabIdRef.current);
+        setDiffExpanded(false);
+      },
+
       clearPlugin: (pluginId) => {
         setRails((all) =>
           Object.fromEntries(Object.entries(all).map(([paneId, byPlugin]) => [paneId, Object.fromEntries(Object.entries(byPlugin).filter(([id]) => id !== pluginId))])),
@@ -1749,6 +1778,7 @@ const leftPanel = usePanelRef();
               if (left < SIDES.left.min) setSidebarOpen(false);
               if (right < SIDES.right.min) setRightSidebar(null);
               setWidths((w) => ({
+                ...w,
                 left: left >= SIDES.left.min ? Math.round(left) : w.left,
                 right: right >= SIDES.right.min ? Math.round(right) : w.right,
               }));
@@ -1785,6 +1815,18 @@ const leftPanel = usePanelRef();
             }}
               />
               <main className="relative min-h-0 min-w-0 flex-1">
+                <ResizablePanelGroup
+                  orientation="horizontal"
+                  elementRef={diffGroup}
+                  onLayoutChanged={(_, meta) => {
+                    if (!meta.isUserInteraction) return;
+                    const width = diffPanel.current?.getSize().inPixels ?? 0;
+                    if (width < SIDES.diff.min) setDiff(null);
+                    else setWidths((w) => ({ ...w, diff: Math.round(width) }));
+                  }}
+                >
+                <ResizablePanel id="tabs" minSize={320} style={PANEL_STYLE}>
+                <div className="relative h-full">
                 {tabs.map((tab) =>
                   isProjectTab(tab) ? (
                     <ProjectPageTab
@@ -1836,6 +1878,26 @@ const leftPanel = usePanelRef();
                     onAdd={(path) => void addSpace(path)}
                   />
                 )}
+                </div>
+                </ResizablePanel>
+                <SideHandle disabled={!diffDocked} />
+                <ResizablePanel
+                  id="diff"
+                  panelRef={diffPanel}
+                  collapsible
+                  collapsedSize={0}
+                  minSize={SIDES.diff.min}
+                  maxSize={SIDES.diff.max}
+                  collapsedThreshold={10}
+                  defaultSize={0}
+                  groupResizeBehavior="preserve-pixel-size"
+                  style={PANEL_STYLE}
+                >
+                  <div className="flex h-full p-2 pt-0 pl-0">
+                    <div ref={setDiffDock} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-hairline bg-surface" />
+                  </div>
+                </ResizablePanel>
+                </ResizablePanelGroup>
               </main>
               </div>
             </ResizablePanel>
@@ -1885,6 +1947,10 @@ const leftPanel = usePanelRef();
         </div>
         <DiffViewer
           diff={diff}
+          // On another tab the dock is collapsed, so the diff stays drawn there, hidden, with your unsent comments.
+          dock={!diffExpanded && diffTab !== null ? diffDock : null}
+          canDock={diffTab !== null}
+          onExpand={setDiffExpanded}
           onClose={() => setDiff(null)}
           reviewTargets={(cwd) =>
             reviewTargets({ agents: agentsRef.current, paneInfo, spaces, agentName: (a) => a.name ?? agentLabel(a.kind) }, cwd)

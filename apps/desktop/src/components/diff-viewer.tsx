@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { invoke } from "@tauri-apps/api/core";
@@ -13,12 +14,16 @@ import {
   Columns2Icon,
   ExternalLinkIcon,
   ListIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   ListTreeIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
   ReplyIcon,
   Rows3Icon,
   SearchIcon,
   TextWrapIcon,
+  XIcon,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -35,6 +40,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DiffScrollbars } from "@/components/diff-scrollbars";
+import { IconButton } from "@/components/icon-button";
 import { LinkOpener, Markdown } from "@/components/markdown";
 import { ReviewDraft, ReviewNote, ReviewPanel } from "@/components/review-panel";
 import { LINE_HEIGHT, rowNumber, rowTop } from "@/lib/diff-scroll";
@@ -135,6 +141,15 @@ function savedTree() {
     return localStorage.getItem(TREE_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+const FILES_KEY = "wings.diff.dockFiles";
+function savedDockFiles() {
+  try {
+    return localStorage.getItem(FILES_KEY) !== "0";
+  } catch {
+    return true;
   }
 }
 
@@ -326,15 +341,17 @@ function CommentThread({
   );
 }
 
-function LoadingDiff() {
+function LoadingDiff({ list }: { list: string | null }) {
   return (
     <div className="flex min-h-0 flex-1" aria-hidden>
-      <div className="flex w-72 shrink-0 flex-col gap-2.5 border-r border-hairline p-3">
-        <Skeleton className="h-8 bg-white/[0.05]" />
-        {Array.from({ length: 9 }, (_, i) => (
-          <Skeleton key={i} className="h-4 bg-white/[0.05]" style={{ width: `${55 + ((i * 37) % 40)}%` }} />
-        ))}
-      </div>
+      {list && (
+        <div className={cn("flex shrink-0 flex-col gap-2.5 border-r border-hairline p-3", list)}>
+          <Skeleton className="h-8 bg-white/[0.05]" />
+          {Array.from({ length: 9 }, (_, i) => (
+            <Skeleton key={i} className="h-4 bg-white/[0.05]" style={{ width: `${55 + ((i * 37) % 40)}%` }} />
+          ))}
+        </div>
+      )}
       <div className="flex flex-1 flex-col gap-2 p-5">
         {Array.from({ length: 18 }, (_, i) => (
           <Skeleton key={i} className="h-3.5 bg-white/[0.04]" style={{ width: `${30 + ((i * 53) % 60)}%` }} />
@@ -344,15 +361,26 @@ function LoadingDiff() {
   );
 }
 
-/** Full-window diff: file list on the left, the selected file with its review comments on the right. */
+/**
+ * File list on the left, the selected file with its review comments on the right. It docks beside the tab that opened it (drawn into `dock`),
+ * or fills the window as a modal. Its state lives here, so moving between the two keeps the file you're on and your unsent comments.
+ */
 export function DiffViewer({
   diff,
+  dock,
+  canDock,
+  onExpand,
   onClose,
   onReply,
   reviewTargets,
   onSendReview,
 }: {
   diff: DiffView | null;
+  /** The dock's card, or null to show the diff as a modal. */
+  dock: HTMLElement | null;
+  /** The diff has a tab to dock beside, so the modal offers to go back there. */
+  canDock: boolean;
+  onExpand: (expanded: boolean) => void;
   onClose: () => void;
   onReply: (diff: DiffView, replyTo: number, body: string) => Promise<void>;
   /** The panes your review can go to, asked when you choose one. `cwd` is the repo the diff is of, when the plugin says. */
@@ -367,7 +395,19 @@ export function DiffViewer({
   const threads = useMemo(() => threadsByPath(diff?.comments), [diff?.comments]);
   /** A file index, or null for the discussion. */
   const [selected, setSelected] = useState<number | null>(0);
-  const [split, setSplit] = useState(true);
+  // A dock is usually too narrow for two columns, so it starts unified until you pick.
+  const [splitChoice, setSplit] = useState<boolean | null>(null);
+  const split = splitChoice ?? !dock;
+  const [dockFiles, setDockFiles] = useState(savedDockFiles);
+  const showList = !dock || dockFiles;
+  const chooseDockFiles = (value: boolean) => {
+    setDockFiles(value);
+    try {
+      localStorage.setItem(FILES_KEY, value ? "1" : "0");
+    } catch {
+      // The choice just won't be remembered.
+    }
+  };
   const [wrap, setWrap] = useState(savedWrap);
   const chooseWrap = (value: boolean) => {
     setWrap(value);
@@ -529,77 +569,100 @@ export function DiffViewer({
     );
   };
 
-  return (
-    <WorkerPoolContext.Provider value={pool}>
-    <Dialog
-      open={diff !== null}
-      onOpenChange={(open) => {
-        if (open) return;
-        onClose();
-        setDraft(null);
-        setReview({ id: null, items: [] });
-        setSelected(0);
-        setQuery("");
-        setCollapsed(new Set());
-      }}
-    >
-      <DialogContent className="flex h-[88vh] w-[min(1440px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
-        <header className="relative flex shrink-0 items-center gap-4 border-b border-hairline py-3 pr-14 pl-5">
-          <div className="min-w-0 flex-1">
-            <DialogTitle className="truncate text-[15px] font-semibold">{diff?.title}</DialogTitle>
-            <DialogDescription className="mt-0.5 flex items-center gap-2 text-[12px] text-muted-foreground">
-              {diff?.subtitle && <span className="truncate">{diff.subtitle}</span>}
-              {loading ? (
-                <span className="flex items-center gap-1.5">
-                  <Spinner className="size-3.5" />
-                  Loading changes…
-                </span>
-              ) : (
-                diff?.patch !== undefined && (
-                  <>
-                    <span>{files.length} files</span>
-                    <span className="text-done">+{totals.added}</span>
-                    <span className="text-blocked">−{totals.removed}</span>
-                    {commentCount > 0 && (
-                      <span className="flex items-center gap-1">
-                        <MessageSquareIcon className="size-3.5" aria-hidden />
-                        {commentCount} comments{outdated > 0 && `, ${outdated} on code that changed since`}
-                      </span>
-                    )}
-                  </>
-                )
-              )}
-            </DialogDescription>
-          </div>
-          <ToggleGroup
-            aria-label="Diff layout"
-            size="sm"
-            value={[split ? "split" : "unified"]}
-            onValueChange={(value) => value[0] && setSplit(value[0] === "split")}
-            className="rounded-lg bg-white/[0.05] p-0.5"
-          >
-            <ToggleGroupItem value="split" className="gap-1.5 text-[12px] data-pressed:bg-white/[0.09]">
-              <Columns2Icon aria-hidden />
-              Split
-            </ToggleGroupItem>
-            <ToggleGroupItem value="unified" className="gap-1.5 text-[12px] data-pressed:bg-white/[0.09]">
-              <Rows3Icon aria-hidden />
-              Unified
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <Toggle size="sm" aria-label="Wrap long lines" title="Wrap long lines. Unwrapped, Shift and the mouse wheel scroll sideways." pressed={wrap} onPressedChange={chooseWrap} className="gap-1.5 text-[12px] aria-pressed:bg-white/[0.09]">
-            <TextWrapIcon aria-hidden />
-            Wrap
-          </Toggle>
-          {loading && (
-            <Progress value={null} aria-label="Loading changes" className="absolute inset-x-0 bottom-0 gap-0 [&_[data-slot=progress-track]]:h-px [&_[data-slot=progress-track]]:bg-transparent" />
-          )}
-        </header>
+  const close = () => {
+    onClose();
+    setDraft(null);
+    setReview({ id: null, items: [] });
+    setSelected(0);
+    setQuery("");
+    setCollapsed(new Set());
+  };
+  const docked = dock !== null;
+  // Inside the modal the title and summary name the dialog for screen readers; in the dock they're plain text.
+  const Title = docked ? "h2" : DialogTitle;
+  const Description = docked ? "div" : DialogDescription;
 
+  const header = (
+    <header className={cn("relative flex shrink-0 items-center gap-1 border-b border-hairline", docked ? "py-2 pr-2 pl-4" : "py-3 pr-3 pl-5")}>
+      <div className="mr-3 min-w-0 flex-1">
+        <Title title={diff?.title} className={cn("truncate font-semibold", docked ? "text-[13px]" : "text-[15px]")}>{diff?.title}</Title>
+        <Description className="mt-0.5 flex min-w-0 items-center gap-2 text-[12px] whitespace-nowrap text-muted-foreground">
+          {diff?.subtitle && <span className="truncate">{diff.subtitle}</span>}
+          {loading ? (
+            <span className="flex items-center gap-1.5">
+              <Spinner className="size-3.5" />
+              Loading changes…
+            </span>
+          ) : (
+            diff?.patch !== undefined && (
+              <>
+                <span>{files.length} files</span>
+                <span className="text-done">+{totals.added}</span>
+                <span className="text-blocked">−{totals.removed}</span>
+                {commentCount > 0 && (
+                  <span className="flex items-center gap-1">
+                    <MessageSquareIcon className="size-3.5" aria-hidden />
+                    {docked ? commentCount : `${commentCount} comments${outdated > 0 ? `, ${outdated} on code that changed since` : ""}`}
+                  </span>
+                )}
+              </>
+            )
+          )}
+        </Description>
+      </div>
+      <ToggleGroup
+        aria-label="Diff layout"
+        size="sm"
+        value={[split ? "split" : "unified"]}
+        onValueChange={(value) => value[0] && setSplit(value[0] === "split")}
+        className="shrink-0 rounded-lg bg-white/[0.05] p-0.5"
+      >
+        <ToggleGroupItem value="split" aria-label="Split" title="Side by side" className="gap-1.5 text-[12px] data-pressed:bg-white/[0.09]">
+          <Columns2Icon aria-hidden />
+          {!docked && "Split"}
+        </ToggleGroupItem>
+        <ToggleGroupItem value="unified" aria-label="Unified" title="One column" className="gap-1.5 text-[12px] data-pressed:bg-white/[0.09]">
+          <Rows3Icon aria-hidden />
+          {!docked && "Unified"}
+        </ToggleGroupItem>
+      </ToggleGroup>
+      <Toggle size="sm" aria-label="Wrap long lines" title="Wrap long lines. Unwrapped, Shift and the mouse wheel scroll sideways." pressed={wrap} onPressedChange={chooseWrap} className="shrink-0 gap-1.5 text-[12px] aria-pressed:bg-white/[0.09]">
+        <TextWrapIcon aria-hidden />
+        {!docked && "Wrap"}
+      </Toggle>
+      {docked && (
+        <Toggle size="sm" aria-label="File list" title="Show the file list" pressed={dockFiles} onPressedChange={chooseDockFiles} className="shrink-0 aria-pressed:bg-white/[0.09]">
+          <PanelLeftIcon aria-hidden />
+        </Toggle>
+      )}
+      <span className="mx-1 h-4 w-px shrink-0 bg-hairline" aria-hidden />
+      {docked ? (
+        <IconButton label="Expand" tooltip="Fill the window" onClick={() => onExpand(true)} className="size-7">
+          <Maximize2Icon />
+        </IconButton>
+      ) : (
+        canDock && (
+          <IconButton label="Dock beside the tab" onClick={() => onExpand(false)} className="size-7">
+            <Minimize2Icon />
+          </IconButton>
+        )
+      )}
+      <IconButton label="Close" onClick={close} className="size-7">
+        <XIcon />
+      </IconButton>
+      {loading && (
+        <Progress value={null} aria-label="Loading changes" className="absolute inset-x-0 bottom-0 gap-0 [&_[data-slot=progress-track]]:h-px [&_[data-slot=progress-track]]:bg-transparent" />
+      )}
+    </header>
+  );
+
+  const body = (
+    <>
+      {header}
         <AnimatePresence mode="wait" initial={false}>
           {loading ? (
             <motion.div key="loading" className="flex min-h-0 flex-1" exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-              <LoadingDiff />
+              <LoadingDiff list={showList ? (docked ? "w-56" : "w-72") : null} />
             </motion.div>
           ) : diff?.error ? (
             <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} role="alert" className="flex flex-1">
@@ -621,7 +684,8 @@ export function DiffViewer({
               transition={{ duration: 0.2 }}
               className="flex min-h-0 flex-1"
             >
-              <aside className="flex w-72 shrink-0 flex-col border-r border-hairline">
+              {showList && (
+              <aside className={cn("flex shrink-0 flex-col border-r border-hairline", docked ? "w-56" : "w-72")}>
                 <div className="flex items-center gap-1.5 p-2">
                   <InputGroup className="h-8 min-w-0 flex-1">
                     <InputGroupAddon>
@@ -691,6 +755,7 @@ export function DiffViewer({
                   </ul>
                 </ScrollArea>
               </aside>
+              )}
 
               <div ref={wheelArea} className="relative flex min-w-0 flex-1">
               <Virtualizer className="min-w-0 flex-1 overflow-auto bg-[#141217]">
@@ -754,8 +819,17 @@ export function DiffViewer({
             </motion.div>
           )}
         </AnimatePresence>
-      </DialogContent>
-    </Dialog>
+    </>
+  );
+
+  return (
+    <WorkerPoolContext.Provider value={pool}>
+      {dock && diff && createPortal(body, dock)}
+      <Dialog open={diff !== null && !dock} onOpenChange={(open) => !open && close()}>
+        <DialogContent showCloseButton={false} className="flex h-[88vh] w-[min(1440px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+          {!dock && body}
+        </DialogContent>
+      </Dialog>
     </WorkerPoolContext.Provider>
   );
 }
