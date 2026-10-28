@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.94 · 2026-10-28
+
+- **See what's assigned to you, and start it.** A Schedules entry "When something is assigned to me" lists your tickets with their state, and you pick which states it asks about. Check now looks right away, and Start works from the list, the Inbox and the notification. A ticket that already has a branch, or a Wings issue in progress, in review or done that names it, counts as started and isn't asked about.
+- **Agent terminals are easier to handle.** A terminal an agent opens below it says which agent opened it, and has buttons to hide it, move it beside or below the agent, or float it over the agent as a panel you can drag, resize and shrink to a bar.
+- **Plugin tools on the command line.** `wings tools` lists them, and `wings <plugin> <tool> key=value` runs one, like `wings schedules check`.
+- **Agents reuse an idle pane in another folder.** An agent's command goes to an idle agent pane of the same project, even one in a different folder, instead of opening a new one.
+- **Wings' own plugins can use each other's tools.** For plugin authors: `wings.callTool` with `permissions.callTools`, only between the plugins that ship with Wings.
+
 ## 0.1.93 · 2026-10-28
 
 - **Start on what's assigned to you.** In Schedules, add an entry "When something is assigned to me" for a project. Every 5 minutes it checks Azure DevOps, GitHub or GitLab for tickets newly assigned to you, and asks before doing anything. Start makes a worktree on a new branch for the ticket, if there's enough free disk, and opens your agent there in the background.
