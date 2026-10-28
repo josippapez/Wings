@@ -56,7 +56,7 @@ import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
-import { idleAgentTab, type AgentTab } from "@/lib/agent-tabs";
+import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -127,6 +127,8 @@ type SavedWorkspace = {
   agentsRunCommands?: boolean;
   /** Whether a message an agent or plugin sends to another agent is submitted with Enter. */
   agentsMessage?: boolean;
+  /** Where the terminals an agent opens first sit: below it (absent), beside it, or floating over it. */
+  agentTerminalsOpen?: AgentTerminalsOpen;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
   /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
@@ -316,6 +318,9 @@ const leftPanel = usePanelRef();
   const [agentsMessage, setAgentsMessage] = useState(false);
   const agentsMessageRef = useRef(agentsMessage);
   agentsMessageRef.current = agentsMessage;
+  const [agentTerminalsOpen, setAgentTerminalsOpen] = useState<AgentTerminalsOpen>("below");
+  const agentTerminalsOpenRef = useRef(agentTerminalsOpen);
+  agentTerminalsOpenRef.current = agentTerminalsOpen;
   /** Panes an agent opened with `open_pane`, by Rust pane id: the only ones it may reuse or close. */
   const agentTabs = useRef(new Map<string, AgentTab>());
   /** The same panes and their owners, for the mark on their tabs and the hide/show chip on the agent's pane. */
@@ -690,14 +695,16 @@ const leftPanel = usePanelRef();
         }
         let key: string;
         if (owner && ownerKey && ownerTab) {
-          // Below the agent, a third of its height, and the keyboard stays with the agent. Its next ones go beside the
-          // last, so the agent's pane doesn't shrink with each command.
+          // The first one opens where Settings, Agents says (below the agent, a third of its height, by default) and the
+          // keyboard stays with the agent. Its next ones go beside the last, so the agent's pane doesn't shrink with each command.
           const beside = [...agentTabs.current].filter(([, at]) => at.owner === owner).flatMap(([id]) => keyOf(id) ?? []).filter((k) => paneIds(ownerTab.layout).includes(k)).at(-1);
           key = createPane(call.spaceId, input, null, call.cwd);
           // Its tab may be one you're not looking at: the shell starts there anyway.
           const session = terminals.get(key);
           if (session) session.background = true;
-          updateTab(ownerTab.id, (t) => ({ layout: beside ? split(t.layout, beside, "row", key) : split(t.layout, ownerKey, "column", key, 0.65), zoomedPane: null }));
+          const first = firstAgentSplit(agentTerminalsOpenRef.current);
+          if (!beside && agentTerminalsOpenRef.current !== "below") setFloatedAgents((all) => (all.has(ownerKey) === first.floating ? all : new Set(first.floating ? [...all, ownerKey] : [...all].filter((k) => k !== ownerKey))));
+          updateTab(ownerTab.id, (t) => ({ layout: beside ? split(t.layout, beside, "row", key) : split(t.layout, ownerKey, first.dir, key, 0.65), zoomedPane: null }));
         } else key = openTab(call.spaceId, input, null, call.cwd, undefined, false);
         const paneId = await terminals.get(key)?.whenStarted;
         if (!paneId) throw new Error("The pane didn't start");
@@ -848,6 +855,7 @@ const leftPanel = usePanelRef();
       setNotifySound(cleanSound(saved.notifySound));
       setAgentsRunCommands(saved.agentsRunCommands === true);
       setAgentsMessage(saved.agentsMessage === true);
+      setAgentTerminalsOpen(parseAgentTerminalsOpen(saved.agentTerminalsOpen));
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
       const restored = saved.tabs
@@ -976,6 +984,7 @@ const leftPanel = usePanelRef();
       notifySound,
       agentsRunCommands,
       agentsMessage,
+      agentTerminalsOpen,
       newTabPage,
       newProjectOpens,
       collapsedSections,
@@ -996,7 +1005,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, agentsMessage, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, agentsMessage, agentTerminalsOpen, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -2185,7 +2194,7 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} agentsMessage={agentsMessage} onAgentsMessageChange={setAgentsMessage} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} agentsMessage={agentsMessage} onAgentsMessageChange={setAgentsMessage} agentTerminalsOpen={agentTerminalsOpen} onAgentTerminalsOpenChange={setAgentTerminalsOpen} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
           onRunInTab={
             activeSpace
               ? (input) => {

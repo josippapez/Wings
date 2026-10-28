@@ -15,3 +15,12 @@ export function idleAgentTab(tabs: Map<string, AgentTab>, want: AgentTab, open: 
   const idle = [...tabs].filter(([id, at]) => at.spaceId === want.spaceId && at.owner === want.owner && open.has(id) && info[id]?.busy === false && !agents.some((a) => a.paneId === id));
   return (idle.find(([, at]) => at.cwd === want.cwd) ?? idle[0])?.[0];
 }
+
+/** Where the terminals an agent opens first sit: set in Settings, Agents. "below" is the split under its pane. */
+export type AgentTerminalsOpen = "below" | "right" | "float";
+
+/** The saved choice, or the default (below the agent) for anything else. */
+export const parseAgentTerminalsOpen = (value: unknown): AgentTerminalsOpen => (value === "right" || value === "float" ? value : "below");
+
+/** The split an agent's first terminal opens in, and whether it starts out floating over the agent. Later ones follow the agent. */
+export const firstAgentSplit = (mode: AgentTerminalsOpen): { dir: "row" | "column"; floating: boolean } => ({ dir: mode === "right" ? "row" : "column", floating: mode === "float" });

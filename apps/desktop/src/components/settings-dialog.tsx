@@ -13,6 +13,7 @@ import { Harnesses } from "@/components/harnesses";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import { api, type AiEngine, type AiStatus, type AvailablePlugin, type PluginView } from "@/lib/api";
+import { parseAgentTerminalsOpen, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { pluginSettingsSection, type NewProjectOpens, type NewTabEntry } from "@/lib/plugin-pages";
 import { playSound, SOUNDS, type SoundSettings } from "@/lib/sound";
 import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
@@ -288,6 +289,8 @@ export function SettingsDialog(props: {
   onAgentsRunCommandsChange: (on: boolean) => void;
   agentsMessage: boolean;
   onAgentsMessageChange: (on: boolean) => void;
+  agentTerminalsOpen: AgentTerminalsOpen;
+  onAgentTerminalsOpenChange: (value: AgentTerminalsOpen) => void;
   /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
   newTabs: NewTabEntry[];
   newTabPage: string;
@@ -495,6 +498,18 @@ export function SettingsDialog(props: {
                   hint="When an agent, or a plugin like the PR tracker, sends a message to another agent, Wings presses Enter for it, so that agent starts on it. Off: the message waits in its prompt for you to press Enter."
                 >
                   <Switch id="agents-message" checked={props.agentsMessage} onCheckedChange={props.onAgentsMessageChange} />
+                </Row>
+                <Row
+                  id="agent-terminals-open"
+                  label="Agent terminals open"
+                  hint="Where the first terminal an agent opens for a command goes: in a split below the agent, in a split to its right, or floating over it. Its next ones follow, and the buttons on the split switch that agent afterwards."
+                >
+                  <Choice
+                    id="agent-terminals-open"
+                    items={[{ value: "below", label: "Below the agent" }, { value: "right", label: "Right of the agent" }, { value: "float", label: "Floating over the agent" }]}
+                    value={props.agentTerminalsOpen}
+                    onChange={(v) => props.onAgentTerminalsOpenChange(parseAgentTerminalsOpen(v))}
+                  />
                 </Row>
               </Group>
             </TabsContent>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { idleAgentTab, type AgentTab } from "./agent-tabs.ts";
+import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab } from "./agent-tabs.ts";
 import type { Agent, PaneInfo } from "./api.ts";
 
 const tabs = new Map<string, AgentTab>([
@@ -32,4 +32,14 @@ test("a closed tab, one with an agent in it, or one Wings knows nothing about ye
   const info = { p1: shell(false), p3: shell(false) };
   assert.equal(idleAgentTab(tabs, { spaceId: "s1", cwd: null, owner: null }, new Set(["p3"]), info, [{ paneId: "p3" } as Agent]), undefined);
   assert.equal(idleAgentTab(tabs, { spaceId: "s1", cwd: null, owner: null }, new Set(["p1"]), {}, []), undefined);
+});
+
+test("an agent's first terminal opens where the setting says", () => {
+  assert.deepEqual(firstAgentSplit("below"), { dir: "column", floating: false });
+  assert.deepEqual(firstAgentSplit("right"), { dir: "row", floating: false });
+  assert.deepEqual(firstAgentSplit("float"), { dir: "column", floating: true }, "floating keeps the split below, for when it comes back");
+  assert.equal(parseAgentTerminalsOpen("right"), "right");
+  assert.equal(parseAgentTerminalsOpen("float"), "float");
+  assert.equal(parseAgentTerminalsOpen(undefined), "below");
+  assert.equal(parseAgentTerminalsOpen("sideways"), "below");
 });
