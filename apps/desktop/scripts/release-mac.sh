@@ -24,13 +24,13 @@ pnpm test
 (cd src-tauri && cargo test --lib --quiet)
 (cd ../../plugins && pnpm run deps >/dev/null && pnpm check)
 # Installed Wings takes a plugin's update only when its version goes up, so a plugin changed since the last release
-# without a bump would never reach anyone.
+# without a bump would never reach anyone. Its preview/ is only for screenshots, so a change there needs no bump.
 LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
 if [ -n "$LAST" ]; then
   stale=""
   for m in ../../plugins/*/wings-plugin.json; do
     d=${m%/wings-plugin.json}
-    git diff --quiet "$LAST" HEAD -- "$d" && continue
+    git diff --quiet "$LAST" HEAD -- "$d" ":(exclude)$d/preview" && continue
     was=$(git show "$LAST:${d#../../}/wings-plugin.json" 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{}})')
     [ -n "$was" ] && [ "$was" = "$(node -p "require('$m').version")" ] && stale="$stale ${d#../../}"
   done
