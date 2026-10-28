@@ -25,7 +25,13 @@ export interface AssignedTicket extends Ticket {
   type?: string;
   /** A branch that has the ticket's id in its name, and the project it is in: someone already started on it. */
   branch?: { name: string; project: string };
+  /** A Wings issue that names the ticket and is in progress, in review or done, and the project it is in. */
+  issue?: { key: string; status: string; project: string };
 }
+
+/** What shows a ticket was already started outside this entry: its branch, else its issue. */
+export const startedElsewhere = (t: AssignedTicket): string | undefined =>
+  t.branch ? `${t.branch.name} (${t.branch.project})` : t.issue ? `${t.issue.key}, ${t.issue.status.replace("_", " ")} (${t.issue.project})` : undefined;
 
 export interface Waiting extends Ticket {
   /** When it showed up. */
@@ -174,10 +180,10 @@ export function applyCheck(w: Watch, tickets: AssignedTicket[], now: number): { 
   const states = w.states ?? defaultStates(w.source, tickets);
   const current = new Set(tickets.map((t) => t.id));
   const known = new Set(w.seen);
-  // One that already has a branch is never asked about, and counts as seen so that deleting the branch doesn't ask later.
-  const asked = tickets.filter((t) => !known.has(t.id) && !t.branch && askedAbout(states, t.state));
+  // One already started is never asked about, and counts as seen so that deleting the branch doesn't ask later.
+  const asked = tickets.filter((t) => !known.has(t.id) && !startedElsewhere(t) && askedAbout(states, t.state));
   const fresh = w.primed ? asked.map((t) => ({ ...t, at: now })) : [];
-  const nowSeen = tickets.filter((t) => known.has(t.id) || asked.includes(t) || t.branch).map((t) => t.id);
+  const nowSeen = tickets.filter((t) => known.has(t.id) || asked.includes(t) || startedElsewhere(t)).map((t) => t.id);
   // What is assigned now goes last, so the cap drops the oldest ids that aren't.
   const seen = [...w.seen.filter((id) => !current.has(id)), ...nowSeen].slice(-SEEN_CAP);
   return { watch: { ...w, primed: true, states, tickets: tickets.slice(0, FETCH_LIMIT), seen, waiting: [...w.waiting, ...fresh] }, fresh };
@@ -268,4 +274,10 @@ export function sameSource(a: Source, b: Source): boolean {
 export function branchMatching(id: string, branches: string[]): string | undefined {
   const re = new RegExp(`(^|[^0-9])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^0-9]|$)`);
   return branches.find((name) => re.test(name));
+}
+
+/** Whether an issue's text names the ticket: its id alone or after #, or at the end of its link, so 12 isn't in WIN-12, 123 or 2026-10-12. */
+export function mentionsTicket(id: string, text: string): boolean {
+  const n = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\w:./-])#?${n}(?![\\w:-])|/${n}(?!\\w)`).test(text);
 }

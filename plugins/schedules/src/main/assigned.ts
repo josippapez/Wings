@@ -8,7 +8,7 @@ import { gitOk } from "wings-plugin-sdk/git";
 import { ch } from "../lib/messages";
 import { AGENTS, type Run } from "../lib/schedule";
 import {
-  applyCheck, askedAbout, branchMatching, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
+  applyCheck, askedAbout, branchMatching, mentionsTicket, startedElsewhere, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sameSource, sourceOf, SOURCE_LABELS, UNSUPPORTED, withStarted,
   type AssignedTicket, type Check, type Source, type Watch, type WatchDraft,
 } from "../lib/assigned";
 import { readWatches, writeWatches } from "./store";
@@ -65,6 +65,29 @@ async function markBranches(source: Source, tickets: AssignedTicket[], projects:
   });
 }
 
+/** An Issues list line for an issue that was started or finished: its key and status. */
+const STARTED_ISSUE = /^(\S+) \[(in_progress|in_review|done)\]/;
+/** The most issues a search finds that are read for one ticket in one project: a short id like 12 finds many. */
+const ISSUES_READ = 5;
+
+/**
+ * The tickets without a branch, with a Wings issue that names one, in a project of the same source: an Issues search
+ * for the id, then a read of each issue it finds, since the search also finds 12 in WIN-120. Nothing when Issues is off.
+ */
+async function markIssues(tickets: AssignedTicket[], projects: { id: string; name: string }[]): Promise<AssignedTicket[]> {
+  const ask = (name: string, args: Record<string, unknown>, project: string) => wings.callTool(name, args, { project }).then((r) => (r.isError ? "" : r.text), () => "");
+  return mapLimit(tickets, 4, async (t) => {
+    if (t.branch) return t;
+    for (const p of projects) {
+      const found = (await ask("tasks__list", { query: t.id }, p.id)).split("\n").map((line) => STARTED_ISSUE.exec(line)).filter((m) => m !== null).slice(0, ISSUES_READ);
+      for (const [, key, status] of found) {
+        if (mentionsTicket(t.id, await ask("tasks__get", { key }, p.id))) return { ...t, issue: { key, status, project: p.name } };
+      }
+    }
+    return t;
+  });
+}
+
 const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "error" | "problem"> => {
   if (e instanceof CliError && e.kind === "missing") return { error: `The ${program} command isn't installed.`, problem: "missing" };
   if (e instanceof CliError && e.kind === "signed-out") return { error: `Sign in to ${SOURCE_LABELS[source.kind]} to see what is assigned to you.`, problem: "signed-out" };
@@ -92,6 +115,9 @@ export async function checkOne(id: string): Promise<void> {
       try {
         tickets = parseTickets(source, await CLIS[command.program].json(command.args, { key: keyOf(source), cwd: project.path, empty: [] }));
         tickets = await markBranches(source, tickets, projects, project.id);
+        const same: typeof projects = [];
+        for (const p of projects) if (sameSource(await sourceFor(p), source)) same.push(p);
+        tickets = await markIssues(tickets, same);
         check = { at, ok: true, count: tickets.length };
       } catch (e) {
         check = { at, ok: false, ...problemOf(e, source, command.program) };
@@ -171,7 +197,7 @@ export async function startTicket(id: string, ticketId: string, force = false): 
     const listed = w.tickets?.find((t) => t.id === ticketId);
     const ticket = waiting ?? listed;
     if (!ticket) throw new Error("That ticket isn't waiting or assigned to you any more.");
-    if (listed?.branch && !force) throw new Error(`There is already a branch for it: ${listed.branch.name} in ${listed.branch.project}. Pass force=true to start it anyway.`);
+    if (listed && startedElsewhere(listed) && !force) throw new Error(`It was already started: ${startedElsewhere(listed)}. Pass force=true to start it anyway.`);
     if (!waiting && listed && !force && !askedAbout(w.states, listed.state)) {
       throw new Error(`This entry doesn't ask about tickets in ${listed.state}. Pass force=true to start it anyway.`);
     }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheck, askedAbout, assignedWiql, branchMatching, branchName, defaultStates, diskProblem, fillPrompt, listCommand, parseTickets, pickDisk, resolveProject, sameSource, sourceOf } from "./assigned.ts";
+import { applyCheck, askedAbout, assignedWiql, branchMatching, branchName, defaultStates, diskProblem, fillPrompt, listCommand, mentionsTicket, parseTickets, pickDisk, resolveProject, sameSource, sourceOf } from "./assigned.ts";
 
 const GB = 1024 ** 3;
 const watch = (extra = {}) => ({ id: "w", projectId: "p", agent: "claude", prompt: "x", minFreeGb: 10, enabled: true, primed: false, seen: [], waiting: [], ...extra });
@@ -167,4 +167,11 @@ test("a folder is on the disk mounted at the longest prefix of its path", () => 
   assert.equal(diskProblem(disks, "/Volumes/Work/app", 10), null);
   assert.match(diskProblem(disks, "/Users/me/app", 10), /Only 5\.0 GB is free on Macintosh HD.*10 GB/);
   assert.match(diskProblem([], "/Users/me/app", 10), /Couldn't tell/);
+});
+
+test("an issue names a ticket by its id alone, after #, or at the end of its link", () => {
+  assert.ok(mentionsTicket("189806", "Fix the cache for 189806."));
+  assert.ok(mentionsTicket("12", "Work on #12"));
+  assert.ok(mentionsTicket("12", "https://github.com/acme/web/issues/12"));
+  assert.ok(!mentionsTicket("12", "WIN-12 [done] updated 2026-10-12T09:12Z, see #123"));
 });

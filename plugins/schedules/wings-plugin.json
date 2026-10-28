@@ -2,7 +2,7 @@
   "id": "schedules",
   "name": "Schedules",
   "version": "0.3.0",
-  "minWingsVersion": "0.1.93",
+  "minWingsVersion": "0.1.94",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
   "api": 1,
@@ -31,7 +31,11 @@
     ],
     "notify": true,
     "worktrees": true,
-    "diskUsage": true
+    "diskUsage": true,
+    "callTools": [
+      "tasks list",
+      "tasks get"
+    ]
   },
   "contributes": {
     "views": [

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
-import { askedAbout, describeCheck, SOURCE_LABELS, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
+import { askedAbout, describeCheck, SOURCE_LABELS, startedElsewhere, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
 import { ScheduleForm } from "./ScheduleForm";
@@ -335,7 +335,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
           <Disclosure summary={`Assigned to you (${tickets.length})`}>
             <List compact>
               {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !!t.branch)} onOpen={() => onOpen(t.url)} />
+                <TicketRow key={t.id} t={t} asked={askedAbout(w.states, t.state)} startedAt={w.started?.[t.id]} now={now} busy={busy} onStart={() => onStartTicket(t.id, !!startedElsewhere(t))} onOpen={() => onOpen(t.url)} />
               ))}
             </List>
           </Disclosure>
@@ -369,9 +369,9 @@ function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRo
             #{t.id}
             {t.type ? ` · ${t.type}` : ""}
           </Text>
-          {t.branch ? (
+          {startedElsewhere(t) ? (
             <Text tone="muted" size="small" truncate>
-              Started: {t.branch.name} ({t.branch.project})
+              Started: {startedElsewhere(t)}
             </Text>
           ) : null}
         </Stack>
@@ -385,8 +385,8 @@ function TicketRow({ t, asked, startedAt, now, busy, onStart, onOpen }: TicketRo
               <Time iso={new Date(startedAt).toISOString()} prefix="Started " now={now} />
             </Text>
           ) : asked ? (
-            <Button size="sm" variant={t.branch ? "outline" : "default"} onClick={onStart} disabled={busy} aria-label={`${t.branch ? "Start anyway" : "Start"} ${t.title}`}>
-              {t.branch ? "Start anyway" : "Start"}
+            <Button size="sm" variant={startedElsewhere(t) ? "outline" : "default"} onClick={onStart} disabled={busy} aria-label={`${startedElsewhere(t) ? "Start anyway" : "Start"} ${t.title}`}>
+              {startedElsewhere(t) ? "Start anyway" : "Start"}
             </Button>
           ) : null}
         </Row>

@@ -1,6 +1,6 @@
 // What the `list` tool prints: plain text, one line for each entry, ticket and waiting ticket. No `wings`, so node tests can drive it.
 
-import { askedAbout, describeCheck, SOURCE_LABELS, type Watch } from "./assigned";
+import { askedAbout, describeCheck, SOURCE_LABELS, startedElsewhere, type Watch } from "./assigned";
 import { describeWhen, nameOf, type Schedule } from "./schedule";
 
 export function formatList(schedules: Schedule[], watches: Watch[], projectName: (id: string) => string, now: number): string {
@@ -14,7 +14,7 @@ export function formatList(schedules: Schedule[], watches: Watch[], projectName:
     const asks = w.states === undefined ? "states not picked yet" : w.states.length ? `asks about ${w.states.join(", ")}` : "asks about every state";
     lines.push(`${w.id} · assigned · ${projectName(w.projectId)} · ${w.agent} · ${w.enabled ? "enabled" : "paused"} · ${w.source ? SOURCE_LABELS[w.source.kind] : "source not read yet"} · ${checked} · ${asks}`);
     for (const t of w.tickets ?? []) {
-      lines.push(`  #${t.id} · ${t.title} · ${t.type ? `${t.type} · ` : ""}${t.state} · ${askedAbout(w.states, t.state) ? "asked about" : "not asked about"}${t.branch ? ` · started: ${t.branch.name} (${t.branch.project})` : ""}${w.started?.[t.id] ? " · started here" : ""}`);
+      lines.push(`  #${t.id} · ${t.title} · ${t.type ? `${t.type} · ` : ""}${t.state} · ${askedAbout(w.states, t.state) ? "asked about" : "not asked about"}${startedElsewhere(t) ? ` · started: ${startedElsewhere(t)}` : ""}${w.started?.[t.id] ? " · started here" : ""}`);
     }
   }
   for (const w of watches) {

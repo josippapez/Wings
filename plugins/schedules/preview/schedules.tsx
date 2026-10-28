@@ -96,14 +96,14 @@ const ticket = (id: string, title: string, state: string, type: string, branch?:
   id, title, state, type, url: `https://dev.azure.com/acme/Shop/_workitems/edit/${id}`,
   ...(branch ? { branch: { name: branch, project: "acme-api" } } : {}),
 });
-// Six assigned, as Azure DevOps names their states: two of them are not started. Four have a branch, and one was started from here.
+// Six assigned, as Azure DevOps names their states: two of them are not started. Three have a branch, one has an issue in progress, and one was started from here.
 const assigned = [
   ticket("1204", "Review the order export rewrite", "In Code Review", "Tech Story", "feature/1204-order-export-rewrite"),
   ticket("1198", "Move the invoice job to the new queue", "In Progress", "User Story", "origin/feature/1198-invoice-queue"),
   ticket("1211", "Show the delivery estimate on the cart", "Ready for Development", "User Story"),
   ticket("1187", "Fix the broken filter chips on mobile", "Ready for Peer Review/QA", "FE Task", "feature/1187-filter-chips"),
   ticket("1190", "Align the footer links with the new design", "Ready for Peer Review/QA", "FE Task"),
-  ticket("1215", "Add retry to the shipping rates call", "New", "Tech Story", "feature/1215-shipping-retry"),
+  { ...ticket("1215", "Add retry to the shipping rates call", "New", "Tech Story"), issue: { key: "API-42", status: "in_progress", project: "acme-api" } },
 ];
 const assignedWatches: WatchView[] = [
   { ...watches[0], projectId: "p2", agent: "claude", source: azure, lastCheck: { at: now - 2 * 60_000, ok: true, count: 6 }, states: ["Ready for Development", "New"], tickets: assigned, started: { "1190": now - 12 * 60_000 } },
