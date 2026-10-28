@@ -12,6 +12,9 @@ export default defineConfig(() => ({
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
     },
+    // packages/plugin-ui has its own install with its own React; without this, the dev server can bundle Base UI with
+    // that copy and the app fails with "Invalid hook call".
+    dedupe: ["react", "react-dom"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
