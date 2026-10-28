@@ -208,6 +208,10 @@ fn plugin_worktree_setup_set(app: AppHandle, state: State<AppState>, plugin_id: 
     if !plugins::may_create_worktrees(&plugin(&state, &plugin_id)?) {
         return Err(format!("{plugin_id} may not change worktree setup"));
     }
+    // The setup line runs in every new worktree: more than making worktrees, so only Wings' own plugins set it.
+    if setup.is_some() && !state.plugins.lock().unwrap().is_builtin(&plugin_id) {
+        return Err("Only Wings' own plugins can change a project's setup command".into());
+    }
     let include = include.map(|lines| spaces::include_text(&lines)).transpose()?;
     let setup = setup.map(|s| spaces::setup_text(&s)).transpose()?;
     set_worktree_setup(&app, &space_id, include.as_deref(), setup.as_deref())

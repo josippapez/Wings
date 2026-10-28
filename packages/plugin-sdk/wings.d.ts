@@ -600,6 +600,7 @@ interface Wings {
    * (null resets to the default list) and `setup` (null clears it). Patterns use .gitignore syntax and `!` leaves
    * files out; a custom list replaces the defaults. Rejects a pattern or setup line with a newline.
    */
+  /** `setup` only from Wings' own plugins: it runs in every new worktree. */
   setWorktreeSetup(projectId: string | undefined, options: { include?: string[] | null; setup?: string | null }): Promise<void>;
   /**
    * Needs `permissions.callTools` naming the tool or its plugin, and Wings 0.1.94. Only between Wings' own plugins

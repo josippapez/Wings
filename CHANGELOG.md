@@ -4,7 +4,7 @@ What changed in each Wings release, newest first.
 
 ## 0.1.99 · 2026-10-28
 
-- **Agents can set up worktrees.** The `worktree_setup` tool and `wings worktree-setup` read and change a project's files to copy into new worktrees and its setup command, the same settings as "Worktree setup…".
+- **Agents can set up worktrees.** The `worktree_setup` tool and `wings worktree-setup` read a project's worktree setup and change the files copied into new worktrees, the same settings as "Worktree setup…". The setup command only you change, since it runs in every new worktree.
 - **Worktree setup in Schedules.** An "assigned to me" entry shows and edits its project's worktree files and setup command.
 - **For plugin authors:** `wings.worktreeSetup` and `wings.setWorktreeSetup`, with `permissions.worktrees`.
 
