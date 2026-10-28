@@ -843,7 +843,6 @@ const leftPanel = usePanelRef();
     })();
     void api.agentsList().then(setAgents);
     void api.paneInfo().then(setPaneInfo);
-    void api.gitStatus().then(setGit);
     const unlisten = [
       api.onAgents((list) => {
         setAgents(list);
@@ -853,7 +852,9 @@ const leftPanel = usePanelRef();
         for (const id of new Set(changed.map((a) => a.spaceId))) touchSpace(id);
       }),
       api.onPaneInfo(setPaneInfo),
-      api.onGitStatus(setGit),
+      // Listening first, then asking: a sweep that finishes in between would otherwise be lost, and the next one
+      // only sends a change, so projects not opened yet stayed without a status.
+      api.onGitStatus(setGit).then((off) => (void api.gitStatus().then(setGit), off)),
       api.onPaneExited((paneId) => {
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         if (key) closePane(key);
