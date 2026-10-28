@@ -1,12 +1,12 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "minWingsVersion": "0.1.94",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
   "api": 1,
-  "mcpInstructions": "Schedules (schedules__*): list shows every schedule and every assigned entry with the tickets assigned to the user and their state; add_assigned starts watching a project for assigned tickets; remove deletes an entry. Use them when the user asks what is assigned to them or in which state, or wants an agent offered on newly assigned tickets in a project.",
+  "mcpInstructions": "Schedules (schedules__*): list shows every schedule and every assigned entry with the tickets assigned to the user and their state; add_assigned starts watching a project for assigned tickets; update changes one; remove deletes an entry. Use them when the user asks what is assigned to them or in which state, or wants an agent offered on newly assigned tickets in a project.",
   "main": "dist/main.js",
   "permissions": {
     "panes": [
@@ -115,6 +115,11 @@
               },
               "maxItems": 20,
               "description": "Ask only about tickets whose title starts with one of these, like FE or BE, when the project's tickets carry a prefix for each repo. Leave out for every title."
+            },
+            "base": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "The branch a ticket's branch starts from, like origin/develop. Leave out for the repo's default branch."
             }
           },
           "required": [
@@ -170,6 +175,67 @@
           "required": [
             "id",
             "ticket"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "update",
+        "description": "Changes an assigned entry: only the fields given change, and an empty string or list clears one. The tickets it already asked about or started stay as they are.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "The id of the assigned entry, from list."
+            },
+            "agent": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "opencode"
+              ],
+              "description": "claude or opencode."
+            },
+            "prompt": {
+              "type": "string",
+              "maxLength": 4000,
+              "description": "What the agent is told. {id}, {title} and {url} become the ticket's number, title and link."
+            },
+            "min_free_gb": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Wings won't make a worktree when the disk has less free space than this."
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "maxItems": 50,
+              "description": "The ticket states to ask about. An empty list asks about every state."
+            },
+            "title_prefixes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "maxItems": 20,
+              "description": "Ask only about tickets whose title starts with one of these, like FE or BE."
+            },
+            "base": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "The branch a ticket's branch starts from, like origin/develop."
+            }
+          },
+          "required": [
+            "id"
           ],
           "additionalProperties": false
         }

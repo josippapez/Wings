@@ -4,7 +4,7 @@
 import { s, tool } from "wings-plugin-sdk/tools";
 import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, describeCheck, resolveProject } from "./lib/assigned";
 import { formatList } from "./lib/format";
-import { addWatch, checkOne, removeWatch, startTicket } from "./main/assigned";
+import { addWatch, checkOne, removeWatch, saveWatch, startTicket } from "./main/assigned";
 import { removeSchedule } from "./main/schedules";
 import { readSchedules, readWatches } from "./main/store";
 
@@ -26,10 +26,11 @@ export const tools = {
       min_free_gb: s.integer({ minimum: 0, maximum: 10_000 }).optional().describe("Wings won't make a worktree when the disk has less free space than this. 10 by default."),
       states: s.array(s.string({ maxLength: 100 }), { maxItems: 50 }).optional().describe("The ticket states to ask about, like New or Ready for development. Leave out to pick the not-started ones after the first check."),
       title_prefixes: s.array(s.string({ maxLength: 40 }), { maxItems: 20 }).optional().describe("Ask only about tickets whose title starts with one of these, like FE or BE, when the project's tickets carry a prefix for each repo. Leave out for every title."),
+      base: s.string({ maxLength: 200 }).optional().describe("The branch a ticket's branch starts from, like origin/develop. Leave out for the repo's default branch."),
     }),
-    run: async ({ project, agent, prompt, min_free_gb, states, title_prefixes }) => {
+    run: async ({ project, agent, prompt, min_free_gb, states, title_prefixes, base }) => {
       const found = resolveProject(await wings.projects(), project);
-      const saved = await addWatch({ projectId: found.id, agent: agent ?? "claude", prompt: prompt ?? DEFAULT_PROMPT, minFreeGb: min_free_gb ?? DEFAULT_MIN_FREE_GB, ...(states ? { states } : {}), prefixes: title_prefixes }, true);
+      const saved = await addWatch({ projectId: found.id, agent: agent ?? "claude", prompt: prompt ?? DEFAULT_PROMPT, minFreeGb: min_free_gb ?? DEFAULT_MIN_FREE_GB, ...(states ? { states } : {}), prefixes: title_prefixes, base }, true);
       await checkOne(saved.id).catch(console.error);
       const w = (await readWatches()).find((x) => x.id === saved.id);
       const asks = w?.states === undefined ? "" : w.states.length ? ` It asks about: ${w.states.join(", ")}.` : " It asks about every state.";
@@ -69,6 +70,33 @@ export const tools = {
       const projectId = project ? resolveProject(await wings.projects(), project).id : undefined;
       const { title, target } = await startTicket(id, ticket.replace(/^#/, ""), force, projectId);
       return `Started ${title} on ${target}.`;
+    },
+  }),
+
+  update: tool({
+    description: "Changes an assigned entry: only the fields given change, and an empty string or list clears one. The tickets it already asked about or started stay as they are.",
+    input: s.object({
+      id: s.string({ minLength: 1, maxLength: 100 }).describe("The id of the assigned entry, from list."),
+      agent: s.enum(["claude", "opencode"]).optional().describe("claude or opencode."),
+      prompt: s.string({ maxLength: 4000 }).optional().describe("What the agent is told. {id}, {title} and {url} become the ticket's number, title and link."),
+      min_free_gb: s.integer({ minimum: 0, maximum: 10000 }).optional().describe("Wings won't make a worktree when the disk has less free space than this."),
+      states: s.array(s.string({ maxLength: 100 }), { maxItems: 50 }).optional().describe("The ticket states to ask about. An empty list asks about every state."),
+      title_prefixes: s.array(s.string({ maxLength: 40 }), { maxItems: 20 }).optional().describe("Ask only about tickets whose title starts with one of these, like FE or BE."),
+      base: s.string({ maxLength: 200 }).optional().describe("The branch a ticket's branch starts from, like origin/develop."),
+    }),
+    run: async ({ id, agent, prompt, min_free_gb, states, title_prefixes, base }) => {
+      const w = (await readWatches()).find((x) => x.id === id);
+      if (!w) throw new Error(`No assigned entry ${id}. Use list to see the ids.`);
+      const saved = await saveWatch(id, {
+        projectId: w.projectId,
+        agent: agent ?? w.agent,
+        prompt: prompt ?? w.prompt,
+        minFreeGb: min_free_gb ?? w.minFreeGb,
+        states: states ?? w.states,
+        prefixes: title_prefixes ?? w.prefixes,
+        base: base ?? w.base,
+      });
+      return `Updated ${id}: ${saved.agent}, ${saved.states?.length ? `asks about ${saved.states.join(", ")}` : "every state"}${saved.prefixes?.length ? `, titles starting with ${saved.prefixes.join(", ")}` : ""}, branches from ${saved.base ?? "the default branch"}.`;
     },
   }),
 

@@ -225,7 +225,8 @@ export async function startTicket(id: string, ticketId: string, force = false, p
       if (problem) throw new Error(problem);
       const prompt = fillPrompt(w.prompt, ticket);
       const branch = branchName(ticket);
-      const made = await wings.createWorktree({ projectId: project.id, branch });
+      // The base is a branch of the entry's own repo: another project starts from its default.
+      const made = await wings.createWorktree({ projectId: project.id, branch, ...(w.base && project.id === w.projectId ? { base: w.base } : {}) });
       madeWorktree = true;
       madeIn = made.projectId;
       target = branch;
@@ -247,6 +248,22 @@ export async function startTicket(id: string, ticketId: string, force = false, p
   }
 }
 
+/** Changes an entry. One moved to another project starts over there, like a new one. */
+export const saveWatch = (id: string, draft: WatchDraft) =>
+  queue(async () => {
+    const clean = cleanWatchDraft(draft);
+    const list = await readWatches();
+    sources.clear();
+    const old = list.find((w) => w.id === id);
+    if (!old) throw new Error("That entry is gone.");
+    // Another project has other tickets, so it starts over: nothing it already has is asked about.
+    const moved = old.projectId !== clean.projectId;
+    const saved: Watch = { ...old, ...clean, ...(moved ? { primed: false, seen: [], waiting: [], states: clean.states, tickets: undefined, source: undefined, lastCheck: undefined } : {}) };
+    await writeWatches(list.map((w) => (w.id === id ? saved : w)));
+    if (saved.enabled) void checkOne(saved.id).catch(console.error);
+    return saved;
+  });
+
 let signInCode: string | null = null;
 export const currentSignInCode = () => signInCode;
 
@@ -264,18 +281,7 @@ export function serveAssigned() {
       void checkOne(saved.id).catch(console.error);
       return;
     }
-    await queue(async () => {
-      const clean = cleanWatchDraft(draft);
-      const list = await readWatches();
-      sources.clear();
-      const old = list.find((w) => w.id === id);
-      if (!old) throw new Error("That entry is gone.");
-      // Another project has other tickets, so it starts over: nothing it already has is asked about.
-      const moved = old.projectId !== clean.projectId;
-      const saved: Watch = { ...old, ...clean, ...(moved ? { primed: false, seen: [], waiting: [], states: clean.states, tickets: undefined, source: undefined, lastCheck: undefined } : {}) };
-      await writeWatches(list.map((w) => (w.id === id ? saved : w)));
-      if (saved.enabled) void checkOne(saved.id).catch(console.error);
-    });
+    await saveWatch(id, draft);
   });
 
   ch.answer("toggleWatch", ({ id }) =>
