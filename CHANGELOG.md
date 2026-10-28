@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.86 · 2026-10-28
+
+- **The coding agents list loads.** Settings > Agents showed "Command harnesses_status not allowed by ACL" instead of your agents. It lists them now.
+- **Update notes read properly.** The update dialog showed `**` and backticks around words. It shows bold text and code now.
+
 ## 0.1.85 · 2026-10-28
 
 - **See which coding agents you have.** Settings > Agents lists Claude Code, Codex, Cursor CLI, Grok Build and OpenCode, with each one's version and whether you're signed in. Install puts the vendor's install command in a new tab for you to run, and Sign in starts the login there. Cursor CLI shows as installed only: Wings doesn't check its sign-in yet.
