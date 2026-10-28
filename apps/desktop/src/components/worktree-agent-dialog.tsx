@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { api, type Space } from "@/lib/api";
+import { api, type Space, type WorktreeMade } from "@/lib/api";
 import {
   agentInput,
   baseChoices,
@@ -17,7 +17,7 @@ import {
   type WorktreeAgent,
 } from "@/lib/worktree-agent";
 
-function Form({ space, onCreated }: { space: Space; onCreated: (space: Space, input: string | null) => void }) {
+function Form({ space, onCreated }: { space: Space; onCreated: (made: WorktreeMade, input: string | null) => void }) {
   const [branch, setBranch] = useState(suggestBranch);
   const [bases, setBases] = useState<string[]>([]);
   const [base, setBase] = useState<string | null>(null);
@@ -116,7 +116,7 @@ function Form({ space, onCreated }: { space: Space; onCreated: (space: Space, in
 }
 
 /** Asks for a branch, a base and an agent, then makes the worktree. `onCreated` opens the tab. Opened by `requestWorktreeAgent`. */
-export function WorktreeAgentDialog({ spaces, onCreated }: { spaces: Space[]; onCreated: (space: Space, input: string | null) => void }) {
+export function WorktreeAgentDialog({ spaces, onCreated }: { spaces: Space[]; onCreated: (made: WorktreeMade, input: string | null) => void }) {
   const spaceId = useSyncExternalStore(worktreeAgentStore.subscribe, worktreeAgentStore.get);
   const space = spaces.find((s) => s.id === spaceId);
   return (

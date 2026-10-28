@@ -24,6 +24,13 @@ pub struct Space {
     /// Listed above the unpinned projects.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// Patterns (gitignore syntax, one per line) for the gitignored local files copied into a new worktree of this
+    /// project. Unset means the default list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_include: Option<String>,
+    /// A shell line run in a new worktree of this project before the first command typed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_setup: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -83,6 +90,22 @@ impl SpaceStore {
         }
     }
 
+    /// The project whose worktree settings apply to `id`: a worktree uses its project's.
+    pub fn settings_owner(&self, id: &str) -> Option<&Space> {
+        let space = self.get(id)?;
+        space.parent.as_deref().and_then(|p| self.get(p)).or(Some(space))
+    }
+
+    /// Blank means unset.
+    pub fn set_worktree_settings(&mut self, id: &str, include: &str, setup: &str) {
+        if let Some(space) = self.spaces.iter_mut().find(|s| s.id == id) {
+            let keep = |t: &str| (!t.trim().is_empty()).then(|| t.trim().to_string());
+            space.worktree_include = keep(include);
+            space.worktree_setup = keep(setup);
+            self.save();
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<&Space> {
         self.spaces.iter().find(|s| s.id == id)
     }
@@ -101,7 +124,7 @@ fn new_space(path: &str) -> Space {
     let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     // The path is unique per space, so it doubles as a stable id.
     let added_at = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
-    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false }
+    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false, worktree_include: None, worktree_setup: None }
 }
 
 pub fn view(space: &Space) -> SpaceView {

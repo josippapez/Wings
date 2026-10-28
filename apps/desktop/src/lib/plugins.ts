@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type Space, type ToolStatus, type ViewPlace } from "@/lib/api";
+import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace, type WorktreeMade } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { diskFindRequest, diskToken, diskUsageRequest } from "@/lib/plugin-disk";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
@@ -125,7 +125,7 @@ type Callbacks = {
   /** Pastes a message into the prompt of the agent in a pane; whether Enter was pressed. Rejects for a pane without an agent. */
   sendToAgent: (paneId: string, text: string) => Promise<boolean>;
   /** A worktree a plugin made became a project in Wings. */
-  addProject: (space: Space) => void;
+  addProject: (made: WorktreeMade) => void;
   /**
    * Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself.
    * For a tab, `multiple` always opens a new one, `newTab` does so for any view, and `args` is what the page reads with `viewArgs`.
@@ -789,9 +789,9 @@ export class PluginHost {
         const spaceId = p.projectId == null ? this.callbacks.currentProject() : String(p.projectId);
         if (!spaceId) throw new Error("No project is open in Wings");
         // Rust checks the permission and the branch, and makes the worktree beside the repo.
-        const space = await invoke<Space>("plugin_worktree_create", { pluginId, spaceId, branch, base: p.base ?? null });
-        this.callbacks.addProject(space);
-        return { projectId: space.id, path: space.path };
+        const made = await invoke<WorktreeMade>("plugin_worktree_create", { pluginId, spaceId, branch, base: p.base ?? null });
+        this.callbacks.addProject(made);
+        return { projectId: made.space.id, path: made.space.path };
       }
       case "sendToAgent": {
         const paneId = String(p.paneId);

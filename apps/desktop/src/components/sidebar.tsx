@@ -18,6 +18,7 @@ import {
   GitBranchIcon,
   GitBranchPlusIcon,
   GitForkIcon,
+  WrenchIcon,
   RotateCcwClockIcon,
   SearchIcon,
   SettingsIcon,
@@ -63,7 +64,7 @@ import { trackDrag } from "@/lib/pointer-drag";
 import { availableUpdate, showUpdate } from "@/lib/updater";
 import { canFork } from "@/lib/resume";
 import { shortcutLabel } from "@/lib/terminal";
-import { requestWorktreeAgent, worktreeTitle } from "@/lib/worktree-agent";
+import { requestWorktreeAgent, requestWorktreeSetup, worktreeTitle } from "@/lib/worktree-agent";
 import { cn } from "@/lib/utils";
 
 const spring = { type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const;
@@ -343,6 +344,10 @@ export function Sidebar(props: {
                     <ContextMenuItem onClick={() => requestWorktreeAgent(space.id)}>
                       <GitBranchPlusIcon />
                       New agent in worktree…
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => requestWorktreeSetup(space.id)}>
+                      <WrenchIcon />
+                      Worktree setup…
                     </ContextMenuItem>
                     <OpenInEditorItems spaceId={space.id} />
                     <ContextMenuItem onClick={() => void revealItemInDir(space.path)}>

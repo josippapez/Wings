@@ -116,14 +116,66 @@ fn worktree_info(state: State<AppState>, space_id: String) -> Res<worktree::Work
     worktree::info(std::path::Path::new(&path))
 }
 
+/// A worktree Wings made: its project, what was copied into it, and the setup line to run in it first.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeMade {
+    space: SpaceView,
+    local: worktree::LocalCopy,
+    setup: Option<String>,
+}
+
+/// Makes the worktree of `space_id`, copies its gitignored local setup in, and adds it as a project under it.
+fn make_worktree(state: &AppState, space_id: &str, branch: &str, base: Option<&str>) -> Res<WorktreeMade> {
+    let (path, include, setup) = {
+        let store = state.spaces.lock().unwrap();
+        let path = store.get(space_id).ok_or("No such project in Wings")?.path.clone();
+        let owner = store.settings_owner(space_id);
+        (path, owner.and_then(|s| s.worktree_include.clone()), owner.and_then(|s| s.worktree_setup.clone()))
+    };
+    let dir = std::path::Path::new(&path);
+    let base = match base {
+        Some(base) => base.to_string(),
+        None => worktree::info(dir)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
+    };
+    let made = worktree::create(dir, branch, &base, include.as_deref())?;
+    let space = spaces::view(&state.spaces.lock().unwrap().add_worktree(&made.path.to_string_lossy(), space_id));
+    gitwatch::resync();
+    Ok(WorktreeMade { space, local: made.local, setup })
+}
+
 /// Makes a git worktree for a new branch and adds it to the sidebar under its project.
 #[tauri::command(async)]
-fn worktree_create(state: State<AppState>, space_id: String, branch: String, base: String) -> Res<SpaceView> {
-    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
-    let folder = worktree::create(std::path::Path::new(&path), &branch, &base)?;
-    let view = spaces::view(&state.spaces.lock().unwrap().add_worktree(&folder.to_string_lossy(), &space_id));
-    gitwatch::resync();
-    Ok(view)
+fn worktree_create(state: State<AppState>, space_id: String, branch: String, base: String) -> Res<WorktreeMade> {
+    make_worktree(&state, &space_id, &branch, Some(&base))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeLocal {
+    include: Option<String>,
+    setup: Option<String>,
+    default_include: String,
+    /// The repo has a `.worktreeinclude`, which is used instead of `include`.
+    has_file: bool,
+}
+
+/// What a project's worktrees get: the include list and setup line it keeps in Wings, the default list, and
+/// whether the repo's own `.worktreeinclude` takes over.
+#[tauri::command(async)]
+fn worktree_local(state: State<AppState>, space_id: String) -> Res<WorktreeLocal> {
+    let store = state.spaces.lock().unwrap();
+    let owner = store.settings_owner(&space_id).ok_or("unknown space")?;
+    let has_file = worktree::has_include_file(std::path::Path::new(&owner.path));
+    Ok(WorktreeLocal { include: owner.worktree_include.clone(), setup: owner.worktree_setup.clone(), default_include: worktree::default_include(), has_file })
+}
+
+#[tauri::command]
+fn worktree_local_set(state: State<AppState>, space_id: String, include: String, setup: String) -> Res<()> {
+    let mut store = state.spaces.lock().unwrap();
+    let id = store.settings_owner(&space_id).ok_or("unknown space")?.id.clone();
+    store.set_worktree_settings(&id, &include, &setup);
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1327,20 +1379,11 @@ fn plugin_focus_pane(state: State<AppState>, plugin_id: String, pane_id: String)
 /// A plugin makes a worktree of one of your projects, on a new branch from `base` or the repo's default branch, and
 /// adds it to Wings as a project under that one, as the New agent in worktree dialog does.
 #[tauri::command(async)]
-fn plugin_worktree_create(state: State<AppState>, plugin_id: String, space_id: String, branch: String, base: Option<String>) -> Res<SpaceView> {
+fn plugin_worktree_create(state: State<AppState>, plugin_id: String, space_id: String, branch: String, base: Option<String>) -> Res<WorktreeMade> {
     if !plugins::may_create_worktrees(&plugin(&state, &plugin_id)?) {
         return Err(format!("{plugin_id} may not create worktrees"));
     }
-    let path = state.spaces.lock().unwrap().get(&space_id).ok_or("No such project in Wings")?.path.clone();
-    let dir = std::path::Path::new(&path);
-    let base = match base {
-        Some(base) => base,
-        None => worktree::info(dir)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
-    };
-    let folder = worktree::create(dir, &branch, &base)?;
-    let view = spaces::view(&state.spaces.lock().unwrap().add_worktree(&folder.to_string_lossy(), &space_id));
-    gitwatch::resync();
-    Ok(view)
+    make_worktree(&state, &space_id, &branch, base.as_deref())
 }
 
 /// A plugin calls another plugin's tool: both have to be Wings' own plugins, it needs `callTools` naming the tool, and
@@ -1861,6 +1904,8 @@ pub fn run() {
             spaces_set_pinned,
             worktree_info,
             worktree_create,
+            worktree_local,
+            worktree_local_set,
             editors_list,
             editor_open,
             sessions_list,

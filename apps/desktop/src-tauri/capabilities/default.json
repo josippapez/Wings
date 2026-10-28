@@ -20,6 +20,8 @@
     "allow-spaces-set-pinned",
     "allow-worktree-info",
     "allow-worktree-create",
+    "allow-worktree-local",
+    "allow-worktree-local-set",
     "allow-editors-list",
     "allow-editor-open",
     "allow-sessions-list",

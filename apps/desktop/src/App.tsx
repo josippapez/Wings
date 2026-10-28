@@ -39,13 +39,13 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Toaster } from "@/components/ui/sonner";
 import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space } from "@/lib/api";
+import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space, type WorktreeMade } from "@/lib/api";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
 import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
 import { tabTitles } from "@/lib/tab-names";
-import { requestWorktreeAgent } from "@/lib/worktree-agent";
+import { copyNotice, requestWorktreeAgent, withSetup } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
 import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
 import { canGoBack, canGoForward, EMPTY_NAV, goBack, goForward, visit, type NavState, type Place } from "@/lib/nav-history";
@@ -61,6 +61,7 @@ import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
+import { WorktreeSetupDialog } from "@/components/worktree-setup-dialog";
 import { checkForUpdate, startUpdateChecks } from "@/lib/updater";
 
 /** `name` is what you called the tab; absent means its automatic title. */
@@ -349,6 +350,18 @@ const leftPanel = usePanelRef();
   const [diffTab, setDiffTab] = useState<string | null>(null);
   const [diffExpanded, setDiffExpanded] = useState(false);
   const pluginHost = useRef<PluginHost | null>(null);
+  /** A project's setup line for a worktree just made, by the worktree's id, until its first pane opens. */
+  const pendingSetup = useRef(new Map<string, string>());
+  /** Adds a worktree Wings made as a project, queues its setup line and tells what was copied into it. */
+  const adoptWorktree = (made: WorktreeMade) => {
+    const { space, local, setup } = made;
+    setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
+    if (setup) pendingSetup.current.set(space.id, setup);
+    const notice = copyNotice(local);
+    if (notice) (notice.failed ? toast.warning : toast.message)(notice.text, { description: notice.detail });
+  };
+  const adoptWorktreeRef = useRef(adoptWorktree);
+  adoptWorktreeRef.current = adoptWorktree;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const panesRef = useRef(panes);
@@ -478,6 +491,12 @@ const leftPanel = usePanelRef();
     ) => {
       const key = crypto.randomUUID();
       historyId ??= key;
+      // The first pane of a worktree Wings just made runs the project's setup line before what was asked for.
+      if (!attachTo && !sessionId) {
+        const typed = withSetup(pendingSetup.current.get(spaceId), initialInput);
+        if (typed !== initialInput) pendingSetup.current.delete(spaceId);
+        initialInput = typed;
+      }
       // A pane that starts with a resume line: its agent isn't detected for a moment after the pane starts, and the
       // Agents row holds its place as "starting" until it is.
       const resuming = !!sessionId && !!initialInput && !attachTo;
@@ -1280,7 +1299,7 @@ const leftPanel = usePanelRef();
         return paneId;
       },
       sendToAgent: (paneId, text) => sendToAgent(paneId, text),
-      addProject: (space) => setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space])),
+      addProject: (made) => adoptWorktreeRef.current(made),
       focusPane: (paneId) => {
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         const tab = key && tabOfPane(tabsRef.current, key);
@@ -2136,11 +2155,12 @@ const leftPanel = usePanelRef();
         </Dialog>
         <WorktreeAgentDialog
           spaces={spaces}
-          onCreated={(space, input) => {
-            setSpaces((list) => (list.some((s) => s.id === space.id) ? list : [...list, space]));
-            openTab(space.id, input);
+          onCreated={(made, input) => {
+            adoptWorktree(made);
+            openTab(made.space.id, input);
           }}
         />
+        <WorktreeSetupDialog spaces={spaces} />
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}

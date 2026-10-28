@@ -22,6 +22,11 @@ export type Editor = { id: string; name: string };
 /** What the new-agent-in-a-worktree dialog offers for a project. `defaultBranch` is a ref like `origin/main`. */
 export type WorktreeInfo = { defaultBranch: string | null; branches: string[] };
 
+/** A worktree Wings made: its project, the gitignored local files copied into it, and the project's setup line to run there first. */
+export type WorktreeMade = { space: Space; local: { copied: number; skipped: number; errors: string[] }; setup: string | null };
+/** What a project's worktrees get. `include` and `setup` are null when unset; `hasFile` is a `.worktreeinclude` in the repo, used instead of `include`. */
+export type WorktreeLocal = { include: string | null; setup: string | null; defaultInclude: string; hasFile: boolean };
+
 export type AgentState = "working" | "blocked" | "done" | "idle";
 
 /** Which agent CLI runs in the pane. */
@@ -328,7 +333,10 @@ export const api = {
   worktreeInfo: (spaceId: string) => invoke<WorktreeInfo>("worktree_info", { spaceId }),
   /** `git worktree add -b <branch> <folder beside the repo> <base>`, added to the sidebar under the project. Rejects with git's message. */
   spacesSetPinned: (id: string, pinned: boolean) => invoke<void>("spaces_set_pinned", { id, pinned }),
-  worktreeCreate: (spaceId: string, branch: string, base: string) => invoke<Space>("worktree_create", { spaceId, branch, base }),
+  worktreeCreate: (spaceId: string, branch: string, base: string) => invoke<WorktreeMade>("worktree_create", { spaceId, branch, base }),
+  worktreeLocal: (spaceId: string) => invoke<WorktreeLocal>("worktree_local", { spaceId }),
+  /** Blank means unset. */
+  worktreeLocalSet: (spaceId: string, include: string, setup: string) => invoke<void>("worktree_local_set", { spaceId, include, setup }),
   editorsList: () => invoke<Editor[]>("editors_list"),
   /** Opens the project's folder in the editor. Rejects with the editor's message. */
   editorOpen: (editorId: string, spaceId: string) => invoke<void>("editor_open", { editorId, spaceId }),

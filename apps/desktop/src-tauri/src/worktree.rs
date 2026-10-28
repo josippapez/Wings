@@ -6,7 +6,8 @@
 //! leaves the repo untouched, and `git worktree remove` still cleans it up.
 
 use std::{
-    path::{Path, PathBuf},
+    io::Write,
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -136,9 +137,148 @@ pub fn info(dir: &Path) -> Result<WorktreeInfo, String> {
     Ok(WorktreeInfo { default_branch, branches: parse_branches(&refs) })
 }
 
-/// Makes the worktree and returns its folder. Refuses when the folder or the branch exists. On failure the
-/// error is git's own text.
-pub fn create(dir: &Path, branch: &str, base: &str) -> Result<PathBuf, String> {
+/// Gitignored local setup an agent needs and a fresh checkout lacks, copied when the project has no
+/// `.worktreeinclude` and no list of its own. Not `.claude/settings*.json`: a worktree already reads the main
+/// checkout's local settings, and a copy would run its hooks twice.
+pub const DEFAULT_INCLUDE: [&str; 9] = [".claude/rules", ".claude/rules-optional", ".claude/agents", ".claude/skills", ".claude/hooks", ".claude/commands", ".mcp.json", ".env", ".env.*"];
+
+pub fn default_include() -> String {
+    DEFAULT_INCLUDE.join("\n")
+}
+
+/// The patterns in a list: one per line, blank lines and `#` comments dropped.
+fn pattern_lines(text: &str) -> Vec<String> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(str::to_string).collect()
+}
+
+/// Whether the repo has its own `.worktreeinclude`, which then wins over the project's list.
+pub fn has_include_file(root: &Path) -> bool {
+    root.join(".worktreeinclude").is_file()
+}
+
+/// What copying the local setup into a new worktree did. Failures here never fail the worktree.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCopy {
+    pub copied: usize,
+    /// Already in the worktree, or a link, which isn't followed.
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Created {
+    pub path: PathBuf,
+    pub local: LocalCopy,
+}
+
+/// Runs git with raw output, optionally feeding `input` to stdin. `ok` lists exit codes that aren't failures.
+fn git_bytes(root: &Path, args: &[String], input: Option<&[u8]>, ok: &[i32]) -> Result<Vec<u8>, String> {
+    let git = find_program("git").ok_or("git isn't installed, or isn't on your PATH")?;
+    let mut child = Command::new(git)
+        .args(args)
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        // A thread writes it so a big list can't fill the pipe while git is still writing its answer.
+        let input = input.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() || out.status.code().is_some_and(|c| ok.contains(&c)) {
+        return Ok(out.stdout);
+    }
+    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+/// Untracked files under `root` that match any of `patterns`, as git's own gitignore matching sees them.
+fn matching(root: &Path, patterns: &[&str]) -> Result<Vec<u8>, String> {
+    let mut args: Vec<String> = ["ls-files", "-z", "--others", "--ignored"].map(String::from).to_vec();
+    args.extend(patterns.iter().map(|p| format!("--exclude={p}")));
+    git_bytes(root, &args, None, &[])
+}
+
+fn split_z(bytes: &[u8]) -> Vec<String> {
+    bytes.split(|b| *b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).collect()
+}
+
+/// The files to copy, relative to `root`: untracked files that match a pattern and are also ignored. `-o -i` with
+/// only the patterns (as `--exclude`) finds the first set; `check-ignore` keeps the ones the repo's ignore rules
+/// cover, so a committed `.env.example` is left alone (a tracked file is never in `ls-files -o` anyway).
+/// A `!pattern` takes its files out of the result, wherever it stands in the list. It isn't passed to git as a
+/// gitignore negation: git can't re-include a file whose folder an earlier pattern (`.claude/**`) excluded.
+fn local_files(root: &Path, patterns: &[String]) -> Result<Vec<String>, String> {
+    let (skip, keep): (Vec<&str>, Vec<&str>) = patterns.iter().map(String::as_str).partition(|p| p.starts_with('!'));
+    if keep.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matched = matching(root, &keep)?;
+    if matched.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Exit code 1 is "none of them are ignored".
+    let ignored = git_bytes(root, &["check-ignore".into(), "--stdin".into(), "-z".into()], Some(&matched), &[1])?;
+    let mut files = split_z(&ignored);
+    if !skip.is_empty() {
+        let skip: Vec<&str> = skip.iter().map(|p| p[1..].trim()).filter(|p| !p.is_empty()).collect();
+        if !skip.is_empty() {
+            let skipped = split_z(&matching(root, &skip)?);
+            files.retain(|f| !skipped.contains(f));
+        }
+    }
+    Ok(files)
+}
+
+/// Copies the project's gitignored local setup from the main checkout `root` into the new worktree `to`. The
+/// patterns come from `root/.worktreeinclude` when it exists, else `custom` (the project's own list), else
+/// `DEFAULT_INCLUDE`. Files are copied, not linked, so an edit in a worktree can't change the main checkout's copy;
+/// one that's already there stays. The executable bit goes along (`fs::copy` keeps the mode).
+pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
+    let mut out = LocalCopy::default();
+    let text = match std::fs::read_to_string(root.join(".worktreeinclude")) {
+        Ok(text) => text,
+        Err(_) => custom.map(str::to_string).unwrap_or_else(default_include),
+    };
+    let files = match local_files(root, &pattern_lines(&text)) {
+        Ok(files) => files,
+        Err(e) => {
+            out.errors.push(format!("Couldn't list the local files to copy: {e}"));
+            return out;
+        }
+    };
+    for rel in files {
+        // git only lists paths inside the repo; this keeps a bad one from writing outside the worktree.
+        if Path::new(&rel).components().any(|c| !matches!(c, Component::Normal(_))) {
+            out.skipped += 1;
+            continue;
+        }
+        let (src, dest) = (root.join(&rel), to.join(&rel));
+        if std::fs::symlink_metadata(&dest).is_ok() || std::fs::symlink_metadata(&src).map_or(true, |m| !m.is_file()) {
+            out.skipped += 1;
+            continue;
+        }
+        let copied = dest.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::copy(&src, &dest).map(|_| ()));
+        match copied {
+            Ok(()) => out.copied += 1,
+            Err(e) if out.errors.len() < 20 => out.errors.push(format!("{rel}: {e}")),
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// Makes the worktree and returns its folder, with the project's gitignored local setup copied into it (`include`
+/// is the project's own pattern list, see `copy_local`). Refuses when the folder or the branch exists. On failure
+/// the error is git's own text.
+pub fn create(dir: &Path, branch: &str, base: &str, include: Option<&str>) -> Result<Created, String> {
     validate_branch(branch)?;
     validate_base(base)?;
     let root = PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| format!("{} isn't a git repository", dir.display()))?);
@@ -163,7 +303,8 @@ pub fn create(dir: &Path, branch: &str, base: &str) -> Result<PathBuf, String> {
     // `--no-track`: a branch cut from `origin/main` would otherwise push to and pull from main.
     let path_arg = path.to_str().ok_or("The worktree's path isn't valid text")?;
     git(&root, &["worktree", "add", "--no-track", "-b", branch, path_arg, base])?;
-    Ok(path)
+    let local = copy_local(&root, &path, include);
+    Ok(Created { path, local })
 }
 
 #[cfg(test)]
@@ -260,18 +401,95 @@ mod tests {
         let found = info(&repo).unwrap();
         assert_eq!(found.default_branch.as_deref(), Some("main"));
 
-        let path = create(&repo, "wings/one", "main").unwrap();
+        let path = create(&repo, "wings/one", "main", None).unwrap().path;
         assert_eq!(path, base.join("app-worktrees/wings-one"));
         assert!(path.join(".git").exists());
-        assert!(create(&repo, "wings/one", "main").unwrap_err().contains("already exists"));
+        assert!(create(&repo, "wings/one", "main", None).unwrap_err().contains("already exists"));
         std::fs::remove_dir_all(&path).unwrap();
         run(&["worktree", "prune"]);
-        assert!(create(&repo, "wings/one", "main").unwrap_err().contains("branch named wings/one already exists"));
-        assert!(create(&repo, "wings/two", "nope").unwrap_err().contains("isn't a branch"));
+        assert!(create(&repo, "wings/one", "main", None).unwrap_err().contains("branch named wings/one already exists"));
+        assert!(create(&repo, "wings/two", "nope", None).unwrap_err().contains("isn't a branch"));
         // From inside a linked worktree the new one still goes beside the main repo.
-        let one = create(&repo, "wings/three", "main").unwrap();
-        assert_eq!(create(&one, "wings/four", "main").unwrap(), base.join("app-worktrees/wings-four"));
-        assert!(create(&base, "x", "main").unwrap_err().contains("isn't a git repository"));
+        let one = create(&repo, "wings/three", "main", None).unwrap().path;
+        assert_eq!(create(&one, "wings/four", "main", None).unwrap().path, base.join("app-worktrees/wings-four"));
+        assert!(create(&base, "x", "main", None).unwrap_err().contains("isn't a git repository"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A repo with ignored local setup, a tracked file the patterns also match, and real worktrees made from it.
+    #[test]
+    fn copies_ignored_local_setup_into_the_worktree() {
+        use std::os::unix::fs::PermissionsExt;
+        if find_program("git").is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("wings-wt-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+                .args(args)
+                .current_dir(&repo)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{args:?}");
+        };
+        let write = |rel: &str, text: &str| {
+            let p = repo.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        write(".gitignore", ".claude/rules/\n.claude/hooks/\n.env*\n!.env.example\nnode_modules/\n");
+        write(".env.example", "tracked");
+        write("src.txt", "x");
+        run(&["init"]);
+        run(&["add", "."]);
+        run(&["commit", "-m", "first"]);
+        write(".env", "A=1");
+        write(".env.local", "B=2");
+        write(".claude/rules/a.md", "rule");
+        write(".claude/hooks/fast.sh", "#!/bin/sh\n");
+        write(".claude/hooks/slow.sh", "#!/bin/sh\n");
+        write("node_modules/pkg/index.js", "dep");
+        std::fs::set_permissions(repo.join(".claude/hooks/fast.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // No .worktreeinclude and no list of its own: the defaults. node_modules and the tracked file stay out.
+        let made = create(&repo, "wings/a", "main", None).unwrap();
+        assert!(made.local.errors.is_empty(), "{:?}", made.local.errors);
+        assert_eq!(made.local.copied, 5);
+        let wt = &made.path;
+        assert_eq!(std::fs::read_to_string(wt.join(".env.local")).unwrap(), "B=2");
+        assert!(wt.join(".claude/rules/a.md").is_file() && wt.join(".claude/hooks/slow.sh").is_file());
+        assert!(!wt.join("node_modules").exists());
+        // Tracked, so the checkout has it; it wasn't copied over.
+        assert_eq!(std::fs::read_to_string(wt.join(".env.example")).unwrap(), "tracked");
+        assert_eq!(std::fs::metadata(wt.join(".claude/hooks/fast.sh")).unwrap().permissions().mode() & 0o111, 0o111);
+
+        // The project's own list, with a `!` exclude after a broad include.
+        let custom = "# hooks\n.claude/**\n!.claude/hooks/slow.sh\n";
+        let made = create(&repo, "wings/b", "main", Some(custom)).unwrap();
+        assert!(made.path.join(".claude/hooks/fast.sh").is_file() && made.path.join(".claude/rules/a.md").is_file());
+        assert!(!made.path.join(".claude/hooks/slow.sh").exists());
+        assert!(!made.path.join(".env").exists());
+
+        // A .worktreeinclude in the repo wins over the project's list; an existing file isn't overwritten.
+        write(".worktreeinclude", ".env\n");
+        let to = base.join("manual");
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(to.join(".env"), "mine").unwrap();
+        std::fs::write(to.join("keep"), "").unwrap();
+        let out = copy_local(&repo, &to, Some(".env.local"));
+        assert_eq!((out.copied, out.skipped), (0, 1));
+        assert_eq!(std::fs::read_to_string(to.join(".env")).unwrap(), "mine");
+        assert!(!to.join(".env.local").exists());
+        assert!(has_include_file(&repo));
+        let made = create(&repo, "wings/c", "main", Some(".env.local")).unwrap();
+        assert!(made.path.join(".env").is_file() && !made.path.join(".env.local").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
