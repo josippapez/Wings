@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.101 · 2026-10-28
+
+- **Notifications you can't miss.** While Wings is in front, a plugin's notification pops up as a toast with its buttons, like Start for a newly assigned ticket, and the Inbox count pulses and takes an accent colour until you read it.
+- **Agents can propose a setup command.** An agent asks with `worktree_setup`, and Wings shows you the exact line, the project and who asked. It's saved only when you click Allow. A setup command is plain ASCII, up to 500 characters.
+
 ## 0.1.100 · 2026-10-28
 
 - **Delete a worktree from the sidebar.** The X on a worktree now asks: remove it from the sidebar only, or delete the worktree folder too. Its branch goes with it when it's merged, and stays, with a note, when it isn't. A worktree with uncommitted changes needs "Delete anyway".
