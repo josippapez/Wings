@@ -57,6 +57,9 @@ pub struct Permissions {
     /// Lets the plugin read the names and sizes of the files and folders on your disks, with `wings.diskUsage`, look
     /// for them by name, with `wings.diskFind`, and list the disks, with `wings.disks`.
     pub disk_usage: bool,
+    /// Lets the plugin type a message into the prompt of an agent running in a pane, with `wings.sendToAgent`. Enter
+    /// is only pressed while the user lets agents message each other.
+    pub send_to_agents: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -1171,6 +1174,10 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
 }
 
 /// Whether the plugin may read what an OpenCode session is doing.
+pub fn may_send_to_agents(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.send_to_agents
+}
+
 pub fn may_read_agent_activity(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.agent_activity
 }
@@ -2359,6 +2366,21 @@ mod tests {
         assert!(!may_read_ports(&manifest(serde_json::json!({}))));
         assert!(!may_read_ports(&manifest(serde_json::json!({ "exec": ["lsof"], "statusline": true }))));
         assert!(may_read_ports(&manifest(serde_json::json!({ "ports": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sending_to_agents_needs_its_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-send-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_send_to_agents(&manifest(serde_json::json!({ "panes": ["claude"] }))));
+        assert!(may_send_to_agents(&manifest(serde_json::json!({ "sendToAgents": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

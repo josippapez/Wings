@@ -65,6 +65,7 @@
     "allow-plugin-open-url",
     "allow-plugin-open-pane",
     "allow-plugin-focus-pane",
+    "allow-plugin-send-to-agent",
     "allow-plugin-notify",
     "allow-plugin-tools",
     "allow-plugin-tool",

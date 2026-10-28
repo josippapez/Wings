@@ -14,7 +14,7 @@ const plugin = (id: string, name: string, extra: Partial<PluginView> & { setting
     description: "",
     main: "main.js",
     iconSvg: null,
-    permissions: { exec: [], transcript: [], openUrl: [], fetch: [], post: [], panes: null, notify: false, statusline: false, ports: false, agentActivity: false, diskUsage: false },
+    permissions: { exec: [], transcript: [], openUrl: [], fetch: [], post: [], panes: null, notify: false, statusline: false, ports: false, agentActivity: false, diskUsage: false, sendToAgents: false },
     contributes: { ui: [], mcpTools: [], panels: [], sidebars: [], views: [], ...(settings ? { settings: { page: "settings.html" } } : {}) },
     enabled: true,
     approved: true,

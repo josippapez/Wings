@@ -122,6 +122,8 @@ type Callbacks = {
   openPane: (plan: PanePlan) => Promise<string>;
   /** Shows a pane and moves the keyboard to it. */
   focusPane: (paneId: string) => void;
+  /** Pastes a message into the prompt of the agent in a pane; whether Enter was pressed. Rejects for a pane without an agent. */
+  sendToAgent: (paneId: string, text: string) => Promise<boolean>;
   /**
    * Shows a plugin page in the sidebar, the modal or a tab of the project on screen. The host opens windows itself.
    * For a tab, `multiple` always opens a new one, `newTab` does so for any view, and `args` is what the page reads with `viewArgs`.
@@ -760,6 +762,17 @@ export class PluginHost {
         const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement });
         await this.listed(paneId);
         return { paneId };
+      }
+      case "sendToAgent": {
+        const paneId = String(p.paneId);
+        const text = typeof p.text === "string" ? p.text.trim() : "";
+        if (!text) throw new Error("sendToAgent needs a message");
+        if (new TextEncoder().encode(text).length > 8 * 1024) throw new Error("A message is up to 8 KB");
+        // Newlines and tabs are text in a paste; an escape could end the paste early and drive the agent's prompt.
+        if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) throw new Error("A message can't hold control characters other than newlines and tabs");
+        await invoke("plugin_send_to_agent", { pluginId, paneId });
+        const submitted = await this.callbacks.sendToAgent(paneId, `(Message from the ${plugin.plugin.name} plugin, sent through Wings.)\n${text}`);
+        return { submitted };
       }
       case "focusPane": {
         const paneId = String(p.paneId);

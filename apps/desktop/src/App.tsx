@@ -56,6 +56,7 @@ import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { idleAgentTab, type AgentTab } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -123,6 +124,8 @@ type SavedWorkspace = {
   notifySound?: SoundSettings;
   /** Whether Claude's `open_pane` may press Enter after the command it types. */
   agentsRunCommands?: boolean;
+  /** Whether a message an agent or plugin sends to another agent is submitted with Enter. */
+  agentsMessage?: boolean;
   /** Flags to resume each pane's session with, by the same keys as `sessions`. Absent in older files. */
   sessionArgs?: Record<string, string[]>;
   /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
@@ -307,6 +310,13 @@ const leftPanel = usePanelRef();
   const [agentsRunCommands, setAgentsRunCommands] = useState(false);
   const agentsRunRef = useRef(agentsRunCommands);
   agentsRunRef.current = agentsRunCommands;
+  const [agentsMessage, setAgentsMessage] = useState(false);
+  const agentsMessageRef = useRef(agentsMessage);
+  agentsMessageRef.current = agentsMessage;
+  /** Panes an agent opened with `open_pane`, by Rust pane id: the only ones it may reuse or close. */
+  const agentTabs = useRef(new Map<string, AgentTab>());
+  /** The same panes, for the mark on their tabs. */
+  const [agentPaneIds, setAgentPaneIds] = useState<ReadonlySet<string>>(new Set());
   const [sleepTick, setSleepTick] = useState(0);
   const [newTabPage, setNewTabPage] = useState<string>("terminal");
   const [newProjectOpens, setNewProjectOpens] = useState<NewProjectOpens>("terminal");
@@ -500,21 +510,6 @@ const leftPanel = usePanelRef();
     [createPane],
   );
 
-  // Claude's `open_pane` tool opens its tab here like any other, so the workspace and the pane list stay one thing.
-  useEffect(() => {
-    const off = api.onMcpOpenPane(async (call) => {
-      try {
-        const ran = call.run && call.input !== null && agentsRunRef.current;
-        const key = openTab(call.spaceId, ran ? `${call.input}\r` : call.input, null, call.cwd);
-        const paneId = await terminals.get(key)?.whenStarted;
-        if (!paneId) throw new Error("The pane didn't start");
-        void api.mcpToolResult(call.callId, JSON.stringify({ paneId, ran }), false);
-      } catch (e) {
-        void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
-      }
-    });
-    return () => void off.then((unlisten) => unlisten());
-  }, [openTab]);
 
   const selectSpace = useCallback(
     (spaceId: string) => {
@@ -619,6 +614,69 @@ const leftPanel = usePanelRef();
     [closeTab, updateTab],
   );
 
+  /**
+   * Pastes a message into the prompt of an agent in a pane, for another agent (`send_to_agent`) or a plugin, and
+   * presses Enter while the user lets agents message each other. Only an agent: a plain shell would run the text. Not
+   * one waiting on a permission prompt, which the text would answer, nor one where you've typed and not sent yet.
+   */
+  async function sendToAgent(paneId: string, text: string) {
+    const agent = agentsRef.current.find((a) => a.paneId === paneId);
+    if (!agent) throw new Error(`Pane ${paneId} isn't running an agent, so Wings won't type into it: a shell would run the text.`);
+    if (agent.state === "blocked") throw new Error(`The agent in pane ${paneId} is waiting for ${agent.waitingFor ?? "an answer"}. Try again once it's past that.`);
+    if (paneInput.hasDraft(paneId)) throw new Error(`Someone typed into the prompt of the agent in pane ${paneId} and hasn't sent it. Wings won't type over it.`);
+    const submit = agentsMessageRef.current;
+    await sendToPane(api.paneWrite, paneId, text, submit);
+    // Left in the prompt, it's a draft like one you typed: sleep keeps the agent, and the next message waits.
+    if (!submit) paneInput.note(paneId, text);
+    return submit;
+  }
+
+  // Claude's `open_pane` tool opens its tab here like any other, so the workspace and the pane list stay one thing.
+  // A command goes to a tab an agent opened before in the same folder when nothing runs there, instead of a new one.
+  useEffect(() => {
+    const off = api.onMcpOpenPane(async (call) => {
+      try {
+        const ran = call.run && call.input !== null && agentsRunRef.current;
+        const input = ran ? `${call.input}\r` : call.input;
+        const live = new Set(Object.values(panesRef.current).flatMap((m) => (m.paneId ? [m.paneId] : [])));
+        const idle = idleAgentTab(agentTabs.current, { spaceId: call.spaceId, cwd: call.cwd }, live, paneInfoRef.current, agentsRef.current);
+        if (idle && input !== null) {
+          await api.paneWrite(idle, input);
+          void api.mcpToolResult(call.callId, JSON.stringify({ paneId: idle, ran, reused: true }), false);
+          return;
+        }
+        const key = openTab(call.spaceId, input, null, call.cwd);
+        const paneId = await terminals.get(key)?.whenStarted;
+        if (!paneId) throw new Error("The pane didn't start");
+        agentTabs.current.set(paneId, { spaceId: call.spaceId, cwd: call.cwd });
+        setAgentPaneIds(new Set(agentTabs.current.keys()));
+        void api.mcpToolResult(call.callId, JSON.stringify({ paneId, ran, reused: false }), false);
+      } catch (e) {
+        void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
+      }
+    });
+    const offClose = api.onMcpClosePane(async (call) => {
+      const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === call.paneId);
+      if (!agentTabs.current.has(call.paneId) || !key) {
+        const why = key ? "Wings only closes tabs an agent opened with open_pane." : `No pane ${call.paneId}. It was closed.`;
+        return void api.mcpToolResult(call.callId, why, true);
+      }
+      agentTabs.current.delete(call.paneId);
+      setAgentPaneIds(new Set(agentTabs.current.keys()));
+      closePane(key);
+      void api.mcpToolResult(call.callId, "{}", false);
+    });
+    const offSend = api.onMcpSendToAgent(async (call) => {
+      try {
+        const submitted = await sendToAgent(call.paneId, call.text);
+        void api.mcpToolResult(call.callId, JSON.stringify({ submitted }), false);
+      } catch (e) {
+        void api.mcpToolResult(call.callId, e instanceof Error ? e.message : String(e), true);
+      }
+    });
+    return () => void Promise.all([off, offClose, offSend]).then((all) => all.forEach((unlisten) => unlisten()));
+  }, [openTab, closePane]);
+
   const splitPane = useCallback(
     (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null) => {
       const tab = tabOfPane(tabsRef.current, key);
@@ -721,6 +779,7 @@ const leftPanel = usePanelRef();
       if (saved.sleep) setSleep({ ...DEFAULT_SLEEP, ...saved.sleep });
       setNotifySound(cleanSound(saved.notifySound));
       setAgentsRunCommands(saved.agentsRunCommands === true);
+      setAgentsMessage(saved.agentsMessage === true);
       const known = new Set(list.map((s) => s.id));
       const asleepKeys: string[] = [];
       const restored = saved.tabs
@@ -847,6 +906,7 @@ const leftPanel = usePanelRef();
       sleep,
       notifySound,
       agentsRunCommands,
+      agentsMessage,
       newTabPage,
       newProjectOpens,
       collapsedSections,
@@ -866,7 +926,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, agentsMessage, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1167,6 +1227,7 @@ const leftPanel = usePanelRef();
         if (!paneId) throw new Error("The pane didn't start");
         return paneId;
       },
+      sendToAgent: (paneId, text) => sendToAgent(paneId, text),
       focusPane: (paneId) => {
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         const tab = key && tabOfPane(tabsRef.current, key);
@@ -1492,6 +1553,7 @@ const leftPanel = usePanelRef();
       focusedPane: t.focusedPane,
       state: rollUp(paneIds(t.layout).flatMap((key) => labels[key]?.agent?.state ?? [])),
       running: [...new Set(paneIds(t.layout).flatMap((key) => labels[key]?.running ?? []))],
+      byAgent: paneIds(t.layout).some((key) => agentPaneIds.has(panes[key]?.paneId ?? "")),
     };
   });
 
@@ -2034,7 +2096,7 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} agentsMessage={agentsMessage} onAgentsMessageChange={setAgentsMessage} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
           onRunInTab={
             activeSpace
               ? (input) => {

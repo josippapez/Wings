@@ -61,13 +61,16 @@ pub fn handle(app: &AppHandle, op: &str, request: &Value) -> Option<Res<Value>> 
                 Value::Null
             })
         }
-        // From `wings wait`: whether the pane runs a command rather than sitting at its shell prompt.
+        // From `wings wait`: whether the pane runs a command rather than sitting at its shell prompt. An agent's pane
+        // is busy while the agent works, so waiting on it ends with its turn. `sessionId` says where its answer is.
         "pane_busy" => {
             let id = arg("pane");
             let pane = app.state::<AppState>().panes.lock().unwrap().get(&id).cloned();
-            match pane {
-                Some(pane) => Ok(json!({ "busy": pane.foreground_pid().is_some_and(|fg| Some(fg) != pane.shell_pid) })),
-                None => Err(format!("No pane {id}. It was closed.")),
+            let agent = app.state::<AppState>().agents.lock().unwrap().iter().find(|a| a.pane_id == id).cloned();
+            match (pane, agent) {
+                (Some(_), Some(agent)) => Ok(json!({ "busy": agent.state == crate::detect::AgentState::Working, "agent": true, "sessionId": agent.session_id })),
+                (Some(pane), None) => Ok(json!({ "busy": pane.foreground_pid().is_some_and(|fg| Some(fg) != pane.shell_pid) })),
+                (None, _) => Err(format!("No pane {id}. It was closed.")),
             }
         }
         // From `wings statusline`, each time Claude Code updates its status line.

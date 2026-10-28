@@ -87,6 +87,8 @@ export type PluginPermissions = {
   agentActivity: boolean;
   /** Reads the names and sizes of the files and folders on your disks, and lists the disks. */
   diskUsage: boolean;
+  /** Types messages into the prompts of the agents in your panes. */
+  sendToAgents: boolean;
 };
 export type PluginSource = { kind: "file" } | { kind: "github"; repo: string; folder?: string };
 /** A web page a plugin shows in a popover from a title bar button. */
@@ -179,6 +181,10 @@ export type McpCall = {
 /** Claude asked Wings (the `open_pane` tool) for a new tab. Answer with `mcpToolResult`: the pane id, or the error. */
 /** `run`: Claude asked for Enter after `input`, which the window presses only while the user allows it. */
 export type McpOpenPane = { callId: number; spaceId: string; cwd: string | null; input: string | null; run: boolean };
+/** Claude asked Wings (`close_pane`) to close a pane. Answer with `mcpToolResult`. */
+export type McpClosePane = { callId: number; paneId: string };
+/** Claude asked Wings (`send_to_agent`) to type into another agent's prompt. Answer with `mcpToolResult`: `{ submitted }`, or the error. */
+export type McpSendToAgent = { callId: number; paneId: string; text: string };
 /** A transcript entry Claude just wrote in a pane. Only `plugins`, which may read its type, get it. */
 export type PluginTranscriptEvent = { sessionId: string; paneId: string; entry: Record<string, unknown>; plugins: string[] };
 /** An OpenCode session in a pane did something. Only `plugins`, which may read agent activity, get it. */
@@ -300,6 +306,8 @@ export const api = {
   /** Claude called a plugin tool. `paneId` is the pane that Claude runs in, if it's a Wings pane. */
   onMcpCall: (cb: (call: McpCall) => void): Promise<UnlistenFn> => listen<McpCall>("mcp-call", (e) => cb(e.payload)),
   onMcpOpenPane: (cb: (call: McpOpenPane) => void): Promise<UnlistenFn> => listen<McpOpenPane>("mcp-open-pane", (e) => cb(e.payload)),
+  onMcpClosePane: (cb: (call: McpClosePane) => void): Promise<UnlistenFn> => listen<McpClosePane>("mcp-close-pane", (e) => cb(e.payload)),
+  onMcpSendToAgent: (cb: (call: McpSendToAgent) => void): Promise<UnlistenFn> => listen<McpSendToAgent>("mcp-send-to-agent", (e) => cb(e.payload)),
   /** Entries Claude wrote to the transcripts of sessions in panes since the last check, about twice a second. */
   onPluginTranscript: (cb: (events: PluginTranscriptEvent[]) => void): Promise<UnlistenFn> =>
     listen<PluginTranscriptEvent[]>("plugin-transcript", (e) => cb(e.payload)),

@@ -257,7 +257,15 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
         // The window answers `{ paneId, ran }`: it alone knows whether the user lets Claude press Enter.
         let reply: Value = serde_json::from_str(&answer.text).map_err(|e| e.to_string())?;
         let pane_id = reply["paneId"].as_str().ok_or("The window didn't say which pane it opened")?.to_string();
-        Ok(crate::mcp_panes::Opened { pane_id, ran: reply["ran"].as_bool().unwrap_or(false) })
+        Ok(crate::mcp_panes::Opened { pane_id, ran: reply["ran"].as_bool().unwrap_or(false), reused: reply["reused"] == true })
+    }
+
+    fn close(&self, pane_id: &str) -> Result<(), String> {
+        let answer = ask_webview(self.0, "mcp-close-pane", json!({ "paneId": pane_id }))?;
+        if answer.is_error {
+            return Err(answer.text);
+        }
+        Ok(())
     }
 
     fn notify(&self, title: String, body: String) -> Result<(), String> {
@@ -267,6 +275,16 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
             format!("Already showed {} notifications this minute. Try again in {} s.", crate::plugins::NOTIFY_LIMIT, wait.as_secs() + 1)
         })?;
         self.0.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+    }
+
+    fn send(&self, pane_id: &str, text: &str) -> Result<bool, String> {
+        let answer = ask_webview(self.0, "mcp-send-to-agent", json!({ "paneId": pane_id, "text": text }))?;
+        if answer.is_error {
+            return Err(answer.text);
+        }
+        // The window answers `{ submitted }`: it alone knows whether the user lets agents message each other.
+        let reply: Value = serde_json::from_str(&answer.text).map_err(|e| e.to_string())?;
+        Ok(reply["submitted"].as_bool().unwrap_or(false))
     }
 }
 

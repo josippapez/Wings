@@ -286,6 +286,8 @@ export function SettingsDialog(props: {
   onNotifySoundChange: (sound: SoundSettings) => void;
   agentsRunCommands: boolean;
   onAgentsRunCommandsChange: (on: boolean) => void;
+  agentsMessage: boolean;
+  onAgentsMessageChange: (on: boolean) => void;
   /** Plugin pages the + menu offers, and the one the + button opens (null for a terminal). */
   newTabs: NewTabEntry[];
   newTabPage: string;
@@ -486,6 +488,13 @@ export function SettingsDialog(props: {
                   hint="When Claude opens a tab for a command, like a dev server, Wings presses Enter for it. Claude Code still asks you before it opens the tab, unless you allowed open_pane without asking. Off: the command waits for you to press Enter."
                 >
                   <Switch id="agents-run-commands" checked={props.agentsRunCommands} onCheckedChange={props.onAgentsRunCommandsChange} />
+                </Row>
+                <Row
+                  id="agents-message"
+                  label="Let agents message each other"
+                  hint="When an agent, or a plugin like the PR tracker, sends a message to another agent, Wings presses Enter for it, so that agent starts on it. Off: the message waits in its prompt for you to press Enter."
+                >
+                  <Switch id="agents-message" checked={props.agentsMessage} onCheckedChange={props.onAgentsMessageChange} />
                 </Row>
               </Group>
             </TabsContent>

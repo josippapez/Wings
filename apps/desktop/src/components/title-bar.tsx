@@ -15,6 +15,7 @@ import {
   PlusIcon,
   XIcon,
   TerminalIcon,
+  BotIcon,
 } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
@@ -142,7 +143,7 @@ function WithPopover({ button, popover, mount, children }: { button: PluginButto
  * the tab, or a plugin view open as a tab.
  */
 export type TabView =
-  | { id: string; label: PaneLabelInfo; /** What the tab shows: your name for it, or the automatic title made unique. */ title: string; named: boolean; layout: LayoutNode; focusedPane: string; state: AgentState | null; /** Programs its panes run instead of a shell prompt, like `node`. */ running: string[] }
+  | { id: string; label: PaneLabelInfo; /** What the tab shows: your name for it, or the automatic title made unique. */ title: string; named: boolean; layout: LayoutNode; focusedPane: string; state: AgentState | null; /** Programs its panes run instead of a shell prompt, like `node`. */ running: string[]; /** An agent opened it with `open_pane`, so it may reuse or close it. */ byAgent: boolean }
   | { id: string; view: { title: string; icon: string; iconSvg?: string | null } }
   /** A project's page, which is Wings' own and not a plugin's. */
   | { id: string; project: { title: string } };
@@ -334,7 +335,7 @@ export function TitleBar(props: {
                             onAuxClick={(e) => e.button === 1 && props.onClose(tab.id)}
                             onPointerDown={(e) => dragTab(e, tab.id)}
                             onDoubleClick={() => "label" in tab && setEditing(tab.id)}
-                            title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}${"running" in tab && tab.running.length ? `\nRunning ${tab.running.join(", ")}` : ""}`}
+                            title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}${"running" in tab && tab.running.length ? `\nRunning ${tab.running.join(", ")}` : ""}${"byAgent" in tab && tab.byAgent ? "\nOpened by an agent, which may run its next command here or close it" : ""}`}
                             className={cn(
                               "relative h-7 max-w-48 flex-none justify-start gap-1.5 rounded-lg border-0 pr-7 pl-2.5 text-[12px] font-normal after:hidden",
                               active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
@@ -350,6 +351,7 @@ export function TitleBar(props: {
                               <PaneIcon agent={tab.label.agent} />
                             )}
                             <span className="truncate font-medium">{title}</span>
+                            {"byAgent" in tab && tab.byAgent && <BotIcon role="img" aria-label="Opened by an agent" className="size-3 shrink-0 text-muted-foreground" />}
                             {"running" in tab && tab.running.length > 0 && (
                               <span role="img" aria-label={`Running ${tab.running.join(", ")}`} className="size-1.5 shrink-0 rounded-full bg-done motion-safe:animate-pulse" />
                             )}

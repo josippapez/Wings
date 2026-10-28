@@ -147,12 +147,26 @@ pub fn wait(args: &[String]) -> i32 {
         eprintln!("Usage: wings wait <pane id>");
         return 2;
     };
-    let busy = || ask("pane_busy", json!({ "pane": pane })).map(|r| r["busy"] == true);
+    let mut last = Value::Null;
+    let busy = || {
+        ask("pane_busy", json!({ "pane": pane })).map(|r| {
+            let busy = r["busy"] == true;
+            last = r;
+            busy
+        })
+    };
     if let Err(e) = wait_until_done(busy, std::time::Duration::from_secs(1), START_GRACE) {
         return fail(&e);
     }
+    if last["agent"] == true {
+        println!("The agent in pane {pane} finished its turn.");
+        if let Some(id) = last["sessionId"].as_str() {
+            println!("Read its answer with read_session, session_id {id}, or the end of its screen with read_pane.");
+        }
+        return 0;
+    }
     let output = ask("call", json!({ "name": "read_pane", "arguments": { "pane_id": pane, "lines": 30 } }));
-    println!("Pane {pane} finished its command.");
+    println!("Pane {pane} finished its command. Close it with close_pane once you're done with its output.");
     if let Some(text) = output.ok().as_ref().and_then(|r| r.pointer("/content/0/text")).and_then(Value::as_str) {
         println!("\n{text}");
     }

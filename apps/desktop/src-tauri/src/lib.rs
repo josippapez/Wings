@@ -1324,6 +1324,16 @@ fn plugin_focus_pane(state: State<AppState>, plugin_id: String, pane_id: String)
     pane(&state, &pane_id).map(|_| ())
 }
 
+/// A plugin wants to type into an agent's pane: it needs the permission, and the pane has to be open. The window
+/// checks the rest, as it does for an agent's `send_to_agent`.
+#[tauri::command]
+fn plugin_send_to_agent(state: State<AppState>, plugin_id: String, pane_id: String) -> Res<()> {
+    if !plugins::may_send_to_agents(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not send messages to agents"));
+    }
+    pane(&state, &pane_id).map(|_| ())
+}
+
 /// A desktop notification from a plugin, up to `NOTIFY_LIMIT` a minute. Desktop notifications only show a
 /// title and body, so there's no click action.
 #[tauri::command]
@@ -1883,6 +1893,7 @@ pub fn run() {
             plugin_open_url,
             plugin_open_pane,
             plugin_focus_pane,
+            plugin_send_to_agent,
             plugin_notify,
             plugin_tools,
             plugin_tool,

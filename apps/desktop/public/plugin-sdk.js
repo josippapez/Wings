@@ -322,6 +322,8 @@
     openPane: ({ command = null, args = [], cwd = null, placement = "tab" } = {}) => call("openPane", { command, args, cwd, placement }),
     /** Shows an open pane and moves the keyboard to it. Needs `permissions.panes`. */
     focusPane: (paneId) => call("focusPane", { paneId }),
+    /** With `permissions.sendToAgents`: pastes a message into the prompt of the agent in a pane, and resolves `{ submitted }`. */
+    sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
     /**
      * Asks Wings to install a command-line tool the plugin runs, like "gh", when `exec` rejected with
      * "<program> is not installed or not on PATH". Wings shows its own confirmation and installs it the vendor's

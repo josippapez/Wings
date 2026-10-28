@@ -572,6 +572,13 @@ interface Wings {
   /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
   focusPane(paneId: string): Promise<void>;
   /**
+   * Needs `permissions.sendToAgents` and Wings 0.1.87. Pastes `text` into the prompt of the agent (Claude Code or
+   * opencode) running in a pane, after a first line naming your plugin. Wings presses Enter only while the user turned
+   * on "Let agents message each other"; `submitted` says whether it did. Rejects for a pane without an agent, an agent
+   * waiting on a permission prompt, or one with unsent text in its prompt. Up to 8 KB; newlines and tabs are fine.
+   */
+  sendToAgent(paneId: string, text: string): Promise<{ submitted: boolean }>;
+  /**
    * After `exec` rejected with "<program> is not installed or not on PATH": Wings asks you, installs it in a new tab
    * and restarts the plugin once it's there. Only `az`, `gh` and `glab`, and only ones `permissions.exec` names.
    * Resolves true once the install started (or it's already installed), false if you cancelled.
