@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useRef, useState } from "react";
 import { BellIcon, BotIcon, CodeIcon, SlidersHorizontalIcon, KeyboardIcon, PuzzleIcon, ScrollTextIcon, TextCursorIcon, TypeIcon } from "lucide-react";
+import { Harnesses } from "@/components/harnesses";
 import { PluginsSection } from "@/components/plugins-section";
 import { defaultEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import { api, type AiEngine, type AiStatus, type AvailablePlugin, type PluginView } from "@/lib/api";
@@ -291,6 +292,8 @@ export function SettingsDialog(props: {
   onNewTabPageChange: (choice: string) => void;
   newProjectOpens: NewProjectOpens;
   onNewProjectOpensChange: (value: NewProjectOpens) => void;
+  /** Opens a tab in the project on screen with `input` typed into it, for an agent's install or sign-in; null with no project. */
+  onRunInTab: ((input: string) => void) | null;
 }) {
   const { keys, look, host } = props;
   const setLook = (patch: Partial<TerminalLook>) => props.onLookChange({ ...look, ...patch });
@@ -457,6 +460,7 @@ export function SettingsDialog(props: {
             </TabsContent>
             <TabsContent value="agents" className="flex flex-col gap-3 p-6">
               <h3 className="text-[15px] font-semibold">Agents</h3>
+              <Harnesses open={props.open && props.section === "agents"} onRunInTab={props.onRunInTab} />
               <AiSettings />
               <Group>
                 <Row

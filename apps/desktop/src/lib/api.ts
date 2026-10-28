@@ -145,6 +145,20 @@ export type ToolStatus = { program: string; name: string; installed: boolean; co
 /** macOS kept another app's data from a program Wings ran, and won't ask you about it. */
 export type PrivacyBlocked = { folder: string; name: string; program: string };
 export type McpStatus = { claude: boolean; connected: boolean; statusline: boolean; alwaysLoad: boolean };
+/** A coding agent CLI: whether it's on this Mac and signed in. `login` and `install` come from Wings' own table. */
+export type HarnessStatus = {
+  id: string;
+  name: string;
+  installed: boolean;
+  version: string | null;
+  auth: "signedIn" | "signedOut" | "unknown";
+  account: string | null;
+  /** Why the sign-in state is unknown, when the CLI said. */
+  note: string | null;
+  login: string;
+  install: string;
+  docs: string;
+};
 /** Whether OpenCode is installed, and its global config has the Wings MCP server. */
 export type OpencodeMcpStatus = { opencode: boolean; connected: boolean };
 /** The `wings` terminal command. `available` is false in dev builds and on Windows. */
@@ -268,6 +282,8 @@ export const api = {
   /** Re-registers the Wings MCP server so its tools load at session start, or back behind tool search. */
   mcpSetAlwaysLoad: (on: boolean) => invoke<void>("mcp_set_always_load", { on }),
   opencodeMcpStatus: () => invoke<OpencodeMcpStatus>("opencode_mcp_status"),
+  /** Runs each coding agent's CLI to see if it's installed and signed in. Takes a few seconds. */
+  harnesses: () => invoke<HarnessStatus[]>("harnesses_status"),
   /** Adds the Wings MCP server to OpenCode's global config, keeping fields you set on it. */
   opencodeMcpConnect: () => invoke<void>("opencode_mcp_connect"),
   opencodeMcpDisconnect: () => invoke<void>("opencode_mcp_disconnect"),

@@ -108,10 +108,10 @@ const opencode: Agent<{ opencode: boolean; connected: boolean }> = {
 };
 
 /** Binds an agent to its own status type, so agents with different status shapes share one list. */
-const entry = <S,>(agent: Agent<S>) => ({ id: agent.id, render: (open: boolean) => <AgentConnection key={agent.id} agent={agent} open={open} /> });
+const entry = <S,>(agent: Agent<S>) => ({ id: agent.id, render: (open: boolean, label?: string) => <AgentConnection key={agent.id} agent={agent} open={open} label={label} /> });
 const AGENTS = [entry(claude), entry(opencode)];
 
-function AgentConnection<S>({ agent, open }: { agent: Agent<S>; open: boolean }) {
+function AgentConnection<S>({ agent, open, label }: { agent: Agent<S>; open: boolean; label?: string }) {
   const [status, setStatus] = useState<S | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,7 +133,7 @@ function AgentConnection<S>({ agent, open }: { agent: Agent<S>; open: boolean })
   const state = agent.state(status);
   return (
     <Connection
-      name={agent.name}
+      name={label ?? agent.name}
       state={state}
       summary={agent.summary(state)}
       busy={busy}
@@ -156,6 +156,11 @@ function AgentConnection<S>({ agent, open }: { agent: Agent<S>; open: boolean })
       {agent.extra?.(status, run, busy)}
     </Connection>
   );
+}
+
+/** One agent's chip, under another name where the agent is already named, like its row in Settings > Agents. */
+export function AgentConnectionChip({ id, label, open }: { id: string; label: string; open: boolean }) {
+  return AGENTS.find((a) => a.id === id)?.render(open, label) ?? null;
 }
 
 /** The agents Wings connects to, one chip each. */

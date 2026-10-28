@@ -2034,7 +2034,16 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState} />
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
+          onRunInTab={
+            activeSpace
+              ? (input) => {
+                  openTab(activeSpace.id, input);
+                  setSettingsOpen(false);
+                }
+              : null
+          }
+        />
         <ToolInstallDialog
           project={activeSpace}
           paneInfo={paneInfo}

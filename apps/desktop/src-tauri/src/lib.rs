@@ -8,6 +8,7 @@ mod detect;
 mod disk_usage;
 mod editors;
 mod gitwatch;
+mod harnesses;
 mod history;
 mod hotkey;
 mod menu;
@@ -518,6 +519,12 @@ fn cli_dismiss(app: AppHandle) -> Res<()> {
     let dir = app.path().app_data_dir().map_err(err)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
     std::fs::write(dir.join(CLI_ASKED), "").map_err(err)
+}
+
+/// Each coding agent CLI: installed, its version, and whether it's signed in. Runs their CLIs, so it takes a few seconds.
+#[tauri::command(async)]
+fn harnesses_status() -> Vec<harnesses::HarnessStatus> {
+    harnesses::check_all()
 }
 
 /// Whether Claude Code has the Wings MCP server and status line. Reading Claude's own list keeps Wings from guessing.
@@ -1855,6 +1862,7 @@ pub fn run() {
             mcp_set_always_load,
             mcp_disconnect,
             opencode_mcp_status,
+            harnesses_status,
             opencode_mcp_connect,
             opencode_mcp_disconnect,
             privacy_open_settings,
