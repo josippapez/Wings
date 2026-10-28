@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.88 · 2026-10-28
+
+- **An agent's commands run below it.** When an agent runs a build or tests in a terminal, it opens as a split below the agent's pane instead of a new tab, and your typing stays with the agent. A chip on the agent's pane, like "1 terminal", hides and shows them. They keep running while hidden, and a new command shows them again. A dev server the agent opens for you still gets its own tab.
+- **PR news reaches the agent.** The PR tracker can tell the agent working on a PR's branch when its checks fail, someone leaves a review comment, or it gets merge conflicts. It checks those PRs every 2 minutes, also while Wings is in the background. Turn it on in the PR tracker's settings.
+
 ## 0.1.87 · 2026-10-28
 
 - **Agents can message each other.** An agent can send a message to the agent in another pane, for example to hand it a task, and then wait for it to finish its turn. Plugins can do the same. Wings presses Enter for them only if you turn on "Let agents message each other" in Settings > Agents. Otherwise the message waits in that agent's prompt for you.
