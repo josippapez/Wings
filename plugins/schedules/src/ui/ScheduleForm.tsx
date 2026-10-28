@@ -12,6 +12,8 @@ interface Props {
   schedule: Schedule | null;
   watch: WatchView | null;
   projects: { id: string; name: string }[];
+  /** The project a new entry starts on: the one the tab is in. */
+  here: string | null;
   busy: boolean;
   /** What the last save failed with. */
   error: string | null;
@@ -22,11 +24,11 @@ interface Props {
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
 
-export function ScheduleForm({ schedule, watch, projects, busy, error, onSave, onSaveWatch, onCancel }: Props) {
+export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel }: Props) {
   // An entry keeps its kind: only a new one picks it.
   const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
   const [name, setName] = useState(schedule?.name ?? "");
-  const [projectId, setProjectId] = useState(schedule?.projectId ?? watch?.projectId ?? projects[0]?.id ?? "");
+  const [projectId, setProjectId] = useState(schedule?.projectId ?? watch?.projectId ?? here ?? projects[0]?.id ?? "");
   const [agent, setAgent] = useState<Agent>(schedule?.agent ?? watch?.agent ?? "claude");
   const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
   const [template, setTemplate] = useState(watch?.prompt ?? DEFAULT_PROMPT);

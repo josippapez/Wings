@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
 import { useQuery } from "wings-plugin-sdk/react";
-import { useViewArgs } from "wings-plugin-ui";
+import { useProject, useViewArgs } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 import { ScheduleView, type InboxStart } from "../ui/ScheduleView";
 
@@ -17,6 +17,7 @@ const SIGN_IN_TIMEOUT_MS = 320_000;
 
 export default function SchedulesPage() {
   const { data, error } = useQuery(ch, "state", undefined);
+  const here = useProject()?.id ?? null;
   // A notification's Review button opens the tab with the entry its ticket is waiting on, and its Start button with the ticket to start.
   // A tab that is open takes new args by reloading, and the same args only bring it to the front, so this runs once for each.
   const args = useViewArgs((raw) => {
@@ -49,6 +50,7 @@ export default function SchedulesPage() {
       state={data}
       error={error?.message ?? null}
       now={now}
+      here={here}
       focusWatch={focusWatch}
       inbox={inbox}
       onSave={(id, draft) => ch.ask("save", { id, draft })}

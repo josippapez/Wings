@@ -136,6 +136,8 @@ const waitingState = { schedules, watches: waitingWatches, projects, signInCode:
 export const states = {
   list: { element: <ScheduleView {...base} /> },
   empty: { element: <ScheduleView {...base} state={{ schedules: [], watches: [], projects, signInCode: null }} /> },
+  "other-project": { element: <ScheduleView {...base} here="p3" /> },
+  "this-project": { element: <ScheduleView {...base} here="p1" /> },
   loading: { element: <ScheduleView {...base} state={null} /> },
   error: { element: <ScheduleView {...base} state={null} error="Wings didn't answer. Try again." /> },
   add: { element: <Steps steps={[{ click: "Add entry" }]}><ScheduleView {...base} /></Steps> },

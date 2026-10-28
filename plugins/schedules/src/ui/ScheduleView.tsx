@@ -22,6 +22,8 @@ export interface ViewProps {
   /** Why it couldn't load. */
   error: string | null;
   now: number;
+  /** The project the tab is in: the page shows its entries, until you ask for all. */
+  here?: string | null;
   /** The entry a notification sent you here for: its waiting tickets come first. */
   focusWatch?: string | null;
   inbox?: InboxStart | null;
@@ -40,12 +42,13 @@ export interface ViewProps {
   onOpenUrl: (url: string) => Promise<unknown>;
 }
 
-export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl }: ViewProps) {
+export function ScheduleView({ state, error, now, here = null, focusWatch, inbox, onSave, onToggle, onRemove, onRun, onSaveWatch, onToggleWatch, onRemoveWatch, onCheckWatch, onStart, onDismiss, onSignIn, onInstall, onOpenUrl }: ViewProps) {
   // `false` is the list, `null` a new entry, else the schedule or "assigned" entry being changed.
   const [editing, setEditing] = useState<string | null | false>(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const action = useAction();
   const [checking, setChecking] = useState<string | null>(null);
+  const [everywhere, setEverywhere] = useState(false);
 
   if (error && !state) {
     return (
@@ -62,12 +65,16 @@ export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onT
     );
   }
 
-  const { schedules, watches, projects, signInCode } = state;
+  const { projects, signInCode } = state;
+  const inScope = (projectId: string, id: string) => everywhere || !here || projectId === here || id === focusWatch;
+  const schedules = state.schedules.filter((s) => inScope(s.projectId, s.id));
+  const watches = state.watches.filter((w) => inScope(w.projectId, w.id));
+  const elsewhere = state.schedules.length + state.watches.length - schedules.length - watches.length;
   const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? "Missing project";
 
   if (editing !== false) {
-    const schedule = schedules.find((s) => s.id === editing) ?? null;
-    const watch = watches.find((w) => w.id === editing) ?? null;
+    const schedule = state.schedules.find((s) => s.id === editing) ?? null;
+    const watch = state.watches.find((w) => w.id === editing) ?? null;
     return (
       <Page
         toolbar={
@@ -84,6 +91,7 @@ export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onT
           schedule={schedule}
           watch={watch}
           projects={projects}
+          here={here}
           busy={action.busy}
           error={action.error}
           onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
@@ -105,9 +113,29 @@ export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onT
     .flatMap((w) => w.waiting.map((ticket) => ({ w, ticket })))
     .sort((a, b) => Number(b.w.id === focusWatch) - Number(a.w.id === focusWatch));
   const empty = schedules.length === 0 && watches.length === 0;
+  const scope =
+    here && (everywhere || elsewhere > 0) ? (
+      <Button variant="ghost" onClick={() => setEverywhere(!everywhere)}>
+        {everywhere ? "This project" : `All projects (${elsewhere} more)`}
+      </Button>
+    ) : null;
 
   return (
-    <Page toolbar={<Toolbar title="Schedules" actions={empty ? undefined : add} />}>
+    <Page
+      toolbar={
+        <Toolbar
+          title="Schedules"
+          actions={
+            empty && !scope ? undefined : (
+              <Row gap="s">
+                {scope}
+                {empty ? null : add}
+              </Row>
+            )
+          }
+        />
+      }
+    >
       <Stack gap="l">
         {action.error ? <Notice tone="danger">{action.error}</Notice> : null}
         {error ? <Notice tone="warn">{error}</Notice> : null}
@@ -152,7 +180,7 @@ export function ScheduleView({ state, error, now, focusWatch, inbox, onSave, onT
           </Stack>
         ) : null}
         {empty ? (
-          <Empty title="Nothing set up yet" description="Pick a project and a prompt, and Wings starts the agent for you at the time you choose, or when a ticket is assigned to you. Wings has to be running.">
+          <Empty title={elsewhere > 0 ? "Nothing set up for this project" : "Nothing set up yet"} description="Pick a project and a prompt, and Wings starts the agent for you at the time you choose, or when a ticket is assigned to you. Wings has to be running.">
             {add}
           </Empty>
         ) : (
