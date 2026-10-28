@@ -9,3 +9,7 @@
   flex: 1;
   min-width: 0;
 }
+/* The list items sit 6px inside the page edge, so a heading above them does too. */
+.sc-heading {
+  padding-inline: 6px;
+}

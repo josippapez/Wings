@@ -1,0 +1,247 @@
+// The "When something is assigned to me" entries: one CLI call per entry every few minutes, a notification for each ticket
+// that is new, and Start, which makes the worktree and opens the agent in it.
+// Every read-then-write of the entries goes through `queue`, so a tick, a manual check and an edit never interleave.
+
+import { errorMessage, serial, singleFlight } from "wings-plugin-sdk/async";
+import { cli, CliError, lastLine, type Cli } from "wings-plugin-sdk/cli";
+import { gitOk } from "wings-plugin-sdk/git";
+import { ch } from "../lib/messages";
+import { AGENTS, type Run } from "../lib/schedule";
+import {
+  applyCheck, branchName, cleanWatchDraft, diskProblem, fillPrompt, keyOf, listCommand, parseTickets, sourceOf, SOURCE_LABELS, UNSUPPORTED,
+  type Check, type Source, type Ticket, type Watch,
+} from "../lib/assigned";
+import { readWatches, writeWatches } from "./store";
+
+/** A check is one CLI call, so it runs while Wings is in the background too: that is when a new ticket is wanted. */
+export const CHECK_MS = 5 * 60_000;
+
+const queue = serial();
+
+const hostOf = (key: string | undefined) => (key ?? "").slice((key ?? "").indexOf(":") + 1);
+
+const CLIS: Record<"az" | "gh" | "glab", Cli> = {
+  az: cli("az", { signedOut: /login/i, signIn: ["login", "--allow-no-subscriptions", "--output", "none"] }),
+  gh: cli("gh", {
+    // No token prints `gh auth login` or GH_TOKEN; an expired one gh can renew prints "Try authenticating with: gh auth refresh".
+    signedOut: /gh auth login|GH_TOKEN|Try authenticating with:\s+gh auth refresh\b/,
+    signIn: (key) => ["auth", "login", "--web", "--clipboard", "--hostname", hostOf(key)],
+  }),
+  glab: cli("glab", {
+    // A private project looks missing (404) to a signed-out user, so ask glab whether it is signed in.
+    signedOut: async ({ stderr }, key) => /\b401\b/.test(stderr) || (/\b404\b/.test(stderr) && (await wings.exec("glab", ["auth", "status", "--hostname", hostOf(key)])).code !== 0),
+    signIn: (key) => ["auth", "login", "--web", "--hostname", hostOf(key)],
+  }),
+};
+
+/** The remote of each project, read once: a check is then the one call. Forgotten on Try again. */
+const sources = new Map<string, Source>();
+
+async function sourceFor(project: { id: string; path: string }): Promise<Source> {
+  const key = `${project.id}\n${project.path}`;
+  let source = sources.get(key);
+  if (!source) {
+    source = sourceOf(await gitOk(project.path, ["remote", "get-url", "origin"]));
+    sources.set(key, source);
+  }
+  return source;
+}
+
+const problemOf = (e: unknown, source: Source, program: string): Pick<Check, "error" | "problem"> => {
+  if (e instanceof CliError && e.kind === "missing") return { error: `The ${program} command isn't installed.`, problem: "missing" };
+  if (e instanceof CliError && e.kind === "signed-out") return { error: `Sign in to ${SOURCE_LABELS[source.kind]} to see what is assigned to you.`, problem: "signed-out" };
+  return { error: lastLine(errorMessage(e)) || "The check failed." };
+};
+
+/** Looks for what is assigned to you in one entry's project and records what it found. */
+async function checkOne(id: string): Promise<void> {
+  const w = (await readWatches()).find((x) => x.id === id);
+  if (!w) return;
+  const project = (await wings.projects()).find((p) => p.id === w.projectId);
+  const at = Date.now();
+  let check: Check;
+  let source = w.source;
+  let tickets: Ticket[] | null = null;
+  if (!project) {
+    check = { at, ok: false, error: "The project is no longer in Wings." };
+  } else {
+    source = await sourceFor(project);
+    const command = listCommand(source);
+    if (!command) {
+      check = { at, ok: false, error: UNSUPPORTED };
+    } else {
+      try {
+        tickets = parseTickets(source, await CLIS[command.program].json(command.args, { key: keyOf(source), cwd: project.path, empty: [] }));
+        check = { at, ok: true, count: tickets.length };
+      } catch (e) {
+        check = { at, ok: false, ...problemOf(e, source, command.program) };
+      }
+    }
+  }
+  await queue(async () => {
+    const list = await readWatches();
+    const current = list.find((x) => x.id === id);
+    if (!current) return;
+    let next: Watch = { ...current, source, lastCheck: check };
+    let fresh: ReturnType<typeof applyCheck>["fresh"] = [];
+    // Paused while the call ran: what it found is not looked at.
+    if (tickets && current.enabled) ({ watch: next, fresh } = applyCheck(next, tickets, at));
+    await writeWatches(list.map((x) => (x.id === id ? next : x)));
+    for (const t of fresh) {
+      wings
+        .notify({
+          title: `Assigned: ${t.title}`,
+          body: `${project?.name ?? "A project"} · Start ${AGENTS[w.agent].label} on it in a new worktree?`,
+          projectId: project?.id,
+          actions: [{ label: "Review", open: { view: "schedules", args: { waiting: id } } }],
+        })
+        .catch(console.error);
+    }
+  });
+}
+
+/** One call for each enabled entry. */
+export const checkAll = singleFlight(async () => {
+  for (const w of (await readWatches()).filter((x) => x.enabled)) await checkOne(w.id).catch(console.error);
+});
+
+const update = (id: string, change: (w: Watch) => Watch) =>
+  queue(async () => {
+    const list = await readWatches();
+    if (list.some((w) => w.id === id)) await writeWatches(list.map((w) => (w.id === id ? change(w) : w)));
+  });
+
+const find = async (id: string) => {
+  const w = (await readWatches()).find((x) => x.id === id);
+  if (!w) throw new Error("That entry is gone.");
+  return w;
+};
+
+const starting = new Set<string>();
+
+/** Makes the worktree for a waiting ticket and opens the agent in it, in a tab behind the one on screen. */
+async function startWaiting(id: string, ticketId: string): Promise<void> {
+  const key = `${id}\n${ticketId}`;
+  if (starting.has(key)) throw new Error("That one is already starting.");
+  starting.add(key);
+  try {
+    const w = await find(id);
+    const ticket = w.waiting.find((t) => t.id === ticketId);
+    if (!ticket) throw new Error("That ticket isn't waiting any more.");
+    const at = Date.now();
+    let run: Run;
+    let madeWorktree = false;
+    let target = "";
+    let projectId: string | undefined;
+    try {
+      const project = (await wings.projects()).find((p) => p.id === w.projectId);
+      if (!project) throw new Error("The project is no longer in Wings.");
+      const problem = diskProblem(await wings.disks(), project.path, w.minFreeGb);
+      if (problem) throw new Error(problem);
+      const prompt = fillPrompt(w.prompt, ticket);
+      const branch = branchName(ticket);
+      const made = await wings.createWorktree({ projectId: project.id, branch });
+      madeWorktree = true;
+      projectId = made.projectId;
+      target = branch;
+      const { paneId } = await wings.openPane({ command: AGENTS[w.agent].command, args: [prompt], cwd: made.path, focus: false });
+      run = { at, paneId, ok: true };
+    } catch (e) {
+      run = { at, ok: false, error: madeWorktree ? `Made the worktree, but couldn't start the agent: ${errorMessage(e)}` : errorMessage(e) };
+    }
+    // A ticket whose worktree exists isn't offered again: Start would only fail on the branch.
+    await update(id, (x) => ({ ...x, lastRun: run, waiting: run.ok || madeWorktree ? x.waiting.filter((t) => t.id !== ticketId) : x.waiting }));
+    if (!run.ok) throw new Error(run.error);
+    wings
+      .notify({ title: `Started ${ticket.title}`, body: `${AGENTS[w.agent].label} on ${target}`, projectId, actions: [{ label: "Open Schedules", open: { view: "schedules" } }] })
+      .catch(console.error);
+  } finally {
+    starting.delete(key);
+  }
+}
+
+let signInCode: string | null = null;
+export const currentSignInCode = () => signInCode;
+
+const cliOf = async (id: string) => {
+  const { source } = await find(id);
+  const command = source && listCommand(source);
+  if (!source || !command) throw new Error("There is no CLI to set up for this entry.");
+  return { cli: CLIS[command.program], key: keyOf(source), github: source.kind === "github" ? source.host : null };
+};
+
+export function serveAssigned() {
+  ch.answer("saveWatch", ({ id, draft }) =>
+    queue(async () => {
+      const clean = cleanWatchDraft(draft);
+      const list = await readWatches();
+      sources.clear();
+      let saved: Watch;
+      if (id === null) {
+        saved = { ...clean, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, enabled: true, primed: false, seen: [], waiting: [] };
+        await writeWatches([...list, saved]);
+      } else {
+        const old = list.find((w) => w.id === id);
+        if (!old) throw new Error("That entry is gone.");
+        // Another project has other tickets, so it starts over: nothing it already has is asked about.
+        const moved = old.projectId !== clean.projectId;
+        saved = { ...old, ...clean, ...(moved ? { primed: false, seen: [], waiting: [], source: undefined, lastCheck: undefined } : {}) };
+        await writeWatches(list.map((w) => (w.id === id ? saved : w)));
+      }
+      if (saved.enabled) void checkOne(saved.id).catch(console.error);
+    }),
+  );
+
+  ch.answer("toggleWatch", ({ id }) =>
+    queue(async () => {
+      const list = await readWatches();
+      const old = list.find((w) => w.id === id);
+      if (!old) return;
+      // What was assigned while it was paused is not asked about: it starts over from what is assigned on resume.
+      await writeWatches(list.map((w) => (w.id === id ? { ...w, enabled: !w.enabled, ...(w.enabled ? {} : { primed: false }) } : w)));
+      if (!old.enabled) void checkOne(id).catch(console.error);
+    }),
+  );
+
+  ch.answer("removeWatch", ({ id }) => queue(async () => writeWatches((await readWatches()).filter((w) => w.id !== id))));
+  ch.answer("checkWatch", async ({ id }) => {
+    sources.clear();
+    await find(id);
+    await checkOne(id);
+  });
+  ch.answer("startWaiting", ({ id, ticketId }) => startWaiting(id, ticketId));
+  ch.answer("dismissWaiting", ({ id, ticketId }) => update(id, (w) => ({ ...w, waiting: w.waiting.filter((t) => t.id !== ticketId) })));
+
+  ch.answer("install", async ({ id }) => void (await (await cliOf(id)).cli.install()));
+  ch.answer("signIn", async ({ id }) => {
+    const { cli: c, key, github } = await cliOf(id);
+    try {
+      await c.signIn(key, {
+        // gh doesn't open the browser without a terminal: it prints a one-time code and a URL.
+        onOutput(line) {
+          if (!github) return;
+          const code = line.match(/code(?::| \()\s*([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1];
+          if (code) (signInCode = code), ch.refresh("state");
+          const url = line.match(new RegExp(`https://${github.replace(/\./g, "\\.")}/\\S+`))?.[0];
+          if (url) void wings.openUrl(url).catch(console.error);
+        },
+      });
+    } finally {
+      signInCode = null;
+      ch.refresh("state");
+    }
+  });
+
+  // After Try again or a sign-in the remotes are read again and the entries checked.
+  for (const c of Object.values(CLIS)) {
+    c.onRetry(() => {
+      sources.clear();
+      return checkAll();
+    });
+  }
+}
+
+export function pollAssigned() {
+  void checkAll().catch(console.error);
+  setInterval(() => void checkAll().catch(console.error), CHECK_MS);
+}

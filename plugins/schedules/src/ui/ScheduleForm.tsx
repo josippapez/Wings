@@ -1,28 +1,36 @@
-// The form that adds or changes a schedule.
+// The form that adds or changes a schedule, or an entry that waits for something to be assigned to you.
 
 import { useState, type FormEvent } from "react";
 import { Button, Card, Chip, Chips, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
+import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, type WatchDraft } from "../lib/assigned";
+import type { WatchView } from "../lib/messages";
 import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
 import "./schedules.css";
 
 interface Props {
-  /** The schedule being changed, or null for a new one. */
+  /** The schedule or "assigned" entry being changed, or neither for a new one. */
   schedule: Schedule | null;
+  watch: WatchView | null;
   projects: { id: string; name: string }[];
   busy: boolean;
   /** What the last save failed with. */
   error: string | null;
   onSave: (draft: Draft) => void;
+  onSaveWatch: (draft: WatchDraft) => void;
   onCancel: () => void;
 }
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
 
-export function ScheduleForm({ schedule, projects, busy, error, onSave, onCancel }: Props) {
+export function ScheduleForm({ schedule, watch, projects, busy, error, onSave, onSaveWatch, onCancel }: Props) {
+  // An entry keeps its kind: only a new one picks it.
+  const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
   const [name, setName] = useState(schedule?.name ?? "");
-  const [projectId, setProjectId] = useState(schedule?.projectId ?? projects[0]?.id ?? "");
-  const [agent, setAgent] = useState<Agent>(schedule?.agent ?? "claude");
+  const [projectId, setProjectId] = useState(schedule?.projectId ?? watch?.projectId ?? projects[0]?.id ?? "");
+  const [agent, setAgent] = useState<Agent>(schedule?.agent ?? watch?.agent ?? "claude");
   const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
+  const [template, setTemplate] = useState(watch?.prompt ?? DEFAULT_PROMPT);
+  const [minFree, setMinFree] = useState(String(watch?.minFreeGb ?? DEFAULT_MIN_FREE_GB));
   const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
   const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
@@ -30,16 +38,32 @@ export function ScheduleForm({ schedule, projects, busy, error, onSave, onCancel
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (kind === "assigned") return onSaveWatch({ projectId, agent, prompt: template, minFreeGb: Number(minFree) });
     onSave({ name, projectId, agent, prompt, when: mode === "every" ? { kind: "every", hours } : { kind: "daily", time, days } });
   };
   const toggleDay = (n: number) => setDays(days.includes(n) ? days.filter((d) => d !== n) : [...days, n]);
 
   return (
-    <Card as="form" className="sc-form" onSubmit={submit} aria-label={schedule ? "Edit schedule" : "New schedule"}>
+    <Card as="form" className="sc-form" onSubmit={submit} aria-label={schedule || watch ? "Edit entry" : "New entry"}>
       <Stack gap="l">
-        <Field label="Name" hint="Optional. Without one, the list shows the start of the prompt.">
-          <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Morning review" />
-        </Field>
+        {schedule || watch ? null : (
+          <FieldGroup label="Start an agent">
+            <Chips
+              label="Start an agent"
+              value={kind}
+              onChange={setKind}
+              options={[
+                { value: "schedule", label: "On a schedule" },
+                { value: "assigned", label: "When something is assigned to me" },
+              ]}
+            />
+          </FieldGroup>
+        )}
+        {kind === "schedule" ? (
+          <Field label="Name" hint="Optional. Without one, the list shows the start of the prompt.">
+            <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Morning review" />
+          </Field>
+        ) : null}
         <Row gap="l" wrap align="start">
           <Field label="Project">
             <Select
@@ -53,52 +77,66 @@ export function ScheduleForm({ schedule, projects, busy, error, onSave, onCancel
             <Chips label="Agent" value={agent} onChange={setAgent} options={(Object.keys(AGENTS) as Agent[]).map((value) => ({ value, label: AGENTS[value].label }))} />
           </Field>
         </Row>
-        <Field label="Prompt" hint="What the agent is asked to do. It goes in as one line: line breaks become spaces.">
-          <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="Check yesterday's failed CI runs and open a fix for the flaky test." />
-        </Field>
-        <FieldGroup label="When">
-          <Stack gap="m">
-            <Chips
-              label="When"
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: "daily", label: "At a time of day" },
-                { value: "every", label: "Every few hours" },
-              ]}
-            />
-            {mode === "every" ? (
-              <Field label="Every">
-                <Select
-                  label="Every"
-                  value={String(hours)}
-                  onChange={(v) => setHours(Number(v))}
-                  options={EVERY_HOURS.map((h) => ({ value: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+        {kind === "schedule" ? (
+          <>
+            <Field label="Prompt" hint="What the agent is asked to do. It goes in as one line: line breaks become spaces.">
+              <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="Check yesterday's failed CI runs and open a fix for the flaky test." />
+            </Field>
+            <FieldGroup label="When">
+              <Stack gap="m">
+                <Chips
+                  label="When"
+                  value={mode}
+                  onChange={setMode}
+                  options={[
+                    { value: "daily", label: "At a time of day" },
+                    { value: "every", label: "Every few hours" },
+                  ]}
                 />
-              </Field>
-            ) : (
-              <Row gap="l" wrap align="start">
-                <Field label="Time">
-                  <TextInput type="time" value={time} onChange={(e) => setTime(e.target.value)} required />
-                </Field>
-                <FieldGroup label="Days">
-                  <Row gap="s" wrap>
-                    {DAYS.map((label, i) => (
-                      <Chip key={label} pressed={days.includes(DAY_NUMBERS[i])} onClick={() => toggleDay(DAY_NUMBERS[i])}>
-                        {label}
-                      </Chip>
-                    ))}
+                {mode === "every" ? (
+                  <Field label="Every">
+                    <Select
+                      label="Every"
+                      value={String(hours)}
+                      onChange={(v) => setHours(Number(v))}
+                      options={EVERY_HOURS.map((h) => ({ value: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+                    />
+                  </Field>
+                ) : (
+                  <Row gap="l" wrap align="start">
+                    <Field label="Time">
+                      <TextInput type="time" value={time} onChange={(e) => setTime(e.target.value)} required />
+                    </Field>
+                    <FieldGroup label="Days">
+                      <Row gap="s" wrap>
+                        {DAYS.map((label, i) => (
+                          <Chip key={label} pressed={days.includes(DAY_NUMBERS[i])} onClick={() => toggleDay(DAY_NUMBERS[i])}>
+                            {label}
+                          </Chip>
+                        ))}
+                      </Row>
+                    </FieldGroup>
                   </Row>
-                </FieldGroup>
-              </Row>
-            )}
-          </Stack>
-        </FieldGroup>
-        {projects.length === 0 ? <Notice tone="warn">Add a project in Wings first. A schedule runs inside one.</Notice> : null}
+                )}
+              </Stack>
+            </FieldGroup>
+          </>
+        ) : (
+          <>
+            <Field label="Prompt" hint="Sent to the agent as one line. {id}, {title} and {url} become the ticket's number, title and link.">
+              <Textarea value={template} onChange={(e) => setTemplate(e.target.value)} rows={4} />
+            </Field>
+            <Field label="Keep free" hint="In GB. Wings won't make the worktree when the disk it goes on has less room than this.">
+              <TextInput type="number" min={0} step={1} value={minFree} onChange={(e) => setMinFree(e.target.value)} required />
+            </Field>
+            <Notice>Wings asks the project's Azure DevOps, GitHub or GitLab what is assigned to you every 5 minutes, using its origin remote. You are asked first: nothing starts until you press Start.</Notice>
+          </>
+        )}
+        {projects.length === 0 ? <Notice tone="warn">Add a project in Wings first. An entry runs inside one.</Notice> : null}
         {error ? <Notice tone="danger">{error}</Notice> : null}
         <Row gap="m" wrap>
           <Button type="submit" busy={busy} disabled={projects.length === 0}>
-            {schedule ? "Save" : "Add schedule"}
+            {schedule || watch ? "Save" : "Add entry"}
           </Button>
           <Button variant="ghost" onClick={onCancel}>
             Cancel

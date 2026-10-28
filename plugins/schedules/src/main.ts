@@ -1,26 +1,17 @@
 // The Schedules main script: a timer that starts the agents that are due, and the changes the Schedules page asks for.
 // Every read-then-write of the schedules goes through `queue`, so two ticks, or a tick and an edit, never interleave.
+// The "assigned" entries have their own timer and queue in main/assigned.ts.
 
 import { errorMessage, serial } from "wings-plugin-sdk/async";
 import { ch, type State } from "./lib/messages";
+import { currentSignInCode, pollAssigned, serveAssigned } from "./main/assigned";
+import { readSchedules as read, readWatches, syncSections, writeSchedules as write } from "./main/store";
 import { AGENTS, claim, cleanDraft, dueAt, nameOf, onStart, type Run, type Schedule } from "./lib/schedule";
 
-const KEY = "schedules";
 /** A tick is a few comparisons, so it runs while Wings is in the background too: that is when a run is wanted. */
 const TICK_MS = 30_000;
 
 const queue = serial();
-
-const read = async (): Promise<Schedule[]> => {
-  const raw = await wings.storage.get(KEY);
-  return Array.isArray(raw) ? (raw as Schedule[]) : [];
-};
-
-/** Saves the schedules and tells the page. */
-async function write(list: Schedule[]): Promise<void> {
-  await wings.storage.set(KEY, list);
-  ch.refresh("state");
-}
 
 /** Starts the agent for `s`, in a new tab in its project. Never throws: a failure is the run's result. */
 async function start(s: Schedule): Promise<Run> {
@@ -71,10 +62,19 @@ async function tick(): Promise<void> {
 }
 
 ch.serve("state", async (): Promise<State> => {
-  const [schedules, projects] = await Promise.all([read(), wings.projects()]);
-  return { schedules, projects: projects.map(({ id, name }) => ({ id, name })) };
+  const [schedules, watches, projects] = await Promise.all([read(), readWatches(), wings.projects()]);
+  return {
+    schedules,
+    watches: watches.map(({ seen, ...rest }) => rest),
+    projects: projects.map(({ id, name }) => ({ id, name })),
+    signInCode: currentSignInCode(),
+  };
 });
-wings.onProjects(() => ch.refresh("state"));
+wings.onProjects(() => {
+  ch.refresh("state");
+  void syncSections();
+});
+serveAssigned();
 
 ch.answer("save", ({ id, draft }) =>
   queue(async () => {
@@ -117,4 +117,6 @@ queue(async () => {
   const run = () => tick().catch(console.error);
   void run();
   setInterval(run, TICK_MS);
+  pollAssigned();
 }, console.error);
+void syncSections();
