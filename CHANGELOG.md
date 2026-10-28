@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.85 · 2026-10-28
+
+- **See which coding agents you have.** Settings > Agents lists Claude Code, Codex, Cursor CLI, Grok Build and OpenCode, with each one's version and whether you're signed in. Install puts the vendor's install command in a new tab for you to run, and Sign in starts the login there. Cursor CLI shows as installed only: Wings doesn't check its sign-in yet.
+
 ## 0.1.84 · 2026-10-28
 
 - **Diffs open beside your work.** A diff from the PR tab, a pane badge or the session panel opens in a split to the right of that tab, so the PR page or the terminal stays in view. Drag the edge to resize it. The expand button fills the window with it, as before, and the button there docks it back. The diff only shows on the tab you opened it from.
