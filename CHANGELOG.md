@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.90 · 2026-10-28
+
+- **Agents don't pull you away.** When an agent opens a terminal for a command, you stay on the tab and project you're in. Its terminal starts in the background, below the agent or in its own tab, and is there when you go look.
+
 ## 0.1.89 · 2026-10-28
 
 - **Agents take messages and go to sleep again.** Wings took the terminal's own answers to Claude Code starting up for text you had typed and not sent. So every agent looked busy with a draft: it never went to sleep, and other agents couldn't message it.
