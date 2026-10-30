@@ -658,10 +658,34 @@ const ONLY_FLAGS: &[(&str, &[&str], &[&str])] = &[
     ("glab", &["auth", "login"], &["--web", "--hostname"]),
 ];
 
+/// Commands that change a CLI's own settings, which every later call of every plugin then follows, refused whatever the
+/// manifest says: they install code (`gh extension install`, `az extension add`), point a command at any program (`gh
+/// alias set --shell`, `gh config set browser`, `git config core.fsmonitor`), or move where calls and tokens go (`az
+/// devops configure --defaults organization=`, `az cloud set`, `glab config set token --host`).
+const SETTINGS_COMMANDS: &[(&str, &[&str])] = &[
+    ("az", &["config"]),
+    ("az", &["configure"]),
+    ("az", &["cloud"]),
+    ("az", &["extension"]),
+    ("az", &["devops", "configure"]),
+    ("gh", &["config"]),
+    ("gh", &["alias"]),
+    ("gh", &["extension"]),
+    ("gh", &["extensions"]),
+    ("gh", &["ext"]),
+    ("glab", &["config"]),
+    ("glab", &["alias"]),
+    ("git", &["config"]),
+];
+
+/// Whether `args` start with a command's words.
+fn starts_with_words(args: &[String], words: &[&str]) -> bool {
+    words.iter().enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word))
+}
+
 /// A flag that a command in `ONLY_FLAGS` doesn't take.
 fn flag_not_taken<'a>(program: &str, args: &'a [String]) -> Option<&'a String> {
-    let starts = |command: &[&str]| command.iter().enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word));
-    let (_, command, flags) = ONLY_FLAGS.iter().find(|(p, command, _)| *p == program && starts(command))?;
+    let (_, command, flags) = ONLY_FLAGS.iter().find(|(p, command, _)| *p == program && starts_with_words(args, command))?;
     args[command.len()..].iter().find(|a| a.starts_with('-') && !flags.contains(&a.split('=').next().unwrap_or(a)))
 }
 
@@ -685,8 +709,9 @@ fn az_reaches_azure_devops_only(args: &[String]) -> bool {
     let one = |values: Vec<Option<&str>>, ok: fn(&str) -> bool| values.len() == 1 && all(values, ok);
     let resource = || flag_values(args, |n| n == "--resource");
     let devops = |r: &str| r == AZURE_DEVOPS_RESOURCE;
-    // az takes any unambiguous start of a long flag, so `--orga` is `--organization` too.
-    all(flag_values(args, |n| n.len() >= 5 && "--organization".starts_with(n)), azure_devops_url)
+    // az takes any unambiguous start of a long flag, so `--orga` is `--organization` too. `--or` is ambiguous with the
+    // `--org` alias today, but counts too, whatever aliases an az version has.
+    all(flag_values(args, |n| n.len() > 2 && "--organization".starts_with(n)), azure_devops_url)
         && match args.first().map(String::as_str) {
             Some("rest") => one(flag_values(args, |n| matches!(n, "--url" | "--uri" | "-u")), azure_devops_url) && all(resource(), devops),
             Some("account") if args.get(1).is_some_and(|a| a == "get-access-token") => one(resource(), devops),
@@ -782,6 +807,9 @@ fn exec_check(plugin: &Plugin, program: &str, args: &[String]) -> Result<(), Str
     if !may_exec(plugin, program, args) {
         let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
         return Err(format!("{id} may not run {program} {sub}"));
+    }
+    if let Some((_, words)) = SETTINGS_COMMANDS.iter().find(|(p, words)| *p == program && starts_with_words(args, words)) {
+        return Err(format!("{id} may not change {program}'s own settings with {program} {}", words.join(" ")));
     }
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
@@ -2209,12 +2237,43 @@ mod tests {
             &["--organization", "http://127.0.0.1:9/contoso"],
             &["--org=https://dev.azure.com.example.com/contoso"],
             &["--orga", "https://example.com/contoso"],
+            &["--or", "https://example.com/contoso"],
             &["--organization", "https://dev.azure.com@example.com/contoso"],
             &["--organization", "https://dev.azure.com/contoso", "--org", "https://example.com/x"],
             &["--organization"],
         ] {
             assert!(!az_allowed(&call(org)), "{org:?}");
         }
+    }
+
+    #[test]
+    fn no_plugin_changes_a_clis_own_settings() {
+        // Even a manifest that allows every command of a CLI can't change what that CLI does on later calls.
+        let p = plugin(Path::new("/tmp"), &["az", "gh", "glab", "git"], &[]);
+        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        for (program, args) in [
+            ("az", &["devops", "configure", "--defaults", "organization=https://example.com/x"][..]),
+            ("az", &["config", "set", "extension.index_url=https://example.com/index.json"]),
+            ("az", &["configure", "--defaults", "group=x"]),
+            ("az", &["cloud", "set", "--name", "x"]),
+            ("az", &["extension", "add", "--source", "https://example.com/x.whl"]),
+            ("gh", &["extension", "install", "octo/gh-x"]),
+            ("gh", &["ext", "install", "octo/gh-x"]),
+            ("gh", &["alias", "set", "--shell", "x", "touch /tmp/x"]),
+            ("gh", &["config", "set", "browser", "touch /tmp/x"]),
+            ("glab", &["config", "set", "token", "x", "--host", "gitlab.com"]),
+            ("glab", &["alias", "set", "x", "!touch /tmp/x"]),
+            ("git", &["config", "core.fsmonitor", "touch /tmp/x"]),
+        ] {
+            assert!(check(program, args).unwrap_err().contains("own settings"), "{program} {args:?}");
+        }
+        assert_eq!(check("az", &["devops", "invoke", "--area", "core", "--organization", "https://dev.azure.com/o"]), Ok(()));
+        assert_eq!(check("gh", &["pr", "view", "1"]), Ok(()));
+        // A flag before the command can't skip the checks: an entry's words must be the first arguments, and az itself
+        // refuses a command after one (`az --only-show-errors account get-access-token` is "misspelled").
+        let rest = plugin(Path::new("/tmp"), &["az rest [--url --resource -o]"], &[]);
+        let args: Vec<String> = ["--only-show-errors", "rest", "--url", "https://example.com/x"].map(String::from).to_vec();
+        assert!(exec_check(&rest, "az", &args).is_err());
     }
 
     #[test]
