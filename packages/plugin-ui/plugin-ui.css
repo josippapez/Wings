@@ -1837,13 +1837,111 @@ span.w-md {
   font-family: var(--wings-mono);
   font-size: 0.92em;
 }
-.w-md-pre {
+.w-codeblock {
+  position: relative;
+  min-width: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wings-fg) 6%, transparent);
+  font: 12px/1.45 var(--wings-mono);
+}
+.w-codeblock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 4px 2px 12px;
+  border-bottom: 1px solid var(--wings-hairline);
+  color: var(--wings-muted);
+}
+.w-codeblock-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Without a header the copy button floats in the corner, out of sight until the block is pointed at or has focus. */
+.w-codeblock:not([data-head]) > .w-codeblock-copy {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.w-codeblock:not([data-head]):hover > .w-codeblock-copy,
+.w-codeblock:not([data-head]):focus-within > .w-codeblock-copy {
+  opacity: 1;
+}
+@media (hover: none) {
+  .w-codeblock:not([data-head]) > .w-codeblock-copy {
+    opacity: 1;
+  }
+}
+.w-codeblock-body {
   margin: 0;
   padding: 10px 12px;
   overflow-x: auto;
-  border-radius: 8px;
-  background: rgb(255 255 255 / 0.06);
-  font: 12px/1.45 var(--wings-mono);
+  border-radius: inherit;
+  font: inherit;
+}
+.w-codeblock[data-head] .w-codeblock-body {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.w-codeblock-body:focus-visible {
+  outline: 2px solid var(--wings-ring);
+  outline-offset: -2px;
+}
+.w-codeblock-body code {
+  font: inherit;
+}
+.w-codeblock-line {
+  display: flex;
+  min-width: max-content;
+  margin: 0 -12px;
+  padding: 0 12px;
+  white-space: pre;
+}
+.w-codeblock-ln {
+  flex: none;
+  min-width: 3ch;
+  margin-right: 12px;
+  color: var(--wings-muted);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.w-codeblock-mark {
+  flex: none;
+  width: 2ch;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.w-codeblock-line[data-kind="added"] {
+  background: color-mix(in srgb, var(--wings-success) 16%, transparent);
+}
+.w-codeblock-line[data-kind="removed"] {
+  background: color-mix(in srgb, var(--wings-danger) 16%, transparent);
+}
+.w-codeblock-line[data-highlighted] {
+  background: color-mix(in srgb, var(--wings-info) 16%, transparent);
+  box-shadow: inset 2px 0 var(--wings-info);
+}
+.w-codeblock-line[data-highlighted][data-kind="added"] {
+  background: color-mix(in srgb, var(--wings-success) 16%, color-mix(in srgb, var(--wings-info) 16%, transparent));
+}
+.w-codeblock-line[data-highlighted][data-kind="removed"] {
+  background: color-mix(in srgb, var(--wings-danger) 16%, color-mix(in srgb, var(--wings-info) 16%, transparent));
+}
+.w-codeblock[data-busy] .w-codeblock-line:not([data-highlighted]) .w-codeblock-ln {
+  opacity: 0.4;
+}
+.w-codeblock[data-wrap] .w-codeblock-body,
+.w-codeblock[data-wrap] .w-codeblock-line {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .w-md-quote {
   margin: 0;

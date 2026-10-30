@@ -5,7 +5,7 @@ import type { PrValue, PullsAnswer } from "../src/lib/messages";
 import type { Comment, PrArgs } from "../src/lib/types";
 import { PrView } from "../src/ui/pr-view";
 import "../src/pages/pr.css";
-import { args, comments, overview, props, pushes, rows, withChecks } from "./_data";
+import { args, comments, githubComments, overview, props, pushes, rows, withChecks } from "./_data";
 
 export { default, page } from "../src/pages/pr";
 
@@ -35,6 +35,8 @@ const back = () => {};
 export const states = {
   // Opened straight on a pull request.
   page: { args, queries: { pr: value(), "pr-comments": comments, "pr-pushes": [] } },
+  // GitHub: each code thread shows the diff hunk its comment carries, with +/- rows and the commented lines marked, and a fenced block in a reply.
+  "page-github": { args, queries: { pr: value(), "pr-comments": githubComments, "pr-pushes": [] } },
   // A conversation over 64 KB, which main sends in parts.
   "page-big": { args, queries: { pr: value(), "pr-comments": many, "pr-pushes": [] } },
   // Azure DevOps: votes instead of approving, and pushes between the threads.

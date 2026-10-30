@@ -724,6 +724,8 @@ const ICONS = {
   check: "M20 6 9 17l-5-5",
   "chevron-down": "m6 9 6 6 6-6",
   trash: "M10 11v6M14 11v6M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+  // Lucide's copy: the front sheet (a rect there) and the back one.
+  copy: "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
 };
 
 /** One of Lucide's icons, in the colour of the text around it. Decoration, unless it has a `label`. */
@@ -1093,6 +1095,60 @@ export function Disclosure({ summary, open, defaultOpen, onOpenChange, children,
   );
 }
 
+// ---------- code ----------
+
+/**
+ * Code, terminal output or a diff in a mono block, as shadcn's code-block draws it, without syntax highlighting (which
+ * would ship a highlighter in every page). `code` is plain text, one text node. `lines` are rows that can carry a line
+ * number, a diff kind and a highlight. A `title` makes a header that also holds the copy button; without one the
+ * button floats over the block's corner. Copying takes the text only: no line numbers, no +/- markers.
+ */
+export function CodeBlock({ code, lines, title, label, busy, wrap, copy = true, className, ...rest }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const text = lines ? lines.map((l) => l.text).join("\n") : (code ?? "");
+  const numbered = Boolean(lines?.some((l) => l.n !== undefined));
+  const diff = Boolean(lines?.some((l) => l.kind));
+  const button = copy
+    ? h(
+        Button,
+        {
+          variant: "ghost",
+          size: "icon-xs",
+          className: "w-codeblock-copy",
+          "aria-label": copied ? "Copied" : "Copy code",
+          disabled: busy,
+          onClick: () => void copyText(text).then(() => setCopied(true)),
+        },
+        icon(copied ? "check" : "copy"),
+      )
+    : null;
+  return h(
+    "div",
+    { ...rest, className: cx("w-codeblock", className), role: "group", "aria-label": title ?? label ?? "Code", "aria-busy": busy ? true : undefined, "data-busy": flag(busy), "data-wrap": flag(wrap), "data-head": flag(title) },
+    title ? h("div", { className: "w-codeblock-head" }, h("span", { className: "w-codeblock-title", title }, title), button) : button,
+    h(
+      "pre",
+      { className: "w-codeblock-body", tabIndex: 0, role: "region", "aria-label": label ?? title ?? "Code" },
+      lines
+        ? lines.map((l, i) =>
+            h(
+              "code",
+              { key: i, className: "w-codeblock-line", "data-kind": l.kind, "data-highlighted": flag(l.highlighted) },
+              numbered ? h("span", { className: "w-codeblock-ln", "aria-hidden": true }, l.n) : null,
+              diff ? h("span", { className: "w-codeblock-mark", ...(l.kind ? { role: "img", "aria-label": l.kind } : { "aria-hidden": true }) }, l.kind === "added" ? "+" : l.kind === "removed" ? "\u2212" : null) : null,
+              h("span", { className: "w-codeblock-text" }, l.text || " "),
+            ),
+          )
+        : h("code", null, code),
+    ),
+  );
+}
+
 // ---------- markdown ----------
 
 const openLink = (e, href) => {
@@ -1194,7 +1250,7 @@ function mdBlocks(blocks) {
             ),
           );
         case "code":
-          return h("pre", { key: i, className: "w-md-pre" }, h("code", null, b.text));
+          return h(CodeBlock, { key: i, code: b.text, title: b.lang || undefined, label: b.lang ? undefined : "Code" });
         case "quote":
           return h("blockquote", { key: i, className: "w-md-quote" }, h(MdInline, { text: b.text }));
         case "rule":

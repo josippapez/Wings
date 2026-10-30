@@ -148,6 +148,7 @@ function Opened({ name }: { name: string }) {
 | `Summary`, `SummaryChip` | `SummaryChip`: `tone` (`info`, `success`, `warn`, `danger`), `onClick` | A row of small facts under a page's header, like "2 approved" or "Priority 1"; with `onClick` a chip is a button that goes to where the fact comes from |
 | `Skeletons`, `Skeleton` | `Skeletons`: `label`; `Skeleton`: `width`, `height` | Blocks that stand in for loading content, announced once as `label` with `aria-busy`; they shimmer unless the user asked for less motion |
 | `Timeline`, `TimelineCard`, `TimelineNote` | `Timeline`: `label`; `TimelineCard`: `author`, `at`, `tag`, `actions`, `quiet`, `clamp`; `TimelineNote`: `author`, `at` | A conversation or activity feed: a card per entry with the author's `Avatar`, name, time, an optional tag and actions, and the body as children (`Markdown` or your own); `quiet` for bots and the system; `clamp` cuts a long body with a "Show more" button that only appears when something was cut; a `TimelineNote` is a one-line entry like "Ada moved it to Active" |
+| `CodeBlock` | `code` or `lines` (`{ text, n?, kind?: "added" \| "removed", highlighted? }[]`), `title`, `label`, `busy`, `wrap`, `copy` | Code, terminal output or a diff, as shadcn's code-block draws it, with no syntax highlighting: a header with the `title` (a file path, a language) and a copy button, a gutter when a row has a number `n`, added and removed rows with +/− markers, and highlighted rows. Copying leaves out the numbers and markers. Without a `title` the copy button floats in the corner. `busy` dims the gutter while the code loads. `Markdown` draws its fenced code with it, the language as the title |
 | `Markdown` | `source`, `inline` | Markdown as React: headings, lists with read-only task checkboxes, GFM tables, fenced code, quotes, rules, `<details>` with its `<summary>` as a fold (the only HTML it reads, and only as structure), bold, italics, strikethrough, links and bare https URLs, images, and emoji shortcodes (`:white_check_mark:`, `:x:`, `:bulb:`: the GitHub and Slack names, flags left out; unknown names, and anything inside code, stay as typed). Link reference definitions (`[KEY]: value` lines) are hidden, as Markdown hides them. No other HTML is ever parsed; only `https:` links open (through `wings.openUrl`, so the manifest needs `permissions.openUrl` with an `https://` prefix) and images load only from `https:` or `data:image/` png, jpeg, gif or webp URLs up to 8,000 characters (`MAX_DATA_IMAGE`); an `https:` image shows as a "Load image from <host>" button and loads only when clicked (no option to turn that off), because the text may come from an agent and the URL could carry data out, and a `data:` image shows at once; `[![alt](img)](url)` is a link with the alt as its text. `inline` renders just the inline parts in a span. Memoized on `source` |
 
 Every component passes other props, like `id`, `title`, `className`, `onClick` and `aria-*`, to its element.
@@ -233,7 +234,7 @@ rather than styles.
 `w-tabs` with `data-variant`, `w-tab`; `w-field` with `data-layout`, `w-field-row`, `w-field-label`, `w-field-hint`,
 `w-field-group`, `w-input`, `w-search`, `w-select`, `w-check`; `w-combobox`, `w-listbox`, `w-option`,
 `w-option-label`, `w-option-detail`, `w-option-empty`; `w-menu-root`, `w-menu` with `data-align`, `w-menu-item`
-with `data-variant`; `w-disclosure`. A `ul` or `ol` with `w-row`, `w-stack` or `w-card` loses its bullets.
+with `data-variant`; `w-disclosure`; `w-codeblock` with `data-busy`, `data-wrap`, `data-head`, `w-codeblock-head`, `w-codeblock-title`, `w-codeblock-copy`, `w-codeblock-body`, `w-codeblock-line` with `data-kind` and `data-highlighted`, `w-codeblock-ln`, `w-codeblock-mark`, `w-codeblock-text`. A `ul` or `ol` with `w-row`, `w-stack` or `w-card` loses its bullets.
 
 ## Tailwind or any CSS
 
@@ -261,7 +262,7 @@ does:
 
 | Component | Props | Renders |
 | --- | --- | --- |
-| `Icon` | `name` (`check`, `chevron-down`, `trash`), `label` | One of Lucide's icons in the colour of the text around it. Decoration unless it has a `label` |
+| `Icon` | `name` (`check`, `chevron-down`, `copy`, `trash`), `label` | One of Lucide's icons in the colour of the text around it. Decoration unless it has a `label` |
 | `Textarea` | `label`, `rows`, the textarea's own props | A multi-line input that joins a `Field` like `TextInput` does |
 | `InlineInput` | `label`, `value`, `required`, `onSave`, `onDone`, `className` | A one-line input for editing in place. Enter or leaving saves, Escape cancels. If `onSave` throws, it stays open with the text and shows the message under it |
 | `Notice` | `tone` (`info`, `success`, `warn`, `danger`) | A short tinted message. `warn` and `danger` are announced at once |

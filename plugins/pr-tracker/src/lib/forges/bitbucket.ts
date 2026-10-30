@@ -2,6 +2,7 @@
 import { cached } from "wings-plugin-sdk/async";
 import { git } from "wings-plugin-sdk/git";
 import { real } from "../checklist";
+import { diffWindow } from "../snippet";
 import { counts, encodeQuery, labelOf, openOrNewest, plainFailure, withSecondPage } from "./shared";
 import { forgeJson, forgePost, forgeUser, forgetUsers, type Account } from "./token";
 import type { Forge } from "./types";
@@ -167,6 +168,7 @@ export function bbComments(values: BbComment[], url: string): Comment[] {
       createdAt: c.created_on,
       url: c.links?.html?.href ?? url,
       canReply: root === c.id,
+      ...(root === c.id && inline && (inline.to ?? inline.from) ? { range: { start: (inline.to ?? inline.from)!, end: (inline.to ?? inline.from)! } } : {}),
     };
   });
 }
@@ -197,6 +199,18 @@ const toLink = (pr: BbPr, remote: BitbucketRemote, cwd: string): BitbucketLink =
 });
 
 const load = (link: BitbucketLink) => Promise.all([forgeJson<BbPr>(ACCOUNT, prUrl(link)), getPage<BbStatus>(`${prUrl(link)}/statuses?pagelen=100`).catch(() => [])]);
+
+/** The two branches a PR is between, which its snippets are diffed over. */
+const branches = cached(
+  async (link: BitbucketLink) => {
+    const pr = await forgeJson<BbPr>(ACCOUNT, prUrl(link));
+    return { base: pr.destination.branch.name, head: pr.source.branch.name };
+  },
+  { key: (link) => link.url },
+);
+
+/** The branches fetched once, for every thread that reads a snippet. */
+const synced = cached((a: { cwd: string; base: string; head: string }) => git(a.cwd, ["fetch", "--quiet", "--end-of-options", "origin", a.base, a.head]), { key: (a) => `${a.cwd}:${a.base}:${a.head}` });
 
 const comments = async (link: BitbucketLink): Promise<Comment[]> => bbComments(await getPage<BbComment>(`${prUrl(link)}/comments?pagelen=100`), link.url);
 
@@ -254,6 +268,21 @@ export const bitbucket: Forge<BitbucketLink, BitbucketRemote> = {
   },
 
   comments,
+
+  /** The lines of the PR's diff of the file, up to the commented one, read from local git like the diff itself. */
+  async snippet(link, root) {
+    if (!root.path || !root.range) return null;
+    try {
+      const { base, head } = await branches.get(link);
+      await synced.get({ cwd: link.cwd, base, head });
+      const patch = await git(link.cwd, ["diff", "--no-color", "--no-ext-diff", `origin/${base}...origin/${head}`, "--", root.path], { raw: true });
+      return diffWindow(patch, root.side, root.range.start, root.range.end);
+    } catch {
+      // A PR from a fork isn't on `origin`, as for the diff itself.
+      return null;
+    }
+  },
+
   failure: plainFailure,
 
   /** Replies in the thread. The API threads a comment under `parent`, and a reply to a reply is moved under the thread's first comment on read. */

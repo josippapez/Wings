@@ -1,7 +1,7 @@
 {
   "id": "hud",
   "name": "HUD",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "minWingsVersion": "0.1.32",
   "icon": "icon.svg",
   "description": "Your Claude usage limits and each session's context and failed MCP servers in a strip under its terminal, and memory, MCP servers and skills in a sidebar, so you can turn off a terminal status line like claude-hud.",

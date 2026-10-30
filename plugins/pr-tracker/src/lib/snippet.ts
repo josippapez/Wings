@@ -7,6 +7,8 @@ export interface SnippetLine {
   hit: boolean;
   /** The PR added or changed this line. Set only when the diff was read. */
   added?: boolean;
+  /** The PR removed this line, so `n` is its number before the change. Set only on rows read from a diff. */
+  removed?: boolean;
 }
 
 const ABOVE = 4;
@@ -43,4 +45,46 @@ export function snippetOf(content: string, start: number, end: number = start, a
     out.push({ n, text: lines[n - 1].replace(/\r$/, ""), hit: n >= start && n <= span.last, ...(added ? { added: added.has(n) } : {}) });
   }
   return out;
+}
+
+/**
+ * The rows of a unified diff that end at the commented lines, as a host's page shows a review thread: up to 4 rows above
+ * the first commented line (context, `+` and `-` alike), then the commented ones. `side` and the numbers say which
+ * lines were commented: new-file numbers for `additions`, old-file numbers for `deletions`. Null when the diff has
+ * no such line.
+ */
+export function diffWindow(patch: string, side: "additions" | "deletions", start: number, end: number = start): SnippetLine[] | null {
+  interface Row {
+    kind: "context" | "added" | "removed";
+    text: string;
+    old: number;
+    now: number;
+  }
+  const rows: Row[] = [];
+  let old = 0;
+  let now = 0;
+  let inHunk = false;
+  const lines = patch.split("\n");
+  lines.forEach((line, i) => {
+    const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)/);
+    if (header) {
+      [old, now, inHunk] = [Number(header[1]), Number(header[2]), true];
+    } else if (line.startsWith("diff ")) {
+      inHunk = false;
+    } else if (inHunk && line[0] === "+") rows.push({ kind: "added", text: line.slice(1), old, now: now++ });
+    else if (inHunk && line[0] === "-") rows.push({ kind: "removed", text: line.slice(1), old: old++, now });
+    // A blank context line may have lost its leading space; the patch's last blank line is only its final newline.
+    else if (inHunk && (line[0] === " " || (line === "" && i < lines.length - 1))) rows.push({ kind: "context", text: line.slice(1), old: old++, now: now++ });
+  });
+  const on = (r: Row) => (side === "additions" ? r.kind !== "removed" && r.now >= start && r.now <= end : r.kind !== "added" && r.old >= start && r.old <= end);
+  const first = rows.findIndex(on);
+  if (first < 0) return null;
+  const last = Math.min(rows.findLastIndex(on), first + MAX_RANGE - 1);
+  const from = Math.max(0, first - ABOVE);
+  return rows.slice(from, last + 1).map((r, i) => ({
+    n: r.kind === "removed" ? r.old : r.now,
+    text: r.text,
+    hit: from + i >= first && on(r),
+    ...(r.kind === "added" ? { added: true } : r.kind === "removed" ? { removed: true } : {}),
+  }));
 }

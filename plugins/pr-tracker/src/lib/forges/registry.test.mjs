@@ -47,6 +47,8 @@ test("a tab's args become the link of their provider, and a provider that needs 
 
 test("only a forge with something to approve with, vote with or read pushes from says so", () => {
   assert.deepEqual(Object.entries(forges).filter(([, f]) => f.approve).map(([k]) => k).sort(), ["bitbucket", "gitea", "github", "gitlab"]);
-  assert.deepEqual(Object.entries(forges).filter(([, f]) => f.vote || f.pushes || f.snippet).map(([k]) => k), ["azure"]);
+  assert.deepEqual(Object.entries(forges).filter(([, f]) => f.vote || f.pushes).map(([k]) => k), ["azure"]);
+  // GitHub's comments carry their code, so only these read it when the card shows.
+  assert.deepEqual(Object.entries(forges).filter(([, f]) => f.snippet).map(([k]) => k).sort(), ["azure", "bitbucket", "gitlab"]);
   assert.deepEqual(Object.entries(forges).filter(([, f]) => f.login).map(([k]) => k).sort(), ["azure", "github", "gitlab"]);
 });

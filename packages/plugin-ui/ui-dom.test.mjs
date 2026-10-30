@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useCallback, useEffect, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
+const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, CodeBlock, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -786,6 +786,23 @@ test("copyText writes to the clipboard, and uses a textarea and execCommand when
   assert.deepEqual([written, copies, document.querySelector("textarea")], [["fix/login"], [["copy", "fix/login"]], null]);
   delete dom.window.navigator.clipboard;
   delete dom.window.document.execCommand;
+});
+
+test("CodeBlock copies the text without line numbers or markers, and a Markdown fence takes its language as the title", async () => {
+  const written = [];
+  Object.defineProperty(dom.window.navigator, "clipboard", { configurable: true, value: { writeText: async (text) => void written.push(text) } });
+  const lines = [{ n: 4, text: "keep" }, { n: 5, text: "old", kind: "removed" }, { n: 5, text: "new", kind: "added", highlighted: true }];
+  const { host, unmount } = await mount(h("div", null, h(CodeBlock, { title: "src/a.ts", lines }), h(Markdown, { source: "```ts\nlet a = 1;\n```" })));
+  const [diff, fence] = host.querySelectorAll(".w-codeblock");
+  await click(diff.querySelector(".w-codeblock-copy"));
+  assert.deepEqual(written, ["keep\nold\nnew"]);
+  assert.equal(diff.querySelector(".w-codeblock-copy").getAttribute("aria-label"), "Copied");
+  assert.deepEqual([...diff.querySelectorAll(".w-codeblock-mark")].map((m) => m.textContent), ["", "\u2212", "+"]);
+  assert.equal(diff.querySelectorAll("[data-highlighted]").length, 1);
+  assert.equal(fence.querySelector(".w-codeblock-title").textContent, "ts");
+  assert.equal(fence.querySelector("pre").textContent, "let a = 1;");
+  delete dom.window.navigator.clipboard;
+  await unmount();
 });
 
 test("useAction is busy while any run is going, and keeps the message of the last one that threw until the next run starts", async () => {

@@ -202,7 +202,7 @@
   font-size: 13px;
 }
 /* A code block wraps instead of scrolling, so its right padding stays visible at any width. */
-.pr-md .w-md-pre {
+.pr-md .w-codeblock-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -288,42 +288,11 @@
   color: var(--wings-muted);
   font-size: 11px;
 }
+/* The code of a thread runs edge to edge of its card, between hairlines. */
 .pr-snippet {
   margin: 0 -14px;
-  padding: 6px 0;
-  overflow-x: auto;
+  border-radius: 0;
   border-block: 1px solid var(--wings-hairline);
-  background: rgb(255 255 255 / 0.025);
-  font: 12px/1.6 var(--wings-mono);
-}
-.pr-snippet-line {
-  display: flex;
-  min-width: max-content;
-  padding-right: 14px;
-  font: inherit;
-  white-space: pre;
-}
-.pr-snippet-line[data-hit] {
-  background: color-mix(in srgb, var(--wings-info) 16%, transparent);
-  box-shadow: inset 2px 0 var(--wings-info);
-}
-.pr-snippet-line[data-added] {
-  background: color-mix(in srgb, var(--wings-success) 16%, transparent);
-}
-.pr-snippet-line[data-hit][data-added] {
-  background: color-mix(in srgb, var(--wings-success) 16%, color-mix(in srgb, var(--wings-info) 16%, transparent));
-}
-.pr-snippet[data-loading] .pr-snippet-line:not([data-hit]) .pr-ln {
-  opacity: 0.4;
-}
-.pr-ln {
-  flex: none;
-  width: 44px;
-  padding-right: 12px;
-  color: var(--wings-muted);
-  opacity: 0.7;
-  text-align: right;
-  user-select: none;
 }
 .pr-line-no {
   opacity: 0.8;
@@ -666,6 +635,9 @@ button.pr-check-main {
 @media (max-width: 520px) {
   .pr-card {
     padding: 10px;
+  }
+  .pr-snippet {
+    margin: 0 -10px;
   }
   .pr-title {
     font-size: 17px;

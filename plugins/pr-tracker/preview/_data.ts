@@ -3,7 +3,7 @@ import type { Comment, Overview, PrArgs } from "../src/lib/types";
 import type { PrViewProps } from "../src/ui/pr-view";
 import type { PullRow } from "../src/lib/pulls";
 import type { Push } from "../src/lib/pushes";
-import { snippetOf } from "../src/lib/snippet";
+import { diffWindow, snippetOf } from "../src/lib/snippet";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -66,6 +66,29 @@ export const comments: Comment[] = [
   { id: 5, replyTo: null, path: "src/sync/client.ts", line: 41, range: { start: 40, end: 41, iteration: 2 }, side: "additions", author: "Project Build Service (Acme)", body: "**Retry guardrail**\n\n**Major: Violation:** docs/standards/retries.md\n\nThe delay is computed inline instead of through the shared backoff helper, so the jitter standard cannot be changed in one place.\n\n- Use `backoff()` from `src/sync/backoff.ts`\n- Keep the cap at 30 s\n\n<details>\n<summary>Context & sources</summary>\n\n**Standard:** every retry loop goes through the shared helper.\n\n- docs/standards/retries.md\n- docs/standards/jitter.md\n</details>\n\n[ISSUE_KEY]: AbC-123", createdAt: ago(60 * 21), url: "https://github.com/acme/web/pull/482#c5", canReply: true, thread: { state: "active", label: "Active" } },
   { id: 4, replyTo: null, path: null, line: null, side: "additions", author: "ci-bot[bot]", body: "Coverage is 91.2%, down 0.1% from main.", createdAt: ago(60 * 5), url: "https://github.com/acme/web/pull/482#c4" },
 ];
+
+/** A hunk as GitHub gives it in a review comment: from its start down to the commented line. */
+const HUNK = [
+  "@@ -80,7 +80,10 @@ export class SyncClient {",
+  "   async send(request: Request, attempt = 0): Promise<Response> {",
+  "     const res = await fetch(request);",
+  "     if (res.status < 500 || attempt >= 5) return res;",
+  "-    const wait = this.base * 2 ** attempt;",
+  "-    await delay(wait);",
+  "+    const wait = Math.min(this.base * 2 ** attempt, 30_000);",
+  "+    const jitter = wait * (0.5 + Math.random() / 2);",
+  "+    await delay(res.headers.get(\"Retry-After\") ? retryAfter(res) : jitter);",
+  "     return this.send(request, attempt + 1);",
+].join("\n");
+
+/** The same conversation on GitHub, whose comments carry their code: a thread on added lines, one on a removed line, and a reply with a fenced block. */
+export const githubComments: Comment[] = comments.map((c) => {
+  if (c.id === 1) return { ...c, range: undefined, line: 85, snippet: diffWindow(HUNK, "additions", 84, 85)! };
+  if (c.id === 3) return { ...c, range: undefined, line: 83, side: "deletions", snippet: diffWindow(HUNK, "deletions", 83)! };
+  if (c.id === 5) return { ...c, range: undefined, line: 85, snippet: diffWindow(HUNK, "additions", 85)! };
+  if (c.id === 2) return { ...c, body: "Equal jitter keeps a floor on the delay, which I wanted:\n\n```ts\nconst jitter = wait * (0.5 + Math.random() / 2);\n```\n\nHappy to switch if you disagree." };
+  return c;
+});
 
 const commit = (sha: string, message: string, author: string, minutes: number) => ({ sha: sha.padEnd(40, "0"), message, author, at: ago(minutes) });
 

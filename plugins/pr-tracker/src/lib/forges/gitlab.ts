@@ -3,6 +3,7 @@ import { cached, errorMessage } from "wings-plugin-sdk/async";
 import { cli, CliError } from "wings-plugin-sdk/cli";
 import { real } from "../checklist";
 import { cleanLog, detail } from "../logs";
+import { diffWindow } from "../snippet";
 import { post } from "./post";
 import { counts, labelOf, ladder, noLog, openOrNewest, same } from "./shared";
 import { AccountProblem, type Forge } from "./types";
@@ -67,7 +68,17 @@ interface GlNote {
   type?: string | null;
   resolvable?: boolean;
   resolved?: boolean;
-  position?: { new_path?: string; old_path?: string; new_line?: number | null; old_line?: number | null };
+  position?: {
+    new_path?: string;
+    old_path?: string;
+    new_line?: number | null;
+    old_line?: number | null;
+    /** The commits the note was written between. */
+    base_sha?: string;
+    head_sha?: string;
+    /** A multi-line note's first line, which `new_line` and `old_line` are the last of. */
+    line_range?: { start?: { new_line?: number | null; old_line?: number | null } };
+  };
   author?: { name?: string; username?: string };
   body?: string;
   created_at: string;
@@ -204,12 +215,15 @@ export function glComments(discussions: { id: string; notes?: GlNote[] }[], url:
     notes.forEach((n, i) => {
       // Only diff notes have a position; the rest are comments on the whole MR.
       const pos = n.type === "DiffNote" ? n.position : null;
+      const right = Boolean(pos?.new_line);
+      const end = pos && (pos.new_line ?? pos.old_line);
+      const start = (right ? pos?.line_range?.start?.new_line : pos?.line_range?.start?.old_line) ?? end;
       comments.push({
         id: n.id,
         replyTo: i === 0 ? null : notes[0].id,
         path: pos ? (pos.new_path ?? pos.old_path)! : null,
         line: pos ? (pos.new_line ?? pos.old_line ?? null) : null,
-        side: pos?.new_line ? "additions" : "deletions",
+        side: right ? "additions" : "deletions",
         author: nameOf(n.author) ?? "unknown",
         by: n.author?.username,
         body: n.body ?? "",
@@ -219,6 +233,8 @@ export function glComments(discussions: { id: string; notes?: GlNote[] }[], url:
         discussion: d.id,
         ...(i === 0 && n.resolvable ? { thread: n.resolved ? { state: "resolved" as const, label: "Resolved" } : { state: "active" as const, label: "Unresolved" } } : {}),
         ...(n.system ? { system: true } : {}),
+        ...(i === 0 && start && end ? { range: { start, end } } : {}),
+        ...(i === 0 && pos?.base_sha && pos.head_sha ? { refs: { base: pos.base_sha, head: pos.head_sha } } : {}),
       });
     });
   }
@@ -269,6 +285,13 @@ async function load(link: GitlabLink) {
   return { mr, approvals, jobs };
 }
 
+/** The files an MR's commits changed, as GitLab diffs them. One call serves every thread between the same two commits. */
+const compared = cached(
+  (a: { remote: GitlabRemote; base: string; head: string }) =>
+    api<{ diffs?: { old_path: string; new_path: string; diff: string }[] }>(a.remote, `${project(a.remote)}/repository/compare?from=${a.base}&to=${a.head}&straight=true`),
+  { key: (a) => `${a.remote.host}/${a.remote.path}:${a.base}:${a.head}` },
+);
+
 async function comments(link: GitlabLink, system: boolean): Promise<Comment[]> {
   const discussions = await api<{ id: string; notes?: GlNote[] }[]>(link.remote, `${mrPath(link)}/discussions?per_page=100`, true).catch(() => []);
   return glComments(discussions, link.url, system);
@@ -318,6 +341,14 @@ export const gitlab: Forge<GitlabLink, GitlabRemote> = {
   async overview(link) {
     const { mr, approvals, jobs } = await load(link);
     return { status: glStatusOf(mr, approvals, jobs), author: nameOf(mr.author) ?? "unknown", body: mr.description ?? "", createdAt: mr.created_at, reviewers: glReviewers(approvals) };
+  },
+
+  /** The lines GitLab's own thread shows: the diff of the file between the note's commits, up to the commented line. */
+  async snippet(link, root) {
+    if (!root.path || !root.range || !root.refs) return null;
+    const { diffs } = await compared.get({ remote: link.remote, ...root.refs });
+    const file = diffs?.find((d) => d.new_path === root.path || d.old_path === root.path);
+    return file ? diffWindow(file.diff, root.side, root.range.start, root.range.end) : null;
   },
 
   async diff(link) {

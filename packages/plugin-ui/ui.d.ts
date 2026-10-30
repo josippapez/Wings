@@ -329,7 +329,7 @@ export function Tabs<V extends string>(
 // ---------- fields ----------
 
 /** The names `Icon` draws. */
-export type IconName = "check" | "chevron-down" | "trash";
+export type IconName = "check" | "chevron-down" | "copy" | "trash";
 /**
  * One of Lucide's icons, 16px in the colour of the text around it (smaller inside the smallest buttons). It is
  * decoration unless it has a `label`, so a button that holds only an icon needs its own `aria-label`.
@@ -465,6 +465,30 @@ export function Disclosure(
 ): ReactElement;
 
 // ---------- markdown ----------
+
+/** One row of a `CodeBlock`. */
+export interface CodeLine {
+  text: string;
+  /** The line number shown in the gutter. The block shows a gutter when any row has one. */
+  n?: number;
+  /** A diff row: `added` is green with a + marker, `removed` red with a −. */
+  kind?: "added" | "removed";
+  /** Marks the row with an accent bar, like the lines a comment is on. Works with a `kind` too. */
+  highlighted?: boolean;
+}
+
+/**
+ * Code, terminal output or a diff in a mono block, modelled on shadcn's code-block but without syntax highlighting,
+ * which would ship a highlighter in every plugin page. Pass `code` for plain text (one text node) or `lines` for rows
+ * with line numbers, diff kinds and highlights. A `title`, like a file path, makes a header that holds the copy button;
+ * without one the button floats over the corner until the block is pointed at or focused. The copy button copies the
+ * text only, with no line numbers or +/- markers, through `copyText`. `busy` dims the gutter and disables copying while
+ * the code is loading, and announces it with `aria-busy`. `label` names the scrollable code region for a screen reader
+ * (default: the `title`, else "Code"). `wrap` wraps long lines instead of scrolling them sideways.
+ */
+export function CodeBlock(
+  props: Omit<Props<"div">, "children" | "title"> & { code?: string; lines?: CodeLine[]; title?: string; label?: string; busy?: boolean; wrap?: boolean; copy?: boolean },
+): ReactElement;
 
 /**
  * Markdown as React elements: headings, paragraphs, lists (with read-only task checkboxes), fenced code, quotes,

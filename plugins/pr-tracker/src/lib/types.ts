@@ -1,5 +1,6 @@
 /** The shapes the PR tracker keeps in its maps and passes between its modules. */
 import type { Remote } from "wings-plugin-sdk/git";
+import type { SnippetLine } from "./snippet";
 
 export type { Remote };
 export type Provider = "github" | "azure" | "gitlab" | "bitbucket" | "gitea";
@@ -221,6 +222,10 @@ export interface Comment extends WingsComment {
   thread?: { state: "active" | "resolved"; label: string };
   /** On a code thread's first comment, the commented lines and the PR iteration they were written on, where the provider says. */
   range?: { start: number; end: number; iteration?: number };
+  /** On a code thread's first comment, the code it is on, where the comment itself carries it (GitHub's diff hunk), so no file is read. */
+  snippet?: SnippetLine[];
+  /** On a code thread's first comment, the two commits its lines are read between, where the provider says. */
+  refs?: { base: string; head: string };
   /** Written by the provider itself (a policy update, a status change) rather than a person. Only the PR tab asks for these. */
   system?: boolean;
 }

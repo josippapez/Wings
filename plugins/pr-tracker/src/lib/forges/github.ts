@@ -4,6 +4,7 @@ import { cli } from "wings-plugin-sdk/cli";
 import { between, failingOf, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
 import { stepLines } from "../runlog";
+import { diffWindow } from "../snippet";
 import { post } from "./post";
 import { counts, labelOf, noLog, orElse, same } from "./shared";
 import type { Forge } from "./types";
@@ -91,6 +92,13 @@ interface GhComment {
   path: string;
   line?: number | null;
   side?: string;
+  /** The first line of a multi-line comment, and the side it is on. The `original_*` ones are where they were when the comment was written, which is all an outdated comment has. */
+  start_line?: number | null;
+  start_side?: string | null;
+  original_line?: number | null;
+  original_start_line?: number | null;
+  /** The diff from the start of its hunk to the commented line, as it was when the comment was written. */
+  diff_hunk?: string;
   user?: { login?: string };
   body?: string;
   created_at: string;
@@ -242,18 +250,24 @@ export function githubListed(prs: GhPr[], me: string, requested: ReadonlySet<num
 
 /** A line comment from the REST API. GitHub threads only line comments, so only a thread's first one takes replies, on github.com and on an Enterprise host alike. */
 export function githubComment(c: GhComment): Comment {
+  const side = c.side === "LEFT" ? "deletions" : "additions";
+  // The hunk is the diff as it was when the comment was written and ends at that line, so the thread's code is already in the comment: no call to read the file. `line` is where the line sits now, which the hunk's numbers don't follow once the PR has moved on.
+  const end = c.original_line ?? c.line;
+  const first = c.original_start_line ?? c.start_line;
+  const snippet = !c.in_reply_to_id && c.diff_hunk && end ? diffWindow(c.diff_hunk, side, first && (c.start_side ?? c.side) === c.side ? first : end, end) : null;
   return {
     id: c.id,
     replyTo: c.in_reply_to_id ?? null,
     path: c.path,
     line: c.line ?? null,
-    side: c.side === "LEFT" ? "deletions" : "additions",
+    side,
     author: c.user?.login ?? "unknown",
     by: c.user?.login,
     body: c.body ?? "",
     createdAt: c.created_at,
     url: c.html_url,
     canReply: !c.in_reply_to_id,
+    ...(snippet ? { snippet } : {}),
   };
 }
 

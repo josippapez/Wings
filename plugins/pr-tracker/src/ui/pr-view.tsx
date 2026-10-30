@@ -2,7 +2,7 @@
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Chip, copyText, Empty, Heading, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar } from "wings-plugin-ui";
+import { Avatar, Badge, Button, Chip, CodeBlock, copyText, Empty, Heading, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar, type CodeLine } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
@@ -452,7 +452,7 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
               </div>
               <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
             </div>
-            {onSnippet ? <Snippet root={root} latest={latest} onSnippet={onSnippet} /> : null}
+            <Snippet root={root} latest={latest} onSnippet={onSnippet} />
           </>
         ) : null}
         <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor} bot={isAutomated(root)}>
@@ -476,21 +476,25 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
   );
 });
 
-/** Blank lines numbered like the snippet that will replace them. A file that ends sooner makes the real one a few lines shorter. */
-function placeholderLines(start: number, end?: number): SnippetLine[] {
+/** Blank lines numbered like the snippet that will replace them. A file that ends sooner makes the real one a few lines shorter. A thread read from a diff ends at the commented line, so it has no lines below. */
+function placeholderLines(start: number, end: number | undefined, below: boolean): SnippetLine[] {
   const { from, to, last } = snippetSpan(start, end);
-  return Array.from({ length: to - from + 1 }, (_, i) => ({ n: from + i, text: "", hit: from + i >= start && from + i <= last }));
+  return Array.from({ length: (below ? to : last) - from + 1 }, (_, i) => ({ n: from + i, text: "", hit: from + i >= start && from + i <= last }));
 }
 
+const codeLine = (l: SnippetLine): CodeLine => ({ text: l.text, n: l.n, kind: l.added ? "added" : l.removed ? "removed" : undefined, highlighted: l.hit });
+
 /**
- * The lines around the commented ones, read when the card shows: mono, line numbers muted, the commented lines marked.
- * A thread written on an older push shows the code as it was then, and can switch to where those lines sit now.
+ * The code a thread is on: the lines the comment carries (GitHub's diff hunk) or the ones main reads when the card
+ * shows, with the commented lines marked. A thread written on an older push shows the code as it was then, and can
+ * switch to where those lines sit now.
  */
-function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; onSnippet: (root: Comment, now: boolean) => Promise<SnippetLine[] | null> }) {
+function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; onSnippet?: (root: Comment, now: boolean) => Promise<SnippetLine[] | null> }) {
   const [now, setNow] = useState(false);
-  const [lines, setLines] = useState<SnippetLine[] | null>(null);
+  const [lines, setLines] = useState<SnippetLine[] | null>(root.snippet ?? null);
   const [gone, setGone] = useState(false);
   useEffect(() => {
+    if (root.snippet || !onSnippet) return;
     let live = true;
     setLines(null);
     setGone(false);
@@ -506,7 +510,8 @@ function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; 
   const iteration = root.range?.iteration;
   const older = iteration !== undefined && latest !== undefined && iteration < latest;
   // While the file is read, empty lines of the count the range gives keep the card's height, so it doesn't jump when the code arrives.
-  const shown = lines ?? (root.path && root.range && !gone ? placeholderLines(root.range.start, root.range.end) : null);
+  const loading = !lines && Boolean(onSnippet) && Boolean(root.path && root.range) && !gone;
+  const shown = lines ?? (loading ? placeholderLines(root.range!.start, root.range!.end, iteration !== undefined) : null);
   const bar = older ? (
     <div className="pr-snippet-bar" data-testid="pr-snippet-bar">
       <Text tone="muted" size="tiny" as="span">{now ? `Latest code, push ${latest}` : `As of push ${iteration}`}</Text>
@@ -525,14 +530,7 @@ function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; 
   return (
     <>
       {bar}
-      <pre className="pr-snippet" aria-label={`Code around line ${root.line}`} aria-busy={lines ? undefined : true} data-testid="pr-snippet" data-loading={lines ? undefined : ""}>
-        {shown.map((l) => (
-          <code key={l.n} className="pr-snippet-line" data-hit={l.hit ? "" : undefined} data-added={l.added ? "" : undefined}>
-            <span className="pr-ln" aria-hidden="true">{l.n}</span>
-            <span className="pr-code">{l.text || " "}</span>
-          </code>
-        ))}
-      </pre>
+      <CodeBlock className="pr-snippet" label={`Code around line ${root.line ?? root.range?.end ?? ""}`} lines={shown.map(codeLine)} busy={!lines} data-testid="pr-snippet" />
     </>
   );
 }
