@@ -20,6 +20,11 @@ REPO=josippapez/Wings
 # Checks before the build, which takes minutes: a release is what's committed, its tests pass, and each plugin's
 # committed built files match its source (`pnpm check` compares the content of each built file).
 [ -z "$(git status --porcelain)" ] || { echo "Commit or stash your changes first: a release builds what's in the tree." >&2; git status --short >&2; exit 1; }
+# The builds keep the dependencies from release to release, and only the app's own crate is compiled again (see the
+# clean below). Dependencies change only with Cargo.lock, so when it changed for more than this app's version, start
+# from a clean build and the old dependency versions don't pile up.
+LOCK=$(sed '/^name = "wings"$/,/^$/d' src-tauri/Cargo.lock | shasum | cut -d' ' -f1)
+[ "$(cat src-tauri/target/release-lock 2>/dev/null)" = "$LOCK" ] || (cd src-tauri && cargo clean)
 pnpm test
 (cd src-tauri && cargo test --lib --quiet)
 (cd ../../plugins && pnpm run deps >/dev/null && pnpm check)
@@ -49,6 +54,7 @@ rm -f "$ARCHIVE" "$ARCHIVE.sig" "$DIR/latest.json" "$DIR/notes.md" "$DIR"/*.wing
 sh scripts/build-mac-app.sh
 
 [ -f "$ARCHIVE" ] && [ -f "$ARCHIVE.sig" ] || { echo "Build didn't produce $ARCHIVE and its .sig" >&2; exit 1; }
+echo "$LOCK" > src-tauri/target/release-lock
 
 # The updater fetches this file from the latest release, so it names the assets of the release being published.
 export VERSION NOTES ARCH REPO ARCHIVE
@@ -74,13 +80,14 @@ fs.writeFileSync(process.argv[1], JSON.stringify(latest, null, 2) + "\n");
 PACKED=$(sh scripts/pack-plugins.sh "$DIR")
 PLUGINS=$(printf '%s\n' "$PACKED" | while read -r f; do printf ' "%s"' "$f"; done)
 
-# The debug build keeps every old copy of the app's own code and grew to 29 GB between two releases. The release
-# build holds the files to publish, so the printed command cleans it once they are uploaded.
-(cd src-tauri && cargo clean --profile dev)
+# Each version compiles a new copy of the app's own crate, and the debug build grew to 29 GB of them between two
+# releases. `--workspace` drops every copy of it and keeps the dependencies. The release build holds the files to
+# publish, so the printed command does the same there once they are uploaded.
+(cd src-tauri && cargo clean --profile dev --workspace)
 
 echo
 echo "Built Wings $VERSION. Publish it with:"
 echo
 # Notes go in a file: pasted inside quotes, a backtick in them would run as a command.
 printf '%s\n' "$NOTES" > "$DIR/notes.md"
-echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --target main --title \"Wings $VERSION\" --notes-file \"$PWD/$DIR/notes.md\" && (cd \"$PWD/src-tauri\" && cargo clean --release)"
+echo "  gh release create v$VERSION \"$PWD/$ARCHIVE\" \"$PWD/$ARCHIVE.sig\" \"$PWD/$DIR/latest.json\"$PLUGINS --repo $REPO --target main --title \"Wings $VERSION\" --notes-file \"$PWD/$DIR/notes.md\" && (cd \"$PWD/src-tauri\" && cargo clean --release --workspace)"
