@@ -625,7 +625,8 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
             &["--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--output", "--ext-diff", "--textconv", "--no-index"],
             true,
         ),
-        "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--show-token"], false),
+        // glab's `--form` sends a multipart POST, and `@path` in it uploads that file.
+        "gh" | "glab" => (&['X', 'f', 'F', 't'], &["--method", "--field", "--raw-field", "--input", "--form", "--show-token"], false),
         // Short forms too: -f --file, -d --destination, -s --source, -m --method.
         "az" => (&['m', 'f', 'd', 's'], &["--http-method", "--method", "--in-file", "--out-file", "--output-file", "--file", "--destination", "--source"], true),
         _ => return false,
@@ -1661,6 +1662,8 @@ mod tests {
             ("gh", "--method=POST"),
             ("gh", "-fquery=mutation"),
             ("glab", "--show-token"),
+            ("glab", "--form"),
+            ("glab", "--form=file=@/etc/hosts"),
             ("glab", "-t"),
             ("az", "--http-method"),
         ] {
