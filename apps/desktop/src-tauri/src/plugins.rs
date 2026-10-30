@@ -812,12 +812,12 @@ pub fn exec(
     timeout: Duration,
     on_line: Option<OnLine>,
 ) -> Result<ExecResult, String> {
-    exec_check(plugin, program, args)?;
+    exec_check(plugin, program, args, cwd)?;
     run(program, args, cwd, timeout, on_line)
 }
 
-/// Everything `exec` checks before it runs a command.
-fn exec_check(plugin: &Plugin, program: &str, args: &[String]) -> Result<(), String> {
+/// Everything `exec` checks before it runs a command in `cwd`.
+fn exec_check(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
     let id = &plugin.manifest.id;
     if !may_exec(plugin, program, args) {
         let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
@@ -839,7 +839,40 @@ fn exec_check(plugin: &Plugin, program: &str, args: &[String]) -> Result<(), Str
     if program == "gh" && jq_reads_env(args) {
         return Err(format!("{id} may not read the environment with --jq"));
     }
+    if program == "git" && !git_args_ok(args, cwd) {
+        return Err(format!("{id} may only name paths inside the folder git runs in, and fetch no refspec with a destination"));
+    }
     Ok(())
+}
+
+/// git's arguments held to what a plugin may touch. `git diff <a> <b>` compares any two files once one is outside the
+/// repo (`git diff /etc/hosts /dev/null` printed it), so a path must stay inside `cwd`: no `..`, and an absolute one in a
+/// folder inside it once symlinks are resolved. A fetch refspec with a destination or `+` moves a local ref (`git fetch
+/// <other repo> +HEAD:refs/heads/main` put another repo's commit on main). `worktree` names its own worktrees' folders,
+/// which git checks belong to the repo.
+fn git_args_ok(args: &[String], cwd: Option<&Path>) -> bool {
+    let Some(command) = args.first().filter(|c| *c != "worktree") else { return true };
+    let inside = |path: &Path| {
+        cwd.is_some_and(|cwd| path.parent().is_some_and(|parent| parent.canonicalize().map_or(path.starts_with(cwd), |p| p.starts_with(cwd))))
+    };
+    let (mut words, mut options) = (args[1..].iter(), true);
+    while let Some(arg) = words.next() {
+        if options && (arg == "--" || arg == "--end-of-options") {
+            options = false;
+        } else if options && arg.starts_with('-') {
+            // A grep pattern, not a path.
+            if arg == "-e" || arg == "--regexp" {
+                words.next();
+            }
+        } else {
+            let path = Path::new(arg);
+            let refspec = command == "fetch" && (arg.starts_with('+') || (arg.contains(':') && !arg.contains("://")));
+            if refspec || path.components().any(|c| c == std::path::Component::ParentDir) || (path.is_absolute() && !inside(path)) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Runs a program once its arguments have been checked.
@@ -1859,6 +1892,42 @@ mod tests {
     }
 
     #[test]
+    fn git_paths_stay_inside_the_folder_it_runs_in() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
+        let p = plugin(&repo, &["git diff", "git ls-files", "git show", "git fetch", "git worktree remove [--]"], &[]);
+        let check = |args: &[&str]| exec_check(&p, "git", &args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), Some(&repo));
+        let file = repo.join("src/lib.rs").display().to_string();
+        for args in [
+            &["diff", "HEAD", "--no-color", "--no-ext-diff", "--", &file][..],
+            &["ls-files", "--error-unmatch", "--", &file],
+            &["diff", "--no-color", "origin/main...origin/feature/x", "--", "src/a.ts"],
+            &["show", "abc123:src/a.ts"],
+            &["fetch", "--quiet", "--end-of-options", "origin", "main", "0123456789abcdef0123456789abcdef01234567"],
+            &["fetch", "https://github.com/o/r", "main"],
+            &["worktree", "remove", "--", "/Users/me/dev/app-feature"],
+        ] {
+            assert_eq!(check(args), Ok(()), "{args:?}");
+        }
+        for args in [
+            // git turns on --no-index by itself when a path is outside the repo.
+            &["diff", "/etc/hosts", "/dev/null"][..],
+            &["diff", "--no-color", "--", "/etc/hosts", "/dev/null"],
+            &["diff", "--", "../outside.txt", "src/lib.rs"],
+            &["show", "abc123:../../etc/hosts"],
+            &["diff", "-O", "/etc/hosts", "HEAD"],
+            // A refspec with a destination or `+` moves local refs.
+            &["fetch", "origin", "+HEAD:refs/heads/main"],
+            &["fetch", "origin", "main:main"],
+            &["fetch", "origin", "+main"],
+        ] {
+            assert!(check(args).is_err(), "{args:?}");
+        }
+        // Run for real from this crate's repo, it printed /etc/hosts.
+        let args: Vec<String> = ["diff", "/etc/hosts", "/dev/null"].map(String::from).to_vec();
+        assert!(exec(&p, "git", &args, Some(&repo), EXEC_TIMEOUT, None).is_err());
+    }
+
+    #[test]
     fn pr_tracker_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"));
         let p = load(dir).unwrap();
@@ -1891,7 +1960,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, program, &args), Ok(()), "{program} {args:?}");
+            assert_eq!(exec_check(&p, program, &args, None), Ok(()), "{program} {args:?}");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
         // az's own file and method flags still can't ride along on a vote.
@@ -2001,7 +2070,7 @@ mod tests {
             grep(&["-I", "-z", "--no-line-number", "--no-column"]),
         ];
         for args in &calls {
-            assert_eq!(exec_check(&p, "git", args), Ok(()), "git {args:?}");
+            assert_eq!(exec_check(&p, "git", args, None), Ok(()), "git {args:?}");
         }
         // Read-only: git grep can't open a pager, and branch can't delete or rename.
         assert!(!may_exec(&p, "git", &["grep".into(), "-Ovi".into(), "x".into()]));
@@ -2034,7 +2103,7 @@ mod tests {
         ];
         for args in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, "git", &args), Ok(()), "git {args:?}");
+            assert_eq!(exec_check(&p, "git", &args, None), Ok(()), "git {args:?}");
         }
         // Nothing can force a removal, delete an unmerged branch, or change anything else.
         for args in [
@@ -2123,7 +2192,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, program, &args), Ok(()), "{program} {args:?}");
+            assert_eq!(exec_check(&p, program, &args, None), Ok(()), "{program} {args:?}");
         }
         assert!(!p.manifest.permissions.notify);
         // The query entry only takes the flags it lists, and no other `boards` subcommand but the declared ones.
@@ -2201,7 +2270,7 @@ mod tests {
     #[test]
     fn gh_and_glab_api_only_call_plain_paths_on_their_own_host() {
         let p = plugin(Path::new("/tmp"), &["gh api", "gh pr view", "gh auth login", "glab api", "glab auth login"], &[]);
-        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), None);
         // pr-tracker's calls.
         for (program, args) in [
             ("gh", &["api", "user", "--jq", ".login"][..]),
@@ -2278,7 +2347,7 @@ mod tests {
     fn no_plugin_changes_a_clis_own_settings() {
         // Even a manifest that allows every command of a CLI can't change what that CLI does on later calls.
         let p = plugin(Path::new("/tmp"), &["az", "gh", "glab", "git"], &[]);
-        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), None);
         for (program, args) in [
             ("az", &["devops", "configure", "--defaults", "organization=https://example.com/x"][..]),
             ("az", &["config", "set", "extension.index_url=https://example.com/index.json"]),
