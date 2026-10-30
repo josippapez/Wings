@@ -2204,6 +2204,9 @@ mod tests {
             ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "title", "--jq", ".environment"]),
             ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
             ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
+            // pflag gives a group's first flag that takes a value the rest of the group, or the next word if it ends it.
+            ("gh", &["api", "user", "-iq", ".login"]),
+            ("gh", &["api", "-iH", "Accept: x", "user"]),
         ] {
             assert_eq!(check(program, args), Ok(()), "{program} {args:?}");
         }
@@ -2222,6 +2225,9 @@ mod tests {
             ("gh", &["api", "user", "-q", "env | keys"]),
             ("gh", &["api", "user", "--jq=env.HOME"]),
             ("gh", &["pr", "view", "1", "--json", "title", "-iqenv"]),
+            ("gh", &["api", "user", "-iq", "$ENV"]),
+            // `-Hq` is a header with the value `q`, so the next word is the endpoint.
+            ("gh", &["api", "-Hq", "https://example.invalid/x"]),
             // A sign-in can't take a token or move where the host's token goes.
             ("glab", &["auth", "login", "--hostname", "gitlab.com", "--api-host", "example.invalid"]),
             ("glab", &["auth", "login", "--hostname", "gitlab.com", "-a", "example.invalid", "--web"]),
