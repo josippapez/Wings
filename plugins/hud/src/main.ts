@@ -17,6 +17,8 @@ import { overview, paneStatus, snapshot, state } from "./lib/view";
 const REPLIES = 500;
 /** Tool results are most of a transcript, and only the newest show whether an MCP server's calls fail. */
 const RESULTS = 100;
+/** How often the limits are read while you're in Wings. A status line with `refreshInterval` reports this often. */
+const STATUS_EVERY = 5_000;
 
 let totalMemory: number | null = null;
 
@@ -84,9 +86,17 @@ function alertLimits() {
   }
 }
 
-async function refreshStatus() {
+/** The last status read, so a check that finds nothing new draws nothing. */
+let lastStatus = "";
+
+/** Without `redraw`, only a status that changed is drawn. */
+async function refreshStatus(redraw = true) {
   try {
-    state.reported = await wings.statusline();
+    const reported = await wings.statusline();
+    const json = JSON.stringify(reported);
+    if (!redraw && json === lastStatus) return;
+    lastStatus = json;
+    state.reported = reported;
     const limits = state.reported?.rateLimits;
     if (limits && JSON.stringify(limits) !== JSON.stringify(state.savedLimits)) {
       state.savedLimits = limits;
@@ -94,6 +104,7 @@ async function refreshStatus() {
     }
   } catch (error) {
     state.reported = null;
+    lastStatus = "";
     console.error(error);
   }
   alertLimits();
@@ -117,7 +128,8 @@ async function refreshMemory() {
   ch.refresh("hud");
 }
 
-// Limits reset on their own and memory moves, so both are checked once a minute. Each check is a few ms.
+// The limits are read every 5 seconds while you're in Wings, and once a minute behind it, which also moves the time
+// to reset along. Memory is checked once a minute. Each check is a few ms.
 void wings.storage
   .get("limits")
   .then(
@@ -132,4 +144,5 @@ void refreshMemory();
 // The status check also raises limit alerts, which matter most when you're in another app, so it keeps running.
 // Memory is only drawn for someone looking, and costs a `vm_stat` run, so it pauses while Wings is in the background.
 setInterval(() => void refreshStatus(), MINUTE);
+pollWhileFocused(() => void refreshStatus(false), STATUS_EVERY);
 pollWhileFocused(() => void refreshMemory(), MINUTE);
