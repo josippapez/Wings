@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.103 · 2026-10-30
+
+- **Deleting a worktree is quick.** Delete worktree in the sidebar finishes at once instead of hanging for 15 seconds or more on a big `node_modules`. Its files are deleted afterwards.
+
 ## 0.1.102 · 2026-10-30
 
 - **Close a floating terminal.** A terminal floating over its agent has a Close button, on the panel and on its minimised bar.
