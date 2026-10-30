@@ -292,9 +292,9 @@ The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists eve
   "main": "dist/main.js",
   "permissions": {
     "exec": [
-      "git branch --show-current",
-      "gh pr list",
-      "gh pr view"
+      "git branch --show-current [--show-current]",
+      "gh pr list [--head --state --json]",
+      "gh pr view [--json]"
     ],
     "transcript": [
       "pr-link"
@@ -314,7 +314,7 @@ The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists eve
 
 | Permission | Allows |
 |---|---|
-| `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments. An entry can end with the only flags it allows, like `az boards work-item update [--id --state]`, which refuses `--title` or any other flag. The list names at least one flag: `[]` is refused, so to allow no flags at all there's no entry form yet |
+| `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments. An entry can end with the only flags it allows, like `az boards work-item update [--id --state]`, which refuses `--title` or any other flag. Only flag names are listed; their values, and arguments that don't start with `-`, stay free. A flag in the command itself is listed too, like `git branch --show-current [--show-current]`. `[]` allows no flags at all, like `git remote get-url []` (Wings 0.1.108; older Wings refuse the plugin, so set `"minWingsVersion": "0.1.108"`). Give every entry a list: one without lets the plugin pass any flag Wings doesn't refuse outright, so list exactly the flags its calls pass, including the ones a helper adds, like `-o json` and `--organization` from `wings-plugin-sdk/cli` callers |
 | `post` | POSTing to these API paths through a signed-in CLI with `wings.post`. Each entry is `gh`, `glab` or `az` and a path where `*` stands for one segment, like `gh repos/*/*/pulls/*/comments/*/replies`. `az` paths are full `https://` URLs. An entry may end with ` {field=a\|b}`, which pins that body field to one of those values, like `gh repos/*/*/pulls/*/reviews {event=APPROVE}` (an approval that can't be turned into a "request changes"); a request whose field has another value, or none, is refused. `exec` itself refuses every flag that writes, like `-X` or `--method` |
 | `transcript` | Reading these Claude Code transcript entry types. `attachment:<kind>`, like `attachment:model`, allows one kind of attachment entry: attachments include whole files and hook output, so ask for the kinds you need rather than `attachment` |
 | `openUrl` | Opening URLs that start with these prefixes: https, or http to this computer only (`localhost`, `127.0.0.1`, `[::1]`, without credentials), like `http://localhost:` |

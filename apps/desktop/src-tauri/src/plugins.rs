@@ -23,7 +23,8 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase", default)]
 pub struct Permissions {
     /// Commands the plugin may run: a program and the subcommand its arguments must start with, e.g.
-    /// `gh pr view`. A bare program name allows any arguments.
+    /// `gh pr view`. A bare program name allows any arguments. A trailing `[...]` lists the only flags it may pass,
+    /// and `[]` allows none.
     pub exec: Vec<String>,
     /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`, or `attachment:<kind>` for one
     /// kind of attachment, e.g. `attachment:model`.
@@ -516,10 +517,10 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     let flags_ok = |e: &str| {
         let (_, flags) = exec_entry(e);
-        e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && !f.is_empty() && f.iter().all(|w| w.starts_with('-')))
+        e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && f.iter().all(|w| w.starts_with('-')))
     };
     if let Some(entry) = manifest.permissions.exec.iter().find(|e| !flags_ok(e)) {
-        return Err(format!("exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state]"));
+        return Err(format!("exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state], or [] for none"));
     }
     if let Some(entry) = manifest.permissions.post.iter().find(|e| post_entry(e).is_none()) {
         return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));
@@ -609,8 +610,9 @@ fn exec_entry(entry: &str) -> (&str, Option<Vec<&str>>) {
     }
 }
 
-/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`, and
-/// `az boards work-item update [--id --state]` allows that command with no flags but those two.
+/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`,
+/// `az boards work-item update [--id --state]` allows that command with no flags but those two, and `gh pr diff []`
+/// allows no flags at all.
 fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
     plugin.manifest.permissions.exec.iter().any(|entry| {
         let (command, flags) = exec_entry(entry);
@@ -1750,30 +1752,41 @@ mod tests {
 
     #[test]
     fn pr_tracker_calls_pass_its_own_manifest() {
-        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"));
-        let p = load(dir).unwrap();
+        let p = own_plugin("pr-tracker");
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "failing_checks"));
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
+            ("git", &["rev-parse", "--show-toplevel"]),
             ("git", &["branch", "--show-current"]),
             ("git", &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]),
             ("git", &["fetch", "--quiet", "origin", "main", "feature/x"]),
+            ("git", &["fetch", "--quiet", "--end-of-options", "origin", "main", "feature/x"]),
             ("git", &["diff", "--no-color", "--no-ext-diff", "origin/main...origin/feature/x"]),
+            ("git", &["diff", "--no-color", "--no-ext-diff", "-U0", "abc123", "def456", "--", "src/a.ts"]),
+            ("git", &["show", "abc123:src/a.ts"]),
             ("gh", &["pr", "list", "--head", "x", "--state", "all", "--limit", "1", "--json", "url,number"]),
+            ("gh", &["pr", "list", "--repo", "ghe.example.com/o/r", "--head", "x", "--state", "all", "--limit", "1", "--json", "url,number"]),
             ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "comments,reviews"]),
             ("gh", &["pr", "diff", "https://github.com/o/r/pull/1"]),
             ("gh", &["api", "repos/o/r/pulls/1/comments", "--paginate", "--slurp"]),
             ("gh", &["api", "repos/o/r/actions/jobs/123"]),
+            ("gh", &["api", "--hostname", "ghe.example.com", "user", "--jq", ".login"]),
             ("gh", &["api", "repos/o/r/actions/jobs/123/logs", "--allow-escape-sequences"]),
+            ("gh", &["auth", "status", "--json", "hosts"]),
             ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
             ("glab", &["api", "--hostname", "gitlab.com", "--paginate", "projects/g%2Fp/merge_requests/1/discussions?per_page=100"]),
             ("glab", &["api", "--hostname", "gitlab.com", "projects/1/jobs/123/trace"]),
             ("glab", &["mr", "diff", "1", "--raw", "--repo", "https://gitlab.com/g/p"]),
+            ("glab", &["auth", "status", "--all"]),
             ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
             ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
             ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--source-branch", "x", "-o", "json"]),
+            ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--project", "P", "--repository", "r", "--status", "active", "--top", "100", "-o", "json"]),
+            ("az", &["repos", "pr", "show", "--id", "1", "--organization", "https://dev.azure.com/o", "-o", "json"]),
             ("az", &["repos", "pr", "policy", "list", "--id", "1", "-o", "json"]),
+            ("az", &["account", "show", "--query", "user.name", "-o", "tsv"]),
             ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads", "--api-version", "7.1"]),
+            ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestIterations", "--route-parameters", "project=P", "--query-parameters", "includeCommits=true", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "build", "--resource", "timeline", "--route-parameters", "project=My Project", "buildId=123", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "build", "--resource", "logs", "--route-parameters", "project=My Project", "buildId=123", "logId=4", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
@@ -1785,6 +1798,18 @@ mod tests {
             assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
+        // Only the flags its calls pass: no header on gh api, no forced fetch, no options on a diff that takes none.
+        for (program, args) in [
+            ("gh", &["api", "-H", "Host: example.com", "user"][..]),
+            ("gh", &["api", "--cache", "1h", "user"]),
+            ("git", &["fetch", "--force", "origin", "main"]),
+            ("git", &["fetch", "-f", "origin", "main"]),
+            ("gh", &["pr", "diff", "1", "--patch"]),
+            ("git", &["show", "--stat", "abc123"]),
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(!may_exec(&p, program, &args), "{program} {args:?} allowed");
+        }
         // az's own file and method flags still can't ride along on a vote.
         let vote = |extra: &[&str]| -> Vec<String> { ["repos", "pr", "set-vote", "--id", "1", "--vote", "reset"].iter().chain(extra).map(|a| a.to_string()).collect() };
         assert!(may_exec(&p, "az", &vote(&[])));
@@ -1844,7 +1869,7 @@ mod tests {
 
     #[test]
     fn pr_tracker_replies_on_azure_at_dev_azure_com_only() {
-        let p = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"))).unwrap();
+        let p = own_plugin("pr-tracker");
         let tail = "_apis/git/repositories/repo/pullRequests/7/threads/44590/comments?api-version=7.1";
         let reply = |address: &str| post_args(&p, &post_request("az", &format!("{address}/{tail}"), None));
         // An organization on {org}.visualstudio.com is reachable at dev.azure.com too, so the plugin posts there.
@@ -1857,8 +1882,7 @@ mod tests {
 
     #[test]
     fn changes_calls_pass_its_own_manifest() {
-        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/changes"));
-        let p = load(dir).unwrap();
+        let p = own_plugin("changes");
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "changed_files"));
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "recent_commits"));
         assert!(p.manifest.contributes.views.iter().any(|v| v.id == "graph" && v.opens == ["window", "modal"]));
@@ -1962,6 +1986,107 @@ mod tests {
         }
     }
 
+    /// One of the plugins in this repo. Its manifest is read without `load`, whose Wings version check refuses a plugin
+    /// that needs the Wings this commit becomes.
+    fn own_plugin(name: &str) -> Plugin {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../plugins").join(name);
+        let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
+        Plugin { manifest, dir, icon_svg: None }
+    }
+
+    /// Each call is one the plugin's manifest allows, with no flag Wings refuses outright.
+    fn assert_calls_pass(p: &Plugin, calls: &[(&str, &[&str])]) {
+        for (program, args) in calls {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(may_exec(p, program, &args), "{program} {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+        }
+    }
+
+    #[test]
+    fn disk_calls_pass_its_own_manifest() {
+        let p = own_plugin("disk");
+        let file = "/Users/me/Downloads/big.zip";
+        assert_calls_pass(
+            &p,
+            &[
+                ("df", &["-k", "-P"]),
+                ("open", &["-R", file]),
+                ("qlmanage", &["-p", file]),
+                ("trash", &[file]),
+                ("tmutil", &["listlocalsnapshotdates", "/"]),
+                ("tmutil", &["deletelocalsnapshots", "2026-10-30-101500"]),
+                ("tmutil", &["thinlocalsnapshots", "/", "999999999999", "4"]),
+            ],
+        );
+        assert!(!may_exec(&p, "trash", &["-v".into(), file.into()]));
+        assert!(!may_exec(&p, "tmutil", &["deletelocalsnapshots".into(), "-d".into(), "/".into()]));
+    }
+
+    #[test]
+    fn hud_calls_pass_its_own_manifest() {
+        let p = own_plugin("hud");
+        assert_calls_pass(&p, &[("vm_stat", &[]), ("sysctl", &["-n", "hw.memsize"])]);
+        assert!(!may_exec(&p, "sysctl", &["-n".into(), "hw.memsize".into(), "-w".into()]));
+    }
+
+    #[test]
+    fn schedules_calls_pass_its_own_manifest() {
+        let p = own_plugin("schedules");
+        let org = "https://dev.azure.com/contoso";
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["remote", "get-url", "origin"]),
+                ("git", &["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"]),
+                ("az", &["boards", "query", "--wiql", "SELECT [System.Id] FROM WorkItems", "--organization", org, "--project", "Web", "-o", "json"]),
+                ("gh", &["issue", "list", "--assignee", "@me", "--state", "open", "--json", "number,title,url", "--limit", "50"]),
+                ("glab", &["issue", "list", "--assignee=@me", "--output", "json", "--per-page", "50"]),
+                ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
+                ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+                ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
+                ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
+            ],
+        );
+        // A sign-in opens the browser: it can't be handed a token, which would sign the CLI in as someone else.
+        assert!(!may_exec(&p, "gh", &["auth".into(), "login".into(), "--with-token".into()]));
+        assert!(!may_exec(&p, "glab", &["auth".into(), "login".into(), "--token".into(), "x".into()]));
+    }
+
+    #[test]
+    fn session_detail_calls_pass_its_own_manifest() {
+        let p = own_plugin("session-detail");
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff"]),
+                ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff", "--", "src/a.ts"]),
+                ("git", &["ls-files", "--error-unmatch", "--", "src/a.ts"]),
+            ],
+        );
+    }
+
+    #[test]
+    fn tasks_calls_pass_its_own_manifest() {
+        let p = own_plugin("tasks");
+        let org = "https://dev.azure.com/contoso";
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["remote", "get-url", "origin"]),
+                ("git", &["diff", "abc123^", "--no-color", "--no-ext-diff", "--", "src/a.ts"]),
+                ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "state", "--jq", ".state"]),
+                ("gh", &["pr", "list", "--head", "feature/x", "--state", "all", "--limit", "5", "--json", "url,state"]),
+                ("az", &["repos", "pr", "show", "--id", "7", "--organization", org, "--query", "status", "--output", "tsv"]),
+                (
+                    "az",
+                    &["repos", "pr", "list", "--organization", org, "--project", "Web", "--repository", "web", "--source-branch", "feature/x", "--status", "all", "--top", "5", "--output", "json"],
+                ),
+            ],
+        );
+        assert!(!may_exec(&p, "git", &["remote".into(), "get-url".into(), "--push".into(), "origin".into()]));
+    }
+
     #[test]
     fn work_item_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
@@ -1971,6 +2096,15 @@ mod tests {
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
             ("git", &["branch", "--show-current"]),
+            ("git", &["rev-parse", "--show-toplevel"]),
+            ("git", &["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"]),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "wit", "--resource", "workItemTypes", "--route-parameters", "project=My Project", "--api-version", "7.1",
+                    "--query", "value[].{name:name,states:states[].{name:name,category:category}}", "--organization", org, "-o", "json",
+                ],
+            ),
             (
                 "az",
                 &[
@@ -2053,8 +2187,15 @@ mod tests {
         };
         assert!(manifest("az boards work-item update [--id --state]").is_ok());
         assert!(manifest("git branch --show-current").is_ok());
-        for bad in ["az x [--id", "az x [id]", "az x []", "az x [--id] y", "az x [--a] [--b]"] {
+        for bad in ["az x [--id", "az x [id]", "az x [] y", "az x [--id] y", "az x [--a] [--b]"] {
             assert!(manifest(bad).is_err(), "{bad}");
+        }
+        // `[]` is a command that takes no flags: its values pass, any flag is refused.
+        let p = manifest("gh pr diff []").unwrap();
+        let diff = |extra: &[&str]| -> Vec<String> { ["pr", "diff", "https://github.com/o/r/pull/1"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(may_exec(&p, "gh", &diff(&[])));
+        for extra in [&["--patch"][..], &["--name-only"], &["-R", "o/r"], &["--repo=o/r"], &["--"]] {
+            assert!(!may_exec(&p, "gh", &diff(extra)), "{extra:?}");
         }
         fs::remove_dir_all(&dir).unwrap();
     }

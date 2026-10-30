@@ -52,7 +52,7 @@ and `main`. This one is enough for the badge below:
   "version": "0.1.0",
   "api": 1,
   "main": "dist/main.js",
-  "permissions": { "exec": ["git branch --show-current"] },
+  "permissions": { "exec": ["git branch --show-current [--show-current]"] },
   "contributes": { "ui": ["badges"] }
 }
 ```
@@ -437,7 +437,8 @@ export const size = (n: number) => tokens(n); // "116k"
 
 `cli` wraps `az`, `gh` or `glab`. It tells "not installed" and "signed out" from a failed call, remembers the
 problem, and builds the badge that offers Install, Sign in or Try again. List each command in `permissions.exec`,
-`az login` or `gh auth login` included.
+`az login` or `gh auth login` included, with the flags your calls and its `signIn` pass, like
+`az login [--allow-no-subscriptions --output]`.
 
 ```ts
 // src/lib/gh.ts

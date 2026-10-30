@@ -1,7 +1,7 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minWingsVersion": "0.1.104",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
@@ -14,15 +14,15 @@
       "opencode --prompt"
     ],
     "exec": [
-      "git remote get-url",
+      "git remote get-url []",
       "git for-each-ref [--format]",
       "az boards query [--wiql --organization --project -o]",
       "gh issue list [--assignee --state --json --limit]",
       "glab issue list [--assignee --output --per-page]",
-      "glab auth status",
-      "az login",
-      "gh auth login",
-      "glab auth login"
+      "glab auth status [--hostname]",
+      "az login [--allow-no-subscriptions --output]",
+      "gh auth login [--web --clipboard --hostname]",
+      "glab auth login [--web --hostname]"
     ],
     "openUrl": [
       "https://dev.azure.com/",

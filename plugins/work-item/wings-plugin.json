@@ -9,15 +9,15 @@
   "main": "dist/main.js",
   "permissions": {
     "exec": [
-      "git remote get-url",
-      "git branch --show-current",
+      "git remote get-url []",
+      "git branch --show-current [--show-current]",
       "git rev-parse [--show-toplevel]",
       "git for-each-ref [--format]",
       "az boards work-item update [--id --state --organization -o]",
       "az boards query [--wiql --project --organization -o]",
-      "az devops invoke",
+      "az devops invoke [--area --resource --route-parameters --query-parameters --api-version --query --organization -o]",
       "az rest [--resource --url -o]",
-      "az login"
+      "az login [--allow-no-subscriptions --output]"
     ],
     "openUrl": [
       "https://dev.azure.com/"
