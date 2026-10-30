@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.108 · 2026-10-30
+
+- **A local log.** Wings keeps what it prints, how long each plugin command took, and any crash in `~/Library/Logs/Wings/wings.log`, up to about 4 MB. Nothing leaves your Mac.
+- **Fewer background processes.** The PR tracker lists the pull requests of every GitHub project in one call a minute instead of two per project, and reads a pane's PR from that list. Work items are read in one call for all of them.
+- **Work items in the sidebar load again.** The Work items section stayed empty with Azure CLI 2.91, whose `az devops invoke` fails on that call.
+- **Highlighted code in plugin pages.** Code in a PR comment thread and in plugin Markdown is coloured by language, loaded only when a page shows code. Code that scrolls sideways gets a thin scrollbar.
+- **Plugins can load images.** A plugin can fetch an image or other file that isn't text, so the Sprint board shows the pictures in a work item.
+- **Plugins keep to what they asked for.** A plugin's commands run only in your projects or a repo open in a pane, and Worktrees still lists the worktrees of repos elsewhere on your Mac. git can't read a file outside that folder, a saved token is sent only to the address the plugin names for it, `gh`, `glab` and `az` only reach their own service, GraphQL calls can only read, and no plugin can change a CLI's own settings or sign it in as someone else. Plugins whose access changed ask you to approve it again.
+
 ## 0.1.107 · 2026-10-30
 
 - **Name an assigned entry.** A Schedules "When something is assigned to me" entry takes a name, shown in the list and the sidebar instead of what it does.
