@@ -644,6 +644,45 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
     name.strip_prefix('-').is_some_and(|group| group.chars().any(|c| short.contains(&c)))
 }
 
+/// `az rest` sends a token to whatever `--url` names, so a plugin's call may only go to Azure DevOps, with Azure
+/// DevOps' token. An abbreviated or attached form of those flags is refused, since az reads it as the real one.
+fn az_rest_ok(args: &[String]) -> bool {
+    if args.first().is_none_or(|a| a != "rest") {
+        return true;
+    }
+    let (mut url, mut resource) = (None, None);
+    let mut rest = args[1..].iter();
+    while let Some(arg) = rest.next() {
+        let (name, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(n, v)| (n, Some(v)));
+        let slot = match name {
+            "--url" | "--uri" | "-u" => &mut url,
+            "--resource" => &mut resource,
+            n if n.len() > 2 && ["--url", "--uri", "--resource"].iter().any(|f| f.starts_with(n)) => return false,
+            n if n.starts_with("-u") && !n.starts_with("--") => return false,
+            _ => continue,
+        };
+        let Some(value) = inline.map(str::to_string).or_else(|| rest.next().cloned()) else { return false };
+        if slot.replace(value).is_some() {
+            return false;
+        }
+    }
+    url.is_some_and(|u| azure_devops_url(&u)) && resource.is_none_or(|r| r == AZURE_DEVOPS_RESOURCE)
+}
+
+/// An https URL on `dev.azure.com` or an `<org>.visualstudio.com` host.
+fn azure_devops_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let org_host = |org: &str| !org.is_empty() && org.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    rest[host.len()..].starts_with('/') && (host == "dev.azure.com" || host.strip_suffix(".visualstudio.com").is_some_and(org_host))
+}
+
+/// `gh api graphql` runs mutations too, so a plugin's GraphQL may only read.
+fn graphql_reads_only(fields: &serde_json::Map<String, Value>) -> bool {
+    let words = |q: &str| q.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|w| w == "mutation" || w == "subscription");
+    fields.get("query").and_then(Value::as_str).is_some_and(|q| !words(q))
+}
+
 /// Runs a command the manifest allows. No shell, so arguments can't smuggle in commands.
 pub fn exec(
     plugin: &Plugin,
@@ -660,6 +699,9 @@ pub fn exec(
     }
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
+    }
+    if program == "az" && !az_rest_ok(args) {
+        return Err(format!("{id} may only call Azure DevOps with az rest, with its token"));
     }
     run(program, args, cwd, timeout, on_line)
 }
@@ -1070,6 +1112,9 @@ fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, Stri
     let id = &plugin.manifest.id;
     if !may_post(plugin, program, url, fields) {
         return Err(format!("{id} may not post to {program} {url}"));
+    }
+    if program == "gh" && url == "graphql" && !graphql_reads_only(fields) {
+        return Err(format!("{id} may only read with gh graphql"));
     }
     let key_ok = |k: &str| !k.is_empty() && k.len() <= 40 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
     if fields.is_empty() || fields.len() > 10 {
@@ -1691,6 +1736,16 @@ mod tests {
         for (program, url, host) in posts {
             assert!(post_args(&p, &post_request(program, url, host)).is_ok(), "{program} {url} not declared");
         }
+        // The lists' GraphQL only reads: a mutation is refused though the entry allows `gh graphql`.
+        let graphql = |query: &str| {
+            let mut r = post_request("gh", "graphql", None);
+            r.fields = serde_json::json!({ "query": query }).as_object().unwrap().clone();
+            r
+        };
+        assert!(post_args(&p, &graphql("query { viewer { login } }")).is_ok());
+        for query in ["mutation { addStar(input: {starrableId: \"x\"}) { clientMutationId } }", "query { a } mutation{b}", "subscription { x }"] {
+            assert!(post_args(&p, &graphql(query)).is_err(), "{query}");
+        }
         // Approving on GitHub is pinned to the APPROVE event, on github.com and on an Enterprise host.
         let review = |event: &str, host: Option<&str>| {
             let mut r = post_request("gh", "repos/o/r/pulls/1/reviews", host);
@@ -1848,7 +1903,13 @@ mod tests {
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
             ("git", &["branch", "--show-current"]),
-            ("az", &["boards", "work-item", "show", "--id", "123456", "--organization", org, "-o", "json"]),
+            (
+                "az",
+                &[
+                    "rest", "--resource", AZURE_DEVOPS_RESOURCE, "--url",
+                    "https://dev.azure.com/o/_apis/wit/workitems?ids=1,2&$expand=relations&errorPolicy=omit&api-version=7.1", "-o", "json",
+                ],
+            ),
             (
                 "az",
                 &[
@@ -1904,7 +1965,7 @@ mod tests {
             assert!(update(extra).iter().any(|a| is_unsafe_flag("az", a)), "{extra:?}");
         }
         assert!(!may_exec(&p, "az", &["boards".into(), "work-item".into(), "delete".into(), "--id".into(), "1".into()]));
-        assert!(!may_exec(&p, "az", &["rest".into()]));
+        assert!(!may_exec(&p, "az", &["rest".into(), "--headers".into(), "x=1".into()]));
         assert!(p.manifest.permissions.post.is_empty());
         // Only the flags its entry lists: state, not the title, fields or anything else.
         assert!(may_exec(&p, "az", &update(&["--state=Done"])));
@@ -1933,6 +1994,31 @@ mod tests {
     fn post_request(program: &str, url: &str, host: Option<&str>) -> PostRequest {
         let fields = serde_json::json!({ "body": "Thanks, fixed" }).as_object().unwrap().clone();
         PostRequest { program: program.into(), url: url.into(), host: host.map(String::from), fields }
+    }
+
+    #[test]
+    fn az_rest_only_reaches_azure_devops_with_its_token() {
+        let rest = |extra: &[&str]| -> Vec<String> { ["rest"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        let ado = "https://dev.azure.com/o/_apis/wit/workitems?ids=1";
+        assert!(az_rest_ok(&rest(&["--resource", AZURE_DEVOPS_RESOURCE, "--url", ado, "-o", "json"])));
+        assert!(az_rest_ok(&rest(&["--url=https://contoso.visualstudio.com/_apis/projects"])));
+        for extra in [
+            &["--resource", AZURE_DEVOPS_RESOURCE, "--url", "https://example.com/x"][..],
+            &["--url", "https://dev.azure.com@example.com/x"],
+            &["--url", "https://dev.azure.com.example.com/x"],
+            &["--url", "http://dev.azure.com/x"],
+            &["--url", "/subscriptions/x"],
+            &["--url", ado, "--resource", "https://management.azure.com/"],
+            &["--url", ado, "--url", "https://example.com/x"],
+            &["--ur", "https://example.com/x"],
+            &["-uhttps://example.com/x"],
+            &["--resour", "https://management.azure.com/", "--url", ado],
+            &["--url"],
+            &[],
+        ] {
+            assert!(!az_rest_ok(&rest(extra)), "{extra:?}");
+        }
+        assert!(az_rest_ok(&["repos".into(), "pr".into(), "list".into()]));
     }
 
     #[test]
