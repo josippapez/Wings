@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 
+import { CodeSnippet } from "@/components/code-snippet";
 import { parseBlocks, parseInline, type Inline as InlinePart, type MdBlock } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
@@ -150,9 +151,7 @@ function Block({ b, headingOffset, read }: { b: MdBlock; headingOffset: number; 
     }
     case "code":
       return (
-        <pre className="overflow-x-auto rounded-lg bg-white/[0.06] p-3 font-mono text-[12px] leading-snug">
-          <code>{b.text}</code>
-        </pre>
+        <CodeSnippet code={b.text} language={b.lang} />
       );
     case "quote":
       return (

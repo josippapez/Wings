@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { CodeSnippet } from "@/components/code-snippet";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, type McpSetupApproval } from "@/lib/api";
@@ -50,13 +51,17 @@ export function SetupApprovalDialog() {
             <div className="grid gap-3 text-[13px]">
               <div className="grid gap-1">
                 <span className="text-[12px] text-muted-foreground">Now</span>
-                <pre className="rounded-lg bg-muted px-3 py-2 font-mono text-[12px] break-all whitespace-pre-wrap text-muted-foreground">{ask.current || "none"}</pre>
+                {ask.current ? <CodeSnippet code={ask.current} language="bash" wrap className="text-muted-foreground" /> : <span className="rounded-lg bg-muted px-2.5 py-2 font-mono text-[12px] text-muted-foreground">none</span>}
               </div>
               <div className="grid gap-1">
                 <span className="text-[12px] text-muted-foreground">Proposed, exactly as it will run</span>
-                <pre className="rounded-lg bg-muted px-3 py-2 font-mono text-[12px] break-all whitespace-pre-wrap" data-testid="setup-approval-command">
-                  {ask.proposed || "(clear it)"}
-                </pre>
+                {ask.proposed ? (
+                  <CodeSnippet code={ask.proposed} language="bash" wrap data-testid="setup-approval-command" />
+                ) : (
+                  <span className="rounded-lg bg-muted px-2.5 py-2 font-mono text-[12px]" data-testid="setup-approval-command">
+                    (clear it)
+                  </span>
+                )}
               </div>
               <p className="text-[12px] text-muted-foreground">It runs in every new worktree of this project before the agent starts.</p>
             </div>

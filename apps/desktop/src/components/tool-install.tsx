@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CircleCheckIcon, ExternalLinkIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { CodeSnippet } from "@/components/code-snippet";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
@@ -113,7 +114,7 @@ export function ToolInstallDialog(props: {
                 ? `Wings opens a new tab in ${props.project.name} and runs this there, so you can follow it and answer any question it asks:`
                 : "Add a project to Wings first. The install runs in a new tab there:"}
             </p>
-            <code className="rounded-md bg-white/[0.06] px-2 py-1 font-mono text-[12px] text-foreground select-all">{tool.command}</code>
+            <CodeSnippet code={tool.command} language="bash" wrap className="text-foreground" />
           </div>
         ) : tool?.needsHomebrew ? (
           <p className="text-[13px] text-muted-foreground">Wings installs it with Homebrew, which isn't on this Mac. Install Homebrew first, or follow {tool.name}'s own guide.</p>

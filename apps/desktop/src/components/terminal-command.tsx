@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { CodeSnippet } from "@/components/code-snippet";
 import { Connection } from "@/components/connections";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,7 +22,7 @@ function Added({ status }: { status: CliStatus }) {
   return (
     <div className="flex flex-col gap-2 text-[13px] text-muted-foreground">
       <p>Added to ~/.local/bin, but that folder isn't on your PATH yet. Add this line to your shell profile, like ~/.zshrc:</p>
-      <code className="rounded-md bg-white/[0.06] px-2 py-1 font-mono text-[12px] text-foreground select-all">{pathLine}</code>
+      <CodeSnippet code={pathLine} language="bash" wrap className="text-foreground" />
     </div>
   );
 }
