@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.107 · 2026-10-30
+
+- **Terminal in the sidebar.** A Terminal row under Search opens and hides the quick terminal, and shows its shortcut.
+
 ## 0.1.106 · 2026-10-30
 
 - **Quick terminal.** ⌃` opens a terminal in your home folder over whatever you're looking at, without picking a project. Press it again to hide it, and the shell keeps running. Move, resize or minimise it, and close it to end the shell. Change the shortcut in Settings, Keyboard, or find Quick Terminal in the command palette.
