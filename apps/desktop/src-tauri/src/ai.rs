@@ -2,8 +2,9 @@
 //! model (through a Swift helper compiled on first use) or an Ollama model on localhost. Nothing leaves this Mac.
 //!
 //! Names go to sessions with no title of their own, and are kept in `ai-names.json` in the app data folder; the
-//! agents' own data is never written. Summaries are made when an agent's turn ends and live in memory. All
-//! generation runs on one background thread, one job at a time, so detection and the UI never wait for it.
+//! agents' own data is never written. Summaries are made when an agent's turn ends, and every two minutes while a long
+//! one runs, and live in memory. All generation runs on one background thread, one job at a time, so detection and
+//! the UI never wait for it.
 //! The model only sees the user's prompt and the agent's reply, cut short: never tool output.
 
 use std::{
@@ -46,6 +47,9 @@ const NAMES_PER_SEARCH: usize = 12;
 /// A turn the agent worked on for less than this gets no summary: a quick answer says little the prompt doesn't, and
 /// each summary costs the model about a second.
 const SUMMARY_MIN_TURN: Duration = Duration::from_secs(15);
+/// How often a pane that keeps working gets a new summary, so a turn that runs for many minutes, like a scheduled
+/// one, says what it is doing. Each summary takes the model 2 to 14 seconds.
+const SUMMARY_EVERY: Duration = Duration::from_secs(120);
 const QUEUE_NAMES: usize = 24;
 const NAME_WORDS: usize = 8;
 const SUMMARY_WORDS: usize = 12;
@@ -155,6 +159,8 @@ pub struct Ai {
     retry: Mutex<HashMap<(Task, String), Instant>>,
     /// Each pane's last state and when it began, to see a turn end and how long it took.
     seen: Mutex<HashMap<String, (AgentState, Instant)>>,
+    /// When each pane last got a summary while still working. See `summary_due`.
+    asked: Mutex<HashMap<String, Instant>>,
     /// One compile at a time.
     build: Mutex<()>,
 }
@@ -171,6 +177,12 @@ fn active_engine(chosen: Engine, failed: Option<Instant>, now: Instant) -> Engin
 /// or done, after at least `SUMMARY_MIN_TURN`.
 fn long_turn_ended(before: Option<(AgentState, Instant)>, state: AgentState, now: Instant) -> bool {
     matches!(before, Some((AgentState::Working, since)) if now.duration_since(since) >= SUMMARY_MIN_TURN) && matches!(state, AgentState::Done | AgentState::Idle)
+}
+
+/// Whether a pane that has been `state` since `since`, and was last summarized while working at `asked`, is due a
+/// summary of what it is doing now.
+fn summary_due(state: AgentState, since: Instant, asked: Option<Instant>, now: Instant) -> bool {
+    state == AgentState::Working && now.duration_since(since) >= SUMMARY_EVERY && asked.is_none_or(|at| now.duration_since(at) >= SUMMARY_EVERY)
 }
 
 fn cut_head(text: &str, chars: usize) -> String {
@@ -249,6 +261,7 @@ impl Ai {
             failed: Mutex::default(),
             retry: Mutex::default(),
             seen: Mutex::default(),
+            asked: Mutex::default(),
             build: Mutex::new(()),
         }
     }
@@ -282,8 +295,10 @@ impl Ai {
     /// every detection tick, so it only reads memory; the model runs on its own thread.
     pub fn observe(&self, agents: &mut [Agent]) {
         let mut seen = self.seen.lock().unwrap();
+        let mut asked = self.asked.lock().unwrap();
         if self.engine() == Engine::Off {
             seen.clear();
+            asked.clear();
             return;
         }
         let summaries = self.summaries.lock().unwrap();
@@ -298,6 +313,9 @@ impl Ai {
                 crate::detect::AgentKind::Opencode => history::Agent::OpenCode,
             };
             if long_turn_ended(before, agent.state, now) {
+                self.enqueue(Task::Summary, &id, kind);
+            } else if summary_due(agent.state, since, asked.get(&agent.pane_id).copied(), now) {
+                asked.insert(agent.pane_id.clone(), now);
                 self.enqueue(Task::Summary, &id, kind);
             }
             if agent.name.is_none() || agent.weak_name {
@@ -599,6 +617,17 @@ mod tests {
         assert!(!long_turn_ended(worked(90), AgentState::Working, start), "still working");
         assert!(!long_turn_ended(Some((AgentState::Idle, start - Duration::from_secs(90))), AgentState::Idle, start));
         assert!(!long_turn_ended(None, AgentState::Idle, start));
+    }
+
+    #[test]
+    fn a_long_turn_gets_a_summary_every_two_minutes_while_it_runs() {
+        let now = Instant::now();
+        let ago = |secs| now - Duration::from_secs(secs);
+        assert!(summary_due(AgentState::Working, ago(120), None, now));
+        assert!(!summary_due(AgentState::Working, ago(119), None, now), "not in the turn's first two minutes");
+        assert!(!summary_due(AgentState::Working, ago(600), Some(ago(60)), now), "one a minute ago");
+        assert!(summary_due(AgentState::Working, ago(600), Some(ago(120)), now));
+        assert!(!summary_due(AgentState::Blocked, ago(600), None, now), "waiting, not working");
     }
 
     #[test]
