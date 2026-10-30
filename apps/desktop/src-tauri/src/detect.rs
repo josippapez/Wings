@@ -194,6 +194,10 @@ impl Detector {
         for (((pane, (_, agent)), info), (args, started_at)) in panes.iter().zip(found).zip(infos).zip(launch) {
             let cwd = info.cwd.clone();
             pane_infos.insert(pane.pane_id.clone(), info);
+            // A pane with no project has no place in the Agents list, so an agent run there is left alone.
+            if pane.space_id == crate::pty::NO_PROJECT {
+                continue;
+            }
             let Some((pid, kind)) = agent else {
                 self.last.remove(&pane.pane_id);
                 self.unseen_done.remove(&pane.pane_id);
@@ -541,6 +545,11 @@ mod tests {
         let titled = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: probe.shell_pid, foreground_pid: None, title: "✳ Opencode wings registration error".into() };
         let agents = d.scan(std::slice::from_ref(&titled), None).agents;
         assert_eq!((agents[0].name.as_deref(), agents[0].weak_name), (Some("Opencode wings registration error"), false));
+        // The same Claude in a pane with no project (the quick terminal) is no agent, but the pane still reports its command and folder.
+        let loose = PaneProbe { pane_id: "p2".into(), space_id: crate::pty::NO_PROJECT.into(), shell_pid: probe.shell_pid, foreground_pid: None, title: String::new() };
+        let scan = d.scan(std::slice::from_ref(&loose), None);
+        assert!(scan.agents.is_empty());
+        assert_eq!(scan.panes["p2"].command, "claude");
 
         shell.kill().unwrap();
         let _ = Command::new("pkill").arg("-f").arg(fake.to_str().unwrap()).status();

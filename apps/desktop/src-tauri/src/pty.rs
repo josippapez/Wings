@@ -8,6 +8,10 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
+/// The `space_id` of a pane that belongs to no project (the quick terminal): it starts in the home folder, and no
+/// agent is detected in it, since the Agents list is grouped by project.
+pub const NO_PROJECT: &str = "";
+
 /// A shell running in a pseudo-terminal, bound to one Wings tab.
 pub struct Pane {
     pub id: String,

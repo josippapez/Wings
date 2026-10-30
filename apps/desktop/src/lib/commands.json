@@ -25,6 +25,7 @@
     { "id": "find", "title": "Find in Pane", "group": "View", "menu": "View", "key": "f" },
     { "id": "palette", "title": "Command Palette", "group": "View", "menu": "View", "key": "k" },
     { "id": "history", "title": "Past Sessions", "group": "View", "menu": "View" },
+    { "id": "quick-terminal", "title": "Quick Terminal", "group": "View", "menu": "View" },
     { "id": "font-up", "title": "Increase Font Size", "group": "View", "menu": "View", "gap": true, "key": "+", "also": ["="] },
     { "id": "font-down", "title": "Decrease Font Size", "group": "View", "menu": "View", "key": "-", "also": ["_"] },
     { "id": "font-reset", "title": "Reset Font Size", "group": "View", "menu": "View", "key": "0" },

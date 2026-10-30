@@ -285,10 +285,16 @@ fn pane_create(
     cwd: Option<String>,
     history_id: Option<String>,
 ) -> Res<String> {
-    let root = PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path);
+    let projectless = space_id == pty::NO_PROJECT;
+    let root = if projectless {
+        dirs::home_dir().ok_or("Couldn't find your home folder")?
+    } else {
+        PathBuf::from(&state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path)
+    };
     // A plugin's pane can start in a subfolder, but never outside the project it belongs to. Only a tab Claude's
     // `open_pane` asked for can.
     let cwd = match cwd {
+        _ if projectless => root,
         Some(dir) => match plugins::pane_cwd(std::path::Path::new(&dir), &[root], Some(0)) {
             Ok((_, dir)) => dir,
             Err(e) => plugins::take_grant(&mut state.pane_grants.lock().unwrap(), &space_id, std::path::Path::new(&dir)).ok_or(e)?,

@@ -13,6 +13,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import { api } from "@/lib/api";
 import { commandForKey, shortcutOf } from "@/lib/commands";
+import { DEFAULT_QUICK_TERMINAL_KEY, isQuickTerminalKey, type QuickTerminalKey } from "@/lib/quick-terminal";
 import { editKey } from "@/lib/edit-keys";
 import { canUnloadHistory, HISTORY_SEAM, TERMINAL_UNLOAD_MS } from "@/lib/idle-unload";
 
@@ -175,6 +176,13 @@ export function setTerminalKeys(next: TerminalKeys) {
   keys = next;
 }
 
+let quickKey = DEFAULT_QUICK_TERMINAL_KEY;
+
+/** The quick terminal's shortcut: no pane sends it to its shell, so it works from inside any terminal. */
+export function setQuickTerminalKey(next: QuickTerminalKey) {
+  quickKey = next;
+}
+
 /** The Option keys held down. xterm.js treats Option as Meta or not, never one side only, so it's switched per key. */
 const heldOption = new Set<string>();
 
@@ -283,7 +291,7 @@ export class TerminalSession {
         if (e.type === "keydown") this.term.input("\x1b\r");
         return false;
       }
-      return shortcutFor(e) === null;
+      return shortcutFor(e) === null && !isQuickTerminalKey(e, quickKey);
     });
     this.el.addEventListener("focusin", handlers.onFocus);
     // Copy on select writes when the button is released, not on every selection change while dragging.

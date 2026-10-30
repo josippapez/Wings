@@ -52,14 +52,16 @@ import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
 import { canGoBack, canGoForward, EMPTY_NAV, goBack, goForward, visit, type NavState, type Place } from "@/lib/nav-history";
 import { defaultEditor, openInEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import { DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
+import { DEFAULT_QUICK_TERMINAL_KEY, INITIAL_QUICK, isQuickTerminalKey, NO_SPACE, QUICK_TERMINAL_KEY, quickReducer, type QuickTerminalKey } from "@/lib/quick-terminal";
 import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
-import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
+import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, setQuickTerminalKey, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
 import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
+import { QuickTerminal } from "@/components/quick-terminal";
 import { SetupApprovalDialog } from "@/components/setup-approval-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
@@ -101,6 +103,8 @@ type SavedWorkspace = {
   terminalKeys?: TerminalKeys;
   /** The shortcut that brings Wings forward from any app. */
   globalHotkey?: GlobalHotkey;
+  /** The shortcut that shows and hides the quick terminal. */
+  quickTerminalKey?: QuickTerminalKey;
   /** The terminal's font, cursor, scrollback, copy and contrast settings. */
   terminalLook?: TerminalLook;
   tabs: PaneTab[];
@@ -312,6 +316,7 @@ const leftPanel = usePanelRef();
   const [terminalKeys, setTerminalKeysState] = useState<TerminalKeys>(DEFAULT_TERMINAL_KEYS);
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
+  const [quickKey, setQuickKey] = useState<QuickTerminalKey>(DEFAULT_QUICK_TERMINAL_KEY);
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [notifySound, setNotifySound] = useState<SoundSettings>(DEFAULT_SOUND);
   const [agentsRunCommands, setAgentsRunCommands] = useState(false);
@@ -844,6 +849,7 @@ const leftPanel = usePanelRef();
       }
       if (saved.terminalKeys) setTerminalKeysState({ ...DEFAULT_TERMINAL_KEYS, ...saved.terminalKeys });
       if (saved.globalHotkey) setGlobalHotkey({ ...DEFAULT_GLOBAL_HOTKEY, ...saved.globalHotkey });
+      if (saved.quickTerminalKey) setQuickKey({ ...DEFAULT_QUICK_TERMINAL_KEY, ...saved.quickTerminalKey });
       if (saved.terminalLook) setTerminalLookState({ ...DEFAULT_TERMINAL_LOOK, ...saved.terminalLook });
       if (saved.pinnedButtons) setPinnedButtons(saved.pinnedButtons);
       if (saved.newTabPage) setNewTabPage(saved.newTabPage);
@@ -920,6 +926,7 @@ const leftPanel = usePanelRef();
       // only sends a change, so projects not opened yet stayed without a status.
       api.onGitStatus(setGit).then((off) => (void api.gitStatus().then(setGit), off)),
       api.onPaneExited((paneId) => {
+        if (terminals.get(QUICK_TERMINAL_KEY)?.paneId === paneId) quickEndRef.current();
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         if (key) closePane(key);
       }),
@@ -975,6 +982,7 @@ const leftPanel = usePanelRef();
       fontSize,
       terminalKeys,
       globalHotkey,
+      quickTerminalKey: quickKey,
       terminalLook,
       tabs: paneTabs,
       viewTabs,
@@ -1007,7 +1015,7 @@ const leftPanel = usePanelRef();
       void api.workspaceSave(json);
     }, 400);
     return () => clearTimeout(timer);
-  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, terminalLook, sleep, notifySound, agentsRunCommands, agentsMessage, agentTerminalsOpen, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
+  }, [ready, tabs, panes, spaces, activeSpaceId, activeTabBySpace, sidebarOpen, widths, pinnedButtons, fontSize, terminalKeys, globalHotkey, quickKey, terminalLook, sleep, notifySound, agentsRunCommands, agentsMessage, agentTerminalsOpen, newTabPage, newProjectOpens, collapsedSections, projectSort, olderOpen, lastActive, notifications, cwdsJson]);
 
   const rightRef = rightSidebar ? sidebarRef(rightSidebar) : null;
   // Sidebars slide open and shut; a drag on a handle resizes them straight away. The first placement, with the
@@ -1073,14 +1081,14 @@ const leftPanel = usePanelRef();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const id = shortcutFor(e);
+      const id = shortcutFor(e) ?? (!e.repeat && isQuickTerminalKey(e, quickKey) ? "quick-terminal" : null);
       if (!id) return;
       e.preventDefault();
       runCommand(id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [runCommand]);
+  }, [runCommand, quickKey]);
 
   // The mouse's back and forward buttons are buttons 3 and 4 (WebKit maps NSEvent buttonNumber 3 and 4 to them).
   // Capture phase on the window, so a terminal can't take them, and the press is swallowed too: a program with
@@ -1127,6 +1135,7 @@ const leftPanel = usePanelRef();
 
   useEffect(() => setTerminalFontSize(fontSize), [fontSize]);
   useEffect(() => setTerminalKeys(terminalKeys), [terminalKeys]);
+  useEffect(() => setQuickTerminalKey(quickKey), [quickKey]);
   useEffect(() => setTerminalLook(terminalLook), [terminalLook]);
   useEffect(() => setSoundSettings(notifySound), [notifySound]);
 
@@ -1776,6 +1785,49 @@ const leftPanel = usePanelRef();
     },
   };
 
+  const focusTerminal = useCallback(() => {
+    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+    if (tab && isPaneTab(tab)) terminals.get(tab.focusedPane)?.focus();
+  }, []);
+
+  // The quick terminal: a shell that belongs to no project, floated over the pane area. Its session sits in `terminals`
+  // like any pane's, so font and look changes reach it, but in no tab, so nothing saves or lists it.
+  const [quick, dispatchQuick] = useReducer(quickReducer, INITIAL_QUICK);
+  const [quickPaneId, setQuickPaneId] = useState<string | null>(null);
+  const quickRef = useRef(quick);
+  quickRef.current = quick;
+  /** What had focus when the quick terminal opened, to give it back when it goes. */
+  const quickOpener = useRef<HTMLElement | null>(null);
+  const giveFocusBack = () => {
+    const at = document.activeElement;
+    const panel = terminals.get(QUICK_TERMINAL_KEY)?.el.closest("[role=group]");
+    const opener = quickOpener.current;
+    quickOpener.current = null;
+    // Already clicked into something else: leave it there.
+    if (at && at !== document.body && !panel?.contains(at)) return;
+    if (opener?.isConnected) opener.focus();
+    else focusTerminal();
+  };
+  const toggleQuick = () => {
+    const { phase } = quickRef.current;
+    if (phase === "shown") giveFocusBack();
+    else {
+      quickOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      if (phase === "off") terminals.set(QUICK_TERMINAL_KEY, new TerminalSession(NO_SPACE, { onFocus: () => {}, onStarted: setQuickPaneId }));
+    }
+    dispatchQuick("toggle");
+  };
+  /** Closing it, or its shell exiting: the shell ends, and the next toggle starts a new one. */
+  const endQuick = () => {
+    if (quickRef.current.phase === "shown") giveFocusBack();
+    terminals.get(QUICK_TERMINAL_KEY)?.dispose();
+    terminals.delete(QUICK_TERMINAL_KEY);
+    setQuickPaneId(null);
+    dispatchQuick("end");
+  };
+  const quickEndRef = useRef(endQuick);
+  quickEndRef.current = endQuick;
+
   const editors = useEditors();
   const [editorId] = useDefaultEditorId();
   const editor = defaultEditor(editors, editorId);
@@ -1836,6 +1888,7 @@ const leftPanel = usePanelRef();
       },
       palette: () => setPaletteOpen((o) => !o),
       history: () => setHistoryOpen(true),
+      "quick-terminal": toggleQuick,
       "font-up": () => setFontSize((f) => Math.min(24, f + 1)),
       "font-down": () => setFontSize((f) => Math.max(9, f - 1)),
       "font-reset": () => setFontSize(DEFAULT_FONT_SIZE),
@@ -1863,10 +1916,10 @@ const leftPanel = usePanelRef();
   /** What the palette searches besides past sessions. Built only while it is open. */
   const paletteItems = (): PaletteItem[] => {
     const projectName = (id: string) => spaces.find((s) => s.id === id)?.name ?? "";
-    const opens = new Set(["history", "settings", "notifications", "send-review", "worktree-agent"]);
+    const opens = new Set(["history", "settings", "notifications", "send-review", "worktree-agent", "quick-terminal"]);
     const items: PaletteItem[] = commands
       .filter((c) => c.enabled && c.id !== "palette")
-      .map((c) => ({ id: `command:${c.id}`, kind: "command", title: c.title, subtitle: undefined, keywords: c.group, shortcut: shortcutText(c, isMac) || undefined, opensUi: opens.has(c.id), run: c.run }));
+      .map((c) => ({ id: `command:${c.id}`, kind: "command", title: c.title, subtitle: undefined, keywords: c.group, shortcut: (c.id === "quick-terminal" ? quickKey.enabled && hotkeyLabel(quickKey.accelerator, isMac) : shortcutText(c, isMac)) || undefined, opensUi: opens.has(c.id), run: c.run }));
     for (const s of spaces) {
       items.push({ id: `project-page:${s.id}`, kind: "command", title: `Project page: ${s.name}`, keywords: "notes facts info", run: () => showProjectPage(s.id) });
     }
@@ -1926,10 +1979,6 @@ const leftPanel = usePanelRef();
   );
   const launchSessionRef = useRef(launchSession);
   launchSessionRef.current = launchSession;
-  const focusTerminal = useCallback(() => {
-    const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-    if (tab && isPaneTab(tab)) terminals.get(tab.focusedPane)?.focus();
-  }, []);
 
   /** What a plugin button on the title bar does; `rect` is the button, which a panel opens under. */
   const pressPluginButton = (button: PluginButton, rect: { right: number; bottom: number }, newTab?: boolean) => {
@@ -2084,6 +2133,19 @@ const leftPanel = usePanelRef();
                     actions={actions}
                   />
                   ),
+                )}
+                {quick.phase !== "off" && (
+                  <QuickTerminal
+                    state={quick}
+                    cwd={(quickPaneId && paneInfo[quickPaneId]?.cwd) || null}
+                    shortcut={quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null}
+                    onMinimise={() => {
+                      giveFocusBack();
+                      dispatchQuick("minimise");
+                    }}
+                    onExpand={() => dispatchQuick("expand")}
+                    onClose={endQuick}
+                  />
                 )}
                 {!activeSpace && !activeTabId && (
                   <Welcome
@@ -2285,7 +2347,7 @@ const leftPanel = usePanelRef();
             checking: pluginUpdates.checking,
             onCheck: () => void pluginUpdates.check(true),
           }}
-          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} agentsMessage={agentsMessage} onAgentsMessageChange={setAgentsMessage} agentTerminalsOpen={agentTerminalsOpen} onAgentTerminalsOpenChange={setAgentTerminalsOpen} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
+          keys={terminalKeys} onKeysChange={setTerminalKeysState} hotkey={globalHotkey} onHotkeyChange={setGlobalHotkey} quickKey={quickKey} onQuickKeyChange={setQuickKey} sleep={sleep} onSleepChange={setSleep} notifySound={notifySound} onNotifySoundChange={setNotifySound} agentsRunCommands={agentsRunCommands} onAgentsRunCommandsChange={setAgentsRunCommands} agentsMessage={agentsMessage} onAgentsMessageChange={setAgentsMessage} agentTerminalsOpen={agentTerminalsOpen} onAgentTerminalsOpenChange={setAgentTerminalsOpen} newTabs={newTabs} newTabPage={newTabPage} onNewTabPageChange={setNewTabPage} newProjectOpens={newProjectOpens} onNewProjectOpensChange={setNewProjectOpens} look={terminalLook} onLookChange={setTerminalLookState}
           onRunInTab={
             activeSpace
               ? (input) => {

@@ -20,6 +20,7 @@ import { SLEEP_MINUTES, type SleepSettings } from "@/lib/sleep";
 import type { PluginHost } from "@/lib/plugins";
 import { cn } from "@/lib/utils";
 import { acceleratorFromEvent, DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
+import { DEFAULT_QUICK_TERMINAL_KEY, type QuickTerminalKey } from "@/lib/quick-terminal";
 import { isMac, type CursorInactiveStyle, type CursorStyle, type OptionAsMeta, type TerminalKeys, type TerminalLook } from "@/lib/terminal";
 
 const optionChoices: { value: OptionAsMeta; label: string }[] = [
@@ -69,13 +70,13 @@ function Row(props: { id: string; label: string; hint?: string; children: React.
 }
 
 /** Shows a shortcut; click it, then press a new one. Escape cancels, and Backspace puts the default back. */
-function HotkeyRecorder(props: { value: string; disabled: boolean; onChange: (accelerator: string) => void }) {
+function HotkeyRecorder(props: { label: string; value: string; fallback: string; disabled: boolean; onChange: (accelerator: string) => void }) {
   const [recording, setRecording] = useState(false);
   return (
     <button
       type="button"
       disabled={props.disabled}
-      aria-label="Global shortcut. Press to change it"
+      aria-label={`${props.label}. Press to change it`}
       onClick={() => setRecording(true)}
       onBlur={() => setRecording(false)}
       onKeyDown={(e) => {
@@ -83,7 +84,7 @@ function HotkeyRecorder(props: { value: string; disabled: boolean; onChange: (ac
         e.preventDefault();
         e.stopPropagation();
         if (e.key === "Escape") return setRecording(false);
-        if (e.key === "Backspace") props.onChange(DEFAULT_GLOBAL_HOTKEY.accelerator);
+        if (e.key === "Backspace") props.onChange(props.fallback);
         else {
           const accelerator = acceleratorFromEvent(e);
           if (!accelerator) return;
@@ -279,6 +280,8 @@ export function SettingsDialog(props: {
   onKeysChange: (keys: TerminalKeys) => void;
   hotkey: GlobalHotkey;
   onHotkeyChange: (hotkey: GlobalHotkey) => void;
+  quickKey: QuickTerminalKey;
+  onQuickKeyChange: (key: QuickTerminalKey) => void;
   look: TerminalLook;
   onLookChange: (look: TerminalLook) => void;
   sleep: SleepSettings;
@@ -432,8 +435,14 @@ export function SettingsDialog(props: {
                 </Row>
                 <Row id="global-hotkey" label="Bring Wings forward from any app" hint="Shows Wings and goes to the agent that needs you, or stays where you were if none does.">
                   <div className="flex items-center gap-3">
-                    <HotkeyRecorder value={props.hotkey.accelerator} disabled={!props.hotkey.enabled} onChange={(accelerator) => props.onHotkeyChange({ ...props.hotkey, accelerator })} />
+                    <HotkeyRecorder label="Global shortcut" value={props.hotkey.accelerator} fallback={DEFAULT_GLOBAL_HOTKEY.accelerator} disabled={!props.hotkey.enabled} onChange={(accelerator) => props.onHotkeyChange({ ...props.hotkey, accelerator })} />
                     <Switch id="global-hotkey" checked={props.hotkey.enabled} onCheckedChange={(enabled) => props.onHotkeyChange({ ...props.hotkey, enabled })} />
+                  </div>
+                </Row>
+                <Row id="quick-terminal-key" label="Quick terminal" hint="Shows a terminal in your home folder over whatever you're looking at, and hides it again. Its shell keeps running while hidden.">
+                  <div className="flex items-center gap-3">
+                    <HotkeyRecorder label="Quick terminal shortcut" value={props.quickKey.accelerator} fallback={DEFAULT_QUICK_TERMINAL_KEY.accelerator} disabled={!props.quickKey.enabled} onChange={(accelerator) => props.onQuickKeyChange({ ...props.quickKey, accelerator })} />
+                    <Switch id="quick-terminal-key" checked={props.quickKey.enabled} onCheckedChange={(enabled) => props.onQuickKeyChange({ ...props.quickKey, enabled })} />
                   </div>
                 </Row>
               </Group>

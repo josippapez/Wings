@@ -1,26 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { MinusIcon, PanelBottomIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 
+import { FloatingPanel, PANEL_EDGE, type Rect } from "@/components/floating-panel";
 import { IconButton } from "@/components/icon-button";
 import type { PaneLabelInfo } from "@/components/pane-label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { trackDrag } from "@/lib/pointer-drag";
 import { terminals } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
-/** Where the panel sits, as distances from the bottom-right corner of the pane, so a smaller window never leaves it out of view. */
-type Rect = { right: number; bottom: number; w: number; h: number };
 type PanelState = { rect: Rect; collapsed: boolean; active: string | null };
 
-const MIN_W = 280;
-const MIN_H = 120;
-const EDGE = 12;
 /** The panel of each agent pane, for as long as Wings runs: a restructured tree remounts the pane that shows it. */
 const states = new Map<string, PanelState>();
-const initial = (): PanelState => ({ rect: { right: EDGE, bottom: EDGE, w: 520, h: 300 }, collapsed: false, active: null });
+const initial = (): PanelState => ({ rect: { right: PANEL_EDGE, bottom: PANEL_EDGE, w: 520, h: 300 }, collapsed: false, active: null });
 
-/** One floated terminal. Its element moves in from the split it left and refits at the panel's size once that holds still. */
-function Host({ paneKey, shown, visible, keepRenderer, initialInput }: { paneKey: string; shown: boolean; visible: boolean; keepRenderer: boolean; initialInput: string | null }) {
+/** One floated terminal, here and in the quick terminal. Its element moves in from the split it left and refits at the panel's size once that holds still. */
+export function Host({ paneKey, shown, visible, keepRenderer, initialInput }: { paneKey: string; shown: boolean; visible: boolean; keepRenderer: boolean; initialInput: string | null }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const term = terminals.get(paneKey);
@@ -49,8 +44,6 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
   onClose: (paneKey: string) => void;
 }) {
   const [state, setState] = useState<PanelState>(() => states.get(ownerKey) ?? initial());
-  const area = useRef<HTMLDivElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
   const keep = (next: PanelState) => {
     states.set(ownerKey, next);
     setState(next);
@@ -59,78 +52,18 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
   const label = labels[active];
   const { rect, collapsed } = state;
 
-  const move = (e: React.PointerEvent) => {
-    const el = panel.current;
-    const box = area.current;
-    if (!el || !box || (e.target as HTMLElement).closest("[data-no-drag]")) return;
-    let next = rect;
-    trackDrag(e, {
-      onStart: () => (el.style.willChange = "right, bottom"),
-      onMove: ({ dx, dy }) => {
-        const w = el.offsetWidth;
-        const h = el.offsetHeight;
-        next = { ...rect, right: Math.min(Math.max(rect.right - dx, 0), box.clientWidth - w), bottom: Math.min(Math.max(rect.bottom - dy, 0), box.clientHeight - h) };
-        el.style.right = `${next.right}px`;
-        el.style.bottom = `${next.bottom}px`;
-      },
-      onEnd: (_, cancelled) => {
-        el.style.willChange = "";
-        if (cancelled) {
-          el.style.right = `${rect.right}px`;
-          el.style.bottom = `${rect.bottom}px`;
-        } else keep({ ...state, rect: next });
-      },
-    });
-  };
-
-  const resize = (e: React.PointerEvent) => {
-    const el = panel.current;
-    const box = area.current;
-    if (!el || !box) return;
-    e.stopPropagation();
-    let next = rect;
-    trackDrag(e, {
-      onStart: () => (el.style.willChange = "width, height"),
-      onMove: ({ dx, dy }) => {
-        next = { ...rect, w: Math.min(Math.max(rect.w - dx, MIN_W), box.clientWidth - rect.right), h: Math.min(Math.max(rect.h - dy, MIN_H), box.clientHeight - rect.bottom) };
-        el.style.width = `${next.w}px`;
-        el.style.height = `${next.h}px`;
-      },
-      onEnd: (_, cancelled) => {
-        el.style.willChange = "";
-        if (cancelled) {
-          el.style.width = `${rect.w}px`;
-          el.style.height = `${rect.h}px`;
-        } else keep({ ...state, rect: next });
-      },
-    }, 2);
-  };
-
   const names = (key: string) => labels[key]?.title ?? "Terminal";
   const bodies = commands.map((key) => <Host key={key} paneKey={key} shown={!collapsed && key === active} visible={visible} keepRenderer={keepRenderer} initialInput={initialInputs[key] ?? null} />);
 
   return (
-    <div
-      ref={area}
-      // Clicks pass through the overlay to the agent's terminal; only the panel takes them, and a press on it keeps its own focus.
-      onMouseDown={(e) => e.stopPropagation()}
-      className="pointer-events-none absolute inset-0 z-20"
-    >
-      <div
-        ref={panel}
-        role="group"
-        aria-label={`Terminals opened by ${ownerTitle}`}
-        style={{ right: rect.right, bottom: rect.bottom, ...(collapsed ? {} : { width: rect.w, height: rect.h }) }}
-        className={cn(
-          "pointer-events-auto absolute flex max-h-full max-w-full flex-col overflow-hidden border border-hairline-strong bg-surface text-[12px] shadow-lg",
-          collapsed ? "h-7 rounded-full bg-popover/90 backdrop-blur-xl" : "rounded-xl",
-        )}
-      >
-        <div
-          onPointerDown={move}
-          onClick={collapsed ? () => keep({ ...state, collapsed: false }) : undefined}
-          className={cn("flex shrink-0 cursor-grab items-center gap-1.5 select-none active:cursor-grabbing", collapsed ? "h-7 pr-1 pl-3" : "h-8 pr-1 pl-3")}
-        >
+    <FloatingPanel
+      rect={rect}
+      collapsed={collapsed}
+      onRect={(next) => keep({ ...state, rect: next })}
+      onExpand={() => keep({ ...state, collapsed: false })}
+      label={`Terminals opened by ${ownerTitle}`}
+      header={
+        <>
           <SquareTerminalIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           {commands.length > 1 && !collapsed ? (
             <Tabs value={active} onValueChange={(key) => keep({ ...state, active: String(key) })} className="min-w-0 gap-0">
@@ -186,11 +119,11 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
               </IconButton>
             </>
           )}
-        </div>
-        {/* The terminals stay mounted while minimised, hidden, so scrollback and the shell are untouched. */}
-        <div className={cn("flex min-h-0 flex-1 flex-col", collapsed && "hidden")}>{bodies}</div>
-        {!collapsed && <div onPointerDown={resize} aria-hidden className="absolute top-0 left-0 size-4 cursor-nwse-resize touch-none" />}
-      </div>
-    </div>
+        </>
+      }
+    >
+      {/* The terminals stay mounted while minimised, hidden, so scrollback and the shell are untouched. */}
+      {bodies}
+    </FloatingPanel>
   );
 }
