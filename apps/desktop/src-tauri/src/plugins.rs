@@ -1283,9 +1283,10 @@ const AGENT_PROGRAMS: [&str; 2] = ["claude", "opencode"];
 /// `openPane` `args` together: room for a prompt that names an issue and says what to do with it.
 const PANE_ARGS_MAX: usize = 4096;
 
-/// One `args` value as a single shell word: single-quoted, a `'` inside written as `'\''`.
+/// One `args` value as a single shell word: single-quoted, a `'` inside written as `'\''` and a `\` as `'\\'`. fish reads
+/// `\'` and `\\` as escapes even inside single quotes, so a backslash stays outside them to read the same in every shell.
 fn shell_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', "'\\''"))
+    format!("'{}'", arg.split('\\').map(|part| part.replace('\'', "'\\''")).collect::<Vec<_>>().join("'\\\\'"))
 }
 
 /// The line to type into a new pane's shell for `command`, or `None` for a plain shell. Like `exec`, an entry
@@ -2634,6 +2635,26 @@ mod tests {
         let none = with_panes(None);
         assert!(pane_input(&none, None, &[]).unwrap_err().contains("may not open panes"));
         assert!(!may_use_panes(&none));
+    }
+
+    #[test]
+    fn a_pane_value_with_a_backslash_stays_one_word_in_fish() {
+        // In fish `\'` is a quote even inside single quotes, so this value would close its word and run `touch`.
+        let value = "\\'; touch /tmp/wings-pwned; # C:\\dir\\";
+        let quoted = shell_quote(value);
+        let (mut chars, mut inside) = (quoted.chars(), false);
+        while let Some(c) = chars.next() {
+            match (inside, c) {
+                (_, '\'') => inside = !inside,
+                (false, '\\') => _ = chars.next(),
+                (true, '\\') => panic!("a backslash inside single quotes, which fish reads as an escape: {quoted}"),
+                _ => {}
+            }
+        }
+        for shell in ["sh", "bash"] {
+            let out = Command::new(shell).args(["-c", &format!("printf %s {quoted}")]).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), value, "{shell}");
+        }
     }
 
     #[test]
