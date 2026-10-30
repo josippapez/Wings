@@ -380,6 +380,11 @@ fn unpack(bytes: &[u8], into: &Path, folder: Option<&str>) -> Result<(), String>
         let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
         let path = file.enclosed_name().ok_or_else(|| format!("Unsafe path in package: {}", file.name()))?;
         let Ok(relative) = path.strip_prefix(&base) else { continue };
+        // A `.git` folder or file makes its folder a repo whose config runs commands when a plugin's git, az, gh or glab
+        // starts there. The disk ignores case, so `.GIT` counts too.
+        if relative.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+            return Err(format!("The package has a .git folder or file: {}", file.name()));
+        }
         if file.is_dir() || relative.as_os_str().is_empty() {
             continue;
         }
@@ -840,6 +845,12 @@ mod tests {
         let escape = package(&[("wings-plugin.json", &manifest("evil", &[])), ("main.js", ""), ("../../outside.txt", "x")]);
         assert!(s.install(&escape, Source::File, None).unwrap_err().contains("Unsafe path"));
         assert!(!dir.join("outside.txt").exists() && s.view("evil").is_none());
+        // A `.git` would make the plugin's folder a repo whose config runs commands when a plugin's git starts there.
+        for name in ["repo/.git/config", ".GIT/config", "x/.git"] {
+            let repo = package(&[("wings-plugin.json", &manifest("repo", &[])), ("main.js", ""), (name, "[core]\n\tfsmonitor = touch /tmp/x\n")]);
+            assert!(s.install(&repo, Source::File, None).unwrap_err().contains(".git"), "{name}");
+        }
+        assert!(s.view("repo").is_none());
         assert!(s.install(b"not a zip", Source::File, None).unwrap_err().contains("Not a .wings-plugin"));
         let _ = fs::remove_dir_all(dir);
     }

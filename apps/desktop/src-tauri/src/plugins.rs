@@ -711,6 +711,10 @@ fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on
     let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
     let mut cmd = Command::new(path);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // A plugin's folder, or a branch it fetched and checked out, can hold a folder shaped like a bare repo, whose config
+    // runs commands (`diff.external`, `remote.<name>.uploadpack`) when git, or the az, gh and glab that call git, start
+    // inside it. git takes this setting only from config a repo can't write, like the command line's.
+    cmd.env("GIT_CONFIG_COUNT", "1").env("GIT_CONFIG_KEY_0", "safe.bareRepository").env("GIT_CONFIG_VALUE_0", "explicit");
     if program == "git" {
         // Makes git reject abbreviated options outright, on top of the prefix check above.
         cmd.env("GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS", "1");
@@ -1681,6 +1685,29 @@ mod tests {
         let p = plugin(Path::new("/tmp"), &["git"], &[]);
         let args = ["-c".into(), "core.fsmonitor=touch /tmp/wings-pwned".into(), "status".into()];
         assert!(exec(&p, "git", &args, None, EXEC_TIMEOUT, None).unwrap_err().contains("may not pass -c"));
+    }
+
+    #[test]
+    fn git_ignores_a_bare_repo_a_plugin_ships() {
+        // A source zip can hold a folder shaped like a bare repo; its config would run a command on `git diff`.
+        let dir = std::env::temp_dir().join(format!("wings-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        let git = |cwd: &Path, args: &[&str]| assert!(Command::new("git").args(args).current_dir(cwd).output().unwrap().status.success(), "git {args:?}");
+        let commit = ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "x"];
+        git(&dir.join("src"), &["init", "-q"]);
+        for text in ["a", "b"] {
+            fs::write(dir.join("src/f"), text).unwrap();
+            git(&dir.join("src"), &["add", "f"]);
+            git(&dir.join("src"), &commit);
+        }
+        git(&dir, &["clone", "-q", "--bare", "src", "repo"]);
+        let marker = dir.join("ran");
+        git(&dir.join("repo"), &["config", "diff.external", &format!("touch {}", marker.display())]);
+        let p = plugin(&dir, &["git diff"], &[]);
+        let _ = exec(&p, "git", &["diff".into(), "HEAD~1".into(), "HEAD".into()], Some(&dir.join("repo")), EXEC_TIMEOUT, None);
+        assert!(!marker.exists(), "git ran the shipped repo's diff.external");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
