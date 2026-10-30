@@ -868,6 +868,7 @@ export class PluginHost {
             headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, String(v)])),
             body: typeof p.body === "string" ? p.body : null,
             bearer: str(p.bearer, 64) ?? null,
+            binary: p.binary === true,
           },
         });
       }

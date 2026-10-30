@@ -1036,6 +1036,9 @@ struct FetchRequest {
     body: Option<String>,
     /// A secret's name: Rust sends it as `Authorization: Bearer <secret>`.
     bearer: Option<String>,
+    /// Answer with the body as base64 (up to 10 MB), for an image or a file that isn't text.
+    #[serde(default)]
+    binary: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1084,7 +1087,7 @@ fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest
         .run(builder.body(request.body.unwrap_or_default()).map_err(err)?)
         .map_err(|e| format!("Couldn't reach {}: {e}", request.url))?;
     let content_type = response.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string);
-    let body = response.body_mut().read_to_string().map_err(err)?;
+    let body = if request.binary { opencode::base64(&response.body_mut().read_to_vec().map_err(err)?) } else { response.body_mut().read_to_string().map_err(err)? };
     Ok(FetchResponse { status: response.status().as_u16(), content_type, body })
 }
 
