@@ -849,14 +849,19 @@ fn exec_check(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path
 }
 
 /// git's arguments held to what a plugin may touch. `git diff <a> <b>` compares any two files once one is outside the
-/// repo (`git diff /etc/hosts /dev/null` printed it), so a path must stay inside `cwd`: no `..`, and an absolute one in a
-/// folder inside it once symlinks are resolved. A fetch refspec with a destination or `+` moves a local ref (`git fetch
-/// <other repo> +HEAD:refs/heads/main` put another repo's commit on main). `worktree` names its own worktrees' folders,
-/// which git checks belong to the repo.
+/// repo (`git diff /etc/hosts /dev/null` printed it), or anywhere in a folder that isn't a repo, through a symlink too
+/// (`link/a link/b` printed the files `link` led to). So git needs a `cwd`, and a path must stay inside it: no `..`, and
+/// what it names on disk, symlinks resolved, inside `cwd`. A path that names nothing reads nothing, like a revision
+/// (`origin/main`). A fetch refspec with a destination or `+` moves a local ref (`git fetch <other repo>
+/// +HEAD:refs/heads/main` put another repo's commit on main). `worktree` names its own worktrees' folders, which git
+/// checks belong to the repo.
 fn git_args_ok(args: &[String], cwd: Option<&Path>) -> bool {
+    let Some(cwd) = cwd.and_then(|c| c.canonicalize().ok()) else { return false };
     let Some(command) = args.first().filter(|c| *c != "worktree") else { return true };
-    let inside = |path: &Path| {
-        cwd.is_some_and(|cwd| path.parent().is_some_and(|parent| parent.canonicalize().map_or(path.starts_with(cwd), |p| p.starts_with(cwd))))
+    let inside = |arg: &str| {
+        let path = cwd.join(arg);
+        let on_disk = path.canonicalize().or_else(|e| path.parent().ok_or(e).and_then(Path::canonicalize));
+        on_disk.ok().is_none_or(|p| p.starts_with(&cwd))
     };
     let (mut words, mut options) = (args[1..].iter(), true);
     while let Some(arg) = words.next() {
@@ -868,9 +873,8 @@ fn git_args_ok(args: &[String], cwd: Option<&Path>) -> bool {
                 words.next();
             }
         } else {
-            let path = Path::new(arg);
             let refspec = command == "fetch" && (arg.starts_with('+') || (arg.contains(':') && !arg.contains("://")));
-            if refspec || path.components().any(|c| c == std::path::Component::ParentDir) || (path.is_absolute() && !inside(path)) {
+            if refspec || Path::new(arg).components().any(|c| c == std::path::Component::ParentDir) || !inside(arg) {
                 return false;
             }
         }
@@ -1946,6 +1950,19 @@ mod tests {
         // Run for real from this crate's repo, it printed /etc/hosts.
         let args: Vec<String> = ["diff", "/etc/hosts", "/dev/null"].map(String::from).to_vec();
         assert!(exec(&p, "git", &args, Some(&repo), EXEC_TIMEOUT, None).is_err());
+        assert!(exec_check(&p, "git", &["diff".into(), "HEAD".into()], None).is_err(), "git needs a folder");
+        // In a folder that isn't a repo, git diff compared the files a symlink led to.
+        let base = std::env::temp_dir().join(format!("wings-git-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("outside")).unwrap();
+        fs::create_dir_all(base.join("project")).unwrap();
+        fs::write(base.join("outside/a"), "secret a\n").unwrap();
+        fs::write(base.join("outside/b"), "secret b\n").unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("project/link")).unwrap();
+        let args: Vec<String> = ["diff", "link/a", "link/b"].map(String::from).to_vec();
+        let out = exec(&p, "git", &args, Some(&base.join("project")), EXEC_TIMEOUT, None);
+        assert!(out.as_ref().is_err(), "git diff printed {:?}", out.map(|o| o.stdout));
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
@@ -1981,7 +1998,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, program, &args, None), Ok(()), "{program} {args:?}");
+            assert_eq!(exec_check(&p, program, &args, Some(dir)), Ok(()), "{program} {args:?}");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
         // az's own file and method flags still can't ride along on a vote.
@@ -2091,7 +2108,7 @@ mod tests {
             grep(&["-I", "-z", "--no-line-number", "--no-column"]),
         ];
         for args in &calls {
-            assert_eq!(exec_check(&p, "git", args, None), Ok(()), "git {args:?}");
+            assert_eq!(exec_check(&p, "git", args, Some(dir)), Ok(()), "git {args:?}");
         }
         // Read-only: git grep can't open a pager, and branch can't delete or rename.
         assert!(!may_exec(&p, "git", &["grep".into(), "-Ovi".into(), "x".into()]));
@@ -2124,7 +2141,7 @@ mod tests {
         ];
         for args in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, "git", &args, None), Ok(()), "git {args:?}");
+            assert_eq!(exec_check(&p, "git", &args, Some(dir)), Ok(()), "git {args:?}");
         }
         // Nothing can force a removal, delete an unmerged branch, or change anything else.
         for args in [
@@ -2213,7 +2230,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert_eq!(exec_check(&p, program, &args, None), Ok(()), "{program} {args:?}");
+            assert_eq!(exec_check(&p, program, &args, Some(dir)), Ok(()), "{program} {args:?}");
         }
         assert!(!p.manifest.permissions.notify);
         // The query entry only takes the flags it lists, and no other `boards` subcommand but the declared ones.
