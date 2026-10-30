@@ -43,3 +43,5 @@ Tabs, splits and font size are saved and come back on the next launch; panes tha
 `sh scripts/bench-renderers.sh <out-dir>` (after `pnpm tauri build --no-bundle --features bench-canvas`) compares renderers in the real WKWebView: a recorded Claude Code session (`bench/claude-fullscreen.rec`) replayed into 1, 4 and 12 panes with xterm.js DOM, xterm.js WebGL and a Rust-parsed canvas prototype (`src-tauri/bench-grid`, `src/bench-canvas.ts`), plus the UI with no terminals. It samples CPU and `vmmap` footprints of Wings and its WebKit processes, opens a window that takes focus for about 3 to 4 minutes, and prints a table. The `bench-canvas` feature is off in normal builds.
 
 Dev builds print `[detect]`, `[focus]` and `[pane]` lines to the `pnpm tauri dev` output.
+
+The installed app keeps a log of what it prints, including each `[plugin] ... took N ms` line, in `~/Library/Logs/Wings/wings.log`. At 2 MB it moves to `wings.log.1`, replacing the last one. Dev builds don't write it. It stays on the machine.

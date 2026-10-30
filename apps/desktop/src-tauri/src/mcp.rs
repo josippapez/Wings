@@ -64,7 +64,7 @@ pub fn start(app: AppHandle, path: PathBuf) {
     }
     let listener = match UnixListener::bind(&path) {
         Ok(listener) => listener,
-        Err(e) => return eprintln!("[mcp] couldn't listen on {}: {e}", path.display()),
+        Err(e) => return crate::applog::log_line!("[mcp] couldn't listen on {}: {e}", path.display()),
     };
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     thread::spawn(move || {

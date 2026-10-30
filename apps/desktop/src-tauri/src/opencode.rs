@@ -925,7 +925,7 @@ pub fn spawn(shared: Arc<Shared>) {
                 Ok(up) => up,
                 Err((up, e)) => {
                     if cfg!(debug_assertions) {
-                        eprintln!("[opencode] {e}");
+                        crate::applog::log_line!("[opencode] {e}");
                     }
                     up
                 }

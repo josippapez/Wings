@@ -138,7 +138,7 @@ impl Store {
                 Ok(plugin) => {
                     store.plugins.insert(id, plugin);
                 }
-                Err(e) => eprintln!("[plugins] skipped linked {}: {e}", folder.display()),
+                Err(e) => crate::applog::log_line!("[plugins] skipped linked {}: {e}", folder.display()),
             }
         }
         if let Some(dev) = dev_root {

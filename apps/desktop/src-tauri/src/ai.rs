@@ -476,7 +476,7 @@ impl Ai {
         match self.generate(job.task, &input) {
             Err(e) => {
                 if cfg!(debug_assertions) {
-                    eprintln!("[ai] {:?} for {} failed: {e}", job.task, job.id);
+                    crate::applog::log_line!("[ai] {:?} for {} failed: {e}", job.task, job.id);
                 }
                 *self.failed.lock().unwrap() = Some(Instant::now());
             }

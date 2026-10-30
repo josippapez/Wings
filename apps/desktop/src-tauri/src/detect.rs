@@ -215,7 +215,7 @@ impl Detector {
                     let is_focused = focused == Some(pane.pane_id.as_str());
                     let state = self.with_done(&pane.pane_id, raw, is_focused);
                     if cfg!(debug_assertions) && self.traced.insert(pane.pane_id.clone(), (raw, state, is_focused)) != Some((raw, state, is_focused)) {
-                        eprintln!("[detect] {} raw={raw:?} shown={state:?} focused={is_focused} status={:?}", pane.pane_id, file.status);
+                        crate::applog::log_line!("[detect] {} raw={raw:?} shown={state:?} focused={is_focused} status={:?}", pane.pane_id, file.status);
                     }
                     (file, state)
                 }

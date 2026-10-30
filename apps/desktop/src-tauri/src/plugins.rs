@@ -363,7 +363,7 @@ pub fn discover(roots: &[PathBuf]) -> HashMap<String, Plugin> {
                 Ok(plugin) => {
                     found.entry(plugin.manifest.id.clone()).or_insert(plugin);
                 }
-                Err(e) if dir.join("wings-plugin.json").exists() => eprintln!("[plugins] skipped {}: {e}", dir.display()),
+                Err(e) if dir.join("wings-plugin.json").exists() => crate::applog::log_line!("[plugins] skipped {}: {e}", dir.display()),
                 Err(_) => {}
             }
         }

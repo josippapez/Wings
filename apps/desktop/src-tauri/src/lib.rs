@@ -1,4 +1,5 @@
 mod agent_activity;
+mod applog;
 mod ai;
 mod bench;
 mod claude;
@@ -303,7 +304,7 @@ fn pane_create(
     };
     let id = format!("p{}", state.next_pane.fetch_add(1, Ordering::Relaxed));
     if cfg!(debug_assertions) {
-        eprintln!("[pane] create {id} in {space_id}");
+        applog::log_line!("[pane] create {id} in {space_id}");
     }
     let exit_app = app.clone();
     let pane = Pane::spawn(
@@ -363,7 +364,7 @@ fn panes_list(state: State<AppState>) -> Vec<PaneView> {
 #[tauri::command]
 fn pane_attach(state: State<AppState>, id: String, on_output: Channel<InvokeResponseBody>) -> Res<()> {
     if cfg!(debug_assertions) {
-        eprintln!("[pane] attach {id}");
+        applog::log_line!("[pane] attach {id}");
     }
     pane(&state, &id)?.attach(on_output).map_err(err)
 }
@@ -384,7 +385,7 @@ fn panes_reset(state: State<AppState>, keep: Vec<String>) {
 #[tauri::command]
 fn pane_focus(state: State<AppState>, id: Option<String>) {
     if cfg!(debug_assertions) {
-        eprintln!("[focus] {id:?}");
+        applog::log_line!("[focus] {id:?}");
     }
     *state.focused.lock().unwrap() = id;
 }
@@ -481,7 +482,7 @@ fn tools_changed(app: &AppHandle) {
 fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
     for name in &old.names {
         if let Err(e) = secrets::delete(plugin_id, &old.scope, name) {
-            eprintln!("[plugins] couldn't delete {plugin_id} secret {name}: {e}");
+            applog::log_line!("[plugins] couldn't delete {plugin_id} secret {name}: {e}");
         }
     }
 }
@@ -489,7 +490,7 @@ fn delete_secrets(plugin_id: &str, old: &plugin_store::SecretScope) {
 /// A failure only leaves an orphan file: the scope is gone, so nothing reads it again.
 fn delete_storage(app: &AppHandle, plugin_id: &str, old: &plugin_store::SecretScope) {
     if let Err(e) = app.state::<AppState>().storage.remove(plugin_id, &old.scope) {
-        eprintln!("[plugins] couldn't delete {plugin_id} storage: {e}");
+        applog::log_line!("[plugins] couldn't delete {plugin_id} storage: {e}");
     }
 }
 
@@ -813,7 +814,7 @@ fn connect_claude_on_start(app: AppHandle) {
             .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
         let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app, None) };
         if let Err(e) = result {
-            eprintln!("[claude] couldn't connect Claude Code: {e}");
+            applog::log_line!("[claude] couldn't connect Claude Code: {e}");
         }
     });
     #[cfg(not(unix))]
@@ -837,7 +838,7 @@ fn journal_sync(app: &AppHandle) {
             None => return,
         };
         if let Err(e) = result {
-            eprintln!("[journal] couldn't set the journal sink: {e}");
+            applog::log_line!("[journal] couldn't set the journal sink: {e}");
         }
     }
     #[cfg(not(unix))]
@@ -895,8 +896,8 @@ fn reload_opencode() {
     let Some(opencode) = plugins::find_program("opencode") else { return };
     let out = std::process::Command::new(opencode).arg("reload").current_dir(std::env::home_dir().unwrap_or_default()).stdin(std::process::Stdio::null()).output();
     match out {
-        Ok(out) if !out.status.success() => eprintln!("[opencode] reload failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
-        Err(e) => eprintln!("[opencode] reload failed: {e}"),
+        Ok(out) if !out.status.success() => applog::log_line!("[opencode] reload failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        Err(e) => applog::log_line!("[opencode] reload failed: {e}"),
         Ok(_) => {}
     }
 }
@@ -914,7 +915,7 @@ fn connect_opencode_on_start(app: AppHandle) {
             return;
         }
         if let Err(e) = connect_opencode(&app) {
-            eprintln!("[opencode] couldn't connect OpenCode: {e}");
+            applog::log_line!("[opencode] couldn't connect OpenCode: {e}");
         }
     });
     #[cfg(not(unix))]
@@ -1221,9 +1222,7 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
         })
     });
     let result = plugins::exec(&plugin(&state, &plugin_id)?, &program, &args, cwd.as_deref().map(std::path::Path::new), timeout, on_line);
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
     result
 }
 
@@ -1240,9 +1239,7 @@ fn plugin_agent_activity(state: State<AppState>, plugin_id: String, session_id: 
     }
     let start = std::time::Instant::now();
     let activity = agent_activity::fetch_live(&session_id);
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} agentActivity took {} ms", start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} agentActivity took {} ms", start.elapsed().as_millis());
     activity
 }
 
@@ -1264,9 +1261,7 @@ fn plugin_ports(state: State<AppState>, plugin_id: String) -> Res<Vec<ports::Pan
     let panes: Vec<(String, Option<u32>)> = state.panes.lock().unwrap().values().map(|p| (p.id.clone(), p.shell_pid)).collect();
     let start = std::time::Instant::now();
     let found = ports::scan(&panes);
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} ports took {} ms", start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} ports took {} ms", start.elapsed().as_millis());
     found
 }
 
@@ -1305,9 +1300,7 @@ fn plugin_disk_usage(state: State<AppState>, plugin_id: String, request: DiskUsa
             }
         }
     });
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} diskUsage took {} ms", start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} diskUsage took {} ms", start.elapsed().as_millis());
     scan
 }
 
@@ -1349,9 +1342,7 @@ fn plugin_disk_find(state: State<AppState>, plugin_id: String, request: DiskFind
             }
         }
     });
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} diskFind took {} ms", start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} diskFind took {} ms", start.elapsed().as_millis());
     found
 }
 
@@ -1363,9 +1354,7 @@ fn plugin_disks(state: State<AppState>, plugin_id: String) -> Res<Vec<disk_usage
     }
     let start = std::time::Instant::now();
     let found = disk_usage::disks();
-    if cfg!(debug_assertions) {
-        eprintln!("[plugin] {plugin_id} disks took {} ms", start.elapsed().as_millis());
-    }
+    applog::log_line!("[plugin] {plugin_id} disks took {} ms", start.elapsed().as_millis());
     Ok(found)
 }
 
@@ -1887,6 +1876,9 @@ fn start_git_status(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if !cfg!(debug_assertions) {
+        applog::init();
+    }
     let mut builder = tauri::Builder::default();
     // A benchmark run would save its window size over yours.
     if !bench_mode() {
