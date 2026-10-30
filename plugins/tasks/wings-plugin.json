@@ -2,7 +2,7 @@
   "id": "tasks",
   "name": "Issues",
   "version": "0.24.2",
-  "minWingsVersion": "0.1.98",
+  "minWingsVersion": "0.1.104",
   "icon": "icon.svg",
   "description": "A lightweight issue tracker for each project, for you and for Claude. Each issue has a key like WIN-12, a type (task, bug, feature or epic), a Markdown spec, a status, a priority (urgent, high, medium or low), links to commits, a branch and a PR (set by you or by the agent, never through keys in git), parents, related and blocking issues, the agent sessions (Claude Code or OpenCode) that worked on it and an activity log of who did what and when. Issues stay local: a session start line tells Claude to track its work here and a setting keeps issue keys out of its commits and PRs. Keep the open ones in the sidebar and under the project, see them on a board in a tab, in rows by epic or feature, or as a list grouped by status, open one as a page to read, edit, resume or start an agent on, and Claude uses tasks__list, tasks__get, tasks__create, tasks__update and tasks__log.",
   "api": 1,
