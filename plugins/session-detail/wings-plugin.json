@@ -1,7 +1,7 @@
 {
   "id": "session-detail",
   "name": "Session detail",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "minWingsVersion": "0.1.104",
   "icon": "icon.svg",
   "description": "Shows what each Claude Code or OpenCode session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
