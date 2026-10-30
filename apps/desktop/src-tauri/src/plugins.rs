@@ -645,37 +645,57 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
     name.strip_prefix('-').is_some_and(|group| group.chars().any(|c| short.contains(&c)))
 }
 
-/// `az rest` sends a token to whatever `--url` names, so a plugin's call may only go to Azure DevOps, with Azure
-/// DevOps' token. An abbreviated or attached form of those flags is refused, since az reads it as the real one.
-fn az_rest_ok(args: &[String]) -> bool {
-    if args.first().is_none_or(|a| a != "rest") {
-        return true;
-    }
-    let (mut url, mut resource) = (None, None);
-    let mut rest = args[1..].iter();
-    while let Some(arg) = rest.next() {
-        let (name, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(n, v)| (n, Some(v)));
-        let slot = match name {
-            "--url" | "--uri" | "-u" => &mut url,
-            "--resource" => &mut resource,
-            n if n.len() > 2 && ["--url", "--uri", "--resource"].iter().any(|f| f.starts_with(n)) => return false,
-            n if n.starts_with("-u") && !n.starts_with("--") => return false,
-            _ => continue,
-        };
-        let Some(value) = inline.map(str::to_string).or_else(|| rest.next().cloned()) else { return false };
-        if slot.replace(value).is_some() {
-            return false;
-        }
-    }
-    url.is_some_and(|u| azure_devops_url(&u)) && resource.is_none_or(|r| r == AZURE_DEVOPS_RESOURCE)
+/// The only flags these commands take from a plugin, whatever its manifest says. Their other flags sign the CLI in as
+/// someone else (`az login --service-principal`) or get a token for another service (`az account get-access-token
+/// --resource-type arm`). Names are exact, so an abbreviation or an attached value counts as another flag.
+const ONLY_FLAGS: &[(&str, &[&str], &[&str])] = &[
+    ("az", &["login"], &["--allow-no-subscriptions", "--output", "-o"]),
+    ("az", &["account", "get-access-token"], &["--resource", "--output", "-o"]),
+    ("az", &["rest"], &["--url", "--uri", "-u", "--resource", "--output", "-o", "--query"]),
+];
+
+/// A flag that a command in `ONLY_FLAGS` doesn't take.
+fn flag_not_taken<'a>(program: &str, args: &'a [String]) -> Option<&'a String> {
+    let starts = |command: &[&str]| command.iter().enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word));
+    let (_, command, flags) = ONLY_FLAGS.iter().find(|(p, command, _)| *p == program && starts(command))?;
+    args[command.len()..].iter().find(|a| a.starts_with('-') && !flags.contains(&a.split('=').next().unwrap_or(a)))
 }
 
-/// An https URL on `dev.azure.com` or an `<org>.visualstudio.com` host.
+/// The value of each flag `is_name` matches: after its `=`, or the next word. `None` where there's none.
+fn flag_values(args: &[String], is_name: impl Fn(&str) -> bool) -> Vec<Option<&str>> {
+    let (mut words, mut values) = (args.iter(), Vec::new());
+    while let Some(arg) = words.next() {
+        let (name, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(n, v)| (n, Some(v)));
+        if is_name(name) {
+            values.push(inline.or_else(|| words.next().map(String::as_str)));
+        }
+    }
+    values
+}
+
+/// Whether an `az` call reaches only Azure DevOps, and only with Azure DevOps' token. The azure-devops extension before
+/// 1.0.6 sends your token to whatever `--organization` names, `az rest` sends one to whatever `--url` names, and `az
+/// account get-access-token` prints the token it gets. `ONLY_FLAGS` has already refused other spellings of the last two.
+fn az_reaches_azure_devops_only(args: &[String]) -> bool {
+    let all = |values: Vec<Option<&str>>, ok: fn(&str) -> bool| values.into_iter().all(|v| v.is_some_and(ok));
+    let one = |values: Vec<Option<&str>>, ok: fn(&str) -> bool| values.len() == 1 && all(values, ok);
+    let resource = || flag_values(args, |n| n == "--resource");
+    let devops = |r: &str| r == AZURE_DEVOPS_RESOURCE;
+    // az takes any unambiguous start of a long flag, so `--orga` is `--organization` too.
+    all(flag_values(args, |n| n.len() >= 5 && "--organization".starts_with(n)), azure_devops_url)
+        && match args.first().map(String::as_str) {
+            Some("rest") => one(flag_values(args, |n| matches!(n, "--url" | "--uri" | "-u")), azure_devops_url) && all(resource(), devops),
+            Some("account") if args.get(1).is_some_and(|a| a == "get-access-token") => one(resource(), devops),
+            _ => true,
+        }
+}
+
+/// An https URL on `dev.azure.com` or an `<org>.visualstudio.com` host, with a path or none, like an organization.
 fn azure_devops_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else { return false };
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let org_host = |org: &str| !org.is_empty() && org.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-    rest[host.len()..].starts_with('/') && (host == "dev.azure.com" || host.strip_suffix(".visualstudio.com").is_some_and(org_host))
+    matches!(rest[host.len()..].chars().next(), None | Some('/')) && (host == "dev.azure.com" || host.strip_suffix(".visualstudio.com").is_some_and(org_host))
 }
 
 /// `gh api graphql` runs mutations too, so a plugin's GraphQL may only read.
@@ -701,8 +721,11 @@ pub fn exec(
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
-    if program == "az" && !az_rest_ok(args) {
-        return Err(format!("{id} may only call Azure DevOps with az rest, with its token"));
+    if let Some(flag) = flag_not_taken(program, args) {
+        return Err(format!("{id} may not pass {flag} to {program} {}", args[0]));
+    }
+    if program == "az" && !az_reaches_azure_devops_only(args) {
+        return Err(format!("{id} may only reach Azure DevOps with az, with its token"));
     }
     run(program, args, cwd, timeout, on_line)
 }
@@ -2027,12 +2050,17 @@ mod tests {
         PostRequest { program: program.into(), url: url.into(), host: host.map(String::from), fields }
     }
 
+    /// Whether `exec`'s own checks of an az call's flags and hosts let it through.
+    fn az_allowed(args: &[String]) -> bool {
+        flag_not_taken("az", args).is_none() && az_reaches_azure_devops_only(args)
+    }
+
     #[test]
     fn az_rest_only_reaches_azure_devops_with_its_token() {
         let rest = |extra: &[&str]| -> Vec<String> { ["rest"].iter().chain(extra).map(|a| a.to_string()).collect() };
         let ado = "https://dev.azure.com/o/_apis/wit/workitems?ids=1";
-        assert!(az_rest_ok(&rest(&["--resource", AZURE_DEVOPS_RESOURCE, "--url", ado, "-o", "json"])));
-        assert!(az_rest_ok(&rest(&["--url=https://contoso.visualstudio.com/_apis/projects"])));
+        assert!(az_allowed(&rest(&["--resource", AZURE_DEVOPS_RESOURCE, "--url", ado, "-o", "json"])));
+        assert!(az_allowed(&rest(&["--url=https://contoso.visualstudio.com/_apis/projects"])));
         for extra in [
             &["--resource", AZURE_DEVOPS_RESOURCE, "--url", "https://example.com/x"][..],
             &["--url", "https://dev.azure.com@example.com/x"],
@@ -2046,10 +2074,61 @@ mod tests {
             &["--resour", "https://management.azure.com/", "--url", ado],
             &["--url"],
             &[],
+            &["--url", ado, "--headers", "Host=example.com"],
         ] {
-            assert!(!az_rest_ok(&rest(extra)), "{extra:?}");
+            assert!(!az_allowed(&rest(extra)), "{extra:?}");
         }
-        assert!(az_rest_ok(&["repos".into(), "pr".into(), "list".into()]));
+        assert!(az_allowed(&["repos".into(), "pr".into(), "list".into()]));
+    }
+
+    #[test]
+    fn az_names_only_azure_devops_organizations() {
+        // The azure-devops extension before 1.0.6 sent the az login token to any --organization: version 1.0.2 sent
+        // `Authorization: Basic` with it to a listener on 127.0.0.1.
+        let call = |org: &[&str]| -> Vec<String> { ["devops", "invoke", "--area", "core", "--resource", "projects"].iter().chain(org).map(|a| a.to_string()).collect() };
+        for org in [
+            &["--organization", "https://dev.azure.com/contoso"][..],
+            &["--org", "https://dev.azure.com/contoso/"],
+            &["--organization=https://contoso.visualstudio.com"],
+            &[],
+        ] {
+            assert!(az_allowed(&call(org)), "{org:?}");
+        }
+        for org in [
+            &["--organization", "https://example.com/contoso"][..],
+            &["--organization", "http://127.0.0.1:9/contoso"],
+            &["--org=https://dev.azure.com.example.com/contoso"],
+            &["--orga", "https://example.com/contoso"],
+            &["--organization", "https://dev.azure.com@example.com/contoso"],
+            &["--organization", "https://dev.azure.com/contoso", "--org", "https://example.com/x"],
+            &["--organization"],
+        ] {
+            assert!(!az_allowed(&call(org)), "{org:?}");
+        }
+    }
+
+    #[test]
+    fn az_gets_only_azure_devops_tokens_and_keeps_its_sign_in() {
+        // Without a flag list, `az account get-access-token` printed an ARM and a Microsoft Graph token too.
+        let token = |extra: &[&str]| -> Vec<String> { ["account", "get-access-token"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(az_allowed(&token(&["--resource", AZURE_DEVOPS_RESOURCE, "-o", "json"])));
+        for extra in [
+            &["--resource", "https://management.azure.com/"][..],
+            &["--resource-type", "arm"],
+            &["--scope", "https://graph.microsoft.com/.default"],
+            &["--resource", AZURE_DEVOPS_RESOURCE, "--resource", "https://management.azure.com/"],
+            &["--resource", AZURE_DEVOPS_RESOURCE, "--tenant", "t"],
+            &["--resou", "https://management.azure.com/"],
+            &[],
+        ] {
+            assert!(!az_allowed(&token(extra)), "{extra:?}");
+        }
+        // `az login` can't sign az in as another identity, which every later az call of every plugin would act as.
+        let login = |extra: &[&str]| -> Vec<String> { ["login"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(az_allowed(&login(&["--allow-no-subscriptions", "--output", "none"])));
+        for extra in [&["--service-principal", "-u", "app", "-p", "secret", "--tenant", "t"][..], &["--identity"], &["--federated-token", "x"], &["--allow"], &["-onone"]] {
+            assert!(!az_allowed(&login(extra)), "{extra:?}");
+        }
     }
 
     #[test]
