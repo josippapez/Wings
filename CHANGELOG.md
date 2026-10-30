@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.105 · 2026-10-30
+
+- **Worktrees under their project.** In the sidebar a project's worktrees come right after it, and its Issues, pull requests and schedules after them.
+
 ## 0.1.104 · 2026-10-30
 
 - **Highlighted code.** Code in Markdown, the setup command to approve and the install and PATH commands is highlighted, with a copy button.
