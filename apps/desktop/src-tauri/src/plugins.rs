@@ -678,6 +678,21 @@ const SETTINGS_COMMANDS: &[(&str, &[&str])] = &[
     ("git", &["config"]),
 ];
 
+/// The CLIs whose checks find a command by its first words. Each also takes options before the command, which would
+/// hide it from those checks (gh and glab ran `--hostname=x api <url>`, git runs `-C . config`), and no plugin needs one.
+const COMMAND_FIRST: [&str; 4] = ["git", "gh", "glab", "az"];
+
+/// What no manifest can allow in a CLI call: an option before its command, or a command that changes the CLI's settings.
+fn command_refused(id: &str, program: &str, args: &[String]) -> Result<(), String> {
+    if COMMAND_FIRST.contains(&program) && args.first().is_some_and(|a| a.starts_with('-')) {
+        return Err(format!("{id} must start a {program} call with its command, not {}", args[0]));
+    }
+    match SETTINGS_COMMANDS.iter().find(|(p, words)| *p == program && starts_with_words(args, words)) {
+        Some((_, words)) => Err(format!("{id} may not change {program}'s own settings with {program} {}", words.join(" "))),
+        None => Ok(()),
+    }
+}
+
 /// Whether `args` start with a command's words.
 fn starts_with_words(args: &[String], words: &[&str]) -> bool {
     words.iter().enumerate().all(|(i, word)| args.get(i).is_some_and(|a| a == word))
@@ -808,9 +823,7 @@ fn exec_check(plugin: &Plugin, program: &str, args: &[String]) -> Result<(), Str
         let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
         return Err(format!("{id} may not run {program} {sub}"));
     }
-    if let Some((_, words)) = SETTINGS_COMMANDS.iter().find(|(p, words)| *p == program && starts_with_words(args, words)) {
-        return Err(format!("{id} may not change {program}'s own settings with {program} {}", words.join(" ")));
-    }
+    command_refused(id, program, args)?;
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
@@ -1439,6 +1452,7 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
     if let Some(flag) = words[1..].iter().find(|w| is_unsafe_flag(program, w)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
+    command_refused(id, program, &words[1..].iter().map(|w| w.to_string()).collect::<Vec<_>>())?;
     // An agent's flags set its permissions, tools and config (claude --dangerously-skip-permissions, --mcp-config,
     // --settings; opencode --auto, --server), so a plugin passes only the ones its entry names. And one value at most,
     // a session id or a prompt: a second word reads as a subcommand (`opencode --session <id> uninstall`).
@@ -1810,7 +1824,7 @@ mod tests {
         // The escape this guards against: a config override that runs a shell command.
         let p = plugin(Path::new("/tmp"), &["git"], &[]);
         let args = ["-c".into(), "core.fsmonitor=touch /tmp/wings-pwned".into(), "status".into()];
-        assert!(exec(&p, "git", &args, None, EXEC_TIMEOUT, None).unwrap_err().contains("may not pass -c"));
+        assert!(exec(&p, "git", &args, None, EXEC_TIMEOUT, None).unwrap_err().contains("-c"));
     }
 
     #[test]
@@ -2269,11 +2283,19 @@ mod tests {
         }
         assert_eq!(check("az", &["devops", "invoke", "--area", "core", "--organization", "https://dev.azure.com/o"]), Ok(()));
         assert_eq!(check("gh", &["pr", "view", "1"]), Ok(()));
-        // A flag before the command can't skip the checks: an entry's words must be the first arguments, and az itself
-        // refuses a command after one (`az --only-show-errors account get-access-token` is "misspelled").
-        let rest = plugin(Path::new("/tmp"), &["az rest [--url --resource -o]"], &[]);
-        let args: Vec<String> = ["--only-show-errors", "rest", "--url", "https://example.com/x"].map(String::from).to_vec();
-        assert!(exec_check(&rest, "az", &args).is_err());
+        // An option before the command would hide it from these checks: gh and glab ran `--hostname=x api <url>`.
+        for (program, args) in [
+            ("git", &["-C", ".", "config", "core.sshCommand", "touch /tmp/x"][..]),
+            ("git", &["--no-pager", "config", "core.fsmonitor", "touch /tmp/x"]),
+            ("gh", &["--hostname", "example.com", "api", "https://example.com/x"]),
+            ("glab", &["--hostname=x", "api", "http://127.0.0.1:9/x"]),
+            ("az", &["--only-show-errors", "rest", "--url", "https://example.com/"]),
+        ] {
+            assert!(check(program, args).unwrap_err().contains("with its command"), "{program} {args:?}");
+        }
+        let panes = with_panes(Some(&["git"]));
+        assert!(pane_input(&panes, Some("git -C . config core.pager x"), &[]).unwrap_err().contains("with its command"));
+        assert!(pane_input(&panes, Some("git config core.pager x"), &[]).unwrap_err().contains("own settings"));
     }
 
     #[test]
