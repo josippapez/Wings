@@ -3,7 +3,7 @@
 //! machine is checked here against the permissions the manifest declares.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -36,6 +36,10 @@ pub struct Permissions {
     /// for one path segment, with a JSON object (or no body, if nothing is pinned) and no query. Either may end with ` {field=a|b}` to
     /// pin body fields (POST only).
     pub fetch: Vec<String>,
+    /// The secrets the plugin may keep with `wings.secrets.set`, each with the one URL prefix `wings.fetch` sends it to
+    /// as the bearer, like `{"azure-devops": "https://dev.azure.com/"}`. A plugin that may call two hosts can't send
+    /// one's token to the other.
+    pub secrets: BTreeMap<String, String>,
     /// API paths the plugin may POST to through a signed-in CLI, as `<gh|glab|az> <pattern>`. `*` stands for
     /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag. An
     /// entry may end with ` {field=a|b}`, which pins a body field to one of those values, like
@@ -503,6 +507,11 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(entry) = manifest.permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
         return Err(format!(
             "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
+        ));
+    }
+    if let Some((name, prefix)) = manifest.permissions.secrets.iter().find(|(name, prefix)| !crate::secrets::valid_name(name) || !fetch_prefix_ok(prefix)) {
+        return Err(format!(
+            "secret {name:?} needs a name of letters, digits, - and _, and the https URL prefix it's sent to, like https://api.example.com/, not {prefix:?}"
         ));
     }
     let flags_ok = |e: &str| {
@@ -1027,6 +1036,17 @@ pub fn fetch_url(plugin: &Plugin, method: &str, url: &str, body: Option<&str>) -
 pub fn fetch_needs_json(plugin: &Plugin, method: &str, url: &str) -> bool {
     method.eq_ignore_ascii_case("POST")
         && plugin.manifest.permissions.fetch.iter().filter_map(|e| fetch_rule(e)).any(|rule| rule.method == Some("POST") && !rule.pins.is_empty() && post_url_matches(rule.target, url))
+}
+
+/// Whether `wings.secrets.set` may keep a secret of this name: only one `permissions.secrets` binds to a URL prefix.
+pub fn declares_secret(plugin: &Plugin, name: &str) -> bool {
+    plugin.manifest.permissions.secrets.contains_key(name)
+}
+
+/// Whether `wings.fetch` may send this secret as the bearer to `url`, the normal form `fetch_url` returned: only under
+/// the prefix the manifest binds it to. Its host part ends in `/` (`fetch_prefix_ok`), so a longer host can't match.
+pub fn may_send_secret(plugin: &Plugin, name: &str, url: &str) -> bool {
+    plugin.manifest.permissions.secrets.get(name).is_some_and(|prefix| url.starts_with(prefix.as_str()))
 }
 
 /// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
@@ -1608,6 +1628,51 @@ mod tests {
         assert!(!fetch_prefix_ok("https://api.example.com") && !fetch_prefix_ok("http://x.com/") && !fetch_prefix_ok("https:///x"));
     }
 
+    /// A plugin with two fetch hosts, loaded from a manifest that binds its secrets as given.
+    fn with_secrets(dir: &Path, secrets: Value) -> Result<Plugin, String> {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let permissions = serde_json::json!({ "fetch": ["https://api.example.com/v1/", "https://other.example.com/"], "secrets": secrets });
+        let manifest = serde_json::json!({ "id": "t", "name": "T", "version": "0", "api": 1, "main": "main.js", "permissions": permissions });
+        fs::write(dir.join("wings-plugin.json"), manifest.to_string()).unwrap();
+        load(dir)
+    }
+
+    #[test]
+    fn a_bearer_secret_only_goes_to_the_prefix_it_is_bound_to() {
+        let dir = std::env::temp_dir().join(format!("wings-bearer-{}", std::process::id()));
+        let p = with_secrets(&dir, serde_json::json!({ "api": "https://api.example.com/v1/" })).unwrap();
+        let (own, other) = ("https://api.example.com/v1/timers", "https://other.example.com/collect");
+        // The plugin may call both hosts, but its token only goes to the one the manifest names.
+        assert_eq!(fetch_url(&p, "GET", own, None).as_deref(), Some(own));
+        assert_eq!(fetch_url(&p, "GET", other, None).as_deref(), Some(other));
+        assert!(may_send_secret(&p, "api", own));
+        assert!(!may_send_secret(&p, "api", other));
+        assert!(!may_send_secret(&p, "api", "https://api.example.com/v2/x"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_declared_secrets_can_be_kept_or_sent() {
+        let dir = std::env::temp_dir().join(format!("wings-secret-names-{}", std::process::id()));
+        let p = with_secrets(&dir, serde_json::json!({ "api": "https://api.example.com/v1/" })).unwrap();
+        assert!(declares_secret(&p, "api"));
+        assert!(!declares_secret(&p, "other"));
+        assert!(!may_send_secret(&p, "other", "https://api.example.com/v1/timers"));
+        // A manifest that declares no secrets sends none, whatever its fetch entries allow.
+        assert!(!may_send_secret(&with_secrets(&dir, serde_json::json!({})).unwrap(), "api", "https://api.example.com/v1/timers"));
+        for bad in [
+            serde_json::json!({ "api": "https://api.example.com" }),
+            serde_json::json!({ "api": "https://api.example.com.evil.net" }),
+            serde_json::json!({ "api": "http://api.example.com/" }),
+            serde_json::json!({ "a b": "https://api.example.com/" }),
+            serde_json::json!({ "api": ["https://api.example.com/"] }),
+        ] {
+            assert!(with_secrets(&dir, bad.clone()).is_err(), "{bad}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn exec_rejects_output_over_the_limit_without_waiting_for_the_timeout() {
         let p = plugin(Path::new("/tmp"), &["yes", "echo"], &[]);
@@ -1772,6 +1837,9 @@ mod tests {
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"APPROVED"}"#)).is_some());
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"REQUEST_CHANGES","body":"no"}"#)).is_none());
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/merge"), Some(r#"{"Do":"merge"}"#)).is_none());
+        // Each token goes only to its own host.
+        assert!(may_send_secret(&p, "bitbucket", &format!("{bb}/comments")) && !may_send_secret(&p, "bitbucket", &format!("{cb}/pulls/4.diff")));
+        assert!(may_send_secret(&p, "codeberg", &format!("{cb}/pulls/4.diff")) && !may_send_secret(&p, "codeberg", &format!("{bb}/comments")));
     }
 
     #[test]

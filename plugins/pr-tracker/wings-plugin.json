@@ -57,7 +57,11 @@
       "GET https://codeberg.org/api/v1/",
       "POST https://codeberg.org/api/v1/repos/*/*/issues/*/comments",
       "POST https://codeberg.org/api/v1/repos/*/*/pulls/*/reviews {event=APPROVED}"
-    ]
+    ],
+    "secrets": {
+      "bitbucket": "https://api.bitbucket.org/2.0/",
+      "codeberg": "https://codeberg.org/api/v1/"
+    }
   },
   "contributes": {
     "mcpInstructions": "PRs (pr-tracker__*): when the pull request for this session's branch has failing checks, or the user asks why CI failed, use pr-tracker__failing_checks to read each failed step and the end of its log instead of fetching logs with gh or az.",

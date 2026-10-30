@@ -670,7 +670,7 @@ interface Wings {
   /**
    * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
    * `POST <url with * segments>` (optionally `{field=value}`) for one write with a JSON `body`. `bearer` names a secret that Wings sends
-   * as `Authorization: Bearer <secret>`. Resolves for any status; redirects aren't followed. With `binary: true` (Wings 0.1.108)
+   * as `Authorization: Bearer <secret>`, only to a URL under the prefix `permissions.secrets` binds it to (Wings 0.1.108). Resolves for any status; redirects aren't followed. With `binary: true` (Wings 0.1.108)
    * `body` is the response as base64, up to 10 MB, for an image or a file: show an image with
    * `data:${contentType};base64,${body}`.
    */
@@ -680,6 +680,7 @@ interface Wings {
   ): Promise<{ status: number; contentType: string | null; body: string }>;
   /** Secrets, like API tokens, in the system keychain. `fetch` can send them, but they can't be read back. */
   secrets: {
+    /** Refused for a name `permissions.secrets` doesn't declare (Wings 0.1.108). */
     set(name: string, value: string): Promise<void>;
     delete(name: string): Promise<void>;
     has(name: string): Promise<boolean>;

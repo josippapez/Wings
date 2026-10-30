@@ -358,11 +358,11 @@
     /**
      * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
      * `POST <url with * segments> [{field=value}]` for one write with a JSON `body`. `bearer` names a secret that Wings
-     * sends as `Authorization: Bearer <secret>`. Resolves `{ status, contentType, body }` for any status;
+     * sends as `Authorization: Bearer <secret>`, only under the URL prefix `permissions.secrets` binds it to. Resolves `{ status, contentType, body }` for any status;
      * redirects aren't followed. With `binary: true` the `body` is base64 (up to 10 MB), for an image or a file.
      */
     fetch: (url, { method, headers, body, bearer, binary } = {}) => call("fetch", { url, method, headers, body, bearer, binary }),
-    /** Secrets, like API tokens, kept in the system keychain. They can be used by `fetch` but not read back. */
+    /** Secrets, like API tokens, kept in the system keychain. They can be used by `fetch` but not read back. Only names `permissions.secrets` declares. */
     secrets: Object.freeze({
       set: (name, value) => call("secretSet", { name, value }),
       delete: (name) => call("secretDelete", { name }),
