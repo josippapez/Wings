@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.102 · 2026-10-30
+
+- **Close a floating terminal.** A terminal floating over its agent has a Close button, on the panel and on its minimised bar.
+- **Summaries while an agent works.** A session on a long turn, like a scheduled one, gets a new one-line summary in the Agents list every two minutes, not only when the turn ends.
+
 ## 0.1.101 · 2026-10-28
 
 - **Notifications you can't miss.** While Wings is in front, a plugin's notification pops up as a toast with its buttons, like Start for a newly assigned ticket, and the Inbox count pulses and takes an accent colour until you read it.
