@@ -339,7 +339,13 @@ pub struct WorktreeState {
 #[serde(rename_all = "camelCase")]
 pub struct Deleted {
     pub kept_branch: Option<String>,
+    /// Where the folder was moved, for `clear_aside` to delete its files.
+    #[serde(skip)]
+    pub aside: PathBuf,
 }
+
+/// Starts the name a deleted worktree's folder is moved to, beside where it was.
+const ASIDE: &str = ".wings-deleting-";
 
 /// The linked worktrees of `repo` as (folder, branch), the main checkout left out.
 fn linked(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>, String> {
@@ -380,28 +386,54 @@ pub fn inspect(repo: &Path, path: &Path) -> Result<WorktreeState, String> {
     Ok(WorktreeState { path: path.to_string_lossy().into_owned(), branch, changes: status.lines().map(str::to_string).collect() })
 }
 
-/// Removes the worktree folder, then deletes its branch when git considers it merged (`branch -d`). Refuses a
-/// worktree with changes unless `force`, and anything that isn't a linked worktree of `repo`.
+/// Removes the worktree from git, then deletes its branch when git considers it merged (`branch -d`). Refuses a
+/// worktree with changes unless `force`, a locked one, and anything that isn't a linked worktree of `repo`.
+///
+/// The folder is only moved aside, for `clear_aside` to delete: `git worktree remove` deletes it file by file, which
+/// takes 15 seconds for a `node_modules` of 137k files.
 pub fn delete(repo: &Path, path: &Path, force: bool) -> Result<Deleted, String> {
     let state = inspect(repo, path)?;
     if !force && !state.changes.is_empty() {
         return Err("The worktree has uncommitted changes".to_string());
     }
-    let mut args = vec!["worktree", "remove"];
-    if force {
-        args.push("--force");
+    let path = Path::new(&state.path);
+    // The folder git keeps for the worktree, `<common dir>/worktrees/<id>`, which `git worktree remove` deletes too.
+    let admin = PathBuf::from(git(path, &["rev-parse", "--absolute-git-dir"])?);
+    let common = PathBuf::from(git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
+    let common = common.canonicalize().map_err(|e| e.to_string())?;
+    if admin.parent() != Some(common.join("worktrees").as_path()) {
+        return Err(format!("{} isn't a git worktree of {}", path.display(), repo.display()));
     }
-    args.push(&state.path);
-    git(repo, &args)?;
+    if admin.join("locked").exists() {
+        return Err("The worktree is locked. Unlock it with git worktree unlock first".to_string());
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let aside = path.with_file_name(format!("{ASIDE}{name}-{nanos}"));
+    std::fs::rename(path, &aside).map_err(|e| format!("Couldn't move the folder: {e}"))?;
+    if let Err(e) = std::fs::remove_dir_all(&admin) {
+        let _ = std::fs::rename(&aside, path);
+        return Err(format!("Couldn't remove the worktree from git: {e}"));
+    }
     let kept_branch = match &state.branch {
         Some(b) if git(repo, &["branch", "-d", b]).is_err() => Some(b.clone()),
         _ => None,
     };
-    // `<repo>-worktrees` goes with its last worktree. `remove_dir` leaves a folder that still has something in it.
-    if let Some(dir) = Path::new(&state.path).parent().filter(|d| d.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("-worktrees"))) {
+    Ok(Deleted { kept_branch, aside })
+}
+
+/// Deletes a folder `delete` moved aside, and any others left beside it when Wings quit before deleting them. Then
+/// `<repo>-worktrees` goes with its last worktree: `remove_dir` leaves a folder that still has something in it.
+pub fn clear_aside(aside: &Path) {
+    let Some(dir) = aside.parent() else { return };
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().starts_with(ASIDE) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+    if dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("-worktrees")) {
         let _ = std::fs::remove_dir(dir);
     }
-    Ok(Deleted { kept_branch })
 }
 
 #[cfg(test)]
@@ -635,11 +667,16 @@ mod tests {
         assert!(delete(&repo, &stray, true).is_err());
         assert!(stray.exists());
 
-        // Clean: the folder, the branch and the then-empty `app-worktrees` go.
+        // Clean: the folder, the branch and git's record of it go, then the files moved aside and the then-empty
+        // `app-worktrees`.
         let one = create(&repo, "wings/one", "main", None).unwrap().path;
         assert!(inspect(&repo, &one).unwrap().changes.is_empty());
-        assert_eq!(delete(&repo, &one, false).unwrap().kept_branch, None);
-        assert!(!one.exists() && !has_branch("wings/one") && !base.join("app-worktrees").exists());
+        let done = delete(&repo, &one, false).unwrap();
+        assert_eq!(done.kept_branch, None);
+        assert!(!one.exists() && !has_branch("wings/one") && linked(&repo).unwrap().is_empty());
+        assert!(done.aside.exists());
+        clear_aside(&done.aside);
+        assert!(!base.join("app-worktrees").exists());
 
         // Dirty: refused without force, deleted with it.
         let two = create(&repo, "wings/two", "main", None).unwrap().path;

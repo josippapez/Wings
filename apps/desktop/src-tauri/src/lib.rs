@@ -165,11 +165,15 @@ fn worktree_status(state: State<AppState>, space_id: String) -> Res<worktree::Wo
     worktree::inspect(&repo, &path)
 }
 
-/// Removes the worktree's folder and its branch (when merged). It leaves the sidebar to the caller.
+/// Removes the worktree's folder and its branch (when merged). It leaves the sidebar to the caller. The folder's files
+/// are deleted after it returns.
 #[tauri::command(async)]
 fn worktree_delete(state: State<AppState>, space_id: String, force: bool) -> Res<worktree::Deleted> {
     let (repo, path) = worktree_target(&state, &space_id)?;
-    worktree::delete(&repo, &path, force)
+    let done = worktree::delete(&repo, &path, force)?;
+    let aside = done.aside.clone();
+    std::thread::spawn(move || worktree::clear_aside(&aside));
+    Ok(done)
 }
 
 #[derive(serde::Serialize)]
