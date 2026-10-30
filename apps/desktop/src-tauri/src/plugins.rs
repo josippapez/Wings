@@ -1554,11 +1554,11 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
 
 /// The folder a plugin's command runs in. A `cwd` must be inside one of your projects once `..` and symlinks are resolved,
 /// like a pane's: in a folder of its own choosing, git compares any two files there and az, gh and glab read its repo. A
-/// folder outside them is allowed when it's in a git repo that one of your open panes is in, and for a built-in plugin in
-/// any git repo (Worktrees finds repos all over the Mac). Only a repo: in a folder that isn't one, git diff compares any
-/// two files. git needs a cwd. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings
-/// itself started in.
-pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &[PathBuf], builtin: bool) -> Result<PathBuf, String> {
+/// folder outside them is allowed when it's in a git repo that one of your open panes is in, and with `any_repo` in any
+/// git repo (see `lists_worktrees_anywhere`). Only a repo: in a folder that isn't one, git diff compares any two files.
+/// git needs a cwd. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings itself
+/// started in.
+pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &[PathBuf], any_repo: bool) -> Result<PathBuf, String> {
     let Some(cwd) = cwd else {
         return if program == "git" { Err("git runs in a folder inside one of your Wings projects: pass its cwd".into()) } else { Ok(PathBuf::from("/")) };
     };
@@ -1566,12 +1566,19 @@ pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &
         let dir = Path::new(cwd).canonicalize().ok().filter(|d| d.is_dir()).ok_or_else(|| refused.clone())?;
         let repo = repo_root(&dir).ok_or_else(|| refused.clone())?;
         let open = || panes.iter().filter_map(|p| p.canonicalize().ok()).any(|p| repo_root(&p).as_ref() == Some(&repo));
-        if builtin || open() {
+        if any_repo || open() {
             Ok(dir)
         } else {
             Err(format!("{cwd} isn't inside any of your Wings projects or a repo open in a pane"))
         }
     })
+}
+
+/// Whether a built-in plugin may run this in any git repo on the Mac, for Worktrees' "Elsewhere". Only `git worktree
+/// list`: a repo's own config runs commands on most others (`core.fsmonitor` and clean filters on `git status`, textconv
+/// on `git diff`), and a repo found on disk may be anyone's.
+pub fn lists_worktrees_anywhere(builtin: bool, program: &str, args: &[String]) -> bool {
+    builtin && program == "git" && args.len() >= 2 && args[0] == "worktree" && args[1] == "list"
 }
 
 /// The nearest folder at or above `dir` that holds a `.git`, a folder or a worktree's file.
@@ -3645,11 +3652,17 @@ mod tests {
         // The repo a pane is in, at its root or below, for any plugin.
         assert_eq!(at("repo", false).unwrap(), base.join("repo").canonicalize().unwrap());
         assert!(at("repo/src", false).is_ok());
-        // Another repo only for a built-in plugin; a pane's folder that isn't a repo never, since git diff there reads any file.
+        // Another repo only to list its worktrees from a built-in plugin; a pane's folder that isn't a repo never, since git
+        // diff there reads any file.
         assert!(at("other", false).unwrap_err().contains("open in a pane"));
         assert!(at("other", true).is_ok());
         for cwd in ["plain", "plain/sub"] {
             assert!(at(cwd, false).is_err() && at(cwd, true).is_err(), "{cwd}");
+        }
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(lists_worktrees_anywhere(true, "git", &args(&["worktree", "list", "--porcelain"])));
+        for (builtin, a) in [(false, &["worktree", "list"][..]), (true, &["status"]), (true, &["diff"]), (true, &["worktree", "add"])] {
+            assert!(!lists_worktrees_anywhere(builtin, "git", &args(a)), "{builtin} {a:?}");
         }
         fs::remove_dir_all(&base).unwrap();
     }

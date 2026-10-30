@@ -1238,8 +1238,8 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
         let info = state.pane_info.lock().unwrap();
         started.into_iter().map(|(id, cwd)| info.get(&id).and_then(|i| i.cwd.as_deref()).map_or(cwd, PathBuf::from)).collect()
     };
-    let builtin = state.plugins.lock().unwrap().is_builtin(&plugin_id);
-    let result = plugins::exec_cwd(&program, cwd.as_deref(), &projects, &panes, builtin).and_then(|cwd| plugins::exec(&plugin, &program, &args, Some(&cwd), timeout, on_line));
+    let any_repo = plugins::lists_worktrees_anywhere(state.plugins.lock().unwrap().is_builtin(&plugin_id), &program, &args);
+    let result = plugins::exec_cwd(&program, cwd.as_deref(), &projects, &panes, any_repo).and_then(|cwd| plugins::exec(&plugin, &program, &args, Some(&cwd), timeout, on_line));
     applog::log_line!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
     result
 }
