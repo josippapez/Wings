@@ -238,6 +238,35 @@ export function Sidebar(props: {
     if (typeof path === "string") props.onAddSpace(path);
   }
 
+  /**
+   * Each project, then its worktrees, then the project's sections. Issues, pull requests and schedules belong to the
+   * repo, so they come once after its worktrees, which sit right under the project like its branch; a worktree's own
+   * sections would repeat them.
+   */
+  function renderRows(rows: ProjectRow<Space>[], older = false) {
+    let project = "";
+    return rows.flatMap((row, i) => {
+      if (!row.child) project = row.space.id;
+      // An empty slot would still take a gap in the list.
+      if (rows[i + 1]?.child || !Object.keys(props.projectSections[project] ?? {}).length) return [renderRow(row, older)];
+      return [
+        renderRow(row, older),
+        <motion.div key={`sections:${project}`} layout={dragId === project ? false : "position"} transition={spring}>
+          <ProjectSections
+            projectId={project}
+            sections={props.projectSections[project]}
+            plugins={props.plugins}
+            collapsed={props.collapsedSections}
+            onToggle={props.onToggleSection}
+            onOpen={props.onOpenSectionRow}
+            sorts={props.sectionSorts}
+            onSort={props.onSortSection}
+          />
+        </motion.div>,
+      ];
+    });
+  }
+
   function renderRow({ space, child }: ProjectRow<Space>, older = false) {
                 const top = tops.indexOf(space.id);
                 const active = space.id === props.activeSpaceId;
@@ -319,19 +348,6 @@ export function Sidebar(props: {
                       </IconButton>
                     </span>
                     </div>
-                    {/* Issues, pull requests and schedules belong to the repo, which lists them above its worktrees; a worktree's own would repeat them. */}
-                    {!child && (
-                      <ProjectSections
-                        projectId={space.id}
-                        sections={props.projectSections[space.id]}
-                        plugins={props.plugins}
-                        collapsed={props.collapsedSections}
-                        onToggle={props.onToggleSection}
-                        onOpen={props.onOpenSectionRow}
-                        sorts={props.sectionSorts}
-                        onSort={props.onSortSection}
-                      />
-                    )}
                   </ContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => props.onNewTab(space.id)}>
@@ -462,7 +478,7 @@ export function Sidebar(props: {
                   </EmptyContent>
                 </Empty>
               )}
-              {shown.map((row) => renderRow(row))}
+              {renderRows(shown)}
               {older.length > 0 && (
                 <Collapsible open={props.olderOpen} onOpenChange={() => props.onToggleOlder()}>
                   <CollapsibleTrigger
@@ -473,7 +489,7 @@ export function Sidebar(props: {
                     <span className="truncate">Older</span>
                     <span className="tabular-nums">{older.filter((r) => !r.child).length}</span>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="flex flex-col gap-px">{older.map((row) => renderRow(row, true))}</CollapsibleContent>
+                  <CollapsibleContent className="flex flex-col gap-px">{renderRows(older, true)}</CollapsibleContent>
                 </Collapsible>
               )}
             </nav>
