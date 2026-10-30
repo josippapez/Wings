@@ -1,12 +1,16 @@
-// Plays what a person does on a fixture once it has drawn: click a button, type into a field, press a key. A state uses it
-// to show a page after a failed save, which only a click and some typing reach.
+// Plays what a person does on a fixture once it has drawn: click a button, type into a field, press a key, scroll an
+// element to its end. A state uses it to show a page after a failed save, which only a click and some typing reach.
 import { useEffect, type ReactNode } from "react";
 
-export type Step = { click: string } | { type: [label: string, text: string] } | { key: [label: string, key: string] };
+export type Step = { click: string } | { type: [label: string, text: string] } | { key: [label: string, key: string] } | { scroll: string };
 
 const find = (selector: string, named: string) => [...document.querySelectorAll<HTMLElement>(selector)].find((el) => el.textContent === named || el.title === named || el.getAttribute("aria-label") === named);
 
 function play(step: Step) {
+  if ("scroll" in step) {
+    const el = document.querySelector(step.scroll);
+    return el ? (el.scrollTop = el.scrollHeight, true) : false;
+  }
   if ("click" in step) {
     const button = find("button, [role=menuitem]", step.click);
     return button ? (button.click(), true) : false;

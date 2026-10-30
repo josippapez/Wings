@@ -131,6 +131,8 @@
 .tk-page .w-page-body {
   display: block;
   overflow-x: hidden;
+  /* So the properties column can be at most as tall as the page shows (`100cqh`). */
+  container-type: size;
 }
 /* A plain block centred by auto margins: its width is the frame's, up to 1040px, whatever its content measures. */
 .tk-wrap {
@@ -317,6 +319,12 @@
   grid-area: props;
   position: sticky;
   top: 0;
+  /* A column taller than the page scrolls on its own, instead of hiding its end until the page reaches its own end. The
+     padding keeps focus rings inside the scroll box. */
+  max-height: 100cqh;
+  overflow-y: auto;
+  margin: -3px;
+  padding: 3px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -395,10 +403,13 @@
   }
   .tk-props {
     position: static;
+    max-height: none;
+    overflow: visible;
+    margin: 0;
     flex-direction: row;
     flex-wrap: wrap;
     gap: 12px 24px;
-    padding-bottom: 16px;
+    padding: 0 0 16px;
     border-bottom: 1px solid var(--wings-hairline);
   }
   .tk-prop[data-empty] {

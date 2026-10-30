@@ -21,6 +21,8 @@ const failed = (steps: Step[], props: Partial<IssueViewProps> = {}) => (
 export const states = {
   // A long log, three sessions and links.
   long: { element: view({ issue: longIssue, issueKey: "WEB-4" }) },
+  // The properties scrolled to their end, as in a tab too short for them: they scroll on their own (shot with --height 520).
+  "props-scrolled": { element: <Steps steps={[{ scroll: ".tk-props" }]}>{view({ issue: longIssue, issueKey: "WEB-4" })}</Steps> },
   // A new issue: no links, no sessions, one log entry.
   short: { element: view({ issue: shortIssue, issueKey: "WEB-1" }) },
   // The project is on a long branch the issue doesn't have yet: the offer to use it stays inside its column.
