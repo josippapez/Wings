@@ -1182,7 +1182,8 @@ fn post_entry(entry: &str) -> Option<(&str, &str, Vec<Pin<'_>>)> {
     // `?` and `=` for a fixed query like `?api-version=7.1`. A `*` only matches a whole plain segment.
     let chars_ok = !pattern.is_empty() && pattern.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%?=".contains(&b));
     let shape_ok = match program {
-        "gh" | "glab" => !pattern.starts_with('/') && !pattern.contains(':'),
+        // A query or a `.` segment would let `graphql?x` or `graphql/.` reach GraphQL past the check in `post_args`.
+        "gh" | "glab" => !pattern.contains([':', '?', '=']) && pattern.split('/').all(|s| !s.is_empty() && s != "." && s != ".."),
         "az" => pattern.strip_prefix("https://").is_some_and(|rest| rest.split('/').next().is_some_and(|host| !host.is_empty() && !host.contains('*'))),
         _ => false,
     };
@@ -1195,22 +1196,23 @@ fn post_segment_ok(segment: &str) -> bool {
     if segment.is_empty() || !segment.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~%".contains(&b)) {
         return false;
     }
+    percent_decoded(segment).is_some_and(|decoded| !decoded.contains(['%', '\\', '?', '#']) && !decoded.split('/').any(|part| part == "." || part == ".."))
+}
+
+/// A segment with its `%XX` escapes decoded, or `None` if one is malformed.
+fn percent_decoded(segment: &str) -> Option<String> {
     let bytes = segment.as_bytes();
-    let mut decoded = Vec::new();
-    let mut i = 0;
+    let (mut decoded, mut i) = (Vec::new(), 0);
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let hex = segment.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok());
-            let Some(byte) = hex else { return false };
-            decoded.push(byte);
+            decoded.push(segment.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())?);
             i += 3;
         } else {
             decoded.push(bytes[i]);
             i += 1;
         }
     }
-    let decoded = String::from_utf8_lossy(&decoded);
-    !decoded.contains(['%', '\\', '?', '#']) && !decoded.split('/').any(|part| part == "." || part == "..")
+    Some(String::from_utf8_lossy(&decoded).into_owned())
 }
 
 /// Whether a `permissions.post` entry covers a POST by `program` to `url`.
@@ -1253,8 +1255,10 @@ fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, Stri
     if !may_post(plugin, program, url, fields) {
         return Err(format!("{id} may not post to {program} {url}"));
     }
-    if program == "gh" && url == "graphql" && !graphql_reads_only(fields) {
-        return Err(format!("{id} may only read with gh graphql"));
+    // GitHub answered GraphQL at `graphql?x=1` too, and glab posts GraphQL as well, so the check goes by the decoded path.
+    let graphql = url.rsplit('/').next().and_then(percent_decoded).is_some_and(|s| s.eq_ignore_ascii_case("graphql"));
+    if matches!(program.as_str(), "gh" | "glab") && graphql && !graphql_reads_only(fields) {
+        return Err(format!("{id} may only read with {program} graphql"));
     }
     let key_ok = |k: &str| !k.is_empty() && k.len() <= 40 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
     if fields.is_empty() || fields.len() > 10 {
@@ -2561,6 +2565,29 @@ mod tests {
         assert!(parse_gh_hosts("not json").is_empty());
         let text = "gitlab.com\n  x gitlab.com: API call failed\n  ! No token found\n\ngitlab.example.com\n  ✓ Logged in to gitlab.example.com\n\n   ERROR  \n\n  X could not authenticate";
         assert_eq!(parse_glab_hosts(text), ["gitlab.com", "gitlab.example.com"]);
+    }
+
+    #[test]
+    fn graphql_only_reads_whichever_path_reaches_it() {
+        let mutation = "mutation { addStar(input: {starrableId: \"x\"}) { clientMutationId } }";
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.post = vec!["gh *".into(), "glab graphql".into(), "gh repos/*/*/issues/*/comments".into()];
+        let post = |program: &str, url: &str, query: &str| {
+            let mut r = post_request(program, url, (program == "glab").then_some("gitlab.com"));
+            r.fields = serde_json::json!({ "query": query }).as_object().unwrap().clone();
+            post_args(&p, &r)
+        };
+        for (program, url) in [("glab", "graphql"), ("gh", "GraphQL"), ("gh", "graph%71l")] {
+            assert!(post(program, url, mutation).is_err(), "{program} {url}");
+            assert!(post(program, url, "query { viewer { login } }").is_ok(), "{program} {url}");
+        }
+        // A repo named graphql is a REST path like any other.
+        assert!(post("gh", "repos/o/graphql/issues/1/comments", "Thanks").is_ok());
+        // GitHub served GraphQL at `graphql?x=1`, so a gh or glab entry can't hold a query, `=` or a `.` segment.
+        for entry in ["gh graphql?x=1", "gh graphql/.", "gh x/../graphql", "glab graphql/", "gh a//graphql", "gh x=1"] {
+            assert!(post_entry(entry).is_none(), "{entry}");
+        }
+        assert!(post_entry("az https://dev.azure.com/*/threads?api-version=7.1").is_some());
     }
 
     #[test]
