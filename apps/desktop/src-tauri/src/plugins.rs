@@ -1516,6 +1516,17 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
     Ok(Some(entry.iter().map(|w| w.to_string()).chain(extra).collect::<Vec<_>>().join(" ")))
 }
 
+/// The folder a plugin's command runs in. A `cwd` must be inside one of your projects once `..` and symlinks are resolved,
+/// like a pane's: in a folder of its own choosing, git compares any two files there and az, gh and glab read its repo. git
+/// needs one. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings itself started in.
+pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf]) -> Result<PathBuf, String> {
+    match cwd {
+        Some(cwd) => pane_cwd(Path::new(cwd), projects, None).map(|(_, dir)| dir),
+        None if program == "git" => Err("git runs in a folder inside one of your Wings projects: pass its cwd".into()),
+        None => Ok(PathBuf::from("/")),
+    }
+}
+
 /// The folder a plugin's pane may start in: inside one of your projects once `..` and symlinks are resolved,
 /// so neither can lead out of it. Returns which project it belongs to and the resolved folder. The project
 /// on screen (`current`) wins when it holds the folder, so a split stays in its tab's project; otherwise the
@@ -3328,6 +3339,25 @@ mod tests {
         assert_eq!(take_grant(&mut grants, "s1", Path::new("/")), None);
         assert_eq!(take_grant(&mut grants, "s1", &dir), Some(dir.clone()));
         assert_eq!(take_grant(&mut grants, "s1", &dir), None, "used up");
+    }
+
+    #[test]
+    fn exec_runs_inside_a_project() {
+        let base = std::env::temp_dir().join(format!("wings-exec-cwd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("proj/src")).unwrap();
+        fs::create_dir_all(base.join("other")).unwrap();
+        std::os::unix::fs::symlink(base.join("other"), base.join("proj/out")).unwrap();
+        let projects = [base.join("proj")];
+        let at = |program: &str, cwd: Option<&Path>| exec_cwd(program, cwd.map(|c| c.to_str().unwrap()), &projects);
+        assert_eq!(at("git", Some(&base.join("proj/src"))).unwrap(), base.join("proj/src").canonicalize().unwrap());
+        // A folder outside every project, or one a `..` or a symlink leads out to, is refused.
+        for cwd in [base.join("other"), base.join("proj/src/../../other"), base.join("proj/out"), PathBuf::from("/")] {
+            assert!(at("gh", Some(&cwd)).unwrap_err().contains("isn't inside"), "{}", cwd.display());
+        }
+        assert!(at("git", None).is_err());
+        assert_eq!(at("az", None).unwrap(), PathBuf::from("/"));
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

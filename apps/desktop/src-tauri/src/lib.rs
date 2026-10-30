@@ -1224,7 +1224,9 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
             let _ = on_output.send(line.to_string());
         })
     });
-    let result = plugins::exec(&plugin(&state, &plugin_id)?, &program, &args, cwd.as_deref().map(std::path::Path::new), timeout, on_line);
+    let plugin = plugin(&state, &plugin_id)?;
+    let projects: Vec<PathBuf> = state.spaces.lock().unwrap().spaces.iter().map(|s| PathBuf::from(&s.path)).collect();
+    let result = plugins::exec_cwd(&program, cwd.as_deref(), &projects).and_then(|cwd| plugins::exec(&plugin, &program, &args, Some(&cwd), timeout, on_line));
     applog::log_line!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
     result
 }
