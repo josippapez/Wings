@@ -4,7 +4,7 @@ A terminal workspace for coding agents such as Claude Code and opencode. Your pr
 
 ![Wings with three projects in the sidebar, a Claude Code pane with its todo card, a dev server and a git log](docs/images/hero.png)
 
-Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed.
+Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed. It is inspired by [Herdr](https://herdr.dev), a native home for coding agents.
 
 ## Features
 
@@ -12,11 +12,15 @@ Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed.
 
 The sidebar lists your projects and the agents in each one, and shows whether an agent is working, waiting or needs you. Sort projects by hand, by when you added them, by when you last worked on them or by name, and pin the ones you want on top; projects you haven't touched for 3 days, with no agent running, fold into an Older group. Press ⌘J to jump to the agent that needs you. A global shortcut, ⌃⌥J by default, brings Wings forward and goes there from any app. You can change it in Settings, Keyboard.
 
-A notification list keeps track of the times an agent needed you or finished.
+Each agent has a one-line summary of what it's working on, written on your Mac by Apple's on-device model or a local Ollama model. A notification list keeps track of the times an agent needed you or finished.
 
 ### Tabs and split panes
 
-Each project has tabs, and each tab can split into panes. Rename, reorder and move them by dragging or from the right-click menus. Tabs, splits and the font size come back on the next launch, and panes that were running Claude Code resume their session.
+Each project has tabs, and each tab can split into panes. Rename, reorder and move them by dragging or from the right-click menus. Tabs, splits and the font size come back on the next launch, and panes that were running Claude Code resume their session. A terminal an agent opens shows below it, beside it or floating over it, as you pick in Settings, Agents.
+
+### Agents use Wings too
+
+Wings adds its MCP server to Claude Code and OpenCode when it starts. An agent can then list the other panes and read what they show, open a tab and run a command in it, message the agent in another pane, search past sessions, and send you a notification. Plugin tools come along, and `wings <plugin> <tool>` runs them from the command line.
 
 ### Command palette
 
@@ -43,9 +47,11 @@ A plugin adds badges, sidebars, tabs, blocks and actions to Wings, and can answe
 
 - Changes: changed files per pane, the repo's history and a commit graph.
 - Dev servers: a badge with the port while a program in a pane listens on one.
+- Disk usage: a map of what takes the space on a disk, to find big folders and move them to the Trash.
 - HUD: Claude Code usage.
 - Issues: the tracker above.
-- PR tracker: the pull request for each pane's branch, with its checks.
+- PR tracker: the pull request for each pane's branch with its checks, each project's open pull requests in the sidebar, and a tab to read and reply to its review comments.
+- Schedules: starts an agent with a prompt on a schedule, and offers to start one in a new worktree for each ticket assigned to you.
 - Session detail, Work item and Worktrees.
 
 ## Install
@@ -71,7 +77,7 @@ cargo test          # Rust tests, run in src-tauri/
 
 ## Plugins
 
-A plugin is a folder with a `wings-plugin.json` and some TypeScript, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing and the plugins in this repo (Changes, Dev servers, HUD, Issues, PR tracker, Session detail, Work item, Worktrees). To write one, use [`wings-plugin-sdk`](https://www.npmjs.com/package/wings-plugin-sdk) and [`wings-plugin-ui`](https://www.npmjs.com/package/wings-plugin-ui), whose sources are in `packages/`.
+A plugin is a folder with a `wings-plugin.json` and some TypeScript, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing plugins and for the ones in this repo. To write one, use [`wings-plugin-sdk`](https://www.npmjs.com/package/wings-plugin-sdk) and [`wings-plugin-ui`](https://www.npmjs.com/package/wings-plugin-ui), whose sources are in `packages/`.
 
 ## License
 
