@@ -58,7 +58,8 @@ export interface Forge<L extends Link = Link, R extends KnownRemote = KnownRemot
   list(cwd: string, remote: R): Promise<ListedPr[]>;
   /** The link a tab's args name, which may need the provider asked again. */
   linkOf(args: PrArgs): Promise<L>;
-  status(link: L): Promise<Status>;
+  /** `fresh` is a read the user asked for, which a forge that keeps what it listed reads again. */
+  status(link: L, options?: { fresh?: boolean }): Promise<Status>;
   /** The status, author and description, for the PR tab. */
   overview(link: L): Promise<Overview>;
   /** The patch and the comments the diff viewer shows. `st` is the PR's status, whose branches or commits a forge that diffs in the project's folder reads. */

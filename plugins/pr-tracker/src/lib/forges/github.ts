@@ -1,6 +1,7 @@
 /** GitHub: the PR from the transcript or `gh pr list`, its status and failed Actions jobs, the diff, comments and replies. */
-import { cached } from "wings-plugin-sdk/async";
+import { cached, type Cached } from "wings-plugin-sdk/async";
 import { cli } from "wings-plugin-sdk/cli";
+import { githubPulls, type GithubPulls, type GithubRepo } from "wings-plugin-sdk/github";
 import { between, failingOf, real } from "../checklist";
 import { cleanLog, detail } from "../logs";
 import { stepLines } from "../runlog";
@@ -12,8 +13,20 @@ import type { CheckItem, CheckState, Comment, GithubLink, GithubRemote, ListedPr
 
 const GH_FIELDS =
   "number,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup,additions,deletions,changedFiles,headRefName,baseRefName,url,updatedAt";
-/** What `gh pr list` returns per PR: the status fields, plus the comment and review counts, the author and who is asked to review. One call covers every PR of the repo. */
-const GH_LIST_FIELDS = `${GH_FIELDS},comments,reviews,author,reviewRequests`;
+
+/**
+ * What one GraphQL query reads of each open PR: the status fields of `GH_FIELDS`, the author and the comment and review
+ * counts. `reviewRequests` isn't read: it costs a point per repository each time, and the review-requested search that
+ * rides along says which PRs ask for you or your team. Every nested connection with a `first` counts, so keep to
+ * these two (measured: 1 point per repository for the PRs, 1 more per connection under them).
+ */
+const GH_SELECTION = `number title state isDraft reviewDecision mergeable additions deletions changedFiles headRefName baseRefName url updatedAt
+  author { login } comments { totalCount } reviews { totalCount }
+  statusCheckRollup { contexts(first: 100) { nodes { __typename
+    ... on CheckRun { name status conclusion detailsUrl startedAt completedAt checkSuite { workflowRun { workflow { name } } } }
+    ... on StatusContext { context state targetUrl description } } } }`;
+/** A little under the 60 s poll, so each poll reads again while the list and the pane statuses of one poll share one read. */
+const REPOS_TTL_MS = 55_000;
 
 const DOTCOM = "github.com";
 
@@ -51,9 +64,8 @@ interface GhPr {
   title: string;
   body?: string;
   author?: { login?: string };
-  comments?: unknown[];
-  reviews?: unknown[];
-  reviewRequests?: { login?: string }[];
+  /** Comments and reviews, which the list counts for its unread marks. */
+  activity?: number;
   createdAt?: string;
   latestReviews?: { author?: { login?: string }; state: string }[];
   state: string;
@@ -83,6 +95,26 @@ interface GhCheck {
   workflowName?: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+/** A PR as `GH_SELECTION` reads it. */
+interface GqlPr extends Omit<GhPr, "reviewDecision" | "author" | "activity" | "statusCheckRollup"> {
+  reviewDecision: string | null;
+  author: { login: string } | null;
+  comments: { totalCount: number };
+  reviews: { totalCount: number };
+  statusCheckRollup: { contexts: { nodes: (GhCheck & { checkSuite?: { workflowRun?: { workflow?: { name?: string } | null } | null } | null })[] } } | null;
+}
+
+/** The shape `gh pr view --json` gives, so one mapper serves the list and the PR's own read. */
+export function fromGraphql({ author, comments, reviews, reviewDecision, statusCheckRollup, ...pr }: GqlPr): GhPr {
+  return {
+    ...pr,
+    author: author ?? undefined,
+    reviewDecision: reviewDecision ?? "",
+    activity: comments.totalCount + reviews.totalCount,
+    statusCheckRollup: (statusCheckRollup?.contexts.nodes ?? []).map(({ checkSuite, ...c }) => ({ ...c, workflowName: checkSuite?.workflowRun?.workflow?.name })),
+  };
 }
 
 /** A line comment from `gh api repos/.../pulls/N/comments`. */
@@ -225,15 +257,12 @@ export function githubReviewers(reviews: GhPr["latestReviews"] = []): Reviewer[]
   });
 }
 
-/**
- * Whose a listed PR is. `me` is the login `gh api user` gives. `reviewRequests` also lists teams, which have a slug and no
- * login, so `requested` holds the numbers `gh pr list --search review-requested:@me` found: that search includes your teams.
- */
-export function ghWho(pr: Pick<GhPr, "number" | "author" | "reviewRequests">, me: string, requested: ReadonlySet<number> = new Set()) {
-  return { mine: same(pr.author?.login, me), reviewing: requested.has(pr.number) || (pr.reviewRequests ?? []).some((r) => same(r.login, me)) };
+/** Whose a listed PR is. `me` is the login `gh api user` gives. `requested` holds the numbers the search `review-requested:@me` found, which includes your teams. */
+export function ghWho(pr: Pick<GhPr, "number" | "author">, me: string, requested: ReadonlySet<number>) {
+  return { mine: same(pr.author?.login, me), reviewing: requested.has(pr.number) };
 }
 
-/** Every open PR of a repo, each marked yours or waiting for you. `gh pr list` carries what a PR's own status does, so the list's status stands for it. */
+/** Every open PR of a repo, each marked yours or waiting for you. The list carries what a PR's own status does, so the list's status stands for it. */
 export function githubListed(prs: GhPr[], me: string, requested: ReadonlySet<number>): ListedPr[] {
   return prs.map((pr): ListedPr => ({
     link: { provider: "github", url: pr.url, number: pr.number, repo: repoOf(pr.url) },
@@ -243,7 +272,7 @@ export function githubListed(prs: GhPr[], me: string, requested: ReadonlySet<num
     author: pr.author?.login ?? null,
     status: githubStatusOf(pr),
     loaded: true,
-    activity: (pr.comments?.length ?? 0) + (pr.reviews?.length ?? 0),
+    activity: pr.activity ?? 0,
     updatedAt: pr.updatedAt ?? null,
   }));
 }
@@ -292,6 +321,21 @@ const logins = cached(async (host: string) => {
   if (!login) throw new Error("gh api user printed no login");
   return login;
 });
+
+/** host → the open PRs of each repo, read through one GraphQL call for every repo asked at once, and kept for a poll so the sidebar lists and the pane statuses share it. */
+const readers = new Map<string, Cached<GithubRepo, GithubPulls<GqlPr>>>();
+
+function openPulls(host: string) {
+  let reader = readers.get(host);
+  if (!reader) {
+    reader = cached(githubPulls<GqlPr>(gh, { selection: GH_SELECTION, host, key: ghKey(host) }).get, { ttlMs: REPOS_TTL_MS, key: (r) => `${r.owner}/${r.name}`.toLowerCase() });
+    readers.set(host, reader);
+  }
+  return reader;
+}
+
+/** `owner/repo` as the parts a GraphQL `repository` takes. */
+const partsOf = (repo: string): GithubRepo => ({ owner: repo.slice(0, repo.indexOf("/")), name: repo.slice(repo.indexOf("/") + 1) });
 
 /** A Claude pane can know its PR from the transcript without gh, so this can be the first gh call. */
 const view = (url: string, fields: string) => ghJson<GhPr>(ghKey(hostOf(url)), ["pr", "view", url, "--json", fields]);
@@ -358,24 +402,22 @@ export const github: Forge<GithubLink, GithubRemote> = {
     return { ids: [login], handles: [login] };
   },
 
-  /** One `gh pr list` for every open PR of the repo (up to 100) and one for the ones asking for your review, each marked yours or waiting for you. */
-  async list(cwd, remote) {
-    const key = ghKey(remote.host);
-    const [user, prs, asked] = await Promise.all([
-      logins.get(remote.host),
-      ghJson<GhPr[]>(key, ["pr", "list", ...repoArgs(remote), "--state", "open", "--limit", "100", "--json", GH_LIST_FIELDS], cwd),
-      // `reviewRequests` has no login for a team, so this search says which PRs ask for you or one of your teams.
-      orElse(gh.json<{ number: number }[]>(["pr", "list", ...repoArgs(remote), "--state", "open", "--limit", "100", "--search", "review-requested:@me", "--json", "number"], { key, cwd }), null),
-    ]);
-    return githubListed(prs, user, new Set((asked ?? []).map((p) => p.number)));
+  /** Every open PR of the repo (up to 100), each marked yours or waiting for you, from one GraphQL call that every repo asked in the same turn shares. */
+  async list(_cwd, remote) {
+    const [user, { pulls, asked }] = await Promise.all([logins.get(remote.host), openPulls(remote.host).get(partsOf(remote.path))]);
+    return githubListed(pulls.map(fromGraphql), user, new Set(asked));
   },
 
   async linkOf({ url, number, repo }) {
     return { provider: "github", url, number, repo };
   },
 
-  async status(link) {
-    return githubStatusOf(await view(link.url, GH_FIELDS));
+  /** An open PR's status is in its repo's list, which the sidebar reads anyway: `gh pr view` is for one the list doesn't have, like a merged one. `fresh` skips a list that's still kept. */
+  async status(link, { fresh = false } = {}) {
+    // A list that can't be read leaves it to `gh pr view`, which fails the same way when it is a sign-in.
+    const open = await openPulls(hostOf(link.url)).get(partsOf(link.repo), { fresh }).catch(() => null);
+    const pr = open?.pulls.find((p) => p.number === link.number);
+    return githubStatusOf(pr ? fromGraphql(pr) : await view(link.url, GH_FIELDS));
   },
 
   async overview(link) {
@@ -435,5 +477,8 @@ export const github: Forge<GithubLink, GithubRemote> = {
     await post("gh", `repos/${link.repo}/pulls/${link.number}/reviews`, { event: "APPROVE" }, postOptions(link.url));
   },
 
-  forget: () => logins.clear(),
+  forget() {
+    logins.clear();
+    readers.clear();
+  },
 };

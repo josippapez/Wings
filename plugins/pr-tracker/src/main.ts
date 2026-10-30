@@ -76,9 +76,12 @@ wings.onTranscript(({ sessionId, paneId, entry }) => {
   sessionLinked(sessionId, link);
   void refreshLinks({ local: false, which: (pane) => pane.paneId === paneId });
 });
-pollWhileFocused(refreshPanes, STATUS_POLL_MS);
-// The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
-pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
+// The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't. The
+// lists go first: a forge that lists a repo's open PRs in one call (GitHub) answers the panes' statuses from them.
+pollWhileFocused(async () => {
+  await refreshProjects(true).catch(console.error);
+  await refreshPanes();
+}, STATUS_POLL_MS);
 
 // Notifications about new pull requests, review requests and mentions: with any of them on, the lists are also
 // checked while Wings is in the background, as often as Settings says.

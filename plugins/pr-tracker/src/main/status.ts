@@ -15,7 +15,7 @@ export function refreshStatus(url: string, { byUser = false } = {}): Promise<voi
   if (inFlight.has(url)) return inFlight.get(url)!;
   const run = (async () => {
     try {
-      status.set(url, await forgeOf(link).status(link));
+      status.set(url, await forgeOf(link).status(link, { fresh: byUser }));
     } catch (error) {
       status.set(url, { error: errorMessage(error) });
     } finally {

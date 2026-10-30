@@ -1,4 +1,5 @@
 /** Azure DevOps: the PR for the branch (`az repos`), its policies, failed builds, the diff from local git, comments from threads and replies. */
+import { cached } from "wings-plugin-sdk/async";
 import { cli, CliError, lastLine } from "wings-plugin-sdk/cli";
 import { azureApiOrg, git } from "wings-plugin-sdk/git";
 import { between, real } from "../checklist";
@@ -350,12 +351,12 @@ async function fileAt(link: AzureLink, sha: string, path: string): Promise<strin
   }
 }
 
-/** The user `az` is signed in as, per organization, which marks the PRs you wrote and the ones that wait for you. */
-const who = async (org: string) => {
+/** The user `az` is signed in as, per organization, which marks the PRs you wrote and the ones that wait for you. Kept for good: each `az account show` is a Python start, and it was asked on every list and every look at a PR's comments. */
+const who = cached(async (org: string) => {
   const name = (await az.run(["account", "show", "--query", "user.name", "-o", "tsv"], { key: org })).trim();
   if (!name) throw new Error("az account show printed no user");
   return name;
-};
+});
 
 /** organization → your identity id, as a PR in the list shows it. */
 const identities = new Map<string, string>();
@@ -372,6 +373,9 @@ export const azure: Forge<AzureLink, AzureRemote> = {
     }),
     signIn: (remote) => az.signIn(remote.org),
   },
+
+  /** Forgets who you are, after a sign-in or Try again. */
+  forget: () => who.clear(),
 
   async find(cwd, remote, branch) {
     let prs: AzurePr[];
@@ -392,14 +396,14 @@ export const azure: Forge<AzureLink, AzureRemote> = {
 
   /** `az account show` says who you are: the same name Azure DevOps knows you by as `uniqueName`. A mention is written `@<id>` with your identity id, which a PR you wrote or review carries, so it is read from the list. */
   async me(remote) {
-    const name = await who(remote.org);
+    const name = await who.get(remote.org);
     const id = identities.get(remote.org);
     return { ids: [name], handles: id ? [name, id] : [name] };
   },
 
   /** Every active PR of the repo (up to 100) in one `az repos pr list`, each marked yours or waiting for you. */
   async list(cwd, remote) {
-    const me = await who(remote.org);
+    const me = await who.get(remote.org);
     const prs = await azJson<AzurePr[]>(remote.org, [
       "repos", "pr", "list", "--organization", remote.org, "--project", remote.project, "--repository", remote.repo,
       "--status", "active", "--top", "100", "-o", "json",

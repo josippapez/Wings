@@ -105,10 +105,14 @@ const runProjects = singleFlight(async () => {
   const projects = await wings.projects();
   const live = new Set<string>();
   let complete = true;
+  // Every remote is read before any list is asked for, so the lists of all the projects are asked in one turn and a forge that batches reads them in one call.
+  const remotes = await Promise.allSettled(projects.map((project) => remoteFor(project.path)));
   await Promise.all(
-    projects.map(async (project) => {
+    projects.map(async (project, i) => {
       try {
-        const remote = await remoteFor(project.path);
+        const found = remotes[i];
+        if (found.status === "rejected") throw found.reason;
+        const remote = found.value;
         const items = isKnown(remote) ? await listFor(project.path, remote, !fresh) : [];
         remember(items);
         if (isKnown(remote)) {

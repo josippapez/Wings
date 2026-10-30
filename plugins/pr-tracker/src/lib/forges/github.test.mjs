@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hasLog } from "../checklist.ts";
-import { ghItem, ghRun, ghState, ghWho, githubComment, githubConversation, githubListed, githubReviewers, githubStatusOf } from "./github.ts";
+import { fromGraphql, ghItem, ghRun, ghState, ghWho, githubComment, githubConversation, githubListed, githubReviewers, githubStatusOf } from "./github.ts";
 
 const pr = (over = {}) => ({
   number: 12, url: "https://github.com/o/r/pull/12", title: "Fix x", state: "OPEN", isDraft: false, reviewDecision: "", mergeable: "MERGEABLE",
@@ -35,28 +35,31 @@ test("GitHub status carries the key, branches, size, review text and the failed 
   assert.equal(githubStatusOf(pr()).review, "No review yet");
 });
 
-test("GitHub list marks the PRs you wrote or are asked to review, matching the login without case, and carries the full status", () => {
-  const prs = [
-    pr({ number: 1, author: { login: "Me" } }),
-    pr({ number: 2, reviewRequests: [{ login: "ME" }] }),
-    pr({ number: 3, reviewRequests: [{}] }),
-    pr({ number: 4, reviewRequests: [{ slug: "team" }], comments: [1, 2], reviews: [1] }),
-  ];
+test("GitHub list marks the PRs you wrote or the review search found, matching the login without case, and carries the full status", () => {
+  const prs = [pr({ number: 1, author: { login: "Me" } }), pr({ number: 2 }), pr({ number: 4, activity: 3 })];
   const rows = githubListed(prs, "me", new Set([4]));
-  assert.deepEqual(rows.map((r) => [r.link.number, r.mine, r.reviewing]), [[1, true, false], [2, false, true], [3, false, false], [4, false, true]]);
-  assert.deepEqual([rows[0].link, rows[0].head, rows[0].author, rows[0].loaded, rows[3].activity], [{ provider: "github", url: "https://github.com/o/r/pull/12", number: 1, repo: "o/r" }, "fix", "Me", true, 3]);
+  assert.deepEqual(rows.map((r) => [r.link.number, r.mine, r.reviewing]), [[1, true, false], [2, false, false], [4, false, true]]);
+  assert.deepEqual([rows[0].link, rows[0].head, rows[0].author, rows[0].loaded, rows[2].activity], [{ provider: "github", url: "https://github.com/o/r/pull/12", number: 1, repo: "o/r" }, "fix", "Me", true, 3]);
   assert.equal(rows[0].status.title, "Fix x");
 });
 
-test("GitHub: you wrote it, or your login is among the review requests (teams have no login)", () => {
-  assert.deepEqual(ghWho({ author: { login: "Me" }, reviewRequests: [] }, "me"), { mine: true, reviewing: false });
-  assert.deepEqual(ghWho({ author: { login: "ann" }, reviewRequests: [{ login: "bob" }, { login: "ME" }] }, "me"), { mine: false, reviewing: true });
-  assert.deepEqual(ghWho({ author: { login: "ann" }, reviewRequests: [{}] }, "me"), { mine: false, reviewing: false });
+test("GitHub: you wrote it, or the search for your review requests, your teams' included, found it", () => {
+  assert.deepEqual(ghWho({ number: 7, author: { login: "Me" } }, "me", new Set()), { mine: true, reviewing: false });
+  assert.deepEqual(ghWho({ number: 7, author: { login: "ann" } }, "me", new Set([7])), { mine: false, reviewing: true });
+  assert.deepEqual(ghWho({ number: 8, author: {} }, "me", new Set([7])), { mine: false, reviewing: false });
 });
 
-test("GitHub: a review request to your team counts through the search's numbers", () => {
-  assert.equal(ghWho({ number: 7, author: { login: "ann" }, reviewRequests: [{}] }, "me", new Set([7])).reviewing, true);
-  assert.equal(ghWho({ number: 8, author: { login: "ann" }, reviewRequests: [{}] }, "me", new Set([7])).reviewing, false);
+test("a GraphQL PR becomes what gh pr view gives: the workflow name on a check run, no decision as empty, the counts as activity", () => {
+  const node = {
+    number: 3, url: "https://github.com/o/r/pull/3", title: "T", state: "OPEN", isDraft: false, reviewDecision: null, mergeable: "MERGEABLE", additions: 1, deletions: 2, changedFiles: 1,
+    headRefName: "h", baseRefName: "main", updatedAt: "t", author: null, comments: { totalCount: 2 }, reviews: { totalCount: 1 },
+    statusCheckRollup: { contexts: { nodes: [{ __typename: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/o/r/actions/runs/9/job/5", checkSuite: { workflowRun: { workflow: { name: "CI" } } } }, { __typename: "StatusContext", context: "legacy", state: "SUCCESS" }] } },
+  };
+  const gh = fromGraphql(node);
+  assert.deepEqual([gh.reviewDecision, gh.activity, gh.author, gh.statusCheckRollup[0].workflowName, gh.statusCheckRollup[1].workflowName], ["", 3, undefined, "CI", undefined]);
+  const st = githubStatusOf(gh);
+  assert.deepEqual([st.label, st.items[0].kind, st.items[0].run, st.failing.length], ["Checks failing", "CI", { job: "5" }, 1]);
+  assert.equal(githubStatusOf(fromGraphql({ ...node, statusCheckRollup: null })).checks.failed, 0, "a PR with no checks has no rollup");
 });
 
 test("a review's verdict is a reviewer's vote, and a comment-only review is none", () => {
