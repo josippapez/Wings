@@ -291,6 +291,12 @@
      * stops and the call rejects with "The scan was stopped".
      */
     diskFind: (path, { names, skip, onProgress, signal } = {}) => diskCall("diskFind", { path, names, skip }, { onProgress, signal }),
+    /**
+     * Colors `code` as `lang` (a name like `typescript` or `ts`) in Wings, which loads the grammar the first time it is used
+     * (Wings 0.1.108). Resolves the code as lines of `[text, color?]` tokens in the dark theme, or `null` for a language
+     * Wings doesn't know. Rejects over 100,000 characters.
+     */
+    highlight: (code, lang) => call("highlight", { code, lang }),
     /** With `permissions.diskUsage`: the mounted disks as `{ name, mount, fs, kind, removable, readOnly, total, free }[]`, the startup disk first. */
     disks: () => call("disks", {}),
     /** Shows a badge in a pane's header, or removes it with `null`. Sending what this frame last sent for the pane does nothing. */

@@ -556,6 +556,14 @@ interface Wings {
   ): Promise<WingsDiskFind>;
   /** Needs `permissions.diskUsage` and Wings 0.1.70. The mounted disks Finder shows, the startup disk first. */
   disks(): Promise<WingsDisk[]>;
+  /**
+   * Wings 0.1.108. Colors `code` as `lang`, a name like `typescript`, `ts`, `rust` or `json`, in Wings, which loads the
+   * grammar the first time that language is used. Resolves the code as one array per line of `[text, color?]` tokens in
+   * Wings' dark theme, which is the one plugin pages are drawn in, so the page draws the colors itself. Resolves `null`
+   * for a language Wings doesn't know. Needs no permission. Rejects over 100,000 characters. `CodeBlock` from
+   * `wings-plugin-ui` does this for you with its `lang` prop.
+   */
+  highlight(code: string, lang: string): Promise<Array<Array<[text: string, color?: string]>> | null>;
   /** Opens an https URL, or an http one to localhost, 127.0.0.1 or [::1], that starts with a prefix in `permissions.openUrl`. */
   openUrl(url: string): Promise<void>;
   /**

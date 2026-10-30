@@ -17,9 +17,10 @@ import { ToggleGroup as BaseToggleGroup } from "@base-ui/react/toggle-group";
 import { createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useId, memo, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { languageOf, useHighlight } from "./highlight.js";
 import { MAX_DATA_IMAGE, emojify, parseBlocks, parseInline } from "./markdown.js";
 
-export { MAX_DATA_IMAGE };
+export { MAX_DATA_IMAGE, languageOf };
 
 import { errorMessage } from "wings-plugin-sdk/async";
 import { ago } from "wings-plugin-sdk/format";
@@ -1098,12 +1099,14 @@ export function Disclosure({ summary, open, defaultOpen, onOpenChange, children,
 // ---------- code ----------
 
 /**
- * Code, terminal output or a diff in a mono block, as shadcn's code-block draws it, without syntax highlighting (which
- * would ship a highlighter in every page). `code` is plain text, one text node. `lines` are rows that can carry a line
- * number, a diff kind and a highlight. A `title` makes a header that also holds the copy button; without one the
+ * Code, terminal output or a diff in a mono block, as shadcn's code-block draws it. `code` is plain text. `lines` are rows
+ * that can carry a line number, a diff kind and a highlight. With a `lang` the code is colored: Wings tokenizes it
+ * (`wings.highlight`, loading the grammar on first use), so the block is plain text until the colors arrive and stays
+ * plain for a language Wings doesn't know. The text of a row is the code only, so a diff's +/- marker is never colored
+ * or tokenized. A `title` makes a header that also holds the copy button; without one the
  * button floats over the block's corner. Copying takes the text only: no line numbers, no +/- markers.
  */
-export function CodeBlock({ code, lines, title, label, busy, wrap, copy = true, className, ...rest }) {
+export function CodeBlock({ code, lines, lang, title, label, busy, wrap, copy = true, className, ...rest }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return undefined;
@@ -1111,6 +1114,8 @@ export function CodeBlock({ code, lines, title, label, busy, wrap, copy = true, 
     return () => clearTimeout(t);
   }, [copied]);
   const text = lines ? lines.map((l) => l.text).join("\n") : (code ?? "");
+  const colored = useHighlight(text, lang, lines ? lines.length : text.split("\n").length);
+  const spans = (tokens, row) => tokens.map(([t, color], j) => (color ? h("span", { key: `${row}.${j}`, style: { color } }, t) : t));
   const numbered = Boolean(lines?.some((l) => l.n !== undefined));
   const diff = Boolean(lines?.some((l) => l.kind));
   const button = copy
@@ -1141,10 +1146,10 @@ export function CodeBlock({ code, lines, title, label, busy, wrap, copy = true, 
               { key: i, className: "w-codeblock-line", "data-kind": l.kind, "data-highlighted": flag(l.highlighted) },
               numbered ? h("span", { className: "w-codeblock-ln", "aria-hidden": true }, l.n) : null,
               diff ? h("span", { className: "w-codeblock-mark", ...(l.kind ? { role: "img", "aria-label": l.kind } : { "aria-hidden": true }) }, l.kind === "added" ? "+" : l.kind === "removed" ? "\u2212" : null) : null,
-              h("span", { className: "w-codeblock-text" }, l.text || " "),
+              h("span", { className: "w-codeblock-text" }, colored && l.text ? spans(colored[i], i) : l.text || " "),
             ),
           )
-        : h("code", null, code),
+        : h("code", null, colored ? colored.flatMap((line, i) => (i ? ["\n", ...spans(line, i)] : spans(line, i))) : code),
     ),
   );
 }
@@ -1250,7 +1255,7 @@ function mdBlocks(blocks) {
             ),
           );
         case "code":
-          return h(CodeBlock, { key: i, code: b.text, title: b.lang || undefined, label: b.lang ? undefined : "Code" });
+          return h(CodeBlock, { key: i, code: b.text, lang: b.lang?.split(/\s/)[0] || undefined, title: b.lang || undefined, label: b.lang ? undefined : "Code" });
         case "quote":
           return h("blockquote", { key: i, className: "w-md-quote" }, h(MdInline, { text: b.text }));
         case "rule":

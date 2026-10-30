@@ -805,6 +805,28 @@ test("CodeBlock copies the text without line numbers or markers, and a Markdown 
   await unmount();
 });
 
+test("CodeBlock colors a diff's code, not its markers, when Wings answers, and stays plain when it doesn't", async () => {
+  const asked = [];
+  const lines = [{ n: 1, text: "let a = 1;" }, { n: 2, text: "let b = 2;", kind: "added" }];
+  globalThis.wings = { highlight: async (code, lang) => (asked.push([code, lang]), code.split("\n").map((l) => [[l.slice(0, 3), "#ff7b72"], [l.slice(3)]])) };
+  const { host, unmount } = await mount(h(CodeBlock, { lines, lang: "ts" }));
+  await until(() => host.querySelector(".w-codeblock-text span"), "the colors");
+  assert.deepEqual(asked, [["let a = 1;\nlet b = 2;", "ts"]]);
+  assert.deepEqual([...host.querySelectorAll(".w-codeblock-text")].map((t) => t.textContent), ["let a = 1;", "let b = 2;"]);
+  assert.equal(host.querySelectorAll(".w-codeblock-text span")[1].style.color, "rgb(255, 123, 114)");
+  assert.equal(host.querySelector('[data-kind="added"] .w-codeblock-mark').textContent, "+");
+  await unmount();
+  // An unknown language answers null, and a Wings without the call has none: both leave the text as it was.
+  for (const wingsStub of [{ highlight: async () => null }, {}]) {
+    globalThis.wings = wingsStub;
+    const plain = await mount(h(CodeBlock, { code: "a < b", lang: "nope" }));
+    await settle();
+    assert.equal(plain.host.querySelector("pre code").innerHTML, "a &lt; b");
+    await plain.unmount();
+  }
+  delete globalThis.wings;
+});
+
 test("useAction is busy while any run is going, and keeps the message of the last one that threw until the next run starts", async () => {
   let action;
   const Page = () => ((action = useAction()), null);

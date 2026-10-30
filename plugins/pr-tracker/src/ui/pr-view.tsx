@@ -2,7 +2,7 @@
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Chip, CodeBlock, copyText, Empty, Heading, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar, type CodeLine } from "wings-plugin-ui";
+import { Avatar, Badge, Button, Chip, CodeBlock, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar, type CodeLine } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
@@ -530,7 +530,7 @@ function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; 
   return (
     <>
       {bar}
-      <CodeBlock className="pr-snippet" label={`Code around line ${root.line ?? root.range?.end ?? ""}`} lines={shown.map(codeLine)} busy={!lines} data-testid="pr-snippet" />
+      <CodeBlock className="pr-snippet" lang={languageOf(root.path)} label={`Code around line ${root.line ?? root.range?.end ?? ""}`} lines={shown.map(codeLine)} busy={!lines} data-testid="pr-snippet" />
     </>
   );
 }

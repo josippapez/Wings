@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Meter, Notice, ProjectGate, Row, Stack, Title } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Meter, Notice, ProjectGate, Row, Stack, Title, languageOf } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -145,4 +145,11 @@ test("Notice announces a warning or an error at once and the rest politely", () 
 
 test("Meter takes a success tone", () => {
   assert.match(html(h(Meter, { percent: 100, label: "Done", tone: "success" })), /role="meter"[^>]*data-tone="success"/);
+});
+
+test("languageOf maps a file path to the language Wings highlights, and nothing for a file it has no grammar for", () => {
+  assert.deepEqual(
+    ["src/a.ts", "web/App.TSX", "C:\\work\\main.rs", "x/.eslintrc.json", "Dockerfile", "notes.xyz", "", null].map(languageOf),
+    ["typescript", "tsx", "rust", "json", undefined, undefined, undefined, undefined],
+  );
 });

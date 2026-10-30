@@ -8,6 +8,7 @@ import { diskFindRequest, diskToken, diskUsageRequest } from "@/lib/plugin-disk"
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
 import { cleanPaneRail, type PaneRail } from "@/lib/pane-rail";
 import { cleanPaneStatus, type PaneStatus } from "@/lib/pane-status";
+import { highlightTokens } from "@/lib/highlighter";
 import { cleanFocus, type DiffFocus } from "@/lib/diff-focus";
 import { cleanButtons, type NotificationButton } from "@/lib/notifications";
 import { cleanSectionRows, type ProjectSectionRow } from "@/lib/project-sections";
@@ -280,6 +281,9 @@ const newRun = () => crypto.randomUUID().slice(0, 8);
 
 /** A sidebar button's live text, and the rows shown when you point at it. */
 export type SidebarLabel = { text: string; rows: { label: string; value: string }[]; tone?: "warning" | "danger" };
+
+/** The most code `wings.highlight` tokenizes in one call. */
+const HIGHLIGHT_MAX = 100_000;
 
 export class PluginHost {
   /** Frames in this window by their window, and view windows by label. */
@@ -735,6 +739,12 @@ export class PluginHost {
         return invoke("plugin_disk_usage_cancel", { pluginId, token: diskToken(p.token) });
       case "disks":
         return invoke("plugin_disks", { pluginId });
+      case "highlight": {
+        // Pure compute on text the page already has, so it needs no permission, only bounds on the work.
+        if (typeof p.code !== "string" || typeof p.lang !== "string") throw new Error("highlight needs code and lang strings");
+        if (p.code.length > HIGHLIGHT_MAX) throw new Error(`highlight is limited to ${HIGHLIGHT_MAX} characters`);
+        return highlightTokens(p.code, p.lang.slice(0, 40));
+      }
       case "openUrl":
         return invoke("plugin_open_url", { pluginId, url: String(p.url) });
       case "post":

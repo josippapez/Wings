@@ -21,6 +21,7 @@
 //   storage   { key: value }: what `wings.storage` holds at the start, and keeps what the page sets
 //   answers   { name: (request) => response }: what main answers an `ask` with
 //   queries   { name: (key) => value, or a value for every key }: what main serves a `useQuery` or `subscribe` with
+//   highlight (code, lang) => tokens: what `wings.highlight` answers (default: comments, strings, numbers and keywords colored)
 //   states    { name: { ...fields } }: one screenshot per state. Each shows the file's fields with its own over them.
 //             The PNGs are <plugin>-<file>-<state>-<width>.png; a file without states makes <plugin>-<file>-<width>.png
 // The page gets wings-plugin-ui's plugin-ui.css and the CSS its imports bring, in the app's dark theme, with a stub

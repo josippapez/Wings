@@ -5,6 +5,28 @@
 
 import { channel } from "./messages.js";
 
+const COMMENT = "#8b949e", KEYWORD = "#ff7b72", STRING = "#a5d6ff", NUMBER = "#79c0ff";
+/**
+ * Stands in for `wings.highlight`: not a grammar, just comments, strings, numbers and a few keywords in the colors of
+ * Wings' dark theme, so a shot shows a block colored and a page that draws the tokens is checked. A language it
+ * doesn't know (`unknown`, `text`, `plain`) answers null, as Wings does.
+ */
+function fakeHighlight(code, lang) {
+  if (["unknown", "text", "plain", ""].includes(lang)) return null;
+  const word = /(\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)|\b(\d+(?:\.\d+)?)\b|\b(const|let|var|function|return|if|else|for|while|import|from|export|await|async|new|class|type|interface|throw|try|catch)\b/g;
+  return code.split("\n").map((line) => {
+    const out = [];
+    let last = 0;
+    for (const m of line.matchAll(word)) {
+      if (m.index > last) out.push([line.slice(last, m.index)]);
+      out.push([m[0], m[1] ? COMMENT : m[2] ? STRING : m[3] ? NUMBER : KEYWORD]);
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) out.push([line.slice(last)]);
+    return out;
+  });
+}
+
 /** Installs the stub. `fx` is the fixture module's exports. */
 export function installWings(fx) {
   const listeners = new Set();
@@ -54,6 +76,7 @@ export function installWings(fx) {
     setTabState: (s) => ((state.tab = s), ok()),
     setBlockState: (s) => ((state.block = s), ok()),
     setHeight: () => {},
+    highlight: (code, lang) => Promise.resolve((fx.highlight ?? fakeHighlight)(code, lang)),
     openUrl: ok,
     openView: ok,
     closeView: ok,
