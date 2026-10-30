@@ -372,6 +372,7 @@ function PaneCard(props: GridProps & { paneKey: string }) {
             keepRenderer={props.keepRenderer}
             initialInputs={props.initialInputs}
             onDock={() => actions.agentView(paneKey, "split")}
+            onClose={actions.close}
           />
         )}
         {!!props.rails[paneKey]?.length && <PaneRails paneKey={paneKey} entries={props.rails[paneKey]} onOpen={props.onOpenStatus} />}

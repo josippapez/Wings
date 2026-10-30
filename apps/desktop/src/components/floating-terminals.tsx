@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MinusIcon, PanelBottomIcon, SquareTerminalIcon } from "lucide-react";
+import { MinusIcon, PanelBottomIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 
 import { IconButton } from "@/components/icon-button";
 import type { PaneLabelInfo } from "@/components/pane-label";
@@ -33,10 +33,10 @@ function Host({ paneKey, shown, visible, keepRenderer, initialInput }: { paneKey
 
 /**
  * The terminals an agent opened, floated over its pane instead of split below it: drag the header to move the panel,
- * the corner to resize it, minimise it to a bar to glance at later. Moves and resizes touch only the panel's own
+ * the corner to resize it, minimise it to a bar to glance at later, or close the terminal it shows. Moves and resizes touch only the panel's own
  * style, so the agent's terminal never reflows during a gesture, and the floated terminal refits once at the end.
  */
-export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visible, keepRenderer, initialInputs, onDock }: {
+export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visible, keepRenderer, initialInputs, onDock, onClose }: {
   ownerKey: string;
   ownerTitle: string;
   commands: string[];
@@ -45,6 +45,7 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
   keepRenderer: boolean;
   initialInputs: Record<string, string | null>;
   onDock: () => void;
+  onClose: (paneKey: string) => void;
 }) {
   const [state, setState] = useState<PanelState>(() => states.get(ownerKey) ?? initial());
   const area = useRef<HTMLDivElement>(null);
@@ -155,9 +156,23 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
           </span>
           <span className="flex-1" />
           {collapsed ? (
-            <IconButton label="Dock back into the split" data-no-drag className="size-5" onClick={onDock}>
-              <PanelBottomIcon />
-            </IconButton>
+            <>
+              <IconButton label="Dock back into the split" data-no-drag className="size-5" onClick={onDock}>
+                <PanelBottomIcon />
+              </IconButton>
+              {/* A click on the bar opens the panel: the others would pop open as this one closes. */}
+              <IconButton
+                label={`Close ${names(active)}`}
+                data-no-drag
+                className="size-5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(active);
+                }}
+              >
+                <XIcon />
+              </IconButton>
+            </>
           ) : (
             <>
               <IconButton label="Minimise to a bar" data-no-drag onClick={() => keep({ ...state, collapsed: true })}>
@@ -165,6 +180,9 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
               </IconButton>
               <IconButton label="Dock back into the split" data-no-drag onClick={onDock}>
                 <PanelBottomIcon />
+              </IconButton>
+              <IconButton label={`Close ${names(active)}`} data-no-drag onClick={() => onClose(active)}>
+                <XIcon />
               </IconButton>
             </>
           )}
