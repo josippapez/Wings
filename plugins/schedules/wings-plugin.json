@@ -1,7 +1,7 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "minWingsVersion": "0.1.104",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
@@ -118,6 +118,11 @@
               "maxItems": 20,
               "description": "Ask only about tickets whose title starts with one of these, like FE or BE, when the project's tickets carry a prefix for each repo. Leave out for every title."
             },
+            "name": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "What the lists call the entry instead of \"When something is assigned to me\"."
+            },
             "base": {
               "type": "string",
               "maxLength": 200,
@@ -229,6 +234,11 @@
               },
               "maxItems": 20,
               "description": "Ask only about tickets whose title starts with one of these, like FE or BE."
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "What the lists call the entry instead of \"When something is assigned to me\". An empty string clears it."
             },
             "base": {
               "type": "string",

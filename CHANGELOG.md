@@ -4,6 +4,7 @@ What changed in each Wings release, newest first.
 
 ## 0.1.107 · 2026-10-30
 
+- **Name an assigned entry.** A Schedules "When something is assigned to me" entry takes a name, shown in the list and the sidebar instead of what it does.
 - **Terminal in the sidebar.** A Terminal row under Search opens and hides the quick terminal, and shows its shortcut.
 
 ## 0.1.106 · 2026-10-30

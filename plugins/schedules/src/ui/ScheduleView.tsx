@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Menu, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
-import { asks, describeCheck, SOURCE_LABELS, startedElsewhere, titleWanted, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
+import { asks, describeCheck, SOURCE_LABELS, startedElsewhere, titleWanted, watchName, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import type { WorktreeChange, WorktreeSetup } from "../lib/worktree-setup";
 import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
@@ -85,7 +85,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
             <Button variant="ghost" onClick={() => (action.clear(), setEditing(false))}>
               ← Schedules
             </Button>
-            <Text tone="muted">{schedule ? nameOf(schedule) : watch ? "When something is assigned to me" : "New entry"}</Text>
+            <Text tone="muted">{schedule ? nameOf(schedule) : watch ? watchName(watch) : "New entry"}</Text>
           </Toolbar>
         }
       >
@@ -282,8 +282,6 @@ function Item({ s, project, now, busy, onRun, onEdit, onToggle, onDelete }: Item
   );
 }
 
-const WATCH_NAME = "When something is assigned to me";
-
 interface WatchItemProps {
   w: WatchView;
   project: string;
@@ -302,7 +300,7 @@ interface WatchItemProps {
 
 function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking, onCheck, onStartTicket, onSignIn, onInstall, onOpen }: WatchItemProps) {
   const check = w.lastCheck;
-  const label = `${WATCH_NAME} in ${project}`;
+  const label = `${watchName(w)} in ${project}`;
   const unsupported = w.source?.kind === "unsupported";
   const tickets = w.tickets ?? [];
   return (
@@ -313,7 +311,7 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
           <Stack gap="xs" grow>
             <Row gap="m" wrap>
               <Text weight="strong" truncate>
-                {WATCH_NAME}
+                {watchName(w)}
               </Text>
               {w.enabled ? null : <Badge size="sm">Paused</Badge>}
             </Row>

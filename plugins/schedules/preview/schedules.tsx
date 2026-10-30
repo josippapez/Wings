@@ -69,6 +69,7 @@ const watches: WatchView[] = [
   },
   {
     id: "w2",
+    name: "Backend tickets",
     targets: [projects[1]],
     projectId: "p2",
     agent: "opencode",

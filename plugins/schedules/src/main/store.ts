@@ -2,7 +2,7 @@
 // under each project in the sidebar that show which projects have something set up.
 
 import { describeWhen, nameOf, AGENTS, type Schedule } from "../lib/schedule";
-import { SOURCE_LABELS, type Watch } from "../lib/assigned";
+import { SOURCE_LABELS, watchName, type Watch } from "../lib/assigned";
 import { ch } from "../lib/messages";
 
 const SCHEDULES = "schedules";
@@ -49,7 +49,7 @@ export async function syncSections(): Promise<void> {
         .filter((w) => w.projectId === id)
         .map((w) => ({
           id: `w:${w.id}`,
-          label: "When something is assigned to me",
+          label: watchName(w),
           detail: `${AGENTS[w.agent].label} · ${w.source ? SOURCE_LABELS[w.source.kind] : "Checking"}`,
           ...(w.waiting.length ? { badge: { text: `${w.waiting.length} waiting`, tone: "info" as const } } : w.enabled ? {} : { badge: { text: "Paused" } }),
           open: { view: "schedules", args: { waiting: w.id } },

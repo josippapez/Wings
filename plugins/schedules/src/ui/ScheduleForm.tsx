@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Button, Card, Chip, Chips, Combobox, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
-import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, type WatchDraft } from "../lib/assigned";
+import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, WATCH_NAME, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
 import { includeText, worktreeChange, type WorktreeChange, type WorktreeSetup } from "../lib/worktree-setup";
 import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
@@ -32,7 +32,7 @@ const WEEKDAYS = [1, 2, 3, 4, 5];
 export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel, loadBranches, loadWorktreeSetup }: Props) {
   // An entry keeps its kind: only a new one picks it.
   const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
-  const [name, setName] = useState(schedule?.name ?? "");
+  const [name, setName] = useState(schedule?.name ?? watch?.name ?? "");
   const [projectId, setProjectId] = useState(schedule?.projectId ?? watch?.projectId ?? here ?? projects[0]?.id ?? "");
   const [agent, setAgent] = useState<Agent>(schedule?.agent ?? watch?.agent ?? "claude");
   const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
@@ -78,7 +78,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
     if (kind === "assigned") {
       const change = loaded && worktreeChange(loaded.setup, includeField, setupField);
       return onSaveWatch(
-        { projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()), base },
+        { name, projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()), base },
         loaded && change ? { projectId: loaded.projectId, change } : undefined,
       );
     }
@@ -104,11 +104,9 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
             />
           </FieldGroup>
         )}
-        {kind === "schedule" ? (
-          <Field label="Name" hint="Optional. Without one, the list shows the start of the prompt.">
-            <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Morning review" />
-          </Field>
-        ) : null}
+        <Field label="Name" hint={kind === "schedule" ? "Optional. Without one, the list shows the start of the prompt." : `Optional. Without one, the list says "${WATCH_NAME}".`}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder={kind === "schedule" ? "Morning review" : "Frontend tickets"} />
+        </Field>
         <Row gap="l" wrap align="start">
           <Field label="Project">
             <Select
