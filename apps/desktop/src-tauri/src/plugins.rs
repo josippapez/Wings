@@ -500,6 +500,9 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if let Some(settings) = &manifest.contributes.settings {
         resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
     }
+    if let Some(entry) = manifest.permissions.open_url.iter().find(|e| !open_url_prefix_ok(e)) {
+        return Err(format!("openUrl entry {entry:?} must be https:// for any page, an https URL with a path like https://example.com/, or http://localhost: for this computer"));
+    }
     if let Some(entry) = manifest.permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
         return Err(format!(
             "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
@@ -1055,6 +1058,13 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
 /// also match `https://api.example.com.evil.net`.
 fn fetch_prefix_ok(prefix: &str) -> bool {
     prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains(['@', '*'])))
+}
+
+/// An `openUrl` entry: `https://` for any page, an https prefix that ends its host with `/` like a fetch entry, or http
+/// to this computer with a port or path next. `https://dev.azure.com` would match `https://dev.azure.com.example.com/` too.
+fn open_url_prefix_ok(prefix: &str) -> bool {
+    let loopback = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|host| prefix.strip_prefix(host).is_some_and(|rest| rest.starts_with([':', '/'])));
+    prefix == "https://" || fetch_prefix_ok(prefix) || loopback
 }
 
 /// One `permissions.fetch` entry.
@@ -2223,6 +2233,24 @@ mod tests {
         for extra in [&["--title", "x"][..], &["--fields", "System.Title=x"], &["--assigned-to", "x"], &["--stat", "Done"], &["--discussion", "x"]] {
             assert!(!may_exec(&p, "az", &update(extra)), "{extra:?}");
         }
+    }
+
+    #[test]
+    fn open_url_entries_are_checked_on_load() {
+        for entry in ["https://", "https://dev.azure.com/", "http://localhost:", "http://127.0.0.1:8080/", "http://[::1]:"] {
+            assert!(open_url_prefix_ok(entry), "{entry}");
+        }
+        // Each of these would also match another host: dev.azure.com.example.com, localhost.example.com, user@host.
+        for entry in ["https://dev.azure.com", "http://localhost", "https://dev.azure.com@example.com/", "https://*.example.com/", "http://example.com/", "ftp://x/", ""] {
+            assert!(!open_url_prefix_ok(entry), "{entry}");
+        }
+        let dir = std::env::temp_dir().join(format!("wings-open-url-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = serde_json::json!({ "id": "t", "name": "T", "version": "0", "api": 1, "main": "main.js", "permissions": { "openUrl": ["https://dev.azure.com"] } });
+        fs::write(dir.join("wings-plugin.json"), manifest.to_string()).unwrap();
+        assert!(load(&dir).err().unwrap().contains("openUrl entry"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
