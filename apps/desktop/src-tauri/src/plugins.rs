@@ -646,12 +646,16 @@ fn is_unsafe_flag(program: &str, arg: &str) -> bool {
 }
 
 /// The only flags these commands take from a plugin, whatever its manifest says. Their other flags sign the CLI in as
-/// someone else (`az login --service-principal`) or get a token for another service (`az account get-access-token
-/// --resource-type arm`). Names are exact, so an abbreviation or an attached value counts as another flag.
+/// someone else (`az login --service-principal`, `glab auth login --token`), send a host's token to another server
+/// (after `glab auth login --hostname gitlab.com --api-host <other>`, every glab call for gitlab.com went there), or get
+/// a token for another service (`az account get-access-token --resource-type arm`). Names are exact, so an abbreviation
+/// or an attached value counts as another flag.
 const ONLY_FLAGS: &[(&str, &[&str], &[&str])] = &[
     ("az", &["login"], &["--allow-no-subscriptions", "--output", "-o"]),
     ("az", &["account", "get-access-token"], &["--resource", "--output", "-o"]),
     ("az", &["rest"], &["--url", "--uri", "-u", "--resource", "--output", "-o", "--query"]),
+    ("gh", &["auth", "login"], &["--web", "--clipboard", "--hostname"]),
+    ("glab", &["auth", "login"], &["--web", "--hostname"]),
 ];
 
 /// A flag that a command in `ONLY_FLAGS` doesn't take.
@@ -698,6 +702,61 @@ fn azure_devops_url(url: &str) -> bool {
     matches!(rest[host.len()..].chars().next(), None | Some('/')) && (host == "dev.azure.com" || host.strip_suffix(".visualstudio.com").is_some_and(org_host))
 }
 
+/// `gh api` and `glab api` call any URL their endpoint names, and glab sends its token there (`glab api
+/// https://example.invalid/x` sent `Private-Token`), so an endpoint may only be a plain path on the CLI's own host, like
+/// `repos/o/r/pulls/1/comments` or `projects/g%2Fp/merge_requests?per_page=100`.
+fn api_endpoints_ok(program: &str, args: &[String]) -> bool {
+    if !matches!(program, "gh" | "glab") || args.first().is_none_or(|a| a != "api") {
+        return true;
+    }
+    // The flags whose value is the next word; a short one takes it when it ends its group. The write flags are refused already.
+    let (long, short): (&[&str], &[char]) = match program {
+        "gh" => (&["--cache", "--header", "--hostname", "--jq", "--preview", "--template"], &['H', 'q', 'p']),
+        _ => (&["--header", "--hostname", "--output"], &['H']),
+    };
+    let plain = |s: &str, extra: &[u8]| s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~%".contains(&b) || extra.contains(&b));
+    let path_ok = |endpoint: &str| {
+        let (path, query) = endpoint.split_once('?').unwrap_or((endpoint, ""));
+        path.split('/').all(|s| !s.is_empty() && s != "." && s != ".." && plain(s, b"")) && plain(query, b"=&")
+    };
+    let mut words = args[1..].iter();
+    while let Some(arg) = words.next() {
+        let takes_next = match arg.strip_prefix("--") {
+            Some(_) => long.contains(&arg.as_str()),
+            None => arg.strip_prefix('-').is_some_and(|group| group.find(|c| short.contains(&c)).is_some_and(|i| i + 1 == group.len())),
+        };
+        if takes_next {
+            words.next();
+        } else if !arg.starts_with('-') && !path_ok(arg) {
+            return false;
+        }
+    }
+    true
+}
+
+/// gh's `--jq` can read the environment (`$ENV`, `env`), which holds tokens when Wings starts from a terminal that has
+/// them: `--jq '$ENV | keys | length'` printed 60 variables.
+fn jq_reads_env(args: &[String]) -> bool {
+    let reads = |jq: &str| jq.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$')).any(|w| w == "env" || w == "$ENV");
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        let jq = match arg.strip_prefix("--jq") {
+            Some("") => words.next().map(String::as_str),
+            Some(value) => value.strip_prefix('='),
+            // `-q` ends a group of short flags with its value next, or has it attached: `-iq.x`.
+            None => match arg.strip_prefix('-').filter(|g| !g.starts_with('-')).and_then(|g| g.split_once('q')) {
+                Some((_, "")) => words.next().map(String::as_str),
+                Some((_, attached)) => Some(attached),
+                None => None,
+            },
+        };
+        if jq.is_some_and(reads) {
+            return true;
+        }
+    }
+    false
+}
+
 /// `gh api graphql` runs mutations too, so a plugin's GraphQL may only read.
 fn graphql_reads_only(fields: &serde_json::Map<String, Value>) -> bool {
     let words = |q: &str| q.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|w| w == "mutation" || w == "subscription");
@@ -713,6 +772,12 @@ pub fn exec(
     timeout: Duration,
     on_line: Option<OnLine>,
 ) -> Result<ExecResult, String> {
+    exec_check(plugin, program, args)?;
+    run(program, args, cwd, timeout, on_line)
+}
+
+/// Everything `exec` checks before it runs a command.
+fn exec_check(plugin: &Plugin, program: &str, args: &[String]) -> Result<(), String> {
     let id = &plugin.manifest.id;
     if !may_exec(plugin, program, args) {
         let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
@@ -727,7 +792,13 @@ pub fn exec(
     if program == "az" && !az_reaches_azure_devops_only(args) {
         return Err(format!("{id} may only reach Azure DevOps with az, with its token"));
     }
-    run(program, args, cwd, timeout, on_line)
+    if !api_endpoints_ok(program, args) {
+        return Err(format!("{id} may only call {program} api with a plain API path"));
+    }
+    if program == "gh" && jq_reads_env(args) {
+        return Err(format!("{id} may not read the environment with --jq"));
+    }
+    Ok(())
 }
 
 /// Runs a program once its arguments have been checked.
@@ -1770,8 +1841,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
-            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+            assert_eq!(exec_check(&p, program, &args), Ok(()), "{program} {args:?}");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
         // az's own file and method flags still can't ride along on a vote.
@@ -1881,8 +1951,7 @@ mod tests {
             grep(&["-I", "-z", "--no-line-number", "--no-column"]),
         ];
         for args in &calls {
-            assert!(may_exec(&p, "git", args), "git {args:?} not declared");
-            assert!(!args.iter().any(|a| is_unsafe_flag("git", a)), "git {args:?} refused");
+            assert_eq!(exec_check(&p, "git", args), Ok(()), "git {args:?}");
         }
         // Read-only: git grep can't open a pager, and branch can't delete or rename.
         assert!(!may_exec(&p, "git", &["grep".into(), "-Ovi".into(), "x".into()]));
@@ -1915,8 +1984,7 @@ mod tests {
         ];
         for args in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert!(may_exec(&p, "git", &args), "git {args:?} not declared");
-            assert!(!args.iter().any(|a| is_unsafe_flag("git", a)), "git {args:?} refused");
+            assert_eq!(exec_check(&p, "git", &args), Ok(()), "git {args:?}");
         }
         // Nothing can force a removal, delete an unmerged branch, or change anything else.
         for args in [
@@ -2005,8 +2073,7 @@ mod tests {
         ];
         for (program, args) in calls {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            assert!(may_exec(&p, program, &args), "{program} {args:?} not declared");
-            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+            assert_eq!(exec_check(&p, program, &args), Ok(()), "{program} {args:?}");
         }
         assert!(!p.manifest.permissions.notify);
         // The query entry only takes the flags it lists, and no other `boards` subcommand but the declared ones.
@@ -2079,6 +2146,49 @@ mod tests {
             assert!(!az_allowed(&rest(extra)), "{extra:?}");
         }
         assert!(az_allowed(&["repos".into(), "pr".into(), "list".into()]));
+    }
+
+    #[test]
+    fn gh_and_glab_api_only_call_plain_paths_on_their_own_host() {
+        let p = plugin(Path::new("/tmp"), &["gh api", "gh pr view", "gh auth login", "glab api", "glab auth login"], &[]);
+        let check = |program: &str, args: &[&str]| exec_check(&p, program, &args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        // pr-tracker's calls.
+        for (program, args) in [
+            ("gh", &["api", "user", "--jq", ".login"][..]),
+            ("gh", &["api", "--hostname", "ghe.example.com", "repos/o/r/pulls/1/comments", "--paginate", "--slurp"]),
+            ("gh", &["api", "-H", "Accept: application/vnd.github.raw", "repos/o/r/actions/jobs/1/logs"]),
+            ("glab", &["api", "--hostname", "gitlab.com", "--paginate", "projects/g%2Fp/merge_requests/1/discussions?per_page=100"]),
+            ("glab", &["api", "--hostname", "gitlab.com", "projects/g%2Fp/merge_requests?source_branch=feature%2Fx&state=all&order_by=updated_at&per_page=5"]),
+            ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "title", "--jq", ".environment"]),
+            ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
+            ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
+        ] {
+            assert_eq!(check(program, args), Ok(()), "{program} {args:?}");
+        }
+        for (program, args) in [
+            // glab sent the gitlab.com token to whatever host a full URL named, uppercase scheme and userinfo included.
+            ("glab", &["api", "https://example.invalid/api/v4/user"][..]),
+            ("glab", &["api", "--hostname", "gitlab.com", "HTTPS://example.invalid/x"]),
+            ("glab", &["api", "https://gitlab.com@example.invalid/x"]),
+            ("gh", &["api", "http://127.0.0.1:8080/admin"]),
+            ("gh", &["api", "//example.invalid/x"]),
+            ("gh", &["api", "--jq", ".x", "https://example.invalid/x"]),
+            ("gh", &["api", "repos/../../x"]),
+            ("gh", &["api", "repos/o/r?next=https://example.invalid"]),
+            // `--jq` read the environment, which can hold tokens.
+            ("gh", &["api", "user", "--jq", "$ENV.GH_TOKEN"]),
+            ("gh", &["api", "user", "-q", "env | keys"]),
+            ("gh", &["api", "user", "--jq=env.HOME"]),
+            ("gh", &["pr", "view", "1", "--json", "title", "-iqenv"]),
+            // A sign-in can't take a token or move where the host's token goes.
+            ("glab", &["auth", "login", "--hostname", "gitlab.com", "--api-host", "example.invalid"]),
+            ("glab", &["auth", "login", "--hostname", "gitlab.com", "-a", "example.invalid", "--web"]),
+            ("glab", &["auth", "login", "--hostname", "gitlab.com", "--token", "x"]),
+            ("gh", &["auth", "login", "--web", "--insecure-storage"]),
+            ("gh", &["auth", "login", "--with-token"]),
+        ] {
+            assert!(check(program, args).is_err(), "{program} {args:?}");
+        }
     }
 
     #[test]
