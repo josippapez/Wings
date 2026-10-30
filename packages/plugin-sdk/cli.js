@@ -10,13 +10,14 @@ const SIGN_IN_TIMEOUT_MS = 300_000;
 /** The last line of `text`, which is the error az, gh and glab print after their warnings and context. */
 export const lastLine = (text) => text.trim().split("\n").at(-1);
 
-/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `stderr` is all of it, when the program ran. */
+/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `stderr` and `stdout` are all of what the program printed, when it ran. */
 export class CliError extends Error {
-  constructor(kind, message, stderr = "") {
+  constructor(kind, message, stderr = "", stdout = "") {
     super(message);
     this.name = "CliError";
     this.kind = kind;
     this.stderr = stderr;
+    this.stdout = stdout;
   }
 }
 
@@ -47,9 +48,10 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
     if (known?.kind !== problem.kind || known.message !== problem.message) changed();
   };
 
-  async function exec(args, { key, cwd, timeoutMs, quiet = false } = {}) {
+  /** Calls `send`, which asks Wings to run the program, and turns a program that didn't run into a `CliError`. */
+  async function ran(send, { key, quiet = false } = {}) {
     try {
-      return await w().exec(program, args, { cwd, timeoutMs });
+      return await send();
     } catch (error) {
       const message = errorMessage(error);
       const missing = NOT_INSTALLED.test(message);
@@ -58,9 +60,10 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
     }
   }
 
-  async function run(args, call = {}) {
-    const { key, quiet = false } = call;
-    const out = await exec(args, call);
+  const exec = (args, call = {}) => ran(() => w().exec(program, args, { cwd: call.cwd, timeoutMs: call.timeoutMs }), call);
+
+  /** The stdout of a program that ran, or the `CliError` for its failure, which records a sign-in problem. */
+  async function settle(out, { key, quiet = false }) {
     if (out.code === 0) {
       if (!quiet && !sticky) forget(key);
       return out.stdout;
@@ -68,7 +71,11 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
     const text = out.stderr.trim();
     const loggedOut = typeof signedOut === "function" ? await signedOut(out, key) : signedOut.test(out.stderr);
     if (loggedOut && !quiet) record(key, { kind: "signed-out", message: lastLine(text) || `${program} failed` });
-    throw new CliError(loggedOut ? "signed-out" : "failed", text || `${program} failed`, out.stderr);
+    throw new CliError(loggedOut ? "signed-out" : "failed", text || `${program} failed`, out.stderr, out.stdout);
+  }
+
+  async function run(args, call = {}) {
+    return settle(await exec(args, call), call);
   }
 
   async function retry() {
@@ -82,6 +89,14 @@ export function cli(program, { signedOut, signIn, sticky = false, wings }) {
 
   return {
     run,
+    /**
+     * `wings.post` through this CLI, for a call `permissions.post` names, with the failure handling of `run`. Resolves
+     * stdout. A call that failed after the program printed something, like a GraphQL answer with an error in it, has
+     * that in the `CliError`'s `stdout`.
+     */
+    async post(url, fields, call = {}) {
+      return settle(await ran(() => w().post(program, url, fields, call.host ? { host: call.host } : undefined), call), call);
+    },
     /**
      * Runs the program like `wings.exec` and resolves `{ code, stdout, stderr }` whatever the exit code, for a command
      * whose output matters when it fails, like `gh auth status`. Records and clears no sign-in problem. It throws a

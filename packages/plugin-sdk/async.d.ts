@@ -33,6 +33,28 @@ export interface Cached<K, V> {
 export function cached<V>(load: (key: string) => V | Promise<V>, options?: CachedOptions<string>): Cached<string, V>;
 export function cached<K, V>(load: (key: K) => V | Promise<V>, options: CachedOptions<K> & { key: (key: K) => string }): Cached<K, V>;
 
+export interface BatchedOptions<K> {
+  /** The most args one `loadMany` call takes. A larger batch is split. No limit when unset. */
+  max?: number;
+  /** Turns an arg into the key that equal args share a slot by. `String` when unset, which only suits a string or a number. */
+  key?: (arg: K) => string;
+}
+
+export interface Batched<K, V> {
+  /** The value for `arg`, from the `loadMany` call of every `get` made in this microtask turn. */
+  get(arg: K): Promise<V>;
+}
+
+/**
+ * Turns many loads of one thing into one call of `loadMany`. Every `get(arg)` made in the same microtask turn (a
+ * `Promise.all(items.map(...))` whose callbacks don't await anything first) goes out together as one `loadMany(args)`,
+ * which resolves one value per arg in the same order, split into calls of at most `max` args. Equal keys (`key` turns
+ * an arg into a string, as in `cached`) share one slot. A `loadMany` that fails rejects every `get` of its call, and a
+ * value that is an `Error` rejects only its own `get`. It keeps nothing: put `cached(batch.get, { ttlMs })` over it
+ * for a TTL.
+ */
+export function batched<K, V>(loadMany: (args: K[]) => (V | Error)[] | Promise<(V | Error)[]>, options?: BatchedOptions<K>): Batched<K, V>;
+
 /**
  * Returns a function that runs the jobs it is given one at a time, in the order they came, and gives each job's own
  * result. A job that fails doesn't stop the ones after it.

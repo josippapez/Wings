@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as next, setTimeout as sleep } from "node:timers/promises";
 
-import { cached, errorMessage, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
+import { batched, cached, errorMessage, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
 
 test("errorMessage takes the message of an Error or of anything with one, else the text of the value", () => {
   assert.equal(errorMessage(new Error("boom")), "boom");
@@ -138,4 +138,48 @@ test("openDiffWhile opens the viewer before loading, then updates it with the re
     ["open", { title: "U" }],
     ["update", "v1", { error: "git diff failed" }],
   ]);
+});
+
+test("batched sends the gets of one microtask turn as one call, and splits it at max", async () => {
+  const calls = [];
+  const b = batched(async (ids) => (calls.push(ids), ids.map((id) => id * 2)), { max: 3 });
+  // The callbacks await different numbers of times before they ask, like projects whose remote is read first.
+  const asked = [1, 2, 3, 4, 5, 6, 7].map(async (id) => {
+    for (let i = 0; i < id % 3; i++) await null;
+    return b.get(id);
+  });
+  assert.deepEqual(await Promise.all(asked), [2, 4, 6, 8, 10, 12, 14]);
+  assert.equal(calls.length, 3, "7 args at max 3 are 3 calls");
+  assert.deepEqual(calls.flat().sort(), [1, 2, 3, 4, 5, 6, 7]);
+  await b.get(9);
+  assert.equal(calls.length, 4, "a get in a later turn is a call of its own");
+});
+
+test("batched gives equal keys one slot, and works under cached for a ttl", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  const calls = [];
+  const b = batched(async (list) => (calls.push(list), list.map((r) => r.id)), { key: (r) => String(r.id) });
+  const c = cached(b.get, { ttlMs: 1000, key: (r) => String(r.id) });
+  assert.deepEqual(await Promise.all([c.get({ id: 1 }), c.get({ id: 2 }), c.get({ id: 1 })]), [1, 2, 1]);
+  assert.equal(await c.get({ id: 1 }), 1);
+  assert.deepEqual(calls.map((l) => l.map((r) => r.id)), [[1, 2]], "the duplicate went out once and the kept value not at all");
+  const dup = batched(async (ids) => (calls.push(ids), ids), {});
+  await Promise.all([dup.get("a"), dup.get("a")]);
+  assert.deepEqual(calls.at(-1), ["a"]);
+});
+
+test("batched rejects every get of a failed call, an Error value only its own, and a miscounted answer all", async () => {
+  const boom = new Error("boom");
+  const failing = batched(async () => {
+    throw boom;
+  });
+  assert.deepEqual(await Promise.allSettled([failing.get(1), failing.get(2)]), [{ status: "rejected", reason: boom }, { status: "rejected", reason: boom }]);
+  const own = batched(async (ids) => ids.map((id) => (id === 2 ? new Error("no 2") : id)));
+  const [one, two] = await Promise.allSettled([own.get(1), own.get(2)]);
+  assert.deepEqual([one.value, two.reason.message], [1, "no 2"]);
+  const short = batched(async () => []);
+  await assert.rejects(short.get(1), /gave 0 values for 1 args/);
+  const chunks = batched(async (ids) => { if (ids[0] === 1) throw boom; return ids; }, { max: 1 });
+  const out = await Promise.allSettled([chunks.get(1), chunks.get(2)]);
+  assert.deepEqual(out.map((o) => o.status), ["rejected", "fulfilled"], "a chunk fails alone");
 });

@@ -176,9 +176,11 @@ Every `wings.on*` call returns a function that removes the listener, so `useBroa
 | `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change |
 | `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes |
 | `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front |
-| `wings-plugin-sdk/async` | `cached`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `errorMessage`, `openDiffWhile` |
+| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `errorMessage`, `openDiffWhile` |
 | `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens`, `clock` |
 | `wings-plugin-sdk/cli` | `cli()`: `az`, `gh` and `glab`, with install and sign-in handled |
+| `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az` call for all the ids asked at once |
+| `wings-plugin-sdk/github` | `githubPulls()`: the open PRs of GitHub repositories, one `gh` call for all the repositories asked at once |
 | `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `defaultBranch`, `onGitChange`, `parseRemote` |
 | `wings-plugin-sdk/tools` | `tool`, `s` and `registerTools`: the tools Claude calls |
 | `wings-plugin-sdk/shell` | `mountShell()`: the page frame, for a page without React |
@@ -395,6 +397,26 @@ export async function load(cwd: string) {
 }
 ```
 
+`batched(loadMany, { max, key })` turns the loads asked in one microtask turn into one `loadMany(args)` call, split at
+`max`, which is how a plugin starts one `az` or `gh` process for every project instead of one each. It keeps nothing, so
+`cached` over it gives the TTL, and a `Promise.all(projects.map(...))` whose callbacks ask at once lands in one call:
+
+```ts
+// src/lib/titles.ts
+import { batched, cached } from "wings-plugin-sdk/async";
+
+/** `fetchTitles(ids)` is one call that answers for every id, with a title per id in the same order. */
+declare function fetchTitles(ids: number[]): Promise<string[]>;
+
+const titles = batched(fetchTitles, { max: 200 });
+
+/** Kept for a minute per id. `await Promise.all(ids.map((id) => title.get(id)))` is one `fetchTitles` call for the ids that aren't kept. */
+export const title = cached(titles.get, { ttlMs: 60_000 });
+```
+
+A `loadMany` that throws rejects every `get` of its call, and an `Error` in its answer rejects only that `get`. Resolve
+what every project needs first (its remote, say), then ask: a `get` that comes a turn later is a call of its own.
+
 `serial()` runs jobs one at a time in order, `errorMessage(error)` gives the text of anything thrown, and
 `openDiffWhile(diff, load)` opens the diff viewer loading and fills it when `load` resolves.
 
@@ -454,6 +476,33 @@ gh.onChange(() => console.log("a problem changed: draw the badges again"));
 
 `CliError.kind` is `missing`, `signed-out` or `failed`, and its `message` holds all of stderr. `cli.exec` runs a
 command and resolves `{ code, stdout, stderr }` whatever the exit code, for one whose output matters when it fails.
+`cli.post(url, fields, { host })` is `wings.post` with the same failure handling, for a path `permissions.post` names.
+
+Two helpers read for many things in one call. Each takes the plugin's own `cli` handle, so a missing or signed-out CLI
+still turns into the badge. Ask in one turn, as `batched` says:
+
+```ts
+// src/lib/azure.ts: `permissions.exec` needs "az rest [--resource --url -o]"
+import { cached } from "wings-plugin-sdk/async";
+import { workItems } from "wings-plugin-sdk/azure";
+import { az } from "./az";
+
+/** One `az rest` per 200 ids asked at once. `get(id)` is the work item with its relations, or null when there is none. */
+const items = (org: string) => cached(workItems(az, org).get, { ttlMs: 60_000 });
+```
+
+```ts
+// src/lib/pulls.ts: `permissions.post` needs "gh graphql"
+import { cached } from "wings-plugin-sdk/async";
+import { githubPulls } from "wings-plugin-sdk/github";
+import { gh } from "./gh";
+
+const pulls = githubPulls<{ number: number; title: string }>(gh, { selection: "number title", key: "github" });
+
+/** One `gh api graphql` for every repo asked at once, whose open PRs come with the numbers that ask for your review. */
+export const open = cached(pulls.get, { ttlMs: 55_000, key: (r) => `${r.owner}/${r.name}` });
+// const { pulls, asked } = await open.get({ owner: "octo", name: "repo" });
+```
 
 ### Git
 

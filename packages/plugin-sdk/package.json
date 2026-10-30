@@ -1,6 +1,6 @@
 {
   "name": "wings-plugin-sdk",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "The wings API types, the page frame, React hooks and the build command for Wings plugins.",
   "license": "MIT",
   "type": "module",
@@ -44,6 +44,14 @@
     "./format": {
       "types": "./format.d.ts",
       "default": "./format.js"
+    },
+    "./azure": {
+      "types": "./azure.d.ts",
+      "default": "./azure.js"
+    },
+    "./github": {
+      "types": "./github.d.ts",
+      "default": "./github.js"
     },
     "./cli": {
       "types": "./cli.d.ts",
@@ -90,6 +98,10 @@
     "async.d.ts",
     "format.js",
     "format.d.ts",
+    "azure.js",
+    "azure.d.ts",
+    "github.js",
+    "github.d.ts",
     "cli.js",
     "cli.d.ts",
     "git.js",

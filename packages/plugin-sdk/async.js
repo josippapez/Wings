@@ -42,6 +42,46 @@ export function cached(load, { ttlMs = Infinity, failTtlMs = 0, key = String } =
 }
 
 /**
+ * Turns many loads of one thing into one call of `loadMany`. Every `get(arg)` made in the same microtask turn (a
+ * `Promise.all(items.map(...))` whose callbacks don't await anything first) goes out together as one `loadMany(args)`,
+ * which resolves one value per arg in the same order, split into calls of at most `max` args. Equal keys (`key` turns
+ * an arg into a string, as in `cached`) share one slot. A `loadMany` that fails rejects every `get` of its call, and a
+ * value that is an `Error` rejects only its own `get`. It keeps nothing: put `cached(batch.get, { ttlMs })` over it
+ * for a TTL.
+ */
+export function batched(loadMany, { max = Infinity, key = String } = {}) {
+  /** key → the slot of a `get` that hasn't gone out yet. */
+  let queue = new Map();
+  const run = async (slots) => {
+    try {
+      const values = await loadMany(slots.map((s) => s.arg));
+      if (!Array.isArray(values) || values.length !== slots.length) throw new Error(`loadMany gave ${Array.isArray(values) ? values.length : "no list of"} values for ${slots.length} args`);
+      slots.forEach((s, i) => (values[i] instanceof Error ? s.reject(values[i]) : s.resolve(values[i])));
+    } catch (error) {
+      slots.forEach((s) => s.reject(error));
+    }
+  };
+  const flush = () => {
+    const slots = [...queue.values()];
+    queue = new Map();
+    for (let i = 0; i < slots.length; i += max) void run(slots.slice(i, i + max));
+  };
+  return {
+    get(arg) {
+      const id = key(arg);
+      let slot = queue.get(id);
+      if (!slot) {
+        slot = { arg };
+        slot.promise = new Promise((resolve, reject) => Object.assign(slot, { resolve, reject }));
+        if (!queue.size) queueMicrotask(flush);
+        queue.set(id, slot);
+      }
+      return slot.promise;
+    },
+  };
+}
+
+/**
  * Returns a function that runs the jobs it is given one at a time, in the order they came, and gives each job's own
  * result. A job that fails doesn't stop the ones after it.
  */

@@ -4,11 +4,12 @@ export type CliKind = "missing" | "signed-out" | "failed";
 /** The last line of `text`, which is the error az, gh and glab print after their warnings and context. For a badge, which has room for one line. */
 export function lastLine(text: string): string;
 
-/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `message` is all of stderr, trimmed, when the program ran and said something. `stderr` is it untouched. */
+/** What `run` and `json` throw. `kind` says why, so a plugin doesn't match on text. `message` is all of stderr, trimmed, when the program ran and said something. `stderr` is it untouched, and `stdout` is what it printed before it failed. */
 export class CliError extends Error {
-  constructor(kind: CliKind, message: string, stderr?: string);
+  constructor(kind: CliKind, message: string, stderr?: string, stdout?: string);
   kind: CliKind;
   stderr: string;
+  stdout: string;
 }
 
 /** What `wings.exec` resolves. */
@@ -26,7 +27,7 @@ export interface CliOptions {
   /** Keep a recorded problem until `retry`, even when a later call works. For a host that answers some calls without sign-in. */
   sticky?: boolean;
   /** For tests: a stand-in for the `wings` global. */
-  wings?: Pick<Wings, "exec" | "installTool">;
+  wings?: Pick<Wings, "exec" | "installTool"> & Partial<Pick<Wings, "post">>;
 }
 
 export interface CliCall {
@@ -35,6 +36,8 @@ export interface CliCall {
   cwd?: string;
   /** 30 s by default, 5 min at most. */
   timeoutMs?: number;
+  /** `post` only: the GitHub Enterprise Server the call goes to. github.com when unset. */
+  host?: string;
   /** Record no problem and clear none, for a background read that must not turn badges into sign-in prompts. */
   quiet?: boolean;
 }
@@ -60,6 +63,12 @@ export interface CliBadgeText {
 export interface Cli {
   /** Runs the program with `args` and resolves its stdout. Throws a `CliError`. */
   run(args: string[], call?: CliCall): Promise<string>;
+  /**
+   * `wings.post` through this CLI, for a call `permissions.post` names, with the failure handling of `run`. Resolves
+   * stdout. A call that failed after the program printed something, like a GraphQL answer with an error in it, has
+   * that in the `CliError`'s `stdout`.
+   */
+  post(url: string, fields: Record<string, string | number>, call?: CliCall): Promise<string>;
   /**
    * Runs the program like `wings.exec` and resolves `{ code, stdout, stderr }` whatever the exit code, for a command
    * whose output matters when it fails, like `gh auth status`. Records and clears no sign-in problem. It throws a
