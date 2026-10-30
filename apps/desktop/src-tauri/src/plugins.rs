@@ -3,7 +3,7 @@
 //! machine is checked here against the permissions the manifest declares.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -23,7 +23,8 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase", default)]
 pub struct Permissions {
     /// Commands the plugin may run: a program and the subcommand its arguments must start with, e.g.
-    /// `gh pr view`. A bare program name allows any arguments.
+    /// `gh pr view`. A bare program name allows any arguments. A trailing `[...]` lists the only flags it may pass,
+    /// and `[]` allows none.
     pub exec: Vec<String>,
     /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`, or `attachment:<kind>` for one
     /// kind of attachment, e.g. `attachment:model`.
@@ -36,6 +37,10 @@ pub struct Permissions {
     /// for one path segment, with a JSON object (or no body, if nothing is pinned) and no query. Either may end with ` {field=a|b}` to
     /// pin body fields (POST only).
     pub fetch: Vec<String>,
+    /// The secrets the plugin may keep with `wings.secrets.set`, each with the one URL prefix `wings.fetch` sends it to
+    /// as the bearer, like `{"azure-devops": "https://dev.azure.com/"}`. A plugin that may call two hosts can't send
+    /// one's token to the other.
+    pub secrets: BTreeMap<String, String>,
     /// API paths the plugin may POST to through a signed-in CLI, as `<gh|glab|az> <pattern>`. `*` stands for
     /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag. An
     /// entry may end with ` {field=a|b}`, which pins a body field to one of those values, like
@@ -508,12 +513,17 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
         ));
     }
+    if let Some((name, prefix)) = manifest.permissions.secrets.iter().find(|(name, prefix)| !crate::secrets::valid_name(name) || !fetch_prefix_ok(prefix)) {
+        return Err(format!(
+            "secret {name:?} needs a name of letters, digits, - and _, and the https URL prefix it's sent to, like https://api.example.com/, not {prefix:?}"
+        ));
+    }
     let flags_ok = |e: &str| {
         let (_, flags) = exec_entry(e);
-        e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && !f.is_empty() && f.iter().all(|w| w.starts_with('-')))
+        e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && f.iter().all(|w| w.starts_with('-')))
     };
     if let Some(entry) = manifest.permissions.exec.iter().find(|e| !flags_ok(e)) {
-        return Err(format!("exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state]"));
+        return Err(format!("exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state], or [] for none"));
     }
     if let Some(entry) = manifest.permissions.post.iter().find(|e| post_entry(e).is_none()) {
         return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));
@@ -603,8 +613,9 @@ fn exec_entry(entry: &str) -> (&str, Option<Vec<&str>>) {
     }
 }
 
-/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`, and
-/// `az boards work-item update [--id --state]` allows that command with no flags but those two.
+/// Whether a `permissions.exec` entry covers this call: `gh pr view` allows `gh pr view <url> --json ...`,
+/// `az boards work-item update [--id --state]` allows that command with no flags but those two, and `gh pr diff []`
+/// allows no flags at all.
 fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
     plugin.manifest.permissions.exec.iter().any(|entry| {
         let (command, flags) = exec_entry(entry);
@@ -1216,6 +1227,17 @@ pub fn fetch_needs_json(plugin: &Plugin, method: &str, url: &str) -> bool {
         && plugin.manifest.permissions.fetch.iter().filter_map(|e| fetch_rule(e)).any(|rule| rule.method == Some("POST") && !rule.pins.is_empty() && post_url_matches(rule.target, url))
 }
 
+/// Whether `wings.secrets.set` may keep a secret of this name: only one `permissions.secrets` binds to a URL prefix.
+pub fn declares_secret(plugin: &Plugin, name: &str) -> bool {
+    plugin.manifest.permissions.secrets.contains_key(name)
+}
+
+/// Whether `wings.fetch` may send this secret as the bearer to `url`, the normal form `fetch_url` returned: only under
+/// the prefix the manifest binds it to. Its host part ends in `/` (`fetch_prefix_ok`), so a longer host can't match.
+pub fn may_send_secret(plugin: &Plugin, name: &str, url: &str) -> bool {
+    plugin.manifest.permissions.secrets.get(name).is_some_and(|prefix| url.starts_with(prefix.as_str()))
+}
+
 /// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
 /// different site or path behind the same server (`Host`, `X-Forwarded-*`, `X-HTTP-Host-Override`).
 pub fn fetch_header_ok(name: &str) -> bool {
@@ -1816,6 +1838,51 @@ mod tests {
         assert!(!fetch_prefix_ok("https://api.example.com") && !fetch_prefix_ok("http://x.com/") && !fetch_prefix_ok("https:///x"));
     }
 
+    /// A plugin with two fetch hosts, loaded from a manifest that binds its secrets as given.
+    fn with_secrets(dir: &Path, secrets: Value) -> Result<Plugin, String> {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let permissions = serde_json::json!({ "fetch": ["https://api.example.com/v1/", "https://other.example.com/"], "secrets": secrets });
+        let manifest = serde_json::json!({ "id": "t", "name": "T", "version": "0", "api": 1, "main": "main.js", "permissions": permissions });
+        fs::write(dir.join("wings-plugin.json"), manifest.to_string()).unwrap();
+        load(dir)
+    }
+
+    #[test]
+    fn a_bearer_secret_only_goes_to_the_prefix_it_is_bound_to() {
+        let dir = std::env::temp_dir().join(format!("wings-bearer-{}", std::process::id()));
+        let p = with_secrets(&dir, serde_json::json!({ "api": "https://api.example.com/v1/" })).unwrap();
+        let (own, other) = ("https://api.example.com/v1/timers", "https://other.example.com/collect");
+        // The plugin may call both hosts, but its token only goes to the one the manifest names.
+        assert_eq!(fetch_url(&p, "GET", own, None).as_deref(), Some(own));
+        assert_eq!(fetch_url(&p, "GET", other, None).as_deref(), Some(other));
+        assert!(may_send_secret(&p, "api", own));
+        assert!(!may_send_secret(&p, "api", other));
+        assert!(!may_send_secret(&p, "api", "https://api.example.com/v2/x"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_declared_secrets_can_be_kept_or_sent() {
+        let dir = std::env::temp_dir().join(format!("wings-secret-names-{}", std::process::id()));
+        let p = with_secrets(&dir, serde_json::json!({ "api": "https://api.example.com/v1/" })).unwrap();
+        assert!(declares_secret(&p, "api"));
+        assert!(!declares_secret(&p, "other"));
+        assert!(!may_send_secret(&p, "other", "https://api.example.com/v1/timers"));
+        // A manifest that declares no secrets sends none, whatever its fetch entries allow.
+        assert!(!may_send_secret(&with_secrets(&dir, serde_json::json!({})).unwrap(), "api", "https://api.example.com/v1/timers"));
+        for bad in [
+            serde_json::json!({ "api": "https://api.example.com" }),
+            serde_json::json!({ "api": "https://api.example.com.evil.net" }),
+            serde_json::json!({ "api": "http://api.example.com/" }),
+            serde_json::json!({ "a b": "https://api.example.com/" }),
+            serde_json::json!({ "api": ["https://api.example.com/"] }),
+        ] {
+            assert!(with_secrets(&dir, bad.clone()).is_err(), "{bad}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn exec_rejects_output_over_the_limit_without_waiting_for_the_timeout() {
         let p = plugin(Path::new("/tmp"), &["yes", "echo"], &[]);
@@ -1967,30 +2034,42 @@ mod tests {
 
     #[test]
     fn pr_tracker_calls_pass_its_own_manifest() {
-        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"));
-        let p = load(dir).unwrap();
+        let p = own_plugin("pr-tracker");
+        let dir = p.dir.as_path();
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "failing_checks"));
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
+            ("git", &["rev-parse", "--show-toplevel"]),
             ("git", &["branch", "--show-current"]),
             ("git", &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]),
             ("git", &["fetch", "--quiet", "origin", "main", "feature/x"]),
+            ("git", &["fetch", "--quiet", "--end-of-options", "origin", "main", "feature/x"]),
             ("git", &["diff", "--no-color", "--no-ext-diff", "origin/main...origin/feature/x"]),
+            ("git", &["diff", "--no-color", "--no-ext-diff", "-U0", "abc123", "def456", "--", "src/a.ts"]),
+            ("git", &["show", "abc123:src/a.ts"]),
             ("gh", &["pr", "list", "--head", "x", "--state", "all", "--limit", "1", "--json", "url,number"]),
+            ("gh", &["pr", "list", "--repo", "ghe.example.com/o/r", "--head", "x", "--state", "all", "--limit", "1", "--json", "url,number"]),
             ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "comments,reviews"]),
             ("gh", &["pr", "diff", "https://github.com/o/r/pull/1"]),
             ("gh", &["api", "repos/o/r/pulls/1/comments", "--paginate", "--slurp"]),
             ("gh", &["api", "repos/o/r/actions/jobs/123"]),
+            ("gh", &["api", "--hostname", "ghe.example.com", "user", "--jq", ".login"]),
             ("gh", &["api", "repos/o/r/actions/jobs/123/logs", "--allow-escape-sequences"]),
+            ("gh", &["auth", "status", "--json", "hosts"]),
             ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
             ("glab", &["api", "--hostname", "gitlab.com", "--paginate", "projects/g%2Fp/merge_requests/1/discussions?per_page=100"]),
             ("glab", &["api", "--hostname", "gitlab.com", "projects/1/jobs/123/trace"]),
             ("glab", &["mr", "diff", "1", "--raw", "--repo", "https://gitlab.com/g/p"]),
+            ("glab", &["auth", "status", "--all"]),
             ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
             ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
             ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--source-branch", "x", "-o", "json"]),
+            ("az", &["repos", "pr", "list", "--organization", "https://dev.azure.com/o", "--project", "P", "--repository", "r", "--status", "active", "--top", "100", "-o", "json"]),
+            ("az", &["repos", "pr", "show", "--id", "1", "--organization", "https://dev.azure.com/o", "-o", "json"]),
             ("az", &["repos", "pr", "policy", "list", "--id", "1", "-o", "json"]),
+            ("az", &["account", "show", "--query", "user.name", "-o", "tsv"]),
             ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads", "--api-version", "7.1"]),
+            ("az", &["devops", "invoke", "--area", "git", "--resource", "pullRequestIterations", "--route-parameters", "project=P", "--query-parameters", "includeCommits=true", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "build", "--resource", "timeline", "--route-parameters", "project=My Project", "buildId=123", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["devops", "invoke", "--area", "build", "--resource", "logs", "--route-parameters", "project=My Project", "buildId=123", "logId=4", "--organization", "https://dev.azure.com/o", "--api-version", "7.1", "-o", "json"]),
             ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
@@ -2001,6 +2080,18 @@ mod tests {
             assert_eq!(exec_check(&p, program, &args, Some(dir)), Ok(()), "{program} {args:?}");
         }
         assert!(!may_exec(&p, "gh", &["auth".into(), "token".into()]));
+        // Only the flags its calls pass: no header on gh api, no forced fetch, no options on a diff that takes none.
+        for (program, args) in [
+            ("gh", &["api", "-H", "Host: example.com", "user"][..]),
+            ("gh", &["api", "--cache", "1h", "user"]),
+            ("git", &["fetch", "--force", "origin", "main"]),
+            ("git", &["fetch", "-f", "origin", "main"]),
+            ("gh", &["pr", "diff", "1", "--patch"]),
+            ("git", &["show", "--stat", "abc123"]),
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(!may_exec(&p, program, &args), "{program} {args:?} allowed");
+        }
         // az's own file and method flags still can't ride along on a vote.
         let vote = |extra: &[&str]| -> Vec<String> { ["repos", "pr", "set-vote", "--id", "1", "--vote", "reset"].iter().chain(extra).map(|a| a.to_string()).collect() };
         assert!(may_exec(&p, "az", &vote(&[])));
@@ -2053,11 +2144,14 @@ mod tests {
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"APPROVED"}"#)).is_some());
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/reviews"), Some(r#"{"event":"REQUEST_CHANGES","body":"no"}"#)).is_none());
         assert!(fetch_url(&p, "POST", &format!("{cb}/pulls/4/merge"), Some(r#"{"Do":"merge"}"#)).is_none());
+        // Each token goes only to its own host.
+        assert!(may_send_secret(&p, "bitbucket", &format!("{bb}/comments")) && !may_send_secret(&p, "bitbucket", &format!("{cb}/pulls/4.diff")));
+        assert!(may_send_secret(&p, "codeberg", &format!("{cb}/pulls/4.diff")) && !may_send_secret(&p, "codeberg", &format!("{bb}/comments")));
     }
 
     #[test]
     fn pr_tracker_replies_on_azure_at_dev_azure_com_only() {
-        let p = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/pr-tracker"))).unwrap();
+        let p = own_plugin("pr-tracker");
         let tail = "_apis/git/repositories/repo/pullRequests/7/threads/44590/comments?api-version=7.1";
         let reply = |address: &str| post_args(&p, &post_request("az", &format!("{address}/{tail}"), None));
         // An organization on {org}.visualstudio.com is reachable at dev.azure.com too, so the plugin posts there.
@@ -2070,8 +2164,8 @@ mod tests {
 
     #[test]
     fn changes_calls_pass_its_own_manifest() {
-        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/changes"));
-        let p = load(dir).unwrap();
+        let p = own_plugin("changes");
+        let dir = p.dir.as_path();
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "changed_files"));
         assert!(p.manifest.contributes.mcp_tools.iter().any(|t| t.name == "recent_commits"));
         assert!(p.manifest.contributes.views.iter().any(|v| v.id == "graph" && v.opens == ["window", "modal"]));
@@ -2173,6 +2267,107 @@ mod tests {
         }
     }
 
+    /// One of the plugins in this repo. Its manifest is read without `load`, whose Wings version check refuses a plugin
+    /// that needs the Wings this commit becomes.
+    fn own_plugin(name: &str) -> Plugin {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../plugins").join(name);
+        let manifest: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
+        Plugin { manifest, dir, icon_svg: None }
+    }
+
+    /// Each call is one the plugin's manifest allows, with no flag Wings refuses outright.
+    fn assert_calls_pass(p: &Plugin, calls: &[(&str, &[&str])]) {
+        for (program, args) in calls {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert!(may_exec(p, program, &args), "{program} {args:?} not declared");
+            assert!(!args.iter().any(|a| is_unsafe_flag(program, a)), "{program} {args:?} refused");
+        }
+    }
+
+    #[test]
+    fn disk_calls_pass_its_own_manifest() {
+        let p = own_plugin("disk");
+        let file = "/Users/me/Downloads/big.zip";
+        assert_calls_pass(
+            &p,
+            &[
+                ("df", &["-k", "-P"]),
+                ("open", &["-R", file]),
+                ("qlmanage", &["-p", file]),
+                ("trash", &[file]),
+                ("tmutil", &["listlocalsnapshotdates", "/"]),
+                ("tmutil", &["deletelocalsnapshots", "2026-10-30-101500"]),
+                ("tmutil", &["thinlocalsnapshots", "/", "999999999999", "4"]),
+            ],
+        );
+        assert!(!may_exec(&p, "trash", &["-v".into(), file.into()]));
+        assert!(!may_exec(&p, "tmutil", &["deletelocalsnapshots".into(), "-d".into(), "/".into()]));
+    }
+
+    #[test]
+    fn hud_calls_pass_its_own_manifest() {
+        let p = own_plugin("hud");
+        assert_calls_pass(&p, &[("vm_stat", &[]), ("sysctl", &["-n", "hw.memsize"])]);
+        assert!(!may_exec(&p, "sysctl", &["-n".into(), "hw.memsize".into(), "-w".into()]));
+    }
+
+    #[test]
+    fn schedules_calls_pass_its_own_manifest() {
+        let p = own_plugin("schedules");
+        let org = "https://dev.azure.com/contoso";
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["remote", "get-url", "origin"]),
+                ("git", &["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"]),
+                ("az", &["boards", "query", "--wiql", "SELECT [System.Id] FROM WorkItems", "--organization", org, "--project", "Web", "-o", "json"]),
+                ("gh", &["issue", "list", "--assignee", "@me", "--state", "open", "--json", "number,title,url", "--limit", "50"]),
+                ("glab", &["issue", "list", "--assignee=@me", "--output", "json", "--per-page", "50"]),
+                ("glab", &["auth", "status", "--hostname", "gitlab.com"]),
+                ("az", &["login", "--allow-no-subscriptions", "--output", "none"]),
+                ("gh", &["auth", "login", "--web", "--clipboard", "--hostname", "github.com"]),
+                ("glab", &["auth", "login", "--web", "--hostname", "gitlab.com"]),
+            ],
+        );
+        // A sign-in opens the browser: it can't be handed a token, which would sign the CLI in as someone else.
+        assert!(!may_exec(&p, "gh", &["auth".into(), "login".into(), "--with-token".into()]));
+        assert!(!may_exec(&p, "glab", &["auth".into(), "login".into(), "--token".into(), "x".into()]));
+    }
+
+    #[test]
+    fn session_detail_calls_pass_its_own_manifest() {
+        let p = own_plugin("session-detail");
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff"]),
+                ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff", "--", "src/a.ts"]),
+                ("git", &["ls-files", "--error-unmatch", "--", "src/a.ts"]),
+            ],
+        );
+    }
+
+    #[test]
+    fn tasks_calls_pass_its_own_manifest() {
+        let p = own_plugin("tasks");
+        let org = "https://dev.azure.com/contoso";
+        assert_calls_pass(
+            &p,
+            &[
+                ("git", &["remote", "get-url", "origin"]),
+                ("git", &["diff", "abc123^", "--no-color", "--no-ext-diff", "--", "src/a.ts"]),
+                ("gh", &["pr", "view", "https://github.com/o/r/pull/1", "--json", "state", "--jq", ".state"]),
+                ("gh", &["pr", "list", "--head", "feature/x", "--state", "all", "--limit", "5", "--json", "url,state"]),
+                ("az", &["repos", "pr", "show", "--id", "7", "--organization", org, "--query", "status", "--output", "tsv"]),
+                (
+                    "az",
+                    &["repos", "pr", "list", "--organization", org, "--project", "Web", "--repository", "web", "--source-branch", "feature/x", "--status", "all", "--top", "5", "--output", "json"],
+                ),
+            ],
+        );
+        assert!(!may_exec(&p, "git", &["remote".into(), "get-url".into(), "--push".into(), "origin".into()]));
+    }
+
     #[test]
     fn work_item_calls_pass_its_own_manifest() {
         let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins/work-item"));
@@ -2182,6 +2377,15 @@ mod tests {
         let calls: &[(&str, &[&str])] = &[
             ("git", &["remote", "get-url", "origin"]),
             ("git", &["branch", "--show-current"]),
+            ("git", &["rev-parse", "--show-toplevel"]),
+            ("git", &["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"]),
+            (
+                "az",
+                &[
+                    "devops", "invoke", "--area", "wit", "--resource", "workItemTypes", "--route-parameters", "project=My Project", "--api-version", "7.1",
+                    "--query", "value[].{name:name,states:states[].{name:name,category:category}}", "--organization", org, "-o", "json",
+                ],
+            ),
             (
                 "az",
                 &[
@@ -2281,8 +2485,15 @@ mod tests {
         };
         assert!(manifest("az boards work-item update [--id --state]").is_ok());
         assert!(manifest("git branch --show-current").is_ok());
-        for bad in ["az x [--id", "az x [id]", "az x []", "az x [--id] y", "az x [--a] [--b]"] {
+        for bad in ["az x [--id", "az x [id]", "az x [] y", "az x [--id] y", "az x [--a] [--b]"] {
             assert!(manifest(bad).is_err(), "{bad}");
+        }
+        // `[]` is a command that takes no flags: its values pass, any flag is refused.
+        let p = manifest("gh pr diff []").unwrap();
+        let diff = |extra: &[&str]| -> Vec<String> { ["pr", "diff", "https://github.com/o/r/pull/1"].iter().chain(extra).map(|a| a.to_string()).collect() };
+        assert!(may_exec(&p, "gh", &diff(&[])));
+        for extra in [&["--patch"][..], &["--name-only"], &["-R", "o/r"], &["--repo=o/r"], &["--"]] {
+            assert!(!may_exec(&p, "gh", &diff(extra)), "{extra:?}");
         }
         fs::remove_dir_all(&dir).unwrap();
     }

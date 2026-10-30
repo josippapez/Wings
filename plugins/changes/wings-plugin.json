@@ -1,8 +1,8 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.6.4",
-  "minWingsVersion": "0.1.104",
+  "version": "0.6.5",
+  "minWingsVersion": "0.1.108",
   "icon": "icon.svg",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
@@ -11,7 +11,7 @@
     "exec": [
       "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
       "git branch --show-current [--show-current]",
-      "git merge-base",
+      "git merge-base []",
       "git diff [--numstat --name-status -z -M --no-color --no-ext-diff --no-textconv --no-relative --]",
       "git ls-files [--others --exclude-standard -z]",
       "git grep [--untracked -I -z --count --no-color --no-line-number --no-column -e --]",

@@ -2,22 +2,22 @@
   "id": "work-item",
   "name": "Work item",
   "version": "0.10.0",
-  "minWingsVersion": "0.1.104",
+  "minWingsVersion": "0.1.108",
   "icon": "icon.svg",
   "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Opens a work item in a tab with its description, comments and linked pull requests, and lists the work items assigned to you in the current sprint under each project.",
   "api": 1,
   "main": "dist/main.js",
   "permissions": {
     "exec": [
-      "git remote get-url",
-      "git branch --show-current",
+      "git remote get-url []",
+      "git branch --show-current [--show-current]",
       "git rev-parse [--show-toplevel]",
       "git for-each-ref [--format]",
       "az boards work-item update [--id --state --organization -o]",
       "az boards query [--wiql --project --organization -o]",
-      "az devops invoke",
+      "az devops invoke [--area --resource --route-parameters --query-parameters --api-version --query --organization -o]",
       "az rest [--resource --url -o]",
-      "az login"
+      "az login [--allow-no-subscriptions --output]"
     ],
     "openUrl": [
       "https://dev.azure.com/"

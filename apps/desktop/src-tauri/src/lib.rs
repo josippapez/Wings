@@ -926,7 +926,10 @@ fn connect_opencode_on_start(app: AppHandle) {
 /// back; `plugin_fetch` sends it.
 #[tauri::command]
 fn plugin_secret_set(state: State<AppState>, plugin_id: String, name: String, value: String) -> Res<()> {
-    plugin(&state, &plugin_id)?;
+    let plugin = plugin(&state, &plugin_id)?;
+    if !plugins::declares_secret(&plugin, &name) {
+        return Err(format!("{plugin_id} has no secret named {name} in permissions.secrets"));
+    }
     if !secrets::valid_name(&name) || value.is_empty() || value.len() > 8192 {
         return Err("A secret needs a name of letters, digits, - and _, and a value up to 8 KB".into());
     }
@@ -1074,6 +1077,9 @@ fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest
         builder = builder.header("Content-Type", "application/json");
     }
     if let Some(name) = &request.bearer {
+        if !plugins::may_send_secret(&plugin, name, &url) {
+            return Err(format!("{plugin_id} may not send the {name} secret to {url}"));
+        }
         let token = stored_secret(&state, &plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;
         builder = builder.header("Authorization", format!("Bearer {token}"));
     }

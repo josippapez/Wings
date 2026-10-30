@@ -81,6 +81,8 @@ export type PluginPermissions = {
   transcript: string[];
   openUrl: string[];
   fetch: string[];
+  /** The secrets it may keep in the keychain, each with the one URL prefix `fetch` sends it to. */
+  secrets: Record<string, string>;
   /** API paths it may POST to through gh, glab or az; `*` stands for one path segment. */
   post: string[];
   /** Commands it may start in a new pane; `[]` is plain shells only, `null` no panes and no focusing them. */

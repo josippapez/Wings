@@ -96,12 +96,13 @@ function Source({ plugin: p }: { plugin: PluginView }) {
 
 /** What turning a plugin on lets it do, in plain words, so you know what you're approving. */
 function Permissions({ plugin }: { plugin: PluginView }) {
-  const { exec, post, transcript, openUrl, fetch, panes, notify, statusline, ports, agentActivity, diskUsage, sendToAgents, worktrees, callTools, events } = plugin.permissions;
+  const { exec, post, transcript, openUrl, fetch, secrets, panes, notify, statusline, ports, agentActivity, diskUsage, sendToAgents, worktrees, callTools, events } = plugin.permissions;
   const { ui, mcpTools, panels, sidebars, views, settings, hooks = [] } = plugin.contributes;
   // `on` is for a yes/no permission, which has no list to show.
   const groups: { title: string; items: string[]; on?: boolean }[] = [
     { title: "Show these in Wings", items: [...ui.map((kind) => uiNames[kind] ?? kind), ...sidebars.map(sidebarName), ...views.map(viewName), ...(settings ? ["Settings page"] : [])] },
     { title: "Call these web addresses, with tokens you give it", items: fetch },
+    { title: "Keep these tokens in your keychain, each sent only to its own address", items: Object.entries(secrets).map(([name, prefix]) => `${name} → ${prefix}`) },
     { title: "Open these sites in a panel from the title bar", items: panels.map((p) => new URL(p.url).host) },
     { title: "Offer Claude these tools over MCP", items: mcpTools.map((t) => t.name) },
     { title: "Answer these Claude Code hooks: add context to a session, or refuse a Bash command", items: hooks },

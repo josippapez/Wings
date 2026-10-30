@@ -8,7 +8,7 @@
   "main": "dist/main.js",
   "icon": "icon.svg",
   "permissions": {
-    "exec": ["git branch --show-current"]
+    "exec": ["git branch --show-current [--show-current]"]
   },
   "contributes": {
     "ui": ["badges"],
