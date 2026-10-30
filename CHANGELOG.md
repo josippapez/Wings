@@ -2,12 +2,17 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.104 · 2026-10-30
+
+- **Highlighted code.** Code in Markdown, the setup command to approve and the install and PATH commands is highlighted, with a copy button.
+- **The code a PR comment is about.** In the PR tab, review threads on GitHub, GitLab and Bitbucket show the lines they were written on, like Azure DevOps threads already did. GitHub threads keep their code after it changes.
+- **Copy code from plugin pages.** Code in a plugin page's Markdown, like an issue's description or a PR comment, has a copy button.
+
 ## 0.1.103 · 2026-10-30
 
 - **Deleting a worktree is quick.** Delete worktree in the sidebar finishes at once instead of hanging for 15 seconds or more on a big `node_modules`. Its files are deleted afterwards.
 - **Every open pull request in the sidebar.** Settings, PR tracker, "Sidebar lists" can show everyone's open pull requests under a project, not just yours and the ones waiting for your review.
 - **Issue details scroll.** On an issue, a properties column taller than the tab scrolls on its own, so its last sessions are reachable without scrolling to the end of the activity.
-- **Highlighted code.** Code in Markdown, the setup command to approve and the install and PATH commands is highlighted, with a copy button.
 - **Pick which pull requests notify you.** "Notify me about" is Off, Only when I'm asked to review (also when you're added to one that's already open), or Every new pull request. Background checks run every 5 minutes by default.
 
 ## 0.1.102 · 2026-10-30
