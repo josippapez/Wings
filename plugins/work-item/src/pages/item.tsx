@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
 import { Empty, Page, Toolbar, useAction, useViewArgs } from "wings-plugin-ui";
 
-import { az, azRun, invoke } from "../lib/az";
+import { az, azRun, invoke, workItem } from "../lib/az";
 import { allLinkIds, commentsOf, discussionOf, idsQuery, itemArgs, itemTabArgs, linkIds, linkedItems, pullRequestLinks, revisionsOf, type ItemArgs, type LinkedItem } from "../lib/item";
 import { ch } from "../lib/messages";
 import { prUrl, workItemUrl, type WorkItemUpdate } from "../lib/urls";
@@ -34,7 +34,9 @@ function Item({ args }: { args: ItemArgs }) {
   const load = useCallback(
     () =>
       runLoad(async () => {
-        const shown = await az<Shown>(org, ["boards", "work-item", "show", "--id", String(id), "--expand", "relations"]);
+        const found = await workItem<Shown["fields"]>(org, id);
+        if (!found) throw new Error(`Work item ${id} doesn't exist, or you can't see it.`);
+        const shown: Shown = { id: found.id, fields: found.fields, relations: found.relations ?? null };
         setItem(shown);
         const f = shown.fields;
         const project = f["System.TeamProject"];

@@ -33,14 +33,18 @@ globalThis.wings = {
     if (is.signedOut) return { code: 1, stdout: "", stderr: "ERROR: Please run 'az login' to setup account.\n" };
     if (args[2] === "update" && is.updateRejects) throw new Error("az timed out after 30 s");
     if (args[2] === "update") return ok("{}");
-    if (args[2] === "show") return ok({ id: Number(args[4]), fields: { "System.Title": "T", "System.TeamProject": "Web", "System.WorkItemType": "Bug", "System.State": "Active" } });
+    if (args[0] === "rest") {
+      const ids = new URL(args[args.indexOf("--url") + 1]).searchParams.get("ids").split(",").map(Number);
+      return ok({ value: ids.map((id) => ({ id, fields: { "System.Title": "T", "System.TeamProject": "Web", "System.WorkItemType": "Bug", "System.State": "Active" } })) });
+    }
     return ok({ value: [{ name: "Active", category: "InProgress" }, { name: "Resolved", category: "Resolved" }] });
   },
 };
 const settle = async () => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
 };
-const shows = () => execs.filter((e) => e[3] === "show").map((e) => e[5]);
+/** The ids of the work items read, as they come in `az rest` calls. */
+const shows = () => execs.filter((e) => e[1] === "rest").flatMap((e) => new URL(e[e.indexOf("--url") + 1]).searchParams.get("ids").split(","));
 
 const { showBadges } = await import("./badge.ts");
 showBadges();

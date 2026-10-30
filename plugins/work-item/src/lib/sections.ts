@@ -104,9 +104,9 @@ export function repoIdsOf(relations: { rel?: string; url?: string }[] | null | u
   return [...ids];
 }
 
-/** `workItems?ids=…&$expand=Relations` as `az devops invoke` prints it, as repository ids by work item id. */
-export function repoLinksOf(list: { value?: { id: number; relations?: { rel?: string; url?: string }[] | null }[] } | null | undefined): Record<number, string[]> {
-  return Object.fromEntries((list?.value ?? []).map((w) => [w.id, repoIdsOf(w.relations)]));
+/** Work items read with their relations, as repository ids by work item id. An item that couldn't be read is left out. */
+export function repoLinksOf(items: ({ id: number; relations?: { rel?: string; url?: string }[] | null } | null)[]): Record<number, string[]> {
+  return Object.fromEntries(items.flatMap((w) => (w ? [[w.id, repoIdsOf(w.relations)]] : [])));
 }
 
 /** Whether a branch name carries the work item's id as a token of its own, at least 3 digits: `feature/1234-login` has 1234, `hotfix/2026-10-13` and `v1.2.3` have none. */

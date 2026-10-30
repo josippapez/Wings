@@ -1,6 +1,7 @@
 // The Azure CLI as this plugin calls it. A frame has one instance, so the main script keeps the sign-in problems its
 // badges show, and the item tab has its own, which nothing reads.
 
+import { workItems, type WorkItem } from "wings-plugin-sdk/azure";
 import { cli } from "wings-plugin-sdk/cli";
 
 export const azCli = cli("az", { signedOut: /login/i, signIn: ["login", "--allow-no-subscriptions", "--output", "none"] });
@@ -26,3 +27,19 @@ export const invoke = (area: string, resource: string, route: Record<string, str
   "--api-version", "7.1",
   ...(jmes ? ["--query", jmes] : []),
 ];
+
+/** `${org} ${quiet}` → the loader of that organization's work items. Each caller names the fields it reads, so the loaders keep any. */
+const loaders = new Map<string, ReturnType<typeof workItems<any>>>();
+
+/**
+ * One work item with its relations, or null when there is none or you can't see it. Every item asked in the same
+ * microtask turn is one `az rest` call, so a badge per pane, a parent title and the Work items section cost one process
+ * between them, not one each. `quiet` is for a background read, as in `az`. This replaces `az boards work-item show` and
+ * `az devops invoke --resource workItems`, which the installed azure-cli fails on (`KeyError: 'type'`).
+ */
+export function workItem<F>(org: string, id: number | string, { quiet = false } = {}): Promise<WorkItem<F> | null> {
+  const key = `${org} ${quiet}`;
+  let loader = loaders.get(key);
+  if (!loader) loaders.set(key, (loader = workItems(azCli, org, { quiet })));
+  return loader.get(Number(id));
+}

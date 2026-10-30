@@ -4,7 +4,7 @@
 import { cached, errorMessage, singleFlight } from "wings-plugin-sdk/async";
 import { gitOk } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { az, invoke } from "../lib/az";
+import { az, invoke, workItem } from "../lib/az";
 import { assignedQuery, isFinished, repoLinksOf, repoRows, SECTION_ID, stateCategories, type QueryRow, type RepoRef, type SectionRow } from "../lib/sections";
 import { remoteFor, sprintPaths, type AzureRemote, type Project } from "./azure";
 
@@ -50,9 +50,8 @@ const teamItems = cached(
     const found = await az<QueryRow[]>(org, ["boards", "query", "--project", project, "--wiql", assignedQuery(project, paths)], { quiet: true, empty: [] });
     const cats = await categories.get({ org, project }).catch(() => undefined);
     const rows = found.filter((r) => !isFinished(r.fields["System.WorkItemType"], r.fields["System.State"], cats)).slice(0, ITEMS_CAP);
-    // One read for all the links, never one per item.
-    const ids = rows.map((r) => r.id).join(",");
-    const links = rows.length ? repoLinksOf(await az<Parameters<typeof repoLinksOf>[0]>(org, invoke("wit", "workItems", { project }, { query: [`ids=${ids}`, "$expand=Relations"] }), { quiet: true, empty: {} })) : {};
+    // The items asked together are one read for all the links, never one per item.
+    const links = repoLinksOf(await Promise.all(rows.map((r) => workItem(org, r.id, { quiet: true }))));
     return { rows, links };
   },
   { ttlMs: TEAM_ITEMS_TTL_MS, key: JSON.stringify },

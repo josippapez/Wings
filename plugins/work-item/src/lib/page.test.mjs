@@ -157,7 +157,7 @@ const art = (kind, repo, tail) => ({ rel: "ArtifactLink", url: `vstfs:///Git/${k
 test("repoIdsOf reads the repository id out of branch, commit and pull request links, and nothing else", () => {
   assert.deepEqual(repoIdsOf([art("Ref", "AAA", "GBfeature%2F12-x"), art("Commit", "bbb", "abc123"), art("PullRequestId", "AAA", "7"), { rel: "ArtifactLink", url: "vstfs:///Build/Build/5" }, { rel: "Hyperlink", url: "https://x" }]), ["aaa", "bbb"]);
   assert.deepEqual(repoIdsOf(null), []);
-  assert.deepEqual(repoLinksOf({ value: [{ id: 1, relations: [art("Ref", "R1", "GBx")] }, { id: 2, relations: null }] }), { 1: ["r1"], 2: [] });
+  assert.deepEqual(repoLinksOf([{ id: 1, relations: [art("Ref", "R1", "GBx")] }, { id: 2, relations: null }, null, { id: 4 }]), { 1: ["r1"], 2: [], 4: [] });
 });
 
 test("branchHasId matches the id as a whole number", () => {

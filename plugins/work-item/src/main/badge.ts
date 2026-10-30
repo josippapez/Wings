@@ -5,7 +5,7 @@ import { cached, errorMessage } from "wings-plugin-sdk/async";
 import { lastLine } from "wings-plugin-sdk/cli";
 import { gitOk, onGitChange, watchedProject } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
-import { az, azCli, azRun, invoke } from "../lib/az";
+import { az, azCli, azRun, invoke, workItem } from "../lib/az";
 import { workItemId } from "../lib/branch";
 import { itemTabArgs } from "../lib/item";
 import { ch } from "../lib/messages";
@@ -15,25 +15,21 @@ import { remoteFor } from "./azure";
 
 const BRANCH_POLL_MS = 15_000;
 const ITEM_POLL_MS = 60_000;
-const NOT_FOUND = /TF401232/;
 const PROBLEM_TEXT = {
   title: "Azure DevOps",
   signedOut: "Sign in to Azure DevOps to see this branch's work item.",
   missing: "Work item needs the Azure CLI (az) to show this branch's work item.",
 };
 
-/** The fields of `az boards work-item show` this plugin reads. */
-interface AzWorkItem {
-  id: number;
-  fields: {
-    "System.Title": string;
-    "System.TeamProject": string;
-    "System.WorkItemType": string;
-    "System.State": string;
-    "System.IterationPath"?: string;
-    "System.Parent"?: number;
-    "System.AssignedTo"?: { displayName?: string };
-  };
+/** The fields of a work item this plugin reads. */
+interface AzFields {
+  "System.Title": string;
+  "System.TeamProject": string;
+  "System.WorkItemType": string;
+  "System.State": string;
+  "System.IterationPath"?: string;
+  "System.Parent"?: number;
+  "System.AssignedTo"?: { displayName?: string };
 }
 
 let panes: WingsPane[] = [];
@@ -46,10 +42,9 @@ const items = new Map<string, Item>();
 const inFlight = new Set<string>();
 /** Items refreshed because you clicked something; background polls don't show a spinner. */
 const manual = new Set<string>();
-const show = (org: string, id: string | number) => az<AzWorkItem>(org, ["boards", "work-item", "show", "--id", String(id)]);
 
 /** A parent's title, read once. */
-const parentTitles = cached(async ({ org, id }: { org: string; id: number }) => (await show(org, id)).fields["System.Title"] ?? "", { key: JSON.stringify });
+const parentTitles = cached(async ({ org, id }: { org: string; id: number }) => (await workItem<AzFields>(org, id))?.fields["System.Title"] ?? "", { key: JSON.stringify });
 /** A work item type's states, in workflow order, read once. */
 const typeStates = cached(
   async ({ org, project, type }: { org: string; project: string; type: string }) => (await az<{ value: TypeState[] }>(org, invoke("wit", "workItemTypeStates", { project, type }), { empty: { value: [] } })).value,
@@ -86,10 +81,9 @@ async function refreshItem(key: string, { byUser = false } = {}) {
   inFlight.add(key);
   render();
   try {
-    items.set(key, await loadItem(ref));
+    items.set(key, (await loadItem(ref)) ?? { missing: true });
   } catch (error) {
-    const message = errorMessage(error);
-    items.set(key, NOT_FOUND.test(message) ? { missing: true } : { error: lastLine(message) || "az failed" });
+    items.set(key, { error: lastLine(errorMessage(error)) || "az failed" });
   } finally {
     inFlight.delete(key);
     manual.delete(key);
@@ -97,8 +91,10 @@ async function refreshItem(key: string, { byUser = false } = {}) {
   }
 }
 
-async function loadItem({ org, id }: Ref): Promise<WorkItem> {
-  const wi = await show(org, id);
+/** The work item, or null when there is none. */
+async function loadItem({ org, id }: Ref): Promise<WorkItem | null> {
+  const wi = await workItem<AzFields>(org, id);
+  if (!wi) return null;
   const f = wi.fields;
   const project = f["System.TeamProject"];
   const type = f["System.WorkItemType"];
