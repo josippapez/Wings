@@ -55,6 +55,8 @@
 .html pre {
   padding: 10px 12px;
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--wings-hairline-strong) transparent;
   border-radius: 8px;
   background: rgb(255 255 255 / 0.06);
   font: 12px/1.45 var(--wings-mono);

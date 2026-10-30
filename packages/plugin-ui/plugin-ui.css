@@ -1882,6 +1882,9 @@ span.w-md {
   margin: 0;
   padding: 10px 12px;
   overflow-x: auto;
+  /* A thin track, so a classic scrollbar doesn't read as a bar of its own between the code and what follows. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--wings-hairline-strong) transparent;
   border-radius: inherit;
   font: inherit;
 }

@@ -26,7 +26,7 @@ export const item: Shown = {
     "System.ChangedDate": ago(35),
     "System.Tags": "sync; reliability; customer-reported",
     "System.Description":
-      "<p>When the server answers <code>503</code> the sync client stops and the user sees stale data until they reload.</p><ul><li>Reproduces on the staging server</li><li>Does not happen on a clean network</li></ul><p>Expected: the client retries with a growing delay.</p>",
+      "<p>When the server answers <code>503</code> the sync client stops and the user sees stale data until they reload.</p><ul><li>Reproduces on the staging server</li><li>Does not happen on a clean network</li></ul><p>Expected: the client retries with a growing delay.</p><pre><code>const wait = Math.min(this.base * 2 ** attempt, 30_000); // wait for the Retry-After header when the server sends one, else back off with jitter</code></pre>",
     "Microsoft.VSTS.TCM.ReproSteps": "<ol><li>Start the web app</li><li>Stop the API for ten seconds</li><li>Start it again and watch the list</li></ol>",
     "Microsoft.VSTS.Common.AcceptanceCriteria": "<p>Five retries, doubling from 200 ms, and the user sees a notice while it retries.</p>",
     "Microsoft.VSTS.Common.Priority": 2,

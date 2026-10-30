@@ -77,7 +77,7 @@ const HUNK = [
   "-    await delay(wait);",
   "+    const wait = Math.min(this.base * 2 ** attempt, 30_000);",
   "+    const jitter = wait * (0.5 + Math.random() / 2);",
-  "+    await delay(res.headers.get(\"Retry-After\") ? retryAfter(res) : jitter);",
+  "+    await delay(res.headers.get(\"Retry-After\") ? retryAfter(res) : jitter); // wait for the server's Retry-After header when it sends one, else back off with jitter so clients spread out",
   "     return this.send(request, attempt + 1);",
 ].join("\n");
 
