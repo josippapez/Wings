@@ -1760,6 +1760,8 @@ const leftPanel = usePanelRef();
     onAddSpace: (path) => void addSpace(path),
     onRemoveSpace: askRemoveSpace,
     onSearch: () => setPaletteOpen(true),
+    onQuickTerminal: () => toggleQuick(),
+    quickTerminalHint: quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null,
     onHistory: () => setHistoryOpen(true),
     onSettings: () => setSettingsOpen(true),
     notifications: {
