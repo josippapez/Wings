@@ -35,6 +35,7 @@ import {
 import { IconButton } from "@/components/icon-button";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -463,21 +464,17 @@ export function Sidebar(props: {
               )}
               {shown.map((row) => renderRow(row))}
               {older.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    aria-expanded={props.olderOpen}
-                    aria-controls="older-projects"
+                <Collapsible open={props.olderOpen} onOpenChange={() => props.onToggleOlder()}>
+                  <CollapsibleTrigger
                     title={`Older, ${older.filter((r) => !r.child).length}`}
-                    onClick={props.onToggleOlder}
                     className="mt-1 flex h-6 w-full items-center gap-1 rounded-md px-2 text-left text-[11px] text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
                   >
                     <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none", props.olderOpen && "rotate-90")} aria-hidden />
                     <span className="truncate">Older</span>
                     <span className="tabular-nums">{older.filter((r) => !r.child).length}</span>
-                  </button>
-                  {props.olderOpen && <div id="older-projects" className="flex flex-col gap-px">{older.map((row) => renderRow(row, true))}</div>}
-                </>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="flex flex-col gap-px">{older.map((row) => renderRow(row, true))}</CollapsibleContent>
+                </Collapsible>
               )}
             </nav>
           </LayoutGroup>

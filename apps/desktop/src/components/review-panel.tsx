@@ -131,9 +131,11 @@ export function ReviewPanel({
         {comments.map((c) => (
           <li key={c.id} className="group/note rounded-lg p-2 hover:bg-hover">
             <div className="flex items-center gap-1">
-              <button type="button" onClick={() => onJump(c)} className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-muted-foreground hover:text-foreground" title={`${c.path}:${lines(c)}`}>
-                {name(c.path)}:{lines(c)}
-              </button>
+              <Button variant="link" onClick={() => onJump(c)} className="h-auto min-w-0 flex-1 justify-start rounded-none p-0 font-mono text-[11px] font-normal text-muted-foreground hover:text-foreground hover:no-underline" title={`${c.path}:${lines(c)}`}>
+                <span className="truncate">
+                  {name(c.path)}:{lines(c)}
+                </span>
+              </Button>
               <Button variant="ghost" size="icon-xs" onClick={() => onRemove(c.id)} aria-label={`Remove comment on ${name(c.path)}:${lines(c)}`} className="opacity-0 group-hover/note:opacity-100 focus-visible:opacity-100">
                 <Trash2Icon />
               </Button>

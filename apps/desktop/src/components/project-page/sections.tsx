@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { Markdown, type LocalImage } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LIMITS, editSection, projectInfo, type Section } from "@/lib/project-info";
 
@@ -189,7 +190,7 @@ function SectionEditor({ projectId, section, apply, onDone }: { projectId: strin
           Done
         </Button>
       </div>
-      <textarea
+      <Textarea
         ref={area}
         aria-label={`${section.title}, Markdown`}
         placeholder="Markdown: lists, tables, [links](https://example.com). Paste or drop an image to add it."
@@ -217,7 +218,8 @@ function SectionEditor({ projectId, section, apply, onDone }: { projectId: strin
           e.preventDefault();
           void addImage(file);
         }}
-        className="min-h-40 w-full resize-y rounded-lg border border-input bg-transparent p-2.5 font-mono text-[12.5px] leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        // Fixed rows with a drag handle, not the component's grow-with-content sizing.
+        className="field-sizing-fixed min-h-40 resize-y p-2.5 font-mono text-[12.5px] leading-relaxed md:text-[12.5px]"
       />
       <p role="status" className={status === "error" ? "text-[12px] text-destructive" : "text-[12px] text-muted-foreground"}>
         {status === "saved" ? "Saved" : status === "unsaved" ? "Saving..." : `Couldn't save: ${error} Your text is still here.`}

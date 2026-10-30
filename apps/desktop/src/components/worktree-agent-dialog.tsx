@@ -1,9 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { api, type Space, type WorktreeMade } from "@/lib/api";
@@ -63,12 +64,12 @@ function Form({ space, onCreated }: { space: Space; onCreated: (made: WorktreeMa
         void create();
       }}
     >
-      <div className="grid gap-1.5">
-        <Label htmlFor="worktree-branch">Branch</Label>
+      <Field className="gap-1.5">
+        <FieldLabel className="leading-none" htmlFor="worktree-branch">Branch</FieldLabel>
         <Input id="worktree-branch" value={branch} onChange={(e) => setBranch(e.target.value)} spellCheck={false} autoComplete="off" autoFocus />
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="worktree-base">Start from</Label>
+      </Field>
+      <Field className="gap-1.5">
+        <FieldLabel className="leading-none" htmlFor="worktree-base">Start from</FieldLabel>
         <Select items={bases.map((b) => ({ value: b, label: b }))} value={base} onValueChange={(v) => v !== null && setBase(v)}>
           <SelectTrigger id="worktree-base" className="w-full">
             <SelectValue placeholder="Reading branches…" />
@@ -81,9 +82,9 @@ function Form({ space, onCreated }: { space: Space; onCreated: (made: WorktreeMa
             ))}
           </SelectContent>
         </Select>
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="worktree-agent">Agent</Label>
+      </Field>
+      <Field className="gap-1.5">
+        <FieldLabel className="leading-none" htmlFor="worktree-agent">Agent</FieldLabel>
         <Select items={worktreeAgents} value={agent} onValueChange={(v) => v !== null && setAgent(v as WorktreeAgent)}>
           <SelectTrigger id="worktree-agent" className="w-full">
             <SelectValue />
@@ -96,11 +97,11 @@ function Form({ space, onCreated }: { space: Space; onCreated: (made: WorktreeMa
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </Field>
       {error && (
-        <p role="alert" className="max-h-32 overflow-y-auto rounded-lg bg-destructive/10 px-3 py-2 text-[12px] break-words whitespace-pre-wrap text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="max-h-32 overflow-y-auto border-transparent bg-destructive/10 px-3 text-[12px]">
+          <AlertDescription className="text-[12px] text-wrap break-words md:text-wrap whitespace-pre-wrap">{error}</AlertDescription>
+        </Alert>
       )}
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={clearWorktreeAgentRequest}>

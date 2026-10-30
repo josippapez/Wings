@@ -3,6 +3,7 @@ import { MinusIcon, PanelBottomIcon, SquareTerminalIcon, XIcon } from "lucide-re
 
 import { IconButton } from "@/components/icon-button";
 import type { PaneLabelInfo } from "@/components/pane-label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trackDrag } from "@/lib/pointer-drag";
 import { terminals } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
@@ -132,21 +133,20 @@ export function FloatingTerminals({ ownerKey, ownerTitle, commands, labels, visi
         >
           <SquareTerminalIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           {commands.length > 1 && !collapsed ? (
-            <div className="flex min-w-0 items-center gap-1" role="tablist">
-              {commands.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  data-no-drag
-                  aria-selected={key === active}
-                  onClick={() => keep({ ...state, active: key })}
-                  className={cn("max-w-28 truncate rounded-md px-1.5 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-ring", key === active ? "bg-hover font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}
-                >
-                  {names(key)}
-                </button>
-              ))}
-            </div>
+            <Tabs value={active} onValueChange={(key) => keep({ ...state, active: String(key) })} className="min-w-0 gap-0">
+              <TabsList className="h-auto min-w-0 gap-1 rounded-none bg-transparent p-0">
+                {commands.map((key) => (
+                  <TabsTrigger
+                    key={key}
+                    value={key}
+                    data-no-drag
+                    className="h-auto max-w-28 flex-none justify-start px-1.5 py-0.5 text-[12px] font-normal text-muted-foreground after:hidden data-active:bg-hover data-active:shadow-none data-active:font-medium data-active:text-foreground dark:data-active:border-transparent dark:data-active:bg-hover"
+                  >
+                    <span className="truncate">{names(key)}</span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
           ) : (
             <span className="min-w-0 truncate font-medium">{names(active)}</span>
           )}

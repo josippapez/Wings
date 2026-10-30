@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 
 import { CodeSnippet } from "@/components/code-snippet";
+import { Button } from "@/components/ui/button";
 import { parseBlocks, parseInline, type Inline as InlinePart, type MdBlock } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
@@ -35,14 +36,14 @@ function RemoteImage({ src, alt }: { src: string; alt: string }) {
     return <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" className="my-1 max-h-96 max-w-full rounded-lg" />;
   }
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
       title={alt || undefined}
       onClick={() => setLoaded(true)}
-      className="rounded-md border border-hairline bg-white/[0.04] px-2 py-1 text-[12px] text-muted-foreground outline-none hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="h-auto rounded-md border-hairline bg-white/[0.04] px-2 py-1 text-[12px] font-normal text-muted-foreground hover:bg-hover hover:text-foreground dark:border-hairline dark:bg-white/[0.04] dark:hover:bg-hover"
     >
       Load image from {new URL(src).host}
-    </button>
+    </Button>
   );
 }
 

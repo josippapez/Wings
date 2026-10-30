@@ -3,6 +3,7 @@ import { InboxIcon, PuzzleIcon } from "lucide-react";
 
 import { SidebarNavRow } from "@/components/sidebar-nav-row";
 import { StatusDot } from "@/components/status-dot";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -77,17 +78,17 @@ export function NotificationBell({
             aria-label={unread ? `Inbox, ${unread} unread` : "Inbox"}
             trailing={
               unread > 0 && (
-                <span
+                <Badge
                   key={pulse}
                   data-pulse={pulse > 0 || undefined}
                   className={cn(
-                    "inbox-count flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] leading-none font-medium tabular-nums",
+                    "inbox-count h-4 min-w-4 px-1 text-[10px] leading-none tabular-nums",
                     accent ? "bg-chart-1 text-primary-foreground" : "bg-white/[0.1] text-foreground",
                   )}
                   aria-hidden
                 >
                   {unread > 99 ? "99+" : unread}
-                </span>
+                </Badge>
               )
             }
           />

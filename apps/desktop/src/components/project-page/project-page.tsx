@@ -6,6 +6,7 @@ import type { PluginView } from "@/lib/api";
 import { listBlocks, type BlockEntry } from "@/lib/plugin-blocks";
 import type { PluginHost } from "@/lib/plugins";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LIMITS, projectInfo, type Place } from "@/lib/project-info";
 import { cn } from "@/lib/utils";
@@ -155,9 +156,11 @@ export function ProjectPage({ space, branch, plugins, epochs, host, visible }: {
             </p>
           </div>
           <div role="search" className="flex shrink-0 items-center gap-2 pt-1.5">
-            <label className="relative flex items-center">
-              <SearchIcon className="pointer-events-none absolute left-2 size-3.5 text-muted-foreground" aria-hidden />
-              <input
+            <InputGroup className="h-7 w-36 border-transparent bg-hover transition-[width,border-color] has-[[data-slot=input-group-control]:focus-visible]:w-52 dark:bg-hover">
+              <InputGroupAddon className="pl-2">
+                <SearchIcon className="size-3.5" aria-hidden />
+              </InputGroupAddon>
+              <InputGroupInput
                 ref={searchInput}
                 type="search"
                 aria-label="Search this page"
@@ -177,9 +180,9 @@ export function ProjectPage({ space, branch, plugins, epochs, host, visible }: {
                     else setAt(() => stepMatch(shown, e.shiftKey ? -1 : 1, matches.length));
                   }
                 }}
-                className="h-7 w-36 rounded-lg border border-transparent bg-hover pr-2 pl-7 text-[12px] transition-[width,border-color] outline-none placeholder:text-muted-foreground focus-visible:w-52 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="h-full text-[12px] md:text-[12px]"
               />
-            </label>
+            </InputGroup>
             {applied.trim() !== "" && (
               <span role="status" className="text-[11px] whitespace-nowrap text-muted-foreground">
                 {matches.length === 0 ? "No matches" : `${shown + 1} of ${matches.length} ${matches.length === 1 ? "match" : "matches"}`}

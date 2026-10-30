@@ -144,9 +144,16 @@ export function CommandPalette({ open, onOpenChange, items, loadSessions, focusT
           })}
         </div>
         <div className="flex items-center gap-3 border-t border-hairline px-3 py-2 text-[11px] text-muted-foreground">
-          <span>↑↓ move</span>
-          <span>↵ run</span>
-          <span>esc close</span>
+          {[
+            ["↑↓", "move"],
+            ["↵", "run"],
+            ["esc", "close"],
+          ].map(([key, what]) => (
+            <span key={what} className="flex items-center gap-1">
+              <Kbd className="h-4 min-w-4 text-[10px]">{key}</Kbd>
+              {what}
+            </span>
+          ))}
         </div>
       </DialogContent>
     </Dialog>

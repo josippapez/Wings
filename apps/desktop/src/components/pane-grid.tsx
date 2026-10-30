@@ -10,6 +10,7 @@ import { OverflowRow } from "@/components/overflow-row";
 import { PaneBadge } from "@/components/pane-badge";
 import { PaneRails, type PaneRailEntry } from "@/components/pane-rail";
 import { PaneStatusStrip, type PaneStatusEntry } from "@/components/pane-status";
+import { Badge as BadgePill } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -251,10 +252,10 @@ function PaneCard(props: GridProps & { paneKey: string }) {
         )}
         {label?.detail && <span className="min-w-0 truncate text-[12px] text-muted-foreground">{label.detail}</span>}
         {owner && (
-          <span title={`This terminal was opened by ${ownerTitle}`} className="flex h-5 max-w-40 shrink-0 items-center gap-1 rounded-full bg-hover px-2 text-[11px] text-muted-foreground">
+          <BadgePill title={`This terminal was opened by ${ownerTitle}`} className="max-w-40 bg-hover text-[11px] font-normal text-muted-foreground">
             <span aria-hidden>↑</span>
             <span className="truncate">Opened by {ownerTitle}</span>
-          </span>
+          </BadgePill>
         )}
         {props.commands[paneKey] > 0 && !props.floated.has(paneKey) && (
           // Hiding is zooming the agent's pane: the terminals below it keep running out of sight.

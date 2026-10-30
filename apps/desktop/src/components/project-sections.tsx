@@ -2,6 +2,7 @@ import { ArrowUpDownIcon, ChevronRightIcon, CircleCheckIcon, CircleDotDashedIcon
 import { memo, useMemo, useState } from "react";
 
 import { iconFor, toneClass } from "@/components/pane-badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { PluginView } from "@/lib/api";
 import { wantsNewTab } from "@/lib/plugin-pages";
@@ -59,26 +60,22 @@ export const ProjectSections = memo(function ProjectSections({
     <div className="group/sections flex flex-col pt-px pb-1 pl-5" data-testid="project-sections">
       {groups.map((group) => {
         const open = !collapsed.includes(collapseKey(projectId, group.key));
-        const listId = `section-${projectId}-${group.key}`.replace(/[^a-zA-Z0-9_-]/g, "_");
         const all = expanded.includes(group.key);
         const nested = nestRows(group.rows);
         const rows = all ? nested : nested.slice(0, SECTION_ROWS_SHOWN);
         const hidden = nested.length - rows.length;
         return (
           <section key={group.key} aria-label={group.title}>
+            <Collapsible open={open} onOpenChange={() => onToggle(projectId, group.key)}>
             <div className="group/head flex items-center">
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-controls={listId}
+            <CollapsibleTrigger
               title={`${group.title}, ${group.rows.length}`}
               aria-label={`${group.title}, ${group.rows.length} ${group.rows.length === 1 ? "item" : "items"}`}
-              onClick={() => onToggle(projectId, group.key)}
               className="group/header flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 text-left text-[11px] text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <span className="truncate">{group.title}</span>
               <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none", open ? "hidden rotate-90 group-hover/sections:block group-focus-visible/header:block" : "block")} aria-hidden />
-            </button>
+            </CollapsibleTrigger>
             {group.sorts && (
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -117,8 +114,7 @@ export const ProjectSections = memo(function ProjectSections({
               </button>
             )}
             </div>
-            {open && (
-              <ul id={listId} className="flex flex-col">
+            <CollapsibleContent render={<ul className="flex flex-col" />}>
                 {rows.map(({ row, depth }) => {
                   const { ref } = rowRef(row.detail);
                   const name = rowName(row);
@@ -167,8 +163,8 @@ export const ProjectSections = memo(function ProjectSections({
                     </button>
                   </li>
                 )}
-              </ul>
-            )}
+            </CollapsibleContent>
+            </Collapsible>
           </section>
         );
       })}

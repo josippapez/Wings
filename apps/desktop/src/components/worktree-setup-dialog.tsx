@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Space, type WorktreeLocal } from "@/lib/api";
@@ -70,8 +71,8 @@ function Form({ space }: { space: Space }) {
         void save();
       }}
     >
-      <div className="grid gap-1.5">
-        <Label htmlFor="worktree-include">Local files to copy</Label>
+      <Field className="gap-1.5">
+        <FieldLabel className="leading-none" htmlFor="worktree-include">Local files to copy</FieldLabel>
         <Textarea
           id="worktree-include"
           value={include}
@@ -82,14 +83,14 @@ function Form({ space }: { space: Space }) {
           rows={8}
           className="font-mono text-[12px] md:text-[12px]"
         />
-        <p className="text-[12px] text-muted-foreground">
+        <FieldDescription className="text-[12px]">
           One pattern per line, gitignore syntax. Only files your repo ignores are copied, never tracked ones. Start a line with ! to leave files out, like !.claude/hooks/slow.sh. Lines starting with # are notes.
           {local?.hasFile && " This repo has a .worktreeinclude, so that file is used and this list is ignored."}
           {local && !local.hasFile && " A .worktreeinclude in the repo would take precedence over this list."}
-        </p>
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="worktree-setup">Setup command</Label>
+        </FieldDescription>
+      </Field>
+      <Field className="gap-1.5">
+        <FieldLabel className="leading-none" htmlFor="worktree-setup">Setup command</FieldLabel>
         <Input
           id="worktree-setup"
           value={setup}
@@ -100,14 +101,14 @@ function Form({ space }: { space: Space }) {
           autoComplete="off"
           className="font-mono text-[12px] md:text-[12px]"
         />
-        <p className="text-[12px] text-muted-foreground">
+        <FieldDescription className="text-[12px]">
           Any shell line, like ./scripts/setup-worktree.sh or make bootstrap && pnpm install. It runs in the new worktree's folder, in the first terminal opened there, and the agent starts once it succeeds.
-        </p>
-      </div>
+        </FieldDescription>
+      </Field>
       {error && (
-        <p role="alert" className="max-h-32 overflow-y-auto rounded-lg bg-destructive/10 px-3 py-2 text-[12px] break-words whitespace-pre-wrap text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="max-h-32 overflow-y-auto border-transparent bg-destructive/10 px-3 text-[12px]">
+          <AlertDescription className="text-[12px] text-wrap break-words md:text-wrap whitespace-pre-wrap">{error}</AlertDescription>
+        </Alert>
       )}
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={() => requestWorktreeSetup(null)}>
