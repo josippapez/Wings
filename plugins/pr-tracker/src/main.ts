@@ -12,12 +12,12 @@ import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
 import { ch } from "./lib/messages";
 import { mentionsOn } from "./lib/inbox";
-import { watchMinutes, type WatchMinutes } from "./lib/watch";
+import { notifyPulls, sidebarPulls, watchMinutes, type Notify, type WatchMinutes } from "./lib/watch";
 import { openDiffFor, replyInViewer } from "./main/diff";
 import { prLinkOf } from "./lib/forges/github";
 import { forgetPanes, projectOf, refreshLinks, sessionLinked } from "./main/links";
 import { problemOf } from "./main/problems";
-import { pullsFor, refreshProjects, setWatching } from "./main/projects";
+import { pullsFor, refreshProjects, setNotify, setSidebar } from "./main/projects";
 import { remoteFor, remotes } from "./main/remote";
 import { connectClis, install, retry, signIn } from "./main/retry";
 import { startNews } from "./main/news";
@@ -80,22 +80,25 @@ pollWhileFocused(refreshPanes, STATUS_POLL_MS);
 // The project lists are cached for a little under this, so a poll fetches fresh and pane changes in between don't.
 pollWhileFocused(() => void refreshProjects(true), STATUS_POLL_MS);
 
-// New pull requests: with an interval set in Settings, the lists are also checked while Wings is in the background.
-// Mentions use the same checks, every 5 minutes when no interval is set for new pull requests.
-const MENTION_MINUTES = 5;
+// Notifications about new pull requests, review requests and mentions: with any of them on, the lists are also
+// checked while Wings is in the background, as often as Settings says.
 let watchTimer: ReturnType<typeof setInterval> | undefined;
-let minutes: WatchMinutes = 0;
+let minutes: WatchMinutes = 5;
+let notify: Notify = "off";
 let mentions = false;
 function watch() {
-  setWatching(minutes > 0);
+  setNotify(notify);
   clearInterval(watchTimer);
-  const every = minutes || (mentions ? MENTION_MINUTES : 0);
-  if (every) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), every * 60_000);
+  if (notify !== "off" || mentions) watchTimer = setInterval(() => !wings.focused && void refreshProjects(true), minutes * 60_000);
 }
 void watchMinutes.get().then((m) => ((minutes = m), watch()));
 watchMinutes.onChange((m) => ((minutes = m), watch()));
+void notifyPulls.get().then((n) => ((notify = n), watch()));
+notifyPulls.onChange((n) => ((notify = n), watch()));
 void mentionsOn.get().then((on) => ((mentions = on), watch()));
 mentionsOn.onChange((on) => ((mentions = on), watch()));
+void sidebarPulls.get().then(setSidebar);
+sidebarPulls.onChange(setSidebar);
 
 // An agent on a PR's branch hears about its failed checks, new comments and conflicts, when the setting is on.
 startNews();

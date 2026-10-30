@@ -5,6 +5,8 @@ What changed in each Wings release, newest first.
 ## 0.1.103 · 2026-10-30
 
 - **Deleting a worktree is quick.** Delete worktree in the sidebar finishes at once instead of hanging for 15 seconds or more on a big `node_modules`. Its files are deleted afterwards.
+- **Every open pull request in the sidebar.** Settings, PR tracker, "Sidebar lists" can show everyone's open pull requests under a project, not just yours and the ones waiting for your review.
+- **Pick which pull requests notify you.** "Notify me about" is Off, Only when I'm asked to review (also when you're added to one that's already open), or Every new pull request. Background checks run every 5 minutes by default.
 
 ## 0.1.102 · 2026-10-30
 

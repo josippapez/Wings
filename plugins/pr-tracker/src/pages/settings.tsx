@@ -1,14 +1,14 @@
-// The PR tracker's page in Wings Settings: how often to check for new pull requests, and the tokens for the hosts that
-// have no CLI to sign in with. A token goes to the system keychain and can be sent by `wings.fetch` but never read back,
+// The PR tracker's page in Wings Settings: what the sidebar lists, what you're notified about and how often to check, and
+// the tokens for the hosts that have no CLI to sign in with. A token goes to the system keychain and can be sent by `wings.fetch` but never read back,
 // so this page only shows whether one is saved.
 
 import { useEffect, useState } from "react";
 import { useSetting } from "wings-plugin-sdk/react";
-import { Button, Checkbox, Confirm, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
+import { Button, Checkbox, Confirm, Field, Heading, Row, Select, Stack, Text, TextInput, useAction } from "wings-plugin-ui";
 import { mentionsOn } from "../lib/inbox";
 import { ch } from "../lib/messages";
 import { tellAgents } from "../lib/news";
-import { WATCH_MINUTES, watchMinutes, watchOf, type WatchMinutes } from "../lib/watch";
+import { NOTIFY, SIDEBAR, WATCH_MINUTES, notifyPulls, sidebarPulls, watchMinutes, watchOf, type Notify, type Sidebar, type WatchMinutes } from "../lib/watch";
 
 export const page = { place: "settings" };
 
@@ -75,18 +75,47 @@ function TokenField({ host }: { host: Host }) {
   );
 }
 
-const WATCH_OPTIONS = WATCH_MINUTES.map((m) => ({ value: String(m) as `${WatchMinutes}`, label: m ? `Every ${m} minutes` : "Off" }));
+const SIDEBAR_LABELS: Record<Sidebar, string> = { mine: "Yours and review requests", all: "Every open pull request" };
+const SIDEBAR_OPTIONS = SIDEBAR.map((s) => ({ value: s, label: SIDEBAR_LABELS[s] }));
+
+function SidebarField() {
+  const [shown, setShown] = useSetting(sidebarPulls);
+
+  return (
+    <Stack gap="s">
+      <Heading>Sidebar</Heading>
+      <Text tone="muted">The pull requests listed under each project. Yours come first, then the ones waiting for your review, then everyone else's.</Text>
+      {shown === null ? null : (
+        <Field label="Sidebar lists">
+          <Select options={SIDEBAR_OPTIONS} value={shown} onChange={(value) => void setShown(value)} />
+        </Field>
+      )}
+    </Stack>
+  );
+}
+
+const NOTIFY_LABELS: Record<Notify, string> = { off: "Off", review: "Only when I'm asked to review", all: "Every new pull request" };
+const NOTIFY_OPTIONS = NOTIFY.map((n) => ({ value: n, label: NOTIFY_LABELS[n] }));
+const WATCH_OPTIONS = WATCH_MINUTES.map((m) => ({ value: String(m) as `${WatchMinutes}`, label: `Every ${m} minutes` }));
 
 function WatchField() {
+  const [notify, setNotify] = useSetting(notifyPulls);
   const [minutes, setMinutes] = useSetting(watchMinutes);
-
-  const change = (value: string) => void setMinutes(watchOf(Number(value)) ?? 0);
 
   return (
     <Stack gap="s">
       <Heading>New pull requests</Heading>
-      <Text tone="muted">Get a notification when someone opens a pull request in one of your projects. While Wings is in front it checks every minute. In the background it checks this often.</Text>
-      {minutes === null ? null : <Select label="Check in the background" options={WATCH_OPTIONS} value={String(minutes) as `${WatchMinutes}`} onChange={change} />}
+      <Text tone="muted">Get a notification when someone opens a pull request in one of your projects, or only when one asks for your review, including one you're added to later. While Wings is in front it checks every minute. In the background it checks as often as you pick here.</Text>
+      {notify === null ? null : (
+        <Field label="Notify me about">
+          <Select options={NOTIFY_OPTIONS} value={notify} onChange={(value) => void setNotify(value)} />
+        </Field>
+      )}
+      {minutes === null ? null : (
+        <Field label="Check in the background">
+          <Select options={WATCH_OPTIONS} value={String(minutes) as `${WatchMinutes}`} onChange={(value) => void setMinutes(watchOf(Number(value)) ?? 5)} />
+        </Field>
+      )}
     </Stack>
   );
 }
@@ -97,7 +126,7 @@ function MentionsField() {
   return (
     <Stack gap="s">
       <Heading>Comments for you</Heading>
-      <Text tone="muted">Get a notification when someone mentions you, or replies in a thread you wrote in, on any pull request in your projects. It only checks while Wings is in the background, as often as above, or every 5 minutes when that is off.</Text>
+      <Text tone="muted">Get a notification when someone mentions you, or replies in a thread you wrote in, on any pull request in your projects. It only checks while Wings is in the background, as often as above.</Text>
       {on === null ? null : <Checkbox checked={on} onChange={(checked) => void setOn(checked)}>Notify me about mentions and replies</Checkbox>}
     </Stack>
   );
@@ -118,6 +147,7 @@ function AgentsField() {
 export default function PrTrackerSettings() {
   return (
     <Stack gap="l">
+      <SidebarField />
       <WatchField />
       <MentionsField />
       <AgentsField />

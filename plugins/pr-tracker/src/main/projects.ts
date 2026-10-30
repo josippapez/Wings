@@ -1,4 +1,4 @@
-/** The Pull requests section under each project in the sidebar: its open PRs, yours first, then the ones waiting for your review. */
+/** The Pull requests section under each project in the sidebar: its open PRs, yours first, then the ones waiting for your review, then, when Settings says so, the rest. */
 import { cached, singleFlight } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { argsOf } from "../lib/args";
@@ -8,14 +8,14 @@ import type { PullsAnswer } from "../lib/messages";
 import { BLOCK_ROWS, orderPulls, type PullRow } from "../lib/pulls";
 import type { KnownRemote, ListedPr, Status } from "../lib/types";
 import { eventFor, finalState, retry, settle, type Tracked } from "../lib/finished";
-import { newPulls, notesFor } from "../lib/watch";
+import { newPulls, newReviews, notesFor, type Notify, type Sidebar } from "../lib/watch";
 import { checkMentions, markRead, pruneMentions } from "./inbox";
 import { answered, explains, shownProblem } from "./problems";
 import { remoteFor } from "./remote";
 import { known, links, prune, state, status } from "./state";
 
 const SECTION = "pulls";
-/** The sidebar shows only yours and the ones asked of you, so a short list. */
+/** The host's limit on a section's rows. */
 const MAX_ROWS = 50;
 /** A little under the 60 s poll, so each poll fetches fresh while a burst of pane changes shares one list. */
 const LIST_TTL_MS = 55_000;
@@ -40,10 +40,14 @@ const seen = new Map<string, number>();
 const activity = new Map<string, number>();
 /** repo → the urls of its open PRs on the last check, to tell which are new. */
 const opened = new Map<string, Set<string>>();
+/** repo → the urls of its open PRs that asked for your review on the last check, to tell which ask now. */
+const asked = new Map<string, Set<string>>();
 /** repo → its open PRs on the last check, as `settle` keeps them, to tell which merged or closed. */
 const tracked = new Map<string, Map<string, Tracked>>();
-/** A check interval is set in Settings, so new PRs get a notification. */
-let watching = false;
+/** What Settings says to notify about. */
+let notify: Notify = "off";
+/** What Settings says the sidebar lists. */
+let sidebar: Sidebar = "mine";
 /** `seen` as last saved. */
 let persisted = "";
 let loaded: Promise<void> | undefined;
@@ -81,7 +85,7 @@ function row(item: ListedPr, cwd: string) {
   const agent = state.panes.find((p) => p.session && links.get(p.paneId)?.url === link.url);
   const detail = [
     refOf(link),
-    !item.mine && "needs your review",
+    !item.mine && (item.reviewing ? "needs your review" : item.author),
     failed ? `${plural(failed, "check")} failing` : running ? "checks running" : null,
     unread ? `${unread} unread` : null,
     agent && (agent.session!.state === "working" ? "agent working" : "agent here"),
@@ -114,9 +118,9 @@ const runProjects = singleFlight(async () => {
         items.forEach((i) => live.add(i.link.url));
         // A PR seen for the first time starts from what it has, so only what comes after counts as unread.
         for (const i of items) if (i.activity !== null && !seen.has(i.link.url)) seen.set(i.link.url, i.activity);
-        // The sidebar is yours and the ones asked of you; the tab and the block list the rest.
-        const mine = [...items.filter((i) => i.mine), ...items.filter((i) => !i.mine && i.reviewing)];
-        const rows = mine.slice(0, MAX_ROWS).map((i) => row(i, project.path));
+        // Yours, then the ones asked of you, then the rest when Settings says the sidebar lists every open PR.
+        const shown = [...items.filter((i) => i.mine), ...items.filter((i) => !i.mine && i.reviewing), ...(sidebar === "all" ? items.filter((i) => !i.mine && !i.reviewing) : [])];
+        const rows = shown.slice(0, MAX_ROWS).map((i) => row(i, project.path));
         await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null);
         if (isKnown(remote)) await checkMentions(project, remote, items).catch(console.error);
       } catch (error) {
@@ -146,15 +150,28 @@ export function refreshProjects(fresh = false): Promise<void> {
   return runProjects();
 }
 
-export function setWatching(on: boolean) {
-  watching = on;
+export function setNotify(to: Notify) {
+  notify = to;
 }
 
-/** Notifies about the PRs that weren't open on the last check. Tracked with notifications off too, so turning them on doesn't announce every open PR. */
+export function setSidebar(to: Sidebar) {
+  sidebar = to;
+  void refreshProjects();
+}
+
+/**
+ * Notifies about the PRs that ask for your review and didn't on the last check, and with "all" also the PRs that weren't
+ * open. Tracked with notifications off too, so turning them on doesn't announce every open PR.
+ */
 function announce(project: WingsProject, repo: string, items: ListedPr[]) {
-  const fresh = newPulls(opened.get(repo), items).map((i) => ({ title: i.title, author: i.author, url: i.link.url, args: argsOf(i.link, i.title, project.path) }));
+  const reviews = newReviews(asked.get(repo), items);
+  const fresh = newPulls(opened.get(repo), items).filter((i) => !reviews.includes(i));
   opened.set(repo, new Set(items.map((i) => i.link.url)));
-  if (watching) for (const note of notesFor(project.name, fresh)) void wings.notify({ ...note, projectId: project.id }).catch(console.error);
+  asked.set(repo, new Set(items.filter((i) => i.reviewing).map((i) => i.link.url)));
+  if (notify === "off") return;
+  const notes = (list: ListedPr[], review: boolean) =>
+    notesFor(project.name, list.map((i) => ({ title: i.title, author: i.author, url: i.link.url, args: argsOf(i.link, i.title, project.path) })), review);
+  for (const note of [...notes(reviews, true), ...(notify === "all" ? notes(fresh, false) : [])]) void wings.notify({ ...note, projectId: project.id }).catch(console.error);
 }
 
 /**
