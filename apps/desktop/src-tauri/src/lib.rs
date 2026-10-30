@@ -1232,7 +1232,14 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
     });
     let plugin = plugin(&state, &plugin_id)?;
     let projects: Vec<PathBuf> = state.spaces.lock().unwrap().spaces.iter().map(|s| PathBuf::from(&s.path)).collect();
-    let result = plugins::exec_cwd(&program, cwd.as_deref(), &projects).and_then(|cwd| plugins::exec(&plugin, &program, &args, Some(&cwd), timeout, on_line));
+    // Where each pane's shell is now, else where it started.
+    let started: Vec<(String, PathBuf)> = state.panes.lock().unwrap().values().map(|p| (p.id.clone(), p.cwd.clone())).collect();
+    let panes: Vec<PathBuf> = {
+        let info = state.pane_info.lock().unwrap();
+        started.into_iter().map(|(id, cwd)| info.get(&id).and_then(|i| i.cwd.as_deref()).map_or(cwd, PathBuf::from)).collect()
+    };
+    let builtin = state.plugins.lock().unwrap().is_builtin(&plugin_id);
+    let result = plugins::exec_cwd(&program, cwd.as_deref(), &projects, &panes, builtin).and_then(|cwd| plugins::exec(&plugin, &program, &args, Some(&cwd), timeout, on_line));
     applog::log_line!("[plugin] {plugin_id} {program} {} took {} ms", args.first().map(String::as_str).unwrap_or(""), start.elapsed().as_millis());
     result
 }

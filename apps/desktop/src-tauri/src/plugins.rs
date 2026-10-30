@@ -1553,14 +1553,30 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
 }
 
 /// The folder a plugin's command runs in. A `cwd` must be inside one of your projects once `..` and symlinks are resolved,
-/// like a pane's: in a folder of its own choosing, git compares any two files there and az, gh and glab read its repo. git
-/// needs one. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings itself started in.
-pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf]) -> Result<PathBuf, String> {
-    match cwd {
-        Some(cwd) => pane_cwd(Path::new(cwd), projects, None).map(|(_, dir)| dir),
-        None if program == "git" => Err("git runs in a folder inside one of your Wings projects: pass its cwd".into()),
-        None => Ok(PathBuf::from("/")),
-    }
+/// like a pane's: in a folder of its own choosing, git compares any two files there and az, gh and glab read its repo. A
+/// folder outside them is allowed when it's in a git repo that one of your open panes is in, and for a built-in plugin in
+/// any git repo (Worktrees finds repos all over the Mac). Only a repo: in a folder that isn't one, git diff compares any
+/// two files. git needs a cwd. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings
+/// itself started in.
+pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &[PathBuf], builtin: bool) -> Result<PathBuf, String> {
+    let Some(cwd) = cwd else {
+        return if program == "git" { Err("git runs in a folder inside one of your Wings projects: pass its cwd".into()) } else { Ok(PathBuf::from("/")) };
+    };
+    pane_cwd(Path::new(cwd), projects, None).map(|(_, dir)| dir).or_else(|refused| {
+        let dir = Path::new(cwd).canonicalize().ok().filter(|d| d.is_dir()).ok_or_else(|| refused.clone())?;
+        let repo = repo_root(&dir).ok_or_else(|| refused.clone())?;
+        let open = || panes.iter().filter_map(|p| p.canonicalize().ok()).any(|p| repo_root(&p).as_ref() == Some(&repo));
+        if builtin || open() {
+            Ok(dir)
+        } else {
+            Err(format!("{cwd} isn't inside any of your Wings projects or a repo open in a pane"))
+        }
+    })
+}
+
+/// The nearest folder at or above `dir` that holds a `.git`, a folder or a worktree's file.
+fn repo_root(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
 }
 
 /// The folder a plugin's pane may start in: inside one of your projects once `..` and symlinks are resolved,
@@ -3605,7 +3621,7 @@ mod tests {
         fs::create_dir_all(base.join("other")).unwrap();
         std::os::unix::fs::symlink(base.join("other"), base.join("proj/out")).unwrap();
         let projects = [base.join("proj")];
-        let at = |program: &str, cwd: Option<&Path>| exec_cwd(program, cwd.map(|c| c.to_str().unwrap()), &projects);
+        let at = |program: &str, cwd: Option<&Path>| exec_cwd(program, cwd.map(|c| c.to_str().unwrap()), &projects, &[], false);
         assert_eq!(at("git", Some(&base.join("proj/src"))).unwrap(), base.join("proj/src").canonicalize().unwrap());
         // A folder outside every project, or one a `..` or a symlink leads out to, is refused.
         for cwd in [base.join("other"), base.join("proj/src/../../other"), base.join("proj/out"), PathBuf::from("/")] {
@@ -3613,6 +3629,28 @@ mod tests {
         }
         assert!(at("git", None).is_err());
         assert_eq!(at("az", None).unwrap(), PathBuf::from("/"));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn exec_runs_in_a_repo_a_pane_is_in_and_built_ins_in_any_repo() {
+        let base = std::env::temp_dir().join(format!("wings-exec-repo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        for dir in ["proj", "repo/.git", "repo/src", "other/.git", "plain/sub"] {
+            fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        let projects = [base.join("proj")];
+        let panes = [base.join("repo/src"), base.join("plain")];
+        let at = |cwd: &str, builtin| exec_cwd("git", Some(base.join(cwd).to_str().unwrap()), &projects, &panes, builtin);
+        // The repo a pane is in, at its root or below, for any plugin.
+        assert_eq!(at("repo", false).unwrap(), base.join("repo").canonicalize().unwrap());
+        assert!(at("repo/src", false).is_ok());
+        // Another repo only for a built-in plugin; a pane's folder that isn't a repo never, since git diff there reads any file.
+        assert!(at("other", false).unwrap_err().contains("open in a pane"));
+        assert!(at("other", true).is_ok());
+        for cwd in ["plain", "plain/sub"] {
+            assert!(at(cwd, false).is_err() && at(cwd, true).is_err(), "{cwd}");
+        }
         fs::remove_dir_all(&base).unwrap();
     }
 
