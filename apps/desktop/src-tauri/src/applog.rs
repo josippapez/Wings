@@ -1,5 +1,5 @@
-//! The local log: what the app prints, with a timestamp, in `~/Library/Logs/Wings/wings.log`. A release app's
-//! stderr goes nowhere, so without this its `[plugin] ... took N ms` lines and its errors are lost. Nothing
+//! The local log: what the app prints and its panics, with a timestamp, in `~/Library/Logs/Wings/wings.log`. A
+//! release app's stderr goes nowhere, so without this its `[plugin] ... took N ms` lines and its errors are lost. Nothing
 //! leaves the machine. At `MAX_BYTES` the file moves to `wings.log.1` (replacing the last one), so the pair
 //! never holds more than twice that. Dev builds don't open the file: they print to the terminal as before.
 
@@ -34,17 +34,32 @@ fn log_dir() -> Option<PathBuf> {
     }
 }
 
-/// Starts writing to the log file. Does nothing when the folder can't be made.
+/// Starts writing to the log file, panics included. Does nothing when the folder can't be made.
 pub fn init() {
-    let Some(dir) = log_dir() else { return };
-    if let Some(sink) = Sink::open(dir, MAX_BYTES) {
-        let _ = SINK.set(Mutex::new(sink));
+    if let Some(dir) = log_dir() {
+        start(dir);
     }
+}
+
+fn start(dir: PathBuf) {
+    let Some(sink) = Sink::open(dir, MAX_BYTES) else { return };
+    let _ = SINK.set(Mutex::new(sink));
+    // The release app aborts on a panic, and the hook runs before that, so it's the one place the panic gets written down.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        to_file(format_args!("[panic] thread '{}' {info}", thread.name().unwrap_or("<unnamed>")));
+        default(info);
+    }));
 }
 
 /// Prints one line to stderr and, once `init` ran, appends it to the file with a timestamp.
 pub fn line(message: Arguments) {
     eprintln!("{message}");
+    to_file(message);
+}
+
+fn to_file(message: Arguments) {
     if let Some(sink) = SINK.get() {
         let text = format!("{} {message}\n", timestamp(SystemTime::now()));
         if let Ok(mut sink) = sink.lock() {
@@ -128,6 +143,17 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(dir.join(NAME)).unwrap(), "cccccccccccc\n");
         assert_eq!(fs::read_to_string(dir.join("wings.log.1")).unwrap(), "bbbbbbbbbbbb\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_panic_is_written_to_the_file() {
+        let dir = std::env::temp_dir().join(format!("wings-applog-panic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        start(dir.clone());
+        let _ = std::thread::Builder::new().name("boom".into()).spawn(|| panic!("kaboom")).unwrap().join();
+        let log = fs::read_to_string(dir.join(NAME)).unwrap();
+        assert!(log.contains("[panic] thread 'boom' panicked at") && log.contains("kaboom"), "{log}");
         let _ = fs::remove_dir_all(&dir);
     }
 }
