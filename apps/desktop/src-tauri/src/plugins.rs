@@ -1453,10 +1453,12 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
         .max_by_key(Vec::len)
         .ok_or_else(|| format!("{id} may not start {}", words.iter().take(3).copied().collect::<Vec<_>>().join(" ")))?;
     let program = words[0];
-    if let Some(flag) = words[1..].iter().find(|w| is_unsafe_flag(program, w)) {
+    // What gets typed after the program: the command's words, then `args`.
+    let typed: Vec<String> = words[1..].iter().map(|w| w.to_string()).chain(args.iter().cloned()).collect();
+    if let Some(flag) = typed.iter().find(|w| is_unsafe_flag(program, w)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
     }
-    command_refused(id, program, &words[1..].iter().map(|w| w.to_string()).collect::<Vec<_>>())?;
+    command_refused(id, program, &typed)?;
     // An agent's flags set its permissions, tools and config (claude --dangerously-skip-permissions, --mcp-config,
     // --settings; opencode --auto, --server), so a plugin passes only the ones its entry names. And one value at most,
     // a session id or a prompt: a second word reads as a subcommand (`opencode --session <id> uninstall`).
@@ -2303,9 +2305,13 @@ mod tests {
         ] {
             assert!(check(program, args).unwrap_err().contains("with its command"), "{program} {args:?}");
         }
-        let panes = with_panes(Some(&["git"]));
+        let panes = with_panes(Some(&["git", "az"]));
         assert!(pane_input(&panes, Some("git -C . config core.pager x"), &[]).unwrap_err().contains("with its command"));
         assert!(pane_input(&panes, Some("git config core.pager x"), &[]).unwrap_err().contains("own settings"));
+        // `args` are typed after the command's words, so they're checked with them.
+        let typed = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(pane_input(&panes, Some("git"), &typed(&["config", "core.sshCommand", "touch /tmp/x"])).unwrap_err().contains("own settings"));
+        assert!(pane_input(&panes, Some("az"), &typed(&["boards", "query", "@/etc/hosts"])).unwrap_err().contains("@/etc/hosts"));
     }
 
     #[test]
