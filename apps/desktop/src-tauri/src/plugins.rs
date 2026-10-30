@@ -1255,8 +1255,10 @@ fn post_args(plugin: &Plugin, request: &PostRequest) -> Result<Vec<String>, Stri
     if !may_post(plugin, program, url, fields) {
         return Err(format!("{id} may not post to {program} {url}"));
     }
-    // GitHub answered GraphQL at `graphql?x=1` too, and glab posts GraphQL as well, so the check goes by the decoded path.
-    let graphql = url.rsplit('/').next().and_then(percent_decoded).is_some_and(|s| s.eq_ignore_ascii_case("graphql"));
+    // GitHub answered GraphQL at `graphql?x=1` too, and glab posts GraphQL as well, so the check goes by the decoded path:
+    // a `*` can hold `%2F`, so `graphql%2F` ends in `graphql` once decoded, which a server that tidies paths may route there.
+    let last = |path: String| path.split('/').rfind(|s| !s.is_empty()).is_some_and(|s| s.eq_ignore_ascii_case("graphql"));
+    let graphql = percent_decoded(url).is_some_and(last);
     if matches!(program.as_str(), "gh" | "glab") && graphql && !graphql_reads_only(fields) {
         return Err(format!("{id} may only read with {program} graphql"));
     }
@@ -2583,7 +2585,7 @@ mod tests {
             r.fields = serde_json::json!({ "query": query }).as_object().unwrap().clone();
             post_args(&p, &r)
         };
-        for (program, url) in [("glab", "graphql"), ("gh", "GraphQL"), ("gh", "graph%71l")] {
+        for (program, url) in [("glab", "graphql"), ("gh", "GraphQL"), ("gh", "graph%71l"), ("gh", "graphql%2F")] {
             assert!(post(program, url, mutation).is_err(), "{program} {url}");
             assert!(post(program, url, "query { viewer { login } }").is_ok(), "{program} {url}");
         }
