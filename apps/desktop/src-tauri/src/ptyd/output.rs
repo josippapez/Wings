@@ -59,6 +59,23 @@ impl Ring {
         }
         out
     }
+
+    /// The newest `n` bytes exactly as written, for a terminal that already has everything before them. `None` once
+    /// some of them were dropped.
+    pub fn tail(&self, n: usize) -> Option<Vec<u8>> {
+        if n > self.buf.len() {
+            return None;
+        }
+        let (newer, older) = self.buf.split_at(self.start);
+        let mut out = Vec::with_capacity(n);
+        if n > newer.len() {
+            out.extend_from_slice(&older[older.len() - (n - newer.len())..]);
+            out.extend_from_slice(newer);
+        } else {
+            out.extend_from_slice(&newer[newer.len() - n..]);
+        }
+        Some(out)
+    }
 }
 
 /// Output saved before a restart, ended so the new shell starts as in a fresh terminal: the modes it left on go off.
@@ -185,6 +202,20 @@ mod tests {
         assert_eq!(ring_after(8, &[b"12345", b"6789\nab"]), (b"ab".to_vec(), true));
         assert_eq!(ring_after(4, &[b"1\n345678"]), (b"5678".to_vec(), true));
         assert_eq!(ring_after(4, &[b"1", b"2", b"3", b"4", b"\n", b"6"]), (b"6".to_vec(), true));
+    }
+
+    #[test]
+    fn ring_tail_is_the_newest_bytes_as_written() {
+        let mut ring = Ring::new(8);
+        ring.push(b"abc");
+        assert_eq!(ring.tail(2).as_deref(), Some(&b"bc"[..]));
+        assert_eq!(ring.tail(0).as_deref(), Some(&b""[..]));
+        assert_eq!(ring.tail(4), None);
+        ring.push(b"defghij");
+        // Holds "cdefghij" across the wrap point.
+        assert_eq!(ring.tail(8).as_deref(), Some(&b"cdefghij"[..]));
+        assert_eq!(ring.tail(3).as_deref(), Some(&b"hij"[..]));
+        assert_eq!(ring.tail(9), None);
     }
 
     #[test]

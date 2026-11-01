@@ -1622,6 +1622,26 @@ fn bench_mode() -> bool {
     std::env::var_os("WINGS_BENCH").is_some()
 }
 
+/// Where panes run: in this process, or with `WINGS_PTYD=1` in the terminal host, which this starts if none runs.
+fn terminal_backend(app_data: &std::path::Path) -> Box<dyn PtyBackend> {
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("WINGS_PTYD").is_some_and(|v| v == "1") {
+        match ptyd::remote::RemoteBackend::connect_or_start(&ptyd::socket_path(app_data)) {
+            Ok(remote) => return Box::new(remote),
+            Err(e) => applog::log_line!("[ptyd] panes run in Wings, the terminal host isn't usable: {e:#}"),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app_data;
+    Box::new(ptyd::LocalBackend::default())
+}
+
+/// `wings ptyd --socket <path>`: the terminal host.
+#[cfg(target_os = "macos")]
+pub fn ptyd(args: &[String]) -> i32 {
+    ptyd::host::main(args)
+}
+
 /// Prints the benchmark report (and writes it to `WINGS_BENCH_OUT` if set), then quits.
 #[tauri::command]
 fn bench_report(app: AppHandle, report: String) {
@@ -1935,6 +1955,9 @@ pub fn run() {
             // The example plugins in the repo, so `pnpm tauri dev` picks up edits to them.
             let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
             let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
+            let terminals = terminal_backend(&data);
+            // A terminal host can still run panes from an earlier launch, and the ids count up from 1 each launch.
+            let next_pane = terminals.list().iter().filter_map(|p| p.id.strip_prefix('p')?.parse::<u64>().ok()).max().map_or(1, |n| n + 1);
             app.manage(AppState {
                 ai: ai::Ai::new(data.join("ai")),
                 plugins,
@@ -1943,14 +1966,14 @@ pub fn run() {
                 claude_dir,
                 history: history::History::default(),
                 spaces: Mutex::new(store),
-                terminals: Box::new(ptyd::LocalBackend::default()),
+                terminals,
                 focused: Mutex::new(None),
                 agents: Mutex::new(Vec::new()),
                 pane_info: Mutex::new(HashMap::new()),
                 git: Mutex::new(HashMap::new()),
                 #[cfg(unix)]
                 mcp: mcp::Mcp::default(),
-                next_pane: AtomicU64::new(1),
+                next_pane: AtomicU64::new(next_pane),
                 notified: Mutex::default(),
                 statusline: Mutex::default(),
                 pane_grants: Mutex::default(),

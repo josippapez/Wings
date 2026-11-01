@@ -1,8 +1,14 @@
 //! Where a pane's shell runs. The app talks to its terminals through `PtyBackend`; `LocalBackend` keeps them inside
-//! this process, as Wings always has.
+//! this process, as Wings always has. With `WINGS_PTYD=1`, `RemoteBackend` keeps them in a terminal host process,
+//! `wings ptyd` (`host.rs`), that the app talks to over a socket (`proto.rs`).
 
+#[cfg(target_os = "macos")]
+pub mod host;
 pub mod local;
 pub mod output;
+pub mod proto;
+#[cfg(target_os = "macos")]
+pub mod remote;
 mod shell;
 
 use std::{
@@ -13,6 +19,16 @@ use std::{
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 pub use local::LocalBackend;
+
+/// The terminal host's own version, apart from Wings', in its `welcome`. Bump it when `host.rs` changes, so an app
+/// can tell an older host that still runs from before an update.
+pub const HOST_VERSION: u32 = 1;
+
+/// The terminal host's socket, in a folder only this user can open, next to the MCP socket. A dev build has its own,
+/// so it never talks to the installed Wings' host.
+pub fn socket_path(app_data: &Path) -> PathBuf {
+    app_data.join("ptyd").join(if cfg!(debug_assertions) { "ptyd-dev.sock" } else { "ptyd.sock" })
+}
 
 /// The `space_id` of a pane that belongs to no project (the quick terminal): it starts in the home folder, and no
 /// agent is detected in it, since the Agents list is grouped by project.
