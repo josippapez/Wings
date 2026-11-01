@@ -6,6 +6,8 @@ import {
 } from "shiki/core"
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 
+import { tokensOf, type HighlightedToken } from "@/lib/highlight-tokens"
+
 // Add the languages you need. Each one loads the first time it is used.
 const languages = {
   bash: () => import("shiki/langs/shellscript.mjs"),
@@ -145,8 +147,7 @@ export async function highlightCode(code: string, language: string) {
   return highlighter ? highlighter.highlight(code).lines : null
 }
 
-/** A run of code in one color: the text and, when the theme has one, its `#rrggbb`. */
-export type HighlightedToken = [text: string, color?: string]
+export type { HighlightedToken } from "@/lib/highlight-tokens"
 
 /**
  * What a plugin page asks for with `wings.highlight`: the code as tokens per line in the dark theme, which is the one
@@ -166,9 +167,5 @@ export async function highlightTokens(code: string, language: string): Promise<H
     return null
   }
 
-  const shiki = await getHighlighter()
-
-  return shiki
-    .codeToTokens(code, { lang, theme: "github-dark", tokenizeMaxLineLength: 4000 })
-    .tokens.map((line) => line.map((token) => (token.color ? [token.content, token.color] : [token.content])))
+  return tokensOf(await getHighlighter(), code, lang)
 }
