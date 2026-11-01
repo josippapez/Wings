@@ -609,8 +609,14 @@ mod tests {
         backend.write("p1", b"seq 1 100000; echo do''ne\r").unwrap();
         wait_for(&got, "done");
         assert!(backend.inner().lags.load(Ordering::Relaxed) > 0, "never lagged");
+        // Exactly the bytes the pane wrote: every byte streamed was in the host's ring first, and the ring, far from
+        // full, still starts at the pane's first byte.
+        let received = got.lock().unwrap().clone();
+        assert!(backend.recent_output("p1").unwrap().starts_with(&received), "lost, repeated or out of order");
+        // A line can end in "\r\r\n" before it reaches the host: a tty whose output queue fills between the "\r" and
+        // the "\n" it makes of a newline writes the "\r" again (xnu's ttyoutput), which happens under load.
         // A shell's integration marker (OSC 133;C) can come right before the first number.
-        let numbers: Vec<u32> = text(&got).split("\r\n").filter_map(|line| line.rsplit('\x07').next()?.parse().ok()).collect();
+        let numbers: Vec<u32> = String::from_utf8_lossy(&received).split('\n').filter_map(|line| line.trim_end_matches('\r').rsplit('\x07').next()?.parse().ok()).collect();
         assert_eq!(numbers.len(), 100_000);
         assert!(numbers.iter().zip(1..).all(|(&n, i)| n == i), "out of order, lost or repeated");
         backend.kill("p1");
