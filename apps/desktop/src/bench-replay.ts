@@ -264,7 +264,7 @@ class BrowserSource {
         const start = performance.now();
         for (let k = 0; k < after.length; ) {
           if (plan.playMs === undefined) {
-            // Drain: 64 KB of input per task, like `pty.rs` reads when output piles up.
+            // Drain: 64 KB of input per task, like `ptyd/local.rs` reads when output piles up.
             const batch: Uint8Array[] = [];
             for (let size = 0; k < after.length && size < 65536; k++) {
               batch.push(after[k][1]);

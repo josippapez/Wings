@@ -171,7 +171,7 @@ fn project_info_tool(app: &AppHandle, name: &str, arguments: &Value, ppid: Optio
         return None;
     }
     let state = app.state::<AppState>();
-    let space = ppid.and_then(|pid| pane_of(app, pid)).and_then(|id| state.panes.lock().unwrap().get(&id).map(|p| p.space_id.clone()));
+    let space = ppid.and_then(|pid| pane_of(app, pid)).and_then(|id| state.terminals.meta(&id).map(|p| p.space_id.clone()));
     let spaces = state.spaces.lock().unwrap().spaces.clone();
     crate::project_info::call_tool(&state.project_info, &spaces, space.as_deref(), name, arguments, &|id| {
         let _ = app.emit("project-info-changed", json!({ "projectId": id }));
@@ -205,18 +205,19 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
     fn panes(&self) -> Vec<crate::mcp_panes::PaneRow> {
         let state = self.0.state::<AppState>();
         // Never both locks at once; other code takes them in either order.
-        let panes: Vec<_> = state.panes.lock().unwrap().values().cloned().collect();
+        let mut panes = Vec::new();
+        state.terminals.each_mirror(&mut |p| panes.push((p.meta.clone(), p.title.to_string())));
         let info = state.pane_info.lock().unwrap();
         let mut rows: Vec<_> = panes
-            .iter()
-            .map(|p| {
+            .into_iter()
+            .map(|(p, title)| {
                 let live = info.get(&p.id);
                 crate::mcp_panes::PaneRow {
                     id: p.id.clone(),
                     space_id: p.space_id.clone(),
                     cwd: live.and_then(|i| i.cwd.clone()).map_or_else(|| p.cwd.clone(), PathBuf::from),
                     command: live.map(|i| i.command.clone()),
-                    title: p.title(),
+                    title,
                 }
             })
             .collect();
@@ -271,8 +272,7 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
     }
 
     fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
-        let pane = self.0.state::<AppState>().panes.lock().unwrap().get(pane_id).cloned()?;
-        Some(pane.recent_output())
+        self.0.state::<AppState>().terminals.recent_output(pane_id)
     }
 
     fn open(&self, plan: crate::mcp_panes::OpenPlan) -> Result<crate::mcp_panes::Opened, String> {
@@ -430,7 +430,7 @@ fn caller(space: Option<&Space>, agent: Option<&Agent>) -> (Value, Value) {
 /// `caller` for the pane a call came from, read where Wings keeps its panes, projects and agents.
 fn caller_of(app: &AppHandle, pane_id: Option<&str>) -> (Value, Value) {
     let state = app.state::<AppState>();
-    let space_id = pane_id.and_then(|id| state.panes.lock().unwrap().get(id).map(|p| p.space_id.clone()));
+    let space_id = pane_id.and_then(|id| state.terminals.meta(id).map(|p| p.space_id.clone()));
     let space = space_id.and_then(|id| state.spaces.lock().unwrap().get(&id).cloned());
     let agent = pane_id.and_then(|id| state.agents.lock().unwrap().iter().find(|a| a.pane_id == id).cloned());
     caller(space.as_ref(), agent.as_ref())
@@ -452,7 +452,7 @@ pub fn notify_changed(app: &AppHandle) {
 /// The Wings pane a bridge runs in: Claude Code is its parent, and somewhere above that is a pane's shell.
 fn pane_of(app: &AppHandle, pid: u32) -> Option<String> {
     let shells: HashMap<u32, String> =
-        app.state::<AppState>().panes.lock().unwrap().values().filter_map(|p| Some((p.shell_pid?, p.id.clone()))).collect();
+        app.state::<AppState>().terminals.list().iter().filter_map(|p| Some((p.shell_pid?, p.id.clone()))).collect();
     let mut system = sysinfo::System::new();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let mut current = sysinfo::Pid::from_u32(pid);

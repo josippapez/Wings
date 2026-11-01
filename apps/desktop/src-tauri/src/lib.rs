@@ -35,7 +35,7 @@ mod ports;
 #[cfg(target_os = "macos")]
 mod privacy;
 mod secrets;
-mod pty;
+mod ptyd;
 mod spaces;
 mod statusline;
 mod tail;
@@ -62,7 +62,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use claude::SessionSummary;
 use detect::{Agent, AgentKind, AgentState, Detector, PaneInfo, PaneProbe};
-use pty::{Pane, SpawnRequest};
+use ptyd::{PtyBackend, SpawnRequest};
 use plugin_store::{Grant, PluginView, Source, Store};
 use plugins::{ExecResult, Plugin};
 use spaces::{GitStatus, SpaceStore, SpaceView};
@@ -72,7 +72,7 @@ struct AppState {
     claude_dir: PathBuf,
     history: history::History,
     spaces: Mutex<SpaceStore>,
-    panes: Mutex<HashMap<String, Arc<Pane>>>,
+    terminals: Box<dyn PtyBackend>,
     focused: Mutex<Option<String>>,
     agents: Mutex<Vec<Agent>>,
     pane_info: Mutex<HashMap<String, PaneInfo>>,
@@ -286,7 +286,7 @@ fn pane_create(
     cwd: Option<String>,
     history_id: Option<String>,
 ) -> Res<String> {
-    let projectless = space_id == pty::NO_PROJECT;
+    let projectless = space_id == ptyd::NO_PROJECT;
     let root = if projectless {
         dirs::home_dir().ok_or("Couldn't find your home folder")?
     } else {
@@ -307,42 +307,40 @@ fn pane_create(
         applog::log_line!("[pane] create {id} in {space_id}");
     }
     let exit_app = app.clone();
-    let pane = Pane::spawn(
-        SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(pty::restored).unwrap_or_default(), history_id },
-        on_output,
-        move |pane_id| {
-            exit_app.state::<AppState>().panes.lock().unwrap().remove(pane_id);
-            let _ = exit_app.emit("pane-exited", pane_id);
-        },
-    )
-    .map_err(err)?;
+    state
+        .terminals
+        .spawn(
+            SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(ptyd::local::restored).unwrap_or_default(), history_id },
+            on_output,
+            Box::new(move |pane_id| {
+                let _ = exit_app.emit("pane-exited", pane_id);
+            }),
+        )
+        .map_err(err)?;
     if let Some(input) = initial_input {
         // Typed into the shell, so you land back at a prompt when the command exits.
-        pane.write(input.as_bytes()).map_err(err)?;
+        state.terminals.write(&id, input.as_bytes()).map_err(err)?;
     }
-    state.panes.lock().unwrap().insert(id.clone(), pane);
     Ok(id)
 }
 
-fn pane(state: &AppState, id: &str) -> Res<Arc<Pane>> {
-    state.panes.lock().unwrap().get(id).cloned().ok_or_else(|| format!("unknown pane {id}"))
+fn pane(state: &AppState, id: &str) -> Res<Arc<ptyd::PaneMeta>> {
+    state.terminals.meta(id).ok_or_else(|| format!("unknown pane {id}"))
 }
 
 #[tauri::command]
 fn pane_write(state: State<AppState>, id: String, data: String) -> Res<()> {
-    pane(&state, &id)?.write(data.as_bytes()).map_err(err)
+    state.terminals.write(&id, data.as_bytes()).map_err(err)
 }
 
 #[tauri::command]
 fn pane_resize(state: State<AppState>, id: String, cols: u16, rows: u16) -> Res<()> {
-    pane(&state, &id)?.resize(cols, rows).map_err(err)
+    state.terminals.resize(&id, cols, rows).map_err(err)
 }
 
 #[tauri::command]
 fn pane_close(state: State<AppState>, id: String) {
-    if let Some(pane) = state.panes.lock().unwrap().remove(&id) {
-        pane.kill();
-    }
+    state.terminals.kill(&id);
 }
 
 /// A running pane, for a UI that loads again (a webview reload) to find its terminals.
@@ -356,8 +354,7 @@ struct PaneView {
 
 #[tauri::command]
 fn panes_list(state: State<AppState>) -> Vec<PaneView> {
-    let panes = state.panes.lock().unwrap();
-    panes.values().map(|p| PaneView { id: p.id.clone(), space_id: p.space_id.clone(), cwd: p.cwd.clone() }).collect()
+    state.terminals.list().iter().map(|p| PaneView { id: p.id.clone(), space_id: p.space_id.clone(), cwd: p.cwd.clone() }).collect()
 }
 
 /// Streams a running pane to a UI that loaded since, after the output it missed.
@@ -366,20 +363,18 @@ fn pane_attach(state: State<AppState>, id: String, on_output: Channel<InvokeResp
     if cfg!(debug_assertions) {
         applog::log_line!("[pane] attach {id}");
     }
-    pane(&state, &id)?.attach(on_output).map_err(err)
+    state.terminals.attach(&id, on_output).map_err(err)
 }
 
 /// Called when the UI loads. Panes from a previous load (a webview reload) that it doesn't attach to again have no
 /// terminal left, so kill them.
 #[tauri::command]
 fn panes_reset(state: State<AppState>, keep: Vec<String>) {
-    state.panes.lock().unwrap().retain(|id, pane| {
-        let kept = keep.contains(id);
-        if !kept {
-            pane.kill();
+    for pane in state.terminals.list() {
+        if !keep.contains(&pane.id) {
+            state.terminals.kill(&pane.id);
         }
-        kept
-    });
+    }
 }
 
 #[tauri::command]
@@ -1238,7 +1233,7 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
     let plugin = plugin(&state, &plugin_id)?;
     let projects: Vec<PathBuf> = state.spaces.lock().unwrap().spaces.iter().map(|s| PathBuf::from(&s.path)).collect();
     // Where each pane's shell is now, else where it started.
-    let started: Vec<(String, PathBuf)> = state.panes.lock().unwrap().values().map(|p| (p.id.clone(), p.cwd.clone())).collect();
+    let started: Vec<(String, PathBuf)> = state.terminals.list().iter().map(|p| (p.id.clone(), p.cwd.clone())).collect();
     let panes: Vec<PathBuf> = {
         let info = state.pane_info.lock().unwrap();
         started.into_iter().map(|(id, cwd)| info.get(&id).and_then(|i| i.cwd.as_deref()).map_or(cwd, PathBuf::from)).collect()
@@ -1281,7 +1276,7 @@ fn plugin_ports(state: State<AppState>, plugin_id: String) -> Res<Vec<ports::Pan
     if !plugins::may_read_ports(&plugin(&state, &plugin_id)?) {
         return Err(format!("{plugin_id} may not read listening ports"));
     }
-    let panes: Vec<(String, Option<u32>)> = state.panes.lock().unwrap().values().map(|p| (p.id.clone(), p.shell_pid)).collect();
+    let panes: Vec<(String, Option<u32>)> = state.terminals.list().iter().map(|p| (p.id.clone(), p.shell_pid)).collect();
     let start = std::time::Instant::now();
     let found = ports::scan(&panes);
     applog::log_line!("[plugin] {plugin_id} ports took {} ms", start.elapsed().as_millis());
@@ -1562,18 +1557,19 @@ fn saved_history(app: &AppHandle, id: &str) -> Option<Vec<u8>> {
 /// A pane's output from before the restart, for the UI to write before the new shell starts.
 #[tauri::command]
 fn history_load(app: AppHandle, id: String) -> tauri::ipc::Response {
-    tauri::ipc::Response::new(saved_history(&app, &id).map(pty::restored).unwrap_or_default())
+    tauri::ipc::Response::new(saved_history(&app, &id).map(ptyd::local::restored).unwrap_or_default())
 }
 
 /// On quit: each pane's kept output, for the same pane when Wings starts again.
 fn save_histories(app: &AppHandle) {
-    let panes: Vec<Arc<Pane>> = app.state::<AppState>().panes.lock().unwrap().values().cloned().collect();
-    for pane in panes {
+    let terminals = &app.state::<AppState>().terminals;
+    for pane in terminals.list() {
         let Some(file) = pane.history_id.as_deref().and_then(|id| history_file(app, id)) else { continue };
+        let Some(output) = terminals.recent_output(&pane.id) else { continue };
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(file, pane.recent_output());
+        let _ = std::fs::write(file, output);
     }
 }
 
@@ -1740,19 +1736,16 @@ fn start_detection(app: AppHandle) {
         opencode::spawn(detector.opencode());
         forward_agent_activity(&app, &detector.opencode());
         loop {
-            let probes: Vec<PaneProbe> = state
-                .panes
-                .lock()
-                .unwrap()
-                .values()
-                .map(|p| PaneProbe {
-                    pane_id: p.id.clone(),
-                    space_id: p.space_id.clone(),
-                    shell_pid: p.shell_pid,
-                    foreground_pid: p.foreground_pid(),
-                    title: p.title(),
+            let mut probes: Vec<PaneProbe> = Vec::new();
+            state.terminals.each_mirror(&mut |p| {
+                probes.push(PaneProbe {
+                    pane_id: p.meta.id.clone(),
+                    space_id: p.meta.space_id.clone(),
+                    shell_pid: p.meta.shell_pid,
+                    foreground_pid: p.foreground_pid,
+                    title: p.title.to_string(),
                 })
-                .collect();
+            });
             let focused = state.focused.lock().unwrap().clone();
             let scan = detector.scan(&probes, focused.as_deref());
             let mut agents = scan.agents;
@@ -1950,7 +1943,7 @@ pub fn run() {
                 claude_dir,
                 history: history::History::default(),
                 spaces: Mutex::new(store),
-                panes: Mutex::new(HashMap::new()),
+                terminals: Box::new(ptyd::LocalBackend::default()),
                 focused: Mutex::new(None),
                 agents: Mutex::new(Vec::new()),
                 pane_info: Mutex::new(HashMap::new()),

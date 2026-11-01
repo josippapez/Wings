@@ -97,7 +97,7 @@ pub struct ReplayStats {
 
 /// One frame of changed rows per display refresh at most, like a renderer that draws once per frame.
 const FRAME: Duration = Duration::from_millis(16);
-/// What `pty.rs` reads at once when a lot of output is waiting.
+/// What `ptyd/local.rs` reads at once when a lot of output is waiting.
 const READ: usize = 64 * 1024;
 
 trait Sink {
@@ -202,7 +202,7 @@ fn play(rec: &Recording, sink: &mut dyn Sink, grid: bool, from_ms: u32, play_ms:
     thread::sleep((start + Duration::from_millis(play_ms as u64)).saturating_duration_since(Instant::now()));
 }
 
-/// Replays the recording into every pane at once, one thread per pane like `pty.rs`. Each pane's channel gets an
+/// Replays the recording into every pane at once, one thread per pane like `ptyd/local.rs`. Each pane's channel gets an
 /// empty message when its part is done.
 #[tauri::command]
 pub async fn bench_replay(webview: Webview, channels: Vec<JavaScriptChannelId>, plan: ReplayPlan) -> Result<ReplayStats, String> {

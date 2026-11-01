@@ -1,6 +1,6 @@
 use std::{
+    collections::HashMap,
     io::{Read, Write},
-    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
 };
@@ -8,37 +8,17 @@ use std::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
-/// The `space_id` of a pane that belongs to no project (the quick terminal): it starts in the home folder, and no
-/// agent is detected in it, since the Agents list is grouped by project.
-pub const NO_PROJECT: &str = "";
+use super::{OnExit, PaneMeta, PaneMirror, PtyBackend, SpawnRequest};
 
 /// A shell running in a pseudo-terminal, bound to one Wings tab.
 pub struct Pane {
-    pub id: String,
-    pub space_id: String,
-    pub shell_pid: Option<u32>,
-    /// The folder the shell started in.
-    pub cwd: PathBuf,
-    /// Names the file its output is saved to when Wings quits, and read back from when it starts again.
-    pub history_id: Option<String>,
+    pub meta: Arc<PaneMeta>,
     /// Latest OSC 0/2 window title the program set. Claude Code puts its state glyph here.
     pub title: Arc<Mutex<String>>,
     output: Arc<Mutex<Output>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
-}
-
-pub struct SpawnRequest<'a> {
-    pub id: String,
-    pub space_id: String,
-    pub cwd: &'a Path,
-    pub cols: u16,
-    pub rows: u16,
-    pub history_id: Option<String>,
-    /// Output saved from this pane before Wings restarted, as `restored` gives it. It goes in the kept output only: the UI
-    /// writes it into the terminal itself, before it listens for input.
-    pub history: Vec<u8>,
 }
 
 /// Variables the dev host (a Claude Code or Herdr session) would otherwise leak into every pane.
@@ -85,11 +65,13 @@ impl Pane {
         drop(pair.slave);
 
         let pane = Arc::new(Pane {
-            id: req.id,
-            space_id: req.space_id,
-            shell_pid: child.process_id(),
-            cwd: req.cwd.to_path_buf(),
-            history_id: req.history_id,
+            meta: Arc::new(PaneMeta {
+                id: req.id,
+                space_id: req.space_id,
+                shell_pid: child.process_id(),
+                cwd: req.cwd.to_path_buf(),
+                history_id: req.history_id,
+            }),
             title: Arc::new(Mutex::new(String::new())),
             output: Arc::new(Mutex::new(Output::default())),
             writer: Mutex::new(pair.master.take_writer()?),
@@ -110,7 +92,7 @@ impl Pane {
         let mut reader = pane.master.lock().unwrap().try_clone_reader()?;
         let title = pane.title.clone();
         let shared = pane.output.clone();
-        let pane_id = pane.id.clone();
+        let pane_id = pane.meta.id.clone();
         thread::Builder::new()
             .name(format!("pty-{pane_id}"))
             .spawn(move || {
@@ -164,13 +146,75 @@ impl Pane {
         None
     }
 
-    pub fn title(&self) -> String {
-        self.title.lock().unwrap().clone()
-    }
-
     /// The raw output kept for this pane (up to `REPLAY_BYTES`), oldest first, for `read_pane`.
     pub fn recent_output(&self) -> Vec<u8> {
         self.output.lock().unwrap().ring.contents()
+    }
+}
+
+/// Panes that run in this process, each with its own reader thread.
+#[derive(Default)]
+pub struct LocalBackend {
+    panes: Arc<Mutex<HashMap<String, Arc<Pane>>>>,
+}
+
+impl LocalBackend {
+    fn pane(&self, id: &str) -> anyhow::Result<Arc<Pane>> {
+        self.panes.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow::anyhow!("unknown pane {id}"))
+    }
+}
+
+impl PtyBackend for LocalBackend {
+    fn spawn(&self, req: SpawnRequest<'_>, output: Channel<InvokeResponseBody>, on_exit: OnExit) -> anyhow::Result<Arc<PaneMeta>> {
+        let panes = self.panes.clone();
+        let pane = Pane::spawn(req, output, move |id| {
+            panes.lock().unwrap().remove(id);
+            on_exit(id);
+        })?;
+        let meta = pane.meta.clone();
+        self.panes.lock().unwrap().insert(meta.id.clone(), pane);
+        Ok(meta)
+    }
+
+    fn attach(&self, id: &str, output: Channel<InvokeResponseBody>) -> anyhow::Result<()> {
+        self.pane(id)?.attach(output)
+    }
+
+    fn write(&self, id: &str, data: &[u8]) -> anyhow::Result<()> {
+        self.pane(id)?.write(data)
+    }
+
+    fn resize(&self, id: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+        self.pane(id)?.resize(cols, rows)
+    }
+
+    fn kill(&self, id: &str) {
+        let pane = self.panes.lock().unwrap().remove(id);
+        if let Some(pane) = pane {
+            pane.kill();
+        }
+    }
+
+    fn meta(&self, id: &str) -> Option<Arc<PaneMeta>> {
+        self.panes.lock().unwrap().get(id).map(|p| p.meta.clone())
+    }
+
+    fn list(&self) -> Vec<Arc<PaneMeta>> {
+        self.panes.lock().unwrap().values().map(|p| p.meta.clone()).collect()
+    }
+
+    fn each_mirror(&self, visit: &mut dyn FnMut(PaneMirror<'_>)) {
+        for pane in self.panes.lock().unwrap().values() {
+            visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.foreground_pid(), title: &pane.title.lock().unwrap() });
+        }
+    }
+
+    fn foreground_pid(&self, id: &str) -> Option<u32> {
+        self.pane(id).ok()?.foreground_pid()
+    }
+
+    fn recent_output(&self, id: &str) -> Option<Vec<u8>> {
+        Some(self.pane(id).ok()?.recent_output())
     }
 }
 
@@ -472,6 +516,34 @@ mod tests {
         wait_for(&got, "after");
         pane.kill();
     }
+
+    #[test]
+    fn the_backend_finds_a_pane_by_id_until_it_is_killed() {
+        let backend = LocalBackend::default();
+        let (output, _) = recorder();
+        let (exited, exit_rx) = std::sync::mpsc::channel();
+        let dir = std::env::temp_dir();
+        let req = SpawnRequest { id: "p7".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history: Vec::new() };
+        let meta = backend.spawn(req, output, Box::new(move |id| exited.send(id.to_string()).unwrap())).unwrap();
+        assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p7", "s", Some("h")));
+        assert!(meta.shell_pid.is_some());
+        assert_eq!(backend.list().len(), 1);
+        backend.write("p7", b"printf '\\033]0;hel''lo\\007'\r").unwrap();
+        let mut title = String::new();
+        for _ in 0..200 {
+            backend.each_mirror(&mut |p| title = p.title.to_string());
+            if title == "hello" {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(title, "hello");
+        assert!(backend.recent_output("p7").is_some_and(|out| !out.is_empty()));
+        assert!(backend.write("nope", b"x").is_err() && backend.meta("nope").is_none());
+        backend.kill("p7");
+        assert!(backend.meta("p7").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
+        assert_eq!(exit_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "p7");
+    }
 }
 
 #[cfg(test)]
@@ -511,7 +583,7 @@ mod bench {
     }
 
     /// `cargo test --release pty_echo_latency -- --ignored --nocapture`: how long one keystroke takes to come back
-    /// through the output stream, from a `cat` that echoes it (the tty's own echo is off, so it is the process's).
+    /// through the output stream (and the backend), from a `cat` that echoes it (the tty's own echo is off, so it is the process's).
     #[test]
     #[ignore]
     fn pty_echo_latency() {
@@ -523,16 +595,13 @@ mod bench {
             Ok(())
         });
         let dir = std::env::temp_dir();
-        let pane = Pane::spawn(
-            SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() },
-            channel,
-            |_| {},
-        )
-        .unwrap();
-        pane.write(b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
+        let backend = LocalBackend::default();
+        let req = SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        backend.spawn(req, channel, Box::new(|_| {})).unwrap();
+        backend.write("bench", b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
         let ready_by = Instant::now() + std::time::Duration::from_secs(10);
         // Raw mode turns off the tty's \n to \r\n, so the marker ends in a bare \n.
-        while !String::from_utf8_lossy(&pane.recent_output()).contains("READY\n") {
+        while !String::from_utf8_lossy(&backend.recent_output("bench").unwrap()).contains("READY\n") {
             assert!(Instant::now() < ready_by, "shell never got ready");
             thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -540,7 +609,7 @@ mod bench {
         let mut micros = Vec::new();
         for _ in 0..2000 {
             let start = Instant::now();
-            pane.write(b"k").unwrap();
+            backend.write("bench", b"k").unwrap();
             let at = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("no echo");
             micros.push(at.duration_since(start).as_secs_f64() * 1e6);
             thread::sleep(std::time::Duration::from_millis(2));
@@ -548,7 +617,7 @@ mod bench {
         micros.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let at = |q: f64| micros[((micros.len() - 1) as f64 * q) as usize];
         println!("pty_echo_latency: {} keys, median {:.0} us, p95 {:.0} us, max {:.0} us", micros.len(), at(0.5), at(0.95), micros[micros.len() - 1]);
-        pane.kill();
+        backend.kill("bench");
     }
 
     /// `cargo test --release read_loop_cost -- --ignored --nocapture`: the work per read without the PTY, with and
