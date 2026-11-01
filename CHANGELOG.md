@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.109 · 2026-11-01
+
+- **Code in plugin pages keeps its colors.** The first code block after a language loads, like a `.tsx` snippet in a PR comment thread, came out mostly plain, because tokenizing it took longer than shiki's half-second limit while the grammar warmed up.
+
 ## 0.1.108 · 2026-10-30
 
 - **A local log.** Wings keeps what it prints, how long each plugin command took, and any crash in `~/Library/Logs/Wings/wings.log`, up to about 4 MB. Nothing leaves your Mac.
