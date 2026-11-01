@@ -1093,8 +1093,13 @@ fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest
         .run(builder.body(request.body.unwrap_or_default()).map_err(err)?)
         .map_err(|e| format!("Couldn't reach {}: {e}", request.url))?;
     let content_type = response.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string);
-    let body = if request.binary { opencode::base64(&response.body_mut().read_to_vec().map_err(err)?) } else { response.body_mut().read_to_string().map_err(err)? };
+    let body = fetch_body(response.body_mut(), request.binary)?;
     Ok(FetchResponse { status: response.status().as_u16(), content_type, body })
+}
+
+/// The response body as the plugin gets it: text, or base64 when it asked for `binary`, since bytes that aren't UTF-8 can't be a string.
+fn fetch_body(body: &mut ureq::Body, binary: bool) -> Res<String> {
+    if binary { Ok(opencode::base64(&body.read_to_vec().map_err(err)?)) } else { body.read_to_string().map_err(err) }
 }
 
 fn panel_label(plugin_id: &str, panel_id: &str) -> String {
@@ -2104,6 +2109,33 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// Fetches `body` from a local port the way `plugin_fetch` reads it.
+    fn fetched(body: &'static [u8], binary: bool) -> super::Res<String> {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.read(&mut [0u8; 4096]).unwrap();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let mut response = ureq::get(&url).call().unwrap();
+        let result = super::fetch_body(response.body_mut(), binary);
+        server.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn a_binary_fetch_body_comes_back_byte_for_byte() {
+        // A PNG header, then bytes that aren't UTF-8.
+        let png: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0xFE, 0x00];
+        assert!(std::str::from_utf8(png).is_err());
+        assert_eq!(fetched(png, true).unwrap(), "iVBORw0KGgr//gA=");
+        // A text body is still text.
+        assert_eq!(fetched("héllo".as_bytes(), false).unwrap(), "héllo");
+    }
+
     #[test]
     fn only_the_installed_app_connects_the_agents_on_start() {
         use std::path::Path;
