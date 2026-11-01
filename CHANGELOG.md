@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.110 · 2026-11-01
+
+- **Terminals that keep running when Wings quits, for testing.** Opened with `WINGS_PTYD=1`, Wings runs its terminals in a background process that macOS keeps running, listed under Allow in the Background in Login Items. Quit Wings and they keep going, and they come back when you open it again. Without the variable nothing changes.
+
 ## 0.1.109 · 2026-11-01
 
 - **Code in plugin pages keeps its colors.** The first code block after a language loads, like a `.tsx` snippet in a PR comment thread, came out mostly plain, because tokenizing it took longer than shiki's half-second limit while the grammar warmed up.
