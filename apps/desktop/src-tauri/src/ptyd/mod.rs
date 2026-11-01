@@ -2,6 +2,8 @@
 //! this process, as Wings always has.
 
 pub mod local;
+pub mod output;
+mod shell;
 
 use std::{
     path::{Path, PathBuf},
