@@ -674,16 +674,31 @@ fn drop_pane(queue: &mut Queue, pane: u32) {
     queue.bytes -= dropped;
 }
 
-/// A host on a socket in a fresh folder, serving on its own thread, for tests here and in `remote.rs`.
+/// A host serving on its own thread, for tests here and in `remote.rs`. Its socket's folder goes when this does,
+/// since the host itself only removes the socket when it exits idle.
 #[cfg(test)]
-pub(super) fn test_host(config: Config) -> (PathBuf, thread::JoinHandle<()>) {
+pub(super) struct TestHost {
+    dir: PathBuf,
+    pub serving: thread::JoinHandle<()>,
+}
+
+#[cfg(test)]
+impl Drop for TestHost {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A host on a socket in a fresh folder, and the folder's path.
+#[cfg(test)]
+pub(super) fn test_host(config: Config) -> (PathBuf, TestHost) {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     // Short: a socket path can't be longer than 104 bytes.
     let dir = std::env::temp_dir().join(format!("wptyd-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let path = dir.join("s.sock");
     let listener = bind(&path).unwrap();
     let serving = path.clone();
-    (path, thread::spawn(move || serve(listener, &serving, config)))
+    (path, TestHost { dir, serving: thread::spawn(move || serve(listener, &serving, config)) })
 }
 
 #[cfg(test)]
@@ -1010,13 +1025,13 @@ mod tests {
         let mut client = TestClient::connect(&path);
         let pane = client.spawn("p1");
         thread::sleep(Duration::from_millis(900));
-        assert!(!host.is_finished(), "exited with a client and a pane");
+        assert!(!host.serving.is_finished(), "exited with a client and a pane");
         client.call(Request::Kill { pane });
         thread::sleep(Duration::from_millis(900));
-        assert!(!host.is_finished(), "exited with a client connected");
+        assert!(!host.serving.is_finished(), "exited with a client connected");
         drop(client);
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !host.is_finished() {
+        while !host.serving.is_finished() {
             assert!(Instant::now() < deadline, "still running with nothing to do");
             thread::sleep(Duration::from_millis(20));
         }

@@ -597,17 +597,32 @@ mod tests {
 mod bench {
     use super::*;
     use crate::ptyd::{
-        host::{test_host, Config},
+        host::{test_host, Config, TestHost},
         local::bench::{echo_latency, quantile, throughput},
         LocalBackend,
     };
 
-    /// The host to measure: the real `wings ptyd` in its own process when `WINGS_PTYD_BIN` names the binary, else
-    /// one on a thread of this test.
-    fn host() -> (PathBuf, Option<std::process::Child>) {
+    /// The host being measured. Dropping it stops a host process and removes its folder.
+    enum Measured {
+        Thread(#[allow(dead_code)] TestHost),
+        Process(PathBuf, std::process::Child),
+    }
+
+    impl Drop for Measured {
+        fn drop(&mut self) {
+            if let Measured::Process(dir, child) = self {
+                let _ = child.kill();
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    /// The real `wings ptyd` in its own process when `WINGS_PTYD_BIN` names the binary, else a host on a thread of
+    /// this test.
+    fn host() -> (PathBuf, Measured) {
         let Some(bin) = std::env::var_os("WINGS_PTYD_BIN") else {
-            let (path, _serving) = test_host(Config::default());
-            return (path, None);
+            let (path, serving) = test_host(Config::default());
+            return (path, Measured::Thread(serving));
         };
         let dir = std::env::temp_dir().join(format!("wptyd-bench-{}", std::process::id()));
         let path = dir.join("s.sock");
@@ -617,7 +632,7 @@ mod bench {
             assert!(Instant::now() < deadline, "the host didn't start");
             thread::sleep(Duration::from_millis(10));
         }
-        (path, Some(child))
+        (path, Measured::Process(dir, child))
     }
 
     /// `cargo test --release --lib pty_echo_latency_remote_vs_local -- --ignored --nocapture`, rounds of each
@@ -625,7 +640,7 @@ mod bench {
     #[test]
     #[ignore]
     fn pty_echo_latency_remote_vs_local() {
-        let (path, child) = host();
+        let (path, _host) = host();
         let remote = RemoteBackend::connect(&path).unwrap();
         let local = LocalBackend::default();
         let (mut all_local, mut all_remote) = (Vec::new(), Vec::new());
@@ -649,15 +664,13 @@ mod bench {
             all.sort_by(|a, b| a.partial_cmp(b).unwrap());
             println!("pty_echo_latency {name}: {} keys, median {:.0} us, p95 {:.0} us, max {:.0} us", all.len(), quantile(all, 0.5), quantile(all, 0.95), all[all.len() - 1]);
         }
-        drop(remote);
-        child.map(|mut c| c.kill());
     }
 
     /// `cargo test --release --lib pty_throughput_remote_vs_local -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn pty_throughput_remote_vs_local() {
-        let (path, child) = host();
+        let (path, _host) = host();
         let remote = RemoteBackend::connect(&path).unwrap();
         let local = LocalBackend::default();
         for round in 0..6 {
@@ -665,7 +678,5 @@ mod bench {
             let (mb, secs) = throughput(backend, &format!("t{round}"));
             println!("pty_throughput {}: {mb:.0} MB in {secs:.2}s = {:.0} MB/s", if round % 2 == 0 { "local" } else { "remote" }, mb / secs);
         }
-        drop(remote);
-        child.map(|mut c| c.kill());
     }
 }
