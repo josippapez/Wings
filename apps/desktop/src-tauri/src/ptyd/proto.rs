@@ -160,14 +160,13 @@ pub enum Request {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Spawn {
-    /// The app's name for the pane, unique among the host's panes, and its `WINGS_PANE_ID`.
-    pub key: String,
     pub space_id: String,
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
     pub history_id: Option<String>,
-    /// The shell's whole environment. The app builds it, so a pane gets the same one whoever started the host.
+    /// The shell's whole environment but its `WINGS_PANE_ID`, which the host adds. The app builds it, so a pane gets
+    /// the same one whoever started the host.
     pub env: Vec<(String, String)>,
 }
 
@@ -220,7 +219,6 @@ pub struct Attached {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PaneInfo {
     pub pane: u32,
-    pub key: String,
     pub space_id: String,
     pub cwd: PathBuf,
     pub history_id: Option<String>,
@@ -269,7 +267,6 @@ mod tests {
         let spawn = Call {
             id: 1,
             req: Request::Spawn(Spawn {
-                key: "p1".into(),
                 space_id: "s".into(),
                 cwd: "/tmp".into(),
                 cols: 80,

@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 use super::{
     output::{Kept, REPLAY_BYTES},
     proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, PROTO},
+    pane_id,
     shell::pane_command,
     HOST_VERSION,
 };
@@ -145,8 +146,8 @@ struct Host {
 }
 
 struct HostPane {
+    /// Never given twice while the host runs, so the app can use it as the pane's id across its restarts.
     id: u32,
-    key: String,
     space_id: String,
     cwd: PathBuf,
     history_id: Option<String>,
@@ -349,16 +350,14 @@ impl Host {
     }
 
     fn spawn(self: &Arc<Self>, client: &Arc<Client>, id: u32, spawn: Spawn, history: Vec<u8>) -> anyhow::Result<()> {
-        if self.all_panes().iter().any(|p| p.key == spawn.key && !p.out.lock().unwrap().forget) {
-            anyhow::bail!("a pane {} already runs", spawn.key);
-        }
+        let number = self.next_pane.fetch_add(1, Ordering::Relaxed);
         let pair = native_pty_system().openpty(PtySize { rows: spawn.rows, cols: spawn.cols, pixel_width: 0, pixel_height: 0 })?;
-        let child = pair.slave.spawn_command(pane_command(&spawn.cwd, spawn.env.into_iter().map(|(k, v)| (k.into(), v.into()))))?;
+        let env = spawn.env.into_iter().map(|(k, v)| (k.into(), v.into()));
+        let child = pair.slave.spawn_command(pane_command(&spawn.cwd, env, &pane_id(number)))?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let pane = Arc::new(HostPane {
-            id: self.next_pane.fetch_add(1, Ordering::Relaxed),
-            key: spawn.key,
+            id: number,
             space_id: spawn.space_id,
             cwd: spawn.cwd,
             history_id: spawn.history_id,
@@ -475,7 +474,6 @@ impl Host {
                 }
                 Some(PaneInfo {
                     pane: pane.id,
-                    key: pane.key.clone(),
                     space_id: pane.space_id.clone(),
                     cwd: pane.cwd.clone(),
                     history_id: pane.history_id.clone(),
@@ -802,8 +800,8 @@ mod tests {
             ok
         }
 
-        fn spawn(&mut self, key: &str) -> u32 {
-            let spawned: Spawned = serde_json::from_value(self.call(Request::Spawn(spawn_request(key)))).unwrap();
+        fn spawn(&mut self, name: &str) -> u32 {
+            let spawned: Spawned = serde_json::from_value(self.call(Request::Spawn(spawn_request(name)))).unwrap();
             self.seq.insert(spawned.pane, spawned.seq);
             spawned.pane
         }
@@ -825,15 +823,14 @@ mod tests {
         }
     }
 
-    fn spawn_request(key: &str) -> Spawn {
+    fn spawn_request(name: &str) -> Spawn {
         Spawn {
-            key: key.into(),
             space_id: "s".into(),
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
-            history_id: Some(format!("h-{key}")),
-            env: pane_env(key).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
+            history_id: Some(format!("h-{name}")),
+            env: pane_env().into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
         }
     }
 
@@ -855,17 +852,17 @@ mod tests {
         let mut client = TestClient::connect(&path);
         let pane = client.spawn("p1");
         client.type_in(pane, "printf '\\033]0;bu''ild\\007'; echo he''llo $WINGS_PANE_ID\r");
-        client.wait_for(pane, "hello p1");
+        client.wait_for(pane, &format!("hello p{pane}"));
         client.until("the title", |c| c.events.contains(&HostMsg::Title { pane, title: "build".into() }));
         client.until("the foreground process", |c| c.events.iter().any(|e| matches!(e, HostMsg::Fg { pane: p, pid: Some(_) } if *p == pane)));
         let listed = client.list();
         assert_eq!(listed.len(), 1);
         let info = &listed[0];
-        assert_eq!((info.pane, info.key.as_str(), info.space_id.as_str(), info.history_id.as_deref()), (pane, "p1", "s", Some("h-p1")));
+        assert_eq!((info.pane, info.space_id.as_str(), info.history_id.as_deref()), (pane, "s", Some("h-p1")));
         assert!(info.shell_pid.is_some() && !info.exited && info.title == "build");
-        let refused = client.send(Request::Spawn(spawn_request("p1")), &[]);
-        client.until("the refusal", |c| c.replies.contains_key(&refused));
-        assert!(client.replies[&refused].1.as_deref().is_some_and(|e| e.contains("already runs")), "two panes with one id");
+        let other = client.spawn("p2");
+        assert_ne!(other, pane, "one number for each pane");
+        client.call(Request::Kill { pane: other });
         client.call(Request::Kill { pane });
     }
 

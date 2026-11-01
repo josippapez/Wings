@@ -18,31 +18,27 @@ fn is_host_session_var(key: &str) -> bool {
         || key.starts_with("TERM_PROGRAM")
 }
 
-/// This process's environment, minus the dev host's session, plus what Wings tells every pane.
-pub fn pane_env(pane_id: &str) -> Vec<(OsString, OsString)> {
+/// This process's environment, minus the dev host's session, plus what Wings tells every pane but its id, which
+/// `pane_command` adds: in the terminal host, the host numbers the pane.
+pub fn pane_env() -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> =
         std::env::vars_os().filter(|(key, _)| !key.to_str().is_some_and(is_host_session_var)).collect();
-    for (key, value) in [
-        ("TERM", "xterm-256color"),
-        ("COLORTERM", "truecolor"),
-        ("TERM_PROGRAM", "Wings"),
-        ("WINGS_ENV", "1"),
-        ("WINGS_PANE_ID", pane_id),
-    ] {
+    for (key, value) in [("TERM", "xterm-256color"), ("COLORTERM", "truecolor"), ("TERM_PROGRAM", "Wings"), ("WINGS_ENV", "1")] {
         env.retain(|(k, _)| k != key);
         env.push((key.into(), value.into()));
     }
     env
 }
 
-/// The user's login shell in `cwd`, with `env` as its whole environment, so their PATH and profile load as in any
-/// terminal.
-pub fn pane_command(cwd: &Path, env: impl IntoIterator<Item = (OsString, OsString)>) -> CommandBuilder {
+/// The user's login shell in `cwd`, with `env` and the pane's id as its whole environment, so their PATH and profile
+/// load as in any terminal.
+pub fn pane_command(cwd: &Path, env: impl IntoIterator<Item = (OsString, OsString)>, pane_id: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new_default_prog();
     cmd.env_clear();
     for (key, value) in env {
         cmd.env(key, value);
     }
+    cmd.env("WINGS_PANE_ID", pane_id);
     cmd.cwd(cwd);
     cmd
 }

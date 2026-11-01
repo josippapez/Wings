@@ -45,10 +45,7 @@ mod worktree;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -82,7 +79,6 @@ struct AppState {
     plugins: Mutex<Store>,
     storage: plugin_storage::Storage,
     project_info: project_info::Store,
-    next_pane: AtomicU64,
     /// Recent plugin notifications, for their rate limit.
     notified: Mutex<plugins::NotifyLog>,
     /// What Claude Code last told `wings statusline`.
@@ -302,21 +298,22 @@ fn pane_create(
         },
         None => root,
     };
-    let id = format!("p{}", state.next_pane.fetch_add(1, Ordering::Relaxed));
-    if cfg!(debug_assertions) {
-        applog::log_line!("[pane] create {id} in {space_id}");
-    }
     let exit_app = app.clone();
-    state
+    let id = state
         .terminals
         .spawn(
-            SpawnRequest { id: id.clone(), space_id, cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(ptyd::output::restored).unwrap_or_default(), history_id },
+            SpawnRequest { space_id: space_id.clone(), cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(ptyd::output::restored).unwrap_or_default(), history_id },
             on_output,
             Box::new(move |pane_id| {
                 let _ = exit_app.emit("pane-exited", pane_id);
             }),
         )
-        .map_err(err)?;
+        .map_err(err)?
+        .id
+        .clone();
+    if cfg!(debug_assertions) {
+        applog::log_line!("[pane] create {id} in {space_id}");
+    }
     if let Some(input) = initial_input {
         // Typed into the shell, so you land back at a prompt when the command exits.
         state.terminals.write(&id, input.as_bytes()).map_err(err)?;
@@ -1956,8 +1953,6 @@ pub fn run() {
             let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
             let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
             let terminals = terminal_backend(&data);
-            // A terminal host can still run panes from an earlier launch, and the ids count up from 1 each launch.
-            let next_pane = terminals.list().iter().filter_map(|p| p.id.strip_prefix('p')?.parse::<u64>().ok()).max().map_or(1, |n| n + 1);
             app.manage(AppState {
                 ai: ai::Ai::new(data.join("ai")),
                 plugins,
@@ -1973,7 +1968,6 @@ pub fn run() {
                 git: Mutex::new(HashMap::new()),
                 #[cfg(unix)]
                 mcp: mcp::Mcp::default(),
-                next_pane: AtomicU64::new(next_pane),
                 notified: Mutex::default(),
                 statusline: Mutex::default(),
                 pane_grants: Mutex::default(),

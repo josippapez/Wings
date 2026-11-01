@@ -22,6 +22,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 
 use super::{
     proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, MIN_PROTO, PROTO},
+    pane_id, pane_number,
     shell::pane_env,
     OnExit, PaneMeta, PaneMirror, PtyBackend, SpawnRequest,
 };
@@ -53,15 +54,13 @@ struct Pending {
     done: Done,
 }
 
-/// The panes by the app's id, and the host's number for each.
+/// The panes by the host's number for each, which their id carries.
 #[derive(Default)]
 struct Mirror {
-    panes: HashMap<String, Pane>,
-    ids: HashMap<u32, String>,
+    panes: HashMap<u32, Pane>,
 }
 
 struct Pane {
-    /// The host's number for it.
     number: u32,
     meta: Arc<PaneMeta>,
     fg: Option<u32>,
@@ -78,22 +77,23 @@ struct Pane {
 
 impl Mirror {
     fn by_number(&mut self, number: u32) -> Option<&mut Pane> {
-        let id = self.ids.get(&number)?;
-        self.panes.get_mut(id)
+        self.panes.get_mut(&number)
     }
 
     fn live(&self, id: &str) -> Option<&Pane> {
-        self.panes.get(id).filter(|p| !p.killed)
+        self.panes.get(&pane_number(id)?).filter(|p| !p.killed)
+    }
+
+    fn live_mut(&mut self, id: &str) -> Option<&mut Pane> {
+        self.panes.get_mut(&pane_number(id)?).filter(|p| !p.killed)
     }
 
     fn insert(&mut self, pane: Pane) {
-        self.ids.insert(pane.number, pane.meta.id.clone());
-        self.panes.insert(pane.meta.id.clone(), pane);
+        self.panes.insert(pane.number, pane);
     }
 
     fn remove(&mut self, number: u32) -> Option<Pane> {
-        let id = self.ids.remove(&number)?;
-        self.panes.remove(&id)
+        self.panes.remove(&number)
     }
 }
 
@@ -328,7 +328,7 @@ impl Inner {
             mirror.insert(Pane {
                 number: info.pane,
                 meta: Arc::new(PaneMeta {
-                    id: info.key.clone(),
+                    id: pane_id(info.pane),
                     space_id: info.space_id.clone(),
                     shell_pid: info.shell_pid,
                     cwd: info.cwd.clone(),
@@ -368,11 +368,11 @@ impl Inner {
 impl PtyBackend for RemoteBackend {
     fn spawn(&self, req: SpawnRequest<'_>, output: Channel<InvokeResponseBody>, on_exit: OnExit) -> anyhow::Result<Arc<PaneMeta>> {
         // Only what JSON can carry: a variable that isn't UTF-8 doesn't reach a pane in the host.
-        let env = pane_env(&req.id).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
+        let env = pane_env().into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
         let cwd: PathBuf = req.cwd.to_path_buf();
-        let spawn = Spawn { key: req.id.clone(), space_id: req.space_id.clone(), cwd: cwd.clone(), cols: req.cols, rows: req.rows, history_id: req.history_id.clone(), env };
+        let spawn = Spawn { space_id: req.space_id.clone(), cwd: cwd.clone(), cols: req.cols, rows: req.rows, history_id: req.history_id.clone(), env };
         let (tx, rx) = mpsc::channel();
-        let (id, space_id, history_id) = (req.id, req.space_id, req.history_id);
+        let (space_id, history_id) = (req.space_id, req.history_id);
         self.inner.send(
             Request::Spawn(spawn),
             req.history,
@@ -380,7 +380,7 @@ impl PtyBackend for RemoteBackend {
             Box::new(move |inner, result, _| {
                 let spawned = result.and_then(|v| serde_json::from_value::<Spawned>(v).map_err(|e| e.to_string()));
                 let _ = tx.send(spawned.map(|spawned| {
-                    let meta = Arc::new(PaneMeta { id, space_id, shell_pid: spawned.shell_pid, cwd, history_id });
+                    let meta = Arc::new(PaneMeta { id: pane_id(spawned.pane), space_id, shell_pid: spawned.shell_pid, cwd, history_id });
                     inner.mirror.lock().unwrap().insert(Pane {
                         number: spawned.pane,
                         meta: meta.clone(),
@@ -402,7 +402,7 @@ impl PtyBackend for RemoteBackend {
     fn attach(&self, id: &str, output: Channel<InvokeResponseBody>) -> anyhow::Result<()> {
         let number = {
             let mut mirror = self.inner.mirror.lock().unwrap();
-            let pane = mirror.panes.get_mut(id).filter(|p| !p.killed).ok_or_else(|| anyhow!("unknown pane {id}"))?;
+            let pane = mirror.live_mut(id).ok_or_else(|| anyhow!("unknown pane {id}"))?;
             pane.sink = Some(output);
             pane.syncing = true;
             pane.number
@@ -438,7 +438,7 @@ impl PtyBackend for RemoteBackend {
     fn kill(&self, id: &str) {
         let number = {
             let mut mirror = self.inner.mirror.lock().unwrap();
-            let Some(pane) = mirror.panes.get_mut(id).filter(|p| !p.killed) else { return };
+            let Some(pane) = mirror.live_mut(id) else { return };
             pane.killed = true;
             pane.number
         };
@@ -499,8 +499,8 @@ mod tests {
         }
     }
 
-    fn request<'a>(id: &str, cwd: &'a Path, history: Vec<u8>) -> SpawnRequest<'a> {
-        SpawnRequest { id: id.into(), space_id: "s".into(), cwd, cols: 80, rows: 24, history_id: Some(format!("h-{id}")), history }
+    fn request<'a>(name: &str, cwd: &'a Path, history: Vec<u8>) -> SpawnRequest<'a> {
+        SpawnRequest { space_id: "s".into(), cwd, cols: 80, rows: 24, history_id: Some(format!("h-{name}")), history }
     }
 
     #[test]
@@ -512,10 +512,10 @@ mod tests {
         let dir = std::env::temp_dir();
         let history = crate::ptyd::output::restored(b"saved line\r\n".to_vec());
         let meta = backend.spawn(request("p7", &dir, history), output, Box::new(move |id| exited.send(id.to_string()).unwrap())).unwrap();
-        assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p7", "s", Some("h-p7")));
+        assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p1", "s", Some("h-p7")), "the host's number");
         assert!(meta.shell_pid.is_some() && meta.cwd == dir);
-        backend.write("p7", b"printf '\\033]0;hel''lo\\007'; echo ec''ho\r").unwrap();
-        wait_for(&got, "echo");
+        backend.write("p1", b"printf '\\033]0;hel''lo\\007'; echo ec''ho $WINGS_PANE_ID\r").unwrap();
+        wait_for(&got, "echo p1");
         assert!(!text(&got).contains("saved line"), "the UI writes saved output itself");
         let (mut title, mut fg) = (String::new(), None);
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -524,24 +524,24 @@ mod tests {
             backend.each_mirror(&mut |p| (title, fg) = (p.title.to_string(), p.foreground_pid));
             thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(backend.foreground_pid("p7"), fg);
-        assert!(backend.recent_output("p7").unwrap().starts_with(b"saved line"), "kept for the next quit");
+        assert_eq!(backend.foreground_pid("p1"), fg);
+        assert!(backend.recent_output("p1").unwrap().starts_with(b"saved line"), "kept for the next quit");
         // A UI that loaded again gets what was kept, then the stream instead of the old terminal.
         let (again, got_again) = recorder();
-        backend.attach("p7", again).unwrap();
+        backend.attach("p1", again).unwrap();
         wait_for(&got_again, "echo");
-        backend.write("p7", b"echo af''ter\r").unwrap();
+        backend.write("p1", b"echo af''ter\r").unwrap();
         wait_for(&got_again, "after");
         assert!(!text(&got).contains("after"));
-        backend.resize("p7", 100, 30).unwrap();
+        backend.resize("p1", 100, 30).unwrap();
         assert!(backend.write("nope", b"x").is_err() && backend.meta("nope").is_none() && backend.resize("nope", 1, 1).is_err());
         // Another Wings connecting, as after a restart, finds it running; closing that connection leaves it be.
         let other = RemoteBackend::connect(&path).unwrap();
-        assert_eq!(other.list().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["p7"]);
+        assert_eq!(other.list().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["p1"]);
         drop(other);
-        backend.kill("p7");
-        assert!(backend.meta("p7").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
-        assert_eq!(exit_rx.recv_timeout(Duration::from_secs(10)).unwrap(), "p7");
+        backend.kill("p1");
+        assert!(backend.meta("p1").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
+        assert_eq!(exit_rx.recv_timeout(Duration::from_secs(10)).unwrap(), "p1");
         assert!(RemoteBackend::connect(&path).unwrap().list().is_empty(), "the host forgot it too");
     }
 
@@ -646,7 +646,7 @@ mod bench {
         let (mut all_local, mut all_remote) = (Vec::new(), Vec::new());
         for round in 0..8 {
             let run = |backend: &dyn PtyBackend, name: &str, all: &mut Vec<f64>| {
-                let micros = echo_latency(backend, &format!("{name}{round}"), 500);
+                let micros = echo_latency(backend, 500);
                 let line = format!("{name} median {:>4.0} us p95 {:>4.0} us", quantile(&micros, 0.5), quantile(&micros, 0.95));
                 all.extend(micros);
                 line
@@ -675,7 +675,7 @@ mod bench {
         let local = LocalBackend::default();
         for round in 0..6 {
             let backend: &dyn PtyBackend = if round % 2 == 0 { &local } else { &remote };
-            let (mb, secs) = throughput(backend, &format!("t{round}"));
+            let (mb, secs) = throughput(backend);
             println!("pty_throughput {}: {mb:.0} MB in {secs:.2}s = {:.0} MB/s", if round % 2 == 0 { "local" } else { "remote" }, mb / secs);
         }
     }

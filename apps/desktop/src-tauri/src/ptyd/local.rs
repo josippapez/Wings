@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
     thread,
 };
 
@@ -10,6 +13,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 
 use super::{
     output::Kept,
+    pane_id,
     shell::{pane_command, pane_env},
     OnExit, PaneMeta, PaneMirror, PtyBackend, SpawnRequest,
 };
@@ -27,6 +31,7 @@ pub struct Pane {
 
 impl Pane {
     pub fn spawn(
+        id: String,
         req: SpawnRequest,
         output: Channel<InvokeResponseBody>,
         on_exit: impl FnOnce(&str) + Send + 'static,
@@ -38,12 +43,12 @@ impl Pane {
             pixel_height: 0,
         })?;
 
-        let child = pair.slave.spawn_command(pane_command(req.cwd, pane_env(&req.id)))?;
+        let child = pair.slave.spawn_command(pane_command(req.cwd, pane_env(), &id))?;
         drop(pair.slave);
 
         let pane = Arc::new(Pane {
             meta: Arc::new(PaneMeta {
-                id: req.id,
+                id,
                 space_id: req.space_id,
                 shell_pid: child.process_id(),
                 cwd: req.cwd.to_path_buf(),
@@ -133,6 +138,8 @@ impl Pane {
 #[derive(Default)]
 pub struct LocalBackend {
     panes: Arc<Mutex<HashMap<String, Arc<Pane>>>>,
+    /// The last pane's number. Counts from 1 each launch, since no pane outlives this process.
+    numbered: AtomicU32,
 }
 
 impl LocalBackend {
@@ -144,7 +151,8 @@ impl LocalBackend {
 impl PtyBackend for LocalBackend {
     fn spawn(&self, req: SpawnRequest<'_>, output: Channel<InvokeResponseBody>, on_exit: OnExit) -> anyhow::Result<Arc<PaneMeta>> {
         let panes = self.panes.clone();
-        let pane = Pane::spawn(req, output, move |id| {
+        let id = pane_id(self.numbered.fetch_add(1, Ordering::Relaxed) + 1);
+        let pane = Pane::spawn(id, req, output, move |id| {
             panes.lock().unwrap().remove(id);
             on_exit(id);
         })?;
@@ -264,7 +272,8 @@ mod tests {
         let (channel, got) = recorder();
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
-            SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history },
+            "t".into(),
+            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history },
             channel,
             |_| {},
         )
@@ -280,7 +289,8 @@ mod tests {
         let (first, _) = recorder();
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
-            SpawnRequest { id: "t".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() },
+            "t".into(),
+            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() },
             first,
             |_| {},
         )
@@ -312,26 +322,32 @@ mod tests {
         let (output, _) = recorder();
         let (exited, exit_rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { id: "p7".into(), space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history: Vec::new() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history: Vec::new() };
         let meta = backend.spawn(req, output, Box::new(move |id| exited.send(id.to_string()).unwrap())).unwrap();
-        assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p7", "s", Some("h")));
+        assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p1", "s", Some("h")));
         assert!(meta.shell_pid.is_some());
         assert_eq!(backend.list().len(), 1);
-        backend.write("p7", b"printf '\\033]0;hel''lo\\007'\r").unwrap();
+        backend.write("p1", b"printf '\\033]0;hel''lo\\007'; echo id=$WINGS_PANE_ID\r").unwrap();
         let mut title = String::new();
+        // Its id is in its environment.
+        let echoed = || backend.recent_output("p1").is_some_and(|out| String::from_utf8_lossy(&out).contains("id=p1"));
         for _ in 0..200 {
             backend.each_mirror(&mut |p| title = p.title.to_string());
-            if title == "hello" {
+            if title == "hello" && echoed() {
                 break;
             }
             thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert_eq!(title, "hello");
-        assert!(backend.recent_output("p7").is_some_and(|out| !out.is_empty()));
+        assert!(title == "hello" && echoed(), "title {title:?}");
         assert!(backend.write("nope", b"x").is_err() && backend.meta("nope").is_none());
-        backend.kill("p7");
-        assert!(backend.meta("p7").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
-        assert_eq!(exit_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "p7");
+        backend.kill("p1");
+        assert!(backend.meta("p1").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
+        assert_eq!(exit_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "p1");
+        let (output, _) = recorder();
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() };
+        let next = backend.spawn(req, output, Box::new(|_| {})).unwrap();
+        assert_eq!(next.id, "p2", "an id is never given twice");
+        backend.kill("p2");
     }
 }
 
@@ -343,7 +359,7 @@ pub(super) mod bench {
     use std::time::Instant;
 
     /// MB and seconds for 20 MB of `yes` through a backend's output stream, timed from the first MB.
-    pub(in crate::ptyd) fn throughput(backend: &dyn PtyBackend, id: &str) -> (f64, f64) {
+    pub(in crate::ptyd) fn throughput(backend: &dyn PtyBackend) -> (f64, f64) {
         let bytes = Arc::new(AtomicU64::new(0));
         let start = Arc::new(Mutex::new(None::<Instant>));
         let (b, s) = (bytes.clone(), start.clone());
@@ -357,9 +373,9 @@ pub(super) mod bench {
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { id: id.into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
-        backend.spawn(req, channel, Box::new(move |_| tx.send(Instant::now()).unwrap())).unwrap();
-        backend.write(id, b"exec sh -c 'yes | head -c 20000000'\r").unwrap();
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        let id = backend.spawn(req, channel, Box::new(move |_| tx.send(Instant::now()).unwrap())).unwrap().id.clone();
+        backend.write(&id, b"exec sh -c 'yes | head -c 20000000'\r").unwrap();
         let end = rx.recv().unwrap();
         let total = bytes.load(Ordering::Relaxed) as f64;
         let secs = (end - start.lock().unwrap().unwrap()).as_secs_f64();
@@ -370,13 +386,13 @@ pub(super) mod bench {
     #[test]
     #[ignore]
     fn pty_throughput() {
-        let (mb, secs) = throughput(&LocalBackend::default(), "bench");
+        let (mb, secs) = throughput(&LocalBackend::default());
         println!("pty_throughput: {mb:.0} MB in {secs:.2}s = {:.0} MB/s", mb / secs);
     }
 
     /// Microseconds from writing one key to seeing it back in the output stream, sorted, for `keys` keys, from a
     /// `cat` that echoes it (the tty's own echo is off, so it is the process's).
-    pub(in crate::ptyd) fn echo_latency(backend: &dyn PtyBackend, id: &str, keys: usize) -> Vec<f64> {
+    pub(in crate::ptyd) fn echo_latency(backend: &dyn PtyBackend, keys: usize) -> Vec<f64> {
         let (tx, rx) = std::sync::mpsc::channel::<Instant>();
         let channel = Channel::new(move |body| {
             if matches!(body, InvokeResponseBody::Raw(_)) {
@@ -385,8 +401,8 @@ pub(super) mod bench {
             Ok(())
         });
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { id: id.into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
-        backend.spawn(req, channel, Box::new(|_| {})).unwrap();
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        let id = &backend.spawn(req, channel, Box::new(|_| {})).unwrap().id.clone();
         backend.write(id, b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
         let ready_by = Instant::now() + std::time::Duration::from_secs(10);
         // Raw mode turns off the tty's \n to \r\n, so the marker ends in a bare \n.
@@ -418,7 +434,7 @@ pub(super) mod bench {
     #[test]
     #[ignore]
     fn pty_echo_latency() {
-        let micros = echo_latency(&LocalBackend::default(), "bench", 2000);
+        let micros = echo_latency(&LocalBackend::default(), 2000);
         let at = |q| quantile(&micros, q);
         println!("pty_echo_latency: {} keys, median {:.0} us, p95 {:.0} us, max {:.0} us", micros.len(), at(0.5), at(0.95), micros[micros.len() - 1]);
     }

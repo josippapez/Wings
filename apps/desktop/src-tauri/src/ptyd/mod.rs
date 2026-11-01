@@ -34,8 +34,18 @@ pub fn socket_path(app_data: &Path) -> PathBuf {
 /// agent is detected in it, since the Agents list is grouped by project.
 pub const NO_PROJECT: &str = "";
 
+/// A pane's id, from the number its backend gave it. The terminal host numbers its panes, so the ids Wings saved
+/// still name the same panes after it restarts.
+pub fn pane_id(number: u32) -> String {
+    format!("p{number}")
+}
+
+/// The number in a pane's id.
+pub fn pane_number(id: &str) -> Option<u32> {
+    id.strip_prefix('p')?.parse().ok()
+}
+
 pub struct SpawnRequest<'a> {
-    pub id: String,
     pub space_id: String,
     pub cwd: &'a Path,
     pub cols: u16,
@@ -71,6 +81,7 @@ pub type OnExit = Box<dyn FnOnce(&str) + Send>;
 
 /// The terminals Wings runs, by pane id. Every method is safe to call from any thread.
 pub trait PtyBackend: Send + Sync {
+    /// Starts a pane, under an id the backend picks.
     fn spawn(&self, req: SpawnRequest<'_>, output: Channel<InvokeResponseBody>, on_exit: OnExit) -> anyhow::Result<Arc<PaneMeta>>;
 
     /// Sends the UI that loaded since (a webview reload) the recent output, then streams to it instead.
