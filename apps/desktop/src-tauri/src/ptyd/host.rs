@@ -207,7 +207,7 @@ impl Host {
 
     /// Sends an event to every client. Its lock order: a pane's output, then the client list, then a queue.
     fn broadcast(&self, msg: &HostMsg) {
-        let frame = Arc::new(proto::ctrl(msg).expect("an event fits a frame"));
+        let Some(frame) = ctrl_frame(msg) else { return };
         for client in self.clients.lock().unwrap().values() {
             client.send(None, frame.clone());
         }
@@ -256,11 +256,12 @@ impl Host {
             features: Vec::new(),
             error: both.is_none().then(|| format!("this host speaks protocols {}..={PROTO}, not {min_proto}..={proto}", proto::MIN_PROTO)),
         };
+        let Some(welcome) = ctrl_frame(&welcome) else { return };
         if both.is_none() {
-            let _ = (&write_half).write_all(&proto::ctrl(&welcome).expect("fits"));
+            let _ = (&write_half).write_all(&welcome);
             return;
         }
-        client.send(None, Arc::new(proto::ctrl(&welcome).expect("fits")));
+        client.send(None, welcome);
         let writer = client.clone();
         let Ok(mut socket) = write_half.try_clone() else { return };
         let spawned = thread::Builder::new().name("ptyd-write".into()).spawn(move || {
@@ -521,9 +522,22 @@ fn reply(client: &Client, id: u32, result: Result<Value, String>) {
         Ok(ok) => HostMsg::Reply { id, ok, error: None },
         Err(error) => HostMsg::Reply { id, ok: Value::Null, error: Some(error) },
     };
-    match proto::ctrl(&msg) {
-        Ok(frame) => client.send(None, Arc::new(frame)),
-        Err(e) => client.send(None, Arc::new(proto::ctrl(&HostMsg::Reply { id, ok: Value::Null, error: Some(e.to_string()) }).expect("fits"))),
+    // A reply too big for a frame still answers, so the client doesn't wait for one.
+    let too_big = || HostMsg::Reply { id, ok: Value::Null, error: Some("the reply doesn't fit a frame".into()) };
+    if let Some(frame) = ctrl_frame(&msg).or_else(|| ctrl_frame(&too_big())) {
+        client.send(None, frame);
+    }
+}
+
+/// A control frame, or `None` for a message too big for one: it is dropped and logged, never a panic, which in a
+/// release build would end every pane in the host.
+fn ctrl_frame(msg: &HostMsg) -> Option<Arc<Vec<u8>>> {
+    match proto::ctrl(msg) {
+        Ok(frame) => Some(Arc::new(frame)),
+        Err(e) => {
+            crate::applog::log_line!("[ptyd] dropped a message: {e}");
+            None
+        }
     }
 }
 
@@ -615,7 +629,9 @@ impl Client {
         }
         drop_pane(&mut queue, pane);
         drop(queue);
-        self.send(None, Arc::new(proto::ctrl(&HostMsg::Lagged { pane }).expect("fits")));
+        if let Some(lagged) = ctrl_frame(&HostMsg::Lagged { pane }) {
+            self.send(None, lagged);
+        }
         false
     }
 
@@ -892,6 +908,20 @@ mod tests {
         // `read_one` checks that every byte arrives exactly once.
         client.wait_for(pane, "done");
         assert!(client.text(pane).matches("0123456789").count() >= 600_000 / 11);
+        client.call(Request::Kill { pane });
+    }
+
+    #[test]
+    fn a_title_bigger_than_a_frame_does_not_take_the_pane_down() {
+        let (path, _host) = test_host(config());
+        let mut client = TestClient::connect(&path);
+        let pane = client.spawn("p1");
+        client.type_in(pane, "printf '\\033]0;'; head -c 1100000 /dev/zero | tr '\\0' x; printf '\\007'; echo af''ter\r");
+        client.wait_for(pane, "after");
+        client.until("the title", |c| c.events.iter().any(|e| matches!(e, HostMsg::Title { title, .. } if title.len() == crate::ptyd::output::MAX_TITLE)));
+        client.type_in(pane, "echo st''ill here\r");
+        client.wait_for(pane, "still here");
+        assert_eq!(client.list()[0].title, "x".repeat(crate::ptyd::output::MAX_TITLE));
         client.call(Request::Kill { pane });
     }
 

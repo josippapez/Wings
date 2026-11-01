@@ -138,6 +138,10 @@ impl Kept {
     }
 }
 
+/// The longest title kept. vte hands over an OSC of any length, so a program (or a file someone `cat`s) can set a
+/// title of megabytes, which the terminal host couldn't fit in a frame to send.
+pub const MAX_TITLE: usize = 4096;
+
 /// Watches the byte stream for OSC 0/2 title changes and the modes in `MODES`, without keeping a screen model.
 pub struct Tap<'a> {
     pub title: &'a Mutex<String>,
@@ -148,7 +152,9 @@ impl vte::Perform for Tap<'_> {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         if let [kind, rest @ ..] = params {
             if matches!(*kind, b"0" | b"2") && !rest.is_empty() {
-                *self.title.lock().unwrap() = String::from_utf8_lossy(&rest.join(&b';')).into_owned();
+                let mut title = String::from_utf8_lossy(&rest.join(&b';')).into_owned();
+                title.truncate(title.floor_char_boundary(MAX_TITLE));
+                *self.title.lock().unwrap() = title;
             }
         }
     }
@@ -181,6 +187,14 @@ mod tests {
         assert_eq!(title_after(b"\x1b]0;\xe2\x9c\xb3 Fix login\x07"), "✳ Fix login");
         assert_eq!(title_after(b"\x1b]2;a;b\x1b\\"), "a;b");
         assert_eq!(title_after(b"\x1b]7;file:///tmp\x07"), "");
+    }
+
+    #[test]
+    fn a_title_longer_than_a_frame_is_cut_on_a_character() {
+        let long = |text: &str| [&b"\x1b]0;"[..], text.repeat(crate::ptyd::proto::MAX_FRAME).as_bytes(), b"\x07"].concat();
+        assert_eq!(title_after(&long("x")), "x".repeat(MAX_TITLE));
+        // Three bytes each: 4096 isn't a multiple of 3.
+        assert_eq!(title_after(&long("✳")), "✳".repeat(MAX_TITLE / 3));
     }
 
     fn ring_after(cap: usize, pushes: &[&[u8]]) -> (Vec<u8>, bool) {
