@@ -88,8 +88,8 @@ export function cleanButtons(buttons: unknown, tabViews: string[]): Notification
 const kinds: Record<NotificationEvent["kind"], true> = { blocked: true, done: true, plugin: true };
 
 /**
- * The saved list, as the last run left it, keeping only well-formed entries. Pane ids count up from p1 on each start,
- * so an old entry keeps its Go to pane only while its pane still runs (`live`, after a webview reload).
+ * The saved list, as the last run left it, keeping only well-formed entries. An old entry keeps its Go to pane only
+ * while its pane still runs (`live`, after a webview reload, or a restart while the terminal host kept it).
  */
 export function restoreNotifications(saved: unknown, live: ReadonlySet<string>): NotificationEvent[] {
   if (!Array.isArray(saved)) return [];

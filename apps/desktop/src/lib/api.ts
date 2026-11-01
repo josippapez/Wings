@@ -73,7 +73,7 @@ export type GitStatus = { branch: string | null; ahead: number; behind: number; 
 /** What a pane runs right now and where: the shell's cwd follows `cd`. */
 export type PaneInfo = { command: string; cwd: string | null; busy: boolean };
 
-/** A pane still running in the Rust core, which a reloaded UI can attach to again. */
+/** A pane still running, in this Wings or in the terminal host from before a restart, which the UI can attach to again. */
 export type LivePane = { id: string; spaceId: string; cwd: string };
 
 export type PluginPermissions = {

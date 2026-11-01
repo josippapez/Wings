@@ -263,7 +263,7 @@ export class TerminalSession {
     private handlers: { onFocus: () => void; onStarted: (paneId: string) => void },
     /** A folder inside the project to start in, instead of its root. */
     private cwd: string | null = null,
-    /** A Rust pane still running from before a webview reload, to show again instead of starting a shell. */
+    /** A pane still running from before a webview reload or a restart, to show again instead of starting a shell. */
     private attachTo: string | null = null,
     /** The folder the pane was in before Wings restarted: its shell starts there, or in the root if it's gone. */
     private savedCwd: string | null = null,

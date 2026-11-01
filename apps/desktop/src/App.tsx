@@ -40,7 +40,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Toaster } from "@/components/ui/sonner";
 import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, pagesOf, type Agent, type AgentState, type GitStatus, type LivePane, type PaneInfo, type PluginView, type Space, type WorktreeMade, type WorktreeState } from "@/lib/api";
+import { api, pagesOf, type Agent, type AgentState, type GitStatus, type PaneInfo, type PluginView, type Space, type WorktreeMade, type WorktreeState } from "@/lib/api";
+import { stillRunning } from "@/lib/still-running";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
 import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
@@ -139,7 +140,8 @@ type SavedWorkspace = {
   sessionArgs?: Record<string, string[]>;
   /** The folder each pane's shell was in, by the same keys as `sessions`. Absent in older files. */
   cwds?: Record<string, string>;
-  /** The Rust pane behind each pane, by the same keys. Still running only after a webview reload. */
+  /** The Rust pane behind each pane, by the same keys. Still running after a webview reload, and after a restart
+   * when the terminal host kept it. */
   paneIds?: Record<string, string>;
   /** Each pane's `historyId`. Absent in older files. */
   histories?: Record<string, string>;
@@ -154,19 +156,6 @@ function parseSaved(json: string | null): SavedWorkspace | null {
   } catch {
     return null;
   }
-}
-
-/** Saved panes whose Rust pane still runs in the same project, as saved key to pane id. Only after a webview reload. */
-function stillRunning(saved: SavedWorkspace | null, live: LivePane[], spaces: Space[]) {
-  const running = new Map<string, string>();
-  for (const tab of saved?.tabs ?? []) {
-    if (!spaces.some((s) => s.id === tab.spaceId)) continue;
-    for (const key of paneIds(tab.layout)) {
-      const id = saved?.paneIds?.[key];
-      if (id && live.some((p) => p.id === id && p.spaceId === tab.spaceId)) running.set(key, id);
-    }
-  }
-  return running;
 }
 
 type Widths = { left: number; right: number; diff: number };
@@ -835,8 +824,9 @@ const leftPanel = usePanelRef();
   );
 
   /**
-   * Rebuilds saved tabs and splits. After a webview reload, panes in `running` show their still-running shell again;
-   * the others get a fresh shell, and Claude panes resume their session.
+   * Rebuilds saved tabs and splits. Panes in `running` (after a webview reload, or a restart while the terminal host
+   * kept them) show their still-running shell again; the others get a fresh shell, and Claude panes resume their
+   * session.
    */
   const restore = useCallback(
     (list: Space[], saved: SavedWorkspace | null, running: Map<string, string>) => {
@@ -904,8 +894,9 @@ const leftPanel = usePanelRef();
       const [list, json, live] = await Promise.all([api.spacesList(), api.workspaceLoad(), api.panesList()]);
       const saved = parseSaved(json);
       const running = stillRunning(saved, live, list);
-      // Before any pane starts, so only panes from before a reload that nothing shows again are killed.
-      await api.panesReset([...running.values()]);
+      // Before any pane starts, so only panes from before that nothing shows again are killed: their tab was closed.
+      // Unless the saved layout didn't load, which would make every pane the host kept look closed.
+      if (saved) await api.panesReset([...running.values()]);
       void api.historiesKeep(Object.values(saved?.histories ?? {}));
       setSpaces(sortByOrder(list, saved?.spaceOrder));
       if (!restore(list, saved, running) && list[0]) selectSpace(list[0].id);
