@@ -510,6 +510,47 @@ mod bench {
         println!("pty_throughput: {:.0} MB in {secs:.2}s = {:.0} MB/s", total / 1e6, total / 1e6 / secs);
     }
 
+    /// `cargo test --release pty_echo_latency -- --ignored --nocapture`: how long one keystroke takes to come back
+    /// through the output stream, from a `cat` that echoes it (the tty's own echo is off, so it is the process's).
+    #[test]
+    #[ignore]
+    fn pty_echo_latency() {
+        let (tx, rx) = std::sync::mpsc::channel::<Instant>();
+        let channel = Channel::new(move |body| {
+            if matches!(body, InvokeResponseBody::Raw(_)) {
+                let _ = tx.send(Instant::now());
+            }
+            Ok(())
+        });
+        let dir = std::env::temp_dir();
+        let pane = Pane::spawn(
+            SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() },
+            channel,
+            |_| {},
+        )
+        .unwrap();
+        pane.write(b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
+        let ready_by = Instant::now() + std::time::Duration::from_secs(10);
+        // Raw mode turns off the tty's \n to \r\n, so the marker ends in a bare \n.
+        while !String::from_utf8_lossy(&pane.recent_output()).contains("READY\n") {
+            assert!(Instant::now() < ready_by, "shell never got ready");
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+        while rx.recv_timeout(std::time::Duration::from_millis(200)).is_ok() {}
+        let mut micros = Vec::new();
+        for _ in 0..2000 {
+            let start = Instant::now();
+            pane.write(b"k").unwrap();
+            let at = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("no echo");
+            micros.push(at.duration_since(start).as_secs_f64() * 1e6);
+            thread::sleep(std::time::Duration::from_millis(2));
+        }
+        micros.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let at = |q: f64| micros[((micros.len() - 1) as f64 * q) as usize];
+        println!("pty_echo_latency: {} keys, median {:.0} us, p95 {:.0} us, max {:.0} us", micros.len(), at(0.5), at(0.95), micros[micros.len() - 1]);
+        pane.kill();
+    }
+
     /// `cargo test --release read_loop_cost -- --ignored --nocapture`: the work per read without the PTY, with and
     /// without the replay ring, at the read sizes a PTY hands out.
     #[test]
