@@ -46,6 +46,7 @@ import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, 
 import { withBadge, withLabel } from "@/lib/badges";
 import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
+import { tabCloser } from "@/lib/close-tabs";
 import { tabTitles } from "@/lib/tab-names";
 import { copyNotice, requestWorktreeAgent, withSetup } from "@/lib/worktree-agent";
 import { nextNeedingYou } from "@/lib/agents";
@@ -556,24 +557,7 @@ const leftPanel = usePanelRef();
     setPanes(({ [key]: _gone, ...rest }) => rest);
   };
 
-  /** Closes tabs; a project showing one of them shows its last other tab. */
-  const closeTabs = useCallback((tabIds: string[]) => {
-    const gone = tabsRef.current.filter((t) => tabIds.includes(t.id));
-    if (!gone.length) return;
-    for (const tab of gone) if (isPaneTab(tab)) paneIds(tab.layout).forEach(disposePane);
-    const rest = tabsRef.current.filter((t) => !tabIds.includes(t.id));
-    setTabs(rest);
-    setActiveTabBySpace((m) => {
-      const next = { ...m };
-      for (const tab of gone) {
-        if (next[tab.spaceId] !== tab.id) continue;
-        const siblings = rest.filter((t) => t.spaceId === tab.spaceId);
-        if (siblings.length) next[tab.spaceId] = siblings[siblings.length - 1].id;
-        else delete next[tab.spaceId];
-      }
-      return next;
-    });
-  }, []);
+  const { closeTabs, closePane } = useMemo(() => tabCloser(tabsRef, setTabs, setActiveTabBySpace, disposePane), []);
   const closeTab = useCallback((tabId: string) => closeTabs([tabId]), [closeTabs]);
   // A project on screen takes over, so the pages opened without one are closed rather than left hidden.
   useEffect(() => {
@@ -628,22 +612,6 @@ const leftPanel = usePanelRef();
   useEffect(() => {
     if (pluginsLoaded) closeTabs(staleViewTabs(tabs, plugins));
   }, [pluginsLoaded, plugins, tabs, closeTabs]);
-
-  const closePane = useCallback(
-    (key: string) => {
-      const tab = tabOfPane(tabsRef.current, key);
-      if (!tab) return;
-      const layout = remove(tab.layout, key);
-      if (!layout) return closeTab(tab.id);
-      disposePane(key);
-      updateTab(tab.id, (t) => ({
-        layout,
-        focusedPane: t.focusedPane === key ? paneIds(layout)[0] : t.focusedPane,
-        zoomedPane: t.zoomedPane === key ? null : t.zoomedPane,
-      }));
-    },
-    [closeTab, updateTab],
-  );
 
   /**
    * Pastes a message into the prompt of an agent in a pane, for another agent (`send_to_agent`) or a plugin, and
