@@ -336,16 +336,14 @@ mod tests {
 }
 
 #[cfg(test)]
-mod bench {
+pub(super) mod bench {
     use super::*;
     use crate::ptyd::output::Tap;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Instant;
 
-    /// `cargo test --release pty_throughput -- --ignored --nocapture`: MB/s through the read loop.
-    #[test]
-    #[ignore]
-    fn pty_throughput() {
+    /// MB and seconds for 20 MB of `yes` through a backend's output stream, timed from the first MB.
+    pub(in crate::ptyd) fn throughput(backend: &dyn PtyBackend, id: &str) -> (f64, f64) {
         let bytes = Arc::new(AtomicU64::new(0));
         let start = Arc::new(Mutex::new(None::<Instant>));
         let (b, s) = (bytes.clone(), start.clone());
@@ -359,24 +357,26 @@ mod bench {
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
-        let pane = Pane::spawn(
-            SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() },
-            channel,
-            move |_| tx.send(Instant::now()).unwrap(),
-        )
-        .unwrap();
-        pane.write(b"exec sh -c 'yes | head -c 20000000'\r").unwrap();
+        let req = SpawnRequest { id: id.into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        backend.spawn(req, channel, Box::new(move |_| tx.send(Instant::now()).unwrap())).unwrap();
+        backend.write(id, b"exec sh -c 'yes | head -c 20000000'\r").unwrap();
         let end = rx.recv().unwrap();
         let total = bytes.load(Ordering::Relaxed) as f64;
         let secs = (end - start.lock().unwrap().unwrap()).as_secs_f64();
-        println!("pty_throughput: {:.0} MB in {secs:.2}s = {:.0} MB/s", total / 1e6, total / 1e6 / secs);
+        (total / 1e6, secs)
     }
 
-    /// `cargo test --release pty_echo_latency -- --ignored --nocapture`: how long one keystroke takes to come back
-    /// through the output stream (and the backend), from a `cat` that echoes it (the tty's own echo is off, so it is the process's).
+    /// `cargo test --release pty_throughput -- --ignored --nocapture`: MB/s through the read loop.
     #[test]
     #[ignore]
-    fn pty_echo_latency() {
+    fn pty_throughput() {
+        let (mb, secs) = throughput(&LocalBackend::default(), "bench");
+        println!("pty_throughput: {mb:.0} MB in {secs:.2}s = {:.0} MB/s", mb / secs);
+    }
+
+    /// Microseconds from writing one key to seeing it back in the output stream, sorted, for `keys` keys, from a
+    /// `cat` that echoes it (the tty's own echo is off, so it is the process's).
+    pub(in crate::ptyd) fn echo_latency(backend: &dyn PtyBackend, id: &str, keys: usize) -> Vec<f64> {
         let (tx, rx) = std::sync::mpsc::channel::<Instant>();
         let channel = Channel::new(move |body| {
             if matches!(body, InvokeResponseBody::Raw(_)) {
@@ -385,29 +385,42 @@ mod bench {
             Ok(())
         });
         let dir = std::env::temp_dir();
-        let backend = LocalBackend::default();
-        let req = SpawnRequest { id: "bench".into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        let req = SpawnRequest { id: id.into(), space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
         backend.spawn(req, channel, Box::new(|_| {})).unwrap();
-        backend.write("bench", b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
+        backend.write(id, b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
         let ready_by = Instant::now() + std::time::Duration::from_secs(10);
         // Raw mode turns off the tty's \n to \r\n, so the marker ends in a bare \n.
-        while !String::from_utf8_lossy(&backend.recent_output("bench").unwrap()).contains("READY\n") {
+        while !String::from_utf8_lossy(&backend.recent_output(id).unwrap()).contains("READY\n") {
             assert!(Instant::now() < ready_by, "shell never got ready");
             thread::sleep(std::time::Duration::from_millis(20));
         }
         while rx.recv_timeout(std::time::Duration::from_millis(200)).is_ok() {}
         let mut micros = Vec::new();
-        for _ in 0..2000 {
+        for _ in 0..keys {
             let start = Instant::now();
-            backend.write("bench", b"k").unwrap();
+            backend.write(id, b"k").unwrap();
             let at = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("no echo");
             micros.push(at.duration_since(start).as_secs_f64() * 1e6);
             thread::sleep(std::time::Duration::from_millis(2));
         }
+        backend.kill(id);
         micros.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let at = |q: f64| micros[((micros.len() - 1) as f64 * q) as usize];
+        micros
+    }
+
+    /// The value below which `q` of the sorted `micros` fall.
+    pub(in crate::ptyd) fn quantile(micros: &[f64], q: f64) -> f64 {
+        micros[((micros.len() - 1) as f64 * q) as usize]
+    }
+
+    /// `cargo test --release pty_echo_latency -- --ignored --nocapture`: how long one keystroke takes to come back
+    /// through the output stream (and the backend).
+    #[test]
+    #[ignore]
+    fn pty_echo_latency() {
+        let micros = echo_latency(&LocalBackend::default(), "bench", 2000);
+        let at = |q| quantile(&micros, q);
         println!("pty_echo_latency: {} keys, median {:.0} us, p95 {:.0} us, max {:.0} us", micros.len(), at(0.5), at(0.95), micros[micros.len() - 1]);
-        backend.kill("bench");
     }
 
     /// `cargo test --release read_loop_cost -- --ignored --nocapture`: the work per read without the PTY, with and
