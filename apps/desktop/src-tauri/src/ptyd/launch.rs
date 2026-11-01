@@ -51,6 +51,20 @@ pub fn register() {
     }
 }
 
+/// Removes the host's LaunchAgent, so launchd stops starting it. Nothing happens when it isn't registered.
+pub fn unregister() {
+    if !bundled() {
+        return;
+    }
+    let service = unsafe { SMAppService::agentServiceWithPlistName(&NSString::from_str(PLIST)) };
+    if unsafe { service.status() } == SMAppServiceStatus::NotRegistered {
+        return;
+    }
+    if let Err(e) = unsafe { service.unregisterAndReturnError() } {
+        crate::applog::log_line!("[ptyd] couldn't unregister the terminal host: {} ({})", e.localizedDescription(), e.code());
+    }
+}
+
 /// A connection to the host at `socket`: launchd's, which may take a moment to start, or a child this starts.
 pub fn connect(socket: &Path) -> io::Result<UnixStream> {
     if let Ok(stream) = UnixStream::connect(socket) {

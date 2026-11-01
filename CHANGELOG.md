@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.112 · 2026-11-01
+
+- **The background terminal test is off.** Wings removes the background item that `WINGS_PTYD=1` added under Login Items, Allow in the Background. After an update macOS stopped that host from starting, so terminals stay inside Wings for now.
+
 ## 0.1.111 · 2026-11-01
 
 - **No blank window when the terminal host stops.** With `WINGS_PTYD=1`, a terminal host that crashed or was stopped left the Wings window blank. Now its terminals close and Wings keeps working.

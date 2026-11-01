@@ -1641,6 +1641,9 @@ fn terminal_backend(app: &AppHandle, app_data: &std::path::Path) -> Box<dyn PtyB
             }
             Err(e) => applog::log_line!("[ptyd] panes run in Wings, the terminal host isn't usable: {e:#}"),
         }
+    } else {
+        // A test launch registered it, and launchd keeps starting it: after an update it fails on every start.
+        ptyd::launch::unregister();
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, app_data);
