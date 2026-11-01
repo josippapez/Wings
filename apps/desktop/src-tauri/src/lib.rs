@@ -1561,13 +1561,18 @@ fn history_load(app: AppHandle, id: String) -> tauri::ipc::Response {
 fn save_histories(app: &AppHandle) {
     let terminals = &app.state::<AppState>().terminals;
     for pane in terminals.list() {
-        let Some(file) = pane.history_id.as_deref().and_then(|id| history_file(app, id)) else { continue };
+        let Some(id) = pane.history_id.as_deref() else { continue };
         let Some(output) = terminals.recent_output(&pane.id) else { continue };
-        if let Some(dir) = file.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(file, output);
+        save_history(app, id, &output);
     }
+}
+
+fn save_history(app: &AppHandle, id: &str, output: &[u8]) {
+    let Some(file) = history_file(app, id) else { return };
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(file, output);
 }
 
 /// Called when the UI loads: deletes saved output no pane in the saved workspace will show.
@@ -1619,21 +1624,30 @@ fn bench_mode() -> bool {
     std::env::var_os("WINGS_BENCH").is_some()
 }
 
-/// Where panes run: in this process, or with `WINGS_PTYD=1` in the terminal host, which this starts if none runs.
-fn terminal_backend(app_data: &std::path::Path) -> Box<dyn PtyBackend> {
+/// Where panes run: in this process, or with `WINGS_PTYD=1` in the terminal host (`ptyd::launch`), where they outlive
+/// Wings.
+fn terminal_backend(app: &AppHandle, app_data: &std::path::Path) -> Box<dyn PtyBackend> {
     #[cfg(target_os = "macos")]
     if std::env::var_os("WINGS_PTYD").is_some_and(|v| v == "1") {
-        match ptyd::remote::RemoteBackend::connect_or_start(&ptyd::socket_path(app_data)) {
-            Ok(remote) => return Box::new(remote),
+        ptyd::launch::register();
+        let exited = app.clone();
+        match ptyd::remote::RemoteBackend::start(ptyd::socket_path(app_data), move |id| drop(exited.emit("pane-exited", id))) {
+            Ok(remote) => {
+                // Panes that ended while Wings was closed: the UI starts them over from their last output.
+                for (history_id, output) in remote.take_exited() {
+                    save_history(app, &history_id, &output);
+                }
+                return Box::new(remote);
+            }
             Err(e) => applog::log_line!("[ptyd] panes run in Wings, the terminal host isn't usable: {e:#}"),
         }
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = app_data;
+    let _ = (app, app_data);
     Box::new(ptyd::LocalBackend::default())
 }
 
-/// `wings ptyd --socket <path>`: the terminal host.
+/// `wings ptyd`: the terminal host.
 #[cfg(target_os = "macos")]
 pub fn ptyd(args: &[String]) -> i32 {
     ptyd::host::main(args)
@@ -1952,7 +1966,7 @@ pub fn run() {
             // The example plugins in the repo, so `pnpm tauri dev` picks up edits to them.
             let dev = cfg!(debug_assertions).then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")));
             let plugins = Mutex::new(Store::load(data.join("plugins"), data.join("plugins.json"), dev.as_deref()));
-            let terminals = terminal_backend(&data);
+            let terminals = terminal_backend(app.handle(), &data);
             app.manage(AppState {
                 ai: ai::Ai::new(data.join("ai")),
                 plugins,

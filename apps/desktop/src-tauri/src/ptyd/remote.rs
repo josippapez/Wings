@@ -7,13 +7,12 @@ use std::{
     io::{BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc, Arc, Mutex,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail};
@@ -21,8 +20,8 @@ use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use super::{
+    launch, pane_id, pane_number,
     proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, MIN_PROTO, PROTO},
-    pane_id, pane_number,
     shell::pane_env,
     OnExit, PaneMeta, PaneMirror, PtyBackend, SpawnRequest,
 };
@@ -31,8 +30,14 @@ use super::{
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RemoteBackend {
-    inner: Arc<Inner>,
+    /// The connection, replaced by a new one for the next pane when the host went away.
+    conn: Mutex<Arc<Inner>>,
+    socket: PathBuf,
+    on_adopted_exit: AdoptedExit,
 }
+
+/// Called with the id of a pane the host already ran when this connected, once it exits.
+type AdoptedExit = Arc<dyn Fn(&str) + Send + Sync>;
 
 struct Inner {
     writer: Mutex<UnixStream>,
@@ -42,6 +47,9 @@ struct Inner {
     alive: AtomicBool,
     /// This backend closed the connection itself: the panes it leaves keep running, so they don't exit for the app.
     closing: AtomicBool,
+    on_adopted_exit: AdoptedExit,
+    /// Panes that exited while no Wings was connected, until their output is taken.
+    exited: Mutex<Vec<PaneInfo>>,
     #[cfg(test)]
     lags: AtomicU32,
 }
@@ -98,22 +106,73 @@ impl Mirror {
 }
 
 impl RemoteBackend {
-    /// Connects to the host at `path`, starting one from this executable if none answers.
-    // debt: a plain child of this app, so it can't outlive Wings for long; the launcher replaces this.
-    pub fn connect_or_start(path: &Path) -> anyhow::Result<RemoteBackend> {
-        let stream = match UnixStream::connect(path) {
-            Ok(stream) => stream,
-            Err(_) => start_host(path)?,
-        };
-        RemoteBackend::over(stream)
+    /// Connects to the host at `socket` (`launch::connect`) and takes over the panes it still runs.
+    /// `on_adopted_exit` hears when one of those exits.
+    pub fn start(socket: PathBuf, on_adopted_exit: impl Fn(&str) + Send + Sync + 'static) -> anyhow::Result<RemoteBackend> {
+        let on_adopted_exit: AdoptedExit = Arc::new(on_adopted_exit);
+        let inner = connect(&socket, &on_adopted_exit)?;
+        Ok(RemoteBackend { conn: Mutex::new(inner), socket, on_adopted_exit })
     }
 
+    /// To a host that already runs at `path`.
     #[cfg(test)]
     pub fn connect(path: &Path) -> anyhow::Result<RemoteBackend> {
-        RemoteBackend::over(UnixStream::connect(path)?)
+        let on_adopted_exit: AdoptedExit = Arc::new(|_| {});
+        let inner = Inner::over(UnixStream::connect(path)?, on_adopted_exit.clone())?;
+        Ok(RemoteBackend { conn: Mutex::new(inner), socket: path.to_path_buf(), on_adopted_exit })
     }
 
-    fn over(stream: UnixStream) -> anyhow::Result<RemoteBackend> {
+    fn inner(&self) -> Arc<Inner> {
+        self.conn.lock().unwrap().clone()
+    }
+
+    /// The connection, a new one if the host went away: its panes ended with it, and launchd starts it again.
+    fn live(&self) -> anyhow::Result<Arc<Inner>> {
+        let mut conn = self.conn.lock().unwrap();
+        if !conn.alive.load(Ordering::Relaxed) {
+            *conn = connect(&self.socket, &self.on_adopted_exit)?;
+        }
+        Ok(conn.clone())
+    }
+
+    /// Sends a request and waits for its reply and the bytes that came with it.
+    fn call(&self, req: Request) -> anyhow::Result<(Value, Vec<u8>)> {
+        let (tx, rx) = mpsc::channel();
+        self.inner().send(req, Vec::new(), Box::new(move |_, result, blob| drop(tx.send(result.map(|v| (v, blob))))))?;
+        rx.recv_timeout(TIMEOUT).map_err(|_| anyhow!("the terminal host didn't answer"))?.map_err(anyhow::Error::msg)
+    }
+
+    /// The last output of each pane that ended while no Wings was connected, by its history id, for the UI to start
+    /// it over from. The host forgets them.
+    pub fn take_exited(&self) -> Vec<(String, Vec<u8>)> {
+        let inner = self.inner();
+        let exited = std::mem::take(&mut *inner.exited.lock().unwrap());
+        exited
+            .into_iter()
+            .filter_map(|info| {
+                let output = self.call(Request::Read { pane: info.pane }).ok().map(|(_, blob)| blob);
+                inner.tell(Request::Kill { pane: info.pane });
+                Some((info.history_id?, output?))
+            })
+            .collect()
+    }
+}
+
+impl Drop for RemoteBackend {
+    fn drop(&mut self) {
+        let inner = self.inner();
+        inner.closing.store(true, Ordering::Relaxed);
+        let _ = inner.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
+    }
+}
+
+fn connect(socket: &Path, on_adopted_exit: &AdoptedExit) -> anyhow::Result<Arc<Inner>> {
+    // A host that leaves after an update closes a connection that came as it left; launchd starts the new one.
+    Inner::over(launch::connect(socket)?, on_adopted_exit.clone()).or_else(|_| Inner::over(launch::connect(socket)?, on_adopted_exit.clone()))
+}
+
+impl Inner {
+    fn over(stream: UnixStream, on_adopted_exit: AdoptedExit) -> anyhow::Result<Arc<Inner>> {
         stream.set_read_timeout(Some(TIMEOUT))?;
         (&stream).write_all(&proto::ctrl(&Call { id: 0, req: Request::Hello { proto: PROTO, min_proto: MIN_PROTO } })?)?;
         let mut reader = BufReader::with_capacity(64 << 10, stream.try_clone()?);
@@ -133,6 +192,8 @@ impl RemoteBackend {
             mirror: Mutex::default(),
             alive: AtomicBool::new(true),
             closing: AtomicBool::new(false),
+            on_adopted_exit,
+            exited: Mutex::default(),
             #[cfg(test)]
             lags: AtomicU32::new(0),
         });
@@ -153,55 +214,13 @@ impl RemoteBackend {
             }),
         )?;
         rx.recv_timeout(TIMEOUT).map_err(|_| anyhow!("the terminal host didn't list its panes"))?.map_err(anyhow::Error::msg)?;
-        Ok(RemoteBackend { inner })
+        Ok(inner)
     }
 
     fn number(&self, id: &str) -> anyhow::Result<u32> {
-        self.inner.mirror.lock().unwrap().live(id).map(|p| p.number).ok_or_else(|| anyhow!("unknown pane {id}"))
+        self.mirror.lock().unwrap().live(id).map(|p| p.number).ok_or_else(|| anyhow!("unknown pane {id}"))
     }
 
-    /// Sends a request and waits for its reply and the bytes that came with it.
-    fn call(&self, req: Request) -> anyhow::Result<(Value, Vec<u8>)> {
-        let (tx, rx) = mpsc::channel();
-        self.inner.send(req, Vec::new(), Box::new(move |_, result, blob| drop(tx.send(result.map(|v| (v, blob))))))?;
-        rx.recv_timeout(TIMEOUT).map_err(|_| anyhow!("the terminal host didn't answer"))?.map_err(anyhow::Error::msg)
-    }
-}
-
-impl Drop for RemoteBackend {
-    fn drop(&mut self) {
-        self.inner.closing.store(true, Ordering::Relaxed);
-        let _ = self.inner.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
-    }
-}
-
-/// Starts `wings ptyd` from this executable and waits for it to answer at `path`.
-fn start_host(path: &Path) -> anyhow::Result<UnixStream> {
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg("ptyd")
-        .arg("--socket")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .spawn()?;
-    let until = Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Ok(stream) = UnixStream::connect(path) {
-            // Reaped when it exits, since nothing else waits for it.
-            thread::spawn(move || child.wait());
-            return Ok(stream);
-        }
-        if let Some(status) = child.try_wait()? {
-            bail!("the terminal host exited: {status}");
-        }
-        if Instant::now() > until {
-            bail!("the terminal host didn't start");
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-impl Inner {
     /// Writes a request, after the bytes it carries, and registers what to do with the reply.
     fn send(&self, req: Request, blob: Vec<u8>, done: Done) -> anyhow::Result<()> {
         let id = self.next_req.fetch_add(1, Ordering::Relaxed);
@@ -317,14 +336,15 @@ impl Inner {
         }
     }
 
-    /// Panes the host already runs, from an earlier connection. Exited ones are forgotten; nothing shows them yet.
+    /// Panes the host already runs, from an earlier connection. Exited ones wait for `take_exited`.
     fn adopt(&self, panes: &[PaneInfo]) {
         let mut mirror = self.mirror.lock().unwrap();
         for info in panes {
             if info.exited {
-                self.tell(Request::Kill { pane: info.pane });
+                self.exited.lock().unwrap().push(info.clone());
                 continue;
             }
+            let on_exit = self.on_adopted_exit.clone();
             mirror.insert(Pane {
                 number: info.pane,
                 meta: Arc::new(PaneMeta {
@@ -339,7 +359,7 @@ impl Inner {
                 seq: info.seq,
                 sink: None,
                 syncing: false,
-                on_exit: None,
+                on_exit: Some(Box::new(move |id| on_exit(id))),
                 killed: false,
             });
         }
@@ -373,7 +393,7 @@ impl PtyBackend for RemoteBackend {
         let spawn = Spawn { space_id: req.space_id.clone(), cwd: cwd.clone(), cols: req.cols, rows: req.rows, history_id: req.history_id.clone(), env };
         let (tx, rx) = mpsc::channel();
         let (space_id, history_id) = (req.space_id, req.history_id);
-        self.inner.send(
+        self.live()?.send(
             Request::Spawn(spawn),
             req.history,
             // In the mirror before the reader thread reads the pane's first output.
@@ -400,15 +420,16 @@ impl PtyBackend for RemoteBackend {
     }
 
     fn attach(&self, id: &str, output: Channel<InvokeResponseBody>) -> anyhow::Result<()> {
+        let inner = self.inner();
         let number = {
-            let mut mirror = self.inner.mirror.lock().unwrap();
+            let mut mirror = inner.mirror.lock().unwrap();
             let pane = mirror.live_mut(id).ok_or_else(|| anyhow!("unknown pane {id}"))?;
             pane.sink = Some(output);
             pane.syncing = true;
             pane.number
         };
         let (tx, rx) = mpsc::channel();
-        self.inner.send(
+        inner.send(
             Request::Attach { pane: number, from_seq: None },
             Vec::new(),
             Box::new(move |inner, result, _| {
@@ -423,8 +444,9 @@ impl PtyBackend for RemoteBackend {
     }
 
     fn write(&self, id: &str, data: &[u8]) -> anyhow::Result<()> {
-        let number = self.number(id)?;
-        let mut writer = self.inner.writer.lock().unwrap();
+        let inner = self.inner();
+        let number = inner.number(id)?;
+        let mut writer = inner.writer.lock().unwrap();
         for chunk in data.chunks(CHUNK) {
             writer.write_all(&proto::input(number, chunk))?;
         }
@@ -432,39 +454,40 @@ impl PtyBackend for RemoteBackend {
     }
 
     fn resize(&self, id: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.call(Request::Resize { pane: self.number(id)?, cols, rows }).map(drop)
+        self.call(Request::Resize { pane: self.inner().number(id)?, cols, rows }).map(drop)
     }
 
     fn kill(&self, id: &str) {
+        let inner = self.inner();
         let number = {
-            let mut mirror = self.inner.mirror.lock().unwrap();
+            let mut mirror = inner.mirror.lock().unwrap();
             let Some(pane) = mirror.live_mut(id) else { return };
             pane.killed = true;
             pane.number
         };
-        self.inner.tell(Request::Kill { pane: number });
+        inner.tell(Request::Kill { pane: number });
     }
 
     fn meta(&self, id: &str) -> Option<Arc<PaneMeta>> {
-        self.inner.mirror.lock().unwrap().live(id).map(|p| p.meta.clone())
+        self.inner().mirror.lock().unwrap().live(id).map(|p| p.meta.clone())
     }
 
     fn list(&self) -> Vec<Arc<PaneMeta>> {
-        self.inner.mirror.lock().unwrap().panes.values().filter(|p| !p.killed).map(|p| p.meta.clone()).collect()
+        self.inner().mirror.lock().unwrap().panes.values().filter(|p| !p.killed).map(|p| p.meta.clone()).collect()
     }
 
     fn each_mirror(&self, visit: &mut dyn FnMut(PaneMirror<'_>)) {
-        for pane in self.inner.mirror.lock().unwrap().panes.values().filter(|p| !p.killed) {
+        for pane in self.inner().mirror.lock().unwrap().panes.values().filter(|p| !p.killed) {
             visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.fg, title: &pane.title });
         }
     }
 
     fn foreground_pid(&self, id: &str) -> Option<u32> {
-        self.inner.mirror.lock().unwrap().live(id)?.fg
+        self.inner().mirror.lock().unwrap().live(id)?.fg
     }
 
     fn recent_output(&self, id: &str) -> Option<Vec<u8>> {
-        self.call(Request::Read { pane: self.number(id).ok()? }).ok().map(|(_, blob)| blob)
+        self.call(Request::Read { pane: self.inner().number(id).ok()? }).ok().map(|(_, blob)| blob)
     }
 }
 
@@ -472,6 +495,7 @@ impl PtyBackend for RemoteBackend {
 mod tests {
     use super::*;
     use crate::ptyd::host::{test_host, Config};
+    use std::time::Instant;
 
     type Got = Arc<Mutex<Vec<u8>>>;
 
@@ -584,12 +608,50 @@ mod tests {
         backend.spawn(request("p1", &dir, Vec::new()), output, Box::new(|_| {})).unwrap();
         backend.write("p1", b"seq 1 100000; echo do''ne\r").unwrap();
         wait_for(&got, "done");
-        assert!(backend.inner.lags.load(Ordering::Relaxed) > 0, "never lagged");
+        assert!(backend.inner().lags.load(Ordering::Relaxed) > 0, "never lagged");
         // A shell's integration marker (OSC 133;C) can come right before the first number.
         let numbers: Vec<u32> = text(&got).split("\r\n").filter_map(|line| line.rsplit('\x07').next()?.parse().ok()).collect();
         assert_eq!(numbers.len(), 100_000);
         assert!(numbers.iter().zip(1..).all(|(&n, i)| n == i), "out of order, lost or repeated");
         backend.kill("p1");
+    }
+
+    #[test]
+    fn restart_reattaches_by_pane_id() {
+        let (path, _host) = test_host(Config::default());
+        let first = RemoteBackend::connect(&path).unwrap();
+        let (output, got) = recorder();
+        let dir = std::env::temp_dir();
+        let kept = first.spawn(request("kept", &dir, Vec::new()), output, Box::new(|_| {})).unwrap().id.clone();
+        first.write(&kept, b"echo be''fore\r").unwrap();
+        wait_for(&got, "before");
+        let (output, got) = recorder();
+        let ends = first.spawn(request("ends", &dir, Vec::new()), output, Box::new(|_| {})).unwrap().id.clone();
+        first.write(&ends, b"echo re''ady; sleep 0.3; echo by''e; exit\r").unwrap();
+        wait_for(&got, "ready");
+        // Wings quits.
+        drop(first);
+        thread::sleep(Duration::from_secs(1));
+        let (exited, exit_rx) = mpsc::channel();
+        let second = RemoteBackend::start(path.clone(), move |id| exited.send(id.to_string()).unwrap()).unwrap();
+        assert_eq!(second.list().iter().map(|m| m.id.clone()).collect::<Vec<_>>(), [kept.clone()], "by the id the UI saved");
+        let taken = second.take_exited();
+        assert!(taken.len() == 1 && taken[0].0 == "h-ends" && String::from_utf8_lossy(&taken[0].1).contains("bye"), "the one that ended while Wings was closed");
+        let (again, got_again) = recorder();
+        second.attach(&kept, again).unwrap();
+        wait_for(&got_again, "before");
+        second.write(&kept, b"echo af''ter; exit\r").unwrap();
+        wait_for(&got_again, "after");
+        assert_eq!(exit_rx.recv_timeout(Duration::from_secs(10)).unwrap(), kept, "a pane from before reports its exit too");
+        let forgotten = || {
+            let fresh = RemoteBackend::connect(&path).unwrap();
+            fresh.list().is_empty() && fresh.inner().exited.lock().unwrap().is_empty()
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !forgotten() {
+            assert!(Instant::now() < deadline, "the host kept a pane after Wings took it");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -601,6 +663,7 @@ mod bench {
         local::bench::{echo_latency, quantile, throughput},
         LocalBackend,
     };
+    use std::{process::Command, time::Instant};
 
     /// The host being measured. Dropping it stops a host process and removes its folder.
     enum Measured {

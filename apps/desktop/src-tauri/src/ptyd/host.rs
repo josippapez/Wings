@@ -1,4 +1,4 @@
-//! `wings ptyd --socket <path>`: the process that owns the terminals, so they can keep running while Wings restarts.
+//! `wings ptyd`: the process that owns the terminals, so they can keep running while Wings restarts.
 //! It reads every pane's output into its ring whether or not anyone is connected (a macOS PTY stops its writer after
 //! about 1 KB nobody reads), and serves any number of this user's Wings processes over a Unix socket.
 //!
@@ -22,7 +22,7 @@ use std::{
         Arc, Condvar, Mutex,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use portable_pty::{native_pty_system, Child, MasterPty, PtySize};
@@ -37,18 +37,18 @@ use super::{
 };
 
 pub struct Config {
-    /// How long the host stays with no panes and no client before it exits.
-    pub idle_exit: Duration,
     /// Output queued for one client before it is told it lagged.
     pub client_queue: usize,
     /// The only user who may connect.
     pub uid: u32,
+    /// The executable the host runs from. Once a new one is put at this path, as an update does, the host exits as
+    /// soon as it has no pane, and launchd starts the new one.
+    pub exe: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        // Long enough to stay up across a quick quit and reopen of Wings.
-        Config { idle_exit: Duration::from_secs(10 * 60), client_queue: 8 << 20, uid: unsafe { libc::getuid() } }
+        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None }
     }
 }
 
@@ -56,18 +56,24 @@ impl Default for Config {
 /// app's agent detection, which reads it.
 const FG_POLL: Duration = Duration::from_millis(250);
 
+/// How often the host checks whether its executable was replaced.
+const TICK: Duration = Duration::from_secs(1);
+
 /// Saved output a client may send ahead of a spawn: a ring's worth, and its end.
 const MAX_STAGED: usize = 2 * REPLAY_BYTES;
 
-/// `wings ptyd --socket <path>`.
+/// `wings ptyd [--socket <path>]`, on this user's terminal host socket unless told another.
 pub fn main(args: &[String]) -> i32 {
-    let Some(path) = args.windows(2).find(|w| w[0] == "--socket").map(|w| PathBuf::from(&w[1])) else {
-        eprintln!("usage: wings ptyd --socket <path>");
-        return 2;
+    let path = match args.windows(2).find(|w| w[0] == "--socket") {
+        Some(w) => PathBuf::from(&w[1]),
+        None => match dirs::data_dir() {
+            Some(data) => super::socket_path(&data.join(crate::cli::IDENTIFIER)),
+            None => return 2,
+        },
     };
     match bind(&path) {
         Ok(listener) => {
-            serve(listener, &path, Config::default());
+            serve(listener, &path, Config { exe: std::env::current_exe().ok(), ..Config::default() });
             0
         }
         Err(e) => {
@@ -95,20 +101,21 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Serves clients until the host has had no pane and no client for `config.idle_exit`, then removes the socket.
+/// Serves clients until its executable was replaced and it has no pane, then removes the socket.
 pub fn serve(listener: UnixListener, path: &Path, config: Config) {
-    let tick = (config.idle_exit / 4).clamp(Duration::from_millis(10), Duration::from_secs(1));
-    let idle_exit = config.idle_exit;
+    // The file it started from: an update swaps the whole bundle, so the path then names another file.
+    let started = config.exe.as_ref().and_then(|exe| fs::metadata(exe).ok()).map(|m| (m.dev(), m.ino()));
+    let replaced = |exe: &Path| started.is_some_and(|ino| fs::metadata(exe).is_ok_and(|m| (m.dev(), m.ino()) != ino));
     let host = Arc::new(Host::new(config));
     let poller = host.clone();
     thread::Builder::new().name("ptyd-fg".into()).spawn(move || poller.poll_foreground()).expect("thread");
     loop {
-        if readable(&listener, tick) {
+        if readable(&listener, TICK) {
             if let Ok((stream, _)) = listener.accept() {
                 host.accept(stream);
             }
         }
-        if host.idle_since.lock().unwrap().is_some_and(|since| since.elapsed() >= idle_exit) {
+        if host.panes.lock().unwrap().is_empty() && host.config.exe.as_deref().is_some_and(replaced) {
             break;
         }
     }
@@ -117,7 +124,7 @@ pub fn serve(listener: UnixListener, path: &Path, config: Config) {
     host.clients_changed.notify_all();
 }
 
-/// Waits up to `timeout` for a connection, so the accept loop can also notice it has been idle long enough.
+/// Waits up to `timeout` for a connection, so the accept loop also checks its executable while nobody connects.
 fn readable(listener: &UnixListener, timeout: Duration) -> bool {
     let mut fd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
     unsafe { libc::poll(&mut fd, 1, timeout.as_millis() as libc::c_int) > 0 }
@@ -140,8 +147,6 @@ struct Host {
     /// Wakes the foreground poller when the first client connects.
     clients_changed: Condvar,
     next_client: AtomicU64,
-    /// Since when the host has had no pane and no client.
-    idle_since: Mutex<Option<Instant>>,
     stopped: AtomicBool,
 }
 
@@ -182,19 +187,7 @@ impl Host {
             clients: Mutex::default(),
             clients_changed: Condvar::new(),
             next_client: AtomicU64::new(1),
-            idle_since: Mutex::new(Some(Instant::now())),
             stopped: AtomicBool::new(false),
-        }
-    }
-
-    /// Starts or stops the idle clock after a pane or client came or went.
-    fn touch(&self) {
-        let idle = self.panes.lock().unwrap().is_empty() && self.clients.lock().unwrap().is_empty();
-        let mut since = self.idle_since.lock().unwrap();
-        if !idle {
-            *since = None;
-        } else if since.is_none() {
-            *since = Some(Instant::now());
         }
     }
 
@@ -214,7 +207,6 @@ impl Host {
         }
     }
 
-    /// Registered before its thread starts, so the accept loop can't take the host for idle while it says hello.
     fn accept(self: &Arc<Self>, stream: UnixStream) {
         // Another user gets the connection closed before a byte is read.
         if peer_uid(&stream).ok() != Some(self.config.uid) {
@@ -223,7 +215,6 @@ impl Host {
         let id = self.next_client.fetch_add(1, Ordering::Relaxed);
         let client = Arc::new(Client::new(id, self.config.client_queue));
         self.clients.lock().unwrap().insert(id, client.clone());
-        self.touch();
         self.clients_changed.notify_all();
         let host = self.clone();
         let spawned = thread::Builder::new().name("ptyd-client".into()).spawn(move || {
@@ -233,7 +224,6 @@ impl Host {
         });
         if spawned.is_err() {
             self.clients.lock().unwrap().remove(&id);
-            self.touch();
         }
     }
 
@@ -242,7 +232,6 @@ impl Host {
         for pane in self.all_panes() {
             pane.out.lock().unwrap().attached.retain(|c| !Arc::ptr_eq(c, client));
         }
-        self.touch();
     }
 
     fn serve_client(self: &Arc<Self>, client: &Arc<Client>, stream: UnixStream) {
@@ -390,7 +379,6 @@ impl Host {
             reply(client, id, Ok(serde_json::to_value(spawned).expect("serializes")));
         }
         self.panes.lock().unwrap().insert(pane.id, pane.clone());
-        self.touch();
         let host = self.clone();
         thread::Builder::new().name(format!("ptyd-pane-{}", pane.id)).spawn(move || host.read_loop(&pane, reader))?;
         Ok(())
@@ -435,7 +423,6 @@ impl Host {
         };
         if forget {
             self.panes.lock().unwrap().remove(&pane.id);
-            self.touch();
         }
     }
 
@@ -449,7 +436,6 @@ impl Host {
         };
         if exited {
             self.panes.lock().unwrap().remove(&id);
-            self.touch();
         } else {
             // portable_pty gives a SIGHUP 200 ms before it sends SIGKILL; this client's next keystroke shouldn't wait.
             thread::spawn(move || {
@@ -703,6 +689,7 @@ pub(super) fn test_host(config: Config) -> (PathBuf, TestHost) {
 mod tests {
     use super::*;
     use crate::ptyd::shell::pane_env;
+    use std::time::Instant;
 
     fn config() -> Config {
         Config::default()
@@ -1017,21 +1004,27 @@ mod tests {
     }
 
     #[test]
-    fn exits_after_a_while_with_no_pane_and_no_client() {
-        let (path, host) = test_host(Config { idle_exit: Duration::from_millis(300), ..config() });
+    fn exits_once_its_executable_was_replaced_and_it_has_no_pane() {
+        let exe = std::env::temp_dir().join(format!("wptyd-exe-{}", std::process::id()));
+        fs::write(&exe, "old").unwrap();
+        let (path, host) = test_host(Config { exe: Some(exe.clone()), ..config() });
         let mut client = TestClient::connect(&path);
+        thread::sleep(TICK + Duration::from_millis(300));
+        assert!(!host.serving.is_finished(), "exited with no pane, but not replaced");
         let pane = client.spawn("p1");
-        thread::sleep(Duration::from_millis(900));
-        assert!(!host.serving.is_finished(), "exited with a client and a pane");
+        // As an update does: a new file at the same path.
+        let new = exe.with_extension("new");
+        fs::write(&new, "new").unwrap();
+        fs::rename(&new, &exe).unwrap();
+        thread::sleep(TICK + Duration::from_millis(300));
+        assert!(!host.serving.is_finished(), "exited while it still had a pane");
         client.call(Request::Kill { pane });
-        thread::sleep(Duration::from_millis(900));
-        assert!(!host.serving.is_finished(), "exited with a client connected");
-        drop(client);
         let deadline = Instant::now() + Duration::from_secs(5);
         while !host.serving.is_finished() {
-            assert!(Instant::now() < deadline, "still running with nothing to do");
+            assert!(Instant::now() < deadline, "still running from a replaced executable with no pane");
             thread::sleep(Duration::from_millis(20));
         }
         assert!(!path.exists(), "left its socket behind");
+        let _ = fs::remove_file(exe);
     }
 }

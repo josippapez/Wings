@@ -1,9 +1,11 @@
 //! Where a pane's shell runs. The app talks to its terminals through `PtyBackend`; `LocalBackend` keeps them inside
 //! this process, as Wings always has. With `WINGS_PTYD=1`, `RemoteBackend` keeps them in a terminal host process,
-//! `wings ptyd` (`host.rs`), that the app talks to over a socket (`proto.rs`).
+//! `wings ptyd` (`host.rs`, run as `launch.rs` says), that the app talks to over a socket (`proto.rs`).
 
 #[cfg(target_os = "macos")]
 pub mod host;
+#[cfg(target_os = "macos")]
+pub mod launch;
 pub mod local;
 pub mod output;
 pub mod proto;

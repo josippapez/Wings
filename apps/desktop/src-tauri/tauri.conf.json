@@ -47,7 +47,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "files": {
+        "Library/LaunchAgents/dev.wings.ptyd.plist": "LaunchAgents/dev.wings.ptyd.plist"
+      }
+    }
   },
   "plugins": {
     "updater": {

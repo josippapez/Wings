@@ -11,7 +11,7 @@ use std::{
 use serde_json::{json, Value};
 
 /// `identifier` in tauri.conf.json. Tauri names the app's data folder after it.
-const IDENTIFIER: &str = "dev.wings.app";
+pub(crate) const IDENTIFIER: &str = "dev.wings.app";
 
 const USAGE: &str = "Usage: wings plugin <command>
 
