@@ -31,8 +31,8 @@ export type WorktreeLocal = { include: string | null; setup: string | null; defa
 
 export type AgentState = "working" | "blocked" | "done" | "idle";
 
-/** Which agent CLI runs in the pane. */
-export type AgentKind = "claude" | "opencode";
+/** Which agent CLI runs in the pane. The ids are `harnesses.rs`'s. Only the first two have sessions Wings can resume. */
+export type AgentKind = SessionKind | "codex" | "cursor" | "grok";
 
 export type Agent = {
   paneId: string;

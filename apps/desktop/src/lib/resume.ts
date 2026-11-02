@@ -21,6 +21,8 @@ const CLIS: Record<SessionKind, { sessionId: RegExp; resume: (id: string, flags:
   opencode: { sessionId: /^ses_[A-Za-z0-9]{8,}$/, resume: (id) => ["opencode", "--session", id] },
 };
 
+export const isSessionKind = (kind: string): kind is SessionKind => Object.hasOwn(CLIS, kind);
+
 export const isSessionIdOf = (kind: SessionKind, id: string) => CLIS[kind].sessionId.test(id);
 
 /** The line that continues a session in its pane's shell, with the flags it was started with where the CLI takes them. */
@@ -34,7 +36,7 @@ export function resumeLine(kind: SessionKind, sessionId: string, args: readonly 
 export const resumeCommand = (sessionId: string, args: readonly string[] = []) => resumeLine("claude", sessionId, args);
 
 /** Whether the agent can copy a session into a new one. */
-export const canFork = (kind: SessionKind) => !!CLIS[kind].fork;
+export const canFork = (kind: string) => isSessionKind(kind) && !!CLIS[kind].fork;
 /** The line that starts a copy of a session, or null when the agent can't fork. */
 export const forkLine = (kind: SessionKind, sessionId: string) => CLIS[kind].fork?.(sessionId).map(shellQuote).join(" ").concat("\r") ?? null;
 

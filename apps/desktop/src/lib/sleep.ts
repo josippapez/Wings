@@ -1,5 +1,5 @@
 import type { Agent } from "./api.ts";
-import { isSessionIdOf } from "./resume.ts";
+import { isSessionIdOf, isSessionKind } from "./resume.ts";
 
 /** Sleeping ends an idle agent that nobody looks at, so its memory comes back: about 400 MB for an idle Claude Code (measured). */
 export type SleepSettings = { enabled: boolean; minutes: number };
@@ -28,7 +28,7 @@ export type SleepCheck = {
 export function canSleep({ agent, visible, draft, busy, background }: SleepCheck) {
   if (!agent || visible || draft || busy || background) return false;
   // `direct`: the pane's shell goes back to its prompt when the agent exits, so nothing else runs in its place.
-  return agent.state === "idle" && agent.direct && !!agent.sessionId && isSessionIdOf(agent.kind, agent.sessionId);
+  return agent.state === "idle" && agent.direct && !!agent.sessionId && isSessionKind(agent.kind) && isSessionIdOf(agent.kind, agent.sessionId);
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { Agent } from "./api.ts";
+import type { Agent, AgentKind } from "./api.ts";
 
 /**
  * The agent the "next agent that needs you" shortcut goes to: blocked ones first, then finished ones you
@@ -23,7 +23,7 @@ export function elapsed(ms: number): string {
 }
 
 /** What a pane's icon shows: the agent's own mark while it is idle, its live state dot otherwise (the same for every agent kind). */
-export function paneGlyph(agent: Agent | undefined): "shell" | "claude" | "opencode" | "state" {
+export function paneGlyph(agent: Agent | undefined): AgentKind | "shell" | "state" {
   if (!agent) return "shell";
   return agent.state === "idle" ? agent.kind : "state";
 }

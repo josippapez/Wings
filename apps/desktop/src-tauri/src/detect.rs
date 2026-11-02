@@ -27,12 +27,16 @@ pub enum AgentState {
     Idle,
 }
 
-/// Which agent CLI a pane runs.
+/// Which agent CLI a pane runs. Serialized as the ids `harnesses.rs` uses. Only Claude and opencode report a state;
+/// the others are recognised by name and read as idle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentKind {
     Claude,
     Opencode,
+    Codex,
+    Cursor,
+    Grok,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -161,7 +165,7 @@ impl Detector {
             .iter()
             .map(|(_, agent)| match agent.and_then(|(pid, kind)| processes.get(&pid).map(|p| (p, kind))) {
                 Some((p, AgentKind::Claude)) => (launch_args(p.cmd()), p.start_time() * 1000),
-                Some((p, AgentKind::Opencode)) => (Vec::new(), p.start_time() * 1000),
+                Some((p, _)) => (Vec::new(), p.start_time() * 1000),
                 None => Default::default(),
             })
             .collect();
@@ -238,6 +242,11 @@ impl Detector {
                         .unwrap_or_default();
                     (file, state)
                 }
+                AgentKind::Codex | AgentKind::Cursor | AgentKind::Grok => {
+                    self.last.remove(&pane.pane_id);
+                    self.unseen_done.remove(&pane.pane_id);
+                    (SessionFile::default(), AgentState::Idle)
+                }
             };
             // Claude Code's session title is in the terminal title. A name Claude Code made from the folder
             // (`wings-ff`) comes after it, and with neither a generated name replaces it.
@@ -247,7 +256,7 @@ impl Detector {
             let name = match kind {
                 AgentKind::Claude if derived => titled.or(file.name),
                 AgentKind::Claude => file.name.or(titled),
-                AgentKind::Opencode => file.name,
+                _ => file.name,
             };
             agents.push(Agent {
                 pane_id: pane.pane_id.clone(),
@@ -372,16 +381,38 @@ fn name_of(processes: &HashMap<Pid, Process>, pid: Pid) -> String {
 }
 
 /// What a process is, from its name and argv. opencode's Homebrew build is a native binary named `opencode`.
+/// Codex from npm runs as `node …/@openai/codex/bin/codex.js` and its standalone build as `codex`; Grok Build is a
+/// native `grok`. The Cursor CLI's launcher `exec -a`s node, so it is `node` with the name it was started as
+/// (`agent` or `cursor-agent`) in argv0 and `…/cursor-agent/versions/<version>/index.js` in argv: `agent` alone
+/// is a generic name, and Grok Build installs one too, so Cursor needs that path.
 fn is_agent(name: &OsStr, cmd: &[OsString]) -> Option<AgentKind> {
     let argv0 = cmd.first().map(|a| Path::new(a).file_name().unwrap_or(a));
-    let claude = name == "claude"
-        || argv0 == Some(OsStr::new("claude"))
-        // npm installs run as `node …/@anthropic-ai/claude-code/cli.js`
-        || cmd.iter().any(|a| a.to_string_lossy().contains("@anthropic-ai/claude-code"));
-    if claude {
-        return Some(AgentKind::Claude);
+    let named = |n: &str| name == n || argv0 == Some(OsStr::new(n));
+    let mut npm = None;
+    let mut cursor = false;
+    for a in cmd {
+        let a = a.to_string_lossy();
+        if a.contains("@anthropic-ai/claude-code") {
+            npm = Some(AgentKind::Claude);
+        } else if a.contains("@openai/codex") {
+            npm = npm.or(Some(AgentKind::Codex));
+        } else if a.contains("/cursor-agent/versions/") && a.ends_with("/index.js") {
+            cursor = true;
+        }
     }
-    (name == "opencode" || argv0 == Some(OsStr::new("opencode"))).then_some(AgentKind::Opencode)
+    if named("claude") || npm == Some(AgentKind::Claude) {
+        Some(AgentKind::Claude)
+    } else if named("opencode") {
+        Some(AgentKind::Opencode)
+    } else if named("codex") || npm == Some(AgentKind::Codex) {
+        Some(AgentKind::Codex)
+    } else if named("cursor-agent") || cursor {
+        Some(AgentKind::Cursor)
+    } else if named("grok") {
+        Some(AgentKind::Grok)
+    } else {
+        None
+    }
 }
 
 fn read_session_file(dir: &Path, pid: u32) -> Option<SessionFile> {
@@ -455,6 +486,68 @@ mod tests {
         assert_eq!(after_exec, "sleep", "the process execs into sleep");
         assert_eq!(stale, "sh", "sysinfo keeps the argv it read before the exec");
         assert_eq!(after, "sleep");
+    }
+
+    #[test]
+    fn recognises_codex_cursor_and_grok_but_not_a_generic_agent() {
+        let argv = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(is_agent(OsStr::new("codex"), &argv(&["codex", "resume"])), Some(AgentKind::Codex));
+        assert_eq!(is_agent(OsStr::new("node"), &argv(&["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"])), Some(AgentKind::Codex));
+        assert_eq!(is_agent(OsStr::new("grok"), &argv(&["/home/me/.grok/bin/grok"])), Some(AgentKind::Grok));
+        assert_eq!(is_agent(OsStr::new("grok-darwin-arm64"), &argv(&["grok"])), Some(AgentKind::Grok));
+        // The Cursor launcher: `exec -a "$0" node --use-system-ca …/cursor-agent/versions/<v>/index.js`.
+        let cursor = argv(&["/home/me/.local/bin/agent", "--use-system-ca", "/home/me/.local/share/cursor-agent/versions/2026.10.22-27dcf5f/index.js"]);
+        assert_eq!(is_agent(OsStr::new("node"), &cursor), Some(AgentKind::Cursor));
+        assert_eq!(is_agent(OsStr::new("node"), &argv(&["cursor-agent"])), Some(AgentKind::Cursor));
+        // A program that is only called `agent`, or only reads Cursor's files, is not Cursor.
+        assert_eq!(is_agent(OsStr::new("agent"), &argv(&["agent", "--serve"])), None);
+        assert_eq!(is_agent(OsStr::new("node"), &argv(&["/usr/local/bin/agent", "server.js"])), None);
+        assert_eq!(is_agent(OsStr::new("vim"), &argv(&["vim", "/home/me/.local/share/cursor-agent/versions/1/index.js.map"])), None);
+    }
+
+    /// Real processes under a shell, as the detector sees them: only the ones that are an agent are reported, with
+    /// no state of their own.
+    #[cfg(unix)]
+    #[test]
+    fn detects_codex_grok_and_cursor_processes_and_leaves_a_plain_agent() {
+        let tmp = std::env::temp_dir().join(format!("wings-agents-{}", std::process::id()));
+        let cases: [(&str, &str, Option<AgentKind>); 4] = [
+            ("codex", "codex/codex", Some(AgentKind::Codex)),
+            ("grok", "grok/grok", Some(AgentKind::Grok)),
+            ("plain", "plain/agent", None),
+            ("cursor", "", Some(AgentKind::Cursor)),
+        ];
+        let mut shells = Vec::new();
+        let mut probes = Vec::new();
+        for (id, program, _) in &cases {
+            let line = if *id == "cursor" {
+                let home = tmp.join("cursor-home");
+                format!("(exec -a '{0}/.local/bin/agent' /bin/sh -c 'sleep 30; true' x {0}/.local/share/cursor-agent/versions/1/index.js); true", home.display())
+            } else {
+                let fake = tmp.join(program);
+                fs::create_dir_all(fake.parent().unwrap()).unwrap();
+                std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+                format!("'{}' 30; true", fake.display())
+            };
+            let shell = Command::new("/bin/sh").arg("-c").arg(line).spawn().unwrap();
+            probes.push(PaneProbe { pane_id: id.to_string(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new() });
+            shells.push(shell);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+
+        let mut d = Detector::new(&tmp);
+        let agents = d.scan(&probes, None).agents;
+        let kind_of = |id: &str| agents.iter().find(|a| a.pane_id == id).map(|a| (a.kind, a.state, a.session_id.clone()));
+        for (id, _, want) in &cases {
+            assert_eq!(kind_of(id), want.map(|k| (k, AgentState::Idle, None)), "pane {id}");
+        }
+
+        for mut shell in shells {
+            let _ = shell.kill();
+            let _ = shell.wait();
+        }
+        let _ = Command::new("pkill").arg("-f").arg(tmp.to_str().unwrap()).status();
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { TerminalIcon } from "lucide-react";
 
+import { CodexIcon, CursorIcon, GrokIcon } from "@/components/agent-icons";
 import { ClaudeIcon } from "@/components/claude-icon";
 import { OpencodeIcon } from "@/components/opencode-icon";
 import { StatusDot } from "@/components/status-dot";
@@ -14,9 +15,11 @@ export function tildify(path: string) {
 /** `running` is the program a pane without an agent runs instead of sitting at its shell prompt, like `node`. */
 export type PaneLabelInfo = { title: string; detail: string; agent: Agent | undefined; running?: string };
 
-/** The name shown for an agent that has none of its own. */
+/** The name shown for an agent that has none of its own; the same names Settings > Agents uses. */
+const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude", opencode: "opencode", codex: "Codex", cursor: "Cursor CLI", grok: "Grok Build" };
+
 export function agentLabel(kind: AgentKind) {
-  return kind === "opencode" ? "opencode" : "Claude";
+  return AGENT_LABEL[kind];
 }
 
 export function paneLabel(agent: Agent | undefined, info: PaneInfo | undefined, space: Space | undefined): PaneLabelInfo {
@@ -26,7 +29,7 @@ export function paneLabel(agent: Agent | undefined, info: PaneInfo | undefined, 
   return { title: info?.command || "shell", detail: cwd ? tildify(cwd) : "", agent, running };
 }
 
-/** An idle agent shows its own mark and a busy one its live status (same for Claude and opencode); plain shells get a terminal glyph. */
+/** An idle agent shows its own mark and a busy one its live status (same for every agent); plain shells get a terminal glyph. */
 export function PaneIcon({ agent, className }: { agent: Agent | undefined; className?: string }) {
   switch (paneGlyph(agent)) {
     case "shell":
@@ -35,6 +38,12 @@ export function PaneIcon({ agent, className }: { agent: Agent | undefined; class
       return <ClaudeIcon className={className ?? "size-3.5 text-[#d97757]"} aria-hidden />;
     case "opencode":
       return <OpencodeIcon className={className ?? "size-3.5 text-foreground"} aria-hidden />;
+    case "codex":
+      return <CodexIcon className={className ?? "size-3.5 text-foreground"} aria-hidden />;
+    case "cursor":
+      return <CursorIcon className={className ?? "size-3.5 text-foreground"} aria-hidden />;
+    case "grok":
+      return <GrokIcon className={className ?? "size-3.5 text-foreground"} aria-hidden />;
     default:
       return <StatusDot state={agent!.state} />;
   }

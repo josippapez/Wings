@@ -311,6 +311,8 @@ impl Ai {
             let kind = match agent.kind {
                 crate::detect::AgentKind::Claude => history::Agent::Claude,
                 crate::detect::AgentKind::Opencode => history::Agent::OpenCode,
+                // No session id to read for these.
+                _ => continue,
             };
             if long_turn_ended(before, agent.state, now) {
                 self.enqueue(Task::Summary, &id, kind);

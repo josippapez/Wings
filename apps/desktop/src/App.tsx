@@ -59,7 +59,7 @@ import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
 import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, TerminalSession, DEFAULT_TERMINAL_KEYS, setTerminalKeys, setQuickTerminalKey, type TerminalKeys, DEFAULT_TERMINAL_LOOK, setTerminalLook, type TerminalLook } from "@/lib/terminal";
-import { forkLine, isSessionIdOf, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
+import { forkLine, isSessionIdOf, isSessionKind, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
@@ -902,7 +902,7 @@ const leftPanel = usePanelRef();
         const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
         let patch: Partial<PaneMeta> | null = null;
         if (agent && (settled(meta, agent) || (agent.sessionId && (agent.sessionId !== meta.sessionId || agent.kind !== meta.kind || !meta.live)))) {
-          patch = { ...(agent.sessionId ? { sessionId: agent.sessionId, kind: agent.kind, args: agent.args } : {}), name: agent.name ?? meta.name, live: true, ...noResume };
+          patch = { ...(agent.sessionId && isSessionKind(agent.kind) ? { sessionId: agent.sessionId, kind: agent.kind, args: agent.args } : {}), name: agent.name ?? meta.name, live: true, ...noResume };
         } else if (!agent && meta.live && !meta.asleep && meta.resumeAt === null) patch = { sessionId: null, live: false, args: [] };
         if (patch) {
           next ??= { ...prev };
@@ -1519,7 +1519,7 @@ const leftPanel = usePanelRef();
   }
 
   function forkAgent(agent: Agent) {
-    const line = agent.sessionId && isSessionIdOf(agent.kind, agent.sessionId) ? forkLine(agent.kind, agent.sessionId) : null;
+    const line = agent.sessionId && isSessionKind(agent.kind) && isSessionIdOf(agent.kind, agent.sessionId) ? forkLine(agent.kind, agent.sessionId) : null;
     if (line) openTab(agent.spaceId, line);
   }
 

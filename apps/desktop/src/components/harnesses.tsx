@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
 
+import { CodexIcon, CursorIcon, GrokIcon } from "@/components/agent-icons";
 import { ClaudeIcon } from "@/components/claude-icon";
 import { AgentConnectionChip } from "@/components/connections";
 import { OpencodeIcon } from "@/components/opencode-icon";
@@ -16,6 +17,9 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 function HarnessIcon({ id, name }: { id: string; name: string }) {
   if (id === "claude") return <ClaudeIcon className="size-4 text-[#d97757]" aria-hidden />;
   if (id === "opencode") return <OpencodeIcon className="size-4 text-foreground" aria-hidden />;
+  if (id === "codex") return <CodexIcon className="size-4 text-foreground" aria-hidden />;
+  if (id === "cursor") return <CursorIcon className="size-4 text-foreground" aria-hidden />;
+  if (id === "grok") return <GrokIcon className="size-4 text-foreground" aria-hidden />;
   return (
     <span className="flex size-4 items-center justify-center rounded-[4px] bg-white/[0.1] text-[10px] font-semibold text-foreground" aria-hidden>
       {name[0]}

@@ -1677,7 +1677,13 @@ fn notify_transitions(app: &AppHandle, before: &[Agent], after: &[Agent]) {
         if was == Some(agent.state) {
             continue;
         }
-        let kind_name = if agent.kind == AgentKind::Opencode { "opencode" } else { "Claude" };
+        let kind_name = match agent.kind {
+            AgentKind::Claude => "Claude",
+            AgentKind::Opencode => "opencode",
+            AgentKind::Codex => "Codex",
+            AgentKind::Cursor => "Cursor CLI",
+            AgentKind::Grok => "Grok Build",
+        };
         let name = agent.name.as_deref().unwrap_or(kind_name);
         let project = std::path::Path::new(&agent.space_id).file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
         let (title, body) = match agent.state {
