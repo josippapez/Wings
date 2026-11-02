@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.114 · 2026-11-02
+
+- **Codex, Cursor CLI and Grok Build panes are recognised.** A pane running one of them shows its name and icon, like Claude Code and opencode, and Settings, Agents uses the same icons. Wings doesn't track whether they're working or waiting yet.
+- **Worktrees elsewhere on your Mac work again.** Repos found by "Scan this Mac" show which worktrees are merged or have lost their upstream, missing ones can be pruned, and you can remove a worktree there again after the warning. Since 0.1.108 Wings only allowed listing them. Wings still runs only those exact git commands in repos outside your projects.
+
 ## 0.1.113 · 2026-11-02
 
 - **Agents can add timed schedules.** Ask an agent to run something every day at 09:00 and it adds the schedule itself, with `schedules__add`, and can change one with `schedules__update`. Wings asks you to allow it first in an "Allow this schedule?" dialog, showing the project, timing, agent and prompt. Nothing is saved if you deny it or don't answer within 100 seconds. Renaming one doesn't ask.
