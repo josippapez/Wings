@@ -1,6 +1,6 @@
 // ---------- diffs: an edited file, or everything changed, against HEAD ----------
 
-import { openDiffWhile } from "wings-plugin-sdk/async";
+import { openLiveDiff } from "wings-plugin-sdk/async";
 import { basename } from "wings-plugin-sdk/format";
 
 import type { Session } from "./session";
@@ -20,16 +20,16 @@ function inside(cwd: unknown, path: unknown) {
 }
 
 /**
- * Opens the viewer at once and fills it in when the command answers, so a click never waits on it. `path` null is the
- * whole working tree. A request that can't be shown throws why, for the sidebar to say.
+ * Opens the viewer at once, fills it in when the command answers, so a click never waits on it, and keeps it up to date
+ * while it's open. `path` null is the whole working tree. A request that can't be shown throws why, for the sidebar to say.
  */
-export function openChanges(s: Session | undefined, path: string | null) {
+export async function openChanges(s: Session | undefined, path: string | null) {
   if (!s?.cwd) throw new Error("This session isn't in a pane any more.");
   const cwd = s.cwd;
   if (path != null && !s.files.has(path)) throw new Error("This session hasn't edited that file in this run.");
   const file = path == null ? null : inside(cwd, path);
   if (path != null && !file) throw new Error(`${basename(path)} is outside ${basename(cwd)}, so there is no diff to show.`);
-  return openDiffWhile({ title: file ? basename(file) : "All changes", cwd, subtitle: file ? "Working tree against HEAD" : `Working tree against HEAD · ${basename(cwd)}` }, async () => {
+  await openLiveDiff({ title: file ? basename(file) : "All changes", cwd, subtitle: file ? "Working tree against HEAD" : `Working tree against HEAD · ${basename(cwd)}` }, async () => {
     const args = file ? ["diff", "HEAD", "--no-color", "--no-ext-diff", "--", file] : ["diff", "HEAD", "--no-color", "--no-ext-diff"];
     const r = await wings.exec("git", args, { cwd });
     if (r.code !== 0) throw new Error(r.stderr.trim() || "git diff failed");

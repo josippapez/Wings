@@ -5,6 +5,7 @@ import { registerTools } from "wings-plugin-sdk/tools";
 import { ch } from "./lib/messages";
 import { registerHooks } from "./main/hooks";
 import { resumeCommand } from "./lib/commands";
+import { openFileDiff } from "./lib/diff";
 import { listenPrState, watchPrs } from "./main/pr-check";
 import { onSectionPanes } from "./main/section";
 import { loadProject, write } from "./main/write";
@@ -30,6 +31,8 @@ ch.answer("openSession", async ({ session, cwd }) => {
   if (pane) await wings.focusPane(pane.paneId);
   else await wings.openPane({ command: resumeCommand(session), cwd });
 });
+
+ch.answer("openDiff", ({ issue, path, root }) => openFileDiff(issue, path, root));
 
 /** Picks up every project as soon as Wings tells us which exist, and again when that changes. */
 wings.onProjects((list) => {

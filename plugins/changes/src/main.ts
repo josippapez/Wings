@@ -1,6 +1,7 @@
 // Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the files as a tree, and
 // the diff viewer for one file or all of them. Everything is local git, about 25 ms a call, cached per repo.
 
+import { refreshLiveDiffs } from "wings-plugin-sdk/async";
 import { onGitChange, repoRoot } from "wings-plugin-sdk/git";
 import { pollWhileFocused } from "wings-plugin-sdk/poll";
 import { registerTools } from "wings-plugin-sdk/tools";
@@ -28,11 +29,13 @@ pollWhileFocused(() => {
   void refreshBadges(panes);
   sidebar.poll();
 }, POLL_MS);
-// A commit, checkout or pull shows at once in the panes of the repos that moved, and in the sidebar if it follows one.
+// A commit, checkout or pull shows at once in the panes of the repos that moved, in the sidebar if it follows one, and in
+// an open diff viewer of that repo.
 onGitChange(async (_ids, roots) => {
   const paneRoots = await Promise.all(panes.map((p) => repoRoot(p.cwd)));
   await refreshBadges(panes.filter((_, i) => paneRoots[i] && roots.includes(paneRoots[i])), { fresh: true });
   sidebar.gitChanged(roots);
+  void refreshLiveDiffs(roots);
 });
 
 wings.onAction(async ({ paneId, actionId }) => {

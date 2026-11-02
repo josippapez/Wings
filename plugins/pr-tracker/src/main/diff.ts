@@ -1,5 +1,5 @@
 /** Opening a PR's diff in the viewer, from a pane's badge or from a PR tab, and replies typed in it. */
-import { openDiffWhile } from "wings-plugin-sdk/async";
+import { openDiffWhile, openLiveDiff } from "wings-plugin-sdk/async";
 import { git } from "wings-plugin-sdk/git";
 import { forgeOf } from "../lib/forges/registry";
 import { refOf } from "../lib/providers";
@@ -8,9 +8,9 @@ import { diffs, linkFor, status, viewers } from "./state";
 import { loadDiff, refreshStatus } from "./status";
 
 /**
- * Opens the viewer at once, in its loading state when the diff isn't cached, then fills it in. `cwd` is the folder
- * of the agent working on the PR, so the viewer's Send to agent offers it first. `focus` is the file and line the viewer
- * scrolls to once the patch is there.
+ * Opens the viewer at once, in its loading state when the diff isn't cached, then fills it in, and shows a new push
+ * while it's open. `cwd` is the folder of the agent working on the PR, so the viewer's Send to agent offers it first.
+ * `focus` is the file and line the viewer scrolls to once the patch is there.
  */
 export async function openDiffFor(link: Link, options: { title?: string; cwd?: string; focus?: WingsDiffFocus } = {}) {
   const { cwd, focus } = options;
@@ -18,20 +18,16 @@ export async function openDiffFor(link: Link, options: { title?: string; cwd?: s
   const title = st?.title ?? options.title ?? `Pull request ${refOf(link)}`;
   const subtitle = `${link.repo} ${refOf(link)}`;
   const cached = diffs.get(link.url);
-  if (cached && cached.key === st?.key) {
-    const { id } = await wings.openDiff({ title, subtitle, cwd, patch: cached.patch, comments: cached.comments, focus });
-    return void viewers.set(id, link.url);
-  }
-  // Not prefetched yet: the viewer opens right away in its loading state, and is filled in.
-  await openDiffWhile({ title, subtitle, cwd, focus }, async (id) => {
-    viewers.set(id, link.url);
-    // A PR from the list or a tab has no pane keeping its status fresh.
-    if (!status.get(link.url)) await refreshStatus(link.url);
+  const shown = cached && cached.key === st?.key ? { patch: cached.patch, comments: cached.comments } : {};
+  const { id } = await openLiveDiff({ title, subtitle, cwd, focus, ...shown }, async ({ fresh }) => {
+    // A PR from the list or a tab has no pane keeping its status fresh, and Refresh asks the forge again.
+    if (fresh || !status.get(link.url)) await refreshStatus(link.url, { byUser: fresh });
     const loaded = status.get(link.url);
     if (loaded?.error) throw new Error(loaded.error);
     const { patch, comments } = await loadDiff(link.url);
     return { patch, comments };
   });
+  viewers.set(id, link.url);
 }
 
 /** One commit's changes against its first parent, as the forge's commit page shows them, from git in the project's folder. */

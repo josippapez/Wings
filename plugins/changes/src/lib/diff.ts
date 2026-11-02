@@ -1,4 +1,4 @@
-import { openDiffWhile } from "wings-plugin-sdk/async";
+import { openLiveDiff } from "wings-plugin-sdk/async";
 import { basename, plural } from "wings-plugin-sdk/format";
 import { git, gitRun } from "wings-plugin-sdk/git";
 
@@ -69,13 +69,14 @@ async function patchOf(c: Changes, path: string | null) {
   return { patch, note: skipped ? ` · ${plural(skipped, "new file")} not shown` : "" };
 }
 
-/** Opens the viewer at once in its loading state and fills it when git answers. */
-export function openChanges(root: string, mode: Mode, path: string | null) {
+/** Opens the viewer at once in its loading state, fills it when git answers, and keeps it up to date while it's open. */
+export async function openChanges(root: string, mode: Mode, path: string | null) {
   const title = path ?? (mode === "branch" ? "Changes on this branch" : "Uncommitted changes");
-  return openDiffWhile({ title, cwd: root, subtitle: `${basename(root)} · ${mode === "branch" ? "This branch" : "Working tree against HEAD"}` }, async () => {
-    const c = await changes(root, mode);
+  const subtitle = `${basename(root)} · ${mode === "branch" ? "This branch" : "Working tree against HEAD"}`;
+  await openLiveDiff({ title, cwd: root, subtitle }, async ({ fresh }) => {
+    const c = await changes(root, mode, { fresh });
     if (c.files.length === 0) return { error: mode === "branch" ? "Nothing changed on this branch." : "No uncommitted changes." };
     const { patch, note } = await patchOf(c, path);
     return patch ? { patch } : { error: `No diff to show${note}.` };
-  });
+  }, { key: root });
 }
