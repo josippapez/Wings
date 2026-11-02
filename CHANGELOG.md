@@ -4,6 +4,7 @@ What changed in each Wings release, newest first.
 
 ## 0.1.113 · 2026-11-02
 
+- **Agents can add timed schedules.** Ask an agent to run something every day at 09:00 and it adds the schedule itself, with `schedules__add`, and can change one with `schedules__update`. Wings asks you to allow it first in an "Allow this schedule?" dialog, showing the project, timing, agent and prompt. Nothing is saved if you deny it or don't answer within 100 seconds. Renaming one doesn't ask.
 - **Open diffs keep up with your changes.** The diff viewer from Changes, Session, an issue's changed files and the PR tracker updates on its own while it's open, every 15 s while Wings is in front, and right away after a commit or checkout for Changes. A Refresh button in its header reloads it now. The selected file stays selected when the list changes.
 
 ## 0.1.112 · 2026-11-01

@@ -2,6 +2,7 @@
 // and reads the result as a query.
 
 import { channel } from "wings-plugin-sdk/messages";
+import type { Approval } from "./approval";
 import type { Watch, WatchDraft } from "./assigned";
 import type { Draft, Schedule } from "./schedule";
 import type { WorktreeChange, WorktreeSetup } from "./worktree-setup";
@@ -42,7 +43,13 @@ export const ch = channel<
     install: { request: { id: string }; response: void };
     /** A project's local and origin branches, for the branch a ticket's branch starts from. */
     branches: { request: { projectId: string }; response: string[] };
+    /** The user's answer to an agent asking to add or change a timed schedule. */
+    answerApproval: { request: { id: string; allow: boolean }; response: void };
   },
   {},
-  { state: { key: void; value: State } }
+  {
+    state: { key: void; value: State };
+    /** What agents are waiting for the user to allow, oldest first. */
+    approvals: { key: void; value: Approval[] };
+  }
 >();

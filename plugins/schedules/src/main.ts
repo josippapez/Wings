@@ -6,9 +6,10 @@ import { errorMessage } from "wings-plugin-sdk/async";
 import { registerTools } from "wings-plugin-sdk/tools";
 import { ch, type State } from "./lib/messages";
 import { currentSignInCode, targetsOf, pollAssigned, serveAssigned } from "./main/assigned";
-import { queue, removeSchedule } from "./main/schedules";
+import { serveApprovals } from "./main/approvals";
+import { queue, removeSchedule, saveSchedule } from "./main/schedules";
 import { readSchedules as read, readWatches, syncSections, writeSchedules as write } from "./main/store";
-import { AGENTS, claim, cleanDraft, dueAt, nameOf, onStart, type Run, type Schedule } from "./lib/schedule";
+import { AGENTS, claim, dueAt, nameOf, onStart, type Run, type Schedule } from "./lib/schedule";
 import { tools } from "./tools";
 
 /** A tick is a few comparisons, so it runs while Wings is in the background too: that is when a run is wanted. */
@@ -76,19 +77,12 @@ wings.onProjects(() => {
   void syncSections();
 });
 serveAssigned();
+serveApprovals();
 registerTools(tools);
 
-ch.answer("save", ({ id, draft }) =>
-  queue(async () => {
-    const clean = cleanDraft(draft);
-    const list = await read();
-    const now = Date.now();
-    if (id === null) return write([...list, { ...clean, id: `${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`, enabled: true, anchor: now }]);
-    if (!list.some((s) => s.id === id)) throw new Error("That schedule is gone.");
-    // A changed time counts from now, so it never runs for a time it was already past when you saved it.
-    return write(list.map((s) => (s.id === id ? { ...s, ...clean, anchor: now } : s)));
-  }),
-);
+ch.answer("save", async ({ id, draft }) => {
+  await saveSchedule(id, draft);
+});
 
 ch.answer("toggle", ({ id }) =>
   queue(async () => {

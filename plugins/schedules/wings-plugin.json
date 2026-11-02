@@ -1,12 +1,12 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "minWingsVersion": "0.1.108",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
   "api": 1,
-  "mcpInstructions": "Schedules (schedules__*): list shows every schedule and every assigned entry with the tickets assigned to the user and their state; add_assigned starts watching a project for assigned tickets; update changes one; remove deletes an entry. Use them when the user asks what is assigned to them or in which state, or wants an agent offered on newly assigned tickets in a project.",
+  "mcpInstructions": "Schedules (schedules__*): add starts an agent with a prompt in a project every few hours or at a set time on chosen days, once the user allows it in Wings; add_assigned watches a project for tickets assigned to the user and offers to start an agent on each; list shows both, with the tickets and their state; update changes one; remove deletes one. Use them when the user wants an agent run on a schedule or asks what is assigned to them.",
   "main": "dist/main.js",
   "permissions": {
     "panes": [
@@ -50,6 +50,17 @@
         ],
         "newTab": true,
         "multiple": false
+      },
+      {
+        "id": "approve",
+        "title": "Allow this schedule?",
+        "page": "dist/approve.html",
+        "opens": [
+          "modal"
+        ],
+        "width": 560,
+        "height": 420,
+        "button": false
       }
     ],
     "projectSections": [
@@ -66,6 +77,72 @@
         "inputSchema": {
           "type": "object",
           "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "add",
+        "description": "Adds a timed schedule: Wings starts an agent with this prompt in a new tab of the project every few hours, or at a time of day on the days given, while Wings runs. It starts by itself, so the user has to allow it in a dialog in Wings first: the call waits up to 100 seconds for their answer and fails, saving nothing, when they deny or don't answer.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000,
+              "description": "What the agent is told on each run, as one line. It can't start with a dash."
+            },
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "description": "A Wings project's name or its folder path. Leave out for the project of the pane you run in."
+            },
+            "agent": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "opencode"
+              ],
+              "description": "claude (default) or opencode."
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "What the lists call it. Leave out to show the start of the prompt."
+            },
+            "every_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24,
+              "description": "Run every this many hours: 1, 2, 3, 4, 6, 8, 12, 24. Leave out for a time of day."
+            },
+            "time": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "Run at this time of day, HH:MM in the Mac's local time, like 09:00."
+            },
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "sun",
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat"
+                ]
+              },
+              "maxItems": 7,
+              "description": "The days time runs on, like [\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]. Leave out for every day."
+            }
+          },
+          "required": [
+            "prompt"
+          ],
           "additionalProperties": false
         }
       },
@@ -188,7 +265,7 @@
       },
       {
         "name": "update",
-        "description": "Changes an assigned entry: only the fields given change, and an empty string or list clears one. The tickets it already asked about or started stay as they are.",
+        "description": "Changes a schedule or an assigned entry: only the fields given change, and an empty string or list clears one. For a schedule, a new agent, prompt or timing waits for the user to allow it in a dialog in Wings (up to 100 seconds) and fails, changing nothing, when they deny or don't answer; a new name alone doesn't ask. For an assigned entry, the tickets it already asked about or started stay as they are.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -196,7 +273,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 100,
-              "description": "The id of the assigned entry, from list."
+              "description": "The id of the schedule or assigned entry, from list."
             },
             "agent": {
               "type": "string",
@@ -209,13 +286,46 @@
             "prompt": {
               "type": "string",
               "maxLength": 4000,
-              "description": "What the agent is told. {id}, {title} and {url} become the ticket's number, title and link."
+              "description": "What the agent is told. In an assigned entry, {id}, {title} and {url} become the ticket's number, title and link."
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "What the lists call it. An empty string clears it."
+            },
+            "every_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24,
+              "description": "Run every this many hours: 1, 2, 3, 4, 6, 8, 12, 24. Leave out for a time of day."
+            },
+            "time": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "Run at this time of day, HH:MM in the Mac's local time, like 09:00."
+            },
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "sun",
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat"
+                ]
+              },
+              "maxItems": 7,
+              "description": "The days time runs on, like [\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]. Leave out for every day."
             },
             "min_free_gb": {
               "type": "integer",
               "minimum": 0,
               "maximum": 10000,
-              "description": "Wings won't make a worktree when the disk has less free space than this."
+              "description": "Assigned entry only: Wings won't make a worktree when the disk has less free space than this."
             },
             "states": {
               "type": "array",
@@ -224,7 +334,7 @@
                 "maxLength": 100
               },
               "maxItems": 50,
-              "description": "The ticket states to ask about. An empty list asks about every state."
+              "description": "Assigned entry only: the ticket states to ask about. An empty list asks about every state."
             },
             "title_prefixes": {
               "type": "array",
@@ -233,17 +343,12 @@
                 "maxLength": 40
               },
               "maxItems": 20,
-              "description": "Ask only about tickets whose title starts with one of these, like FE or BE."
-            },
-            "name": {
-              "type": "string",
-              "maxLength": 80,
-              "description": "What the lists call the entry instead of \"When something is assigned to me\". An empty string clears it."
+              "description": "Assigned entry only: ask only about tickets whose title starts with one of these, like FE or BE."
             },
             "base": {
               "type": "string",
               "maxLength": 200,
-              "description": "The branch a ticket's branch starts from, like origin/develop."
+              "description": "Assigned entry only: the branch a ticket's branch starts from, like origin/develop."
             }
           },
           "required": [
