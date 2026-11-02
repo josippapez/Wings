@@ -19,6 +19,7 @@ import {
   ListTreeIcon,
   MessageSquareIcon,
   PanelLeftIcon,
+  RefreshCwIcon,
   ReplyIcon,
   Rows3Icon,
   SearchIcon,
@@ -372,6 +373,7 @@ export function DiffViewer({
   onExpand,
   onClose,
   onReply,
+  onRefresh,
   reviewTargets,
   onSendReview,
 }: {
@@ -383,6 +385,8 @@ export function DiffViewer({
   onExpand: (expanded: boolean) => void;
   onClose: () => void;
   onReply: (diff: DiffView, replyTo: number, body: string) => Promise<void>;
+  /** The Refresh button of a diff the plugin keeps up to date; resolves once the plugin has updated it. */
+  onRefresh: (diff: DiffView) => Promise<void>;
   /** The panes your review can go to, asked when you choose one. `cwd` is the repo the diff is of, when the plugin says. */
   reviewTargets: (cwd: string | undefined) => { targets: ReviewTarget[]; preferred: string | null };
   /** Pastes the review into the pane; presses Enter after when `submit`. */
@@ -395,6 +399,23 @@ export function DiffViewer({
   const threads = useMemo(() => threadsByPath(diff?.comments), [diff?.comments]);
   /** A file index, or null for the discussion. */
   const [selected, setSelected] = useState<number | null>(0);
+  // A refreshed patch can add or drop files before the selected one, so the selection follows the file by name.
+  const [selectedIn, setSelectedIn] = useState({ id: diff?.id, files });
+  if (selectedIn.files !== files) {
+    setSelectedIn({ id: diff?.id, files });
+    if (selectedIn.id === diff?.id && selected !== null) {
+      const at = files.findIndex((e) => e.file.name === selectedIn.files[selected]?.file.name);
+      setSelected(at !== -1 ? at : Math.min(selected, Math.max(0, files.length - 1)));
+    }
+  }
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = () => {
+    if (!diff) return;
+    setRefreshing(true);
+    onRefresh(diff)
+      .catch((e) => toast.error("Couldn't refresh the changes", { description: String(e) }))
+      .finally(() => setRefreshing(false));
+  };
   // A dock is usually too narrow for two columns, so it starts unified until you pick.
   const [splitChoice, setSplit] = useState<boolean | null>(null);
   const split = splitChoice ?? !dock;
@@ -610,6 +631,11 @@ export function DiffViewer({
           )}
         </Description>
       </div>
+      {diff?.refresh && (
+        <IconButton label="Refresh" onClick={refresh} disabled={refreshing} className="size-7">
+          <RefreshCwIcon className={cn(refreshing && "motion-safe:animate-spin")} />
+        </IconButton>
+      )}
       <ToggleGroup
         aria-label="Diff layout"
         size="sm"

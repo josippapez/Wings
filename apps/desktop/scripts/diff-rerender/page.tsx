@@ -24,7 +24,7 @@ function App() {
   const [, setTick] = useState(0);
   check.rerender = () => setTick((n) => n + 1);
   check.setPatch = () => setDiff({ ...opened, patch: patchOf(3000) });
-  return <DiffViewer diff={diff} onClose={() => {}} onReply={async () => {}} reviewTargets={() => ({ targets: [], preferred: null })} onSendReview={async () => {}} />;
+  return <DiffViewer diff={diff} onClose={() => {}} onReply={async () => {}} onRefresh={async () => {}} reviewTargets={() => ({ targets: [], preferred: null })} onSendReview={async () => {}} />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<App />);

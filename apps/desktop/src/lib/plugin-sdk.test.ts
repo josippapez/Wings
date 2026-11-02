@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 type Sdk = {
   setBadge(paneId: string, badge: unknown): Promise<unknown>;
-  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; onGitChange(fn: (e: { projectIds: string[] }) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void; onHook(event: string, handler: (input: unknown, context: unknown) => unknown): void; setPaneRail(paneId: string, rail: unknown): Promise<unknown> };
+  setSidebarLabel(id: string, label: string | null, extra?: { rows?: unknown[]; tone?: string }): Promise<unknown>; onBroadcast(fn: (m: unknown) => void): () => void; onPanes(fn: (panes: unknown[]) => void): () => void; onFocus(fn: (e: { focused: boolean }) => void): () => void; onProjects(fn: (p: unknown[]) => void): () => void; onGitChange(fn: (e: { projectIds: string[] }) => void): () => void; setProjectSection(projectId: string, sectionId: string, rows: unknown): Promise<unknown>; readonly focused: boolean; blockState(): Promise<unknown>; setBlockState(s: unknown): Promise<unknown>; setHeight(px: number): void; onTool(name: string, handler: (input: unknown, context: unknown) => unknown): void; onHook(event: string, handler: (input: unknown, context: unknown) => unknown): void; setPaneRail(paneId: string, rail: unknown): Promise<unknown>; onDiffRefresh(fn: (e: { diffId: string }) => unknown): void; onDiffClosed(fn: (e: { diffId: string }) => void): () => void };
 
 /** Loads public/plugin-sdk.js into a frame-like context, and delivers events the way the host does. */
 function frame(init?: unknown) {
@@ -297,4 +297,18 @@ test("a script's own mouse events, and the other buttons, never navigate", () =>
   mouse.mouseup({ type: "mouseup", button: 3, isTrusted: false, preventDefault() {}, stopPropagation() {} });
   for (const button of [0, 1, 2]) mouse.mouseup({ type: "mouseup", button, isTrusted: true, preventDefault() {}, stopPropagation() {} });
   assert.equal(calls("navigate").length, 0);
+});
+
+test("a viewer's Refresh runs the plugin's handler and reports back when it's done, and a closed viewer reaches the listener", async () => {
+  const { wings, send, calls } = frame();
+  const refreshed: string[] = [];
+  const closed: string[] = [];
+  wings.onDiffRefresh(async ({ diffId }) => void refreshed.push(diffId));
+  wings.onDiffClosed(({ diffId }) => void closed.push(diffId));
+  send("diffRefresh", { diffId: "d1", token: "t1" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(refreshed, ["d1"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls("actionDone").map((c) => c.params))), [{ token: "t1", error: null }]);
+  send("diffClosed", { diffId: "d1" });
+  assert.deepEqual(closed, ["d1"]);
 });

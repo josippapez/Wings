@@ -11,6 +11,8 @@
   const pending = new Map();
   const listeners = { panes: [], action: [], broadcast: [] };
   let replyHandler = null;
+  let diffRefreshHandler = null;
+  listeners.diffClosed = [];
   listeners.transcript = [];
   listeners.agentActivity = [];
   listeners.git = [];
@@ -120,6 +122,7 @@
     if (message.event === "action") return void runAction(message.data);
     if (message.event === "tool") return void runTool(message.data);
     if (message.event === "reply") return void runReply(message.data);
+    if (message.event === "diffRefresh") return void runDiffRefresh(message.data);
     for (const listener of [...(listeners[message.event] ?? [])]) {
       try {
         listener(message.data);
@@ -149,6 +152,17 @@
     try {
       if (!replyHandler) throw new Error("This plugin doesn't take replies");
       await replyHandler(data);
+    } catch (e) {
+      error = String(e?.message ?? e);
+    }
+    call("actionDone", { token, error });
+  }
+
+  // The viewer's Refresh button spins until this settles, and shows the error if it throws.
+  async function runDiffRefresh({ token, ...data }) {
+    let error = null;
+    try {
+      await diffRefreshHandler?.(data);
     } catch (e) {
       error = String(e?.message ?? e);
     }
@@ -508,7 +522,8 @@
      * `updateDiff(id, { patch, comments })` or `updateDiff(id, { error })`. Resolves `{ id }`. `focus`,
      * `{ path, line?, side?: "old" | "new" }`, makes the viewer open that file once the patch is shown, scroll to
      * the line and highlight it for a moment. It works when the patch arrives later through `updateDiff`, and a
-     * path that isn't in the patch just opens the diff as usual. `updateDiff` takes `focus` too.
+     * path that isn't in the patch just opens the diff as usual. `updateDiff` takes `focus` too. With `refresh: true`
+     * the plugin keeps it up to date: the viewer shows a Refresh button (`onDiffRefresh`) and `onDiffClosed` says when it closes.
      */
     openDiff: (diff) => call("openDiff", diff),
     /**
@@ -517,6 +532,13 @@
      * under the reply box and keeps the text.
      */
     onReply: (handler) => void (replyHandler = handler),
+    /**
+     * The Refresh button of a viewer opened with `refresh: true`: `{ diffId }`. Load it again and `updateDiff` it; the
+     * button spins until this settles, and a thrown error shows as a toast. One handler: a second call replaces the first.
+     */
+    onDiffRefresh: (handler) => void (diffRefreshHandler = handler),
+    /** A viewer opened with `refresh: true` closed, or another diff took its place: `{ diffId }`. Stop keeping it up to date. */
+    onDiffClosed: (listener) => subscribe(listeners.diffClosed, listener),
     /**
      * POSTs `fields` as JSON to an API path in `permissions.post`, through that CLI's own sign-in: `gh api`,
      * `glab api` (pass the GitLab `host`; for `gh` pass a GitHub Enterprise Server's) or `az rest` for Azure

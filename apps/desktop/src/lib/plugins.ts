@@ -77,6 +77,8 @@ export type DiffView = {
   /** Where the viewer scrolls to and briefly highlights once the patch is shown, even when it arrives later through `updateDiff`. */
   focus?: DiffFocus;
   error?: string;
+  /** The plugin keeps it up to date: the viewer shows a Refresh button, and Wings tells the plugin when it closes. */
+  refresh?: boolean;
 };
 
 /** Every terminal pane; `session` is set while an agent (Claude Code or opencode) runs in it. */
@@ -619,6 +621,16 @@ export class PluginHost {
     return this.ask(pluginId, "reply", { diffId, replyTo, body });
   }
 
+  /** The viewer's Refresh: resolves once the plugin has updated it, or fails with the plugin's error. */
+  sendDiffRefresh(pluginId: string, diffId: string): Promise<void> {
+    return this.ask(pluginId, "diffRefresh", { diffId });
+  }
+
+  /** The viewer closed, or another diff took its place: a plugin keeping it up to date can stop. */
+  sendDiffClosed(pluginId: string, diffId: string) {
+    for (const plugin of this.frames.values()) if (plugin.ready && plugin.id === pluginId && plugin.kind === "main") plugin.post({ event: "diffClosed", data: { diffId } });
+  }
+
   private ask(pluginId: string, event: string, data: object): Promise<void> {
     const entry = [...this.frames].find(([, p]) => p.id === pluginId && p.kind === "main");
     if (!entry) return Promise.reject(new Error(`plugin ${pluginId} is not running`));
@@ -1055,7 +1067,7 @@ export class PluginHost {
         const title = str(p.title, 200);
         if (!title) throw new Error("openDiff needs a title");
         const id = `${pluginId}:${this.nextDiff++}`;
-        this.callbacks.openDiff({ id, pluginId, title, subtitle: str(p.subtitle, 200), cwd: str(p.cwd, 1000), ...cleanDiffUpdate(p) });
+        this.callbacks.openDiff({ id, pluginId, title, subtitle: str(p.subtitle, 200), cwd: str(p.cwd, 1000), refresh: p.refresh === true, ...cleanDiffUpdate(p) });
         return { id };
       }
       case "updateDiff":

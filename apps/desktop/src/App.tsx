@@ -1007,6 +1007,13 @@ const leftPanel = usePanelRef();
   useEffect(() => {
     if (diffTab !== null && !tabs.some((t) => t.id === diffTab)) setDiff(null);
   }, [tabs, diffTab]);
+  // A plugin keeping its viewer up to date hears when it closes or another diff takes its place, so it stops.
+  const liveDiffId = diff?.refresh ? diff.id : null;
+  const liveDiffPlugin = diff?.pluginId;
+  useEffect(() => {
+    if (!liveDiffId || !liveDiffPlugin) return;
+    return () => pluginHost.current?.sendDiffClosed(liveDiffPlugin, liveDiffId);
+  }, [liveDiffId, liveDiffPlugin]);
 
   // A pane only counts as seen while the window has focus, so "done" survives you switching apps.
   useEffect(() => {
@@ -1267,8 +1274,13 @@ const leftPanel = usePanelRef();
       },
       setSidebarLabel: (pluginId, sidebarId, label) =>
         setSidebarLabels((all) => withLabel(all, `${pluginId}:${sidebarId}`, label)),
+      // A patch replaces an error the viewer showed before, and an error a patch, so a refreshed viewer can go either way.
       updateDiff: (pluginId, id, update) =>
-        setDiff((d) => (d && d.id === id && d.pluginId === pluginId ? { ...d, ...update } : d)),
+        setDiff((d) =>
+          d && d.id === id && d.pluginId === pluginId
+            ? { ...d, ...(update.patch !== undefined ? { error: undefined } : {}), ...(update.error !== undefined ? { patch: undefined } : {}), ...update }
+            : d,
+        ),
       currentProject: () => activeSpaceIdRef.current,
       projectOf: (spaceId) => {
         const space = spacesRef.current.find((s) => s.id === spaceId);
@@ -2201,6 +2213,10 @@ const leftPanel = usePanelRef();
           onReply={async (view, replyTo, body) => {
             if (!pluginHost.current) throw new Error("Plugins aren't running");
             await pluginHost.current.sendReply(view.pluginId, view.id, replyTo, body);
+          }}
+          onRefresh={async (view) => {
+            if (!pluginHost.current) throw new Error("Plugins aren't running");
+            await pluginHost.current.sendDiffRefresh(view.pluginId, view.id);
           }}
         />
         <PluginModal
