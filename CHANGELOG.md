@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.113 · 2026-11-02
+
+- **Open diffs keep up with your changes.** The diff viewer from Changes, Session, an issue's changed files and the PR tracker updates on its own while it's open, every 15 s while Wings is in front, and right away after a commit or checkout for Changes. A Refresh button in its header reloads it now. The selected file stays selected when the list changes.
+
 ## 0.1.112 · 2026-11-01
 
 - **The background terminal test is off.** Wings removes the background item that `WINGS_PTYD=1` added under Login Items, Allow in the Background. After an update macOS stopped that host from starting, so terminals stay inside Wings for now.
