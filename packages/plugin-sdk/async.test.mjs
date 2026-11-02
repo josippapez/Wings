@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as next, setTimeout as sleep } from "node:timers/promises";
 
-import { batched, cached, errorMessage, latestOnly, mapLimit, openDiffWhile, serial, singleFlight } from "./async.js";
+import { batched, cached, errorMessage, latestOnly, mapLimit, openDiffWhile, openLiveDiff, refreshLiveDiffs, serial, singleFlight } from "./async.js";
 
 test("errorMessage takes the message of an Error or of anything with one, else the text of the value", () => {
   assert.equal(errorMessage(new Error("boom")), "boom");
@@ -182,4 +182,31 @@ test("batched rejects every get of a failed call, an Error value only its own, a
   const chunks = batched(async (ids) => { if (ids[0] === 1) throw boom; return ids; }, { max: 1 });
   const out = await Promise.allSettled([chunks.get(1), chunks.get(2)]);
   assert.deepEqual(out.map((o) => o.status), ["rejected", "fulfilled"], "a chunk fails alone");
+});
+
+test("openLiveDiff sends a viewer only what changed, reloads it fresh on Refresh, and stops once it's closed", async (t) => {
+  const updates = [];
+  const on = {};
+  globalThis.wings = {
+    focused: false,
+    onFocus: () => () => {},
+    openDiff: async (diff) => (updates.push(["open", diff.refresh]), { id: "live1" }),
+    updateDiff: async (id, update) => void updates.push([id, update.patch ?? update.error]),
+    onDiffRefresh: (handler) => void (on.refresh = handler),
+    onDiffClosed: (listener) => void (on.closed = listener),
+  };
+  t.after(() => delete globalThis.wings);
+  let patch = "one";
+  const loads = [];
+  await openLiveDiff({ title: "T" }, ({ fresh }) => (loads.push(fresh), patch === null ? Promise.reject(new Error("gone")) : { patch }), { key: "/r" });
+  await refreshLiveDiffs();
+  patch = "two";
+  await refreshLiveDiffs(["/other"]);
+  await on.refresh({ diffId: "live1" });
+  patch = null;
+  await refreshLiveDiffs(["/r"]);
+  on.closed({ diffId: "live1" });
+  await refreshLiveDiffs();
+  assert.deepEqual(updates, [["open", true], ["live1", "one"], ["live1", "two"], ["live1", "gone"]]);
+  assert.deepEqual(loads, [false, false, true, false]);
 });

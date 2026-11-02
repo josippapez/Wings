@@ -646,8 +646,12 @@ interface Wings {
     projectId?: string;
     actions?: ({ label: string; open: { view: string; args?: unknown } } | { label: string; url: string })[];
   }): Promise<void>;
-  /** Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. */
-  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus }): Promise<{ id: string }>;
+  /**
+   * Needs `"diff"` in `contributes.ui`. Leave out `patch` to open it loading, then call `updateDiff`. With `refresh: true`
+   * (Wings 0.1.113) the plugin keeps it up to date: the viewer shows a Refresh button that calls `onDiffRefresh`, and
+   * `onDiffClosed` says when it closes.
+   */
+  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus; refresh?: boolean }): Promise<{ id: string }>;
   /** Updates a viewer opened with `openDiff`; ignored once it's closed. `{ comments }` alone keeps the patch, like after a reply. */
   updateDiff(id: string, update: { patch: string; comments?: WingsComment[]; focus?: WingsDiffFocus } | { comments: WingsComment[]; focus?: WingsDiffFocus } | { error: string }): Promise<void>;
   /**
@@ -656,6 +660,17 @@ interface Wings {
    * with the text kept. One handler: a second call replaces the first.
    */
   onReply(handler: (reply: WingsReply) => unknown): void;
+  /**
+   * Needs Wings 0.1.113. The Refresh button of a viewer opened with `refresh: true`. Load it again and `updateDiff` it;
+   * the button spins until the returned promise settles, and a thrown error shows as a toast. One handler: a second call
+   * replaces the first.
+   */
+  onDiffRefresh(handler: (event: { diffId: string }) => unknown): void;
+  /**
+   * Needs Wings 0.1.113. A viewer opened with `refresh: true` closed, or another diff took its place, so stop keeping it
+   * up to date. Main script only. Returns a function that removes the listener.
+   */
+  onDiffClosed(listener: (event: { diffId: string }) => void): () => void;
   /**
    * POSTs `fields` (string or whole-number values, up to 64 KB) as JSON to a `permissions.post` path, as you:
    * `gh api` (against `host` for a GitHub Enterprise Server), `glab api` against `host`, or `az rest` for Azure

@@ -176,7 +176,7 @@ Every `wings.on*` call returns a function that removes the listener, so `useBroa
 | `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change |
 | `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes |
 | `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front |
-| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `errorMessage`, `openDiffWhile` |
+| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `errorMessage`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` |
 | `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens`, `clock` |
 | `wings-plugin-sdk/cli` | `cli()`: `az`, `gh` and `glab`, with install and sign-in handled |
 | `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az` call for all the ids asked at once |
@@ -419,6 +419,16 @@ what every project needs first (its remote, say), then ask: a `get` that comes a
 
 `serial()` runs jobs one at a time in order, `errorMessage(error)` gives the text of anything thrown, and
 `openDiffWhile(diff, load)` opens the diff viewer loading and fills it when `load` resolves.
+
+For a diff that can change while it's open, like the working tree or a pull request, use `openLiveDiff(diff, load, { key })`
+from the main script (Wings 0.1.113). The viewer gets a Refresh button, `load({ fresh })` runs again every 15 s while Wings
+is in front, and only a changed update reaches the viewer. `fresh` is true for the button. `refreshLiveDiffs(keys)` loads
+the viewers whose `key` is in `keys` again now, like after a git change:
+
+```ts
+const { id } = await openLiveDiff({ title: "Uncommitted changes", cwd: root }, async ({ fresh }) => ({ patch: await diffOf(root, { fresh }) }), { key: root });
+onGitChange((_ids, roots) => void refreshLiveDiffs(roots));
+```
 
 ### Format
 

@@ -1,5 +1,7 @@
 // Small async helpers that plugins kept writing by hand.
 
+import { pollWhileFocused } from "./poll.js";
+
 /** The message of an Error, or the text of anything else that was thrown. */
 export const errorMessage = (error) => String(error?.message ?? error);
 
@@ -173,4 +175,63 @@ export async function openDiffWhile(diff, load) {
     update = { error: errorMessage(error) };
   }
   await globalThis.wings.updateDiff(id, update);
+}
+
+/** How often an open `openLiveDiff` viewer loads again while Wings is in front. */
+const LIVE_DIFF_MS = 15_000;
+/** The viewers `openLiveDiff` keeps up to date, by id: their load, key, the update they show as JSON, and their queue. */
+const liveDiffs = new Map();
+let stopLivePoll = null;
+let liveHooked = false;
+
+/** Runs a viewer's load and sends the update when it differs from what the viewer shows. One load at a time per viewer. */
+function reloadLiveDiff(id, viewer, fresh) {
+  return viewer.queue(async () => {
+    let update;
+    try {
+      update = await viewer.load({ fresh });
+    } catch (error) {
+      update = { error: errorMessage(error) };
+    }
+    const shown = JSON.stringify(update);
+    if (!liveDiffs.has(id) || shown === viewer.shown) return;
+    viewer.shown = shown;
+    await globalThis.wings.updateDiff(id, update);
+  });
+}
+
+/**
+ * Like `openDiffWhile`, for a diff that can change while it's open, like the working tree or a pull request. Needs Wings
+ * 0.1.113, from the main script. The viewer gets a Refresh button, and `load` runs again every 15 s while Wings is in
+ * front. An update the viewer already shows isn't sent again, and nothing runs once it's closed. `load({ fresh })`:
+ * `fresh` is true for the Refresh button, to skip a cache. With `patch` in `diff` the viewer opens filled and `load`
+ * waits for the first refresh. `key` names what it shows, like a repo folder, for `refreshLiveDiffs`. It takes over
+ * `wings.onDiffRefresh`. Resolves the viewer's `{ id }` once it shows its first update.
+ */
+export async function openLiveDiff(diff, load, { key } = {}) {
+  const w = globalThis.wings;
+  if (!liveHooked) {
+    liveHooked = true;
+    w.onDiffRefresh(({ diffId }) => {
+      const viewer = liveDiffs.get(diffId);
+      return viewer && reloadLiveDiff(diffId, viewer, true);
+    });
+    w.onDiffClosed(({ diffId }) => {
+      liveDiffs.delete(diffId);
+      if (liveDiffs.size > 0 || !stopLivePoll) return;
+      stopLivePoll();
+      stopLivePoll = null;
+    });
+  }
+  const { id } = await w.openDiff({ ...diff, refresh: true });
+  const viewer = { load, key, shown: diff.patch === undefined ? undefined : JSON.stringify({ patch: diff.patch, comments: diff.comments }), queue: serial() };
+  liveDiffs.set(id, viewer);
+  stopLivePoll ??= pollWhileFocused(() => void refreshLiveDiffs(), LIVE_DIFF_MS);
+  if (viewer.shown === undefined) await reloadLiveDiff(id, viewer, false);
+  return { id };
+}
+
+/** Loads the viewers `openLiveDiff` opened again now, or only those whose `key` is in `keys`, like after a git change. */
+export function refreshLiveDiffs(keys) {
+  return Promise.all([...liveDiffs].filter(([, v]) => !keys || keys.includes(v.key)).map(([id, v]) => reloadLiveDiff(id, v, false))).then(() => {});
 }

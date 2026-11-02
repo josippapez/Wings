@@ -93,3 +93,20 @@ export type DiffUpdate = Parameters<Wings["updateDiff"]>[1];
  * a plugin that keeps track of its viewers. Resolves when the viewer has been updated.
  */
 export function openDiffWhile(diff: DiffOpen, load: (id: string) => DiffUpdate | Promise<DiffUpdate>): Promise<void>;
+
+/**
+ * Like `openDiffWhile`, for a diff that can change while it's open, like the working tree or a pull request. Needs Wings
+ * 0.1.113, from the main script. The viewer gets a Refresh button, and `load` runs again every 15 s while Wings is in
+ * front. An update the viewer already shows isn't sent again, and nothing runs once it's closed. `load({ fresh })`:
+ * `fresh` is true for the Refresh button, to skip a cache. With `patch` in `diff` the viewer opens filled and `load`
+ * waits for the first refresh. `key` names what it shows, like a repo folder, for `refreshLiveDiffs`. It takes over
+ * `wings.onDiffRefresh`. Resolves the viewer's `{ id }` once it shows its first update.
+ */
+export function openLiveDiff(
+  diff: Omit<Parameters<Wings["openDiff"]>[0], "refresh">,
+  load: (options: { fresh: boolean }) => DiffUpdate | Promise<DiffUpdate>,
+  options?: { key?: string },
+): Promise<{ id: string }>;
+
+/** Loads the viewers `openLiveDiff` opened again now, or only those whose `key` is in `keys`, like after a git change. */
+export function refreshLiveDiffs(keys?: string[]): Promise<void>;
