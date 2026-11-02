@@ -1555,7 +1555,7 @@ pub fn pane_input(plugin: &Plugin, command: Option<&str>, args: &[String]) -> Re
 /// The folder a plugin's command runs in. A `cwd` must be inside one of your projects once `..` and symlinks are resolved,
 /// like a pane's: in a folder of its own choosing, git compares any two files there and az, gh and glab read its repo. A
 /// folder outside them is allowed when it's in a git repo that one of your open panes is in, and with `any_repo` in any
-/// git repo (see `lists_worktrees_anywhere`). Only a repo: in a folder that isn't one, git diff compares any two files.
+/// git repo (see `worktrees_call_in_any_repo`). Only a repo: in a folder that isn't one, git diff compares any two files.
 /// git needs a cwd. Anything else without one runs in `/`, where nothing is a repo, not in the folder Wings itself
 /// started in.
 pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &[PathBuf], any_repo: bool) -> Result<PathBuf, String> {
@@ -1574,11 +1574,27 @@ pub fn exec_cwd(program: &str, cwd: Option<&str>, projects: &[PathBuf], panes: &
     })
 }
 
-/// Whether a built-in plugin may run this in any git repo on the Mac, for Worktrees' "Elsewhere". Only `git worktree
-/// list`: a repo's own config runs commands on most others (`core.fsmonitor` and clean filters on `git status`, textconv
-/// on `git diff`), and a repo found on disk may be anyone's.
-pub fn lists_worktrees_anywhere(builtin: bool, program: &str, args: &[String]) -> bool {
-    builtin && program == "git" && args.len() >= 2 && args[0] == "worktree" && args[1] == "list"
+/// Whether a built-in plugin may run this in any git repo on the Mac: the exact calls Worktrees makes for its "Elsewhere"
+/// repos, which a repo found on disk may make anyone's. The reads run no program a repo names (measured: `worktree list`,
+/// `rev-parse`, `branch --list`, `worktree prune`). Removing runs the repo's own settings and hooks (`worktree remove`
+/// its file system monitor and clean filters, `branch -d` its reference-transaction hook), so the plugin warns before
+/// it and has no bulk remove there. Never a force flag, and never `status`, `log` or `diff`.
+pub fn worktrees_call_in_any_repo(builtin: bool, program: &str, args: &[String]) -> bool {
+    // An operand that starts with `-` would be read as an option.
+    let operand = |a: &str| !a.is_empty() && !a.starts_with('-') && !a.chars().any(char::is_control);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    builtin
+        && program == "git"
+        && match args.as_slice() {
+            ["worktree", "list", "--porcelain"] | ["worktree", "prune", "--verbose"] => true,
+            ["rev-parse", "--show-toplevel"] | ["rev-parse", "--abbrev-ref", "origin/HEAD"] => true,
+            ["rev-parse", "--verify", "--quiet", rev] => rev.strip_suffix("^{commit}").is_some_and(operand),
+            ["branch", "--list", "--format=%(refname:short)%09%(upstream:track)"] => true,
+            ["branch", "--list", merged, "--format=%(refname:short)"] => merged.strip_prefix("--merged=").is_some_and(operand),
+            ["worktree", "remove", "--", path] => operand(path),
+            ["branch", "-d", branch] => operand(branch),
+            _ => false,
+        }
 }
 
 /// The nearest folder at or above `dir` that holds a `.git`, a folder or a worktree's file.
@@ -3652,7 +3668,7 @@ mod tests {
         // The repo a pane is in, at its root or below, for any plugin.
         assert_eq!(at("repo", false).unwrap(), base.join("repo").canonicalize().unwrap());
         assert!(at("repo/src", false).is_ok());
-        // Another repo only to list its worktrees from a built-in plugin; a pane's folder that isn't a repo never, since git
+        // Another repo only for the calls Worktrees makes, from a built-in plugin; a pane's folder that isn't a repo never, since git
         // diff there reads any file.
         assert!(at("other", false).unwrap_err().contains("open in a pane"));
         assert!(at("other", true).is_ok());
@@ -3660,10 +3676,64 @@ mod tests {
             assert!(at(cwd, false).is_err() && at(cwd, true).is_err(), "{cwd}");
         }
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(lists_worktrees_anywhere(true, "git", &args(&["worktree", "list", "--porcelain"])));
-        for (builtin, a) in [(false, &["worktree", "list"][..]), (true, &["status"]), (true, &["diff"]), (true, &["worktree", "add"])] {
-            assert!(!lists_worktrees_anywhere(builtin, "git", &args(a)), "{builtin} {a:?}");
+        let allowed = |builtin, a: &[&str]| worktrees_call_in_any_repo(builtin, "git", &args(a));
+        // Each call Worktrees makes passes for a built-in plugin and for no other.
+        for a in [
+            &["worktree", "list", "--porcelain"][..],
+            &["worktree", "prune", "--verbose"],
+            &["rev-parse", "--show-toplevel"],
+            &["rev-parse", "--abbrev-ref", "origin/HEAD"],
+            &["rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+            &["branch", "--list", "--merged=origin/main", "--format=%(refname:short)"],
+            &["branch", "--list", "--format=%(refname:short)%09%(upstream:track)"],
+            &["worktree", "remove", "--", "/Users/me/dev/repo-fix"],
+            &["branch", "-d", "feature/x"],
+        ] {
+            assert!(allowed(true, a) && !allowed(false, a), "{a:?}");
         }
+        // Force, `-D`, config and location flags, extra arguments, operands that look like options, and other calls.
+        for a in [
+            &["worktree", "remove", "--force", "--", "/p"][..],
+            &["worktree", "remove", "-f", "--", "/p"],
+            &["worktree", "remove", "/p"],
+            &["worktree", "remove", "--", "-f"],
+            &["worktree", "remove", "--", "/p", "/q"],
+            &["worktree", "remove", "--", ""],
+            &["branch", "-D", "x"],
+            &["branch", "-d", "-D"],
+            &["branch", "-d", "--force", "x"],
+            &["branch", "-d", "-f", "x"],
+            &["branch", "-d", "x", "y"],
+            &["branch", "--delete", "x"],
+            &["-c", "core.fsmonitor=touch x", "worktree", "list", "--porcelain"],
+            &["-C", "/elsewhere", "worktree", "list", "--porcelain"],
+            &["--git-dir=/x", "worktree", "list", "--porcelain"],
+            &["worktree", "list", "--porcelain", "-c", "x=y"],
+            &["worktree", "list"],
+            &["worktree", "list", "--porcelain", "--extra"],
+            &["worktree", "prune"],
+            &["worktree", "prune", "--verbose", "--expire=now"],
+            &["worktree", "add", "/p"],
+            &["worktree", "lock", "/p"],
+            &["rev-parse", "--verify", "--quiet", "--help^{commit}"],
+            &["rev-parse", "--verify", "--quiet", "origin/main"],
+            &["rev-parse", "--verify", "--quiet", "origin/main^{commit}", "--extra"],
+            &["rev-parse", "--git-dir"],
+            &["rev-parse", "--show-toplevel", "--extra"],
+            &["branch", "--list", "--merged=-x", "--format=%(refname:short)"],
+            &["branch", "--list", "--merged=main", "--format=%(refname)"],
+            &["branch", "--list", "--format=%(refname:short)", "--merged=main"],
+            &["branch", "--list", "--contains=x", "--format=%(refname:short)"],
+            &["branch", "--list"],
+            &["status"],
+            &["status", "--porcelain"],
+            &["log", "--max-count=1", "--format=%ct"],
+            &["diff"],
+            &[],
+        ] {
+            assert!(!allowed(true, a), "{a:?}");
+        }
+        assert!(!worktrees_call_in_any_repo(true, "sh", &args(&["worktree", "list", "--porcelain"])));
         fs::remove_dir_all(&base).unwrap();
     }
 

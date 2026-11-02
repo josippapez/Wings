@@ -5,7 +5,8 @@
 // file system monitor, a signature check), `git worktree remove` (it checks for changes first) and `git branch -d` (a
 // hook on the ref). `worktree list`, `rev-parse`, `branch --list` and `worktree prune` run none. A repo that isn't one of
 // your projects, like one a scan found on the disk, may be someone else's, so it is loaded with `check: false`, which
-// runs only the ones that run nothing.
+// runs only the ones that run nothing. Wings runs only these exact calls there (no status or log), and removing one
+// worktree in such a repo is allowed after a warning, since `worktree remove` and `branch -d` can run its programs.
 
 import { errorMessage, mapLimit } from "wings-plugin-sdk/async";
 import { defaultBranch, git, gitOk, gitRun, repoRoot } from "wings-plugin-sdk/git";
