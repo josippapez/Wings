@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.115 · 2026-11-03
+
+- **Agent icons stay visible.** The Agents list keeps each agent's icon while it's working, needs you, finished or idle. Its state indicator sits next to the status text.
+- **OpenCode calls use the right project.** MCP and `wings` commands use the calling session's pane, even when sessions in several projects share one OpenCode service.
+
 ## 0.1.114 · 2026-11-02
 
 - **Codex, Cursor CLI and Grok Build panes are recognised.** A pane running one of them shows its name and icon, like Claude Code and opencode, and Settings, Agents uses the same icons. Wings doesn't track whether they're working or waiting yet.
