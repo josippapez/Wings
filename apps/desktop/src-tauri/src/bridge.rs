@@ -170,6 +170,7 @@ fn handle(bridge: &Bridge, message: Value) {
                 "name": message["params"]["name"],
                 "arguments": message["params"].get("arguments").cloned().unwrap_or_else(|| json!({})),
                 "ppid": std::os::unix::process::parent_id(),
+                "sessionId": message["params"]["_meta"]["ai.opencode/sessionID"],
             });
             Ok(match bridge.ask(request, TOOL_WAIT) {
                 Some(reply) => reply.get("result").cloned().unwrap_or_else(|| {
@@ -190,6 +191,45 @@ fn handle(bridge: &Bridge, message: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_server_calls_keep_the_invoking_session() {
+        let (app, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let bridge = Bridge {
+            stdout: Mutex::new(std::io::stdout()),
+            app: Mutex::new(Some(app)),
+            pending: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(1),
+            initialized: AtomicBool::new(false),
+        };
+        let sessions = [Some("ses_wings"), Some("ses_setup"), None];
+        thread::scope(|scope| {
+            let received = scope.spawn(|| {
+                let mut reader = BufReader::new(peer);
+                sessions.map(|_| {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let id = request["id"].as_u64().unwrap();
+                    bridge.pending.lock().unwrap().remove(&id).unwrap().send(json!({ "result": {} })).unwrap();
+                    request
+                })
+            });
+            for session in sessions {
+                let mut message = json!({ "id": 1, "method": "tools/call", "params": { "name": "tasks__list", "arguments": {} } });
+                if let Some(id) = session {
+                    message["params"]["_meta"] = json!({ "ai.opencode/sessionID": id });
+                }
+                handle(&bridge, message);
+            }
+            for (request, session) in received.join().unwrap().iter().zip(sessions) {
+                assert_eq!(request["sessionId"], json!(session));
+                assert_eq!(request["arguments"], json!({}));
+                assert_eq!(request["ppid"], std::os::unix::process::parent_id());
+            }
+        });
+    }
 
     #[test]
     fn plugin_lines_follow_the_static_text() {

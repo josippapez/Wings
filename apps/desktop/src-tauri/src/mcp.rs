@@ -95,7 +95,8 @@ fn serve(app: &AppHandle, stream: UnixStream) {
                 let name = request.get("name").and_then(Value::as_str).unwrap_or_default();
                 let arguments = request.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 let ppid = request.get("ppid").and_then(Value::as_u64).map(|p| p as u32);
-                let result = call(app, name, arguments, ppid).unwrap_or_else(|text| ToolResult { text, is_error: true });
+                let session_id = request.get("sessionId").and_then(Value::as_str);
+                let result = call(app, name, arguments, ppid, session_id).unwrap_or_else(|text| ToolResult { text, is_error: true });
                 json!({ "id": id, "result": { "content": [{ "type": "text", "text": result.text }], "isError": result.is_error } })
             }
             Some("hook") => {
@@ -150,15 +151,15 @@ fn plugin_instructions(app: &AppHandle) -> Vec<String> {
 }
 
 /// Runs one of Wings' own tools. Their names have no `__`, so they can't be a plugin's.
-fn builtin(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<ToolResult> {
+fn builtin(app: &AppHandle, name: &str, arguments: &Value, caller: &dyn Fn() -> Option<String>) -> Option<ToolResult> {
     let state = app.state::<AppState>();
     if matches!(name, "search_history" | "read_session") {
         // The caller can't ask again later, so OpenCode's sessions are loaded before it searches.
         state.history.sync_opencode();
     }
     let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)
-        .or_else(|| project_info_tool(app, name, arguments, ppid))
-        .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, &|| ppid.and_then(|pid| pane_of(app, pid))))?;
+        .or_else(|| project_info_tool(app, name, arguments, caller))
+        .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, caller))?;
     Some(match result {
         Ok(text) => ToolResult { text, is_error: false },
         Err(text) => ToolResult { text, is_error: true },
@@ -166,12 +167,12 @@ fn builtin(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) ->
 }
 
 /// The `project_info_*` tools, for the project of the pane the call came from.
-fn project_info_tool(app: &AppHandle, name: &str, arguments: &Value, ppid: Option<u32>) -> Option<Result<String, String>> {
+fn project_info_tool(app: &AppHandle, name: &str, arguments: &Value, caller: &dyn Fn() -> Option<String>) -> Option<Result<String, String>> {
     if !name.starts_with("project_info_") {
         return None;
     }
     let state = app.state::<AppState>();
-    let space = ppid.and_then(|pid| pane_of(app, pid)).and_then(|id| state.terminals.meta(&id).map(|p| p.space_id.clone()));
+    let space = caller().and_then(|id| state.terminals.meta(&id).map(|p| p.space_id.clone()));
     let spaces = state.spaces.lock().unwrap().spaces.clone();
     crate::project_info::call_tool(&state.project_info, &spaces, space.as_deref(), name, arguments, &|id| {
         let _ = app.emit("project-info-changed", json!({ "projectId": id }));
@@ -329,8 +330,12 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
 }
 
 /// Asks the plugin, through the webview, to run one of its tools, and waits for its answer.
-fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Result<ToolResult, String> {
-    if let Some(result) = builtin(app, name, &arguments, ppid) {
+fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>, session_id: Option<&str>) -> Result<ToolResult, String> {
+    let caller = || match session_id {
+        Some(id) => session_pane(&app.state::<AppState>().agents.lock().unwrap(), id),
+        None => ppid.and_then(|pid| pane_of(app, pid)),
+    };
+    if let Some(result) = builtin(app, name, &arguments, &caller) {
         return Ok(result);
     }
     let (plugin_id, tool) = name.split_once(SEPARATOR).ok_or_else(|| format!("unknown tool {name}"))?;
@@ -339,7 +344,7 @@ fn call(app: &AppHandle, name: &str, arguments: Value, ppid: Option<u32>) -> Res
     if !plugin.manifest.contributes.mcp_tools.iter().any(|t| t.name == tool) {
         return Err(format!("{plugin_id} has no tool {tool}"));
     }
-    let pane_id = ppid.and_then(|pid| pane_of(app, pid));
+    let pane_id = caller();
     let (project, session) = caller_of(app, pane_id.as_deref());
     ask_webview(app, "mcp-call", json!({ "pluginId": plugin_id, "tool": tool, "arguments": arguments, "paneId": pane_id, "project": project, "session": session }))
         .map_err(|_| format!("{plugin_id} didn't answer in time"))
@@ -436,6 +441,15 @@ fn caller_of(app: &AppHandle, pane_id: Option<&str>) -> (Value, Value) {
     caller(space.as_ref(), agent.as_ref())
 }
 
+// A shared OpenCode service's ancestry points at its first pane, never at later callers.
+fn session_pane(agents: &[Agent], session_id: &str) -> Option<String> {
+    let mut matching = agents.iter().filter(|a| a.kind == AgentKind::Opencode && a.session_id.as_deref() == Some(session_id));
+    match (matching.next(), matching.next()) {
+        (Some(agent), None) => Some(agent.pane_id.clone()),
+        _ => None,
+    }
+}
+
 /// The webview hands back a plugin's answer.
 pub fn resolve(app: &AppHandle, call_id: u64, result: ToolResult) {
     if let Some(done) = app.state::<AppState>().mcp.pending.lock().unwrap().remove(&call_id) {
@@ -502,6 +516,23 @@ mod tests {
         assert_eq!(caller(Some(&tree), None).0, json!({ "id": "s2", "name": "web-fix", "path": "/work/web-fix", "parentId": "s1" }));
         // A call from outside every pane has neither.
         assert_eq!(caller(None, None), (Value::Null, Value::Null));
+    }
+
+    #[test]
+    fn shared_server_sessions_route_to_their_own_panes() {
+        let first = agent(AgentKind::Opencode, Some("ses_setup"), Some("setup"));
+        let mut later = agent(AgentKind::Opencode, Some("ses_wings"), Some("wings"));
+        later.pane_id = "p2".into();
+        later.space_id = "s2".into();
+        let agents = [first, later];
+        assert_eq!(session_pane(&agents, "ses_setup"), Some("p1".into()));
+        assert_eq!(session_pane(&agents, "ses_wings"), Some("p2".into()));
+        assert_eq!(session_pane(&agents, "ses_unknown"), None);
+        assert_eq!(session_pane(&agents, ""), None);
+        let mut duplicate = agents[1].clone();
+        duplicate.pane_id = "p3".into();
+        assert_eq!(session_pane(&[agents[1].clone(), duplicate], "ses_wings"), None);
+        assert_eq!(session_pane(&[agent(AgentKind::Claude, Some("ses_wings"), None)], "ses_wings"), None);
     }
 
     #[test]

@@ -194,7 +194,7 @@ fn call_tool(name: &str, rest: &[String]) -> i32 {
         // A project like `2024` is a name, not a number.
         arguments.insert(key.to_string(), if key == "project" { json!(value) } else { argument(value) });
     }
-    let request = json!({ "name": name, "arguments": arguments, "ppid": std::os::unix::process::parent_id() });
+    let request = tool_request(name, arguments, std::env::var("OPENCODE_SESSION_ID").ok());
     match ask("call", request) {
         Ok(result) => {
             let text = result.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default();
@@ -206,6 +206,10 @@ fn call_tool(name: &str, rest: &[String]) -> i32 {
         }
         Err(e) => fail(&e),
     }
+}
+
+fn tool_request(name: &str, arguments: serde_json::Map<String, Value>, session_id: Option<String>) -> Value {
+    json!({ "name": name, "arguments": arguments, "ppid": std::os::unix::process::parent_id(), "sessionId": session_id })
 }
 
 /// Claude Code's status JSON is a few KB.
@@ -450,6 +454,16 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_server_cli_calls_keep_the_invoking_session() {
+        let args = serde_json::Map::from_iter([("status".into(), json!("todo"))]);
+        let request = super::tool_request("tasks__list", args.clone(), Some("ses_wings".into()));
+        assert_eq!(request["sessionId"], "ses_wings");
+        assert_eq!(request["arguments"], serde_json::Value::Object(args));
+        assert_eq!(request["ppid"], std::os::unix::process::parent_id());
+        assert!(super::tool_request("tasks__list", Default::default(), None)["sessionId"].is_null());
+    }
+
     #[test]
     fn a_command_argument_reads_as_json_when_it_is_a_number_bool_or_list_else_as_text() {
         use super::argument;
