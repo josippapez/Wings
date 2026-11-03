@@ -55,3 +55,12 @@ test("an idle agent shows its own mark, any other state shows the state dot, for
     for (const state of ["working", "blocked", "done"] as const) assert.equal(paneGlyph({ ...agent("a", state), kind }), "state", `${kind} ${state}`);
   }
 });
+
+test("kind-only icons keep every agent's mark in every state", () => {
+  assert.equal(paneGlyph(undefined, false), "shell");
+  for (const kind of ["claude", "opencode", "codex", "cursor", "grok"] as const) {
+    for (const state of ["idle", "working", "blocked", "done"] as const) {
+      assert.equal(paneGlyph({ ...agent("a", state), kind }, false), kind, `${kind} ${state}`);
+    }
+  }
+});

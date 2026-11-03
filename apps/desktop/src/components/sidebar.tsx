@@ -571,8 +571,8 @@ export function Sidebar(props: {
                         agent.state === "blocked" && "bg-blocked/10 hover:bg-blocked/15",
                       )}
                     >
-                      <span className="flex size-4 shrink-0 items-center justify-center">
-                        <PaneIcon agent={agent} />
+                      <span role="img" aria-label={agentLabel(agent.kind)} title={agentLabel(agent.kind)} className="flex size-4 shrink-0 items-center justify-center">
+                        <PaneIcon agent={agent} showState={false} />
                       </span>
                       <span className="min-w-0 flex-1" title={`${agent.name ?? agentLabel(agent.kind)}\n${spaceName(agent.spaceId)}, ${agentStatus(agent)}${agent.summary ? `\n${agent.summary}` : ""}`}>
                         <span className="flex items-center gap-1.5">
@@ -584,12 +584,13 @@ export function Sidebar(props: {
                           )}
                         </span>
                         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
-                          {spaceName(agent.spaceId)}, {agentStatus(agent)}
+                          {spaceName(agent.spaceId)},
+                          <StatusDot state={agent.state} className="mx-1 align-middle" />
+                          {agentStatus(agent)}
                           {agent.state === "working" && agent.stateSince && <Elapsed since={agent.stateSince} />}
                         </span>
                         {agent.summary && <span className="block truncate text-[11px] leading-4 text-muted-foreground/70">{agent.summary}</span>}
                       </span>
-                      {agent.state === "done" && <span className="size-1.5 shrink-0 rounded-full bg-done" aria-hidden />}
                     </Item>
                       </ContextMenuTrigger>
                       <ContextMenuContent>

@@ -29,9 +29,9 @@ export function paneLabel(agent: Agent | undefined, info: PaneInfo | undefined, 
   return { title: info?.command || "shell", detail: cwd ? tildify(cwd) : "", agent, running };
 }
 
-/** An idle agent shows its own mark and a busy one its live status (same for every agent); plain shells get a terminal glyph. */
-export function PaneIcon({ agent, className }: { agent: Agent | undefined; className?: string }) {
-  switch (paneGlyph(agent)) {
+/** Set showState to false where the status is shown separately. */
+export function PaneIcon({ agent, className, showState = true }: { agent: Agent | undefined; className?: string; showState?: boolean }) {
+  switch (paneGlyph(agent, showState)) {
     case "shell":
       return <TerminalIcon className={className ?? "size-3.5 text-muted-foreground"} aria-hidden />;
     case "claude":

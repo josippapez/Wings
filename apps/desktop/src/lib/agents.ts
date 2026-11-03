@@ -22,8 +22,8 @@ export function elapsed(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-/** What a pane's icon shows: the agent's own mark while it is idle, its live state dot otherwise (the same for every agent kind). */
-export function paneGlyph(agent: Agent | undefined): AgentKind | "shell" | "state" {
+/** Busy panes show live status by default; rows with a separate status keep the agent's own mark. */
+export function paneGlyph(agent: Agent | undefined, showState = true): AgentKind | "shell" | "state" {
   if (!agent) return "shell";
-  return agent.state === "idle" ? agent.kind : "state";
+  return !showState || agent.state === "idle" ? agent.kind : "state";
 }
