@@ -280,7 +280,7 @@ export function TitleBar(props: {
             onWheel={(e) => {
               if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
             }}
-            className="h-auto min-w-0 justify-start gap-0.5 overflow-x-auto overflow-y-hidden p-0 [scrollbar-width:none]"
+            className="h-auto w-auto min-w-0 flex-1 justify-start gap-0.5 overflow-x-auto overflow-y-hidden p-0 [scrollbar-width:none]"
           >
             <AnimatePresence initial={false} mode="popLayout">
               {props.tabs.map((tab, i) => {
@@ -297,7 +297,7 @@ export function TitleBar(props: {
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
                     transition={spring}
-                    className="group/tab relative flex shrink-0 rounded-lg data-drop-over:bg-white/[0.1] data-drop-over:ring-1 data-drop-over:ring-ring"
+                    className="group/tab relative flex min-w-36 flex-1 rounded-lg data-drop-over:bg-white/[0.1] data-drop-over:ring-1 data-drop-over:ring-ring"
                   >
                     <ContextMenu
                       onOpenChangeComplete={(open) => {
@@ -306,7 +306,7 @@ export function TitleBar(props: {
                         setEditing(tab.id);
                       }}
                     >
-                      <ContextMenuTrigger render={<div data-tab-inner className="relative flex" />}>
+                      <ContextMenuTrigger render={<div data-tab-inner className="relative flex min-w-0 flex-1" />}>
                         {active && (
                           <motion.span
                             // Plain while its tab is dragged, so it can't slide against the tab it belongs to.
@@ -337,7 +337,7 @@ export function TitleBar(props: {
                             onDoubleClick={() => "label" in tab && setEditing(tab.id)}
                             title={`${title}  ${isMac ? "⌘" : "Ctrl+Shift+"}${i + 1}${"running" in tab && tab.running.length ? `\nRunning ${tab.running.join(", ")}` : ""}${"byAgent" in tab && tab.byAgent ? "\nOpened by an agent, which may run its next command here or close it" : ""}`}
                             className={cn(
-                              "relative h-7 max-w-48 flex-none justify-start gap-1.5 rounded-lg border-0 pr-7 pl-2.5 text-[12px] font-normal after:hidden",
+                              "relative h-7 min-w-0 flex-1 justify-start gap-1.5 rounded-lg border-0 pr-7 pl-2.5 text-[12px] font-normal after:hidden",
                               active ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground",
                             )}
                           >
