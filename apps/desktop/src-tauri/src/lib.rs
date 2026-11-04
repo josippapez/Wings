@@ -6,6 +6,7 @@ mod claude;
 #[cfg(unix)]
 mod claude_settings;
 mod detect;
+mod program_status;
 mod disk_usage;
 mod editors;
 mod gitwatch;
@@ -1784,6 +1785,7 @@ fn start_detection(app: AppHandle) {
                     shell_pid: p.meta.shell_pid,
                     foreground_pid: p.foreground_pid,
                     title: p.title.to_string(),
+                    codex_status: p.codex_status,
                 })
             });
             let focused = state.focused.lock().unwrap().clone();

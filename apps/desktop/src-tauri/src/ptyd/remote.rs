@@ -73,6 +73,7 @@ struct Pane {
     meta: Arc<PaneMeta>,
     fg: Option<u32>,
     title: String,
+    codex_status: Option<crate::program_status::CodexReport>,
     /// Where the output received so far ends, to attach again from there after a lag.
     seq: u64,
     sink: Option<Channel<InvokeResponseBody>>,
@@ -292,9 +293,10 @@ impl Inner {
                 let Some(pending) = self.pending.lock().unwrap().remove(&id) else { return };
                 (pending.done)(self, error.map_or(Ok(ok), Err), pending.blob);
             }
-            HostMsg::Title { pane, title } => {
+            HostMsg::Title { pane, title, codex_status } => {
                 if let Some(pane) = self.mirror.lock().unwrap().by_number(pane) {
                     pane.title = title;
+                    pane.codex_status = codex_status;
                 }
             }
             HostMsg::Fg { pane, pid } => {
@@ -356,6 +358,7 @@ impl Inner {
                 }),
                 fg: info.fg,
                 title: info.title.clone(),
+                codex_status: info.codex_status,
                 seq: info.seq,
                 sink: None,
                 syncing: false,
@@ -406,6 +409,7 @@ impl PtyBackend for RemoteBackend {
                         meta: meta.clone(),
                         fg: None,
                         title: String::new(),
+                codex_status: None,
                         seq: spawned.seq,
                         sink: Some(output),
                         syncing: false,
@@ -478,7 +482,7 @@ impl PtyBackend for RemoteBackend {
 
     fn each_mirror(&self, visit: &mut dyn FnMut(PaneMirror<'_>)) {
         for pane in self.inner().mirror.lock().unwrap().panes.values().filter(|p| !p.killed) {
-            visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.fg, title: &pane.title });
+            visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.fg, title: &pane.title, codex_status: pane.codex_status });
         }
     }
 
@@ -659,6 +663,31 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
     }
+    #[test]
+    fn remote_mirror_keeps_codex_reports_across_app_reconnects() {
+        use crate::program_status::CodexStatus;
+        let (path, _host) = test_host(Config::default());
+        let backend = RemoteBackend::connect(&path).unwrap();
+        let (output, got) = recorder();
+        let dir = std::env::temp_dir();
+        let meta = backend.spawn(request("codex-state", &dir, Vec::new()), output, Box::new(|_| {})).unwrap();
+        backend.write(&meta.id, b"printf '\\033]7501;state=work''ing:app=codex\\007'; echo sta''tus-sent\r").unwrap();
+        wait_for(&got, "status-sent");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut status = None;
+            backend.each_mirror(&mut |p| status = p.codex_status);
+            if status.is_some_and(|s| s.state == CodexStatus::Working) { break; }
+            assert!(Instant::now() < deadline, "the mirror never saw the report");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let again = RemoteBackend::connect(&path).unwrap();
+        let mut status = None;
+        again.each_mirror(&mut |p| status = p.codex_status);
+        assert_eq!(status.map(|s| s.state), Some(CodexStatus::Working));
+        backend.kill(&meta.id);
+    }
+
 }
 
 #[cfg(test)]
@@ -748,4 +777,5 @@ mod bench {
             println!("pty_throughput {}: {mb:.0} MB in {secs:.2}s = {:.0} MB/s", if round % 2 == 0 { "local" } else { "remote" }, mb / secs);
         }
     }
+
 }

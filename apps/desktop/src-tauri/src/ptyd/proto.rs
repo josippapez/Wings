@@ -188,8 +188,14 @@ pub enum HostMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// The program set the window title (OSC 0 or 2).
-    Title { pane: u32, title: String },
+    /// The program changed its title (OSC 0/2) or Codex lifecycle state (OSC 7501).
+    Title {
+        pane: u32,
+        title: String,
+        // Optional so an older host can still serve a newer app, using title fallback detection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        codex_status: Option<crate::program_status::CodexReport>,
+    },
     /// The foreground process changed: the shell itself at a prompt, else the command it runs.
     Fg { pane: u32, pid: Option<u32> },
     /// The pane's output ended: its shell exited, or it was killed. The host keeps it until it is killed.
@@ -225,6 +231,8 @@ pub struct PaneInfo {
     pub shell_pid: Option<u32>,
     pub fg: Option<u32>,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_status: Option<crate::program_status::CodexReport>,
     pub seq: u64,
     pub exited: bool,
 }
@@ -319,4 +327,12 @@ mod tests {
         assert_eq!(negotiate(PROTO + 5, PROTO + 1), None, "a newer app that dropped ours");
         assert_eq!(negotiate(0, 0), None, "older than the host still speaks");
     }
+    #[test]
+    fn old_host_titles_have_no_codex_report_and_new_reports_round_trip() {
+        let old: HostMsg = serde_json::from_str(r#"{"t":"title","pane":1,"title":"Working"}"#).unwrap();
+        assert_eq!(old, HostMsg::Title { pane: 1, title: "Working".into(), codex_status: None });
+        let new = HostMsg::Title { pane: 1, title: String::new(), codex_status: Some(crate::program_status::CodexReport { state: crate::program_status::CodexStatus::Permission, generation: 1, pid: Some(10) }) };
+        assert_eq!(serde_json::from_slice::<HostMsg>(&serde_json::to_vec(&new).unwrap()).unwrap(), new);
+    }
+
 }

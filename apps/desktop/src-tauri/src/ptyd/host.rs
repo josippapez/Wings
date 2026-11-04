@@ -172,6 +172,7 @@ struct PaneOut {
     attached: Vec<Arc<Client>>,
     /// The title and foreground process clients were last told.
     sent_title: String,
+    sent_codex_status: Option<crate::program_status::CodexReport>,
     fg: Option<u32>,
     exited: bool,
     /// Killed: forget it as soon as its output ends.
@@ -360,6 +361,7 @@ impl Host {
                 seq: 0,
                 attached: vec![client.clone()],
                 sent_title: String::new(),
+                sent_codex_status: None,
                 fg: None,
                 exited: false,
                 forget: false,
@@ -373,6 +375,7 @@ impl Host {
                 out.seq = history.len() as u64;
                 // The old program's title isn't the new shell's.
                 pane.title.lock().unwrap().clear();
+            out.kept.codex_status = None;
             }
             // Queued before the read loop starts, so the client knows the pane before its first output.
             let spawned = Spawned { pane: pane.id, shell_pid: pane.shell_pid, seq: out.seq };
@@ -394,17 +397,24 @@ impl Host {
                 Ok(n) => n,
             };
             let mut out = pane.out.lock().unwrap();
+            let previous_report = out.kept.codex_status;
             out.kept.push(&mut parser, &pane.title, &buf[..n]);
+            if out.kept.codex_status != previous_report {
+                if let Some(report) = out.kept.codex_status.as_mut() {
+                    report.pid = pane.master.lock().unwrap().process_group_leader().map(|p| p as u32);
+                }
+            }
             out.seq += n as u64;
             if !out.attached.is_empty() {
                 let frame = Arc::new(proto::out(pane.id, out.seq, &buf[..n]));
                 out.attached.retain(|client| client.stream(pane.id, &frame));
             }
             let title = pane.title.lock().unwrap();
-            if *title != out.sent_title {
+            if *title != out.sent_title || out.kept.codex_status != out.sent_codex_status {
                 out.sent_title.clone_from(&title);
+                out.sent_codex_status = out.kept.codex_status;
                 drop(title);
-                self.broadcast(&HostMsg::Title { pane: pane.id, title: out.sent_title.clone() });
+                self.broadcast(&HostMsg::Title { pane: pane.id, title: out.sent_title.clone(), codex_status: out.sent_codex_status });
             }
         }
         // Reaps the shell, which exits as its side of the PTY closes.
@@ -466,6 +476,7 @@ impl Host {
                     shell_pid: pane.shell_pid,
                     fg: out.fg,
                     title: pane.title.lock().unwrap().clone(),
+                    codex_status: out.kept.codex_status,
                     seq: out.seq,
                     exited: out.exited,
                 })
@@ -840,7 +851,7 @@ mod tests {
         let pane = client.spawn("p1");
         client.type_in(pane, "printf '\\033]0;bu''ild\\007'; echo he''llo $WINGS_PANE_ID\r");
         client.wait_for(pane, &format!("hello p{pane}"));
-        client.until("the title", |c| c.events.contains(&HostMsg::Title { pane, title: "build".into() }));
+        client.until("the title", |c| c.events.contains(&HostMsg::Title { pane, title: "build".into(), codex_status: None }));
         client.until("the foreground process", |c| c.events.iter().any(|e| matches!(e, HostMsg::Fg { pane: p, pid: Some(_) } if *p == pane)));
         let listed = client.list();
         assert_eq!(listed.len(), 1);
@@ -1027,4 +1038,20 @@ mod tests {
         assert!(!path.exists(), "left its socket behind");
         let _ = fs::remove_file(exe);
     }
+    #[test]
+    fn codex_status_is_broadcast_without_a_title_change_and_retained_for_a_new_client() {
+        use crate::program_status::CodexStatus;
+        let (path, _host) = test_host(config());
+        let mut client = TestClient::connect(&path);
+        let pane = client.spawn("codex-state");
+        client.type_in(pane, "printf '\\033]7501;state=work''ing:app=codex\\007'\r");
+        client.until("Codex status", |c| c.events.iter().any(|e| matches!(e, HostMsg::Title { pane: p, codex_status: Some(report), .. } if *p == pane && report.state == CodexStatus::Working)));
+        assert_eq!(client.list()[0].codex_status.map(|s| s.state), Some(CodexStatus::Working));
+        let mut again = TestClient::connect(&path);
+        assert_eq!(again.list()[0].codex_status.map(|s| s.state), Some(CodexStatus::Working));
+        client.type_in(pane, "printf '\\033]7501;state=clear\\007'\r");
+        wait_listed(&mut client, pane, "cleared Codex status", |p| p.codex_status.is_none());
+        client.call(Request::Kill { pane });
+    }
+
 }

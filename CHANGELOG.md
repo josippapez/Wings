@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.117 · 2026-11-04
+
+- **Scheduled labels stay with their session.** Opening another session in a reused tab clears the previous plugin label, title and resume flags. Sleep, resume and workspace restoration keep the original session's label.
+- **Codex shows its live state.** Its Agents row now shows when it is working, waiting for approval or input, or finished, instead of always saying idle. Fast turns and reconnected panes keep the correct state.
+- **Correct Codex and Grok Build icons.** Both use their agent marks in panes and Settings, Agents.
+
 ## 0.1.116 · 2026-11-04
 
 - **Tabs use the whole title bar.** Tabs share the strip's width instead of stopping at a fixed size, so titles aren't cut short while space sits empty. With many tabs the strip scrolls sideways.

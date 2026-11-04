@@ -24,7 +24,7 @@ pub use local::LocalBackend;
 
 /// The terminal host's own version, apart from Wings', in its `welcome`. Bump it when `host.rs` changes, so an app
 /// can tell an older host that still runs from before an update.
-pub const HOST_VERSION: u32 = 1;
+pub const HOST_VERSION: u32 = 2;
 
 /// The terminal host's socket, in a folder only this user can open, next to the MCP socket. A dev build has its own,
 /// so it never talks to the installed Wings' host.
@@ -76,6 +76,7 @@ pub struct PaneMirror<'a> {
     pub foreground_pid: Option<u32>,
     /// Latest OSC 0/2 window title the program set. Claude Code puts its state glyph here.
     pub title: &'a str,
+    pub codex_status: Option<crate::program_status::CodexReport>,
 }
 
 /// Called once with the pane's id when its output ends: the shell exited, or it was killed.

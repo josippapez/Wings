@@ -2,6 +2,7 @@
 //! the same way, so a terminal that attaches later catches up the same way wherever the pane runs.
 
 use std::sync::Mutex;
+use crate::program_status::{codex_report, CodexReport};
 
 /// Output kept per pane for a UI that loads again (a webview reload). xterm keeps 10,000 lines of scrollback, about
 /// 1 MB of plain shell output; output heavy in escape codes, like Claude Code's, fills it faster, but the repaint
@@ -95,18 +96,21 @@ pub struct Kept {
     pub ring: Ring,
     /// Whether each of `MODES` is on.
     pub modes: [bool; MODES.len()],
+    /// Latest root Codex status, kept even when no UI is attached.
+    pub codex_status: Option<CodexReport>,
+    codex_generation: u64,
 }
 
 impl Default for Kept {
     fn default() -> Kept {
         // Only the cursor (25) starts on, as in a fresh xterm.
-        Kept { ring: Ring::new(REPLAY_BYTES), modes: MODES.map(|m| m == 25) }
+        Kept { ring: Ring::new(REPLAY_BYTES), modes: MODES.map(|m| m == 25), codex_status: None, codex_generation: 0 }
     }
 }
 
 impl Kept {
     pub fn push(&mut self, parser: &mut vte::Parser, title: &Mutex<String>, chunk: &[u8]) {
-        parser.advance(&mut Tap { title, modes: &mut self.modes }, chunk);
+        parser.advance(&mut Tap { title, modes: &mut self.modes, codex_status: &mut self.codex_status, codex_generation: &mut self.codex_generation }, chunk);
         self.ring.push(chunk);
     }
 
@@ -146,11 +150,19 @@ pub const MAX_TITLE: usize = 4096;
 pub struct Tap<'a> {
     pub title: &'a Mutex<String>,
     pub modes: &'a mut [bool; MODES.len()],
+    pub codex_status: &'a mut Option<CodexReport>,
+    pub codex_generation: &'a mut u64,
 }
 
 impl vte::Perform for Tap<'_> {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         if let [kind, rest @ ..] = params {
+            if *kind == b"7501" && rest.len() == 1 {
+                if let Some(status) = codex_report(rest[0]) {
+                    *self.codex_generation = self.codex_generation.wrapping_add(1);
+                    *self.codex_status = status.map(|state| CodexReport { state, generation: *self.codex_generation, pid: None });
+                }
+            }
             if matches!(*kind, b"0" | b"2") && !rest.is_empty() {
                 let mut title = String::from_utf8_lossy(&rest.join(&b';')).into_owned();
                 title.truncate(title.floor_char_boundary(MAX_TITLE));
@@ -174,11 +186,12 @@ impl vte::Perform for Tap<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program_status::CodexStatus;
 
     fn title_after(bytes: &[u8]) -> String {
         let title = Mutex::new(String::new());
         let mut modes = Kept::default().modes;
-        vte::Parser::new().advance(&mut Tap { title: &title, modes: &mut modes }, bytes);
+        vte::Parser::new().advance(&mut Tap { title: &title, modes: &mut modes, codex_status: &mut None, codex_generation: &mut 0 }, bytes);
         title.into_inner().unwrap()
     }
 
@@ -243,4 +256,21 @@ mod tests {
         kept.push(&mut parser, &title, b"\nprompt");
         assert_eq!(kept.replay(), b"\x1b[?25l\x1b[?1006h\x1b[?2004hprompt");
     }
+    #[test]
+    fn codex_status_survives_split_osc_sequences_and_ring_wraps_and_clear() {
+        let title = Mutex::new(String::new());
+        let mut kept = Kept::default();
+        let mut parser = vte::Parser::new();
+        kept.push(&mut parser, &title, b"\x1b]7501;state=work");
+        assert_eq!(kept.codex_status.map(|s| s.state), None);
+        kept.push(&mut parser, &title, b"ing:app=codex\x1b\\");
+        assert_eq!(kept.codex_status.map(|s| s.state), Some(CodexStatus::Working));
+        kept.push(&mut parser, &title, &vec![b'x'; REPLAY_BYTES + 1]);
+        assert_eq!(kept.codex_status.map(|s| s.state), Some(CodexStatus::Working), "status remains after its bytes leave the replay");
+        kept.push(&mut parser, &title, b"\x1b]7501;state=done:app=other\x07");
+        assert_eq!(kept.codex_status.map(|s| s.state), Some(CodexStatus::Working));
+        kept.push(&mut parser, &title, b"\x1b]7501;state=clear\x07");
+        assert_eq!(kept.codex_status.map(|s| s.state), None);
+    }
+
 }

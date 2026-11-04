@@ -44,6 +44,7 @@ import { api, pagesOf, type Agent, type AgentState, type GitStatus, type PaneInf
 import { stillRunning } from "@/lib/still-running";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
+import { syncPaneSession, type AgentRun, type PaneSession } from "@/lib/pane-session";
 import { agentSplit, findPane, insertPane, mapPanes, pane, paneIds, paneNames, remove, renamePane, setDir, setRatio, split, type LayoutNode } from "@/lib/layout";
 import { moveTab, reorder, sortByOrder } from "@/lib/tab-order";
 import { tabCloser } from "@/lib/close-tabs";
@@ -62,7 +63,7 @@ import { DEFAULT_FONT_SIZE, setTerminalFontSize, isMac, shortcutFor, terminals, 
 import { forkLine, isSessionIdOf, isSessionKind, isShellCommand, paneCwds, resumeLine, shellQuote, type SessionKind } from "@/lib/resume";
 import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, type AgentTerminalsOpen } from "@/lib/agent-tabs";
 import { paneInput } from "@/lib/pane-input";
-import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, settled, type SleepSettings } from "@/lib/sleep";
+import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, type SleepSettings } from "@/lib/sleep";
 import { QuickTerminal } from "@/components/quick-terminal";
 import { SetupApprovalDialog } from "@/components/setup-approval-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
@@ -83,7 +84,7 @@ const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => i
  * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one. `historyId` names the output
  * Wings keeps for it across a restart.
  */
-type PaneMeta = { spaceId: string; paneId: string | null; sessionId: string | null; kind: SessionKind; name: string | null; live: boolean; args: string[]; asleep: boolean; resumeAt: number | null; resumeFailed: boolean; savedCwd?: string | null; historyId: string; /** The plugin whose `openPane` opened it. */ openedBy?: string };
+type PaneMeta = PaneSession & { spaceId: string; savedCwd?: string | null; historyId: string };
 
 type SavedWorkspace = {
   version: 1;
@@ -146,7 +147,9 @@ type SavedWorkspace = {
   paneIds?: Record<string, string>;
   /** Each pane's `historyId`. Absent in older files. */
   histories?: Record<string, string>;
-  /** The plugin that opened each pane, by the same keys. Absent in older files. */
+  /** Last detected agent processes, so a reused pane cannot inherit a plugin origin after reloading. */
+  agentRuns?: Record<string, AgentRun>;
+  /** The plugin that opened each pane's agent, by the same keys. Absent in older files. */
   openedBy?: Record<string, string>;
 };
 
@@ -490,6 +493,7 @@ const leftPanel = usePanelRef();
       savedCwd: string | null = null,
       historyId: string | null = null,
       openedBy?: string,
+      agentRun?: AgentRun,
     ) => {
       const key = crypto.randomUUID();
       historyId ??= key;
@@ -518,7 +522,7 @@ const leftPanel = usePanelRef();
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId, openedBy } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId, openedBy, agentRun } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -834,7 +838,7 @@ const leftPanel = usePanelRef();
             const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
             // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null, saved.openedBy?.[old]);
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null, saved.openedBy?.[old], saved.agentRuns?.[old]);
             // Still asleep until opened, as Wings left it.
             if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
@@ -893,6 +897,10 @@ const leftPanel = usePanelRef();
     return () => unlisten.forEach((p) => void p.then((off) => off()));
   }, [selectSpace, closePane, restore, touchSpace]);
 
+  // A restored binding may arrive after the agent snapshot. Track bindings separately so sleep/resume
+  // metadata updates do not themselves settle a resume against the previous agent snapshot.
+  const paneBindings = JSON.stringify(Object.entries(panes).map(([key, meta]) => [key, meta.paneId]));
+
   // Remember which agent session each pane runs, so a restart or a sleep can resume it. An agent seen in a pane
   // ends its resume: the row has handed over to the live one.
   useEffect(() => {
@@ -900,18 +908,15 @@ const leftPanel = usePanelRef();
       let next: Record<string, PaneMeta> | null = null;
       for (const [key, meta] of Object.entries(prev)) {
         const agent = meta.paneId ? agentsByPane.get(meta.paneId) : undefined;
-        let patch: Partial<PaneMeta> | null = null;
-        if (agent && (settled(meta, agent) || (agent.sessionId && (agent.sessionId !== meta.sessionId || agent.kind !== meta.kind || !meta.live)))) {
-          patch = { ...(agent.sessionId && isSessionKind(agent.kind) ? { sessionId: agent.sessionId, kind: agent.kind, args: agent.args } : {}), name: agent.name ?? meta.name, live: true, ...noResume };
-        } else if (!agent && meta.live && !meta.asleep && meta.resumeAt === null) patch = { sessionId: null, live: false, args: [] };
-        if (patch) {
+        const updated = syncPaneSession(meta, agent);
+        if (updated !== meta) {
           next ??= { ...prev };
-          next[key] = { ...meta, ...patch };
+          next[key] = updated;
         }
       }
       return next ?? prev;
     });
-  }, [agentsByPane]);
+  }, [agentsByPane, paneBindings]);
 
   /** The workspace while its save waits out the debounce. */
   const unsaved = useRef<string | null>(null);
@@ -965,6 +970,7 @@ const leftPanel = usePanelRef();
       cwds: JSON.parse(cwdsJson),
       paneIds: livePanes,
       histories: Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.historyId])),
+      agentRuns: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.agentRun ? [[key, meta.agentRun]] : []))),
       openedBy: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.openedBy ? [[key, meta.openedBy]] : []))),
     };
     const json = JSON.stringify(saved);

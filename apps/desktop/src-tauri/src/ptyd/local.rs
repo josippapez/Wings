@@ -67,6 +67,7 @@ impl Pane {
                 kept.push(&mut vte::Parser::new(), &pane.title, &req.history);
                 // The old program's title isn't the new shell's.
                 pane.title.lock().unwrap().clear();
+                kept.kept.codex_status = None;
             }
             kept.channel = Some(output);
         }
@@ -75,6 +76,7 @@ impl Pane {
         let title = pane.title.clone();
         let shared = pane.output.clone();
         let pane_id = pane.meta.id.clone();
+        let status_source = pane.clone();
         thread::Builder::new()
             .name(format!("pty-{pane_id}"))
             .spawn(move || {
@@ -83,7 +85,16 @@ impl Pane {
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => shared.lock().unwrap().push(&mut parser, &title, &buf[..n]),
+                        Ok(n) => {
+                            let mut output = shared.lock().unwrap();
+                            let previous = output.kept.codex_status;
+                            output.push(&mut parser, &title, &buf[..n]);
+                            if output.kept.codex_status != previous {
+                                if let Some(report) = output.kept.codex_status.as_mut() {
+                                    report.pid = status_source.foreground_pid();
+                                }
+                            }
+                        }
                     }
                 }
                 on_exit(&pane_id);
@@ -190,7 +201,9 @@ impl PtyBackend for LocalBackend {
 
     fn each_mirror(&self, visit: &mut dyn FnMut(PaneMirror<'_>)) {
         for pane in self.panes.lock().unwrap().values() {
-            visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.foreground_pid(), title: &pane.title.lock().unwrap() });
+            // Read output before title, matching the reader thread's lock order.
+            let codex_status = pane.output.lock().unwrap().kept.codex_status;
+            visit(PaneMirror { meta: &pane.meta, foreground_pid: pane.foreground_pid(), title: &pane.title.lock().unwrap(), codex_status });
         }
     }
 
@@ -349,6 +362,27 @@ mod tests {
         assert_eq!(next.id, "p2", "an id is never given twice");
         backend.kill("p2");
     }
+    #[test]
+    fn local_mirror_exposes_live_codex_status_and_ignores_saved_status() {
+        use crate::program_status::CodexStatus;
+        let backend = LocalBackend::default();
+        let (output, _) = recorder();
+        let dir = std::env::temp_dir();
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: b"\x1b]7501;state=working:app=codex\x07".to_vec() };
+        let meta = backend.spawn(req, output, Box::new(|_| {})).unwrap();
+        let mut status = None;
+        backend.each_mirror(&mut |p| status = p.codex_status);
+        assert_eq!(status, None, "a saved transcript is not a live report");
+        backend.write(&meta.id, b"printf '\\033]7501;state=block''ed:app=codex:kind=permission\\007'; echo sta''tus-sent\r").unwrap();
+        for _ in 0..200 {
+            backend.each_mirror(&mut |p| status = p.codex_status);
+            if status.is_some_and(|s| s.state == CodexStatus::Permission) { break; }
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(status.map(|s| s.state), Some(CodexStatus::Permission));
+        backend.kill(&meta.id);
+    }
+
 }
 
 #[cfg(test)]
@@ -461,7 +495,7 @@ pub(super) mod bench {
             let mut modes = Kept::default().modes;
             let t = Instant::now();
             for _ in 0..reads {
-                parser.advance(&mut Tap { title: &title, modes: &mut modes }, &chunk);
+                parser.advance(&mut Tap { title: &title, modes: &mut modes, codex_status: &mut None, codex_generation: &mut 0 }, &chunk);
                 channel.send(InvokeResponseBody::Raw(chunk.to_vec())).unwrap();
             }
             let without = t.elapsed().as_secs_f64();
@@ -482,4 +516,5 @@ pub(super) mod bench {
         }
         assert!(sent.load(Ordering::Relaxed) > 0);
     }
+
 }

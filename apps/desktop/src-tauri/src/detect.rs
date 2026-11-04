@@ -27,8 +27,8 @@ pub enum AgentState {
     Idle,
 }
 
-/// Which agent CLI a pane runs. Serialized as the ids `harnesses.rs` uses. Only Claude and opencode report a state;
-/// the others are recognised by name and read as idle.
+/// Which agent CLI a pane runs. Serialized as the ids `harnesses.rs` uses. Claude, opencode and Codex report state;
+/// Cursor and Grok are recognised by name and read as idle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentKind {
@@ -105,6 +105,7 @@ pub struct PaneProbe {
     /// The PTY's foreground process group leader (`tcgetpgrp`). Unix only; `None` on Windows.
     pub foreground_pid: Option<u32>,
     pub title: String,
+    pub codex_status: Option<crate::program_status::CodexReport>,
 }
 
 pub struct Detector {
@@ -112,6 +113,7 @@ pub struct Detector {
     sessions_dir: PathBuf,
     last: HashMap<String, AgentState>,
     unseen_done: HashMap<String, bool>,
+    last_codex: HashMap<String, (u32, u64, Option<crate::program_status::CodexReport>)>,
     /// Dev builds log each state change, to debug detection against a live Claude.
     traced: HashMap<String, (AgentState, AgentState, bool)>,
     opencode: std::sync::Arc<opencode::Shared>,
@@ -124,6 +126,7 @@ impl Detector {
             sessions_dir: claude_dir.join("sessions"),
             last: HashMap::new(),
             unseen_done: HashMap::new(),
+            last_codex: HashMap::new(),
             traced: HashMap::new(),
             opencode: Default::default(),
         }
@@ -135,6 +138,7 @@ impl Detector {
     }
 
     pub fn scan(&mut self, panes: &[PaneProbe], focused: Option<&str>) -> Scan {
+        self.last_codex.retain(|id, _| panes.iter().any(|p| p.pane_id == *id));
         // With a foreground pid per pane only those processes need reading; a full scan costs ~7 ms.
         let foreground: Vec<Pid> = panes.iter().filter_map(|p| p.foreground_pid).map(Pid::from_u32).collect();
         let full_scan = foreground.len() < panes.len();
@@ -205,8 +209,12 @@ impl Detector {
             let Some((pid, kind)) = agent else {
                 self.last.remove(&pane.pane_id);
                 self.unseen_done.remove(&pane.pane_id);
+                self.last_codex.remove(&pane.pane_id);
                 continue;
             };
+            if kind != AgentKind::Codex {
+                self.last_codex.remove(&pane.pane_id);
+            }
             let (file, state) = match kind {
                 AgentKind::Claude => {
                     let file = read_session_file(&self.sessions_dir, pid.as_u32()).unwrap_or_default();
@@ -242,7 +250,35 @@ impl Detector {
                         .unwrap_or_default();
                     (file, state)
                 }
-                AgentKind::Codex | AgentKind::Cursor | AgentKind::Grok => {
+                AgentKind::Codex => {
+                    use crate::program_status::CodexStatus;
+                    let report = (pid.as_u32(), started_at, pane.codex_status);
+                    let previous = self.last_codex.insert(pane.pane_id.clone(), report);
+                    if previous.is_none() || previous.is_some_and(|(p, at, _)| (p, at) != (report.0, report.1)) {
+                        self.last.remove(&pane.pane_id);
+                        self.unseen_done.remove(&pane.pane_id);
+                    }
+                    let reported = pane.codex_status.filter(|s| s.pid.map_or(true, |p| p == pid.as_u32()));
+                    let (raw, waiting_for) = match reported.map(|s| s.state) {
+                        Some(CodexStatus::Working) => (AgentState::Working, None),
+                        Some(CodexStatus::Blocked) => (AgentState::Blocked, Some("waiting for input")),
+                        Some(CodexStatus::Permission) => (AgentState::Blocked, Some("permission prompt")),
+                        Some(CodexStatus::Question) => (AgentState::Blocked, Some("question")),
+                        Some(CodexStatus::Auth) => (AgentState::Blocked, Some("sign in")),
+                        Some(CodexStatus::Error) => (AgentState::Blocked, Some("Codex reported an error")),
+                        Some(CodexStatus::Done) => {
+                            if previous != Some(report) && focused != Some(pane.pane_id.as_str()) {
+                                self.unseen_done.insert(pane.pane_id.clone(), true);
+                            }
+                            (AgentState::Idle, None)
+                        }
+                        Some(CodexStatus::Idle) => (AgentState::Idle, None),
+                        None => (if pane.codex_status.is_none() { codex_state_from_title(&pane.title).unwrap_or(AgentState::Idle) } else { AgentState::Idle }, None),
+                    };
+                    let state = self.with_done(&pane.pane_id, raw, focused == Some(pane.pane_id.as_str()));
+                    (SessionFile { waiting_for: waiting_for.map(str::to_string), ..Default::default() }, state)
+                }
+                AgentKind::Cursor | AgentKind::Grok => {
                     self.last.remove(&pane.pane_id);
                     self.unseen_done.remove(&pane.pane_id);
                     (SessionFile::default(), AgentState::Idle)
@@ -439,6 +475,18 @@ pub fn state_from_title(title: &str) -> Option<AgentState> {
     }
 }
 
+/// Codex's default activity title; the explicit OSC status takes precedence when available.
+fn codex_state_from_title(title: &str) -> Option<AgentState> {
+    let title = title.trim_start_matches('●').trim_start();
+    if title.starts_with("[ ! ] Action Required") || title.starts_with("[ . ] Action Required") {
+        return Some(AgentState::Blocked);
+    }
+    if matches!(title.chars().next(), Some('\u{2800}'..='\u{28ff}')) {
+        return Some(AgentState::Working);
+    }
+    None
+}
+
 fn strip_title_glyph(title: &str) -> Option<String> {
     state_from_title(title)?;
     let rest = title.chars().skip(1).collect::<String>().trim().to_string();
@@ -530,7 +578,7 @@ mod tests {
                 format!("'{}' 30; true", fake.display())
             };
             let shell = Command::new("/bin/sh").arg("-c").arg(line).spawn().unwrap();
-            probes.push(PaneProbe { pane_id: id.to_string(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new() });
+            probes.push(PaneProbe { pane_id: id.to_string(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new(), codex_status: None });
             shells.push(shell);
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -611,6 +659,7 @@ mod tests {
             shell_pid: Some(shell.id()),
             foreground_pid: None,
             title: String::new(),
+            codex_status: None,
         };
         let scan = d.scan(std::slice::from_ref(&probe), None);
         assert_eq!(scan.panes["p1"].command, "claude");
@@ -635,11 +684,11 @@ mod tests {
         let agents = d.scan(std::slice::from_ref(&probe), None).agents;
         assert!(agents[0].weak_name);
         // The session's title in the terminal title beats the folder name, and needs no generated one.
-        let titled = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: probe.shell_pid, foreground_pid: None, title: "✳ Opencode wings registration error".into() };
+        let titled = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: probe.shell_pid, foreground_pid: None, title: "✳ Opencode wings registration error".into(), codex_status: None };
         let agents = d.scan(std::slice::from_ref(&titled), None).agents;
         assert_eq!((agents[0].name.as_deref(), agents[0].weak_name), (Some("Opencode wings registration error"), false));
         // The same Claude in a pane with no project (the quick terminal) is no agent, but the pane still reports its command and folder.
-        let loose = PaneProbe { pane_id: "p2".into(), space_id: crate::ptyd::NO_PROJECT.into(), shell_pid: probe.shell_pid, foreground_pid: None, title: String::new() };
+        let loose = PaneProbe { pane_id: "p2".into(), space_id: crate::ptyd::NO_PROJECT.into(), shell_pid: probe.shell_pid, foreground_pid: None, title: String::new(), codex_status: None };
         let scan = d.scan(std::slice::from_ref(&loose), None);
         assert!(scan.agents.is_empty());
         assert_eq!(scan.panes["p2"].command, "claude");
@@ -663,7 +712,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
 
         let mut d = Detector::new(&tmp);
-        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: "✳ looks idle".into() };
+        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: "✳ looks idle".into(), codex_status: None };
         let view = |state, since| opencode::PaneView { session_id: "ses_a".into(), title: Some("Fix it".into()), state, since };
         let scan = |d: &mut Detector, focused| d.scan(std::slice::from_ref(&probe), focused).agents.remove(0);
 
@@ -713,7 +762,7 @@ mod tests {
         let mut shell = Command::new("/bin/sh").arg("-c").arg(format!("sh -c \"'{}' 30; true\"; true", fake.display())).spawn().unwrap();
         std::thread::sleep(Duration::from_millis(300));
 
-        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new() };
+        let probe = PaneProbe { pane_id: "p1".into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: None, title: String::new(), codex_status: None };
         let agents = Detector::new(&tmp).scan(std::slice::from_ref(&probe), None).agents;
         assert_eq!(agents.len(), 1);
         assert!(!agents[0].direct, "the inner sh sits between the shell and claude");
@@ -773,7 +822,7 @@ mod tests {
         let spawn = || Command::new("/bin/sh").args(["-c", "sleep 30; true"]).spawn().unwrap();
         let (mut shell, mut script) = (spawn(), spawn());
         std::thread::sleep(Duration::from_millis(300));
-        let probe = |id: &str, foreground: u32| PaneProbe { pane_id: id.into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: Some(foreground), title: String::new() };
+        let probe = |id: &str, foreground: u32| PaneProbe { pane_id: id.into(), space_id: "s1".into(), shell_pid: Some(shell.id()), foreground_pid: Some(foreground), title: String::new(), codex_status: None };
         let scan = Detector::new(&std::env::temp_dir()).scan(&[probe("prompt", shell.id()), probe("script", script.id())], None);
         assert_eq!((scan.panes["prompt"].command.as_str(), scan.panes["prompt"].busy), ("sh", false));
         assert_eq!((scan.panes["script"].command.as_str(), scan.panes["script"].busy), ("sh", true));
@@ -804,6 +853,7 @@ mod tests {
             shell_pid: child.process_id(),
             foreground_pid: pair.master.process_group_leader().map(|p| p as u32),
             title: String::new(),
+            codex_status: None,
         };
         let scan = Detector::new(&tmp).scan(std::slice::from_ref(&probe), None);
         assert_eq!(scan.panes["p1"].command, "claude");
@@ -840,6 +890,7 @@ mod tests {
             shell_pid: child.process_id(),
             foreground_pid: pair.master.process_group_leader().map(|p| p as u32),
             title: String::new(),
+            codex_status: None,
         };
         let agents = Detector::new(&tmp).scan(std::slice::from_ref(&probe), None).agents;
         assert_eq!(agents.len(), 1);
@@ -848,4 +899,50 @@ mod tests {
         child.kill().unwrap();
         let _ = fs::remove_dir_all(&tmp);
     }
+    #[cfg(unix)]
+    #[test]
+    fn codex_osc_reports_drive_working_blocked_done_and_focus_acknowledgement() {
+        use crate::ptyd::output::Kept;
+        let tmp = std::env::temp_dir().join(format!("wings-codex-state-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("codex");
+        std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+        let mut child = Command::new(&fake).arg("30").spawn().unwrap();
+        struct Cleanup<'a>(&'a mut std::process::Child, PathBuf);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); let _ = fs::remove_dir_all(&self.1); }
+        }
+        let pid = child.id();
+        let _cleanup = Cleanup(&mut child, tmp.clone());
+        let mut detector = Detector::new(&tmp);
+        let mut kept = Kept::default();
+        let mut parser = vte::Parser::new();
+        let title = std::sync::Mutex::new(String::new());
+        let mut scan = |report: &[u8], focused| {
+            kept.push(&mut parser, &title, report);
+            let probe = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: title.lock().unwrap().clone(), codex_status: kept.codex_status };
+            detector.scan(&[probe], focused).agents.remove(0)
+        };
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x1b\\", None).state, AgentState::Working);
+        for (kind, reason) in [("permission", "permission prompt"), ("question", "question"), ("auth", "sign in")] {
+            let a = scan(format!("\x1b]7501;state=blocked:app=codex:kind={kind}\x07").as_bytes(), None);
+            assert_eq!((a.kind, a.state, a.waiting_for.as_deref()), (AgentKind::Codex, AgentState::Blocked, Some(reason)));
+        }
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x07", None).state, AgentState::Working);
+        assert_eq!(scan(b"\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done);
+        assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
+        assert_eq!(scan(b"", None).state, AgentState::Idle, "looking away does not re-arm the done report");
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x07\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done, "a fast complete turn between scans still needs acknowledgement");
+        assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
+        assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle);
+        assert_eq!(scan(b"\x1b]7501;state=error:app=codex\x07", None).waiting_for.as_deref(), Some("Codex reported an error"));
+        let a = scan(b"\x1b]7501;state=clear\x07\x1b]2;\xe2\xa0\x8b Fix session labels\x07", None);
+        assert_eq!(a.state, AgentState::Working, "older hosts and versions use the default activity title");
+        assert_eq!(scan(b"\x1b]2;[ . ] Action Required | Fix labels\x07", None).state, AgentState::Blocked);
+        assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle, "explicit status wins over a stale title");
+        drop(scan);
+        let stale = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: String::new(), codex_status: Some(crate::program_status::CodexReport { state: crate::program_status::CodexStatus::Working, generation: 100, pid: Some(pid + 1) }) };
+        assert_eq!(detector.scan(&[stale], None).agents[0].state, AgentState::Idle, "a new agent cannot inherit another process's status");
+    }
+
 }
