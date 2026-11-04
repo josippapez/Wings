@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.116 · 2026-11-04
+
+- **Tabs use the whole title bar.** Tabs share the strip's width instead of stopping at a fixed size, so titles aren't cut short while space sits empty. With many tabs the strip scrolls sideways.
+
 ## 0.1.115 · 2026-11-03
 
 - **Agent icons stay visible.** The Agents list keeps each agent's icon while it's working, needs you, finished or idle. Its state indicator sits next to the status text.
