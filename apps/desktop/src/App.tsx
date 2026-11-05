@@ -65,6 +65,7 @@ import { firstAgentSplit, idleAgentTab, parseAgentTerminalsOpen, type AgentTab, 
 import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, type SleepSettings } from "@/lib/sleep";
 import { QuickTerminal } from "@/components/quick-terminal";
+import { cn } from "@/lib/utils";
 import { SetupApprovalDialog } from "@/components/setup-approval-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
@@ -310,6 +311,8 @@ const leftPanel = usePanelRef();
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [quickKey, setQuickKey] = useState<QuickTerminalKey>(DEFAULT_QUICK_TERMINAL_KEY);
+  const [quick, dispatchQuick] = useReducer(quickReducer, INITIAL_QUICK);
+  const quickFull = quick.phase === "shown" && quick.full;
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [notifySound, setNotifySound] = useState<SoundSettings>(DEFAULT_SOUND);
   const [agentsRunCommands, setAgentsRunCommands] = useState(false);
@@ -1713,7 +1716,10 @@ const leftPanel = usePanelRef();
     agents,
     activeSpaceId,
     focusedPaneId,
-    onSelectSpace: selectSpace,
+    onSelectSpace: (spaceId: string) => {
+      dispatchQuick("leave");
+      selectSpace(spaceId);
+    },
     onSelectAgent: selectAgent,
     pending,
     onSelectPending: resumePane,
@@ -1737,7 +1743,8 @@ const leftPanel = usePanelRef();
     onAddSpace: (path) => void addSpace(path),
     onRemoveSpace: askRemoveSpace,
     onSearch: () => setPaletteOpen(true),
-    onQuickTerminal: () => toggleQuick(),
+    onQuickTerminal: () => showQuickPage(),
+    quickTerminalOpen: quickFull,
     quickTerminalHint: quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null,
     onHistory: () => setHistoryOpen(true),
     onSettings: () => setSettingsOpen(true),
@@ -1771,7 +1778,6 @@ const leftPanel = usePanelRef();
 
   // The quick terminal: a shell that belongs to no project, floated over the pane area. Its session sits in `terminals`
   // like any pane's, so font and look changes reach it, but in no tab, so nothing saves or lists it.
-  const [quick, dispatchQuick] = useReducer(quickReducer, INITIAL_QUICK);
   const [quickPaneId, setQuickPaneId] = useState<string | null>(null);
   const quickRef = useRef(quick);
   quickRef.current = quick;
@@ -1804,6 +1810,14 @@ const leftPanel = usePanelRef();
     setQuickPaneId(null);
     dispatchQuick("end");
   };
+  /** The sidebar row: the terminal as a page in place of the tab, or back out of sight. */
+  const showQuickPage = () => {
+    if (quickRef.current.phase === "off") terminals.set(QUICK_TERMINAL_KEY, new TerminalSession(NO_SPACE, { onFocus: () => {}, onStarted: setQuickPaneId }));
+    if (quickRef.current.phase === "shown" && quickRef.current.full) focusTerminal();
+    dispatchQuick("page");
+  };
+  // Going to a tab or project puts the full terminal away, as going to another tab would.
+  useEffect(() => dispatchQuick("leave"), [activeSpaceId, activeTabId]);
   const quickEndRef = useRef(endQuick);
   quickEndRef.current = endQuick;
 
@@ -1989,7 +2003,10 @@ const leftPanel = usePanelRef();
             canGoForward={canForward}
             onGoBack={() => navigate(goBack)}
             onGoForward={() => navigate(goForward)}
-            onSelect={(id) => setActiveTabBySpace((m) => ({ ...m, [tabSpaceId]: id }))}
+            onSelect={(id) => {
+              dispatchQuick("leave");
+              setActiveTabBySpace((m) => ({ ...m, [tabSpaceId]: id }));
+            }}
             onClose={closeTab}
             onRename={renameTab}
             onMove={moveTabTo}
@@ -2067,6 +2084,8 @@ const leftPanel = usePanelRef();
                 >
                 <ResizablePanel id="tabs" minSize={320} style={PANEL_STYLE}>
                 <div className="relative h-full">
+                {/* The quick terminal filling the area stands in for the tab, so the tab is out of sight, not just under it. */}
+                <div className={cn("absolute inset-0", quickFull && "invisible")} aria-hidden={quickFull || undefined} inert={quickFull}>
                 {tabs.map((tab) =>
                   isProjectTab(tab) ? (
                     <ProjectPageTab
@@ -2113,6 +2132,7 @@ const leftPanel = usePanelRef();
                   />
                   ),
                 )}
+                </div>
                 {quick.phase !== "off" && (
                   <QuickTerminal
                     state={quick}
@@ -2123,6 +2143,8 @@ const leftPanel = usePanelRef();
                       dispatchQuick("minimise");
                     }}
                     onExpand={() => dispatchQuick("expand")}
+                    onFill={() => dispatchQuick("fill")}
+                    onFloat={() => dispatchQuick("float")}
                     onClose={endQuick}
                   />
                 )}

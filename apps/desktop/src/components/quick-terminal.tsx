@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MinusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { Maximize2Icon, Minimize2Icon, MinusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 
 import { FloatingPanel, PANEL_EDGE, type Rect } from "@/components/floating-panel";
 import { Host } from "@/components/floating-terminals";
@@ -17,13 +17,15 @@ let remembered: Rect = { right: PANEL_EDGE * 2, bottom: PANEL_EDGE * 2, w: 640, 
  * Hidden, it keeps its shell. It's the same panel as the terminals an agent opens: drag the header, resize from the
  * corner, minimise to a bar.
  */
-export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onClose }: {
+export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onFill, onFloat, onClose }: {
   state: QuickState;
   /** Where the shell is now, when Wings tracks it. */
   cwd: string | null;
   shortcut: string | null;
   onMinimise: () => void;
   onExpand: () => void;
+  onFill: () => void;
+  onFloat: () => void;
   onClose: () => void;
 }) {
   const [rect, setRect] = useState(remembered);
@@ -33,12 +35,13 @@ export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onCl
   // Showing it moves the cursor into the shell. Its terminal opens in Host's effect, which runs before this one.
   useEffect(() => {
     if (shown && !state.minimised) terminals.get(QUICK_TERMINAL_KEY)?.focus();
-  }, [shown, state.minimised]);
+  }, [shown, state.minimised, state.full]);
 
   return (
     <FloatingPanel
       rect={rect}
       collapsed={state.minimised}
+      fill={state.full}
       onRect={(next) => setRect((remembered = next))}
       onExpand={onExpand}
       label="Quick terminal"
@@ -50,6 +53,11 @@ export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onCl
           <span className="min-w-0 truncate text-muted-foreground">Quick terminal{shortcut ? ` · ${shortcut}` : ""}</span>
           <span className="flex-1" />
           {!state.minimised && (
+            <IconButton label={state.full ? "Float over the tabs" : "Fill the window like a tab"} data-no-drag onClick={state.full ? onFloat : onFill}>
+              {state.full ? <Minimize2Icon /> : <Maximize2Icon />}
+            </IconButton>
+          )}
+          {!state.minimised && !state.full && (
             <IconButton label="Minimise to a bar" data-no-drag onClick={onMinimise}>
               <MinusIcon />
             </IconButton>

@@ -15,9 +15,11 @@ export const PANEL_EDGE = 12;
  * shrinks to a bar when `collapsed`. Moves and resizes touch only the panel's own style, so a terminal inside never
  * reflows during a gesture; `onRect` runs once, when the gesture ends.
  */
-export function FloatingPanel({ rect, collapsed, onRect, onExpand, label, overlayClassName, header, children }: {
+export function FloatingPanel({ rect, collapsed, fill = false, onRect, onExpand, label, overlayClassName, header, children }: {
   rect: Rect;
   collapsed: boolean;
+  /** Fills the area in the frame a tab has, instead of floating: no moving or resizing. */
+  fill?: boolean;
   onRect: (rect: Rect) => void;
   /** A click on the collapsed bar. */
   onExpand: () => void;
@@ -34,7 +36,7 @@ export function FloatingPanel({ rect, collapsed, onRect, onExpand, label, overla
   const move = (e: React.PointerEvent) => {
     const el = panel.current;
     const box = area.current;
-    if (!el || !box || (e.target as HTMLElement).closest("[data-no-drag]")) return;
+    if (fill || !el || !box || (e.target as HTMLElement).closest("[data-no-drag]")) return;
     let next = rect;
     trackDrag(e, {
       onStart: () => (el.style.willChange = "right, bottom"),
@@ -83,27 +85,28 @@ export function FloatingPanel({ rect, collapsed, onRect, onExpand, label, overla
       ref={area}
       // Clicks pass through the overlay to what is under it; only the panel takes them, and a press on it keeps its own focus.
       onMouseDown={(e) => e.stopPropagation()}
-      className={cn("pointer-events-none absolute inset-0", overlayClassName ?? "z-20")}
+      className={cn("absolute inset-0", fill ? "flex p-2 pt-0" : "pointer-events-none", overlayClassName ?? "z-20")}
     >
       <div
         ref={panel}
         role="group"
         aria-label={label}
-        style={{ right: rect.right, bottom: rect.bottom, ...(collapsed ? {} : { width: rect.w, height: rect.h }) }}
+        style={fill ? undefined : { right: rect.right, bottom: rect.bottom, ...(collapsed ? {} : { width: rect.w, height: rect.h }) }}
         className={cn(
-          "pointer-events-auto absolute flex max-h-full max-w-full flex-col overflow-hidden border border-hairline-strong bg-surface text-[12px] shadow-lg",
-          collapsed ? "h-7 rounded-full bg-popover/90 backdrop-blur-xl" : "rounded-xl",
+          "pointer-events-auto flex max-h-full max-w-full flex-col overflow-hidden border bg-surface text-[12px]",
+          fill ? "relative min-w-0 flex-1 rounded-[14px] border-hairline" : "absolute border-hairline-strong shadow-lg",
+          !fill && (collapsed ? "h-7 rounded-full bg-popover/90 backdrop-blur-xl" : "rounded-xl"),
         )}
       >
         <div
           onPointerDown={move}
           onClick={collapsed ? onExpand : undefined}
-          className={cn("flex shrink-0 cursor-grab items-center gap-1.5 select-none active:cursor-grabbing", collapsed ? "h-7 pr-1 pl-3" : "h-8 pr-1 pl-3")}
+          className={cn("flex shrink-0 items-center gap-1.5 select-none", !fill && "cursor-grab active:cursor-grabbing", collapsed ? "h-7 pr-1 pl-3" : "h-8 pr-1 pl-3")}
         >
           {header}
         </div>
         <div className={cn("flex min-h-0 flex-1 flex-col", collapsed && "hidden")}>{children}</div>
-        {!collapsed && <div onPointerDown={resize} aria-hidden className="absolute top-0 left-0 size-4 cursor-nwse-resize touch-none" />}
+        {!collapsed && !fill && <div onPointerDown={resize} aria-hidden className="absolute top-0 left-0 size-4 cursor-nwse-resize touch-none" />}
       </div>
     </div>
   );

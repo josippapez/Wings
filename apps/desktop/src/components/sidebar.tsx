@@ -152,6 +152,8 @@ export function Sidebar(props: {
   onSearch: () => void;
   /** Shows or hides the quick terminal, a shell in the home folder that belongs to no project. */
   onQuickTerminal: () => void;
+  /** The quick terminal fills the pane area, so its row reads as the page on screen. */
+  quickTerminalOpen: boolean;
   /** Its shortcut as written on this platform, or null while it's turned off. */
   quickTerminalHint: string | null;
   onHistory: () => void;
@@ -420,7 +422,7 @@ export function Sidebar(props: {
       <div className="flex h-full min-w-[200px] flex-col pb-2">
         <nav aria-label="Wings" className="flex shrink-0 flex-col gap-px px-2 pb-2">
           <SidebarNavRow icon={<SearchIcon />} label="Search" trailing={<RowHint>{shortcutLabel.palette}</RowHint>} onClick={props.onSearch} />
-          <SidebarNavRow icon={<SquareTerminalIcon />} label="Terminal" trailing={props.quickTerminalHint && <RowHint>{props.quickTerminalHint}</RowHint>} onClick={props.onQuickTerminal} />
+          <SidebarNavRow icon={<SquareTerminalIcon />} label="Terminal" trailing={props.quickTerminalHint && <RowHint>{props.quickTerminalHint}</RowHint>} onClick={props.onQuickTerminal} aria-pressed={props.quickTerminalOpen} className={cn(props.quickTerminalOpen && "bg-hover text-foreground")} />
           {/* Only the docked copy listens for the show-notifications command, so the peeking copy doesn't open a second popover. */}
           <NotificationBell {...props.notifications} listen={!props.floating} />
           <SidebarNavRow icon={<RotateCcwClockIcon />} label="Past sessions" onClick={props.onHistory} disabled={props.activeSpaceId === null} />
