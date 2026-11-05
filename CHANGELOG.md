@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.119 · 2026-11-05
+
+- **Terminals in the sidebar.** Each click on Terminal opens a new shell that fills the window and gets its own row above Projects. While it's on screen no tab is selected, and closing (⌘W) closes the terminal, not the tab underneath. Detach one to float it over your tabs: its row stays, and clicking the row brings it back full.
+
 ## 0.1.118 · 2026-11-05
 
 - **The quick terminal can fill the window like a tab.** The sidebar's Terminal row opens it in place of the current tab. A button in its header switches between that and the floating panel, keeping the same shell. Going to another tab or project puts it away.
