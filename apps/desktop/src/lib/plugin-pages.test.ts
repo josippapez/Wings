@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import type { PluginView } from "./api.ts";
@@ -152,6 +153,31 @@ test("opening a view tab with different args replaces them and reloads it, same 
   assert.deepEqual(next.tabs[1], { id: "v1", spaceId: "s1", view: board, args: { task: 8 }, rev: 1 });
   assert.equal("state" in (next.tabs[1] as ViewTab), false);
 });
+
+for (const { pluginId, viewId, args } of [
+  { pluginId: "tasks", viewId: "issue", args: [{ key: "WIN-1", projectId: "s1" }, { key: "WIN-2", projectId: "s1" }] },
+  { pluginId: "work-item", viewId: "item", args: [{ id: 1, org: "example" }, { id: 2, org: "example" }] },
+  { pluginId: "pr-tracker", viewId: "pr", args: [1, 2].map((number) => ({ provider: "github", url: `https://github.com/example/repo/pull/${number}`, number, repo: "example/repo", title: `PR ${number}`, cwd: "/repo" })) },
+]) {
+  test(`${pluginId} detail view reuses its tab when another item opens`, () => {
+    const manifest: { contributes: { views: { id: string; multiple?: boolean }[] } } = JSON.parse(readFileSync(new URL(`../../../../plugins/${pluginId}/wings-plugin.json`, import.meta.url), "utf8"));
+    const page = manifest.contributes.views.find((v) => v.id === viewId);
+    assert.ok(page);
+    const options = { multiple: page.multiple === true };
+    const view = { pluginId, viewId };
+    const first: ViewTab = { id: "detail", spaceId: "s1", view, args: args[0], state: { scroll: 40 } };
+    const again = openViewTab([first], "s1", view, "unused", { ...options, args: args[0] });
+    assert.equal(again.tabs[0], first);
+    const next = openViewTab(again.tabs, "s1", view, "unused", { ...options, args: args[1] });
+    assert.equal(next.id, first.id);
+    assert.deepEqual(next.tabs, [{ id: first.id, spaceId: "s1", view, args: args[1], rev: 1 }]);
+    const forced = openViewTab(next.tabs, "s1", view, "extra", { ...options, args: args[1], newTab: true });
+    assert.equal(forced.id, "extra");
+    assert.deepEqual(forced.tabs.map((t) => t.id), [first.id, "extra"]);
+    assert.equal(forced.tabs[0], next.tabs[0]);
+    assert.equal(openViewTab(next.tabs, "s2", view, "other-project", { ...options, args: args[1] }).id, "other-project");
+  });
+}
 
 test("tab state and args are saved with the view tab and restored, without the reload count", () => {
   const tabs: (PaneTab | ViewTab)[] = [paneTab("t1"), { id: "v1", spaceId: "s1", view: board, state: { filter: "open" }, args: { task: 7 }, rev: 3 }];
