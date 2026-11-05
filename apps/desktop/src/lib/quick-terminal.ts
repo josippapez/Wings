@@ -3,44 +3,64 @@ import { acceleratorFromEvent } from "./hotkey.ts";
 /** The pane of a terminal that belongs to no project. The Rust side starts it in the home folder (`pty::NO_SPACE`). */
 export const NO_SPACE = "";
 
-/** The key the quick terminal's shell sits under in `terminals`. There is one. */
-export const QUICK_TERMINAL_KEY = "quick-terminal";
-
 /** The shortcut that shows and hides the quick terminal, matched on the key's `code` like the global shortcut. */
 export type QuickTerminalKey = { enabled: boolean; accelerator: string };
 export const DEFAULT_QUICK_TERMINAL_KEY: QuickTerminalKey = { enabled: true, accelerator: "Ctrl+Backquote" };
 
 export const isQuickTerminalKey = (e: Parameters<typeof acceleratorFromEvent>[0], key: QuickTerminalKey) => key.enabled && acceleratorFromEvent(e) === key.accelerator;
 
-/**
- * The quick terminal's panel. `off` has no shell; `hidden` keeps its shell running out of sight. `full` fills the pane
- * area like a tab instead of floating, and showing again keeps the mode it was last in. Showing always opens the panel
- * fully, since a minimised bar has no terminal to type in.
- */
-export type QuickState = { phase: "off" | "shown" | "hidden"; minimised: boolean; full: boolean };
-export const INITIAL_QUICK: QuickState = { phase: "off", minimised: false, full: false };
-/** `page` is the sidebar row: it shows the terminal full, or hides it when it already is. `leave` is going to a tab or project. */
-export type QuickAction = "toggle" | "page" | "fill" | "float" | "leave" | "minimise" | "expand" | "end";
+/** A terminal in the home folder that belongs to no project, listed in the sidebar while its shell runs. */
+export type LooseTerminal = { key: string; floating: boolean; minimised: boolean };
 
-export function quickReducer(state: QuickState, action: QuickAction): QuickState {
-  const shown = state.phase === "shown";
-  switch (action) {
-    case "toggle":
-      return shown ? { ...state, phase: "hidden" } : { phase: "shown", minimised: false, full: state.full };
-    case "page":
-      return shown && state.full ? { ...state, phase: "hidden" } : { phase: "shown", minimised: false, full: true };
-    case "fill":
-      return shown ? { ...state, minimised: false, full: true } : state;
+/**
+ * The sidebar's terminals. `page` is the one filling the pane area in place of the tab. A floating one sits over
+ * whatever is on screen. Neither, it's out of sight with its shell still running. `last` is the one Ctrl+` acts on.
+ */
+export type LooseState = { list: LooseTerminal[]; page: string | null; last: string | null };
+export const INITIAL_LOOSE: LooseState = { list: [], page: null, last: null };
+
+export type LooseAction =
+  | { type: "open"; key: string; floating: boolean }
+  | { type: "show" | "float" | "hide" | "minimise" | "expand" | "close"; key: string }
+  /** Going to a tab or project. */
+  | { type: "leave" }
+  /** Ctrl+`: shows or hides the last one as a floating panel, or opens `fresh` when there is none. */
+  | { type: "toggle"; fresh: string };
+
+const update = (state: LooseState, key: string, change: Partial<LooseTerminal>) => ({ ...state, list: state.list.map((t) => (t.key === key ? { ...t, ...change } : t)) });
+
+/** The terminal Ctrl+` acts on, or none, when it would open a new one. */
+export const toggleTarget = (state: LooseState) => state.list.find((t) => t.key === state.last) ?? null;
+
+export function looseReducer(state: LooseState, action: LooseAction): LooseState {
+  if (action.type === "leave") return state.page ? { ...state, page: null } : state;
+  if (action.type === "open") {
+    const list = [...state.list, { key: action.key, floating: action.floating, minimised: false }];
+    return { list, page: action.floating ? state.page : action.key, last: action.key };
+  }
+  if (action.type === "toggle") {
+    const target = toggleTarget(state);
+    if (!target) return looseReducer(state, { type: "open", key: action.fresh, floating: true });
+    const shown = state.page === target.key || target.floating;
+    return looseReducer(state, { type: shown ? "hide" : "float", key: target.key });
+  }
+  const { key } = action;
+  if (!state.list.some((t) => t.key === key)) return state;
+  const away = state.page === key ? null : state.page;
+  switch (action.type) {
+    case "show":
+      return { ...update(state, key, { floating: false, minimised: false }), page: key, last: key };
     case "float":
-      return shown ? { ...state, full: false } : state;
-    case "leave":
-      return shown && state.full ? { ...state, phase: "hidden" } : state;
+      return { ...update(state, key, { floating: true, minimised: false }), page: away, last: key };
+    case "hide":
+      return { ...update(state, key, { floating: false }), page: away };
     case "minimise":
-      return shown && !state.full ? { ...state, minimised: true } : state;
+      return state.page === key ? state : update(state, key, { minimised: true });
     case "expand":
-      return shown ? { ...state, minimised: false } : state;
-    // The shell was closed, or exited on its own.
-    case "end":
-      return INITIAL_QUICK;
+      return { ...update(state, key, { minimised: false }), last: key };
+    case "close": {
+      const list = state.list.filter((t) => t.key !== key);
+      return { list, page: away, last: state.last === key ? (list.at(-1)?.key ?? null) : state.last };
+    }
   }
 }

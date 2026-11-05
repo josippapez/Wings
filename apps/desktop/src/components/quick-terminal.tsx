@@ -4,23 +4,24 @@ import { Maximize2Icon, Minimize2Icon, MinusIcon, SquareTerminalIcon, XIcon } fr
 import { FloatingPanel, PANEL_EDGE, type Rect } from "@/components/floating-panel";
 import { Host } from "@/components/floating-terminals";
 import { IconButton } from "@/components/icon-button";
-import { tildify } from "@/components/pane-label";
-import { QUICK_TERMINAL_KEY, type QuickState } from "@/lib/quick-terminal";
 import { terminals } from "@/lib/terminal";
 import { cn } from "@/lib/utils";
 
-/** Where the panel was left, for as long as Wings runs. The shell isn't kept, only the place. */
-let remembered: Rect = { right: PANEL_EDGE * 2, bottom: PANEL_EDGE * 2, w: 640, h: 380 };
+/** Where each panel was left, for as long as Wings runs. The shell isn't kept, only the place. */
+const remembered = new Map<string, Rect>();
+const initialRect = (): Rect => ({ right: PANEL_EDGE * 2, bottom: PANEL_EDGE * 2, w: 640, h: 380 });
 
 /**
- * A terminal in the home folder that belongs to no project, floated over the pane area and toggled by a shortcut.
- * Hidden, it keeps its shell. It's the same panel as the terminals an agent opens: drag the header, resize from the
- * corner, minimise to a bar.
+ * A terminal from the sidebar, in the home folder and in no project. `full` fills the pane area in place of the tab;
+ * otherwise it floats over it like the terminals an agent opens: drag the header, resize from the corner, minimise to
+ * a bar. Out of sight, it keeps its shell.
  */
-export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onFill, onFloat, onClose }: {
-  state: QuickState;
-  /** Where the shell is now, when Wings tracks it. */
-  cwd: string | null;
+export function QuickTerminal({ paneKey, title, shown, full, minimised, shortcut, onMinimise, onExpand, onFill, onFloat, onClose }: {
+  paneKey: string;
+  title: string;
+  shown: boolean;
+  full: boolean;
+  minimised: boolean;
   shortcut: string | null;
   onMinimise: () => void;
   onExpand: () => void;
@@ -28,36 +29,37 @@ export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onFi
   onFloat: () => void;
   onClose: () => void;
 }) {
-  const [rect, setRect] = useState(remembered);
-  const shown = state.phase === "shown";
-  const title = cwd ? tildify(cwd) : "~";
+  const [rect, setRect] = useState(() => remembered.get(paneKey) ?? initialRect());
 
   // Showing it moves the cursor into the shell. Its terminal opens in Host's effect, which runs before this one.
   useEffect(() => {
-    if (shown && !state.minimised) terminals.get(QUICK_TERMINAL_KEY)?.focus();
-  }, [shown, state.minimised, state.full]);
+    if (shown && !minimised) terminals.get(paneKey)?.focus();
+  }, [paneKey, shown, minimised, full]);
 
   return (
     <FloatingPanel
       rect={rect}
-      collapsed={state.minimised}
-      fill={state.full}
-      onRect={(next) => setRect((remembered = next))}
+      collapsed={minimised && !full}
+      fill={full}
+      onRect={(next) => {
+        remembered.set(paneKey, next);
+        setRect(next);
+      }}
       onExpand={onExpand}
-      label="Quick terminal"
+      label="Terminal"
       overlayClassName={cn("z-30", !shown && "hidden")}
       header={
         <>
           <SquareTerminalIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 truncate font-medium">{title}</span>
-          <span className="min-w-0 truncate text-muted-foreground">Quick terminal{shortcut ? ` · ${shortcut}` : ""}</span>
+          {!full && shortcut && <span className="min-w-0 truncate text-muted-foreground">{shortcut}</span>}
           <span className="flex-1" />
-          {!state.minimised && (
-            <IconButton label={state.full ? "Float over the tabs" : "Fill the window like a tab"} data-no-drag onClick={state.full ? onFloat : onFill}>
-              {state.full ? <Minimize2Icon /> : <Maximize2Icon />}
+          {(!minimised || full) && (
+            <IconButton label={full ? "Detach to a floating panel" : "Fill the window like a tab"} data-no-drag onClick={full ? onFloat : onFill}>
+              {full ? <Minimize2Icon /> : <Maximize2Icon />}
             </IconButton>
           )}
-          {!state.minimised && !state.full && (
+          {!minimised && !full && (
             <IconButton label="Minimise to a bar" data-no-drag onClick={onMinimise}>
               <MinusIcon />
             </IconButton>
@@ -65,7 +67,7 @@ export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onFi
           <IconButton
             label="Close and end the shell"
             data-no-drag
-            className={state.minimised ? "size-5" : undefined}
+            className={minimised && !full ? "size-5" : undefined}
             onClick={(e) => {
               e.stopPropagation();
               onClose();
@@ -76,7 +78,7 @@ export function QuickTerminal({ state, cwd, shortcut, onMinimise, onExpand, onFi
         </>
       }
     >
-      <Host paneKey={QUICK_TERMINAL_KEY} shown={!state.minimised} visible={shown} keepRenderer initialInput={null} />
+      <Host paneKey={paneKey} shown={full || !minimised} visible={shown} keepRenderer initialInput={null} />
     </FloatingPanel>
   );
 }

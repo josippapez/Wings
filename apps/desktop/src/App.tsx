@@ -55,7 +55,7 @@ import { createCommands, shortcutOf, shortcutText } from "@/lib/commands";
 import { canGoBack, canGoForward, EMPTY_NAV, goBack, goForward, visit, type NavState, type Place } from "@/lib/nav-history";
 import { defaultEditor, openInEditor, useDefaultEditorId, useEditors } from "@/lib/editors";
 import { DEFAULT_GLOBAL_HOTKEY, hotkeyLabel, type GlobalHotkey } from "@/lib/hotkey";
-import { DEFAULT_QUICK_TERMINAL_KEY, INITIAL_QUICK, isQuickTerminalKey, NO_SPACE, QUICK_TERMINAL_KEY, quickReducer, type QuickTerminalKey } from "@/lib/quick-terminal";
+import { DEFAULT_QUICK_TERMINAL_KEY, INITIAL_LOOSE, isQuickTerminalKey, looseReducer, NO_SPACE, toggleTarget, type QuickTerminalKey } from "@/lib/quick-terminal";
 import type { PaletteItem } from "@/lib/palette";
 import { openNotifications, openReviewSend } from "@/lib/ui-events";
 import { stateLabel } from "@/components/status-dot";
@@ -66,6 +66,7 @@ import { paneInput } from "@/lib/pane-input";
 import { canSleep, DEFAULT_SLEEP, EXIT_GRACE_MS, nextResumeDeadline, noResume, phaseOf, planSleep, resumeExpired, type SleepSettings } from "@/lib/sleep";
 import { QuickTerminal } from "@/components/quick-terminal";
 import { cn } from "@/lib/utils";
+import { tildify } from "@/components/pane-label";
 import { SetupApprovalDialog } from "@/components/setup-approval-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { WorktreeAgentDialog } from "@/components/worktree-agent-dialog";
@@ -311,8 +312,9 @@ const leftPanel = usePanelRef();
   const [terminalLook, setTerminalLookState] = useState<TerminalLook>(DEFAULT_TERMINAL_LOOK);
   const [globalHotkey, setGlobalHotkey] = useState<GlobalHotkey>(DEFAULT_GLOBAL_HOTKEY);
   const [quickKey, setQuickKey] = useState<QuickTerminalKey>(DEFAULT_QUICK_TERMINAL_KEY);
-  const [quick, dispatchQuick] = useReducer(quickReducer, INITIAL_QUICK);
-  const quickFull = quick.phase === "shown" && quick.full;
+  const [loose, dispatchLoose] = useReducer(looseReducer, INITIAL_LOOSE);
+  /** The sidebar terminal filling the pane area, in place of the tab. */
+  const terminalPage = loose.page;
   const [sleep, setSleep] = useState<SleepSettings>(DEFAULT_SLEEP);
   const [notifySound, setNotifySound] = useState<SoundSettings>(DEFAULT_SOUND);
   const [agentsRunCommands, setAgentsRunCommands] = useState(false);
@@ -892,7 +894,8 @@ const leftPanel = usePanelRef();
       // only sends a change, so projects not opened yet stayed without a status.
       api.onGitStatus(setGit).then((off) => (void api.gitStatus().then(setGit), off)),
       api.onPaneExited((paneId) => {
-        if (terminals.get(QUICK_TERMINAL_KEY)?.paneId === paneId) quickEndRef.current();
+        const looseKey = looseRef.current.list.find((t) => terminals.get(t.key)?.paneId === paneId)?.key;
+        if (looseKey) closeLooseRef.current(looseKey);
         const key = Object.keys(panesRef.current).find((k) => panesRef.current[k].paneId === paneId);
         if (key) closePane(key);
       }),
@@ -1709,6 +1712,46 @@ const leftPanel = usePanelRef();
   const runNotificationButtonRef = useRef(runNotificationButton);
   runNotificationButtonRef.current = runNotificationButton;
 
+  // The sidebar's terminals: shells that belong to no project, each filling the pane area or floating over it. Their
+  // sessions sit in `terminals` like any pane's, so font and look changes reach them, but in no tab, so nothing saves them.
+  const [loosePaneIds, setLoosePaneIds] = useState<Record<string, string>>({});
+  const looseRef = useRef(loose);
+  looseRef.current = loose;
+  const looseTitle = (key: string) => {
+    const cwd = loosePaneIds[key] && paneInfo[loosePaneIds[key]]?.cwd;
+    return cwd ? tildify(cwd) : "~";
+  };
+  const startLoose = () => {
+    const key = `terminal:${crypto.randomUUID()}`;
+    terminals.set(key, new TerminalSession(NO_SPACE, { onFocus: () => {}, onStarted: (paneId) => setLoosePaneIds((m) => ({ ...m, [key]: paneId })) }));
+    return key;
+  };
+  /** A terminal going out of sight hands the cursor back to the tab, unless it was already somewhere else. */
+  const focusBackFrom = (key: string) => {
+    const panel = terminals.get(key)?.el.closest("[role=group]");
+    const at = document.activeElement;
+    if (!at || at === document.body || panel?.contains(at)) requestAnimationFrame(focusTerminal);
+  };
+  const openLoose = (floating: boolean) => dispatchLoose({ type: "open", key: startLoose(), floating });
+  const toggleQuick = () => {
+    const target = toggleTarget(looseRef.current);
+    if (!target) return openLoose(true);
+    if (looseRef.current.page === target.key || target.floating) focusBackFrom(target.key);
+    dispatchLoose({ type: "toggle", fresh: "" });
+  };
+  /** Closing one, or its shell exiting: the shell ends and its row goes. */
+  const closeLoose = (key: string) => {
+    focusBackFrom(key);
+    terminals.get(key)?.dispose();
+    terminals.delete(key);
+    setLoosePaneIds(({ [key]: _gone, ...rest }) => rest);
+    dispatchLoose({ type: "close", key });
+  };
+  // Going to a tab or project puts the full terminal away, as going to another tab would.
+  useEffect(() => dispatchLoose({ type: "leave" }), [activeSpaceId, activeTabId]);
+  const closeLooseRef = useRef(closeLoose);
+  closeLooseRef.current = closeLoose;
+
   const sidebarProps: Omit<ComponentProps<typeof Sidebar>, "open"> = {
     spaces,
     git,
@@ -1717,7 +1760,7 @@ const leftPanel = usePanelRef();
     activeSpaceId,
     focusedPaneId,
     onSelectSpace: (spaceId: string) => {
-      dispatchQuick("leave");
+      dispatchLoose({ type: "leave" });
       selectSpace(spaceId);
     },
     onSelectAgent: selectAgent,
@@ -1743,9 +1786,11 @@ const leftPanel = usePanelRef();
     onAddSpace: (path) => void addSpace(path),
     onRemoveSpace: askRemoveSpace,
     onSearch: () => setPaletteOpen(true),
-    onQuickTerminal: () => showQuickPage(),
-    quickTerminalOpen: quickFull,
-    quickTerminalHint: quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null,
+    onNewTerminal: () => openLoose(false),
+    terminals: loose.list.map((t) => ({ key: t.key, title: looseTitle(t.key), floating: t.floating })),
+    terminalPage,
+    onShowTerminal: (key) => dispatchLoose({ type: "show", key }),
+    onCloseTerminal: (key) => closeLoose(key),
     onHistory: () => setHistoryOpen(true),
     onSettings: () => setSettingsOpen(true),
     notifications: {
@@ -1776,55 +1821,16 @@ const leftPanel = usePanelRef();
     if (tab && isPaneTab(tab)) terminals.get(tab.focusedPane)?.focus();
   }, []);
 
-  // The quick terminal: a shell that belongs to no project, floated over the pane area. Its session sits in `terminals`
-  // like any pane's, so font and look changes reach it, but in no tab, so nothing saves or lists it.
-  const [quickPaneId, setQuickPaneId] = useState<string | null>(null);
-  const quickRef = useRef(quick);
-  quickRef.current = quick;
-  /** What had focus when the quick terminal opened, to give it back when it goes. */
-  const quickOpener = useRef<HTMLElement | null>(null);
-  const giveFocusBack = () => {
-    const at = document.activeElement;
-    const panel = terminals.get(QUICK_TERMINAL_KEY)?.el.closest("[role=group]");
-    const opener = quickOpener.current;
-    quickOpener.current = null;
-    // Already clicked into something else: leave it there.
-    if (at && at !== document.body && !panel?.contains(at)) return;
-    if (opener?.isConnected) opener.focus();
-    else focusTerminal();
-  };
-  const toggleQuick = () => {
-    const { phase } = quickRef.current;
-    if (phase === "shown") giveFocusBack();
-    else {
-      quickOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      if (phase === "off") terminals.set(QUICK_TERMINAL_KEY, new TerminalSession(NO_SPACE, { onFocus: () => {}, onStarted: setQuickPaneId }));
-    }
-    dispatchQuick("toggle");
-  };
-  /** Closing it, or its shell exiting: the shell ends, and the next toggle starts a new one. */
-  const endQuick = () => {
-    if (quickRef.current.phase === "shown") giveFocusBack();
-    terminals.get(QUICK_TERMINAL_KEY)?.dispose();
-    terminals.delete(QUICK_TERMINAL_KEY);
-    setQuickPaneId(null);
-    dispatchQuick("end");
-  };
-  /** The sidebar row: the terminal as a page in place of the tab, or back out of sight. */
-  const showQuickPage = () => {
-    if (quickRef.current.phase === "off") terminals.set(QUICK_TERMINAL_KEY, new TerminalSession(NO_SPACE, { onFocus: () => {}, onStarted: setQuickPaneId }));
-    if (quickRef.current.phase === "shown" && quickRef.current.full) focusTerminal();
-    dispatchQuick("page");
-  };
-  // Going to a tab or project puts the full terminal away, as going to another tab would.
-  useEffect(() => dispatchQuick("leave"), [activeSpaceId, activeTabId]);
-  const quickEndRef = useRef(endQuick);
-  quickEndRef.current = endQuick;
 
   const editors = useEditors();
   const [editorId] = useDefaultEditorId();
   const editor = defaultEditor(editors, editorId);
   const closeFocused = () => {
+    // The terminal on screen in place of the tab, or a floating one being typed in, closes before the tab does.
+    const at = document.activeElement;
+    const typing = looseRef.current.list.find((t) => t.floating && at && terminals.get(t.key)?.el.contains(at))?.key;
+    const looseKey = looseRef.current.page ?? typing;
+    if (looseKey) return closeLoose(looseKey);
     const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
     if (tab && !isPaneTab(tab)) closeTab(tab.id);
     else if (tab) closePane(tab.focusedPane);
@@ -1849,8 +1855,9 @@ const leftPanel = usePanelRef();
   };
   const commands = createCommands({
     project: activeSpaceId !== null,
-    terminalTab: activeTab !== null,
-    projectPage: shownTab !== null && isProjectTab(shownTab),
+    terminalTab: activeTab !== null && !terminalPage,
+    projectPage: shownTab !== null && isProjectTab(shownTab) && !terminalPage,
+    terminalPage: terminalPage !== null,
     tabs: spaceTabs.length,
     canGoBack: canBack,
     canGoForward: canForward,
@@ -1996,7 +2003,7 @@ const leftPanel = usePanelRef();
           <TitleBar
             hasSpace={activeSpace !== null}
             tabs={tabViews}
-            activeTabId={activeTabId}
+            activeTabId={terminalPage ? null : activeTabId}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((o) => !o)}
             canGoBack={canBack}
@@ -2004,7 +2011,7 @@ const leftPanel = usePanelRef();
             onGoBack={() => navigate(goBack)}
             onGoForward={() => navigate(goForward)}
             onSelect={(id) => {
-              dispatchQuick("leave");
+              dispatchLoose({ type: "leave" });
               setActiveTabBySpace((m) => ({ ...m, [tabSpaceId]: id }));
             }}
             onClose={closeTab}
@@ -2085,7 +2092,7 @@ const leftPanel = usePanelRef();
                 <ResizablePanel id="tabs" minSize={320} style={PANEL_STYLE}>
                 <div className="relative h-full">
                 {/* The quick terminal filling the area stands in for the tab, so the tab is out of sight, not just under it. */}
-                <div className={cn("absolute inset-0", quickFull && "invisible")} aria-hidden={quickFull || undefined} inert={quickFull}>
+                <div className={cn("absolute inset-0", terminalPage && "invisible")} aria-hidden={!!terminalPage || undefined} inert={!!terminalPage}>
                 {tabs.map((tab) =>
                   isProjectTab(tab) ? (
                     <ProjectPageTab
@@ -2133,21 +2140,25 @@ const leftPanel = usePanelRef();
                   ),
                 )}
                 </div>
-                {quick.phase !== "off" && (
+                {loose.list.map((t) => (
                   <QuickTerminal
-                    state={quick}
-                    cwd={(quickPaneId && paneInfo[quickPaneId]?.cwd) || null}
-                    shortcut={quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null}
+                    key={t.key}
+                    paneKey={t.key}
+                    title={looseTitle(t.key)}
+                    shown={terminalPage === t.key || t.floating}
+                    full={terminalPage === t.key}
+                    minimised={t.minimised}
+                    shortcut={t.key === loose.last && quickKey.enabled ? hotkeyLabel(quickKey.accelerator, isMac) : null}
                     onMinimise={() => {
-                      giveFocusBack();
-                      dispatchQuick("minimise");
+                      focusBackFrom(t.key);
+                      dispatchLoose({ type: "minimise", key: t.key });
                     }}
-                    onExpand={() => dispatchQuick("expand")}
-                    onFill={() => dispatchQuick("fill")}
-                    onFloat={() => dispatchQuick("float")}
-                    onClose={endQuick}
+                    onExpand={() => dispatchLoose({ type: "expand", key: t.key })}
+                    onFill={() => dispatchLoose({ type: "show", key: t.key })}
+                    onFloat={() => dispatchLoose({ type: "float", key: t.key })}
+                    onClose={() => closeLoose(t.key)}
                   />
-                )}
+                ))}
                 {!activeSpace && !activeTabId && (
                   <Welcome
                     paletteKey={shortcutOf("palette", isMac)}

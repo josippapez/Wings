@@ -82,6 +82,8 @@ export type CommandContext = {
   terminalTab: boolean;
   /** A Project page is on screen: Find searches it. */
   projectPage?: boolean;
+  /** A sidebar terminal fills the pane area in place of the tab. */
+  terminalPage?: boolean;
   /** More than one tab in the project on screen. */
   tabs: number;
   /** There is a place to go back or forward to. */
@@ -106,7 +108,7 @@ export function createCommands(ctx: CommandContext, commands: CommandMeta[] = CO
     "go-forward": ctx.canGoForward,
     "worktree-agent": ctx.project,
     "open-in-editor": ctx.project,
-    "close-pane": ctx.tabs > 0,
+    "close-pane": ctx.tabs > 0 || !!ctx.terminalPage,
     "zoom-pane": ctx.terminalTab,
     "focus-left": ctx.terminalTab,
     "focus-right": ctx.terminalTab,

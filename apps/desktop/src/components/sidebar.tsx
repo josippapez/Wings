@@ -150,12 +150,14 @@ export function Sidebar(props: {
   onTogglePin: (id: string, pinned: boolean) => void;
   /** The command palette. */
   onSearch: () => void;
-  /** Shows or hides the quick terminal, a shell in the home folder that belongs to no project. */
-  onQuickTerminal: () => void;
-  /** The quick terminal fills the pane area, so its row reads as the page on screen. */
-  quickTerminalOpen: boolean;
-  /** Its shortcut as written on this platform, or null while it's turned off. */
-  quickTerminalHint: string | null;
+  /** Opens another terminal in the home folder, in no project, filling the pane area. */
+  onNewTerminal: () => void;
+  /** The open ones, each listed under the top rows while its shell runs. */
+  terminals: { key: string; title: string; floating: boolean }[];
+  /** The one filling the pane area in place of the tab. */
+  terminalPage: string | null;
+  onShowTerminal: (key: string) => void;
+  onCloseTerminal: (key: string) => void;
   onHistory: () => void;
   onSettings: () => void;
   /** The Inbox row's popover: agent events, newest first. */
@@ -275,7 +277,7 @@ export function Sidebar(props: {
 
   function renderRow({ space, child }: ProjectRow<Space>, older = false) {
                 const top = tops.indexOf(space.id);
-                const active = space.id === props.activeSpaceId;
+                const active = space.id === props.activeSpaceId && !props.terminalPage;
                 const spaceAgents = agents.filter((a) => a.spaceId === space.id);
                 const state = rollUp(spaceAgents.map((a) => a.state));
                 const status = props.git[space.id];
@@ -422,11 +424,39 @@ export function Sidebar(props: {
       <div className="flex h-full min-w-[200px] flex-col pb-2">
         <nav aria-label="Wings" className="flex shrink-0 flex-col gap-px px-2 pb-2">
           <SidebarNavRow icon={<SearchIcon />} label="Search" trailing={<RowHint>{shortcutLabel.palette}</RowHint>} onClick={props.onSearch} />
-          <SidebarNavRow icon={<SquareTerminalIcon />} label="Terminal" trailing={props.quickTerminalHint && <RowHint>{props.quickTerminalHint}</RowHint>} onClick={props.onQuickTerminal} aria-pressed={props.quickTerminalOpen} className={cn(props.quickTerminalOpen && "bg-hover text-foreground")} />
+          <SidebarNavRow icon={<SquareTerminalIcon />} label="Terminal" trailing={<PlusIcon className="size-3.5! text-muted-foreground/60" aria-hidden />} onClick={props.onNewTerminal} />
           {/* Only the docked copy listens for the show-notifications command, so the peeking copy doesn't open a second popover. */}
           <NotificationBell {...props.notifications} listen={!props.floating} />
           <SidebarNavRow icon={<RotateCcwClockIcon />} label="Past sessions" onClick={props.onHistory} disabled={props.activeSpaceId === null} />
         </nav>
+
+        {props.terminals.length > 0 && (
+          <ul aria-label="Terminals" className="flex shrink-0 flex-col gap-px px-2 pb-2">
+            {props.terminals.map((t) => {
+              const active = t.key === props.terminalPage;
+              return (
+                <li key={t.key} className="group/row relative">
+                  <SidebarNavRow
+                    icon={<SquareTerminalIcon />}
+                    label={t.title}
+                    aria-current={active ? "page" : undefined}
+                    title={t.floating ? `${t.title} · floating` : t.title}
+                    onClick={() => props.onShowTerminal(t.key)}
+                    className={cn("pr-8", active && "bg-sidebar-accent font-semibold text-foreground hover:bg-sidebar-accent")}
+                  />
+                  <IconButton
+                    label="Close and end the shell"
+                    side="right"
+                    onClick={() => props.onCloseTerminal(t.key)}
+                    className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100 [&_svg]:size-3.5"
+                  >
+                    <XIcon />
+                  </IconButton>
+                </li>
+              );
+            })}
+          </ul>
+        )}
 
         <div className="flex h-8 items-center justify-between pr-2 pl-4">
           <h2 className="text-[12px] font-medium text-muted-foreground">Projects</h2>
