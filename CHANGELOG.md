@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.118 · 2026-11-05
+
+- **The quick terminal can fill the window like a tab.** The sidebar's Terminal row opens it in place of the current tab. A button in its header switches between that and the floating panel, keeping the same shell. Going to another tab or project puts it away.
+
 ## 0.1.117 · 2026-11-04
 
 - **Scheduled labels stay with their session.** Opening another session in a reused tab clears the previous plugin label, title and resume flags. Sleep, resume and workspace restoration keep the original session's label.
