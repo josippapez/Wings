@@ -79,7 +79,35 @@ pub struct Config {
     /// Code to it. `None` serves nothing and leaves Claude Code alone, as in tests and screenshots, which must never take
     /// the socket of the Wings you are using; only `main` sets it.
     pub socket: Option<PathBuf>,
+    /// The terminal servers panes run in, so they outlive the app (`WINGS_TERMINAL_SERVER=1`). `None` runs every pane
+    /// in the app, as tests do unless they start a server of their own.
+    #[cfg(unix)]
+    pub terminal_server: Option<TerminalServers>,
 }
+
+/// The app's terminal servers, shared by every view of the config.
+#[cfg(unix)]
+#[derive(Clone)]
+pub struct TerminalServers(pub std::sync::Arc<crate::terminal_server::Servers>);
+
+#[cfg(unix)]
+impl std::fmt::Debug for TerminalServers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("TerminalServers")
+            .field(&self.0.current())
+            .finish()
+    }
+}
+
+#[cfg(unix)]
+impl PartialEq for TerminalServers {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cfg(unix)]
+impl Eq for TerminalServers {}
 
 /// Where past sessions are read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +186,8 @@ impl Config {
             sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
             editors: None,
             socket: None,
+            #[cfg(unix)]
+            terminal_server: None,
         }))
     }
 

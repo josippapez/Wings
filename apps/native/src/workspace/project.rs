@@ -36,6 +36,8 @@ impl Workspace {
             }
             _ => self.new_terminal(window, cx),
         }
+        #[cfg(unix)]
+        self.adopt_orphans(window, cx);
         self.load_issues(cx);
         if self.issues_open
             && self.has_tasks_board()
@@ -56,6 +58,34 @@ impl Workspace {
             self.load(None, cx);
         } else {
             self.issues.update(cx, |view, cx| view.set_setup(cx));
+        }
+    }
+
+    /// A tab for each pane of this project the terminal server still runs but no saved pane names, so no program the
+    /// server kept goes on unseen.
+    #[cfg(unix)]
+    fn adopt_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(servers) = self.config.terminal_server.clone() else {
+            return;
+        };
+        let saved = self
+            .config
+            .state
+            .as_deref()
+            .map(saved::history_ids)
+            .unwrap_or_default();
+        for history in servers.0.orphans(&self.project_key(), &saved) {
+            let pane = self.open_pane(None, Some(history), cx);
+            let id = self.next_tab;
+            self.next_tab += 1;
+            self.terminals.push(super::TerminalTab {
+                id,
+                layout: crate::layout::Layout::Pane(pane),
+                focused: pane,
+                zoomed: None,
+                focus: cx.focus_handle().tab_stop(true),
+            });
+            self.show(super::Active::Terminal(id), window, cx);
         }
     }
 

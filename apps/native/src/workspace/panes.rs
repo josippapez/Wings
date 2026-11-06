@@ -14,6 +14,13 @@ use crate::{
     text_field::{FieldEvent, TextField},
 };
 
+#[cfg(unix)]
+use crate::terminal_server;
+
+#[cfg(all(test, unix, feature = "test-support"))]
+#[path = "server_tests.rs"]
+mod server_tests;
+
 use super::{Active, Drag, Pane, Workspace};
 
 impl Workspace {
@@ -126,14 +133,21 @@ impl Workspace {
                     .unwrap_or_default();
                 format!("{:x}-{id}", now.as_nanos())
             });
-        let output = self
+        let mut output = self
             .config
             .state
             .as_deref()
             .map(|state| saved::load_history(state, &history))
             .unwrap_or_default();
         let account = self.spaces.claude_config_dir(&self.config.project);
-        let view = TerminalView::open(folder, output, account, cx).map_err(SharedString::from);
+        #[cfg(unix)]
+        let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
+        #[cfg(not(unix))]
+        let served = None;
+        let view = match served {
+            Some(view) => Ok(view),
+            None => TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
+        };
         self.panes.insert(
             id,
             Pane {
@@ -145,6 +159,48 @@ impl Workspace {
             },
         );
         id
+    }
+
+    /// The pane in the terminal server: the one it kept running for `history`, else a new one there. `None` runs the
+    /// pane in the app: no server, or it couldn't start one. A pane that ended while the app was away leaves what it
+    /// printed in `output`, above the new shell.
+    #[cfg(unix)]
+    fn open_in_server(
+        &self,
+        folder: &std::path::Path,
+        history: &str,
+        output: &mut Vec<u8>,
+        account: &Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Entity<TerminalView>> {
+        let servers = self.config.terminal_server.as_ref()?.0.clone();
+        if let Some((socket, pane)) = servers.claim(history) {
+            if !pane.exited {
+                match TerminalView::attach_in_server(&socket, &pane, cx) {
+                    Ok(view) => return Some(view),
+                    Err(error) => eprintln!("{error}"),
+                }
+            } else {
+                match terminal_server::read(&socket, pane.pane) {
+                    Ok(kept) => *output = kept,
+                    Err(error) => {
+                        eprintln!("Couldn't read a pane that ended in the terminal server: {error}")
+                    }
+                }
+                terminal_server::kill(&socket, pane.pane);
+            }
+        }
+        let socket = servers.current()?;
+        let opened = TerminalView::open_in_server(
+            socket,
+            self.project_key(),
+            history.to_owned(),
+            folder.to_owned(),
+            output.clone(),
+            account.clone(),
+            cx,
+        );
+        opened.map_err(|error| eprintln!("{error}")).ok()
     }
 
     /// Opens a shell beside the focused pane: to the right for a row, below for a column.

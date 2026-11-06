@@ -319,7 +319,10 @@ sleep 30"#;
     wait_reaped(&process);
 }
 
-fn wait_snapshot(latest: &Latest, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
+pub(super) fn wait_snapshot(
+    latest: &Latest,
+    predicate: impl Fn(&Snapshot) -> bool,
+) -> Arc<Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let snapshot = latest.lock().unwrap().clone();
@@ -335,7 +338,7 @@ fn wait_snapshot(latest: &Latest, predicate: impl Fn(&Snapshot) -> bool) -> Arc<
     }
 }
 
-fn visible_text(snapshot: &Snapshot) -> String {
+pub(super) fn visible_text(snapshot: &Snapshot) -> String {
     snapshot
         .cells
         .iter()
@@ -385,7 +388,9 @@ fn live_worker_runs_the_current_shell_in_its_project_and_refits_the_pty() {
     wait_snapshot(&latest, |frame| {
         visible_text(frame).contains("native-size:31100")
     });
-    let process = runtime.process.clone();
+    let worker::Shell::Local(process) = runtime.process.clone() else {
+        panic!("a local shell")
+    };
     drop(runtime);
     wait_reaped(&process);
 }

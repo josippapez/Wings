@@ -13,6 +13,7 @@ use std::{
 };
 
 use async_channel::{Receiver, Sender};
+use wings_ptyd::client;
 use wings_terminal::{
     PtyProcess,
     grid::{CursorShape, Event, GridPane, Scroll, SelectionType, TermMode},
@@ -80,6 +81,8 @@ pub(super) enum Command {
     FindClose,
     /// Stores the scrollback as text if the pane is still hidden.
     Unload,
+    /// Everything the terminal server kept of the pane, drawn on a fresh screen.
+    Replay(Vec<u8>),
     Eof(Option<String>),
 }
 
@@ -108,8 +111,70 @@ impl Options {
     }
 }
 
+/// Where the pane's program runs: in this process, or in the terminal server, where it outlives the app.
+#[derive(Clone)]
+pub(super) enum Shell {
+    Local(Arc<PtyProcess>),
+    Remote(Arc<client::Pane>),
+}
+
+impl Shell {
+    pub(super) fn process_id(&self) -> Option<u32> {
+        match self {
+            Shell::Local(process) => process.process_id(),
+            Shell::Remote(pane) => pane.shell_pid(),
+        }
+    }
+
+    pub(super) fn foreground_pid(&self) -> Option<u32> {
+        match self {
+            Shell::Local(process) => process.foreground_pid(),
+            Shell::Remote(pane) => pane.foreground_pid(),
+        }
+    }
+
+    pub(super) fn cwd(&self) -> Option<PathBuf> {
+        match self {
+            Shell::Local(process) => process.cwd(),
+            Shell::Remote(pane) => wings_terminal::cwd_of(pane.shell_pid()?),
+        }
+    }
+
+    fn write(&self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            Shell::Local(process) => process.write(data).map_err(std::io::Error::other),
+            Shell::Remote(pane) => pane.write(data),
+        }
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
+        match self {
+            Shell::Local(process) => process.resize(cols, rows).map_err(std::io::Error::other),
+            Shell::Remote(pane) => pane.resize(cols, rows),
+        }
+    }
+
+    /// Ends the program, wherever it runs.
+    fn kill(&self) {
+        match self {
+            Shell::Local(process) => process.kill(),
+            Shell::Remote(pane) => {
+                let _ = pane.kill();
+                pane.detach();
+            }
+        }
+    }
+
+    /// At the end of the output: reaps a local shell. The server reaps its own.
+    fn reap(&self) {
+        if let Shell::Local(process) = self {
+            process.reap();
+        }
+    }
+}
+
 pub(super) struct Runtime {
-    pub(super) process: Arc<PtyProcess>,
+    pub(super) process: Shell,
     pub(super) commands: Sender<Command>,
     /// Text for the system clipboard: a copied selection or a program's OSC 52 write.
     pub(super) clipboard: Receiver<String>,
@@ -125,6 +190,16 @@ impl Runtime {
         self.stopped.store(true, Ordering::Release);
         self.commands.close();
         self.process.kill();
+    }
+
+    /// On quit: a pane in the terminal server goes on running there for the next app. A local one ends.
+    pub(super) fn detach(&self) {
+        let Shell::Remote(pane) = &self.process else {
+            return self.shutdown();
+        };
+        self.stopped.store(true, Ordering::Release);
+        self.commands.close();
+        pane.detach();
     }
 }
 
@@ -192,6 +267,91 @@ pub(super) fn start_process(
     options: Options,
 ) -> Result<(Runtime, Latest, Receiver<()>), String> {
     let mut reader = process.reader().map_err(|error| error.to_string())?;
+    let (runtime, latest, updates, output, commands) =
+        start_model(Shell::Local(process), &id, (80, 24), history, options)?;
+    thread::Builder::new()
+        .name(format!("terminal-read-{id}"))
+        .spawn(move || {
+            let mut buf = [0; OUTPUT_CHUNK];
+            let error = loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break None,
+                    Ok(n) => {
+                        if output.send_blocking(buf[..n].to_vec()).is_err() {
+                            return;
+                        }
+                        if commands.send_blocking(Command::Output).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => break Some(format!("PTY read failed: {error}")),
+                }
+            };
+            let _ = commands.send_blocking(Command::Eof(error));
+        })
+        .map_err(|error| error.to_string())?;
+    Ok((runtime, latest, updates))
+}
+
+/// A pane in the terminal server, of `size` (columns, rows) as the server last drew it. `history` is output saved from
+/// an earlier shell, for a pane just started; a pane attached again gets the server's own replay instead.
+pub(super) fn start_remote(
+    pane: client::Pane,
+    mut events: client::Events,
+    size: (u16, u16),
+    history: Vec<u8>,
+    options: Options,
+) -> Result<(Runtime, Latest, Receiver<()>), String> {
+    let pane = Arc::new(pane);
+    let id = format!("s{}", pane.number());
+    let (runtime, latest, updates, output, commands) =
+        start_model(Shell::Remote(pane.clone()), &id, size, history, options)?;
+    let stopped = runtime.stopped.clone();
+    thread::Builder::new()
+        .name(format!("terminal-read-{id}"))
+        .spawn(move || {
+            let end = loop {
+                match events.next(&pane) {
+                    client::Event::Output(bytes) => {
+                        if output.send_blocking(bytes).is_err()
+                            || commands.send_blocking(Command::Output).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    client::Event::Replay(bytes) => {
+                        if commands.send_blocking(Command::Replay(bytes)).is_err() {
+                            return;
+                        }
+                    }
+                    client::Event::Exited => break None,
+                    // Let go on quit: the pane runs on in the server, and this view is going.
+                    client::Event::Closed if stopped.load(Ordering::Acquire) => return,
+                    client::Event::Closed => break Some("The terminal server stopped.".to_owned()),
+                }
+            };
+            let _ = commands.send_blocking(Command::Eof(end));
+        })
+        .map_err(|error| error.to_string())?;
+    Ok((runtime, latest, updates))
+}
+
+type Started = (
+    Runtime,
+    Latest,
+    Receiver<()>,
+    Sender<Vec<u8>>,
+    Sender<Command>,
+);
+
+/// The model thread, and what feeds it: the output channel and the command channel.
+fn start_model(
+    process: Shell,
+    id: &str,
+    size: (u16, u16),
+    history: Vec<u8>,
+    options: Options,
+) -> Result<Started, String> {
     // Output uses only eight command slots, leaving room for control keys during a flood.
     // At most 128 KiB of output is queued, plus one read chunk. Full queues stop PTY reads.
     let (commands, receiver) = async_channel::bounded(QUEUE_SLOTS);
@@ -227,6 +387,7 @@ pub(super) fn start_process(
                     recent,
                     latest: state,
                 },
+                size,
                 history,
                 options,
                 stopped,
@@ -234,28 +395,7 @@ pub(super) fn start_process(
             );
         })
         .map_err(|error| error.to_string())?;
-    thread::Builder::new()
-        .name(format!("terminal-read-{id}"))
-        .spawn(move || {
-            let mut buf = [0; OUTPUT_CHUNK];
-            let error = loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break None,
-                    Ok(n) => {
-                        if output.send_blocking(buf[..n].to_vec()).is_err() {
-                            return;
-                        }
-                        if commands.send_blocking(Command::Output).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => break Some(format!("PTY read failed: {error}")),
-                }
-            };
-            let _ = commands.send_blocking(Command::Eof(error));
-        })
-        .map_err(|error| error.to_string())?;
-    Ok((runtime, latest, updates))
+    Ok((runtime, latest, updates, output, commands))
 }
 
 /// Where the model thread sends its results.
@@ -269,7 +409,7 @@ struct Outputs {
 
 #[allow(clippy::too_many_arguments)] // the model thread's whole starting state
 fn run_model(
-    process: Arc<PtyProcess>,
+    process: Shell,
     receiver: Receiver<Command>,
     output: Receiver<Vec<u8>>,
     Outputs {
@@ -279,15 +419,16 @@ fn run_model(
         recent,
         latest,
     }: Outputs,
+    (cols, rows): (u16, u16),
     history: Vec<u8>,
     mut options: Options,
     stopped: Arc<AtomicBool>,
     visible: Arc<AtomicBool>,
 ) {
-    let mut pane = GridPane::new(80, 24);
+    let mut pane = GridPane::new(cols as usize, rows as usize);
     let mut geometry = Geometry {
-        cols: 80,
-        rows: 24,
+        cols,
+        rows,
         cell_width: 8,
         cell_height: line_height(DEFAULT_FONT_SIZE, 1.2) as u16,
     };
@@ -322,7 +463,10 @@ fn run_model(
         let mut processed = 0;
         let mut moved = false;
         while let Some(next) = command.take() {
-            moved |= matches!(next, Command::Output | Command::Resize(_) | Command::Unload);
+            moved |= matches!(
+                next,
+                Command::Output | Command::Resize(_) | Command::Unload | Command::Replay(_)
+            );
             let result = match next {
                 Command::Output => {
                     let bytes = output
@@ -413,6 +557,23 @@ fn run_model(
                     {
                         stored = pane.store_history();
                     }
+                    Ok(())
+                }
+                Command::Replay(bytes) => {
+                    pane = GridPane::new(geometry.cols as usize, geometry.rows as usize);
+                    pane.set_cell_size(geometry.cell_width, geometry.cell_height);
+                    pane.set_options(options.cursor, options.scrollback);
+                    pane.feed(&bytes);
+                    // Replies and clipboard writes answered a terminal long gone. Only the title still holds.
+                    for event in pane.take_events() {
+                        if let Event::Title(text) = event {
+                            *title.lock().unwrap() = text;
+                        }
+                    }
+                    let mut kept = recent.lock().unwrap();
+                    kept.clear();
+                    keep_recent(&mut kept, &bytes);
+                    stored = None;
                     Ok(())
                 }
                 Command::Eof(error) => {

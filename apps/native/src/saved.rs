@@ -201,8 +201,8 @@ pub fn save_history(state: &Path, id: &str, output: &[u8]) -> io::Result<()> {
     std::fs::write(file, output)
 }
 
-/// Deletes saved output no pane in any project refers to any more, like the desktop's `histories_keep`.
-pub fn prune_histories(state: &Path) {
+/// The history id of every saved pane in every project.
+pub fn history_ids(state: &Path) -> Vec<String> {
     fn ids(layout: &SavedLayout, keep: &mut Vec<String>) {
         match layout {
             SavedLayout::Pane { history, .. } => keep.extend(history.clone()),
@@ -222,6 +222,12 @@ pub fn prune_histories(state: &Path) {
             ids(&tab.layout, &mut keep);
         }
     }
+    keep
+}
+
+/// Deletes saved output no pane in any project refers to any more, like the desktop's `histories_keep`.
+pub fn prune_histories(state: &Path) {
+    let keep = history_ids(state);
     let dir = state.with_file_name("scrollback");
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if !keep.iter().any(|id| entry.file_name() == id.as_str()) {

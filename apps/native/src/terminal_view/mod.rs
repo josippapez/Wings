@@ -6,6 +6,8 @@ mod input;
 mod links;
 mod mouse;
 mod paint;
+#[cfg(all(test, unix))]
+mod server_tests;
 mod snapshot;
 #[cfg(test)]
 mod tests;
@@ -31,7 +33,7 @@ use self::{
     links::Link,
     mouse::Hit,
     snapshot::{Latest, Snapshot},
-    worker::{Command, Geometry, Options, Runtime, fit, start},
+    worker::{Command, Geometry, Options, Runtime, fit, start, start_remote},
 };
 
 /// The desktop terminal's default size. Increase and Decrease Font Size go from 9 to 24.
@@ -212,6 +214,57 @@ impl TerminalView {
         Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
     }
 
+    /// Starts a shell in the terminal server at `socket`, where it outlives the app, under the saved pane's
+    /// `history_id` so the next app finds it. `history` is shown above it, as in `open`, and is the start of what the
+    /// server keeps of the pane.
+    #[cfg(unix)]
+    pub fn open_in_server(
+        socket: &std::path::Path,
+        space_id: String,
+        history_id: String,
+        cwd: PathBuf,
+        history: Vec<u8>,
+        claude_config_dir: Option<PathBuf>,
+        cx: &mut App,
+    ) -> Result<Entity<Self>, String> {
+        let env = wings_terminal::shell::pane_env(claude_config_dir.as_deref())
+            .into_iter()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
+        let spawn = wings_ptyd::proto::Spawn {
+            space_id,
+            cwd,
+            cols: 80,
+            rows: 24,
+            history_id: Some(history_id),
+            env,
+        };
+        let kept = wings_ptyd::output::restored(history.clone());
+        let (pane, events) = wings_ptyd::client::Pane::spawn(socket, spawn, &kept)
+            .map_err(|error| format!("The terminal server couldn't start a shell: {error}"))?;
+        let options = Options::of(&look(cx));
+        let (runtime, latest, updates) = start_remote(pane, events, (80, 24), history, options)?;
+        Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
+    }
+
+    /// Attaches to a pane the terminal server at `socket` kept running, which shows what it printed meanwhile.
+    #[cfg(unix)]
+    pub fn attach_in_server(
+        socket: &std::path::Path,
+        info: &wings_ptyd::proto::PaneInfo,
+        cx: &mut App,
+    ) -> Result<Entity<Self>, String> {
+        let (pane, events, attached) = wings_ptyd::client::Pane::attach(socket, info)
+            .map_err(|error| format!("Couldn't reach a pane in the terminal server: {error}"))?;
+        let size = match (attached.cols, attached.rows) {
+            (0, _) | (_, 0) => (80, 24),
+            size => size,
+        };
+        let options = Options::of(&look(cx));
+        let (runtime, latest, updates) = start_remote(pane, events, size, Vec::new(), options)?;
+        Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
+    }
+
     fn new(
         runtime: Runtime,
         latest: Latest,
@@ -244,8 +297,9 @@ impl TerminalView {
                 cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
             }
         });
+        // A pane in the terminal server runs on for the next app.
         let quit = cx.on_app_quit(|view, _| {
-            view.runtime.shutdown();
+            view.runtime.detach();
             async {}
         });
         // Blocking, not try_send: a dropped change could leave clipboard writes on after they were turned off.
