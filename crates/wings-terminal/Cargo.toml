@@ -6,12 +6,13 @@ description = "Shared Wings PTY process and optional terminal grid"
 publish = false
 
 [features]
-grid = ["dep:alacritty_terminal"]
+grid = ["dep:ghostty-sys", "dep:regex"]
 
 [dependencies]
 anyhow = "1"
 portable-pty = "0.9.0"
-alacritty_terminal = { version = "0.26.0", optional = true }
+ghostty-sys = { path = "../ghostty-sys", optional = true }
+regex = { version = "1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

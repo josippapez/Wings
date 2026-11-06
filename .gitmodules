@@ -1,0 +1,4 @@
+[submodule "crates/ghostty-sys/vendor/ghostty"]
+	path = crates/ghostty-sys/vendor/ghostty
+	url = https://github.com/ghostty-org/ghostty
+	shallow = true

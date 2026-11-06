@@ -1,0 +1,11 @@
+[package]
+name = "ghostty-sys"
+version = "0.0.0"
+edition = "2021"
+description = "Bindings to libghostty-vt, Ghostty's terminal library, built from vendor/ghostty with Zig"
+license = "MIT"
+publish = false
+links = "ghostty-vt"
+
+[build-dependencies]
+bindgen = "0.72"

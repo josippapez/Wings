@@ -2,159 +2,35 @@
 //! the lines above the screen become text and style codes, a small fraction of the grid's cells, and
 //! go back above the screen when the pane is shown again.
 
-use std::fmt::Write;
-
-use alacritty_terminal::{
-    event::EventListener,
-    grid::{Dimensions, GridCell, Row, Scroll},
-    index::{Column, Line},
-    term::cell::{Cell, Flags},
-    vte::ansi::{Color, CursorShape, NamedColor},
-};
+use ghostty_sys::*;
 
 use crate::grid::GridPane;
 
 /// Fewer lines than this save too little to be worth storing (the desktop's `MIN_HISTORY_LINES`).
 pub const MIN_LINES: usize = 500;
 
-/// The attributes written back, with their SGR parameters.
-const ATTRIBUTES: [(Flags, &str); 11] = [
-    (Flags::BOLD, "1"),
-    (Flags::DIM, "2"),
-    (Flags::ITALIC, "3"),
-    (Flags::UNDERLINE, "4"),
-    (Flags::DOUBLE_UNDERLINE, "4:2"),
-    (Flags::UNDERCURL, "4:3"),
-    (Flags::DOTTED_UNDERLINE, "4:4"),
-    (Flags::DASHED_UNDERLINE, "4:5"),
-    (Flags::INVERSE, "7"),
-    (Flags::HIDDEN, "8"),
-    (Flags::STRIKEOUT, "9"),
-];
-
-#[derive(Clone, Copy, PartialEq)]
-struct Style {
-    fg: Color,
-    bg: Color,
-    flags: Flags,
-    underline: Option<Color>,
-}
-
-impl Style {
-    const PLAIN: Style = Style {
-        fg: Color::Named(NamedColor::Foreground),
-        bg: Color::Named(NamedColor::Background),
-        flags: Flags::empty(),
-        underline: None,
-    };
-
-    fn of(cell: &Cell) -> Style {
-        let attributes = ATTRIBUTES
-            .iter()
-            .fold(Flags::empty(), |all, (flag, _)| all | *flag);
-        Style {
-            fg: cell.fg,
-            bg: cell.bg,
-            flags: cell.flags & attributes,
-            underline: cell.underline_color(),
+impl GridPane {
+    /// Writes the lines above the screen as bytes that draw them again, and drops them. `None` while the program is
+    /// in the middle of a sequence, which the clearing one would break.
+    pub fn store_history(&mut self) -> Option<Vec<u8>> {
+        let (excess, history) = self.history_rows();
+        if history == 0 || !self.at_ground() {
+            return None;
         }
-    }
-
-    fn write(&self, out: &mut String) {
-        out.push_str("\x1b[0");
-        for (flag, code) in ATTRIBUTES {
-            if self.flags.contains(flag) {
-                out.push(';');
-                out.push_str(code);
-            }
-        }
-        color(out, self.fg, 30, 90, 38);
-        color(out, self.bg, 40, 100, 48);
-        // The underline color has no short codes, so the 16 named colors go by their palette index.
-        if let Some(underline) = self.underline {
-            let underline = match underline {
-                Color::Named(name) if (name as usize) < 16 => Color::Indexed(name as u8),
-                other => other,
-            };
-            color(out, underline, 0, 0, 58);
-        }
-        out.push('m');
-    }
-}
-
-/// Named colors past the 16 are the defaults, which the reset before them already set.
-fn color(out: &mut String, color: Color, base: u8, bright: u8, extended: u8) {
-    let _ = match color {
-        Color::Named(name) if (name as usize) < 8 => write!(out, ";{}", base + name as u8),
-        Color::Named(name) if (name as usize) < 16 => write!(out, ";{}", bright + name as u8 - 8),
-        Color::Named(_) => Ok(()),
-        Color::Indexed(index) => write!(out, ";{extended};5;{index}"),
-        Color::Spec(rgb) => write!(out, ";{extended};2;{};{};{}", rgb.r, rgb.g, rgb.b),
-    };
-}
-
-/// Cells up to the last one that shows something.
-fn length(row: &Row<Cell>) -> usize {
-    (0..row.len())
-        .rev()
-        .find(|&col| !row[Column(col)].is_empty())
-        .map_or(0, |col| col + 1)
-}
-
-impl<L: EventListener> GridPane<L> {
-    /// Writes the lines above the screen as bytes that draw them again, and drops them.
-    pub fn store_history(&mut self) -> Vec<u8> {
-        let grid = self.model().grid();
-        let history = grid.history_size() as i32;
-        let mut out = String::new();
-        let mut style = Style::PLAIN;
-        let mut continued = false;
-        for line in -history..0 {
-            let row = &grid[Line(line)];
-            let wraps = row
-                .last()
-                .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE));
-            // A wrapped line fills its row so the terminal wraps it again. The line it continues on keeps
-            // at least one cell, or the two would merge into one.
-            let end = if wraps {
-                row.len()
-            } else {
-                length(row).max(usize::from(continued))
-            };
-            for col in 0..end {
-                let cell = &row[Column(col)];
-                if cell
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    continue;
-                }
-                let next = Style::of(cell);
-                if next != style {
-                    next.write(&mut out);
-                    style = next;
-                }
-                // A tab keeps its character for copying. Writing it jumps to the next tab stop, so the
-                // cursor comes back to the next cell.
-                if cell.c == '\t' {
-                    let _ = write!(out, "\t\x1b[{}G", col + 2);
-                } else {
-                    out.push(cell.c);
-                }
-                out.extend(cell.zerowidth().into_iter().flatten());
-            }
-            if !wraps && line < -1 {
-                // A new line takes the current background, so the style ends first.
-                if style != Style::PLAIN {
-                    out.push_str("\x1b[0m");
-                    style = Style::PLAIN;
-                }
-                out.push_str("\r\n");
-            }
-            continued = wraps;
-        }
-        self.model_mut().grid_mut().clear_history();
-        out.into_bytes()
+        let selection = self.rows_selection(excess, excess + history - 1)?;
+        let mut bytes = self.format(
+            GHOSTTY_FORMATTER_FORMAT_VT,
+            Some(&selection),
+            true,
+            true,
+            GHOSTTY_FORMATTER_EXTRAS_NONE,
+        );
+        // Trimming drops the blank lines at the end, which are part of the history.
+        let blank = self.blank_rows_up_to(excess + history - 1);
+        bytes.extend(b"\r\n".repeat(blank.min(history - 1)));
+        // ED 3 clears the scrollback and leaves the screen.
+        self.feed(b"\x1b[3J");
+        Some(bytes)
     }
 
     /// Puts stored lines back above the screen and the history that came after them. Past the
@@ -163,63 +39,56 @@ impl<L: EventListener> GridPane<L> {
         if stored.is_empty() {
             return;
         }
-        let (cols, rows) = (self.model().columns(), self.model().screen_lines());
-        let mut scratch = GridPane::new(cols, rows);
-        scratch.set_options(CursorShape::Block, self.history_limit());
-        scratch.feed(stored);
-        let source = scratch.model().grid();
-        let last = source.cursor.point.line.0;
-        let first = -(source.history_size() as i32);
-        let limit = self.history_limit();
-        let grid = self.model_mut().grid_mut();
-        let kept = grid.history_size() as i32;
-        let count = ((last - first + 1) as usize).min(limit.saturating_sub(kept as usize)) as i32;
-        if count == 0 {
-            return;
-        }
-        // Scrolling the whole screen up makes `count` lines of room in the history. Everything moves
-        // back down by as much, so the room is above the kept history and the screen stays put.
-        grid.scroll_up(&(Line(0)..Line(rows as i32)), count as usize);
-        for line in (-kept..rows as i32).rev() {
-            grid[Line(line)] = std::mem::replace(&mut grid[Line(line - count)], Row::new(cols));
-        }
-        for (offset, line) in (last + 1 - count..=last).enumerate() {
-            grid[Line(-kept - count + offset as i32)] = source[Line(line)].clone();
-        }
-        grid.scroll_display(Scroll::Bottom);
-        self.model_mut().selection = None;
+        // The terminal is drawn again from the stored lines, then from what it holds now with its modes and cursor.
+        // That starts at the top of the screen, so a screen of new lines first moves the stored ones above it.
+        let kept = self.format(
+            GHOSTTY_FORMATTER_FORMAT_VT,
+            None,
+            true,
+            false,
+            GHOSTTY_FORMATTER_EXTRAS_ALL,
+        );
+        self.replace_terminal(|next| {
+            next.feed(stored);
+            next.feed(b"\x1b[0m");
+            next.feed(&b"\r\n".repeat(next.screen_lines()));
+            next.feed(&kept);
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
+
     use super::*;
-    use crate::grid::HISTORY_LINES;
+    use crate::grid::{CursorShape, Flags, HISTORY_LINES};
 
     /// Each line's cells as text and style, without the wrap flag: the seam between stored and kept
     /// lines starts a new line, as in the desktop terminal.
-    fn lines(pane: &GridPane) -> Vec<String> {
-        let grid = pane.model().grid();
-        let top = -(grid.history_size() as i32);
-        (top..grid.screen_lines() as i32)
-            .map(|line| {
-                let row = &grid[Line(line)];
-                (0..row.len())
-                    .map(|col| {
-                        let cell = &row[Column(col)];
+    fn lines(pane: &mut GridPane) -> Vec<String> {
+        let mut lines = Vec::new();
+        pane.for_each_row(|_, row| {
+            lines.push(
+                row.iter()
+                    .map(|cell| {
                         let flags = cell.flags - Flags::WRAPLINE;
-                        format!(
-                            "{}{:?}{:?}{:?}{:?}",
-                            cell.c,
-                            cell.fg,
-                            cell.bg,
-                            flags,
-                            cell.zerowidth()
-                        )
+                        format!("{}{:x}{:x}{:?}", cell.text, cell.fg, cell.bg, flags)
                     })
-                    .collect()
-            })
-            .collect()
+                    .collect(),
+            )
+        });
+        lines
+    }
+
+    fn text(pane: &mut GridPane, line: usize) -> String {
+        let mut text = String::new();
+        pane.for_each_row(|row, cells| {
+            if row == line {
+                text = cells.iter().map(|cell| cell.text.as_str()).collect();
+            }
+        });
+        text
     }
 
     fn output(lines: std::ops::Range<usize>) -> Vec<u8> {
@@ -246,9 +115,9 @@ mod tests {
         let mut kept = GridPane::new(40, 10);
         stored.feed(&output(0..800));
         kept.feed(&output(0..800));
-        let lines_before = stored.model().grid().history_size();
-        let bytes = stored.store_history();
-        assert_eq!(stored.model().grid().history_size(), 0);
+        let lines_before = stored.history_size();
+        let bytes = stored.store_history().unwrap();
+        assert_eq!(stored.history_size(), 0);
         assert!(
             bytes.len() < lines_before * 40 * 24 / 10,
             "{} bytes for {lines_before} lines",
@@ -258,11 +127,8 @@ mod tests {
         stored.feed(&output(800..900));
         kept.feed(&output(800..900));
         stored.restore_history(&bytes);
-        assert_eq!(lines(&stored), lines(&kept));
-        assert_eq!(
-            stored.model().grid().cursor.point,
-            kept.model().grid().cursor.point
-        );
+        assert_eq!(lines(&mut stored), lines(&mut kept));
+        assert_eq!(stored.viewport().cursor, kept.viewport().cursor);
     }
 
     #[test]
@@ -273,22 +139,16 @@ mod tests {
                 .flat_map(|i| format!("old {i}\r\n").into_bytes())
                 .collect::<Vec<_>>(),
         );
-        let bytes = pane.store_history();
+        let bytes = pane.store_history().unwrap();
         pane.feed(
             &(0..6000)
                 .flat_map(|i| format!("new {i}\r\n").into_bytes())
                 .collect::<Vec<_>>(),
         );
         pane.restore_history(&bytes);
-        let grid = pane.model().grid();
-        assert_eq!(grid.history_size(), HISTORY_LINES);
-        let text = |line: i32| {
-            (0..9)
-                .map(|col| grid[Line(line)][Column(col)].c)
-                .collect::<String>()
-        };
-        assert_eq!(text(-(HISTORY_LINES as i32)).trim(), "old 1996");
-        assert_eq!(text(-1).trim(), "new 5995");
+        assert_eq!(pane.history_size(), HISTORY_LINES);
+        assert_eq!(text(&mut pane, 0).trim(), "old 1996");
+        assert_eq!(text(&mut pane, HISTORY_LINES - 1).trim(), "new 5995");
     }
 
     #[test]
@@ -300,15 +160,11 @@ mod tests {
                 .flat_map(|i| format!("old {i}\r\n").into_bytes())
                 .collect::<Vec<_>>(),
         );
-        let before = pane.model().grid().history_size();
+        let before = pane.history_size();
         assert!(before > HISTORY_LINES);
-        let bytes = pane.store_history();
+        let bytes = pane.store_history().unwrap();
         pane.restore_history(&bytes);
-        let grid = pane.model().grid();
-        assert_eq!(grid.history_size(), before);
-        let first: String = (0..5)
-            .map(|col| grid[Line(-(before as i32))][Column(col)].c)
-            .collect();
-        assert_eq!(first, "old 0");
+        assert_eq!(pane.history_size(), before);
+        assert_eq!(&text(&mut pane, 0)[..5], "old 0");
     }
 }
