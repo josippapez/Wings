@@ -39,7 +39,7 @@ const BACKDROP: u32 = 0x00000080;
 pub enum ButtonSize {
     /// 20px, a tab's close button.
     Tiny,
-    /// `icon-xs`, 24px: pane header buttons.
+    /// `icon-xs`, 24px: the sidebar's small header buttons.
     Xs,
     /// `icon-sm`, 28px: chrome and bar buttons.
     Sm,
@@ -54,11 +54,9 @@ impl ButtonSize {
         }
     }
 
+    /// shadcn's `rounded-[min(var(--radius-md),…)]`: 8px at every size.
     fn radius(self) -> f32 {
-        match self {
-            ButtonSize::Sm => 8.0,
-            _ => 6.0,
-        }
+        8.0
     }
 
     fn icon(self) -> f32 {

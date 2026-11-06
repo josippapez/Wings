@@ -178,9 +178,10 @@ impl Workspace {
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(field),
                 ),
+                // The desktop's `max-w-[50%] truncate`: in a narrow pane the title gives way, not the buttons.
                 None => header.child(
                     div()
-                        .flex_none()
+                        .min_w_0()
                         .max_w(relative(0.5))
                         .truncate()
                         .text_size(px(13.0))
@@ -207,6 +208,7 @@ impl Workspace {
             .children(badges)
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(2.0))
@@ -299,7 +301,7 @@ impl Workspace {
     }
 }
 
-/// A pane header's button: the kit's 24px icon button, aimed at this pane.
+/// A pane header's button: the desktop's `IconButton`, 28px with a 16px icon, aimed at this pane.
 fn pane_button(
     pane: usize,
     label: &'static str,
@@ -313,7 +315,7 @@ fn pane_button(
         glyph,
         label,
         shortcut.map(Into::into),
-        ButtonSize::Xs,
+        ButtonSize::Sm,
     )
     .on_click(cx.listener(move |this, _, window, cx| action(this, pane, window, cx)))
 }
