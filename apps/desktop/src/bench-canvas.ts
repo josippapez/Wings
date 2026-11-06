@@ -1,5 +1,5 @@
 /**
- * Benchmark-only prototype of a terminal drawn with Canvas2D from rows that Rust parsed with `alacritty_terminal`
+ * Benchmark-only prototype of a terminal drawn with Canvas2D from rows that Rust parsed with libghostty-vt
  * (frame layout in `src-tauri/bench-grid/src/lib.rs`). No selection, input, scrollback or links: just enough to
  * show Claude Code's output correctly and measure what drawing it costs.
  */

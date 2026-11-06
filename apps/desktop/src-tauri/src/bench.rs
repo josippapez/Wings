@@ -1,6 +1,6 @@
 //! Renderer benchmark (`WINGS_BENCH=replay`, run by `scripts/bench-renderers.sh`): replays a recorded Claude Code
 //! session into many panes, as raw bytes for xterm.js or, with `--features bench-canvas`, as rows parsed by
-//! `alacritty_terminal` for a canvas, and samples the CPU time and memory of Wings and its WebKit processes.
+//! libghostty-vt (`wings-terminal`'s grid) for a canvas, and samples the CPU time and memory of Wings and its WebKit processes.
 use std::{
     process::Command,
     thread,
