@@ -118,7 +118,15 @@ async function readOld(projectId: string, projectName: string): Promise<Store> {
 }
 
 /** The size of a value as saved: UTF-8 bytes of its JSON. */
-export const estimateBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+export const estimateBytes = (value: unknown): number => {
+  // Counted by hand: the native app's JS engine has no `TextEncoder`.
+  let bytes = 0;
+  for (const char of JSON.stringify(value)) {
+    const code = char.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+};
 
 /**
  * Saves the change from `before` to `after`: the issues that differ, and the project's entry when its counter moved. The counter

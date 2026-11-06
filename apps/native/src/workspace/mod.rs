@@ -32,8 +32,8 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseMoveEvent,
-    MouseUpEvent, Pixels, SharedString, Subscription, Task, Window, canvas, div, prelude::*, px,
-    rgb, rgba,
+    MouseUpEvent, Pixels, ScrollHandle, SharedString, Subscription, Task, Window, canvas, div,
+    prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -89,6 +89,7 @@ struct Parked {
     terminals: Vec<TerminalTab>,
     plugin_tabs: Vec<plugins::PluginTab>,
     project_page: Option<Entity<project_page::ProjectPage>>,
+    issues_open: bool,
     active: Active,
 }
 
@@ -126,6 +127,8 @@ pub struct Workspace {
     project_info: Option<project_page::InfoStore>,
     /// The shown project's page, once opened: a tab after the plugin pages that stays until it is closed.
     project_page: Option<Entity<project_page::ProjectPage>>,
+    /// The Issues tab is in the strip. Closing it hides it; opening Issues again brings it back.
+    issues_open: bool,
     project_page_focus: FocusHandle,
     /// The badge whose card is open.
     badge_card: Option<plugin_ui::BadgeCard>,
@@ -142,6 +145,10 @@ pub struct Workspace {
     issues: Entity<IssuesView>,
     issues_focus: FocusHandle,
     new_focus: FocusHandle,
+    /// Keeps the selected tab in the part of the strip that is not covered by controls.
+    tab_scroll: ScrollHandle,
+    /// The inputs that change the tab strip's available width.
+    tab_layout: Option<(Pixels, bool, Option<f32>, bool, usize)>,
     active: Active,
     config: Config,
     in_flight: bool,
@@ -230,7 +237,10 @@ impl Workspace {
             issues,
             issues_focus: cx.focus_handle().tab_stop(true),
             new_focus: cx.focus_handle().tab_stop(true),
+            tab_scroll: ScrollHandle::new(),
+            tab_layout: None,
             active: Active::Issues,
+            issues_open: true,
             config,
             in_flight: false,
             load_task: None,
@@ -447,16 +457,35 @@ impl Render for Workspace {
                 .into_any_element(),
             );
         }
-        tabs.push(
-            self.tab(
-                Active::Issues,
-                "Issues".into(),
-                None,
-                &self.issues_focus,
-                cx,
-            )
-            .into_any_element(),
+        // With the Issues plugin's own board, that is the Issues tab, among the plugin pages.
+        if self.issues_open && !self.has_tasks_board() {
+            tabs.push(
+                self.tab(
+                    Active::Issues,
+                    "Issues".into(),
+                    None,
+                    &self.issues_focus,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        let tab_layout = (
+            window.viewport_size().width,
+            self.sidebar,
+            self.sidebar.then_some(self.side.width),
+            self.right.is_some(),
+            self.plugins
+                .iter()
+                .map(|plugin| plugin.sidebars.len())
+                .sum(),
         );
+        if self.tab_layout != Some(tab_layout) {
+            if let Some(index) = self.tabs().iter().position(|tab| *tab == self.active) {
+                self.tab_scroll.scroll_to_item(index);
+            }
+            self.tab_layout = Some(tab_layout);
+        }
         let title_bar = self.title_bar(tabs, cx);
         let sidebar = self.sidebar.then(|| self.sidebar_panel(cx));
         let right = self.right_panel(cx);
@@ -503,8 +532,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 if let Some(pane) = this.focused_pane() {
                     this.close_pane(pane, window, cx);
-                } else if matches!(this.active, Active::Plugin(_) | Active::Project) {
-                    // A plugin page is a tab of one pane.
+                } else {
+                    // A page tab (a plugin's, the project page, Issues) is a tab of one pane.
                     this.close_active_tab(window, cx);
                 }
             }))

@@ -4,10 +4,11 @@
 
 import { truncate } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
-import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, Loading, ProjectGate, Row, Stack, Text, useBlockState } from "wings-plugin-ui";
+import { Avatar, Board, BoardColumn, Button, Card, Chips, Empty, ListButton, Loading, ProjectGate, Row, Stack, Text, useBlockState } from "wings-plugin-ui";
 import { itemTabArgs } from "../lib/item";
 import { ch } from "../lib/messages";
 import { cleanBlockState, groupByState, type BlockItem } from "../lib/sections";
+import { Box, Inline } from "../ui/layout";
 import { TypeIcon } from "../ui/TypeIcon";
 import "./sprint.css";
 
@@ -36,7 +37,7 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
     />
   );
   let body;
-  if (error) body = <div role="alert"><Empty title="Couldn't load the sprint" description={truncate(error.message, 300)} /></div>;
+  if (error) body = <Box role="alert"><Empty title="Couldn't load the sprint" description={truncate(error.message, 300)} /></Box>;
   else if (!data) body = <Loading>Loading sprint</Loading>;
   else if (!data.sprints.length) body = <Empty title="No sprint running" />;
   else if (!data.items.length) body = <Empty title={mine ? "Nothing assigned to you" : "No work items"} description={data.sprints.join(", ")} />;
@@ -68,22 +69,22 @@ function ProjectSprint({ path, mine, onMine }: { path: string; mine: boolean; on
 }
 
 function ItemCard({ item, org, showAssignee }: { item: BlockItem; org: string; showAssignee: boolean }) {
+  const open = () => void wings.openView("item", { as: "tab", args: itemTabArgs(item.id, org) });
+  const label = `Open ${item.type} ${item.id}: ${item.title}${showAssignee && item.assignee ? `, assigned to ${item.assignee}` : ""}`;
+  const body = (
+    <Stack gap="xs">
+      <Text weight="medium" clamp title={item.title}>{item.title}</Text>
+      <Row gap="s">
+        <TypeIcon type={item.type} size={14} />
+        <Text tone="muted" size="tiny" numeric>#{item.id}</Text>
+        {showAssignee && item.assignee ? <Inline className="sprint-assignee" title={item.assignee}><Avatar name={item.assignee} size="small" /></Inline> : null}
+      </Row>
+    </Stack>
+  );
   return (
     <Card compact className="sprint-card">
-      <Button
-        variant="ghost"
-        onClick={() => void wings.openView("item", { as: "tab", args: itemTabArgs(item.id, org) })}
-        aria-label={`Open ${item.type} ${item.id}: ${item.title}${showAssignee && item.assignee ? `, assigned to ${item.assignee}` : ""}`}
-      >
-        <Stack gap="xs">
-          <Text weight="medium" clamp title={item.title}>{item.title}</Text>
-          <Row gap="s">
-            <TypeIcon type={item.type} size={14} />
-            <Text tone="muted" size="tiny" numeric>#{item.id}</Text>
-            {showAssignee && item.assignee ? <span className="sprint-assignee" title={item.assignee}><Avatar name={item.assignee} size="small" /></span> : null}
-          </Row>
-        </Stack>
-      </Button>
+      {/* A native button centres what it holds; a list button keeps the card's text at its start, as sprint.css does. */}
+      {WINGS_NATIVE ? <ListButton onClick={open} title={label}>{body}</ListButton> : <Button variant="ghost" onClick={open} aria-label={label}>{body}</Button>}
     </Card>
   );
 }

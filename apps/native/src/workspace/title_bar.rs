@@ -79,6 +79,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(2.0))
                     .overflow_x_scroll()
+                    .track_scroll(&self.tab_scroll)
                     .children(tabs),
             )
             .child(

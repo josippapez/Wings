@@ -58,6 +58,8 @@ pub struct SavedPluginTab {
     /// What `wings.openView` opened it with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -71,6 +73,9 @@ pub struct SavedProject {
     /// The active plugin page's position, when one was open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_plugin: Option<usize>,
+    /// The Issues tab was closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub issues_closed: bool,
 }
 
 /// What the whole app keeps, the same for every project, as in the desktop app.
@@ -255,14 +260,17 @@ mod tests {
                     plugin: "tasks".into(),
                     view: "board".into(),
                     args: None,
+                    state: Some(serde_json::json!({ "view": "list" })),
                 },
                 SavedPluginTab {
                     plugin: "notes".into(),
                     view: "all".into(),
                     args: Some(serde_json::json!({ "filter": "mine" })),
+                    state: None,
                 },
             ],
             active_plugin: None,
+            issues_closed: false,
         }
     }
 

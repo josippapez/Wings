@@ -882,3 +882,19 @@ fn claude_accounts_are_refused_to_a_plugin_without_their_permission() {
     );
     let _ = fs::remove_dir_all(folder);
 }
+
+#[test]
+fn focus_pane_needs_panes_granted_and_a_pane_that_is_there() {
+    let rig = Rig::new(json!({ "permissions": { "panes": [] } }), panes());
+    assert_eq!(
+        rig.allowed("return await wings.focusPane('2');"),
+        json!(null)
+    );
+    assert_eq!(rig.env.seen(), [Seen::FocusPane("2".into())]);
+    assert_eq!(rig.refused("await wings.focusPane('9');"), "no pane 9");
+    let without = Rig::new(json!({}), panes());
+    assert_eq!(
+        without.refused("await wings.focusPane('1');"),
+        "probe may not focus panes"
+    );
+}

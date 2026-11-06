@@ -12,7 +12,8 @@ import { loadProject, write } from "./main/write";
 import { tools } from "./tools";
 
 registerTools(tools);
-registerHooks();
+// Claude Code's hooks reach the desktop app only: the native app has no hook server, so it would never call them.
+if (!WINGS_NATIVE) registerHooks();
 watchPrs();
 listenPrState();
 let panes: WingsPane[] = [];

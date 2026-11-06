@@ -23,10 +23,13 @@ use super::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 /// A project of the list, as plugins know it: its folder is its id.
@@ -36,6 +39,7 @@ impl From<Space> for Project {
             id: space.path.clone(),
             name: space.name,
             path: space.path,
+            parent_id: None,
         }
     }
 }
@@ -182,6 +186,9 @@ pub trait Env: Send + Sync + 'static {
     }
     fn open_view(&self, _plan: OpenView, reply: crate::page::runtime::Reply) {
         reply.err("Opening views isn't available".into());
+    }
+    fn focus_pane(&self, _pane: &str, reply: crate::page::runtime::Reply) {
+        reply.err("Focusing panes isn't available".into());
     }
     /// Closes the plugin's page `view` wherever the app shows it.
     fn close_view(&self, _plugin: &str, _view: &str) {}

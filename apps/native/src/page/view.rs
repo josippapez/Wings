@@ -8,11 +8,13 @@ use std::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, IntoElement, KeyDownEvent,
-    Pixels, Render, Role, SharedString, Task, Toggled, Window, canvas, div, prelude::*, px,
-    relative, rgb, rgba,
+    Animation, AnimationExt, AnyElement, Context, ElementId, Focusable, FontWeight, IntoElement,
+    KeyDownEvent, Pixels, Render, Role, SharedString, Task, Toggled, Window, canvas, div,
+    prelude::*, px, relative, rgb, rgba,
 };
 
+#[path = "board_view.rs"]
+mod board_view;
 #[path = "graph_view.rs"]
 mod graph_view;
 #[path = "rich_view.rs"]
@@ -44,6 +46,12 @@ struct SearchState {
 struct InputState {
     field: gpui::Entity<crate::text_field::TextField>,
     handler: Option<String>,
+    key_handler: Option<String>,
+    blur_handler: Option<String>,
+    initialized: bool,
+    auto_focus: bool,
+    select_on_focus: bool,
+    blur_subscription: Option<gpui::Subscription>,
     /// The text the page last gave it. The field takes the page's text when this changes, which is when the page set it
     /// (a form filled in once it loaded), and not on every render, which would undo a key the page hasn't heard yet.
     given: String,
@@ -101,6 +109,19 @@ impl PageView {
     ) -> Self {
         Self::start(cx, |on_event| {
             host.open_hidden_page_with_args(source, args, on_event)
+        })
+    }
+
+    /// Like `in_plugin_with_args`, for a tab or block whose `wings.tabState`/`blockState` is `state`.
+    pub fn in_plugin_with_state(
+        host: &PluginHost,
+        source: &str,
+        args: Option<&serde_json::Value>,
+        state: crate::page::plugin::FrameState,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::start(cx, |on_event| {
+            host.open_hidden_page_with_state(source, args, state, on_event)
         })
     }
 
@@ -455,6 +476,7 @@ impl PageView {
                         .flex_1()
                         .min_w_0()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap(px(8.0))
                         .children(self.nodes(&toolbar.filters, cx)),
@@ -536,9 +558,20 @@ impl PageView {
                     button.disabled,
                     self.inline(&button.children, cx),
                 );
+                let key_handler = button.on_key_down.clone();
+                let element = element.on_key_down(cx.listener(
+                    move |view, event: &KeyDownEvent, window, cx| {
+                        if let Some(handler) = &key_handler {
+                            send_shortcut(view, handler, event, window, cx);
+                        }
+                    },
+                ));
                 match button.on_click.clone() {
                     Some(handler) => element
-                        .on_click(cx.listener(move |view, _, _, _| view.send(&handler, None)))
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            cx.stop_propagation();
+                            view.send(&handler, None);
+                        }))
                         .into_any_element(),
                     None => element.into_any_element(),
                 }
@@ -804,6 +837,10 @@ impl PageView {
                 (!gauge.note.is_empty()).then(|| self.inline(&gauge.note, cx)),
             )
             .into_any_element(),
+            Node::Meter(meter) => board_view::meter(meter),
+            Node::Board(board) => self.board(board, cx),
+            Node::BoardRow(row) => self.board_row(&row.children, cx),
+            Node::BoardColumn(column) => self.board_column(column, cx),
             Node::List(list) => ui::list(self.nodes(&list.children, cx)).into_any_element(),
             Node::ListItem(item) => {
                 if item
@@ -944,6 +981,7 @@ impl PageView {
                 let button = &item.button;
                 let handler = button.on_click.clone();
                 let keyboard = handler.clone();
+                let key_handler = button.on_key_down.clone();
                 let mut element = div()
                     .id(ElementId::NamedInteger(
                         "page-list-button".into(),
@@ -976,6 +1014,11 @@ impl PageView {
                         .hover(|s| s.bg(rgba(theme::HOVER)))
                         .focus_visible(|s| s.border_color(rgb(theme::FOREGROUND)))
                         .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                            if let Some(handler) = &key_handler
+                                && send_shortcut(view, handler, event, window, cx)
+                            {
+                                return;
+                            }
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                 if let Some(handler) = &keyboard {
                                     view.send(handler, None);
@@ -984,7 +1027,8 @@ impl PageView {
                                 cx.stop_propagation();
                             }
                         }))
-                        .on_click(cx.listener(move |view, _, _, _| {
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            cx.stop_propagation();
                             if let Some(handler) = &handler {
                                 view.send(handler, None);
                             }
@@ -1079,6 +1123,27 @@ impl PageView {
             });
             let id = input.id;
             cx.subscribe(&entity, move |view, entity, event, cx| {
+                if let crate::text_field::FieldEvent::Submit { .. }
+                | crate::text_field::FieldEvent::Cancel = event
+                {
+                    let handler = view
+                        .inputs
+                        .borrow()
+                        .get(&id)
+                        .and_then(|state| state.key_handler.clone());
+                    if let Some(handler) = handler {
+                        let key = if matches!(event, crate::text_field::FieldEvent::Cancel) {
+                            "Escape"
+                        } else {
+                            "Enter"
+                        };
+                        view.send(
+                            &handler,
+                            Some(&serde_json::json!({"type":"keydown", "key":key})),
+                        );
+                    }
+                    return;
+                }
                 if !matches!(event, crate::text_field::FieldEvent::Changed) {
                     return;
                 }
@@ -1096,11 +1161,19 @@ impl PageView {
             InputState {
                 field: entity,
                 handler: None,
+                key_handler: None,
+                blur_handler: None,
+                initialized: false,
+                auto_focus: input.auto_focus,
+                select_on_focus: input.select_on_focus,
+                blur_subscription: None,
                 given: String::new(),
                 sent: Vec::new(),
             }
         });
         state.handler = input.on_change.clone();
+        state.key_handler = input.on_key_down.clone();
+        state.blur_handler = input.on_blur.clone();
         let (disabled, max_chars) = (input.disabled, input.max_length);
         let echo = state.sent.iter().position(|sent| *sent == input.value);
         if let Some(echo) = echo {
@@ -1123,14 +1196,22 @@ impl PageView {
 
     fn disclosure(&self, disclosure: &tree::Disclosure, cx: &mut Context<Self>) -> AnyElement {
         let id = disclosure.id;
-        let open = self.open.contains(&id);
+        let open = disclosure.open.unwrap_or_else(|| self.open.contains(&id));
+        let handler = disclosure.on_open_change.clone();
         let trigger = ui::disclosure_trigger(
             ElementId::NamedInteger("page-disclosure".into(), id),
             plain_text(&disclosure.summary),
             open,
             self.inline(&disclosure.summary, cx),
         )
-        .on_click(cx.listener(move |view, _, _, cx| view.toggle_disclosure(id, cx)));
+        .on_click(cx.listener(move |view, _, _, cx| {
+            cx.stop_propagation();
+            if let Some(handler) = &handler {
+                view.send(handler, Some(&serde_json::json!({"open":!open})));
+            } else {
+                view.toggle_disclosure(id, cx);
+            }
+        }));
         div()
             .min_w_0()
             .flex()
@@ -1212,12 +1293,38 @@ impl PageView {
 }
 
 impl Render for PageView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = self
             .tree
             .as_ref()
             .map(|tree| self.nodes(&tree.children, cx))
             .unwrap_or_default();
+        for (id, state) in self.inputs.borrow_mut().iter_mut() {
+            if !state.initialized {
+                state.initialized = true;
+                let focus = state.field.read(cx).focus_handle(cx);
+                if state.auto_focus {
+                    if state.select_on_focus {
+                        state
+                            .field
+                            .update(cx, |field, cx| field.select_all(window, cx));
+                    } else {
+                        focus.focus(window, cx);
+                    }
+                }
+                let id = *id;
+                state.blur_subscription = Some(cx.on_blur(&focus, window, move |view, _, _| {
+                    let handler = view
+                        .inputs
+                        .borrow()
+                        .get(&id)
+                        .and_then(|state| state.blur_handler.clone());
+                    if let Some(handler) = handler {
+                        view.send(&handler, Some(&serde_json::json!({"type":"blur"})));
+                    }
+                }));
+            }
+        }
         div()
             .id("native-page")
             .size_full()
@@ -1249,6 +1356,27 @@ impl Render for PageView {
                 )
             })
     }
+}
+
+/// Only shortcuts used by Issues cross the page boundary. Ordinary editing/navigation stays with the native control.
+fn send_shortcut(
+    view: &PageView,
+    handler: &str,
+    event: &KeyDownEvent,
+    window: &mut Window,
+    cx: &mut Context<PageView>,
+) -> bool {
+    let key = match event.keystroke.key.as_str() {
+        "left" if event.keystroke.modifiers.alt => "ArrowLeft",
+        "right" if event.keystroke.modifiers.alt => "ArrowRight",
+        "delete" | "backspace" => "Delete",
+        _ => return false,
+    };
+    let modifiers = event.keystroke.modifiers;
+    view.send(handler, Some(&serde_json::json!({"type":"keydown", "key":key, "altKey":modifiers.alt, "metaKey":modifiers.platform, "ctrlKey":modifiers.control, "shiftKey":modifiers.shift})));
+    window.prevent_default();
+    cx.stop_propagation();
+    true
 }
 
 fn gap(gap: Gap) -> f32 {

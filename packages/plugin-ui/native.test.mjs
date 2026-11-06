@@ -5,7 +5,7 @@ import { createElement as h, useEffect, useState } from "react";
 
 const trees = [];
 globalThis.wings = { render: (json) => trees.push(JSON.parse(json)) };
-const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, mount, useAction, useTabState } = await import("./native.js");
+const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, Timeline, TimelineCard, TimelineNote, mount, useAction, useTabState } = await import("./native.js");
 
 const find = (node, type) => (node.type === type ? node : node.children?.map((child) => find(child, type)).find(Boolean));
 const all = (node, type) => [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap((child) => all(child, type))];
@@ -225,9 +225,7 @@ test("a combobox lists the options that match as chips, a menu opens its items, 
 
 test("a dot takes a CSS colour from data, a sunburst sends compact wedges and hears the pointer and clicks, and a split names its panes", () => {
   const heard = [];
-  let tab;
   function Probe() {
-    tab = useTabState({ root: null });
     return h(Split, { defaultSize: 320, start: h(Scroll, null, h(Bar, { edge: "bottom", gap: "xs" }, "Head"), h(Title, { truncate: true }, "Code"), h(Dot, { color: "rgb(17, 34, 51)" }), h(Dot, { color: "#0a0b0c" }), h(Dot, { color: "red" })), end: h(Sunburst, {
       rings: 2, selected: 1, title: "Code", detail: "2 GB", up: true,
       wedges: [{ from: 0, to: 3, ring: 0, color: "rgb(255, 0, 0)" }, { from: 3, to: 6, ring: 0, color: "rgba(0, 0, 255, 0.5)", alpha: 0.5 }],
@@ -245,7 +243,33 @@ test("a dot takes a CSS colour from data, a sunburst sends compact wedges and he
   globalThis.__wingsEvent(map.props.onPoint, '{"index":-2}');
   globalThis.__wingsEvent(map.props.onSelect, '{"index":0,"meta":true}');
   assert.deepEqual(heard, [["point", -2], ["select", 0, true]]);
-  assert.deepEqual(tab[0], { root: null });
+});
+
+test("tab state is null until the app's saved state is read through check, and a set saves it", async () => {
+  const saved = [];
+  globalThis.wings.tabState = async () => ({ folded: ["a", 1] });
+  globalThis.wings.setTabState = async (state) => void saved.push(state);
+  let tab;
+  function Probe() {
+    tab = useTabState({ folded: [] }, (raw) => (Array.isArray(raw?.folded) ? { folded: raw.folded.filter((k) => typeof k === "string") } : null));
+    return h(Text, null, JSON.stringify(tab[0]));
+  }
+  mount(h(Probe));
+  assert.equal(tab[0], null);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(tab[0], { folded: ["a"] });
+  tab[1]({ folded: [] });
+  assert.deepEqual(saved, [{ folded: [] }]);
+});
+
+test("a timeline card and note show the author, the time and what was said", () => {
+  mount(h(Timeline, null,
+    h(TimelineCard, { author: "Ada Lovelace", at: new Date(Date.now() - 5 * 60_000).toISOString(), tag: "Author" }, h(Text, null, "Looks good")),
+    h(TimelineNote, { author: "Grace Hopper" }, "changed the state")));
+  const [card, note] = [find(last(), "Card"), all(last(), "Row").at(-1)];
+  assert.equal(text(card), "Ada LovelaceAuthor5 min agoLooks good");
+  assert.equal(find(card, "Avatar").props.name, "Ada Lovelace");
+  assert.equal(text(note), "Grace Hopperchanged the state");
 });
 
 test("figures sit side by side with the label over the value, and a heading puts its actions on its right", async () => {
@@ -300,6 +324,15 @@ test("Markdown draws headings, lists, code, tables and folds, with bold, code an
   assert.equal(text(body).includes("const a = 1;"), true);
   assert.equal(find(body, "Disclosure") !== undefined, true);
   assert.deepEqual(all(body, "Text").filter((node) => ["A", "B", "1", "2"].includes(text(node))).map(text), ["A", "B", "1", "2"]);
+});
+
+test("Markdown list markers stay at the first line of wrapped bullet, ordered, task and nested items", () => {
+  mount(h(Markdown, { source: "- A long bullet item that wraps at narrow page widths\n1. A long ordered item that wraps at narrow page widths\n- [ ] A long task item that wraps at narrow page widths\n  - A long nested item that wraps at narrow page widths" }));
+  const rows = all(last(), "Row");
+  assert.deepEqual(rows.map((row) => row.props.align), ["start", "start", "start", "start"]);
+  assert.deepEqual(rows.map((row) => text(row.children.find((child) => child.type === "Text" && !child.props.grow))), ["•", "1.", "☐", "•"]);
+  assert.equal(rows.at(-1).children.some((child) => child.type === "Stack" && child.props.width === 16), true);
+  assert.ok(rows.every((row) => row.children.some((child) => child.type === "Text" && child.props.grow)));
 });
 
 test("a project gate waits for the project, and a tab reads what openView opened it with", async () => {

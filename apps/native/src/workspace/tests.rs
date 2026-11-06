@@ -538,10 +538,93 @@ fn tab_shortcuts_open_cycle_jump_and_close_like_the_desktop() {
     assert_eq!(state(&window), (vec![Terminal(0), Issues], Terminal(0)));
     press(&mut window, "w");
     assert_eq!(state(&window), (vec![Issues], Issues));
+    // Issues closes too, and a terminal takes over the empty strip.
     press(&mut window, "w");
-    assert_eq!(state(&window), (vec![Issues], Issues));
+    assert_eq!(state(&window), (vec![Terminal(2)], Terminal(2)));
     press(&mut window, "t");
-    assert_eq!(state(&window), (vec![Terminal(2), Issues], Terminal(2)));
+    assert_eq!(
+        state(&window),
+        (vec![Terminal(2), Terminal(3)], Terminal(3))
+    );
+}
+
+#[test]
+fn a_closed_issues_tab_stays_closed_after_a_relaunch_and_opening_issues_brings_it_back() {
+    use Active::{Issues, Terminal};
+    let dir = std::env::temp_dir().join(format!("wings-native-issues-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("workspace.json");
+    {
+        let (_app, mut window) = open_with(Some(file.clone()));
+        window.update(|w, window, cx| w.show(Issues, window, cx));
+        press(&mut window, "w");
+        assert_eq!(state(&window), (vec![Terminal(0)], Terminal(0)));
+    }
+    let (_app, mut window) = open_with(Some(file));
+    assert!(!state(&window).0.contains(&Issues));
+    press(&mut window, "k");
+    window.simulate_input("Issues");
+    window.simulate_keystroke("enter");
+    assert_eq!(state(&window).0.last(), Some(&Issues));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn assert_active_tab_is_visible(window: &mut TestAppWindow<Workspace>) {
+    window.draw();
+    window.read(|workspace, _| {
+        let index = workspace
+            .tabs()
+            .iter()
+            .position(|tab| *tab == workspace.active())
+            .unwrap();
+        let tab = workspace.tab_scroll.bounds_for_item(index).unwrap();
+        let strip = workspace.tab_scroll.bounds();
+        let offset = workspace.tab_scroll.offset();
+        assert!(tab.left() + offset.x >= strip.left());
+        assert!(tab.right() + offset.x <= strip.right());
+    });
+}
+
+#[test]
+fn overflowing_tabs_keep_the_selected_tab_in_the_visible_strip() {
+    for width in [640.0, 1000.0] {
+        let (_app, mut window) = open_sized(Some(size(px(width), px(640.0))), |_| {});
+        for _ in 0..8 {
+            press(&mut window, "t");
+        }
+        assert_active_tab_is_visible(&mut window);
+
+        press(&mut window, "]");
+        assert_active_tab_is_visible(&mut window);
+
+        if width > 640.0 {
+            window.simulate_resize(size(px(640.0), px(640.0)));
+            assert_active_tab_is_visible(&mut window);
+        }
+
+        press(&mut window, "]");
+        assert_active_tab_is_visible(&mut window);
+
+        press(&mut window, "[");
+        assert_active_tab_is_visible(&mut window);
+    }
+}
+
+#[test]
+fn an_unrelated_redraw_does_not_reset_the_tab_strip_scroll_position() {
+    let (_app, mut window) = open_sized(Some(size(px(640.0), px(640.0))), |_| {});
+    for _ in 0..8 {
+        press(&mut window, "t");
+    }
+    assert_active_tab_is_visible(&mut window);
+
+    window.update(|workspace, _, cx| {
+        workspace.tab_scroll.set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    });
+    window.draw();
+
+    window.read(|workspace, _| assert_eq!(workspace.tab_scroll.offset().x, px(0.0)));
 }
 
 #[test]
@@ -710,10 +793,10 @@ fn a_plugin_page_opens_from_the_sidebar_works_with_its_main_and_stops_when_its_t
     let data = Data::temp();
     install_demo(&data, true);
     let (app, mut window) = open_with_plugin(&data, None);
-    // The plugin's main runs, and of its three views only the one with a native page that opens as a tab is offered.
+    // The plugin's main runs, and of its three views the two with a native page can open as a tab.
     assert_eq!(
         window.read(|w, _| w.plugins.iter().map(|p| p.pages.len()).collect::<Vec<_>>()),
-        [1]
+        [2]
     );
     assert_eq!(frames(&window), 1);
     assert_eq!(state(&window), (vec![Terminal(0), Issues], Terminal(0)));
@@ -825,6 +908,6 @@ fn switching_projects_keeps_each_projects_plugin_pages_open() {
         state(&window),
         (vec![Terminal(0), Plugin(1), Issues], Plugin(1))
     );
-    window.update(|w, window, cx| assert!(!w.open_plugin_view("demo", "plain", None, window, cx)));
+    window.update(|w, window, cx| assert!(!w.open_plugin_view("demo", "later", None, window, cx)));
     std::fs::remove_dir_all(dir).unwrap();
 }

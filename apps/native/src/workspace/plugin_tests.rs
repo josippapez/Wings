@@ -1151,3 +1151,64 @@ fn a_tab_opened_with_args_reads_them_and_takes_new_ones_by_starting_over() {
         assert_eq!(tabs(&mut window, "many"), count, "args {args}");
     }
 }
+
+#[test]
+fn a_plugin_tabs_saved_state_comes_back_after_a_relaunch() {
+    let dir = std::env::temp_dir().join(format!("wings-native-tab-state-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let file = dir.join("workspace.json");
+    let data = Data::temp();
+    data.install_script(
+        "keeper",
+        json!({ "contributes": { "views": [{ "id": "page", "title": "Keeper", "page": "dist/page.html", "opens": ["tab"], "newTab": true }] } }),
+        "",
+        &[("page", "wings.tabState().then(async (s) => { await wings.storage.set('seen', s); if (s == null) await wings.setTabState({ n: 1 }); await wings.storage.set('set', true); });")],
+        "keeper-scope",
+    );
+    {
+        let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+            config.state = Some(file.clone())
+        });
+        window.update(|w, window, cx| {
+            assert!(w.open_plugin_view("keeper", "page", None, window, cx))
+        });
+        until(&app, &mut window, "the page never saved its state", |_| {
+            data.saved("keeper", "keeper-scope", "set") == Some(json!(true))
+        });
+        app.run_until_parked();
+    }
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.state = Some(file.clone())
+    });
+    until(
+        &app,
+        &mut window,
+        "the relaunched tab never read its saved state",
+        |_| data.saved("keeper", "keeper-scope", "seen") == Some(json!({ "n": 1 })),
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_plugin_focusing_a_pane_shows_the_tab_it_is_in() {
+    use super::Active::Terminal;
+    let data = Data::temp();
+    data.install_script(
+        "focuser",
+        json!({ "permissions": { "panes": [] } }),
+        "let done = false; wings.onPanes(async (panes) => { if (panes.length < 2 || done) return; done = true; await wings.focusPane(panes[0].paneId); await wings.storage.set('focused', panes[0].paneId); });",
+        &[],
+        "focuser-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    // A new tab is shown, and the plugin hears of its pane.
+    press(&mut window, "t");
+    until(
+        &app,
+        &mut window,
+        "the plugin never focused the first pane",
+        |_| data.saved("focuser", "focuser-scope", "focused").is_some(),
+    );
+    app.run_until_parked();
+    assert_eq!(window.read(|w, _| w.active()), Terminal(0));
+}

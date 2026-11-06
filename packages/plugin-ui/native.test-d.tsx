@@ -69,11 +69,11 @@ export const sameProps: [
   Takes<typeof NativeProperties, typeof Properties>,
   Takes<typeof NativeTime, typeof Time>,
   // A handler gets the native event, so only the other props are the same.
-  Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick"> ? true : never,
+  Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick" | "onKeyDown"> ? true : never,
   Props<typeof NativeChip> extends Omit<Props<typeof Chip>, "onClick"> ? true : never,
   Props<typeof NativeText> extends Omit<Props<typeof Text>, "onClick"> ? true : never,
-  Props<typeof NativeTextInput> extends Omit<Props<typeof TextInput>, "onChange"> ? true : never,
-  Props<typeof NativeTextarea> extends Omit<Props<typeof Textarea>, "onChange"> ? true : never,
+  Props<typeof NativeTextInput> extends Omit<Props<typeof TextInput>, "onChange" | "onKeyDown" | "onBlur"> ? true : never,
+  Props<typeof NativeTextarea> extends Omit<Props<typeof Textarea>, "onChange" | "onKeyDown" | "onBlur"> ? true : never,
 ] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 export const page = (

@@ -207,6 +207,9 @@ fn main() {
         cx.simulate_keystrokes(window, "cmd-t cmd-t");
         wait(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs"));
+        cx.simulate_keystrokes(window, "cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t");
+        wait(&mut cx, window, Duration::from_secs(4));
+        save(&mut cx, window, &name("tabs-overflow"));
         cx.simulate_keystrokes(window, "cmd-d cmd-shift-d");
         wait(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("splits"));

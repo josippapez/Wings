@@ -9,6 +9,7 @@ import { boardColumns, boardLanes, issueTree, type Lane } from "../lib/orderings
 import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
 import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TypeIcon, useScrollIntoView, type Send } from "./parts";
+import { Box, Inline, Para, SectionBox } from "./layout";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -60,7 +61,8 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
   const move = (issue: Issue, by: 1 | -1) => {
     const next = FLOW[FLOW.indexOf(issue.status) + by];
     if (!next) return;
-    void send({ kind: "update", key: issue.key, status: next }).then(() => document.getElementById(`issue-${issue.key}`)?.focus());
+    // The card moves to another column, and its title keeps the keyboard. The native app has no element to focus.
+    void send({ kind: "update", key: issue.key, status: next }).then(() => WINGS_NATIVE || document.getElementById(`issue-${issue.key}`)?.focus());
   };
   const card = (i: Issue, inLane: boolean) => (
     <IssueCard
@@ -92,22 +94,22 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
         </Toolbar>
       }
     >
-      {error ? <div ref={errorRef}><ErrorText className="tk-error">{error}</ErrorText></div> : null}
+      {error ? <Box ref={errorRef}><ErrorText className="tk-error">{error}</ErrorText></Box> : null}
       {doomed && issues ? (
-        <div ref={confirmRef} className="tk-confirm-wrap" data-layout={layout}>
+        <Box ref={confirmRef} className="tk-confirm-wrap" data-layout={layout}>
           <DeleteConfirm issue={doomed} issues={issues} onCancel={() => setDeleting(null)} onDelete={(children) => apply({ kind: "remove", key: doomed.key, children }).then(() => setDeleting(null))} />
-        </div>
+        </Box>
       ) : null}
       {!issues ? (
         <Loading>Loading issues</Loading>
       ) : searching && issues.length === 0 ? (
-        <div className="tk-confirm-wrap" data-layout={layout}><Text tone="muted" role="status">No issues match "{query.trim()}".</Text></div>
+        <Box className="tk-confirm-wrap" data-layout={layout}><Text tone="muted" role="status">No issues match "{query.trim()}".</Text></Box>
       ) : layout === "list" ? (
         <IssueList project={project} issues={issues} byParent={hasParents && byParent} showCanceled={showCanceled} folded={folded} onFold={onFold} onOpen={onOpen} onDelete={(i) => setDeleting(i.key)} />
       ) : lanes ? (
         <BoardLanes
           label={`Issues for ${project.name}, by parent`}
-          columns={(showCanceled ? STATUSES : FLOW).map((status) => ({ id: status, title: <span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>, count: shownCount(status) }))}
+          columns={(showCanceled ? STATUSES : FLOW).map((status) => ({ id: status, title: <Inline className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</Inline>, count: shownCount(status) }))}
         >
           {lanes.map((lane) => (
             <ParentLane key={lane.parent?.key ?? ""} lane={lane} issues={issues} open={!folded.includes(lane.parent?.key ?? "")} onOpenChange={(open) => onFold(lane.parent?.key ?? "", open)} onOpen={onOpen} card={(i) => card(i, true)} />
@@ -116,8 +118,8 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
       ) : (
         <Board className="tk-board" label={`Issues for ${project.name}`}>
           {boardColumns(issues, showCanceled).map(({ status, issues: column }) => (
-            <BoardColumn key={status} title={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</span>} count={column.length}>
-              {column.length === 0 ? <p className="tk-column-empty">{EMPTY[status]}</p> : null}
+            <BoardColumn key={status} title={<Inline className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}</Inline>} count={column.length}>
+              {column.length === 0 ? <Para className="tk-column-empty">{EMPTY[status]}</Para> : null}
               {column.map((i) => card(i, false))}
             </BoardColumn>
           ))}
@@ -136,16 +138,16 @@ function ParentLane({ lane, issues, open, onOpenChange, onOpen, card }: { lane: 
       label={parent ? `${parent.key} ${parent.title}` : "No parent"}
       title={
         parent ? (
-          <span className="tk-lane-title">
+          <Inline className="tk-lane-title">
             <StatusDot status={parent.status} />
             <TypeIcon type={parent.type} label />
             <Text as="span" mono tone="muted" size="tiny">{parent.key}</Text>
             <Button variant="ghost" size="xs" className="tk-lane-open" {...openProps((newTab) => onOpen(parent, newTab))}>
-              <span className="tk-link-title">{parent.title}</span>
+              <Inline className="tk-link-title">{parent.title}</Inline>
             </Button>
-          </span>
+          </Inline>
         ) : (
-          <span className="tk-lane-none">No parent</span>
+          <Inline className="tk-lane-none">No parent</Inline>
         )
       }
       count={lane.count}
@@ -178,33 +180,33 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
     const { groups, loose } = issueTree(issues, showCanceled);
     if (groups.length + loose.length === 0) return <Text tone="muted">No issues for {project.name} yet.</Text>;
     return (
-      <div className="tk-list">
+      <Box className="tk-list">
         {groups.map(({ root, rows }) => (
-          <section key={root.key} className="tk-tree-group" aria-label={`${root.key} ${root.title}`}>
-            <div className="tk-tree-head">
+          <SectionBox key={root.key} className="tk-tree-group" aria-label={`${root.key} ${root.title}`}>
+            <Box className="tk-tree-head">
               <Button variant="ghost" size="icon-xs" className="tk-fold" aria-label={root.title} aria-expanded={isOpen(root.key)} onClick={() => onFold(root.key, !isOpen(root.key))}>
                 <Icon name="chevron-down" />
               </Button>
               <ListButton className="tk-row tk-tree-root" data-status={root.status} {...openProps((newTab) => onOpen(root, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(root))} aria-label={`Open ${root.key}: ${root.title}`}>
                 <PriorityIcon priority={root.priority} label />
                 <TypeIcon type={root.type} label />
-                <span className="tk-key">{root.key}</span>
+                <Inline className="tk-key">{root.key}</Inline>
                 <Text as="span" grow truncate className="tk-row-title">{root.title}</Text>
                 <ChildProgress {...progress(childrenOf(issues, root.key))} />
-                <span className="tk-row-status"><StatusDot status={root.status} />{STATUS_LABEL[root.status]}</span>
-                <span className="tk-row-time" />
+                <Inline className="tk-row-status"><StatusDot status={root.status} />{STATUS_LABEL[root.status]}</Inline>
+                <Inline className="tk-row-time" />
               </ListButton>
               <DeleteButton issue={root} onDelete={onDelete} />
-            </div>
+            </Box>
             {isOpen(root.key) ? <List compact aria-label={`Under ${root.key}`}>{rows.map(({ issue, depth }) => row(issue, depth))}</List> : null}
-          </section>
+          </SectionBox>
         ))}
         {loose.length ? (
-          <Disclosure className="tk-list-group" open={isOpen("")} onOpenChange={(open) => onFold("", open)} summary={<span className="tk-col-title">No parent<span className="tk-count">{loose.length}</span></span>}>
+          <Disclosure className="tk-list-group" open={isOpen("")} onOpenChange={(open) => onFold("", open)} summary={<Inline className="tk-col-title">No parent<Inline className="tk-count">{loose.length}</Inline></Inline>}>
             <List compact aria-label="No parent">{loose.map((i) => row(i, 0))}</List>
           </Disclosure>
         ) : null}
-      </div>
+      </Box>
     );
   }
   const groups = boardColumns(issues, showCanceled)
@@ -212,19 +214,19 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
     .sort((a, b) => LIST_ORDER.indexOf(a.status) - LIST_ORDER.indexOf(b.status));
   if (groups.length === 0) return <Text tone="muted">No issues for {project.name} yet.</Text>;
   return (
-    <div className="tk-list">
+    <Box className="tk-list">
       {groups.map(({ status, issues: rows }) => (
         <Disclosure
           key={status}
           className="tk-list-group"
           open={isOpen(`status:${status}`)}
           onOpenChange={(open) => onFold(`status:${status}`, open)}
-          summary={<span className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}<span className="tk-count">{rows.length}</span></span>}
+          summary={<Inline className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}<Inline className="tk-count">{rows.length}</Inline></Inline>}
         >
           <List compact aria-label={STATUS_LABEL[status]}>{rows.map((i) => row(i))}</List>
         </Disclosure>
       ))}
-    </div>
+    </Box>
   );
 }
 
@@ -238,15 +240,15 @@ function IssueRow({ issue: i, issues, parent, depth, onOpen, onDelete }: { issue
   return (
     <ListItem className="tk-row-item">
       <ListButton className="tk-row" data-status={i.status} style={depth ? { paddingLeft: `${36 + (depth - 1) * 24}px` } : undefined} {...openProps((newTab) => onOpen(i, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(i))} aria-label={`Open ${i.key}: ${i.title}`}>
-        {depth && depth > 1 ? <span className="tk-tree-elbow" aria-hidden>└</span> : null}
+        {depth && depth > 1 ? <Inline className="tk-tree-elbow" aria-hidden>└</Inline> : null}
         <PriorityIcon priority={i.priority} label />
-        <span className="tk-key">{i.key}</span>
+        <Inline className="tk-key">{i.key}</Inline>
         <TypeIcon type={i.type} />
         <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>
-        {parent ? <span className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><span className="tk-link-title">{parent.title}</span></span> : null}
+        {parent ? <Inline className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><Inline className="tk-link-title">{parent.title}</Inline></Inline> : null}
         {done?.total ? <ChildProgress {...done} /> : null}
         <SessionMarker issue={i} />
-        {depth !== undefined ? <span className="tk-row-status"><StatusDot status={i.status} />{STATUS_LABEL[i.status]}</span> : null}
+        {depth !== undefined ? <Inline className="tk-row-status"><StatusDot status={i.status} />{STATUS_LABEL[i.status]}</Inline> : null}
         <Time className="tk-row-time" iso={iso(i.updatedAt)} />
       </ListButton>
       <DeleteButton issue={i} onDelete={onDelete} />

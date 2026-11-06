@@ -9,6 +9,7 @@ import { canParent, LIMITS, type AgentKind, type FileChange, type Issue, type Se
 import { Activity, Children, Description, FilesChanged } from "./issue-body";
 import { Properties } from "./issue-properties";
 import { DeleteConfirm, ErrorText, TypeIcon, useScrollIntoView, type Apply, type Send } from "./parts";
+import { Box, HeaderBox, Inline, Nav } from "./layout";
 
 export interface IssueViewProps {
   project: WingsProject;
@@ -42,7 +43,7 @@ export interface IssueViewProps {
 function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   const [editing, setEditing] = useState(false);
   return (
-    <div className="tk-title-row">
+    <Box className="tk-title-row">
       <TypeIcon type={issue.type} label />
       {editing ? (
         <InlineInput label="Title" className="tk-title-input" value={issue.title} maxLength={LIMITS.title} required onSave={(title) => apply({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
@@ -54,7 +55,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
         </Title>
       )}
       <Text as="span" mono tone="muted" size="small" className="tk-title-key">{issue.key}</Text>
-    </div>
+    </Box>
   );
 }
 
@@ -62,17 +63,17 @@ export function IssueView({ project, issue, issues, issueKey, error, apply, send
   const [confirming, setConfirming] = useState(false);
   const noticesRef = useScrollIntoView<HTMLDivElement>(confirming || error);
   const crumb = (
-    <nav className="tk-crumbs" aria-label="Breadcrumb">
-      <Button variant="ghost" size="sm" onClick={onBack}><span aria-hidden="true">←</span> Issues</Button>
+    <Nav className="tk-crumbs" aria-label="Breadcrumb">
+      <Button variant="ghost" size="sm" onClick={onBack}><Inline aria-hidden="true">←</Inline> Issues</Button>
       {trail.map((key, i) => (
         <Fragment key={`${i}-${key}`}>
-          <span aria-hidden="true" className="tk-crumb-sep tk-crumb-sep-link">/</span>
+          <Inline aria-hidden="true" className="tk-crumb-sep tk-crumb-sep-link">/</Inline>
           <Button variant="ghost" size="sm" className="tk-crumb-link" onClick={() => onBackTo?.(i)}>{key}</Button>
         </Fragment>
       ))}
-      <span aria-hidden="true" className="tk-crumb-sep">/</span>
-      <span className="tk-crumb" aria-current="page">{issue?.key ?? issueKey}</span>
-    </nav>
+      <Inline aria-hidden="true" className="tk-crumb-sep">/</Inline>
+      <Inline className="tk-crumb" aria-current="page">{issue?.key ?? issueKey}</Inline>
+    </Nav>
   );
   const toolbar = (
     <Toolbar
@@ -103,28 +104,28 @@ export function IssueView({ project, issue, issues, issueKey, error, apply, send
 
   return (
     <Page toolbar={toolbar} className="tk-page">
-      <div className="tk-wrap">
+      <Box className="tk-wrap">
         {error || confirming ? (
-          <div ref={noticesRef}>
+          <Box ref={noticesRef}>
             <Stack gap="m" className="tk-notices">
               {error ? <Card><ErrorText>{error}</ErrorText></Card> : null}
               {confirming ? <DeleteConfirm issue={issue} issues={issues} onCancel={() => setConfirming(false)} onDelete={(children) => apply({ kind: "remove", key: issue.key, children })} /> : null}
             </Stack>
-          </div>
+          </Box>
         ) : null}
-        <div className="tk-grid">
-          <header className="tk-head">
+        <Box className="tk-grid">
+          <HeaderBox className="tk-head">
             <IssueTitle issue={issue} apply={apply} />
-          </header>
+          </HeaderBox>
           <Properties issue={issue} issues={issues} project={project} apply={apply} send={send} onResume={onResume} onOpenUrl={onOpenUrl} onOpenIssue={onOpenIssue} />
-          <div className="tk-main">
+          <Box className="tk-main">
             <Description issue={issue} apply={apply} />
             {canParent(issue.type) ? <Children issue={issue} issues={issues} onOpenIssue={onOpenIssue} /> : null}
             <FilesChanged issue={issue} onOpen={onOpenFile} />
             <Activity issue={issue} apply={apply} onOpenSession={onResume} />
-          </div>
-        </div>
-      </div>
+          </Box>
+        </Box>
+      </Box>
     </Page>
   );
 }

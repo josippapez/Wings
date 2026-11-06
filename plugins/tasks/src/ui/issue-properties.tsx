@@ -9,6 +9,7 @@ import { LIMITS, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPE_LABEL,
 import { iso } from "../lib/format";
 import { blocksOf, parentChoices } from "../lib/relations";
 import { openProps, PriorityIcon, StatusDot, TypeIcon, type Apply, type Send } from "./parts";
+import { Aside, Box, Inline, Item, Unordered } from "./layout";
 
 const STATUS_OPTIONS = STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }));
 const PRIORITY_OPTIONS = PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }));
@@ -17,13 +18,13 @@ const TYPE_OPTIONS = TYPES.map((value) => ({ value, label: TYPE_LABEL[value] }))
 /** One property of the column: a small muted label over its value. */
 function Prop({ label, wide, empty, actions, children }: { label: string; wide?: boolean; empty?: boolean; actions?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="tk-prop" data-wide={wide ? "" : undefined} data-empty={empty ? "" : undefined}>
+    <Box className="tk-prop" data-wide={wide ? "" : undefined} data-empty={empty ? "" : undefined}>
       <Row gap="s" justify="between" className="tk-prop-label">
         <Text as="span" tone="muted" size="tiny" weight="medium">{label}</Text>
         {actions}
       </Row>
       {children}
-    </div>
+    </Box>
   );
 }
 
@@ -92,7 +93,7 @@ function PullRequest({ issue, apply, onOpenUrl }: { issue: Issue; apply: Apply; 
       {editing ? (
         <InlineInput label="Pull request URL" className="tk-prop-input" value={pr} maxLength={LIMITS.pr} placeholder="https://" onSave={(value) => apply({ kind: "update", key: issue.key, pr: value })} onDone={() => setEditing(false)} />
       ) : pr ? (
-        <Button variant="outline" size="xs" className="tk-pr-chip" title={pr} onClick={() => onOpenUrl(pr)}>{prLabel(pr)} <span aria-hidden="true">↗</span></Button>
+        <Button variant="outline" size="xs" className="tk-pr-chip" title={pr} onClick={() => onOpenUrl(pr)}>{prLabel(pr)} <Inline aria-hidden="true">↗</Inline></Button>
       ) : (
         <Text as="span" tone="muted" size="small">None</Text>
       )}
@@ -103,18 +104,18 @@ function PullRequest({ issue, apply, onOpenUrl }: { issue: Issue; apply: Apply; 
 /** Another issue as a chip, "KEY title", that opens it. With `onRemove`, an × beside it takes the link away. */
 function IssueChip({ issue, fallback, onOpen, onRemove }: { issue?: Issue; fallback: string; onOpen: (key: string, newTab: boolean) => void; onRemove?: () => void }) {
   return (
-    <div className="tk-link">
+    <Box className="tk-link">
       {issue ? (
         <Button variant="outline" size="xs" className="tk-link-chip" title={`${issue.key} ${issue.title}`} {...openProps((newTab) => onOpen(issue.key, newTab))}>
           <StatusDot status={issue.status} />
-          <span className="tk-key">{issue.key}</span>
-          <span className="tk-link-title">{issue.title}</span>
+          <Inline className="tk-key">{issue.key}</Inline>
+          <Inline className="tk-link-title">{issue.title}</Inline>
         </Button>
       ) : (
         <Text as="span" mono tone="muted" size="small">{fallback}</Text>
       )}
-      {onRemove ? <Button size="icon-xs" variant="ghost" aria-label={`Remove ${fallback}`} onClick={onRemove}><span aria-hidden="true">×</span></Button> : null}
-    </div>
+      {onRemove ? <Button size="icon-xs" variant="ghost" aria-label={`Remove ${fallback}`} onClick={onRemove}><Inline aria-hidden="true">×</Inline></Button> : null}
+    </Box>
   );
 }
 
@@ -171,7 +172,7 @@ export function Properties({ issue, issues, project, apply, send, onResume, onOp
   const last = lastSession(issue);
   const commits = issue.links?.commits ?? [];
   return (
-    <aside className="tk-props" aria-label="Properties">
+    <Aside className="tk-props" aria-label="Properties">
       <Prop label="Status">
         <Row gap="s" className="tk-status">
           <StatusDot status={issue.status} />
@@ -206,12 +207,12 @@ export function Properties({ issue, issues, project, apply, send, onResume, onOp
         {issue.sessions.length === 0 ? (
           <Text as="span" tone="muted" size="small">None yet</Text>
         ) : (
-          <ul className="tk-sessions" aria-label="Agent sessions">
+          <Unordered className="tk-sessions" aria-label="Agent sessions">
             {[...issue.sessions].sort((a, b) => b.seen - a.seen).map((s) => {
               // An unnamed session goes by its agent, so the line under it doesn't name the agent twice.
               const name = s.name || agentLabel(s);
               return (
-                <li key={s.id} className="tk-session">
+                <Item key={s.id} className="tk-session">
                   <Row gap="s" justify="between">
                     <Row gap="s">
                       <Text as="span" size="small" truncate>{name}</Text>
@@ -220,12 +221,12 @@ export function Properties({ issue, issues, project, apply, send, onResume, onOp
                     <Button variant="ghost" size="xs" aria-label={`Resume ${name}`} title={`Open this ${agentLabel(s)} session in a new terminal`} onClick={() => onResume(s)}>Resume</Button>
                   </Row>
                   <Text as="span" tone="muted" size="tiny">
-                    {s.name ? `${agentLabel(s)} · ` : ""}<span className="tk-sha" title={s.id}>{s.id.slice(0, 8)}</span> · <Time iso={iso(s.seen)} prefix="seen " />
+                    {s.name ? `${agentLabel(s)} · ` : ""}<Inline className="tk-sha" title={s.id}>{s.id.slice(0, 8)}</Inline> · <Time iso={iso(s.seen)} prefix="seen " />
                   </Text>
-                </li>
+                </Item>
               );
             })}
-          </ul>
+          </Unordered>
         )}
       </Prop>
       <Prop label="Created">
@@ -234,6 +235,6 @@ export function Properties({ issue, issues, project, apply, send, onResume, onOp
       <Prop label="Updated">
         <Text as="span" size="small"><Time iso={iso(issue.updatedAt)} /></Text>
       </Prop>
-    </aside>
+    </Aside>
   );
 }

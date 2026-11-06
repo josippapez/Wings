@@ -1,7 +1,8 @@
 //! Renders Worktrees' installed native sidebar offscreen at 1000 and 640 points wide. The plugin installation and
 //! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
 //! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
-//! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, each over made-up data.
+//! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
+//! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -74,6 +75,14 @@ fn main() {
         disk(out);
         return;
     }
+    if std::env::args().any(|arg| arg == "--work-item") {
+        work_item(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--tasks") {
+        tasks(out);
+        return;
+    }
     let data = Data::temp();
     data.install_script(
         "worktrees",
@@ -134,6 +143,9 @@ struct FixtureEnv(PathBuf);
 impl Env for FixtureEnv {
     fn projects(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
+    }
+    fn current_project(&self) -> Option<PathBuf> {
+        Some(self.0.clone())
     }
     fn claude_dirs(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
@@ -449,6 +461,7 @@ fn schedules(out: PathBuf) {
     host.publish_projects(vec![wings_native::page::plugin::Project {
         id: id.clone(),
         name: "shop".into(),
+        parent_id: None,
         path: id,
     }]);
     host.start_main(
@@ -820,6 +833,7 @@ fn disk(out: PathBuf) {
     host.publish_projects(vec![wings_native::page::plugin::Project {
         id: id.clone(),
         name: "Fixture".into(),
+        parent_id: None,
         path: id,
     }]);
     host.start_main(
@@ -957,17 +971,18 @@ fn pr_tracker(out: PathBuf) {
     host.publish_projects(vec![wings_native::page::plugin::Project {
         id: id.clone(),
         name: "web".into(),
+        parent_id: None,
         path: id.clone(),
     }]);
-    host.start_main(
-        &include_str!("../../../plugins/pr-tracker/preview/native-host.js")
-            .replace("__ROOT__", &id),
-        |event| {
-            if let wings_native::page::runtime::Event::Error { message, .. } = event {
-                panic!("{message}");
-            }
-        },
-    )
+    let fixture_main = include_str!("../../../plugins/pr-tracker/preview/native-host.js").replace(
+        r#"- `SyncClient.send` retries up to 5 times\n- Delay doubles from 200 ms\n"#,
+        r#"- SyncClient retries failed requests with exponential backoff, caps the delay, and reports each retry so operators can diagnose a slow upstream without losing the pull request's complete status history\n1. The retry budget applies to every request in this pull request, including the request that loads the final status after the retry loop has reached its configured limit\n- [ ] Add a metric that records the retry count for this request and explains why it reached the final retry budget before the worker returned\n  - Keep the nested diagnostic note with the parent item so the rendered description still explains the retry decision on a narrow pull request page\n"#,
+    );
+    host.start_main(&fixture_main.replace("__ROOT__", &id), |event| {
+        if let wings_native::page::runtime::Event::Error { message, .. } = event {
+            panic!("{message}");
+        }
+    })
     .unwrap();
     let mut cx = VisualTestAppContext::with_asset_source(
         gpui_platform::current_platform(false),
@@ -1051,4 +1066,263 @@ fn pr_tracker(out: PathBuf) {
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
+}
+
+/// A page shown as a tab or block: its name in the PNG, the bundle, what it opens with, its saved state's place, the
+/// chips to press to reach the view, and a text it shows once there.
+type StatePage<'a> = (
+    &'a str,
+    &'a str,
+    Option<&'a serde_json::Value>,
+    wings_native::page::plugin::StatePlace,
+    &'a [&'a str],
+    &'a str,
+);
+
+/// Renders each of `pages` of the plugin `host` runs at 1000 and 640 points wide, into `<prefix>-<name>-<width>.png`.
+fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[StatePage]) {
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.update(actions::bind);
+    for width in [1000.0, 640.0] {
+        for &(name, source, args, place, presses, expected) in pages {
+            let state = wings_native::page::plugin::FrameState::new(place, None, |_| Ok(()));
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin_with_state(host, source, args, state, cx))
+                })
+                .unwrap();
+            let window = handle.into();
+            handle
+                .read_with(&cx, |view, _| view.set_visible(true))
+                .unwrap();
+            let until = |cx: &mut VisualTestAppContext, text: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle
+                    .read_with(cx, |view, _| view.text().contains(text))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "{prefix} {name} did not show {text:?}: {}",
+                        handle.read_with(cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            for label in presses {
+                // Each chip shows once the page has loaded what it needs.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle
+                    .read_with(&cx, |view, _| view.press_chip(label))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "nothing to press for {label}: {}",
+                        handle.read_with(&cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(&mut cx, window, Duration::from_millis(20));
+                }
+            }
+            until(&mut cx, expected);
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(
+                &mut cx,
+                window,
+                out.join(format!("{prefix}-{name}-{width}.png")),
+            );
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+/// A host for the repo's plugin `id`, as the app runs it, in a project folder of the shots.
+fn repo_host(out: &std::path::Path, id: &str, manifest: &str) -> (PluginHost, String) {
+    let project = out.join(format!("fixture-project-{id}"));
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.to_string_lossy().into_owned();
+    let host = PluginHost::with_access(
+        PluginConfig {
+            id: id.into(),
+            root: out.join(format!("fixture-storage-{id}")),
+            scope: "shot".into(),
+        },
+        Access {
+            plugin: wings_plugins::manifest::Plugin {
+                manifest: serde_json::from_str(manifest).unwrap(),
+                dir: project.clone(),
+                icon_svg: None,
+            },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(project)),
+        },
+    );
+    host.publish_projects(vec![wings_native::page::plugin::Project {
+        id: path.clone(),
+        name: "web".into(),
+        parent_id: None,
+        path: path.clone(),
+    }]);
+    (host, path)
+}
+
+fn fail_on_error(event: wings_native::page::runtime::Event) {
+    if let wings_native::page::runtime::Event::Error { message, .. } = event {
+        panic!("{message}");
+    }
+}
+
+/// Work item's built tab and Sprint block. The tab calls `az` itself, so the shots run an `az` of their own, first on
+/// PATH, that answers from `plugins/work-item/preview/native-az.json`; the block's main is the fixture main
+/// `plugins/work-item/preview/native-host.js`.
+fn work_item(out: PathBuf) {
+    let answers: serde_json::Map<String, serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../plugins/work-item/preview/native-az.json"
+    ))
+    .unwrap();
+    let bin = out.join("fake-az");
+    std::fs::create_dir_all(&bin).unwrap();
+    let mut script = String::from("#!/bin/sh\ncase \"$*\" in\n");
+    for (index, (words, answer)) in answers
+        .iter()
+        .filter(|(words, _)| !words.starts_with('_'))
+        .enumerate()
+    {
+        let file = bin.join(format!("{index}.json"));
+        std::fs::write(&file, answer.to_string()).unwrap();
+        script += &format!("  *'{words}'*) cat '{}' ;;\n", file.display());
+    }
+    script += "  *) echo \"no made-up answer for az $*\" >&2; exit 1 ;;\nesac\n";
+    let az = bin.join("az");
+    std::fs::write(&az, script).unwrap();
+    std::process::Command::new("chmod")
+        .arg("+x")
+        .arg(&az)
+        .status()
+        .unwrap();
+    // Programs are found on the login shell's PATH, then this process's: no login shell leaves this one.
+    unsafe {
+        std::env::set_var("SHELL", "/nonexistent-shell");
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+    }
+    let (host, _) = repo_host(
+        &out,
+        "work-item",
+        include_str!("../../../plugins/work-item/wings-plugin.json"),
+    );
+    host.start_main(
+        include_str!("../../../plugins/work-item/preview/native-host.js"),
+        fail_on_error,
+    )
+    .unwrap();
+    let item = include_str!("../../../plugins/work-item/dist/native/item.js");
+    let sprint = include_str!("../../../plugins/work-item/dist/native/sprint.js");
+    let args = json!({ "id": 1432, "org": "https://dev.azure.com/acme" });
+    use wings_native::page::plugin::StatePlace::{Block, Tab};
+    shoot_pages(
+        &out,
+        &host,
+        "work-item",
+        &[
+            (
+                "overview",
+                item,
+                Some(&args),
+                Tab,
+                &[],
+                "Pull request is up",
+            ),
+            (
+                "links",
+                item,
+                Some(&args),
+                Tab,
+                &["Links"],
+                "Make the sync client reliable",
+            ),
+            (
+                "history",
+                item,
+                Some(&args),
+                Tab,
+                &["History"],
+                "Remaining work",
+            ),
+            ("sprint", sprint, None, Block, &[], "Add retry with backoff"),
+        ],
+    );
+}
+
+/// The Issues plugin's built board, list, issue tab and block with its real main, over the made-up issues
+/// `plugins/tasks/preview/native-seed.js` stores first.
+fn tasks(out: PathBuf) {
+    let _ = std::fs::remove_dir_all(out.join("fixture-storage-tasks"));
+    let (host, project) = repo_host(
+        &out,
+        "tasks",
+        include_str!("../../../plugins/tasks/wings-plugin.json"),
+    );
+    let (seeded, done) = std::sync::mpsc::channel();
+    let seed = host
+        .open_page(
+            &include_str!("../../../plugins/tasks/preview/native-seed.js")
+                .replace("__PROJECT__", &project),
+            move |event| match event {
+                wings_native::page::runtime::Event::Tree(tree)
+                    if tree.text().contains("Seeded") =>
+                {
+                    let _ = seeded.send(());
+                }
+                other => fail_on_error(other),
+            },
+        )
+        .unwrap();
+    done.recv_timeout(Duration::from_secs(10))
+        .expect("the issues to be stored");
+    drop(seed);
+    host.start_main(
+        include_str!("../../../plugins/tasks/dist/native/main.js"),
+        fail_on_error,
+    )
+    .unwrap();
+    let board = include_str!("../../../plugins/tasks/dist/native/board.js");
+    let issue = include_str!("../../../plugins/tasks/dist/native/issue.js");
+    let block = include_str!("../../../plugins/tasks/dist/native/block.js");
+    let args = json!({ "key": "WEB-4", "projectId": project });
+    use wings_native::page::plugin::StatePlace::{Block, Tab};
+    shoot_pages(
+        &out,
+        &host,
+        "tasks",
+        &[
+            (
+                "board",
+                board,
+                None,
+                Tab,
+                &["Board"],
+                "Checkout summary card",
+            ),
+            ("list", board, None, Tab, &["List"], "Checkout redesign"),
+            (
+                "issue",
+                issue,
+                Some(&args),
+                Tab,
+                &[],
+                "Waiting on the release branch",
+            ),
+            ("block", block, None, Block, &[], "Open board"),
+        ],
+    );
 }

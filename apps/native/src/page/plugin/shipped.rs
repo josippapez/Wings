@@ -158,6 +158,7 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
         id: root.to_string_lossy().into(),
         path: root.to_string_lossy().into(),
         name: "Fixture worktrees".into(),
+        parent_id: None,
     }]);
     rig.host
         .publish_panes(vec![pane("1", &root.to_string_lossy())]);
@@ -185,11 +186,13 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
             id: root.to_string_lossy().into(),
             path: root.to_string_lossy().into(),
             name: "Fixture worktrees".into(),
+            parent_id: None,
         },
         Project {
             id: linked.to_string_lossy().into(),
             path: linked.to_string_lossy().into(),
             name: "Fixture feature".into(),
+            parent_id: None,
         },
     ]);
     rig.host.publish_git(&[root.to_string_lossy().into()]);
@@ -614,6 +617,7 @@ fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_lis
         id: "/work/api".into(),
         path: "/work/api".into(),
         name: "Api".into(),
+        parent_id: None,
     }]);
     let (on_event, main_errors) = errors();
     rig.host
@@ -865,6 +869,7 @@ fn disk_scans_a_folder_in_its_main_and_its_native_page_draws_the_map_and_fills_t
         id: id.clone(),
         path: id,
         name: "Scanned".into(),
+        parent_id: None,
     }]);
     let (on_event, main_errors) = errors();
     rig.host
@@ -924,6 +929,7 @@ fn pr_rig() -> Rig {
         id: PR_PROJECT.into(),
         path: PR_PROJECT.into(),
         name: "web".into(),
+        parent_id: None,
     }]);
     let fixture = fs::read_to_string(repo_plugin("pr-tracker").join("preview/native-host.js"))
         .unwrap()
@@ -1089,4 +1095,261 @@ fn pr_tracker_main_starts_in_the_native_host_and_its_settings_page_renders() {
     ] {
         assert!(text.contains(shown), "{shown:?} in {text:?}");
     }
+}
+
+/// A page of the plugin `host` runs, shown as a tab or block whose saved state starts as `initial`. What the page saves
+/// lands in the returned list.
+fn open_with_state(
+    host: &super::PluginHost,
+    source: &str,
+    args: Option<&serde_json::Value>,
+    place: super::StatePlace,
+    initial: Option<serde_json::Value>,
+) -> (
+    PageRuntime,
+    mpsc::Receiver<Event>,
+    std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) {
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let state = super::FrameState::new(place, initial, {
+        let saved = saved.clone();
+        move |value| {
+            saved.lock().unwrap().push(value);
+            Ok(())
+        }
+    });
+    let (sent, received) = mpsc::channel();
+    let runtime = host
+        .open_hidden_page_with_state(source, args, state, move |event| {
+            let _ = sent.send(event);
+        })
+        .unwrap();
+    (runtime, received, saved)
+}
+
+fn chips_value(nodes: &[Node], label: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Chips(chips) if chips.label == label => chips.value.clone(),
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| chips_value(part, label)),
+    })
+}
+
+/// Work item with the fixture main that answers the Sprint block's query, in the project `/work/web`.
+fn work_item_rig() -> Rig {
+    let rig = Rig::with(load("work-item"), true, vec![]);
+    *rig.env.projects.lock().unwrap() = vec![PathBuf::from("/work/web")];
+    rig.host.publish_projects(vec![Project {
+        id: "/work/web".into(),
+        path: "/work/web".into(),
+        name: "web".into(),
+        parent_id: None,
+    }]);
+    let fixture =
+        fs::read_to_string(repo_plugin("work-item").join("preview/native-host.js")).unwrap();
+    let (on_event, _errors) = errors();
+    rig.host.start_main(&fixture, on_event).unwrap();
+    rig
+}
+
+#[test]
+fn work_item_sprint_block_draws_a_column_per_state_and_saves_its_filter_as_block_state() {
+    let rig = work_item_rig();
+    let (page, events, saved) = open_with_state(
+        &rig.host,
+        &native("work-item", "sprint.js"),
+        None,
+        super::StatePlace::Block,
+        None,
+    );
+    let mine = tree(&events, "the sprint", |tree| {
+        tree.text().contains("Add retry with backoff")
+    });
+    assert_eq!(chips_value(&mine.children, "Show").as_deref(), Some("mine"));
+    assert!(!mine.text().contains("Show a notice while retrying"));
+    assert_eq!(
+        count_nodes(&mine.children, &|node| matches!(node, Node::BoardColumn(_))),
+        2,
+        "Active and Closed: {}",
+        mine.text()
+    );
+
+    let show = chips_named(&mine.children, "Show").unwrap();
+    assert!(page.dispatch(&show, Some(&json!({ "value": "all" }))));
+    tree(&events, "the whole sprint", |tree| {
+        tree.text().contains("Show a notice while retrying")
+    });
+    assert_eq!(*saved.lock().unwrap(), [json!({ "mine": false })]);
+}
+
+#[test]
+fn work_item_sprint_block_starts_from_its_saved_filter() {
+    let rig = work_item_rig();
+    let (_page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("work-item", "sprint.js"),
+        None,
+        super::StatePlace::Block,
+        Some(json!({ "mine": false })),
+    );
+    let all = tree(&events, "the whole sprint", |tree| {
+        tree.text().contains("Show a notice while retrying")
+    });
+    assert_eq!(chips_value(&all.children, "Show").as_deref(), Some("all"));
+}
+
+#[test]
+fn work_item_tab_without_a_work_item_says_where_to_open_one() {
+    let rig = work_item_rig();
+    let (_page, events) = open_page(&rig.host, &native("work-item", "item.js"));
+    tree(&events, "the empty tab", |tree| {
+        tree.text().contains("Open a work item from a pane's badge")
+    });
+}
+
+/// Issues with its real main, in the project `/work/web`.
+fn tasks_rig() -> Rig {
+    let rig = Rig::with(load("tasks"), true, vec![]);
+    *rig.env.projects.lock().unwrap() = vec![PathBuf::from("/work/web")];
+    rig.host.publish_projects(vec![Project {
+        id: "/work/web".into(),
+        path: "/work/web".into(),
+        name: "web".into(),
+        parent_id: None,
+    }]);
+    let (on_event, _errors) = errors();
+    rig.host
+        .start_main(&native("tasks", "main.js"), on_event)
+        .unwrap();
+    rig
+}
+
+/// Types `title` into the board's New issue field and presses Add, and returns the board that shows it.
+fn add_issue(page: &PageRuntime, events: &mpsc::Receiver<Event>, title: &str) -> Tree {
+    let board = tree(events, "the board", |tree| {
+        input_named(&tree.children, "New issue").is_some()
+    });
+    let field = input_named(&board.children, "New issue").unwrap();
+    assert!(page.dispatch(&field, Some(&json!({ "value": title }))));
+    let typed = tree(events, "the typed title", |tree| {
+        let mut add = Vec::new();
+        buttons_named(&tree.children, "Add", &mut add);
+        !add.is_empty()
+    });
+    let mut add = Vec::new();
+    buttons_named(&typed.children, "Add", &mut add);
+    assert!(page.dispatch(&add[0], None));
+    tree(events, "the new issue", |tree| tree.text().contains(title))
+}
+
+#[test]
+fn tasks_board_adds_an_issue_through_its_main() {
+    let rig = tasks_rig();
+    let (page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "board.js"),
+        None,
+        super::StatePlace::Tab,
+        None,
+    );
+    let board = add_issue(&page, &events, "Fix the login redirect");
+    assert!(board.text().contains("1 to do"), "{}", board.text());
+}
+
+#[test]
+fn tasks_list_starts_with_the_groups_its_tab_saved_as_folded_and_saves_an_unfold() {
+    let rig = tasks_rig();
+    let (page, events, saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "board.js"),
+        None,
+        super::StatePlace::Tab,
+        Some(json!({ "folded": ["status:todo"] })),
+    );
+    let board = add_issue(&page, &events, "Fix the login redirect");
+    let view = chips_named(&board.children, "View").unwrap();
+    assert!(page.dispatch(&view, Some(&json!({ "value": "list" }))));
+    fn group(nodes: &[Node]) -> Option<(Option<bool>, Option<String>)> {
+        nodes.iter().find_map(|node| match node {
+            Node::Disclosure(group) if plain_text(&group.summary).contains("To do") => {
+                Some((group.open, group.on_open_change.clone()))
+            }
+            other => other.parts().into_iter().find_map(group),
+        })
+    }
+    let list = tree(&events, "the list", |tree| group(&tree.children).is_some());
+    let (open, toggle) = group(&list.children).unwrap();
+    assert_eq!(open, Some(false));
+    assert!(page.dispatch(&toggle.unwrap(), Some(&json!({ "open": true }))));
+    tree(&events, "the unfolded group", |tree| {
+        group(&tree.children).is_some_and(|(open, _)| open == Some(true))
+    });
+    assert_eq!(saved.lock().unwrap().last(), Some(&json!({ "folded": [] })));
+}
+
+#[test]
+fn tasks_issue_tab_saves_a_title_edited_in_place() {
+    let rig = tasks_rig();
+    {
+        let (page, events, _saved) = open_with_state(
+            &rig.host,
+            &native("tasks", "board.js"),
+            None,
+            super::StatePlace::Tab,
+            None,
+        );
+        add_issue(&page, &events, "Fix the login redirect");
+    }
+    let args = json!({ "key": "WEB-1", "projectId": "/work/web" });
+    let (page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "issue.js"),
+        Some(&args),
+        super::StatePlace::Tab,
+        None,
+    );
+    let issue = tree(&events, "the issue", |tree| {
+        let mut title = Vec::new();
+        buttons_named(&tree.children, "Fix the login redirect", &mut title);
+        !title.is_empty()
+    });
+    let mut title = Vec::new();
+    buttons_named(&issue.children, "Fix the login redirect", &mut title);
+    assert!(page.dispatch(&title[0], None));
+    fn title_input(nodes: &[Node]) -> Option<(Option<String>, Option<String>)> {
+        nodes.iter().find_map(|node| match node {
+            Node::Input(input) if input.label == "Title" => {
+                Some((input.on_change.clone(), input.on_key_down.clone()))
+            }
+            other => other.parts().into_iter().find_map(title_input),
+        })
+    }
+    let editing = tree(&events, "the title field", |tree| {
+        title_input(&tree.children).is_some()
+    });
+    let (change, key) = title_input(&editing.children).unwrap();
+    assert!(page.dispatch(
+        &change.unwrap(),
+        Some(&json!({ "value": "Fix the sign-in redirect" }))
+    ));
+    fn typed(nodes: &[Node]) -> bool {
+        nodes.iter().any(|node| match node {
+            Node::Input(input) => {
+                input.label == "Title" && input.value == "Fix the sign-in redirect"
+            }
+            other => other.parts().into_iter().any(typed),
+        })
+    }
+    tree(&events, "the typed title", |tree| typed(&tree.children));
+    assert!(page.dispatch(
+        &key.unwrap(),
+        Some(&json!({ "type": "keydown", "key": "Enter" }))
+    ));
+    tree(&events, "the saved title", |tree| {
+        let mut saved = Vec::new();
+        buttons_named(&tree.children, "Fix the sign-in redirect", &mut saved);
+        !saved.is_empty()
+    });
 }

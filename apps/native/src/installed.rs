@@ -83,6 +83,8 @@ pub struct FoundPage {
     pub bundle: PathBuf,
     /// Opening it again opens another tab, instead of showing the one in this project.
     pub multiple: bool,
+    /// Offered as a new tab. A view without it opens only through `wings.openView`.
+    pub new_tab: bool,
 }
 
 /// A plugin that is running: its main, and the pages it can open.
@@ -112,6 +114,7 @@ pub struct Page {
     pub id: String,
     pub title: String,
     pub multiple: bool,
+    pub new_tab: bool,
     /// The page's bundle, read when the plugin started so that it and the main are of one version.
     pub source: Arc<str>,
 }
@@ -145,13 +148,14 @@ pub fn discover(paths: &PluginPaths) -> Vec<Found> {
             let pages = contributes
                 .views
                 .iter()
-                .filter(|view| view.new_tab && view.opens.iter().any(|place| place == "tab"))
+                .filter(|view| view.opens.iter().any(|place| place == "tab"))
                 .filter_map(|view| {
                     Some(FoundPage {
                         id: view.id.clone(),
                         title: view.title.clone(),
                         bundle: bundle(&view.page)?,
                         multiple: view.multiple,
+                        new_tab: view.new_tab,
                     })
                 })
                 .collect();
@@ -164,6 +168,7 @@ pub fn discover(paths: &PluginPaths) -> Vec<Found> {
                         title: sidebar.title.clone(),
                         bundle: bundle(&sidebar.page)?,
                         multiple: false,
+                        new_tab: false,
                     })
                 })
                 .collect();
@@ -173,6 +178,7 @@ pub fn discover(paths: &PluginPaths) -> Vec<Found> {
                     title: format!("{} settings", plugin.manifest.name),
                     bundle: bundle(&settings.page)?,
                     multiple: false,
+                    new_tab: false,
                 })
             });
             Some(Found {
@@ -232,6 +238,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                         id: page.id.clone(),
                         title: page.title.clone(),
                         multiple: page.multiple,
+                        new_tab: page.new_tab,
                         source: read(&page.bundle)?.into(),
                     })
                 })

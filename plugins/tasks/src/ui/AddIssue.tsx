@@ -18,8 +18,9 @@ export function AddIssue({ apply }: { apply: (op: Op) => Promise<void> }) {
 
   return (
     <Row as="form" gap="s" className="tk-add" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <TextInput label="New issue" placeholder="Add an issue" value={title} maxLength={LIMITS.title} onChange={(e) => setTitle(e.currentTarget.value)} />
-      <Button type="submit" busy={busy} disabled={!title.trim()}>Add</Button>
+      <TextInput label="New issue" placeholder="Add an issue" value={title} maxLength={LIMITS.title} onChange={(e) => setTitle(e.currentTarget.value)} onKeyDown={WINGS_NATIVE ? (e) => e.key === "Enter" && submit() : undefined} />
+      {/* The native app has no form to submit. */}
+      <Button type="submit" busy={busy} disabled={!title.trim()} onClick={WINGS_NATIVE ? submit : undefined}>Add</Button>
       {error ? <ErrorText size="small">{error}</ErrorText> : null}
     </Row>
   );

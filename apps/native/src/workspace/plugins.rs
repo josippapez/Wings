@@ -29,11 +29,21 @@ pub(super) struct PluginTab {
     pub(super) title: SharedString,
     /// What `wings.openView` opened it with, which the page reads with `viewArgs`.
     pub(super) args: Option<serde_json::Value>,
+    pub(super) state: crate::page::plugin::FrameState,
     pub(super) page: Entity<PageView>,
     pub(super) focus: FocusHandle,
 }
 
 impl Workspace {
+    pub(super) fn has_tasks_board(&self) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.id == "tasks" && plugin.pages.iter().any(|page| page.id == "board")
+        })
+    }
+
+    fn is_tasks_board(plugin: &str, view: &str) -> bool {
+        plugin == "tasks" && view == "board"
+    }
     /// Shows the plugin's page in this project, opening it unless it is open already. A page that sets `multiple` opens
     /// another tab each time, unless one has the same `args`. A tab that is open with other `args` takes the new ones and
     /// starts over, as the desktop's `openViewTab` does. False when no running plugin has that page.
@@ -74,11 +84,13 @@ impl Workspace {
             (None, Some(tab)) if args.is_none() || tab.args == args => Some(tab.id),
             (None, Some(tab)) => {
                 let id = tab.id;
-                self.plugin_page(plugin, view, args.as_ref(), cx)
+                let state = self.plugin_env.tab_state(None);
+                self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)
                     .and_then(|(page, _)| {
                         let tab = self.plugin_tabs.iter_mut().find(|tab| tab.id == id)?;
                         tab.page = page;
                         tab.args = args;
+                        tab.state = state;
                         Some(id)
                     })
             }
@@ -87,6 +99,9 @@ impl Workspace {
         let Some(id) = id else {
             return false;
         };
+        if Self::is_tasks_board(plugin, view) {
+            self.issues_open = true;
+        }
         self.show(Active::Plugin(id), window, cx);
         true
     }
@@ -97,6 +112,7 @@ impl Workspace {
         plugin: &str,
         view: &str,
         args: Option<&serde_json::Value>,
+        state: crate::page::plugin::FrameState,
         cx: &mut Context<Self>,
     ) -> Option<(Entity<PageView>, String)> {
         let installed = self
@@ -109,7 +125,7 @@ impl Workspace {
             page.source.clone(),
             page.title.clone(),
         );
-        let page = cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args, cx));
+        let page = cx.new(|cx| PageView::in_plugin_with_state(&host, &source, args, state, cx));
         Some((page, title))
     }
 
@@ -121,7 +137,19 @@ impl Workspace {
         args: Option<serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let (page, title) = self.plugin_page(plugin, view, args.as_ref(), cx)?;
+        self.new_plugin_tab_with_state(plugin, view, args, None, cx)
+    }
+
+    fn new_plugin_tab_with_state(
+        &mut self,
+        plugin: &str,
+        view: &str,
+        args: Option<serde_json::Value>,
+        initial: Option<serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let state = self.plugin_env.tab_state(initial);
+        let (page, title) = self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)?;
         let id = self.next_tab;
         self.next_tab += 1;
         self.plugin_tabs.push(PluginTab {
@@ -130,6 +158,7 @@ impl Workspace {
             view: view.into(),
             title: title.into(),
             args,
+            state,
             page,
             focus: cx.focus_handle().tab_stop(true),
         });
@@ -173,7 +202,15 @@ impl Workspace {
     ) -> Vec<Option<usize>> {
         saved
             .iter()
-            .map(|tab| self.new_plugin_tab(&tab.plugin, &tab.view, tab.args.clone(), cx))
+            .map(|tab| {
+                self.new_plugin_tab_with_state(
+                    &tab.plugin,
+                    &tab.view,
+                    tab.args.clone(),
+                    tab.state.clone(),
+                    cx,
+                )
+            })
             .collect()
     }
 
@@ -185,6 +222,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let tab = self.plugin_tabs.remove(index);
+        if Self::is_tasks_board(&tab.plugin, &tab.view) {
+            self.issues_open = false;
+        }
         self.after_closing(
             Active::Plugin(tab.id),
             self.terminals.len() + index,
@@ -202,7 +242,13 @@ impl Workspace {
         let rows: Vec<_> = self
             .plugins
             .iter()
-            .flat_map(|installed| installed.pages.iter().map(move |page| (installed, page)))
+            .flat_map(|installed| {
+                installed
+                    .pages
+                    .iter()
+                    .filter(|page| page.new_tab)
+                    .map(move |page| (installed, page))
+            })
             .enumerate()
             .map(|(index, (installed, page))| {
                 let active =

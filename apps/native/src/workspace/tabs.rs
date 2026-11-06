@@ -30,7 +30,7 @@ impl Workspace {
             .map(|tab| Active::Terminal(tab.id))
             .chain(self.plugin_tabs.iter().map(|tab| Active::Plugin(tab.id)))
             .chain(self.project_page.is_some().then_some(Active::Project))
-            .chain([Active::Issues])
+            .chain((self.issues_open && !self.has_tasks_board()).then_some(Active::Issues))
             .collect()
     }
 
@@ -65,7 +65,7 @@ impl Workspace {
     }
 
     /// Once `closed` has left the strip from `position` (Issues, last, never counts): when it was shown, the neighbour to
-    /// its right takes over, else the one to its left, else Issues.
+    /// its right takes over, else the one to its left, else Issues if it is open, else a new terminal.
     pub(super) fn after_closing(
         &mut self,
         closed: Active,
@@ -82,16 +82,27 @@ impl Workspace {
             let next = strip
                 .get(position)
                 .or_else(|| position.checked_sub(1).and_then(|left| strip.get(left)))
-                .copied()
-                .unwrap_or(Active::Issues);
-            self.show(next, window, cx);
+                .copied();
+            match next {
+                Some(next) => self.show(next, window, cx),
+                None if self.issues_open => self.show(Active::Issues, window, cx),
+                None => self.new_terminal(window, cx),
+            }
         } else {
             self.save(cx);
         }
     }
 
     pub fn show(&mut self, active: Active, window: &mut Window, cx: &mut Context<Self>) {
+        if active == Active::Issues && self.has_tasks_board() {
+            self.open_plugin_view("tasks", "board", None, window, cx);
+            return;
+        }
         self.active = active;
+        self.issues_open |= active == Active::Issues;
+        if let Some(index) = self.tabs().iter().position(|tab| *tab == active) {
+            self.tab_scroll.scroll_to_item(index);
+        }
         self.sync_plugin_visibility(cx);
         let shown: Vec<usize> = match active {
             Active::Terminal(id) => self
@@ -207,8 +218,17 @@ impl Workspace {
                 self.close_project_page(window, cx);
                 cx.notify();
             }
-            Active::Issues => {}
+            Active::Issues => {
+                self.close_issues(window, cx);
+                cx.notify();
+            }
         }
+    }
+
+    fn close_issues(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let position = self.tabs().len() - 1;
+        self.issues_open = false;
+        self.after_closing(Active::Issues, position, window, cx);
     }
 
     pub(super) fn tab(
@@ -289,7 +309,20 @@ impl Workspace {
                     cx.notify();
                 })),
             ),
-            Active::Issues => None,
+            Active::Issues => Some(
+                ui::icon_button(
+                    SharedString::from(format!("{id}-close")),
+                    Icon::X,
+                    format!("Close tab ({})", shortcut_label("W", true)),
+                    ButtonSize::Tiny,
+                )
+                .opacity(0.0)
+                .group_hover(group.clone(), |style| style.opacity(1.0))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close_issues(window, cx);
+                    cx.notify();
+                })),
+            ),
         };
         // The desktop's tab: equal widths, and a raised pill for the one shown.
         div()

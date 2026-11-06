@@ -140,6 +140,10 @@ pub enum Node {
     Heading(Heading),
     Dot(Dot),
     Gauge(Gauge),
+    Meter(Meter),
+    Board(Board),
+    BoardRow(List),
+    BoardColumn(BoardColumn),
     List(List),
     ListItem(ListItem),
     Disclosure(Disclosure),
@@ -226,6 +230,7 @@ pub struct Button {
     pub label: Option<String>,
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
+    pub on_key_down: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -364,6 +369,34 @@ pub struct Gauge {
     pub note: Vec<Node>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Meter {
+    pub id: u64,
+    pub label: String,
+    pub percent: f64,
+    pub tone: Option<Tone>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Board {
+    pub id: u64,
+    pub label: String,
+    pub lanes: bool,
+    pub header: Vec<Node>,
+    pub body: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoardColumn {
+    pub id: u64,
+    pub label: String,
+    pub cell: bool,
+    pub count: Option<u64>,
+    pub title: Vec<Node>,
+    pub actions: Vec<Node>,
+    pub body: Vec<Node>,
+}
+
 /// How full a gauge is, by its `levels`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -397,6 +430,8 @@ pub struct ListItem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Disclosure {
     pub id: u64,
+    pub open: Option<bool>,
+    pub on_open_change: Option<String>,
     pub summary: Vec<Node>,
     pub body: Vec<Node>,
 }
@@ -448,6 +483,10 @@ pub struct Input {
     pub max_length: Option<usize>,
     /// What to send back to the page, with the text after each edit.
     pub on_change: Option<String>,
+    pub on_key_down: Option<String>,
+    pub on_blur: Option<String>,
+    pub auto_focus: bool,
+    pub select_on_focus: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -659,6 +698,10 @@ impl Node {
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
             Node::Gauge(n) => vec![&n.note],
+            Node::Meter(_) => vec![],
+            Node::Board(n) => vec![&n.header, &n.body],
+            Node::BoardRow(n) => vec![&n.children],
+            Node::BoardColumn(n) => vec![&n.title, &n.actions, &n.body],
             Node::List(n) => vec![&n.children],
             Node::ListItem(n) => vec![&n.children],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
@@ -723,6 +766,10 @@ impl Walk {
                 | "Heading"
                 | "Dot"
                 | "Gauge"
+                | "Meter"
+                | "Board"
+                | "BoardRow"
+                | "BoardColumn"
                 | "List"
                 | "ListItem"
                 | "Disclosure"
@@ -746,6 +793,11 @@ impl Walk {
         let children = self.children(children, depth)?;
         let on = |name: &str| props.get(name) == Some(&Value::Bool(true));
         let tone = str_prop(&props, "tone").and_then(Tone::choose);
+        let handler = |name| {
+            str_prop(&props, name)
+                .filter(|value| !on("disabled") && valid_handler(value))
+                .map(str::to_owned)
+        };
         Ok(Some(match kind.as_str() {
             "Slot" => Node::Slot(Slot {
                 name: str_prop(&props, "name").unwrap_or_default().to_owned(),
@@ -832,6 +884,7 @@ impl Walk {
                     on_click: str_prop(&props, "onClick")
                         .filter(|handler| !disabled && valid_handler(handler))
                         .map(str::to_owned),
+                    on_key_down: handler("onKeyDown"),
                     children: parts(children),
                 })
             }
@@ -933,6 +986,44 @@ impl Walk {
                     note: slots.take("note"),
                 })
             }
+            "Meter" => Node::Meter(Meter {
+                id,
+                label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                percent: number(&props, "percent").unwrap_or(0.0).clamp(0.0, 100.0),
+                tone,
+            }),
+            "Board" => {
+                let lanes = on("lanes");
+                let (header, body) = if lanes {
+                    let mut slots = Slots(children);
+                    (slots.take("header"), slots.take("body"))
+                } else {
+                    (Vec::new(), parts(children))
+                };
+                Node::Board(Board {
+                    id,
+                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    lanes,
+                    header,
+                    body,
+                })
+            }
+            "BoardRow" => Node::BoardRow(List {
+                id,
+                children: parts(children),
+            }),
+            "BoardColumn" => {
+                let mut slots = Slots(children);
+                Node::BoardColumn(BoardColumn {
+                    id,
+                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    cell: on("cell"),
+                    count: props.get("count").and_then(Value::as_u64),
+                    title: slots.take("title"),
+                    actions: slots.take("actions"),
+                    body: slots.take("body"),
+                })
+            }
             "List" => Node::List(List {
                 id,
                 children: parts(children),
@@ -945,6 +1036,8 @@ impl Walk {
                 let mut slots = Slots(children);
                 Node::Disclosure(Disclosure {
                     id,
+                    open: props.get("open").and_then(Value::as_bool),
+                    on_open_change: handler("onOpenChange"),
                     summary: slots.take("summary"),
                     body: slots.take("body"),
                 })
@@ -983,6 +1076,10 @@ impl Walk {
                     on_change: str_prop(&props, "onChange")
                         .filter(|handler| !disabled && valid_handler(handler))
                         .map(str::to_owned),
+                    on_key_down: handler("onKeyDown"),
+                    on_blur: handler("onBlur"),
+                    auto_focus: on("autoFocus"),
+                    select_on_focus: on("selectOnFocus"),
                 })
             }
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
@@ -998,6 +1095,7 @@ impl Walk {
                     on_click: str_prop(&props, "onClick")
                         .filter(|s| !on("disabled") && valid_handler(s))
                         .map(str::to_owned),
+                    on_key_down: handler("onKeyDown"),
                     children: parts(children),
                 },
                 indent: number(&props, "indent")

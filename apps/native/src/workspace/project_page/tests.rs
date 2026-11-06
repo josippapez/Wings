@@ -265,3 +265,67 @@ fn a_plugins_section_lists_under_the_project_and_the_project_page_opens_over_the
         assert!(!w.tabs().contains(&Active::Project));
     });
 }
+
+#[test]
+fn a_plugins_block_keeps_the_state_it_saved_with_the_project_page() {
+    let data = Data::temp();
+    let project = data.root.join("block-state-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let app_data = data.root.join("block-state-app-data");
+    let info = InfoStore::open(&app_data);
+    let id = project.to_string_lossy().into_owned();
+    data.install_script(
+        "keeper",
+        json!({ "contributes": { "blocks": [{ "id": "kept", "title": "Kept", "page": "dist/kept.html" }] } }),
+        "",
+        &[("kept", r#"wings.blockState().then(async (s) => {
+            if (s == null) await wings.setBlockState({ n: 1 });
+            wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'State ' + JSON.stringify(s) }] }));
+        });"#)],
+        "keeper-scope",
+    );
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.plugins = Some(data.paths());
+        config.project = project.clone();
+        config.project_info = Some(app_data.clone());
+    });
+    window.update(|w, window, cx| w.open_project_page(project.clone(), window, cx));
+    until(&app, &mut window, "the page never loaded", |w, cx| {
+        w.project_page
+            .as_ref()
+            .is_some_and(|page| page.read(cx).data.is_some())
+    });
+    let page = window.read(|w, _| w.project_page.clone().unwrap());
+    window.update(|_, _, cx| {
+        page.update(cx, |page, cx| {
+            page.add_at(Place::End, Added::Block("keeper".into(), "kept".into()), cx)
+        })
+    });
+    until(
+        &app,
+        &mut window,
+        "the block's state was never stored",
+        |_, _| {
+            info.store.get(&id).unwrap().items.iter().any(|item| matches!(item, Item::Block { state: Some(state), .. } if *state == json!({ "n": 1 })))
+        },
+    );
+
+    window.update(|w, window, cx| {
+        w.show(Active::Project, window, cx);
+        w.close_project_page(window, cx);
+        w.open_project_page(project.clone(), window, cx);
+    });
+    until(
+        &app,
+        &mut window,
+        "the reopened block never read its state",
+        |w, cx| {
+            w.project_page.as_ref().is_some_and(|page| {
+                page.read(cx)
+                    .block_views
+                    .values()
+                    .any(|view| view.read(cx).text().contains(r#"State {"n":1}"#))
+            })
+        },
+    );
+}

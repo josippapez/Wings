@@ -31,6 +31,7 @@ pub(super) enum Seen {
     DiffClose(String, String),
     OpenPane(super::OpenPane),
     OpenView(super::OpenView),
+    FocusPane(String),
     CloseView(String, String),
     Badge(String, String, Option<Badge>),
     Status(String, String, Option<PaneStatus>),
@@ -143,6 +144,10 @@ impl Env for FakeEnv {
 
     fn open_view(&self, plan: super::OpenView, reply: crate::page::runtime::Reply) {
         self.record(Seen::OpenView(plan));
+        reply.ok("null".into());
+    }
+    fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
+        self.record(Seen::FocusPane(pane.into()));
         reply.ok("null".into());
     }
     fn close_view(&self, plugin: &str, view: &str) {

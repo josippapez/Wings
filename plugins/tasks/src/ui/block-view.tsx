@@ -5,6 +5,7 @@ import { AddIssue } from "./AddIssue";
 import { STATUS_LABEL, type Issue, type Op } from "../lib/domain";
 import { openIssues } from "../lib/orderings";
 import { SessionMarker, StatusDot, StatusSummary, TypeIcon } from "./parts";
+import { Inline } from "./layout";
 
 /** The block lists this many open issues; the board has the rest. */
 export const BLOCK_ROWS = 8;
@@ -41,7 +42,7 @@ export function BlockView({ project, issues, apply, openBoard, openIssue }: Bloc
                   <ListButton onClick={() => openIssue(i)} aria-label={`Open ${i.key}: ${i.title}`}>
                     <StatusDot status={i.status} />
                     <TypeIcon type={i.type} />
-                    <span className="tk-key">{i.key}</span>
+                    <Inline className="tk-key">{i.key}</Inline>
                     <Text as="span" grow truncate>{i.title}</Text>
                     {i.status === "todo" ? null : <Text as="span" tone="muted" size="tiny">{STATUS_LABEL[i.status]}</Text>}
                     <SessionMarker issue={i} />

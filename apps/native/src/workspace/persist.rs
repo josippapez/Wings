@@ -42,7 +42,11 @@ impl Workspace {
             .active_plugin
             .and_then(|index| restored.get(index).copied().flatten())
             .map(Active::Plugin);
-        self.show(terminal.or(plugin).unwrap_or(Active::Issues), window, cx);
+        match terminal.or(plugin) {
+            Some(active) => self.show(active, window, cx),
+            None if self.issues_open => self.show(Active::Issues, window, cx),
+            None => self.new_terminal(window, cx),
+        }
     }
 
     fn restore_layout(&mut self, saved: &SavedLayout, cx: &mut Context<Self>) -> Layout {
@@ -126,12 +130,14 @@ impl Workspace {
                     plugin: tab.plugin.clone(),
                     view: tab.view.clone(),
                     args: tab.args.clone(),
+                    state: Some(tab.state.value()).filter(|value| !value.is_null()),
                 })
                 .collect(),
             active_plugin: self
                 .plugin_tabs
                 .iter()
                 .position(|tab| self.active == Active::Plugin(tab.id)),
+            issues_closed: !self.issues_open,
         };
         let look = look(cx);
         let settings = saved::Settings {

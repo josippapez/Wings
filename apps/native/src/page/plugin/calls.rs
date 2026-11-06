@@ -298,6 +298,16 @@ impl Shared {
         };
         let this = self.clone();
         match method {
+            "focusPane" => {
+                let pane = js_string(params.get("paneId"));
+                if !wings_plugins::permissions::may_use_panes(&access.plugin) {
+                    return reply.err(format!("{} may not focus panes", self.config.id));
+                }
+                if let Err(error) = self.require_pane(&pane) {
+                    return reply.err(error);
+                }
+                access.env.focus_pane(&pane, reply);
+            }
             "projects" => reply.done(to_json(&*self.projects.lock().unwrap())),
             "disks" | "diskFind" | "diskUsage" | "diskUsageCancel" => {
                 self.disk_call(method, params, reply, access)

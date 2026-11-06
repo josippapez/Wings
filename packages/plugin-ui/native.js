@@ -1,7 +1,7 @@
 // wings-plugin-ui/native: the components of ui.js that the native Wings app draws, rendered by React into a JSON tree
 // instead of into a DOM. The page runs in a JS engine with no document, and the app turns each tree into its own
 // controls. Handlers never leave the page: the tree names them by id, and the app sends the id back when one fires.
-import { createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
 import { errorMessage } from "wings-plugin-sdk/async";
@@ -179,7 +179,7 @@ export function Text(props) {
 export function Button(props) {
   const { busy } = props;
   const label = props["aria-label"];
-  return h("Button", { ...pick(props, ["variant", "onClick", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
+  return h("Button", { ...pick(props, ["variant", "onClick", "onKeyDown", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
 }
 /** A small quiet button; with `pressed` it is on or off, drawn as a chip of `Chips` is. */
 export function Chip({ pressed, onClick, disabled, children, ...rest }) {
@@ -256,6 +256,35 @@ export function Dot(props) {
 export function Gauge(props) {
   return h("Gauge", pick(props, ["label", "percent", "levels"]), slot("note", props.note || null));
 }
+/** A standalone progress bar. */
+export function Meter(props) {
+  return h("Meter", pick(props, ["label", "percent", "tone"]));
+}
+export function Board({ label, children }) {
+  return h("Board", { label }, children);
+}
+export function BoardColumn({ title, count, actions, children }) {
+  return h("BoardColumn", pick({ count }, ["count"]), slot("title", title), slot("actions", actions), slot("body", children));
+}
+export function BoardLanes({ label, columns, children }) {
+  return h("Board", { label, lanes: true },
+    slot("header", h("BoardRow", null, columns.map((column) => h(BoardColumn, { key: column.id, title: column.title, count: column.count })))),
+    slot("body", children));
+}
+export function BoardLane({ label, title, count, actions, open, defaultOpen = true, onOpenChange, children }) {
+  const [own, setOwn] = useState(defaultOpen);
+  const shown = open ?? own;
+  return h(Stack, { gap: "s" },
+    h(Row, { gap: "s" }, h(Button, { variant: "ghost", "aria-label": label, onClick: () => {
+      if (open === undefined) setOwn(!shown);
+      onOpenChange?.(!shown);
+    } }, shown ? "▾" : "▸"), title ?? h(Text, { weight: "strong" }, label),
+    count === undefined ? null : h(Badge, { variant: "secondary" }, count), actions),
+    shown ? h("BoardRow", null, children) : null);
+}
+export function BoardCell({ label, children }) {
+  return h("BoardColumn", { label, cell: true }, slot("body", children));
+}
 /** A list of rows. */
 export function List(props) {
   return h("List", null, props.children);
@@ -265,8 +294,10 @@ export function ListItem(props) {
   return h("ListItem", null, props.children);
 }
 /** More behind a `summary` line that opens it. */
-export function Disclosure({ summary, children }) {
-  return h("Disclosure", null, slot("summary", summary), slot("body", children));
+export function Disclosure({ summary, open, onOpenChange, children }) {
+  // Without `open` the app folds it on its own; with it, the page decides and hears each click.
+  const props = open === undefined ? null : { open, onOpenChange: () => onOpenChange?.(!open) };
+  return h("Disclosure", props, slot("summary", summary), slot("body", children));
 }
 /** A select of `options`. The app sends the value picked in the event's `value`, and `onChange` gets that value. */
 export function Select(props) {
@@ -279,7 +310,7 @@ export function Chips(props) {
 }
 
 export function ListButton(props) {
-  return h("ListButton", pick(props, ["onClick", "disabled", "align", "layout", "title", "indent", "aria-expanded"]), props.children);
+  return h("ListButton", pick(props, ["onClick", "onKeyDown", "disabled", "align", "layout", "title", "indent", "aria-expanded"]), props.children);
 }
 
 export function SearchField(props) {
@@ -312,7 +343,7 @@ export function FieldGroup({ label, hint, error, children }) {
 const changed = (value) => ({ type: "change", preventDefault() {}, stopPropagation() {}, target: { value }, currentTarget: { value } });
 const input = (type, props, extra) => {
   const { onChange } = props;
-  return h(type, { ...pick(props, ["value", "placeholder", "disabled", "maxLength"]), ...extra, ...(onChange && { onChange: (event) => onChange(changed(event.value)) }) });
+  return h(type, { ...pick(props, ["value", "placeholder", "disabled", "maxLength", "onBlur", "onKeyDown", "autoFocus", "selectOnFocus"]), ...extra, ...(onChange && { onChange: (event) => onChange(changed(event.value)) }) });
 };
 /** A one-line text input. Outside a `Field`, give it a `label`. */
 export function TextInput(props) {
@@ -323,6 +354,40 @@ export function TextInput(props) {
 export function Textarea(props) {
   const name = useContext(FieldName);
   return input("Textarea", props, { label: props.label ?? name, rows: props.rows });
+}
+
+/** Editing in place: Enter or blur saves once, Escape cancels, a failed save keeps the draft. */
+export function InlineInput({ label, value, required, onSave, onDone, onChange, ...rest }) {
+  const [draft, setDraft] = useState(value);
+  const { run, busy, error, clear } = useAction();
+  const open = useRef(true);
+  const saving = useRef(false);
+  const cancel = () => {
+    if (!open.current || saving.current) return;
+    open.current = false;
+    onDone();
+  };
+  const save = async () => {
+    if (!open.current || saving.current) return;
+    const next = draft.trim();
+    if (next === value || (required && !next)) return cancel();
+    saving.current = true;
+    const ok = await run(() => onSave(next));
+    saving.current = false;
+    if (ok) {
+      open.current = false;
+      onDone();
+    }
+  };
+  return h(Stack, { gap: "xs" }, h(TextInput, {
+    ...rest, label, value: draft, disabled: busy, autoFocus: true, selectOnFocus: true,
+    onChange: (event) => { setDraft(event.currentTarget.value); clear(); onChange?.(event); },
+    onBlur: save,
+    onKeyDown: (event) => {
+      if (event.key === "Enter") save();
+      if (event.key === "Escape") cancel();
+    },
+  }), error ? h(Notice, { tone: "danger" }, error) : null);
 }
 
 const matches = (option, query) => `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.toLowerCase());
@@ -412,6 +477,18 @@ export function SummaryChip({ tone, onClick, children }) {
 export function Timeline({ children }) {
   return h(Stack, { gap: "m" }, children);
 }
+/** An entry of a `Timeline`: `author`'s avatar, name and time `at`, an optional `tag` and `actions`, then `children`. */
+export function TimelineCard({ author, at, tag, actions, children }) {
+  return h(Card, null, h(Stack, { gap: "s" },
+    h(Row, { gap: "s" }, h(Avatar, { name: author, size: "small" }), h(Text, { weight: "strong" }, author),
+      tag ? h(Badge, { variant: "secondary" }, tag) : null, at ? h(Text, { tone: "muted", size: "small", grow: true }, h(Time, { iso: at })) : null, actions),
+    children));
+}
+/** A quiet one-line entry of a `Timeline`: a small avatar, the author in bold, `children`, then the time. */
+export function TimelineNote({ author, at, children }) {
+  return h(Row, { gap: "s", wrap: true }, h(Avatar, { name: author, size: "small" }), h(Text, { weight: "strong" }, author),
+    h(Text, { tone: "muted" }, children), at ? h(Text, { tone: "muted", size: "small" }, h(Time, { iso: at })) : null);
+}
 /** Tabs that pick one of `items` over the panel they show, `children`: the chips of `Chips`. */
 export function Tabs({ label, items, value, onChange, children }) {
   return h(Stack, { gap: "m" }, h(Chips, { label, options: items, value, onChange }), children);
@@ -459,7 +536,7 @@ function mdBlocks(blocks) {
           b.items.map((item, j) =>
             h(
               Row,
-              { key: j, gap: "s", align: "baseline" },
+              { key: j, gap: "s", align: "start" },
               item.depth ? h(Stack, { width: item.depth * 16 }) : null,
               h(Text, { tone: "muted" }, item.checked === null ? (b.ordered ? `${j + 1}.` : "•") : item.checked ? "☑" : "☐"),
               h(Text, { grow: true }, mdSpans(item.text)),
@@ -534,11 +611,18 @@ export function ProjectGate({ loading = "Loading…", empty, children }) {
   if (project === null) return h(Empty, { title: empty?.title ?? "No project", description: empty?.description });
   return h(Fragment, { key: project.id }, children(project));
 }
-/** The state of a tab or a block: the app keeps it for as long as the page is open, not across restarts. `check` is not used. */
-export function useTabState(initial) {
-  return useState(initial);
+function useSaved(read, write, initial, check) {
+  const [value, setValue] = useState(null);
+  useEffect(() => {
+    void read().catch(() => null).then((raw) => setValue((raw == null ? undefined : check(raw)) ?? initial));
+  }, []);
+  return [value, (next) => {
+    setValue(next);
+    write(next).catch(() => {});
+  }];
 }
-export const useBlockState = useTabState;
+export const useTabState = (initial, check) => useSaved(() => wings.tabState(), (state) => wings.setTabState(state), initial, check);
+export const useBlockState = (initial, check) => useSaved(() => wings.blockState(), (state) => wings.setBlockState(state), initial, check);
 /** Runs the page's async actions and keeps what its buttons and error card show, as `useAction` of `wings-plugin-ui` does. */
 export function useAction() {
   const [running, setRunning] = useState(0);

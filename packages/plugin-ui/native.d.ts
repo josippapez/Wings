@@ -12,6 +12,18 @@ export interface NativeEvent {
   stopPropagation(): void;
 }
 
+/** A key pressed on a button, a row or a field. The app sends only the keys a page acts on: Enter and Escape in a field, Delete and Alt+Left or Alt+Right on a button or row. */
+export interface NativeKeyEvent {
+  type: "keydown";
+  key: string;
+  altKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  preventDefault(): void;
+  stopPropagation(): void;
+}
+
 /** Shows `element` as the page. One call per page; calling again renders the new element. Its hooks and handlers run in the page's own JS engine. */
 export function mount(element: ReactElement): void;
 
@@ -40,7 +52,7 @@ export function Text(props: {
   children?: ReactNode;
 }): ReactElement;
 /** A button. `variant` "default" is the filled one. `busy` shows a spinner and ignores clicks. An `aria-label` names a button that holds only an icon. */
-export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
+export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A small quiet button. With `pressed` it's a toggle. */
 export function Chip(props: { pressed?: boolean; onClick?: (event: NativeEvent) => void; disabled?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A short message in a tinted box. */
@@ -76,12 +88,25 @@ export function List(props: { children?: ReactNode }): ReactElement;
 /** A row in a `List`. */
 export function ListItem(props: { children?: ReactNode }): ReactElement;
 /** More behind a `summary` line that opens it. The app keeps whether it's open, and it starts closed. */
-export function Disclosure(props: { summary: ReactNode; children?: ReactNode }): ReactElement;
+/** A summary that folds `children` open and shut, shut at first; with `open` the page decides, and `onOpenChange` hears each click. */
+export function Disclosure(props: { summary: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; children?: ReactNode }): ReactElement;
+/** A standalone progress bar, as wide as its parent. */
+export function Meter(props: { label: string; percent: number; tone?: "success" | "warn" | "danger" }): ReactElement;
+/** Columns side by side that scroll sideways, named `label`. */
+export function Board(props: { label: string; children?: ReactNode }): ReactElement;
+/** A column of a `Board`: its `title` and `count` over its cards, `children`. */
+export function BoardColumn(props: { title: ReactNode; count?: number; actions?: ReactNode; children?: ReactNode }): ReactElement;
+/** A board in rows: the `columns`' headers once, over `BoardLane`s. */
+export function BoardLanes(props: { label: string; columns: { id: string; title: ReactNode; count?: number }[]; children?: ReactNode }): ReactElement;
+/** A row of `BoardLanes` that folds: open at first unless `defaultOpen` is false, or as `open` says. Its `children` are `BoardCell`s. */
+export function BoardLane(props: { label: string; title?: ReactNode; count?: number; actions?: ReactNode; open?: boolean; defaultOpen?: boolean; onOpenChange?: (open: boolean) => void; children?: ReactNode }): ReactElement;
+/** One column's cards in a `BoardLane`. */
+export function BoardCell(props: { label: string; children?: ReactNode }): ReactElement;
 /** A select of `options`; without a `value` it starts on the first. `onChange` gets the value picked. */
 export function Select<V extends string>(props: { label?: string; options: (Option<V> & { label: string; disabled?: boolean })[]; value?: V; onChange?: (value: V) => void }): ReactElement;
 
 export function Chips<V extends string>(props: { label: string; options: { value: V; label: string; disabled?: boolean }[]; value: V; onChange: (value: V) => void }): ReactElement;
-export function ListButton(props: { onClick?: (event: NativeEvent) => void; disabled?: boolean; align?: "baseline"; layout?: "column"; title?: string; indent?: number; "aria-expanded"?: boolean; children?: ReactNode }): ReactElement;
+export function ListButton(props: { onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; align?: "baseline"; layout?: "column"; title?: string; indent?: number; "aria-expanded"?: boolean; children?: ReactNode }): ReactElement;
 export function SearchField(props: { label: string; placeholder?: string; defaultValue?: string; onInput?: (event: NativeEvent & { currentTarget: { value: string }; target: { value: string } }) => void }): ReactElement;
 export interface GraphRow {
   hash: string;
@@ -109,9 +134,11 @@ export interface NativeInputEvent {
   currentTarget: { value: string };
 }
 /** A one-line text input. The page holds the text: give it `value` and set it in `onChange`. Outside a `Field`, give it a `label`. */
-export function TextInput(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; onChange?: (event: NativeInputEvent) => void }): ReactElement;
+export function TextInput(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
 /** A multi-line text input, `rows` high at first. Outside a `Field`, give it a `label`. */
-export function Textarea(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; rows?: number; onChange?: (event: NativeInputEvent) => void }): ReactElement;
+export function Textarea(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; rows?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
+/** Edits `value` in place: Enter or leaving the field saves it once with `onSave`, Escape cancels, and a failed save keeps the draft and shows why. `onDone` closes it. */
+export function InlineInput(props: { label: string; value: string; required?: boolean; maxLength?: number; placeholder?: string; onSave: (value: string) => Promise<unknown>; onDone: () => void; onChange?: (event: NativeInputEvent) => void }): ReactElement;
 /** A text field with the options that match it under it as chips; the app has no popup list yet. */
 export function Combobox(props: {
   label?: string;
@@ -153,6 +180,10 @@ export function Summary(props: { children?: ReactNode }): ReactElement;
 export function SummaryChip(props: { tone?: "info" | "success" | "warn" | "danger"; onClick?: (event: NativeEvent) => void; children?: ReactNode }): ReactElement;
 /** A conversation or an activity feed. */
 export function Timeline(props: { label?: string; children?: ReactNode }): ReactElement;
+/** An entry of a `Timeline`: `author`'s avatar, name and time `at` (ISO), an optional `tag` and `actions`, then `children`. */
+export function TimelineCard(props: { author: string; at?: string; tag?: ReactNode; actions?: ReactNode; children?: ReactNode }): ReactElement;
+/** A quiet one-line entry of a `Timeline`: a small avatar, the author in bold, `children`, then the time. */
+export function TimelineNote(props: { author: string; at?: string; children?: ReactNode }): ReactElement;
 /** Tabs that pick one of `items` over the panel they show, `children`. They are drawn as `Chips`. */
 export function Tabs<V extends string>(props: { label: string; items: { value: V; label: string; disabled?: boolean }[]; value: V; onChange: (value: V) => void; variant?: "default" | "line"; children?: ReactNode }): ReactElement;
 /** A `list` pane and a `detail` pane side by side; `empty` shows in place of a missing `detail`. */
@@ -171,8 +202,9 @@ export function useProject(): WingsProject | null | undefined;
 export function useViewArgs<T>(check: Check<T>): T | null;
 /** Shows `children(project)` once the app says which project the page is about, keyed by the project's id. */
 export function ProjectGate(props: { loading?: ReactNode; empty?: { title?: ReactNode; description?: ReactNode }; children: (project: WingsProject) => ReactNode }): ReactElement;
-/** The state of a tab or a block. The native app keeps it for as long as the page is open, not across restarts, and starts with `initial`. */
+/** The state the tab saved with `wings.setTabState`, as `check` reads it, or `initial`; `null` until it is read. The native app keeps it with the tab across restarts. */
 export function useTabState<T>(initial: T, check: Check<T>): [T | null, (next: T) => void];
+/** Like `useTabState`, for a block: the state saved with `wings.setBlockState`, kept with the Project page. */
 export function useBlockState<T>(initial: T, check: Check<T>): [T | null, (next: T) => void];
 /** Runs the page's async actions and keeps what its buttons and error card show: `busy`, the last `error`, `run` and `clear`. */
 export function useAction(): ActionState;

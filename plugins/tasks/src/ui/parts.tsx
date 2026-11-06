@@ -1,12 +1,13 @@
 // Small pieces the Issues pages share.
 
 import { useEffect, useRef, type ComponentProps } from "react";
-import { Badge, Button, Card, Confirm, Dot, Icon, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
+import { Badge, Button, Card, Confirm, Dot, Icon, ListButton, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { agentLabel } from "../lib/commands";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
 import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
+import { Box, Inline } from "./layout";
 
 /** Sends an operation to main. A failure shows in the page's error card; an editor that must stay open uses `apply`, which rejects. */
 export type Send = (op: Op) => Promise<unknown>;
@@ -23,7 +24,8 @@ export function ErrorText(props: Omit<ComponentProps<typeof Text>, "tone" | "rol
 export function useScrollIntoView<T extends HTMLElement>(shown: unknown) {
   const ref = useRef<T>(null);
   useEffect(() => {
-    if (shown) ref.current?.scrollIntoView({ block: "nearest" });
+    // The native app has no element to scroll to.
+    if (shown && !WINGS_NATIVE) ref.current?.scrollIntoView({ block: "nearest" });
   }, [shown]);
   return ref;
 }
@@ -55,8 +57,12 @@ const TYPE_PATH: Record<IssueType, React.ReactNode> = {
   epic: <path d="M9 1.8 3.5 9H8l-1 5.2L12.5 7H8Z" />,
 };
 
+const TYPE_TONE = { task: "muted", bug: "danger", feature: undefined, epic: "warn" } as const;
+
 /** A small icon for an issue's type, coloured by it. Decoration unless `label`: the card or page names the type in text too. */
 export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) {
+  // The native app draws no SVG: a dot in the type's colour.
+  if (WINGS_NATIVE) return <Dot tone={TYPE_TONE[type]} label={label ? TYPE_LABEL[type] : undefined} />;
   return (
     <svg className="tk-type" data-type={type} viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...(label ? { role: "img", "aria-label": TYPE_LABEL[type] } : { "aria-hidden": true })}>
       <title>{TYPE_LABEL[type]}</title>
@@ -71,6 +77,10 @@ export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) 
  */
 export function PriorityIcon({ priority = "none", label }: { priority?: Priority; label?: boolean }) {
   const filled = { urgent: 3, high: 3, medium: 2, low: 1, none: 0 }[priority];
+  if (WINGS_NATIVE) {
+    const bars = priority === "urgent" ? "!" : priority === "none" ? "–" : "▰".repeat(filled) + "▱".repeat(3 - filled);
+    return <Text tone={priority === "urgent" ? "warn" : priority === "high" ? undefined : "muted"} size="tiny" title={label ? PRIORITY_LABEL[priority] : undefined}>{bars}</Text>;
+  }
   return (
     <svg className="tk-priority" data-priority={priority} viewBox="0 0 16 16" width="14" height="14" {...(label ? { role: "img", "aria-label": PRIORITY_LABEL[priority] } : { "aria-hidden": true })}>
       <title>{PRIORITY_LABEL[priority]}</title>
@@ -133,11 +143,13 @@ export function SessionMarker({ issue }: { issue: Issue }) {
 
 /** How many of an epic's or feature's children are done, as a short bar and "3/7". */
 export function ChildProgress({ done, total }: { done: number; total: number }) {
+  // A native Meter is as wide as its row, so the native app shows the count alone.
+  if (WINGS_NATIVE) return <Text tone="muted" size="tiny">{done}/{total} done</Text>;
   return (
-    <span className="tk-child-progress" title={`${done} of ${total} child issues done`}>
+    <Inline className="tk-child-progress" title={`${done} of ${total} child issues done`}>
       <Meter percent={(done / total) * 100} label={`${done} of ${total} child issues done`} tone="success" />
-      <span aria-hidden>{done}/{total}</span>
-    </span>
+      <Inline aria-hidden>{done}/{total}</Inline>
+    </Inline>
   );
 }
 
@@ -150,9 +162,15 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
   const index = FLOW.indexOf(issue.status);
   const target = (by: 1 | -1) => STATUS_LABEL[FLOW[index + by] ?? issue.status];
   const movable = index >= 0;
+  const keys = (e: React.KeyboardEvent) => {
+    if (onDelete && isDeleteKey(e)) return (e.preventDefault(), onDelete());
+    if (!movable || !e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    e.preventDefault();
+    onMove(e.key === "ArrowRight" ? 1 : -1);
+  };
   return (
     <Card compact={compact} className="tk-card" data-status={issue.status}>
-      <Row gap="s" justify="between" className="tk-card-top">
+      <Row gap="s" justify="between" className="tk-card-top" wrap={WINGS_NATIVE}>
         <Row gap="xs" className="tk-card-key">
           {issue.priority ? <PriorityIcon priority={issue.priority} label /> : null}
           <TypeIcon type={issue.type} />
@@ -161,25 +179,21 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
         </Row>
         <SessionMarker issue={issue} />
       </Row>
-      <Button
-        id={id}
-        variant="ghost"
-        className="tk-card-title"
-        {...openProps(onOpen)}
-        onKeyDown={(e) => {
-          if (onDelete && isDeleteKey(e)) return (e.preventDefault(), onDelete());
-          if (!movable || !e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
-          e.preventDefault();
-          onMove(e.key === "ArrowRight" ? 1 : -1);
-        }}
-      >
-        <Text as="span" clamp>{issue.title}</Text>
-      </Button>
+      {/* A native button centres one line; a list button keeps the title at the card's start and wraps it, as tasks.css does. */}
+      {WINGS_NATIVE ? (
+        <ListButton {...openProps(onOpen)} onKeyDown={keys}>
+          <Text clamp>{issue.title}</Text>
+        </ListButton>
+      ) : (
+        <Button id={id} variant="ghost" className="tk-card-title" {...openProps(onOpen)} onKeyDown={keys}>
+          <Text as="span" clamp>{issue.title}</Text>
+        </Button>
+      )}
       {progress?.total ? <ChildProgress {...progress} /> : null}
-      <div className="tk-card-foot">
+      <Box className="tk-card-foot">
         <Time iso={iso(issue.updatedAt)} prefix={issue.status === "done" ? "Done " : "Updated "} />
         {movable || onDelete ? (
-          <span className="tk-moves">
+          <Inline className="tk-moves">
             {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><Icon name="trash" /></Button> : null}
             {movable ? (
               <>
@@ -187,9 +201,9 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
                 <Button size="xs" variant="ghost" disabled={index === FLOW.length - 1} aria-label={`Move ${issue.key} to ${target(1)}`} onClick={() => onMove(1)}>→</Button>
               </>
             ) : null}
-          </span>
+          </Inline>
         ) : null}
-      </div>
+      </Box>
     </Card>
   );
 }

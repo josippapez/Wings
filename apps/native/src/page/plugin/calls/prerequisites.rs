@@ -18,6 +18,7 @@ fn projects_are_the_published_workspace_list_and_changes_reach_existing_frames()
         id: "/repo".into(),
         path: "/repo".into(),
         name: "Repo".into(),
+        parent_id: None,
     };
     rig.host.publish_projects(vec![project.clone()]);
     assert_eq!(

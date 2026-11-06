@@ -563,6 +563,7 @@ impl ProjectPage {
             plugin_id,
             block_id,
             height,
+            state,
             ..
         } = item
         else {
@@ -584,10 +585,32 @@ impl ProjectPage {
         let body: AnyElement = match source {
             Some(source) => {
                 let visible = self.visible;
+                let store = self.info.store.clone();
+                let project = self.id.clone();
+                let block = id.clone();
+                let plugin = plugin_id.clone();
+                let block_kind = block_id.clone();
+                let initial = state.clone();
                 let view: Entity<PageView> = self
                     .block_views
                     .entry(id.clone())
-                    .or_insert_with(|| cx.new(|cx| PageView::in_plugin(&source.host, &source.source, cx)))
+                    .or_insert_with(|| {
+                        let state = crate::page::plugin::FrameState::new(
+                            crate::page::plugin::StatePlace::Block,
+                            initial,
+                            move |value| {
+                                let info = store.get(&project)?;
+                                if !info.items.iter().any(|item| matches!(item,
+                                    Item::Block { id, plugin_id, block_id, .. }
+                                    if id == &block && plugin_id == &plugin && block_id == &block_kind)) {
+                                    return Err("The plugin's block is no longer on this Project page".into());
+                                }
+                                store.apply(&project, Op::SetBlockState { id: block.clone(), state: Some(value) })?;
+                                Ok(())
+                            },
+                        );
+                        cx.new(|cx| PageView::in_plugin_with_state(&source.host, &source.source, None, state, cx))
+                    })
                     .clone();
                 view.read(cx).set_visible(visible);
                 let px_height = height.unwrap_or(source.min_height).clamp(source.min_height, BLOCK_MAX_HEIGHT);

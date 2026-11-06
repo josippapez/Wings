@@ -79,7 +79,8 @@ export default function IssuesSettings() {
           onChange={(value) => void setView(value).then(() => lastLayout.set(null))}
           options={DEFAULT_VIEWS.map(({ value, label }) => ({
             value,
-            label: (
+            // The native app's chips hold text only.
+            label: WINGS_NATIVE ? `${label}: ${PICTURES[value].hint}` : (
               <>
                 <svg viewBox="0 0 120 62" className="tk-view-pic" aria-hidden="true">
                   {PICTURES[value].drawing}

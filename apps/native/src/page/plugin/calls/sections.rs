@@ -293,6 +293,7 @@ mod tests {
             id: "/work".into(),
             path: "/work".into(),
             name: "Work".into(),
+            parent_id: None,
         }]);
         rig
     }

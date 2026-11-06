@@ -284,26 +284,22 @@ impl Workspace {
     /// The commands the native app has, in the desktop's order, with their group and whether they can run now.
     fn palette_commands(&self) -> Vec<(&'static str, &'static str, Rc<dyn Action>, bool)> {
         let terminal = matches!(self.active, Active::Terminal(_));
-        let closable = !self.terminals.is_empty()
-            || !self.plugin_tabs.is_empty()
-            || self.project_page.is_some();
         let movable = match self.active {
             Active::Terminal(_) => self.terminals.len() > 1,
             Active::Plugin(_) => self.plugin_tabs.len() > 1,
             Active::Project | Active::Issues => false,
         };
         let cycles = self.tabs().len() > 1;
-        let pane_closable = terminal || matches!(self.active, Active::Plugin(_) | Active::Project);
         let commands: [(&str, &str, Rc<dyn Action>, bool); 21] = [
             ("New Tab", "Tab", Rc::new(NewTab), true),
-            ("Close Tab", "Tab", Rc::new(CloseTab), closable),
+            ("Close Tab", "Tab", Rc::new(CloseTab), true),
             ("Next Tab", "Tab", Rc::new(NextTab), cycles),
             ("Previous Tab", "Tab", Rc::new(PreviousTab), cycles),
             ("Move Tab Left", "Tab", Rc::new(MoveTabLeft), movable),
             ("Move Tab Right", "Tab", Rc::new(MoveTabRight), movable),
             ("Split Right", "Pane", Rc::new(SplitRight), terminal),
             ("Split Down", "Pane", Rc::new(SplitDown), terminal),
-            ("Close Pane", "Pane", Rc::new(ClosePane), pane_closable),
+            ("Close Pane", "Pane", Rc::new(ClosePane), true),
             ("Zoom Pane", "Pane", Rc::new(ZoomPane), terminal),
             ("Focus Pane Left", "Pane", Rc::new(FocusLeft), terminal),
             ("Focus Pane Right", "Pane", Rc::new(FocusRight), terminal),
@@ -362,7 +358,7 @@ impl Workspace {
             items.push(item);
         }
         for installed in &self.plugins {
-            for page in &installed.pages {
+            for page in installed.pages.iter().filter(|page| page.new_tab) {
                 let mut item = Item::new(
                     Kind::Command,
                     format!("New tab: {}", page.title),

@@ -269,6 +269,11 @@ const SETUP: &str = r#"
             diskFind: (path, { names, skip, onProgress, signal } = {}) =>
                 diskCall('diskFind', { path, names, skip }, { onProgress, signal }),
             project: () => call('project', {}),
+            focusPane: (paneId) => call('focusPane', { paneId: String(paneId) }),
+            tabState: () => call('tabState', {}),
+            setTabState: (state) => call('setTabState', { state }),
+            blockState: () => call('blockState', {}),
+            setBlockState: (state) => call('setBlockState', { state }),
             openPane: ({ command = null, args = [], cwd = null, placement = 'tab' } = {}) => call('openPane', { command, args, cwd, placement }),
             openView: (id, { as, args, newTab } = {}) => call('openView', { id, as, args, newTab: newTab === true }),
             viewArgs: () => (native.viewArgs == null ? null : JSON.parse(native.viewArgs)),

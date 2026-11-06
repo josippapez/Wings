@@ -39,6 +39,8 @@ globalThis.wings = {
   focused: false,
   onFocus: () => () => {},
 };
+// The desktop build: the native one registers no hooks.
+globalThis.WINGS_NATIVE = false;
 await import("./main.ts");
 const { slotOf } = await import("./lib/storage.ts");
 

@@ -68,6 +68,11 @@ fn dropping_plugin_ui_stops_its_git_watcher() {
 
 /// What a plugin asked of the window, for the window to do.
 pub(super) enum UiEvent {
+    SaveTabState,
+    FocusPane {
+        pane: String,
+        reply: crate::page::runtime::Reply,
+    },
     OpenDiff(crate::diff::View),
     UpdateDiff {
         plugin: String,
@@ -204,6 +209,21 @@ pub(super) struct AppEnv {
 }
 
 impl AppEnv {
+    pub(super) fn tab_state(
+        &self,
+        initial: Option<serde_json::Value>,
+    ) -> crate::page::plugin::FrameState {
+        let events = self.events.clone();
+        crate::page::plugin::FrameState::new(
+            crate::page::plugin::StatePlace::Tab,
+            initial,
+            move |_| {
+                events
+                    .try_send(UiEvent::SaveTabState)
+                    .map_err(|_| "The Wings window is closed or busy".into())
+            },
+        )
+    }
     pub(super) fn new(
         events: Sender<UiEvent>,
         claude_dir: PathBuf,
@@ -236,6 +256,18 @@ impl AppEnv {
 }
 
 impl Env for AppEnv {
+    fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
+        if self
+            .events
+            .try_send(UiEvent::FocusPane {
+                pane: pane.into(),
+                reply: reply.clone(),
+            })
+            .is_err()
+        {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
     fn open_diff(&self, view: crate::diff::View) -> Result<(), String> {
         self.events
             .try_send(UiEvent::OpenDiff(view))
@@ -525,6 +557,33 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
+            UiEvent::SaveTabState => self.save(cx),
+            UiEvent::FocusPane { pane, reply } => {
+                let Some(id) = self.plugin_pane(&pane) else {
+                    return reply.err(format!("no pane {pane}"));
+                };
+                let project = self.parked.iter().find_map(|(path, parked)| {
+                    parked
+                        .terminals
+                        .iter()
+                        .any(|tab| tab.layout.panes().contains(&id))
+                        .then(|| path.clone())
+                });
+                if let Some(project) = project {
+                    self.switch_project(project, window, cx);
+                }
+                let Some(tab) = self
+                    .terminals
+                    .iter()
+                    .find(|tab| tab.layout.panes().contains(&id))
+                else {
+                    return reply.err(format!("no pane {pane}"));
+                };
+                // The desktop shows the pane's tab too.
+                self.active = Active::Terminal(tab.id);
+                self.focus_pane(id, window, cx);
+                reply.ok("null".into());
+            }
             UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
             UiEvent::UpdateDiff { plugin, id, update } => {
                 if let Some((viewer, _)) = &self.plugin_ui.diff {
@@ -803,16 +862,9 @@ impl Workspace {
         }
         for installed in &self.plugins {
             installed.host.publish_panes(entries.clone());
-            installed.host.publish_projects(
-                self.projects
-                    .iter()
-                    .map(|project| Project {
-                        id: project.path.to_string_lossy().into_owned(),
-                        name: project.name.clone(),
-                        path: project.path.to_string_lossy().into_owned(),
-                    })
-                    .collect(),
-            );
+            installed
+                .host
+                .publish_projects(published_projects(&self.projects));
             installed.host.publish_focus(self.window_active);
         }
         let paths = self.plugin_env.projects();
@@ -1019,4 +1071,27 @@ fn set<T>(
             }
         }
     }
+}
+
+/// The project list as plugins know it. A worktree follows its project in the list, which is its `parentId`.
+fn published_projects(projects: &[crate::projects::ProjectEntry]) -> Vec<Project> {
+    let mut top = None;
+    projects
+        .iter()
+        .map(|project| {
+            let id = project.path.to_string_lossy().into_owned();
+            let parent_id = if project.child {
+                top.clone()
+            } else {
+                top = Some(id.clone());
+                None
+            };
+            Project {
+                id: id.clone(),
+                name: project.name.clone(),
+                path: id,
+                parent_id,
+            }
+        })
+        .collect()
 }

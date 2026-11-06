@@ -51,15 +51,25 @@ fn only_plugins_that_are_on_approved_and_built_for_native_are_found() {
     // The desktop's scope, so the storage is the desktop's.
     assert_eq!(ready.scope, "scope-ready");
     assert!(ready.main.ends_with("plugins/ready/dist/native/main.js"));
-    // Only a view that opens as a tab, sets `newTab` and has a native page is offered.
+    // Every view that opens as a tab and has a native page can open; only one that sets `newTab` is offered as a new tab.
     assert_eq!(
         ready.pages,
-        [FoundPage {
-            id: "fixture".into(),
-            title: "Fixture".into(),
-            bundle: ready.main.with_file_name("fixture.js"),
-            multiple: false,
-        }]
+        [
+            FoundPage {
+                id: "fixture".into(),
+                title: "Fixture".into(),
+                bundle: ready.main.with_file_name("fixture.js"),
+                multiple: false,
+                new_tab: true,
+            },
+            FoundPage {
+                id: "plain".into(),
+                title: "Plain".into(),
+                bundle: ready.main.with_file_name("plain.js"),
+                multiple: false,
+                new_tab: false,
+            }
+        ]
     );
     // Reading never writes the desktop's state or leaves a file beside it.
     assert_eq!(fs::read(data.paths().state).unwrap(), state);
@@ -164,6 +174,7 @@ fn a_plugin_that_ships_native_builds_of_its_sidebars_has_them_found_and_one_with
             title: "BOARD".into(),
             bundle: found[0].main.with_file_name("board.js"),
             multiple: false,
+            new_tab: false,
         }]
     );
     assert!(found[0].pages.is_empty());

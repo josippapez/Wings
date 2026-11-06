@@ -23,6 +23,9 @@ impl Workspace {
             .state
             .as_deref()
             .and_then(|path| saved::load(path, &self.project_key()));
+        self.issues_open = !restored
+            .as_ref()
+            .is_some_and(|project| project.issues_closed);
         match restored {
             Some(project) if !(project.tabs.is_empty() && project.plugin_tabs.is_empty()) => {
                 self.restore(project, window, cx)
@@ -30,6 +33,15 @@ impl Workspace {
             _ => self.new_terminal(window, cx),
         }
         self.load_issues(cx);
+        if self.issues_open
+            && self.has_tasks_board()
+            && !self
+                .plugin_tabs
+                .iter()
+                .any(|tab| tab.plugin == "tasks" && tab.view == "board")
+        {
+            self.new_plugin_tab("tasks", "board", None, cx);
+        }
     }
 
     fn load_issues(&mut self, cx: &mut Context<Self>) {
@@ -59,6 +71,7 @@ impl Workspace {
             terminals: std::mem::take(&mut self.terminals),
             plugin_tabs: std::mem::take(&mut self.plugin_tabs),
             project_page: self.project_page.take(),
+            issues_open: self.issues_open,
             active: self.active,
         };
         self.parked.insert(self.config.project.clone(), current);
@@ -68,6 +81,7 @@ impl Workspace {
                 self.terminals = parked.terminals;
                 self.plugin_tabs = parked.plugin_tabs;
                 self.project_page = parked.project_page;
+                self.issues_open = parked.issues_open;
                 self.show(parked.active, window, cx);
                 self.load_issues(cx);
             }

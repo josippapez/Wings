@@ -43,6 +43,8 @@ mod calls;
 mod diff;
 mod disk;
 mod env;
+mod state;
+pub use state::{FrameState, StatePlace};
 #[cfg(test)]
 mod focus_tests;
 pub mod ui;
@@ -262,6 +264,7 @@ struct FrameLink {
     ready: Arc<(Mutex<Option<bool>>, Condvar)>,
     /// What the page was opened with, as JSON, for `wings.viewArgs`.
     args: Option<String>,
+    state: Option<FrameState>,
 }
 
 impl Link for FrameLink {
@@ -306,6 +309,34 @@ impl Link for FrameLink {
     }
 
     fn call(&self, method: &str, mut params: serde_json::Value, reply: Reply) {
+        if matches!(
+            method,
+            "tabState" | "setTabState" | "blockState" | "setBlockState"
+        ) {
+            let place = if method.contains("Tab") || method == "tabState" {
+                StatePlace::Tab
+            } else {
+                StatePlace::Block
+            };
+            if !method.starts_with("set") {
+                return reply.ok(self
+                    .state
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |state| state.read(place))
+                    .to_string());
+            }
+            let Some(state) = self.state.clone() else {
+                return reply
+                    .err("State can only be saved by a page shown as a tab or block".into());
+            };
+            let Some(value) = params.get("state").cloned() else {
+                return reply.err("State must be a JSON value".into());
+            };
+            std::thread::spawn(move || {
+                reply.done(state.write(place, value).map(|()| "null".into()))
+            });
+            return;
+        }
         if matches!(method, "openDiff" | "updateDiff") {
             return self.shared.diff_call(self.id, method, params, reply);
         }
@@ -663,6 +694,38 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
+        self.spawn_with_state(role, visible, window, args, None, source, on_event)
+    }
+
+    pub fn open_hidden_page_with_state(
+        &self,
+        source: &str,
+        args: Option<&serde_json::Value>,
+        state: FrameState,
+        on_event: impl FnMut(Event) + Send + 'static,
+    ) -> std::io::Result<PageRuntime> {
+        self.spawn_with_state(
+            Role::Page,
+            false,
+            0,
+            args.map(|args| args.to_string()),
+            Some(state),
+            source,
+            on_event,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_with_state(
+        &self,
+        role: Role,
+        visible: bool,
+        window: u64,
+        args: Option<String>,
+        state: Option<FrameState>,
+        source: &str,
+        on_event: impl FnMut(Event) + Send + 'static,
+    ) -> std::io::Result<PageRuntime> {
         let id = self.shared.next_frame.fetch_add(1, Ordering::Relaxed);
         let visible = Arc::new(AtomicBool::new(visible));
         let ready = Arc::new((Mutex::new(None), Condvar::new()));
@@ -674,6 +737,7 @@ impl PluginHost {
             window,
             ready: ready.clone(),
             args,
+            state,
         });
         let shared = Arc::downgrade(&self.shared);
         let mut on_event = on_event;

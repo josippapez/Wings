@@ -9,6 +9,7 @@ import { lineCounts } from "../lib/diff";
 import { iso } from "../lib/format";
 import { childrenOf, progress } from "../lib/relations";
 import { ErrorText, openProps, StatusDot, TypeIcon, type Apply } from "./parts";
+import { Box, Form, Inline } from "./layout";
 
 export function Description({ issue, apply }: { issue: Issue; apply: Apply }) {
   const [editing, setEditing] = useState(false);
@@ -42,10 +43,10 @@ export function Description({ issue, apply }: { issue: Issue; apply: Apply }) {
     return <Button variant="ghost" className="tk-empty-description" onClick={edit}>Add a description…</Button>;
   }
   return (
-    <div className="tk-description">
+    <Box className="tk-description">
       <Markdown source={shown} className="tk-description-text" />
       <Button size="xs" variant="ghost" onClick={edit}>Edit</Button>
-    </div>
+    </Box>
   );
 }
 
@@ -66,7 +67,7 @@ export function Children({ issue, issues, onOpenIssue }: { issue: Issue; issues:
               <ListButton aria-label={`Open ${c.key}: ${c.title}`} {...openProps((newTab) => onOpenIssue(c.key, newTab))}>
                 <StatusDot status={c.status} />
                 <TypeIcon type={c.type} />
-                <span className="tk-key">{c.key}</span>
+                <Inline className="tk-key">{c.key}</Inline>
                 <Text as="span" grow truncate>{c.title}</Text>
                 <Text as="span" tone="muted" size="tiny">{STATUS_LABEL[c.status]}</Text>
               </ListButton>
@@ -88,15 +89,15 @@ function FileRow({ file, onOpen }: { file: FileChange; onOpen: (file: FileChange
   return (
     <ListItem>
       <ListButton className="tk-file" onClick={() => onOpen(file)} title={`Open the diff of ${file.path}`}>
-        <span className="tk-file-path">
+        <Inline className="tk-file-path">
           <Text as="span" mono className="tk-file-name">{file.path.slice(slash + 1)}</Text>
           {slash > 0 ? <Text as="span" mono tone="muted" size="small" truncate className="tk-file-dir">{file.path.slice(0, slash)}</Text> : null}
-        </span>
+        </Inline>
         {counts ? (
-          <span className="tk-file-counts" aria-label={`${counts.added} lines added, ${counts.removed} removed`}>
+          <Inline className="tk-file-counts" aria-label={`${counts.added} lines added, ${counts.removed} removed`}>
             <Text as="span" size="small" tone="success">+{counts.added}</Text>
             <Text as="span" size="small" tone="danger">−{counts.removed}</Text>
-          </span>
+          </Inline>
         ) : file.what ? (
           <Text as="span" tone="muted" size="small" truncate className="tk-file-what">{file.what}</Text>
         ) : null}
@@ -144,12 +145,13 @@ function Composer({ issue, apply }: { issue: Issue; apply: Apply }) {
       setOpen(false);
     });
   };
-  const grown = open || note !== "";
+  // The native app can't hear a field get the keyboard, so its note box is always open.
+  const grown = WINGS_NATIVE || open || note !== "";
   return (
-    <form className="tk-composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+    <Form className="tk-composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       {grown ? (
         <Textarea
-          autoFocus
+          autoFocus={!WINGS_NATIVE}
           label="Note"
           rows={3}
           maxLength={LIMITS.note}
@@ -159,7 +161,7 @@ function Composer({ issue, apply }: { issue: Issue; apply: Apply }) {
             setNote(e.currentTarget.value);
             clear();
           }}
-          onBlur={() => setOpen(false)}
+          onBlur={WINGS_NATIVE ? undefined : () => setOpen(false)}
           onKeyDown={(e) => {
             if (e.key === "Escape" && !note) setOpen(false);
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
@@ -171,10 +173,10 @@ function Composer({ issue, apply }: { issue: Issue; apply: Apply }) {
       {error ? <ErrorText size="small">{error}</ErrorText> : null}
       {note.trim() ? (
         <Row justify="end">
-          <Button type="submit" size="sm" busy={busy}>Add note</Button>
+          <Button type="submit" size="sm" busy={busy} onClick={WINGS_NATIVE ? submit : undefined}>Add note</Button>
         </Row>
       ) : null}
-    </form>
+    </Form>
   );
 }
 
