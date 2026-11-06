@@ -164,11 +164,12 @@ pub struct Reply {
 pub struct Answer(mpsc::Receiver<Command>);
 
 impl Answer {
-    /// Waits up to `timeout` for the answer: the JSON result, or the error. `None` when none came in time.
+    /// Waits up to `timeout` for the answer: the JSON result, or the error. `None` when none came in time. A zero
+    /// `timeout` still takes an answer already given, as the window's own calls do.
     pub fn wait(&self, timeout: std::time::Duration) -> Option<Result<String, String>> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let left = deadline.checked_duration_since(std::time::Instant::now())?;
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.0.recv_timeout(left).ok()? {
                 Command::Deliver {
                     message: Message::Resolve,
