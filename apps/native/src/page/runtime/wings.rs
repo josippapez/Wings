@@ -9,7 +9,8 @@
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
 //! `notify`, `transcript`, `onTranscript`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
-//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`. `setProjectSection` is there so a plugin gets the host's refusal.
+//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, and `claudeAccounts` and `setClaudeAccount`. `setProjectSection` is there
+//! so a plugin gets the host's refusal.
 //! Each call is a promise the host answers through `Link::call`, when it likes and from any thread, which comes back as a
 //! message to this frame's loop. Nothing else
 //! is added: no files, network or process of the frame's own.
@@ -262,6 +263,8 @@ const SETUP: &str = r#"
             createWorktree: (options) => call('createWorktree', options),
             worktreeSetup: (projectId) => call('worktreeSetup', { projectId: projectId ?? null }),
             setWorktreeSetup: (projectId, options) => call('setWorktreeSetup', { projectId: projectId ?? null, include: options?.include, setup: options?.setup }),
+            claudeAccounts: () => call('claudeAccounts', {}),
+            setClaudeAccount: (projectId, name) => call('setClaudeAccount', { projectId, name: name ?? null }),
             setProjectSection: (projectId, sectionId, rows) => call('setProjectSection', { projectId, sectionId, rows }),
             openDiff: (diff) => call('openDiff', diff ?? {}),
             updateDiff: (id, update) => call('updateDiff', { id, ...update }),

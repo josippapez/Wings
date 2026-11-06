@@ -17,10 +17,11 @@ use wings_plugins::{
     panes::{exec_cwd, worktrees_call_in_any_repo},
     permissions::{
         NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_read_ports, may_read_statusline,
-        notification,
+        may_use_claude_accounts, notification,
     },
     transcript::transcript_entries,
 };
+use wings_spaces::claude_accounts::valid_name;
 
 use super::{
     Shared,
@@ -318,6 +319,12 @@ impl Shared {
             }
             "worktreeSetup" => reply.done(worktree_setup(&access, &params)),
             "setWorktreeSetup" => reply.done(set_worktree_setup(&access, &params)),
+            "claudeAccounts" => {
+                self.off_thread(reply, move |_| claude_accounts(&access));
+            }
+            "setClaudeAccount" => {
+                self.off_thread(reply, move |_| set_claude_account(&access, &params));
+            }
             "setProjectSection" => {
                 reply.err("The native app doesn't show project sections yet".into())
             }
@@ -552,6 +559,49 @@ fn set_worktree_setup(access: &Access, params: &Value) -> Result<String, String>
 const INCLUDE_LINES: &str =
     "setWorktreeSetup include is an array of strings, or null for the default list";
 
+/// The desktop's `plugin_claude_accounts` and `plugin_set_claude_account` both start with this.
+fn may_use_accounts(access: &Access) -> Result<(), String> {
+    if may_use_claude_accounts(&access.plugin) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} may not use Claude Code accounts",
+            access.plugin.manifest.id
+        ))
+    }
+}
+
+/// `claudeAccounts`: `{ accounts, projects }`.
+fn claude_accounts(access: &Access) -> Result<String, String> {
+    may_use_accounts(access)?;
+    to_json(&access.env.claude_accounts()?)
+}
+
+/// `setClaudeAccount`: the account a project's new terminals use, or the default one with a `null` name.
+fn set_claude_account(access: &Access, params: &Value) -> Result<String, String> {
+    let project = match params.get("projectId") {
+        Some(Value::String(id)) if !id.is_empty() => id.as_str(),
+        _ => return Err("setClaudeAccount needs a project id".into()),
+    };
+    let name = match params.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => Some(name.as_str()),
+        _ => {
+            return Err(
+                "setClaudeAccount name is an account name, or null for the default account".into(),
+            );
+        }
+    };
+    may_use_accounts(access)?;
+    if let Some(name) = name.filter(|name| !valid_name(name)) {
+        return Err(format!(
+            "{name:?} isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit"
+        ));
+    }
+    access.env.set_claude_account(project, name)?;
+    Ok("null".into())
+}
+
 fn reply_if_error(reply: Reply, result: Result<(), String>) {
     if let Err(error) = result {
         reply.err(error);
@@ -576,7 +626,7 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
     let last = request.last.map(|last| last as usize);
     let entries = transcript_entries(
         &access.plugin,
-        std::slice::from_ref(&access.env.claude_dir()),
+        &access.env.claude_dirs(),
         &request.session_id,
         &request.types,
         last,

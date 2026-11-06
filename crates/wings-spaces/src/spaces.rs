@@ -221,7 +221,17 @@ pub fn new_space(path: &str) -> Space {
     let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     // The path is unique per space, so it doubles as a stable id.
     let added_at = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
-    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false, worktree_include: None, worktree_setup: None, claude_account: None }
+    Space {
+        id: path.to_string(),
+        name,
+        path: path.to_string(),
+        parent: None,
+        added_at,
+        pinned: false,
+        worktree_include: None,
+        worktree_setup: None,
+        claude_account: None,
+    }
 }
 
 /// A worktree Wings made: its project, what was copied into it, and the setup line to run in it first.

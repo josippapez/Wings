@@ -10,7 +10,10 @@ use std::{
     sync::Mutex,
 };
 
-use wings_spaces::spaces::{self, Space, SpaceStore, WorktreeSetup};
+use wings_spaces::{
+    claude_accounts,
+    spaces::{self, Space, SpaceStore, WorktreeSetup},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectEntry {
@@ -133,6 +136,51 @@ impl Projects {
     /// The setup line waiting for the first pane in the worktree `project`, which now has it.
     pub fn take_setup(&self, project: &Path) -> Option<String> {
         self.setup.lock().unwrap().remove(project)
+    }
+
+    /// The folder for `CLAUDE_CONFIG_DIR` in a new terminal of the project in folder `project`: its account's, or `None`
+    /// for the default account.
+    pub fn claude_config_dir(&self, project: &Path) -> Option<PathBuf> {
+        let store = self.store.lock().unwrap();
+        let space = store
+            .spaces
+            .iter()
+            .find(|space| Path::new(&space.path) == project)?;
+        claude_accounts::pane_dir(&store.spaces, &space.id)
+    }
+
+    /// The Claude Code accounts and the one each project uses, by the project's folder, which is its id to plugins.
+    pub fn claude_accounts(&self) -> claude_accounts::Accounts {
+        let spaces: Vec<Space> = self
+            .store
+            .lock()
+            .unwrap()
+            .spaces
+            .iter()
+            .map(|space| Space {
+                id: space.path.clone(),
+                ..space.clone()
+            })
+            .collect();
+        claude_accounts::list(&spaces)
+    }
+
+    /// Makes new terminals in the project in folder `project` use the account `name`, or the default account with
+    /// `None`. `make_dir` makes the folder of a named account, once the project is known to be one. The name is the
+    /// caller's to check.
+    pub fn set_claude_account(
+        &self,
+        project: &str,
+        name: Option<&str>,
+        make_dir: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut store = self.store.lock().unwrap();
+        let id = self.id_of(&mut store, project, true);
+        store.get(&id).ok_or("No such project in Wings")?;
+        if let Some(name) = name {
+            make_dir(name)?;
+        }
+        store.set_claude_account(&id, name)
     }
 }
 
@@ -474,6 +522,73 @@ mod tests {
                 .unwrap_err(),
             "No such project in Wings"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_projects_account_is_kept_by_its_folder_and_only_for_a_project_that_is_one() {
+        let dir = temp("account");
+        let file = dir.join("spaces.json");
+        let (alpha, beta) = (dir.join("alpha"), dir.join("beta"));
+        // The ids are not the folders here, as in a list edited by hand: plugins and panes name a project by its folder.
+        let list = json!([
+            { "id": "a", "name": "alpha", "path": alpha },
+            { "id": "b", "name": "beta", "path": beta, "claudeAccount": "../etc" },
+        ]);
+        std::fs::write(&file, serde_json::to_vec(&list).unwrap()).unwrap();
+        let projects = Projects::open(Some(file.clone()), alpha.clone());
+        let folder = |path: &Path| path.to_str().unwrap().to_owned();
+        let work = claude_accounts::dir(Some("work"));
+
+        projects
+            .set_claude_account(&folder(&alpha), Some("work"), |_| Ok(()))
+            .unwrap();
+        assert_eq!(projects.claude_config_dir(&alpha), Some(work));
+        assert_eq!(
+            projects.claude_accounts().projects,
+            [(folder(&alpha), "work".to_owned())].into()
+        );
+        // A name that isn't one, from a list edited by hand, is no account. Neither is a folder the list lacks.
+        assert_eq!(projects.claude_config_dir(&beta), None);
+        assert_eq!(projects.claude_config_dir(&dir), None);
+
+        // Its folder is made once the project is known, and a folder that can't be made leaves the account as it was.
+        let made = std::cell::RefCell::new(Vec::new());
+        let make = |name: &str| {
+            made.borrow_mut().push(name.to_owned());
+            Ok(())
+        };
+        assert_eq!(
+            projects
+                .set_claude_account("/elsewhere", Some("home"), make)
+                .unwrap_err(),
+            "No such project in Wings"
+        );
+        assert!(made.borrow().is_empty());
+        assert_eq!(
+            projects
+                .set_claude_account(&folder(&beta), Some("home"), |_| Err("no room".into()))
+                .unwrap_err(),
+            "no room"
+        );
+        projects
+            .set_claude_account(&folder(&beta), Some("home"), make)
+            .unwrap();
+        assert_eq!(*made.borrow(), ["home"]);
+        assert_eq!(
+            projects.claude_config_dir(&beta),
+            Some(claude_accounts::dir(Some("home")))
+        );
+
+        // Saved, and gone with `None`, which makes no folder.
+        let saved: Vec<Space> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved[0].claude_account.as_deref(), Some("work"));
+        projects
+            .set_claude_account(&folder(&alpha), None, |_| {
+                panic!("no folder for the default")
+            })
+            .unwrap();
+        assert_eq!(projects.claude_config_dir(&alpha), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

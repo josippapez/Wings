@@ -270,7 +270,7 @@ fn wait_reaped(process: &PtyProcess) {
 #[test]
 fn live_worker_runs_the_current_shell_in_its_project_and_refits_the_pty() {
     let cwd = std::env::temp_dir().canonicalize().unwrap();
-    let (runtime, latest, _updates) = start(cwd.clone(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start(cwd.clone(), Vec::new(), None).unwrap();
     runtime
         .commands
         .send_blocking(Command::Input(b"printf '\\nnative-''cwd:'; pwd\r".to_vec()))

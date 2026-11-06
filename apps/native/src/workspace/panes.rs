@@ -132,7 +132,8 @@ impl Workspace {
             .as_deref()
             .map(|state| saved::load_history(state, &history))
             .unwrap_or_default();
-        let view = TerminalView::open(folder, output, cx).map_err(SharedString::from);
+        let account = self.spaces.claude_config_dir(&self.config.project);
+        let view = TerminalView::open(folder, output, account, cx).map_err(SharedString::from);
         self.panes.insert(
             id,
             Pane {

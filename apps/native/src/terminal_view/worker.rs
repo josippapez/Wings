@@ -170,10 +170,13 @@ fn history_end(mode: TermMode) -> Vec<u8> {
 pub(super) fn start(
     cwd: PathBuf,
     history: Vec<u8>,
+    claude_config_dir: Option<PathBuf>,
 ) -> Result<(Runtime, Latest, Receiver<()>), String> {
     let id = format!("p{}", NEXT_PANE.fetch_add(1, Ordering::Relaxed));
-    let process =
-        Arc::new(PtyProcess::spawn(&cwd, &id, 80, 24, None).map_err(|error| error.to_string())?);
+    let process = Arc::new(
+        PtyProcess::spawn(&cwd, &id, 80, 24, claude_config_dir.as_deref())
+            .map_err(|error| error.to_string())?,
+    );
     start_process(process, id, history)
 }
 

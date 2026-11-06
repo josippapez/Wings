@@ -5,6 +5,7 @@ use std::{
 
 use crate::plugin::{Action, Broker, Project, Screen, StorageSnapshot};
 use wings_plugin_storage::Storage;
+use wings_spaces::claude_accounts;
 
 pub const USAGE: &str = "Usage: wings-native [--project PATH] [--issues-storage-root PATH --issues-scope SCOPE] [--plugins-dev-root PATH]\n\n--project PATH              Project's saved absolute path (default: current directory)\n--issues-storage-root PATH  Existing Wings plugin storage root\n--issues-scope SCOPE        Explicit trusted Issues installation scope\n--plugins-dev-root PATH     Also run the plugins in PATH, like the repo's plugins/, with no approval (debug builds)\n--help                     Show this help";
 
@@ -131,7 +132,7 @@ impl Config {
             issues,
             state: crate::saved::default_path(),
             projects: crate::projects::default_path(),
-            agents: Some(claude_dir()),
+            agents: Some(claude_accounts::claude_dir()),
             plugins: PluginPaths::desktop().map(|paths| PluginPaths { dev, ..paths }),
         }))
     }
@@ -181,13 +182,6 @@ fn last_project(workspace: &Path) -> Option<PathBuf> {
     let file: serde_json::Value = serde_json::from_slice(&std::fs::read(workspace).ok()?).ok()?;
     let path = PathBuf::from(file.get("activeSpaceId")?.as_str()?);
     path.is_dir().then_some(path)
-}
-
-/// Claude Code's folder, found as the desktop app finds it.
-fn claude_dir() -> PathBuf {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".claude"))
 }
 
 #[cfg(test)]

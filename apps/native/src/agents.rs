@@ -6,6 +6,7 @@ use std::{path::PathBuf, thread, time::Duration};
 use async_channel::{Receiver, Sender};
 pub use wings_agents::detect::{Agent, AgentKind, AgentState, PaneInfo, PaneProbe, Scan};
 use wings_agents::{detect::Detector, opencode};
+use wings_spaces::claude_accounts;
 
 /// The desktop's detection interval.
 pub const EVERY: Duration = Duration::from_millis(500);
@@ -26,6 +27,9 @@ impl Watcher {
                 let mut detector = Detector::new(&claude_dir);
                 opencode::spawn(detector.opencode());
                 while let Ok((panes, focused)) = requests_rx.recv_blocking() {
+                    // An account can appear while Wings runs, and each has its own session files.
+                    detector
+                        .set_claude_dirs(&claude_accounts::dirs_with_default(claude_dir.clone()));
                     let scan = detector.scan(&panes, focused.as_deref());
                     if scans_tx.send_blocking(scan).is_err() {
                         break;

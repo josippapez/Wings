@@ -224,6 +224,48 @@ fn typing_and_selecting_still_work_in_a_pane_that_was_not_redrawn() {
 }
 
 #[test]
+fn a_terminal_of_a_project_with_an_account_starts_with_that_accounts_config_folder() {
+    let dir = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("wings-native-account-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let alpha = dir.join("alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    let list = dir.join("spaces.json");
+    let spaces = serde_json::json!([
+        { "id": alpha, "name": "alpha", "path": alpha, "claudeAccount": "work" },
+    ]);
+    std::fs::write(&list, serde_json::to_vec(&spaces).unwrap()).unwrap();
+    let (app, mut window) = open_config(|config| {
+        config.project = alpha.clone();
+        config.projects = Some(list.clone());
+    });
+    window.draw();
+    window.simulate_input("echo account-''dir:$CLAUDE_CONFIG_DIR");
+    window.simulate_keystroke("enter");
+    let expected = format!(
+        "account-dir:{}",
+        wings_spaces::claude_accounts::dir(Some("work")).display()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let output =
+            window.read(|workspace, cx| workspace.terminal(0).unwrap().read(cx).recent_output());
+        if String::from_utf8_lossy(&output).contains(&expected) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shell never printed {expected}"
+        );
+        app.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn moving_a_tab_swaps_it_with_its_neighbour_and_issues_stays_last() {
     use Active::{Issues, Terminal};
     let (_app, mut window) = open();

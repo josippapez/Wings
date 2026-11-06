@@ -122,8 +122,8 @@ impl Env for FixtureEnv {
     fn projects(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
     }
-    fn claude_dir(&self) -> PathBuf {
-        self.0.clone()
+    fn claude_dirs(&self) -> Vec<PathBuf> {
+        vec![self.0.clone()]
     }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         Ok(vec![])

@@ -38,6 +38,7 @@ show();
 const WINGS_CALLS: &[&str] = &[
     "broadcast",
     "callTool",
+    "claudeAccounts",
     "closeView",
     "createWorktree",
     "diskFind",
@@ -63,6 +64,7 @@ const WINGS_CALLS: &[&str] = &[
     "project",
     "projects",
     "setBadge",
+    "setClaudeAccount",
     "setPaneStatus",
     "setProjectSection",
     "setWorktreeSetup",
@@ -75,6 +77,7 @@ const WINGS_CALLS: &[&str] = &[
 const WINGS_CALLS_AND_RENDER: &[&str] = &[
     "broadcast",
     "callTool",
+    "claudeAccounts",
     "closeView",
     "createWorktree",
     "diskFind",
@@ -101,6 +104,7 @@ const WINGS_CALLS_AND_RENDER: &[&str] = &[
     "projects",
     "render",
     "setBadge",
+    "setClaudeAccount",
     "setPaneStatus",
     "setProjectSection",
     "setWorktreeSetup",

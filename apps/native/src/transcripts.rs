@@ -16,6 +16,8 @@ use std::{
 
 use async_channel::{Receiver, Sender};
 pub use wings_plugins::transcript::Line;
+use wings_plugins::transcript::find_transcript;
+use wings_spaces::claude_accounts;
 
 /// Longer lines are skipped, so no single entry sent to a plugin is bigger. In 43,606 lines from 200 real
 /// transcripts it kept every assistant entry and skipped 51 (0.12%), all tool results and attachments.
@@ -112,24 +114,6 @@ impl Tail {
     }
 }
 
-/// The transcript of a session, `<claude_dir>/projects/<project>/<session id>.jsonl`.
-fn find_transcript(claude_dir: &Path, session_id: &str) -> Option<PathBuf> {
-    // The id becomes a file name, so only the UUID shape Claude Code uses.
-    if session_id.len() != 36
-        || !session_id
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-    {
-        return None;
-    }
-    let file = format!("{session_id}.jsonl");
-    fs::read_dir(claude_dir.join("projects"))
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path().join(&file))
-        .find(|path| path.is_file())
-}
-
 struct Bound {
     session_id: String,
     /// `None` until Claude creates the transcript.
@@ -140,16 +124,21 @@ struct Bound {
 
 /// The transcripts of the sessions running in panes, by pane id.
 struct Tailer {
-    claude_dir: PathBuf,
+    claude_dirs: Vec<PathBuf>,
     panes: HashMap<String, Bound>,
 }
 
 impl Tailer {
     fn new(claude_dir: &Path) -> Self {
         Self {
-            claude_dir: claude_dir.to_path_buf(),
+            claude_dirs: vec![claude_dir.to_path_buf()],
             panes: HashMap::new(),
         }
+    }
+
+    /// Looks for transcripts in these folders from now on: one per Claude Code account.
+    fn set_claude_dirs(&mut self, dirs: Vec<PathBuf>) {
+        self.claude_dirs = dirs;
     }
 
     /// Follows the transcripts of `sessions`, `(pane id, session id)`, and returns what they appended since the last
@@ -164,7 +153,7 @@ impl Tailer {
         for (pane_id, session_id) in sessions {
             let bound = self.panes.entry(pane_id.clone()).or_insert_with(|| Bound {
                 session_id: session_id.clone(),
-                tail: find_transcript(&self.claude_dir, session_id).map(Tail::at_end),
+                tail: find_transcript(&self.claude_dirs, session_id).map(Tail::at_end),
                 lookup_in: LOOKUP_EVERY,
             });
             if bound.tail.is_none() {
@@ -174,7 +163,7 @@ impl Tailer {
                 }
                 bound.lookup_in = LOOKUP_EVERY;
                 // Created since the session was bound, so all of it is new.
-                bound.tail = find_transcript(&self.claude_dir, session_id).map(Tail::at_start);
+                bound.tail = find_transcript(&self.claude_dirs, session_id).map(Tail::at_start);
             }
             let Some(tail) = bound.tail.as_mut() else {
                 continue;
@@ -206,6 +195,8 @@ impl Watcher {
             .spawn(move || {
                 let mut tailer = Tailer::new(&claude_dir);
                 while let Ok(sessions) = requests_rx.recv_blocking() {
+                    // An account can appear while Wings runs, and each has its own transcripts.
+                    tailer.set_claude_dirs(claude_accounts::dirs_with_default(claude_dir.clone()));
                     if lines_tx.send_blocking(tailer.poll(&sessions)).is_err() {
                         break;
                     }
@@ -334,7 +325,29 @@ mod tests {
         assert!(tailer.poll(&sessions).is_empty());
         append(&file(a), "{\"again\":1}\n");
         assert_eq!(tailer.poll(&sessions)[0].bytes, b"{\"again\":1}");
-        assert!(find_transcript(&dir, "../../etc/passwd").is_none());
+        assert!(find_transcript(std::slice::from_ref(&dir), "../../etc/passwd").is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn follows_a_session_whose_transcript_is_in_another_accounts_folder() {
+        let (default, work) = (scratch("account-default"), scratch("account-work"));
+        let id = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+        let file = work.join(format!("projects/-tmp-proj/{id}.jsonl"));
+        append(&file, "{\"before\":1}\n");
+        let mut tailer = Tailer::new(&default);
+        tailer.set_claude_dirs(vec![default.clone(), work.clone()]);
+        let sessions = vec![("p1".to_string(), id.to_string())];
+        assert!(tailer.poll(&sessions).is_empty());
+        append(&file, "{\"after\":1}\n");
+        let lines = tailer.poll(&sessions);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.bytes.as_slice())
+                .collect::<Vec<_>>(),
+            [b"{\"after\":1}".as_slice()]
+        );
+        let _ = (fs::remove_dir_all(&default), fs::remove_dir_all(&work));
     }
 }

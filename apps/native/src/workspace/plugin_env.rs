@@ -16,7 +16,10 @@ use std::{
 use async_channel::Sender;
 use gpui::{Context, SharedString, Task};
 use wings_plugins::transcript::{Line, transcript_event};
-use wings_spaces::spaces::WorktreeSetup;
+use wings_spaces::{
+    claude_accounts::{self, Accounts},
+    spaces::WorktreeSetup,
+};
 
 use crate::{
     agents::AgentKind,
@@ -314,8 +317,20 @@ impl Env for AppEnv {
         self.projects.paths()
     }
 
-    fn claude_dir(&self) -> PathBuf {
-        self.claude_dir.clone()
+    fn claude_dirs(&self) -> Vec<PathBuf> {
+        claude_accounts::dirs_with_default(self.claude_dir.clone())
+    }
+
+    fn claude_accounts(&self) -> Result<Accounts, String> {
+        Ok(self.projects.claude_accounts())
+    }
+
+    fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
+        self.projects.set_claude_account(project, name, |name| {
+            claude_accounts::create_dir(name)
+                .map(drop)
+                .map_err(|error| error.to_string())
+        })
     }
 
     fn ports(&self) -> Result<Vec<PanePort>, String> {

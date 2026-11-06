@@ -475,7 +475,7 @@ fn claude_pane() -> super::PaneEntry {
 fn hud_draws_a_strip_under_a_claude_session_from_its_transcript() {
     let claude = claude_with_session();
     let rig = Rig::with(load("hud"), false, vec![claude_pane(), pane("2", "/other")]);
-    *rig.env.claude.lock().unwrap() = claude.clone();
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     let (on_event, main_errors) = errors();
     rig.host
         .start_main(&native("hud", "main.js"), on_event)
@@ -534,7 +534,7 @@ fn hud_draws_a_strip_under_a_claude_session_from_its_transcript() {
 fn hud_sidebar_page_shows_what_main_read_and_each_frame_is_checked_against_hud_s_manifest() {
     let claude = claude_with_session();
     let rig = Rig::with(load("hud"), false, vec![claude_pane()]);
-    *rig.env.claude.lock().unwrap() = claude.clone();
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     let (on_event, main_errors) = errors();
     rig.host
         .start_main(&native("hud", "main.js"), on_event)
@@ -586,7 +586,7 @@ fn hud_sidebar_page_shows_what_main_read_and_each_frame_is_checked_against_hud_s
 fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
     let claude = claude_with_session();
     let rig = Rig::with(load("hud"), false, vec![claude_pane()]);
-    *rig.env.claude.lock().unwrap() = claude.clone();
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     let result = rig.allowed(&format!(
         "const read = (types) => wings.transcript('{SESSION}', types).then((entries) => entries.length, (error) => error.message);
          return {{ attachments: await read(['attachment:model']), assistant: await read(['assistant']),

@@ -151,8 +151,15 @@ enum Drag {
 impl TerminalView {
     /// Starts a shell in `cwd`. Fails before creating the view when the PTY can't start.
     /// `history` is output saved from this pane's last shell, shown above the new one.
-    pub fn open(cwd: PathBuf, history: Vec<u8>, cx: &mut App) -> Result<Entity<Self>, String> {
-        let (runtime, latest, updates) = start(cwd, history)?;
+    /// `claude_config_dir` is the folder of the Claude Code account the pane's project uses, for the shell's
+    /// `CLAUDE_CONFIG_DIR`; without one the shell keeps the app's own, the default account.
+    pub fn open(
+        cwd: PathBuf,
+        history: Vec<u8>,
+        claude_config_dir: Option<PathBuf>,
+        cx: &mut App,
+    ) -> Result<Entity<Self>, String> {
+        let (runtime, latest, updates) = start(cwd, history, claude_config_dir)?;
         Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
     }
 

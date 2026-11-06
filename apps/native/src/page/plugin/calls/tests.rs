@@ -641,7 +641,7 @@ fn transcripts(types: &[&str]) -> (Rig, std::path::PathBuf) {
         .join("\n"),
     )
     .unwrap();
-    *rig.env.claude.lock().unwrap() = claude.clone();
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     (rig, claude)
 }
 
@@ -694,6 +694,21 @@ fn transcript_is_refused_other_types_other_sessions_and_a_session_that_is_not_on
         json!([])
     );
     let _ = fs::remove_dir_all(claude);
+}
+
+#[test]
+fn transcript_is_read_from_the_folder_of_any_account() {
+    let (rig, claude) = transcripts(&["user"]);
+    let default = claude.with_extension("default");
+    fs::create_dir_all(default.join("projects/-x")).unwrap();
+    let read = format!("return (await wings.transcript('{SESSION}', ['user'])).length;");
+    // The session's transcript is in the second account's folder, not the first's.
+    *rig.env.claude.lock().unwrap() = vec![default.clone(), claude.clone()];
+    assert_eq!(rig.allowed(&read), 2);
+    *rig.env.claude.lock().unwrap() = vec![default.clone()];
+    assert_eq!(rig.refused(&read), "no transcript for that session");
+    let _ = fs::remove_dir_all(claude);
+    let _ = fs::remove_dir_all(default);
 }
 
 #[test]
@@ -757,4 +772,110 @@ fn the_calls_are_on_a_frame_of_a_plugin_and_frozen_with_it() {
     for (name, kind) in names["kinds"].as_object().unwrap() {
         assert_eq!(kind, "function", "{name}");
     }
+}
+
+// claudeAccounts and setClaudeAccount
+
+/// A plugin with or without `claudeAccounts`, in an app whose projects are `/a` and `/b`.
+fn accounts(permitted: bool) -> (Rig, std::path::PathBuf) {
+    let dir = crate::projects::test_dir("calls-accounts");
+    let file = dir.join("spaces.json");
+    let list = json!([
+        { "id": "/a", "name": "a", "path": "/a" },
+        { "id": "/b", "name": "b", "path": "/b" },
+    ]);
+    fs::write(&file, serde_json::to_vec(&list).unwrap()).unwrap();
+    let rig = Rig::new(
+        json!({ "permissions": { "claudeAccounts": permitted } }),
+        panes(),
+    );
+    *rig.env.spaces.lock().unwrap() = crate::projects::Projects::open(Some(file), "/a".into());
+    (rig, dir)
+}
+
+#[test]
+fn a_project_is_given_an_account_and_claude_accounts_says_so() {
+    use wings_spaces::claude_accounts::{claude_dir, dir};
+    let (rig, folder) = accounts(true);
+    let state = || rig.allowed("return await wings.claudeAccounts();");
+    assert_eq!(state()["projects"], json!({}));
+    // The default account leads, with the folder Wings runs under.
+    assert_eq!(state()["accounts"][0]["name"], json!(null));
+    assert_eq!(state()["accounts"][0]["dir"], json!(claude_dir()));
+
+    // An assigned name is listed even before anyone signed in there, and the project is mapped to it by its id.
+    let name = "wings-native-test";
+    assert_eq!(
+        rig.allowed(&format!(
+            "return await wings.setClaudeAccount('/a', '{name}');"
+        )),
+        json!(null)
+    );
+    let now = state();
+    assert_eq!(now["projects"], json!({ "/a": name }));
+    let listed = now["accounts"].as_array().unwrap();
+    let account = listed.iter().find(|a| a["name"] == name).unwrap();
+    assert_eq!(account["dir"], json!(dir(Some(name))));
+    assert_eq!(account["signedIn"], false);
+    assert_eq!(listed.iter().filter(|a| a["name"] == name).count(), 1);
+
+    // No name, or null, goes back to the default account.
+    for call in [
+        "wings.setClaudeAccount('/a')",
+        "wings.setClaudeAccount('/a', null)",
+    ] {
+        rig.allowed(&format!(
+            "await wings.setClaudeAccount('/a', '{name}'); return await {call};"
+        ));
+        assert_eq!(state()["projects"], json!({}), "{call}");
+    }
+
+    // The desktop's words, in its order: the arguments, then the name, then the project.
+    let set = |args: &str| format!("return await wings.setClaudeAccount({args});");
+    for (args, error) in [
+        ("''", "setClaudeAccount needs a project id"),
+        ("3, 'work'", "setClaudeAccount needs a project id"),
+        (
+            "'/a', 3",
+            "setClaudeAccount name is an account name, or null for the default account",
+        ),
+        (
+            "'/a', 'Work'",
+            "\"Work\" isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit",
+        ),
+        (
+            "'/a', '../x'",
+            "\"../x\" isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit",
+        ),
+        ("'/nowhere', 'work'", "No such project in Wings"),
+    ] {
+        assert_eq!(rig.refused(&set(args)), error, "{args}");
+    }
+    assert_eq!(state()["projects"], json!({}));
+    let _ = fs::remove_dir_all(folder);
+}
+
+#[test]
+fn claude_accounts_are_refused_to_a_plugin_without_their_permission() {
+    let (rig, folder) = accounts(false);
+    for call in [
+        "wings.claudeAccounts()",
+        "wings.setClaudeAccount('/a', 'work')",
+    ] {
+        assert_eq!(
+            rig.refused(&format!("return await {call};")),
+            "probe may not use Claude Code accounts",
+            "{call}"
+        );
+    }
+    assert!(
+        rig.env
+            .spaces
+            .lock()
+            .unwrap()
+            .claude_accounts()
+            .projects
+            .is_empty()
+    );
+    let _ = fs::remove_dir_all(folder);
 }

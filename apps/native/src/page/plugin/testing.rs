@@ -9,7 +9,7 @@ use std::{
 
 use serde_json::{Value, json};
 use wings_plugins::manifest::Plugin;
-use wings_spaces::spaces::WorktreeSetup;
+use wings_spaces::{claude_accounts::Accounts, spaces::WorktreeSetup};
 
 use super::{
     Access, Env, PaneEntry, PanePort, PluginHost, Project, Running, ToolCall,
@@ -42,7 +42,8 @@ pub(super) struct FakeEnv {
     pub projects: Mutex<Vec<PathBuf>>,
     /// The list `createWorktree` and `worktreeSetup` work on, which tests replace with one of their own.
     pub spaces: Mutex<Projects>,
-    pub claude: Mutex<PathBuf>,
+    /// The folders of the Claude Code accounts, which `transcript` reads.
+    pub claude: Mutex<Vec<PathBuf>>,
     pub ports: Mutex<Result<Vec<PanePort>, String>>,
     /// Why opening a URL or showing a notification fails, if it should.
     pub refuse: Mutex<Option<String>>,
@@ -168,8 +169,20 @@ impl Env for FakeEnv {
         self.projects.lock().unwrap().clone()
     }
 
-    fn claude_dir(&self) -> PathBuf {
+    fn claude_dirs(&self) -> Vec<PathBuf> {
         self.claude.lock().unwrap().clone()
+    }
+
+    fn claude_accounts(&self) -> Result<Accounts, String> {
+        Ok(self.spaces.lock().unwrap().claude_accounts())
+    }
+
+    fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
+        // Not `claude_accounts::create_dir`, which would make a folder in the user's home.
+        self.spaces
+            .lock()
+            .unwrap()
+            .set_claude_account(project, name, |_| Ok(()))
     }
 
     fn ports(&self) -> Result<Vec<PanePort>, String> {

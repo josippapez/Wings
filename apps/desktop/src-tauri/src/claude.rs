@@ -11,11 +11,7 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
-pub fn claude_dir() -> PathBuf {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".claude"))
-}
+pub use wings_spaces::claude_accounts::claude_dir;
 
 /// Claude Code names a project folder after its cwd with every non-alphanumeric character
 /// replaced by `-` (paths over 200 chars get truncated plus a hash; not handled here).

@@ -12,7 +12,10 @@ use std::{
 
 use serde::Serialize;
 use wings_plugins::manifest::Plugin;
-use wings_spaces::spaces::{Space, WorktreeSetup};
+use wings_spaces::{
+    claude_accounts::Accounts,
+    spaces::{Space, WorktreeSetup},
+};
 
 use super::{
     PluginHost,
@@ -195,8 +198,17 @@ pub trait Env: Send + Sync + 'static {
     }
     /// The folders of the app's projects, which `exec` may run in.
     fn projects(&self) -> Vec<PathBuf>;
-    /// Claude Code's folder, where the transcripts are.
-    fn claude_dir(&self) -> PathBuf;
+    /// The folders of the Claude Code accounts, the default one's first: where the transcripts are.
+    fn claude_dirs(&self) -> Vec<PathBuf>;
+    /// The Claude Code accounts, and the one each project's terminals use.
+    fn claude_accounts(&self) -> Result<Accounts, String> {
+        Err("Claude Code accounts aren't available in this host".into())
+    }
+    /// Makes new terminals in the project in folder `project` use the account `name`, or the default account with
+    /// `None`. The host has checked the plugin may, and that `name` is an account name.
+    fn set_claude_account(&self, _project: &str, _name: Option<&str>) -> Result<(), String> {
+        Err("Claude Code accounts aren't available in this host".into())
+    }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;
     /// Opens `url` in the browser. The host has checked the plugin may.
