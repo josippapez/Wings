@@ -14,7 +14,11 @@
 //! compared with any other. Ghostty keeps history in whole pages, so it holds up to a page more lines than the
 //! scrollback setting asks for; the extra lines above the limit are never shown, searched or stored.
 
-use std::{ffi::c_void, ops::BitOr, ptr};
+use std::{
+    ffi::c_void,
+    ops::{BitOr, ControlFlow, Range},
+    ptr,
+};
 
 use ghostty_sys::*;
 
@@ -214,6 +218,7 @@ pub struct Viewport {
 }
 
 /// What the terminal's callbacks write into; boxed so its address stays put.
+#[derive(Default)]
 struct Shared {
     events: Vec<Event>,
     size: GhosttySizeReportSize,
@@ -452,27 +457,27 @@ fn new_terminal(
         let write: GhosttyTerminalWritePtyFn = Some(on_write_pty);
         set(
             GHOSTTY_TERMINAL_OPT_WRITE_PTY,
-            std::mem::transmute::<_, *const c_void>(write),
+            std::mem::transmute::<GhosttyTerminalWritePtyFn, *const c_void>(write),
         );
         let title: GhosttyTerminalTitleChangedFn = Some(on_title);
         set(
             GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
-            std::mem::transmute::<_, *const c_void>(title),
+            std::mem::transmute::<GhosttyTerminalTitleChangedFn, *const c_void>(title),
         );
         let size: GhosttyTerminalSizeFn = Some(on_size);
         set(
             GHOSTTY_TERMINAL_OPT_SIZE,
-            std::mem::transmute::<_, *const c_void>(size),
+            std::mem::transmute::<GhosttyTerminalSizeFn, *const c_void>(size),
         );
         let attributes: GhosttyTerminalDeviceAttributesFn = Some(on_device_attributes);
         set(
             GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
-            std::mem::transmute::<_, *const c_void>(attributes),
+            std::mem::transmute::<GhosttyTerminalDeviceAttributesFn, *const c_void>(attributes),
         );
         let clipboard: GhosttyTerminalClipboardWriteFn = Some(on_clipboard_write);
         set(
             GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
-            std::mem::transmute::<_, *const c_void>(clipboard),
+            std::mem::transmute::<GhosttyTerminalClipboardWriteFn, *const c_void>(clipboard),
         );
         // No read callback: programs can never read the clipboard, as with Alacritty's default.
         set(
@@ -500,15 +505,6 @@ fn new_terminal(
         );
         set_line_limit(term, scrollback, cols);
         term
-    }
-}
-
-impl Default for Shared {
-    fn default() -> Self {
-        Self {
-            events: Vec::new(),
-            size: GhosttySizeReportSize::default(),
-        }
     }
 }
 
@@ -893,8 +889,21 @@ impl GridPane {
 
     /// Calls `f` with each line of the kept history and the screen, from the top, as its row and cells.
     pub fn for_each_row(&mut self, mut f: impl FnMut(usize, &[Cell])) {
+        self.for_each_row_in(0..usize::MAX, |row, cells| {
+            f(row, cells);
+            ControlFlow::Continue(())
+        });
+    }
+
+    /// `for_each_row` for the rows in `rows`, counted from the top of the kept history, until `f` breaks.
+    pub fn for_each_row_in(
+        &mut self,
+        rows: Range<usize>,
+        mut f: impl FnMut(usize, &[Cell]) -> ControlFlow<()>,
+    ) {
         let bar = self.scrollbar();
-        let (total, excess) = (bar.total as usize, self.excess(&bar));
+        let excess = self.excess(&bar);
+        let total = (bar.total as usize).min(rows.end.saturating_add(excess));
         let was = (bar.offset as usize, bar.offset + bar.len == bar.total);
         let mut render = ptr::null_mut();
         unsafe {
@@ -904,7 +913,7 @@ impl GridPane {
             );
             let overscan = GhosttyRenderStateOverscan {
                 above: 0,
-                below: SCAN_ROWS,
+                below: rows.len().min(SCAN_ROWS as usize) as u16,
             };
             ghostty_render_state_set(
                 render,
@@ -913,16 +922,17 @@ impl GridPane {
             );
         }
         // The view moves through the history a chunk at a time, then goes back where it was.
-        let mut start = excess;
-        while start < total {
+        let mut start = rows.start.saturating_add(excess);
+        let mut stopped = false;
+        while start < total && !stopped {
             self.scroll_to_row(start);
             let top = self.scrollbar().offset as usize;
             unsafe { ghostty_render_state_update(render, self.term) };
             let mut next = start;
             self.read_rows(render, |y, row| {
                 let row_at = (top as i64 + y as i64) as usize;
-                if row_at >= next {
-                    f(row_at - excess, &row);
+                if row_at >= next && row_at < total && !stopped {
+                    stopped = f(row_at - excess, &row).is_break();
                     next = row_at + 1;
                 }
             });

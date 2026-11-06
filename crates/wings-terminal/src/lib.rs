@@ -10,3 +10,5 @@ pub use process::PtyProcess;
 pub mod grid;
 #[cfg(feature = "grid")]
 pub mod history;
+#[cfg(feature = "grid")]
+pub mod search;
