@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
-import { Button, Card, Chips, Empty, Loading, Notice, Row, Spinner, Stack, Text } from "wings-plugin-ui";
+import { Button, Card, Chips, Empty, Loading, Notice, Page, Row, Spinner, Stack, Text, Toolbar } from "wings-plugin-ui";
 
 import { FileTree } from "../ui/FileTree";
 import { History } from "../ui/History";
@@ -92,14 +92,14 @@ export default function Sidebar() {
           <Card compact>
             <Row>
               <Stack gap="none" grow>
-                <div>
+                <Text>
                   {plural(total, "file")}
                   {" "}
                   <Text tone="success" numeric>{`+${added}`}</Text>
                   {" "}
                   <Text tone="danger" numeric>{`−${removed}`}</Text>
                   {partial ? <Text tone="muted">{" (some new files not counted)"}</Text> : null}
-                </div>
+                </Text>
                 <Text as="div" tone="muted" truncate>
                   {against}
                 </Text>
@@ -126,9 +126,9 @@ export default function Sidebar() {
     }
   }
 
-  return (
+  const content = (
     <>
-      {repo ? (
+      {repo && !WINGS_NATIVE ? (
         <Row>
           <Stack gap="none" grow>
             <Text as="div" weight="strong" truncate>
@@ -161,4 +161,5 @@ export default function Sidebar() {
       {body}
     </>
   );
+  return WINGS_NATIVE ? <Page toolbar={<Toolbar title={repo?.name ?? "Changes"} actions={<>{loading ? <Spinner label="Refreshing" /> : null}<Button variant="outline" onClick={refresh}>Refresh</Button></>}><Text tone="muted" truncate>{repo?.branch}</Text></Toolbar>}>{content}</Page> : content;
 }

@@ -11,6 +11,30 @@ use wings_plugins::manifest::Plugin;
 
 use super::ui::{Badge, PaneStatus};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenPane {
+    pub cwd: PathBuf,
+    pub project: PathBuf,
+    pub input: Option<String>,
+    pub placement: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenView {
+    pub plugin: String,
+    pub id: String,
+    pub place: String,
+    pub args: Option<serde_json::Value>,
+    pub new_tab: bool,
+}
+
 /// One program listening for TCP connections that `localhost` reaches, as `wings.ports` lists them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +50,27 @@ pub struct PanePort {
 
 /// The app a host runs in.
 pub trait Env: Send + Sync + 'static {
+    fn open_diff(&self, _view: crate::diff::View) -> Result<(), String> {
+        Err("Native diffs aren't available in this host".into())
+    }
+    fn update_diff(
+        &self,
+        _plugin: &str,
+        _id: &str,
+        _update: crate::diff::Update,
+    ) -> Result<(), String> {
+        Err("Native diffs aren't available in this host".into())
+    }
+    fn close_diff(&self, _plugin: &str, _id: &str) {}
+    fn current_project(&self) -> Option<PathBuf> {
+        None
+    }
+    fn open_pane(&self, _plan: OpenPane, reply: crate::page::runtime::Reply) {
+        reply.err("Opening panes isn't available".into());
+    }
+    fn open_view(&self, _plan: OpenView, reply: crate::page::runtime::Reply) {
+        reply.err("Opening views isn't available".into());
+    }
     /// The folders of the app's projects, which `exec` may run in.
     fn projects(&self) -> Vec<PathBuf>;
     /// Claude Code's folder, where the transcripts are.

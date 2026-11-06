@@ -20,10 +20,13 @@ name = "wings-plugin-worker"
 path = "src/bin/wings-plugin-worker.rs"
 
 [dependencies]
+diffy = { version = "=0.5.2", default-features = false }
 wings-plugin-storage = { path = "../../crates/wings-plugin-storage" }
 wings-terminal = { path = "../../crates/wings-terminal", features = ["grid"], optional = true }
 wings-agents = { path = "../../crates/wings-agents", optional = true }
 wings-plugins = { path = "../../crates/wings-plugins" }
+wings-disk-usage = { path = "../../crates/wings-disk-usage" }
+wings-gitwatch = { path = "../../crates/wings-gitwatch" }
 sysinfo = { version = "0.39.6", optional = true }
 async-channel = { version = "2.5", optional = true }
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
@@ -38,4 +41,8 @@ required-features = ["test-support"]
 
 [[example]]
 name = "shot_plugins"
+required-features = ["test-support"]
+
+[[example]]
+name = "shot_diff"
 required-features = ["test-support"]

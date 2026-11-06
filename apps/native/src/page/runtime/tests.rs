@@ -5,6 +5,67 @@ use std::collections::BTreeSet;
 const PILOT: &str = include_str!("../../../pages/dist/pilot.js");
 const WAIT: Duration = Duration::from_secs(10);
 
+#[test]
+fn disk_progress_is_decoded_and_aborting_cancels_the_same_call() {
+    #[derive(Default)]
+    struct Disk {
+        pending: std::sync::Mutex<Option<(String, Reply)>>,
+    }
+    impl Link for Disk {
+        fn broadcast(&self, _: String) -> Result<(), String> {
+            Ok(())
+        }
+        fn storage(&self, _: Store) -> Result<String, String> {
+            Ok("null".into())
+        }
+        fn call(&self, method: &str, params: serde_json::Value, reply: Reply) {
+            match method {
+                "diskFind" => {
+                    assert_eq!(params["stream"], true);
+                    let token = params["token"].as_str().unwrap().to_owned();
+                    reply.lines()(r#"{"entries":123,"bytes":0,"path":"/fixture"}"#);
+                    *self.pending.lock().unwrap() = Some((token, reply));
+                }
+                "diskUsageCancel" => {
+                    let (token, pending) = self.pending.lock().unwrap().take().unwrap();
+                    assert_eq!(params["token"], token);
+                    pending.err("The scan was stopped".into());
+                    reply.ok("null".into());
+                }
+                _ => panic!("unexpected call {method}"),
+            }
+        }
+    }
+    let source = r#"
+        const controller = new AbortController();
+        let looked = 0;
+        wings.diskFind('/fixture', {
+            names: ['.git'], signal: controller.signal,
+            onProgress: progress => { looked = progress.entries; controller.abort(); controller.abort(); }
+        }).catch(error => wings.render(JSON.stringify({ type: '#root', id: 0, children: [
+            { type: '#text', id: 1, text: JSON.stringify({ looked, stopped: controller.signal.aborted, error: error.message }) }
+        ] })));
+    "#;
+    let (tx, events) = mpsc::channel();
+    let runtime = PageRuntime::spawn_plugin(
+        source,
+        Role::Page,
+        Limits::default(),
+        Arc::new(Disk::default()),
+        move |event| {
+            let _ = tx.send(event);
+        },
+    )
+    .unwrap();
+    let page = Page { runtime, events };
+    let text = page.tree().text();
+    let result: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({ "looked": 123, "stopped": true, "error": "The scan was stopped" })
+    );
+}
+
 struct Page {
     runtime: PageRuntime,
     events: mpsc::Receiver<Event>,

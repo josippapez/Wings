@@ -7,7 +7,7 @@ mod status_dot;
 
 pub use button::{Variant, badge, button};
 pub use parts::{disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
-pub use status_dot::status_dot;
+pub use status_dot::{spinner as working_spinner, status_dot};
 
 use gpui::{
     AnyElement, BoxShadow, Div, ElementId, Entity, FocusHandle, FontWeight, IntoElement,

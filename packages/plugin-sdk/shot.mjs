@@ -49,7 +49,7 @@ export async function shot(args, folders) {
   };
   const widths = flag("--width", "1000,640").split(",").map(Number);
   const height = Number(flag("--height", "900"));
-  const out = flag("--out", null) ?? mkdtempSync(join(tmpdir(), "wings-shot-"));
+  const requestedOut = flag("--out", null);
   const filters = argv;
   if (widths.some((w) => !(w > 0)) || !(height > 0)) {
     console.error("--width is a comma-separated list of pixel widths, and --height a number.");
@@ -73,6 +73,7 @@ export async function shot(args, folders) {
     console.error(`No fixture matches ${filters.join(" ") || "anything"}. They are preview/<file>.tsx in the plugin's folder.`);
     return 2;
   }
+  const out = requestedOut ?? mkdtempSync(join(tmpdir(), "wings-shot-"));
   mkdirSync(out, { recursive: true });
 
   // The stylesheet and React come from the plugin's own folder, like the build finds them, so the page and a linked
@@ -118,7 +119,7 @@ export async function shot(args, folders) {
       format: "iife",
       jsx: "automatic",
       // React's development build, so its warnings reach the console.
-      define: { "process.env.NODE_ENV": '"development"' },
+      define: { "process.env.NODE_ENV": '"development"', WINGS_NATIVE: "false" },
       alias: { react, "react-dom": reactDom },
       write: false,
       logLevel: "silent",
@@ -141,8 +142,16 @@ export async function shot(args, folders) {
     rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     rmSync(work, { recursive: true, force: true });
   };
+  const stop = async () => {
+    proc.kill();
+    if (proc.exitCode === null) await new Promise((resolve) => proc.once("exit", resolve));
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    rmSync(work, { recursive: true, force: true });
+  };
   process.on("exit", cleanup);
-  const wsUrl = await new Promise((resolve, reject) => {
+  let ws;
+  try {
+    const wsUrl = await new Promise((resolve, reject) => {
     let log = "";
     proc.stderr.on("data", (d) => {
       log += d;
@@ -150,8 +159,8 @@ export async function shot(args, folders) {
       if (m) resolve(m[1]);
     });
     proc.on("exit", () => reject(new Error(`Chrome exited: ${log}`)));
-  });
-  const ws = new WebSocket(wsUrl);
+    });
+    ws = new WebSocket(wsUrl);
   await new Promise((r) => (ws.onopen = r));
   let nextId = 0;
   const waiting = new Map();
@@ -252,9 +261,14 @@ export async function shot(args, folders) {
       console.error(`${fixture.id} failed: ${e.message ?? e}`);
     }
   }
-  if (!shot && !failed) {
-    console.error(`No state matches ${filters.join(" ")}. A state is <plugin>/<file>/<state>.`);
-    return 2;
+    if (!shot && !failed) {
+      console.error(`No state matches ${filters.join(" ")}. A state is <plugin>/<file>/<state>.`);
+      return 2;
+    }
+    return failed ? 1 : 0;
+  } finally {
+    ws?.close();
+    await stop();
+    process.off("exit", cleanup);
   }
-  return failed ? 1 : 0;
 }

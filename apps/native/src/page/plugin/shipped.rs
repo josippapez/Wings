@@ -4,6 +4,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::mpsc,
 };
 
@@ -11,11 +12,14 @@ use serde_json::json;
 use wings_plugins::{loading, manifest::Plugin};
 
 use super::{
-    PanePort, SessionEntry,
+    PanePort, Project, SessionEntry,
     testing::{Frame, Rig, Seen, WAIT, pane},
     ui::Tone,
 };
-use crate::page::runtime::Event;
+use crate::page::{
+    runtime::{Event, PageRuntime},
+    tree::{Node, Tree, plain_text},
+};
 
 fn repo_plugin(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -68,6 +72,197 @@ fn node(pane: &str, port: u16) -> PanePort {
         name: "node".into(),
         port,
         started_at: 0,
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A committed main checkout and a linked `feature` worktree. It lives under the test storage root, which `Root` removes.
+fn worktree_repo(rig: &Rig) -> (PathBuf, PathBuf) {
+    let root = rig.root.config("worktrees").root.join("worktrees-repo");
+    fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "Wings test"]);
+    fs::write(root.join("README.md"), "fixture\n").unwrap();
+    git(&root, &["add", "README.md"]);
+    git(&root, &["commit", "-qm", "fixture"]);
+    git(&root, &["branch", "-M", "main"]);
+    (root.clone(), root.with_file_name("worktrees-feature"))
+}
+
+fn open_page(host: &super::PluginHost, source: &str) -> (PageRuntime, mpsc::Receiver<Event>) {
+    let (sent, received) = mpsc::channel();
+    let runtime = host
+        .open_page(source, move |event| {
+            let _ = sent.send(event);
+        })
+        .unwrap();
+    (runtime, received)
+}
+
+fn tree(received: &mpsc::Receiver<Event>, what: &str, done: impl Fn(&Tree) -> bool) -> Tree {
+    let mut last = String::new();
+    loop {
+        match received.recv_timeout(WAIT) {
+            Ok(Event::Tree(tree)) if done(&tree) => return tree,
+            Ok(Event::Tree(tree)) => last = tree.text(),
+            Ok(Event::Error { message, .. }) => panic!("waiting for {what}: {message}"),
+            Err(_) => panic!("waiting for {what}: the page last showed {last:?}"),
+        }
+    }
+}
+
+fn buttons_named(nodes: &[Node], label: &str, found: &mut Vec<String>) {
+    for node in nodes {
+        if let Node::Button(button) = node
+            && plain_text(&button.children) == label
+            && let Some(handler) = &button.on_click
+        {
+            found.push(handler.clone());
+        }
+        for part in node.parts() {
+            buttons_named(part, label, found);
+        }
+    }
+}
+
+#[test]
+fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a_linked_worktree() {
+    let rig = Rig::with(load("worktrees"), true, vec![]);
+    let (root, linked) = worktree_repo(&rig);
+    *rig.env.projects.lock().unwrap() = vec![root.clone()];
+    rig.host.publish_projects(vec![Project {
+        id: root.to_string_lossy().into(),
+        path: root.to_string_lossy().into(),
+        name: "Fixture worktrees".into(),
+    }]);
+    rig.host
+        .publish_panes(vec![pane("1", &root.to_string_lossy())]);
+
+    let (page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    tree(&events, "the initial main worktree", |tree| {
+        let text = tree.text();
+        text.contains("Worktrees") && text.contains("main") && text.contains("Open in new pane")
+    });
+
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+    *rig.env.projects.lock().unwrap() = vec![root.clone(), linked.clone()];
+    rig.host.publish_projects(vec![
+        Project {
+            id: root.to_string_lossy().into(),
+            path: root.to_string_lossy().into(),
+            name: "Fixture worktrees".into(),
+        },
+        Project {
+            id: linked.to_string_lossy().into(),
+            path: linked.to_string_lossy().into(),
+            name: "Fixture feature".into(),
+        },
+    ]);
+    rig.host.publish_git(&[root.to_string_lossy().into()]);
+    let refreshed = tree(&events, "the git refresh", |tree| {
+        tree.text().contains("feature")
+    });
+    let mut open = Vec::new();
+    buttons_named(&refreshed.children, "Open in new pane", &mut open);
+    assert_eq!(open.len(), 2, "{}", refreshed.text());
+    assert!(page.dispatch(&open[1], None));
+    let seen = rig.env.wait("the linked worktree pane", |seen| {
+        matches!(seen.last(), Some(Seen::OpenPane(_)))
+    });
+    let Seen::OpenPane(plan) = seen.last().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(plan.cwd, linked.canonicalize().unwrap());
+    assert_eq!(plan.project, linked);
+    assert_eq!(plan.input, None);
+    assert_eq!(plan.placement, "tab");
+}
+
+#[test]
+fn worktrees_sidebar_shows_the_native_empty_state_without_repos() {
+    let rig = Rig::with(load("worktrees"), true, vec![]);
+    let (_page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    let empty = tree(&events, "the empty state", |tree| {
+        tree.text().contains("None of your projects is a git repo.")
+    });
+    assert!(empty.text().contains("Scan this Mac"));
+}
+
+#[test]
+fn worktrees_sidebar_reports_a_denied_scan_without_walking_any_disk() {
+    let mut plugin = load("worktrees");
+    plugin.manifest.permissions.disk_usage = false;
+    let rig = Rig::with(plugin, true, vec![]);
+    let (page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    let initial = tree(&events, "the scan action", |tree| {
+        tree.text().contains("Scan this Mac")
+    });
+    let mut scan = Vec::new();
+    buttons_named(&initial.children, "Scan this Mac", &mut scan);
+    assert_eq!(scan.len(), 1, "{}", initial.text());
+    assert!(page.dispatch(&scan[0], None));
+    let denied = tree(&events, "the refused scan", |tree| {
+        tree.text().contains("worktrees may not read disk usage")
+    });
+    assert!(denied.text().contains("Elsewhere on this Mac"));
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn worktrees_native_sidebar_bundle_draws_the_empty_state_in_a_native_window() {
+    use crate::page::PageView;
+    use gpui::{TestApp, TestAppWindow};
+    use std::{
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let rig = Rig::with(load("worktrees"), true, vec![]);
+    let host = std::sync::Arc::new(rig.host);
+    let source: &'static str = Box::leak(native("worktrees", "sidebar.js").into_boxed_str());
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let page_host = Arc::clone(&host);
+    let mut window: TestAppWindow<PageView> =
+        app.open_window(move |_, cx| PageView::in_plugin(&page_host, source, cx));
+    window.update(|view, _, _| view.set_visible(true));
+    let deadline = Instant::now() + WAIT;
+    loop {
+        app.run_until_parked();
+        window.draw();
+        if window.read(|view, _| view.text().contains("None of your projects is a git repo.")) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the window shows {:?}",
+            window.read(|view, _| view.text())
+        );
+        thread::sleep(Duration::from_millis(5));
     }
 }
 

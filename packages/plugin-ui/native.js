@@ -1,7 +1,7 @@
 // wings-plugin-ui/native: the components of ui.js that the native Wings app draws, rendered by React into a JSON tree
 // instead of into a DOM. The page runs in a JS engine with no document, and the app turns each tree into its own
 // controls. Handlers never leave the page: the tree names them by id, and the app sends the id back when one fires.
-import { createContext, createElement as h } from "react";
+import { createContext, createElement as h, useState } from "react";
 import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
 
@@ -175,6 +175,47 @@ export function Text(props) {
 export function Button(props) {
   return h("Button", pick(props, ["variant", "onClick", "disabled"]), props.children);
 }
+/** A short message in a tinted box. */
+export function Notice({ tone, children }) {
+  return h("Notice", pick({ tone }, ["tone"]), children);
+}
+/** A spinner. With a label it is announced by the app. */
+export function Spinner(props) {
+  return h("Spinner", pick(props, ["size", "label"]));
+}
+/** A checkbox with its label. `onChange` gets its next checked state. */
+export function Checkbox(props) {
+  const { onChange } = props;
+  return h("Checkbox", { ...pick(props, ["checked", "disabled"]), ...(onChange && { onChange: (event) => onChange(event.checked) }) }, props.children);
+}
+/** An in-page confirmation card. Failed actions leave the card open and show their error. */
+export function Confirm({ title, children, actions, cancelLabel = "Cancel", onCancel }) {
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const run = (action) => async () => {
+    setBusy(action.id);
+    setError(null);
+    try {
+      await action.onConfirm();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return h(
+    "Confirm",
+    null,
+    slot("title", title),
+    slot("body", error ? h(Notice, { tone: "danger" }, error) : children),
+    h(
+      "Slot",
+      { name: "actions" },
+      ...actions.map((action) => h(Button, { key: action.id, variant: action.variant ?? "destructive", disabled: busy !== null, onClick: run(action) }, action.label)),
+      h(Button, { variant: "ghost", disabled: busy !== null, onClick: onCancel }, cancelLabel),
+    ),
+  );
+}
 /** A badge, like a label on a command or a branch name. */
 export function Badge(props) {
   return h("Badge", pick(props, ["variant", "tone", "size"]), props.children);
@@ -219,4 +260,21 @@ export function Disclosure({ summary, children }) {
 export function Select(props) {
   const { onChange } = props;
   return h("Select", { ...pick(props, ["label", "options", "value"]), ...(onChange && { onChange: (event) => onChange(event.value) }) });
+}
+
+export function Chips(props) {
+  return h("Chips", { ...pick(props, ["label", "options", "value"]), onChange: (event) => props.onChange(event.value) });
+}
+
+export function ListButton(props) {
+  return h("ListButton", pick(props, ["onClick", "disabled", "align", "layout", "title", "indent", "aria-expanded"]), props.children);
+}
+
+export function SearchField(props) {
+  return h("SearchField", { ...pick(props, ["label", "placeholder", "defaultValue"]), onInput: (event) => props.onInput?.({ ...event, currentTarget: { value: event.value }, target: { value: event.value } }) });
+}
+
+/** Only the requested window crosses the engine boundary, never the full history. */
+export function Graph(props) {
+  return h("Graph", { ...pick(props, ["total", "lanes", "selected", "offset", "rows", "onRangeChange"]), onSelect: (event) => props.onSelect(event.index) });
 }

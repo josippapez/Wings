@@ -22,6 +22,11 @@ pub(super) const WAIT: Duration = Duration::from_secs(10);
 /// What a plugin did to the app, in order.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Seen {
+    DiffOpen(crate::diff::View),
+    DiffUpdate(String, String, crate::diff::Update),
+    DiffClose(String, String),
+    OpenPane(super::OpenPane),
+    OpenView(super::OpenView),
     Badge(String, String, Option<Badge>),
     Status(String, String, Option<PaneStatus>),
     Url(String),
@@ -77,6 +82,35 @@ impl FakeEnv {
 }
 
 impl Env for FakeEnv {
+    fn open_diff(&self, view: crate::diff::View) -> Result<(), String> {
+        self.record(Seen::DiffOpen(view));
+        Ok(())
+    }
+    fn update_diff(
+        &self,
+        plugin: &str,
+        id: &str,
+        update: crate::diff::Update,
+    ) -> Result<(), String> {
+        self.record(Seen::DiffUpdate(plugin.into(), id.into(), update));
+        Ok(())
+    }
+    fn close_diff(&self, plugin: &str, id: &str) {
+        self.record(Seen::DiffClose(plugin.into(), id.into()));
+    }
+    fn current_project(&self) -> Option<PathBuf> {
+        self.projects.lock().unwrap().first().cloned()
+    }
+
+    fn open_pane(&self, plan: super::OpenPane, reply: crate::page::runtime::Reply) {
+        self.record(Seen::OpenPane(plan));
+        reply.ok(json!({ "paneId": "3" }).to_string());
+    }
+
+    fn open_view(&self, plan: super::OpenView, reply: crate::page::runtime::Reply) {
+        self.record(Seen::OpenView(plan));
+        reply.ok("null".into());
+    }
     fn projects(&self) -> Vec<PathBuf> {
         self.projects.lock().unwrap().clone()
     }
@@ -221,13 +255,41 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    pub fn start(host: &PluginHost, source: &str) -> Self {
+    pub fn in_window(host: &PluginHost, window: u64, source: &str) -> Self {
         let (sender, events) = std::sync::mpsc::channel();
         let runtime = host
-            .open_page(source, move |event| {
+            .open_window_page(source, window, move |event| {
                 let _ = sender.send(event);
             })
             .unwrap();
+        Self {
+            _runtime: runtime,
+            events,
+        }
+    }
+    pub fn start(host: &PluginHost, source: &str) -> Self {
+        Self::with_visibility(host, source, true)
+    }
+
+    pub fn hidden(host: &PluginHost, source: &str) -> Self {
+        Self::with_visibility(host, source, false)
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        self._runtime.set_visible(visible);
+    }
+
+    fn with_visibility(host: &PluginHost, source: &str, visible: bool) -> Self {
+        let (sender, events) = std::sync::mpsc::channel();
+        let report = move |event| {
+            let _ = sender.send(event);
+        };
+        let runtime = if visible {
+            host.open_page(source, report)
+        } else {
+            host.open_hidden_page(source, report)
+        }
+        .unwrap();
         Self {
             _runtime: runtime,
             events,

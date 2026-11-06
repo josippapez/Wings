@@ -155,7 +155,7 @@ async function buildNative(dir, src, banner) {
       jsx: "automatic",
       mainFields: ["module", "main"],
       loader: { ".css": "empty" },
-      define: { "process.env.NODE_ENV": '"production"' },
+      define: { "process.env.NODE_ENV": '"production"', WINGS_NATIVE: "true" },
       banner: { js: banner },
       plugins: [nativeUi(dir), oneReact(dir)],
       legalComments: "none",
@@ -195,7 +195,7 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
       // WKWebView on the oldest macOS Wings supports.
       target: "safari16",
       jsx: "automatic",
-      define: { "process.env.NODE_ENV": '"production"' },
+      define: { "process.env.NODE_ENV": '"production"', WINGS_NATIVE: "false" },
       banner: { js: banner, css: `/* ${GENERATED} from src/. Edit src/, not this file. */` },
       plugins: [shellPlugin(seen), oneReact(dir)],
       legalComments: "none",

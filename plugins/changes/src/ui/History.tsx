@@ -32,7 +32,7 @@ function Commit({ row, onOpen }: { row: CommitRow; onOpen: (row: CommitRow) => v
   const [hash, subject, author, at, refs] = row;
   return (
     <ListItem>
-      <ListButton className="commit" title={`${subject}\n${hash}\n${author}, ${dateTimeOf(at)}`} onClick={() => onOpen(row)}>
+      <ListButton {...(WINGS_NATIVE ? { layout: "column" } : {})} className="commit" title={`${subject}\n${hash}\n${author}, ${dateTimeOf(at)}`} onClick={() => onOpen(row)}>
         <Text truncate className="subject">
           {subject}
         </Text>
@@ -116,7 +116,7 @@ export function History({ view, query, all, searchText, onSearch, onAll, onGraph
       <Row>
         <Stack grow>
           {/* Uncontrolled, so typing in it never loses the caret. Filled once when it mounts, without a value attribute. */}
-          <SearchField id="search" placeholder="Search commits" label="Search commits" ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
+          <SearchField id="search" placeholder="Search commits" label="Search commits" defaultValue={searchText} ref={fillSearch} onInput={(e) => onSearch(e.currentTarget.value)} />
         </Stack>
         <Button variant="outline" onClick={onGraph} title="Every branch as a commit graph">
           Graph

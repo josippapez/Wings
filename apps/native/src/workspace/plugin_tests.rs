@@ -102,6 +102,296 @@ fn install_badger(data: &Data) {
 }
 
 #[test]
+fn graph_default_open_view_uses_an_owned_native_window_with_local_focus_and_cleanup() {
+    let data = Data::temp();
+    data.install_script("graph-window", json!({ "contributes": {
+        "views": [{ "id":"graph", "title":"Commit graph", "page":"dist/graph.html", "opens":["window","modal"], "width":1100, "height":760 }],
+        "sidebars": [{"id":"changes","title":"Changes","page":"dist/sidebar.html"}]
+    } }), "let opened=0; wings.onFocus(({focused})=>wings.storage.set('main',focused)); wings.onAction(async()=>{await wings.openView('graph'); wings.storage.set('opened',++opened);});",
+        &[("graph", "wings.onFocus(({focused})=>wings.storage.set('graph',focused));"), ("sidebar", "wings.onFocus(({focused})=>wings.storage.set('sidebar',focused));")], "graph-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| {
+        window.activate_window();
+        w.show_sidebar("graph-window", "changes", cx);
+    });
+    until(&app, &mut window, "sidebar not focused", |_| {
+        data.saved("graph-window", "graph-scope", "sidebar") == Some(json!(true))
+    });
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "graph", |_| {});
+    until(&app, &mut window, "graph did not open", |w| {
+        !w.plugin_ui.windows.is_empty()
+    });
+    let handle = window.read(|w, _| *w.plugin_ui.windows.values().next().unwrap());
+    window.update(|_, _, cx| {
+        handle
+            .update(cx, |_, window, _| window.activate_window())
+            .unwrap();
+    });
+    until(&app, &mut window, "graph page not focused", |_| {
+        data.saved("graph-window", "graph-scope", "graph") == Some(json!(true))
+    });
+    until(
+        &app,
+        &mut window,
+        "hidden primary sidebar still focused",
+        |_| data.saved("graph-window", "graph-scope", "sidebar") == Some(json!(false)),
+    );
+    assert_eq!(
+        data.saved("graph-window", "graph-scope", "main"),
+        Some(json!(true))
+    );
+    assert_eq!(app.windows().len(), 2);
+    host.send_action("0", "graph", |_| {});
+    until(
+        &app,
+        &mut window,
+        "second graph request did not complete",
+        |_| data.saved("graph-window", "graph-scope", "opened") == Some(json!(2)),
+    );
+    assert_eq!(app.windows().len(), 2);
+    window.update(|_, _, cx| {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    });
+    until(&app, &mut window, "graph frame survived its window", |w| {
+        w.plugins[0].host.frames() == 2 && w.plugin_ui.windows.is_empty()
+    });
+    window.update(|_, window, _| window.activate_window());
+    until(
+        &app,
+        &mut window,
+        "primary sidebar didn't regain focus",
+        |_| data.saved("graph-window", "graph-scope", "sidebar") == Some(json!(true)),
+    );
+}
+
+#[test]
+fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api() {
+    let data = Data::temp();
+    let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two b/two\nnew file mode 100644\n";
+    data.install_script("differ", json!({ "contributes": { "ui": ["diff"] } }), &format!(r#"
+        let id, started = false;
+        wings.onDiffRefresh(async ({{diffId}}) => {{ await wings.updateDiff(diffId, {{patch:{}}}); await wings.storage.set('refreshed', true); }});
+        wings.onDiffClosed(async value => {{ await wings.storage.set('closed', value.diffId); }});
+        wings.onAction(async () => {{ await wings.updateDiff(id, {{patch:{}}}); await wings.storage.set('filled',true); }});
+        wings.onPanes(async list => {{ if (!list.length || started) return; started=true; id=(await wings.openDiff({{title:'Changes',subtitle:'Working tree',refresh:true}})).id; }});
+    "#, json!(patch), json!(patch)), &[], "diff-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(&app, &mut window, "loading diff never opened", |w| {
+        w.plugin_ui.diff.is_some()
+    });
+    assert!(window.read(|w, cx| {
+        w.plugin_ui
+            .diff
+            .as_ref()
+            .unwrap()
+            .0
+            .read(cx)
+            .view
+            .update
+            .patch
+            .is_none()
+    }));
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "fill", |_| {});
+    until(&app, &mut window, "diff never filled", |_| {
+        data.saved("differ", "diff-scope", "filled") == Some(json!(true))
+    });
+    app.run_until_parked();
+    window.draw();
+    window.simulate_click(point(px(80.0), px(114.0)), MouseButton::Left);
+    assert_eq!(
+        window.read(|w, cx| w
+            .plugin_ui
+            .diff
+            .as_ref()
+            .unwrap()
+            .0
+            .read(cx)
+            .selected_file()),
+        1
+    );
+    window.simulate_click(point(px(900.0), px(32.0)), MouseButton::Left);
+    until(&app, &mut window, "refresh did not reach main", |_| {
+        data.saved("differ", "diff-scope", "refreshed") == Some(json!(true))
+    });
+    window.simulate_keystroke("escape");
+    until(&app, &mut window, "diff stayed open", |w| {
+        w.plugin_ui.diff.is_none()
+    });
+    until(&app, &mut window, "close event did not reach main", |_| {
+        data.saved("differ", "diff-scope", "closed").is_some()
+    });
+}
+
+#[test]
+fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
+    let data = Data::temp();
+    let alpha = data.root.join("focus-alpha");
+    let beta = data.root.join("focus-beta");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+    let projects = data.root.join("focus-projects.json");
+    fs::write(
+        &projects,
+        json!([
+            { "id": alpha, "name": "Alpha", "path": alpha },
+            { "id": beta, "name": "Beta", "path": beta }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let source = |key: &str| {
+        format!(
+            "const states = []; const initial = wings.focused; wings.onFocus(({{focused}}) => {{ states.push(focused); wings.storage.set('{key}', {{initial, focused, states}}); }});"
+        )
+    };
+    let (one, two, side, other, main) = (
+        source("one"),
+        source("two"),
+        source("side"),
+        source("other"),
+        source("main"),
+    );
+    data.install_script("visibility", json!({ "contributes": {
+        "views": [
+            { "id": "one", "title": "One", "page": "dist/one.html", "opens": ["tab"], "newTab": true },
+            { "id": "two", "title": "Two", "page": "dist/two.html", "opens": ["tab"], "newTab": true }
+        ],
+        "sidebars": [
+            { "id": "side", "title": "Side", "page": "dist/side.html" },
+            { "id": "other", "title": "Other", "page": "dist/other.html" }
+        ]
+    } }), &main, &[("one", &one), ("two", &two), ("side", &side), ("other", &other)], "visibility-scope");
+    let (mut app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.project = alpha.clone();
+        config.projects = Some(projects);
+    });
+    window.update(|_, window, _| window.activate_window());
+    let focused =
+        |app: &TestApp, window: &mut TestAppWindow<Workspace>, key: &str, expected: bool| {
+            until(
+                app,
+                window,
+                &format!("{key} never became focused={expected}"),
+                |_| {
+                    data.saved("visibility", "visibility-scope", key)
+                        .is_some_and(|value| value["focused"] == expected)
+                },
+            );
+        };
+    focused(&app, &mut window, "main", true);
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("visibility", "one", window, cx));
+    });
+    focused(&app, &mut window, "one", true);
+    assert_eq!(
+        data.saved("visibility", "visibility-scope", "one").unwrap()["initial"],
+        false
+    );
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("visibility", "two", window, cx));
+    });
+    focused(&app, &mut window, "one", false);
+    focused(&app, &mut window, "two", true);
+    window.update(|w, _, cx| w.show_sidebar("visibility", "side", cx));
+    focused(&app, &mut window, "side", true);
+    window.update(|w, _, cx| w.show_sidebar("visibility", "other", cx));
+    focused(&app, &mut window, "side", false);
+    focused(&app, &mut window, "other", true);
+    window.update(|w, window, cx| w.switch_project(beta.clone(), window, cx));
+    focused(&app, &mut window, "two", false);
+    focused(&app, &mut window, "other", true);
+    window.update(|w, window, cx| w.switch_project(alpha, window, cx));
+    focused(&app, &mut window, "two", true);
+    struct Elsewhere;
+    impl gpui::Render for Elsewhere {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    let mut elsewhere = app.open_window(|_, _| Elsewhere);
+    elsewhere.update(|_, window, _| window.activate_window());
+    for key in ["main", "two", "other"] {
+        focused(&app, &mut window, key, false);
+    }
+    window.update(|_, window, _| window.activate_window());
+    for key in ["main", "two", "other"] {
+        focused(&app, &mut window, key, true);
+    }
+    for key in ["one", "side"] {
+        focused(&app, &mut window, key, false);
+    }
+    window.update(|w, _, cx| {
+        w.right = None;
+        w.sync_plugin_visibility(cx);
+    });
+    focused(&app, &mut window, "other", false);
+    assert_eq!(window.read(|w, _| w.plugins[0].host.frames()), 5);
+    window.update(|w, window, cx| w.close_plugin_tab(1, window, cx));
+    until(&app, &mut window, "closed page retained its frame", |w| {
+        w.plugins[0].host.frames() == 4
+    });
+    focused(&app, &mut window, "one", true);
+}
+
+#[test]
+fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
+    let data = Data::temp();
+    let project = data.root.join("project");
+    fs::create_dir_all(project.join("sub")).unwrap();
+    let cwd = project.join("sub").canonicalize().unwrap();
+    data.install_script(
+        "opener",
+        json!({ "permissions": { "panes": [] }, "contributes": { "ui": ["badges"] } }),
+        &format!(
+            r#"
+            let opened = false;
+            wings.onProjects(list => wings.storage.set('projects', list));
+            wings.onPanes(async list => {{
+                if (!list.length || opened) return;
+                opened = true;
+                try {{
+                    const pane = await wings.openPane({{ cwd: {}, placement: 'right' }});
+                    await wings.setBadge(pane.paneId, {{ label: 'Opened' }});
+                    await wings.storage.set('opened', {{ pane }});
+                }} catch (error) {{ await wings.storage.set('failed', error.message); }}
+            }});
+        "#,
+            json!(cwd)
+        ),
+        &[],
+        "opener-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.project = project.clone()
+    });
+    until(&app, &mut window, "the pane never opened", |_| {
+        data.saved("opener", "opener-scope", "opened").is_some()
+            || data.saved("opener", "opener-scope", "failed").is_some()
+    });
+    assert_eq!(data.saved("opener", "opener-scope", "failed"), None);
+    let result = data.saved("opener", "opener-scope", "opened").unwrap();
+    let pane: usize = result["pane"]["paneId"].as_str().unwrap().parse().unwrap();
+    window.read(|w, cx| {
+        assert_eq!(w.panes.len(), 2);
+        assert_eq!(w.terminals[0].focused, pane);
+        assert_eq!(w.plugin_ui.badges[&pane]["opener"].label, "Opened");
+        assert_eq!(w.terminal(pane).unwrap().read(cx).cwd(), Some(cwd));
+    });
+    assert_eq!(
+        data.saved("opener", "opener-scope", "projects").unwrap()[0]["path"],
+        json!(project)
+    );
+}
+
+#[test]
 fn a_plugins_badge_and_status_show_on_the_pane_and_a_click_on_a_button_reaches_the_plugin() {
     let data = Data::temp();
     install_badger(&data);

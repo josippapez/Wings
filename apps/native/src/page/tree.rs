@@ -118,6 +118,10 @@ pub enum Node {
     Row(Row),
     Text(Text),
     Button(Button),
+    Notice(Notice),
+    Spinner(Spinner),
+    Checkbox(Checkbox),
+    Confirm(Confirm),
     Badge(Badge),
     Empty(Empty),
     Loading(Loading),
@@ -129,6 +133,10 @@ pub enum Node {
     ListItem(ListItem),
     Disclosure(Disclosure),
     Select(Select),
+    Chips(Select),
+    ListButton(ListButton),
+    SearchField(SearchField),
+    Graph(Graph),
 }
 
 /// A named part of the component it's in.
@@ -194,6 +202,37 @@ pub struct Button {
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub children: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notice {
+    pub id: u64,
+    pub tone: Option<Tone>,
+    pub children: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spinner {
+    pub id: u64,
+    pub large: bool,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkbox {
+    pub id: u64,
+    pub checked: bool,
+    pub disabled: bool,
+    pub on_change: Option<String>,
+    pub children: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Confirm {
+    pub id: u64,
+    pub title: Vec<Node>,
+    pub body: Vec<Node>,
+    pub actions: Vec<Node>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -304,6 +343,118 @@ pub struct Select {
     pub on_change: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListButton {
+    pub button: Button,
+    pub indent: f32,
+    pub expanded: Option<bool>,
+    pub vertical: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchField {
+    pub id: u64,
+    pub label: String,
+    pub placeholder: String,
+    pub value: Option<String>,
+    pub on_input: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GraphRow {
+    pub hash: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+    pub refs: Vec<String>,
+    pub lane: usize,
+    pub color: usize,
+    pub merge: bool,
+    pub lines: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Graph {
+    pub id: u64,
+    pub total: usize,
+    pub lanes: usize,
+    pub selected: i64,
+    pub offset: usize,
+    pub rows: Vec<GraphRow>,
+    pub on_range: Option<String>,
+    pub on_select: Option<String>,
+}
+
+fn graph(id: u64, props: &Map<String, Value>) -> Result<Graph, TreeError> {
+    let invalid = || {
+        TreeError::Invalid(
+            "invalid graph window (10,000 total, 256 window rows, bounded fields required)".into(),
+        )
+    };
+    let integer = |key| {
+        props
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(invalid)
+    };
+    let total = integer("total")?;
+    let lanes = integer("lanes")?;
+    let offset = integer("offset")?;
+    let selected = props
+        .get("selected")
+        .and_then(Value::as_i64)
+        .ok_or_else(invalid)?;
+    let rows: Vec<GraphRow> =
+        serde_json::from_value(props.get("rows").cloned().ok_or_else(invalid)?)
+            .map_err(|_| invalid())?;
+    let text_ok = |s: &str, max| s.chars().count() <= max;
+    if total > 10_000
+        || !(1..=24).contains(&lanes)
+        || offset > total
+        || rows.len() > 256
+        || rows.len() > total - offset
+        || selected < -1
+        || selected >= total as i64
+        || rows.iter().any(|r| {
+            r.hash.is_empty()
+                || !text_ok(&r.hash, 64)
+                || !text_ok(&r.subject, 4096)
+                || !text_ok(&r.author, 512)
+                || !text_ok(&r.date, 64)
+                || r.refs.len() > 64
+                || r.refs.iter().any(|s| !text_ok(s, 1024))
+                || r.lane > 10_000
+                || r.color > 100_000
+                || r.lines.len() > 4096
+                || !r.lines.len().is_multiple_of(4)
+                || r.lines
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|l| l[0] > 10_000 || l[1] > 10_000 || l[2] > 2 || l[3] > 100_000)
+        })
+    {
+        return Err(invalid());
+    }
+    let handler = |key| {
+        str_prop(props, key)
+            .filter(|s| valid_handler(s))
+            .map(str::to_owned)
+    };
+    Ok(Graph {
+        id,
+        total,
+        lanes,
+        selected,
+        offset,
+        rows,
+        on_range: handler("onRangeChange"),
+        on_select: handler("onSelect"),
+    })
+}
+
 impl Select {
     /// The value the select is on: the one the page set, or the first option's when it set none.
     pub fn current(&self) -> Option<&str> {
@@ -388,12 +539,21 @@ impl Node {
             Node::Row(n) => vec![&n.children],
             Node::Text(n) => vec![&n.children],
             Node::Button(n) => vec![&n.children],
+            Node::ListButton(n) => vec![&n.button.children],
+            Node::Notice(n) => vec![&n.children],
+            Node::Spinner(_) => vec![],
+            Node::Checkbox(n) => vec![&n.children],
+            Node::Confirm(n) => vec![&n.title, &n.body, &n.actions],
             Node::Badge(n) => vec![&n.children],
             Node::Empty(n) => vec![&n.title, &n.description, &n.children],
             Node::Loading(n) => vec![&n.children],
             Node::Card(n) => vec![&n.children],
             Node::Heading(n) => vec![&n.children],
-            Node::Dot(_) | Node::Select(_) => vec![],
+            Node::Dot(_)
+            | Node::Select(_)
+            | Node::Chips(_)
+            | Node::SearchField(_)
+            | Node::Graph(_) => vec![],
             Node::Gauge(n) => vec![&n.note],
             Node::List(n) => vec![&n.children],
             Node::ListItem(n) => vec![&n.children],
@@ -448,6 +608,10 @@ impl Walk {
                 | "Row"
                 | "Text"
                 | "Button"
+                | "Notice"
+                | "Spinner"
+                | "Checkbox"
+                | "Confirm"
                 | "Badge"
                 | "Empty"
                 | "Loading"
@@ -459,6 +623,10 @@ impl Walk {
                 | "ListItem"
                 | "Disclosure"
                 | "Select"
+                | "Chips"
+                | "ListButton"
+                | "SearchField"
+                | "Graph"
         ) {
             return Ok(None);
         }
@@ -526,6 +694,37 @@ impl Walk {
                     children: parts(children),
                 })
             }
+            "Notice" => Node::Notice(Notice {
+                id,
+                tone,
+                children: parts(children),
+            }),
+            "Spinner" => Node::Spinner(Spinner {
+                id,
+                large: str_prop(&props, "size") == Some("large"),
+                label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+            }),
+            "Checkbox" => {
+                let disabled = on("disabled");
+                Node::Checkbox(Checkbox {
+                    id,
+                    checked: on("checked"),
+                    disabled,
+                    on_change: str_prop(&props, "onChange")
+                        .filter(|handler| !disabled && valid_handler(handler))
+                        .map(str::to_owned),
+                    children: parts(children),
+                })
+            }
+            "Confirm" => {
+                let mut slots = Slots(children);
+                Node::Confirm(Confirm {
+                    id,
+                    title: slots.take("title"),
+                    body: slots.take("body"),
+                    actions: slots.take("actions"),
+                })
+            }
             "Badge" => Node::Badge(Badge {
                 id,
                 variant: choice(&props, "variant"),
@@ -581,15 +780,50 @@ impl Walk {
                     body: slots.take("body"),
                 })
             }
-            "Select" => Node::Select(Select {
+            "Graph" => Node::Graph(graph(id, &props)?),
+            "SearchField" => Node::SearchField(SearchField {
                 id,
                 label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
-                options: options(&props),
-                value: str_prop(&props, "value").map(|value| cut(value.to_owned())),
-                on_change: str_prop(&props, "onChange")
-                    .filter(|handler| valid_handler(handler))
+                placeholder: cut(str_prop(&props, "placeholder")
+                    .unwrap_or_default()
+                    .to_owned()),
+                value: str_prop(&props, "defaultValue").map(str::to_owned),
+                on_input: str_prop(&props, "onInput")
+                    .filter(|s| valid_handler(s))
                     .map(str::to_owned),
             }),
+            "ListButton" => Node::ListButton(ListButton {
+                button: Button {
+                    id,
+                    variant: Variant::Ghost,
+                    disabled: on("disabled"),
+                    on_click: str_prop(&props, "onClick")
+                        .filter(|s| !on("disabled") && valid_handler(s))
+                        .map(str::to_owned),
+                    children: parts(children),
+                },
+                indent: number(&props, "indent")
+                    .unwrap_or_default()
+                    .clamp(0.0, 240.0) as f32,
+                expanded: props.get("aria-expanded").and_then(Value::as_bool),
+                vertical: str_prop(&props, "layout") == Some("column"),
+            }),
+            "Select" | "Chips" => {
+                let select = Select {
+                    id,
+                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    options: options(&props),
+                    value: str_prop(&props, "value").map(|value| cut(value.to_owned())),
+                    on_change: str_prop(&props, "onChange")
+                        .filter(|handler| valid_handler(handler))
+                        .map(str::to_owned),
+                };
+                if kind == "Chips" {
+                    Node::Chips(select)
+                } else {
+                    Node::Select(select)
+                }
+            }
             _ => return Ok(None),
         }))
     }
@@ -756,6 +990,47 @@ mod tests {
             panic!("a stack")
         };
         assert_eq!(stack.gap, Gap::M);
+    }
+
+    #[test]
+    fn notices_spinners_checkboxes_and_confirms_have_only_their_supported_parts() {
+        let parsed = tree(json!([
+            {"id":1,"type":"Notice","props":{"tone":"warn"},"children":[text(2, "Careful")]},
+            {"id":3,"type":"Spinner","props":{"size":"large","label":"Refreshing"},"children":[]},
+            {"id":4,"type":"Checkbox","props":{"checked":true,"onChange":"4:onChange"},"children":[text(5, "Delete branch")]},
+            {"id":6,"type":"Confirm","props":{},"children":[
+                slot("title", json!([text(7, "Remove?")])),
+                slot("body", json!([text(8, "This cannot be undone.")])),
+                slot("actions", json!([button(json!({"onClick":"9:onClick"}))]))]}]))
+        .unwrap();
+        let Node::Notice(notice) = &parsed.children[0] else {
+            panic!("a notice")
+        };
+        assert_eq!(
+            (notice.tone, plain_text(&notice.children)),
+            (Some(Tone::Warn), "Careful".to_owned())
+        );
+        let Node::Spinner(spinner) = &parsed.children[1] else {
+            panic!("a spinner")
+        };
+        assert!(spinner.large && spinner.label == "Refreshing");
+        let Node::Checkbox(checkbox) = &parsed.children[2] else {
+            panic!("a checkbox")
+        };
+        assert_eq!(
+            (
+                checkbox.checked,
+                checkbox.on_change.as_deref(),
+                plain_text(&checkbox.children)
+            ),
+            (true, Some("4:onChange"), "Delete branch".to_owned())
+        );
+        let Node::Confirm(confirm) = &parsed.children[3] else {
+            panic!("a confirm")
+        };
+        assert_eq!(plain_text(&confirm.title), "Remove?");
+        assert_eq!(plain_text(&confirm.body), "This cannot be undone.");
+        assert_eq!(plain_text(&confirm.actions), "Go");
     }
 
     fn slot(name: &str, children: Value) -> Value {
@@ -984,5 +1259,29 @@ mod tests {
         ] {
             assert!(Tree::parse(json).is_err(), "{json}");
         }
+    }
+
+    #[test]
+    fn graph_windows_preserve_geometry_and_reject_oversized_or_malformed_data() {
+        let mut props = serde_json::json!({ "total": 10000, "lanes": 2, "selected": -1, "offset": 5000,
+            "rows": [{"hash":"abc", "subject":"x".repeat(3000), "author":"Ada", "date":"2026-11-06", "refs":["H:main"], "lane":1, "color":2, "merge":true, "lines":[0,1,0,2,1,1,1,2]}]
+        }).as_object().unwrap().clone();
+        let parsed = graph(1, &props).unwrap();
+        assert_eq!(
+            parsed.rows[0].subject.len(),
+            3000,
+            "graph data is not generic truncated text"
+        );
+        assert_eq!(parsed.rows[0].lines, [0, 1, 0, 2, 1, 1, 1, 2]);
+        assert!(parsed.rows[0].merge);
+        let row = props["rows"][0].clone();
+        props.insert("rows".into(), serde_json::json!(vec![row.clone(); 257]));
+        assert!(graph(1, &props).is_err());
+        props.insert("rows".into(), serde_json::json!([row]));
+        props["rows"][0]["lines"] = serde_json::json!([0, 1, 3, 0]);
+        assert!(graph(1, &props).is_err());
+        props["rows"][0]["lines"] = serde_json::json!([0, 1, 0, 0]);
+        props["rows"][0]["subject"] = serde_json::json!("x".repeat(4097));
+        assert!(graph(1, &props).is_err());
     }
 }

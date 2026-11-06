@@ -6,6 +6,7 @@
   "icon": "icon.svg",
   "description": "Lists the git worktrees of your projects with what each one is (merged, upstream gone, dirty, locked, missing folder), and removes the ones you no longer need after you confirm. It can also look across the whole Mac for repos outside your projects that have worktrees.",
   "api": 1,
+  "native": true,
   "main": "dist/main.js",
   "permissions": {
     "exec": [

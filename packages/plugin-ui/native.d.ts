@@ -39,6 +39,20 @@ export function Text(props: {
 }): ReactElement;
 /** A button. `variant` "default" is the filled one. */
 export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; disabled?: boolean; children?: ReactNode }): ReactElement;
+/** A short message in a tinted box. */
+export function Notice(props: { tone?: "info" | "success" | "warn" | "danger"; children?: ReactNode }): ReactElement;
+/** A spinner. With a label it is announced by the app. */
+export function Spinner(props: { size?: "large"; label?: string }): ReactElement;
+/** A checkbox with its label. `onChange` gets its next checked state. */
+export function Checkbox(props: { checked?: boolean; disabled?: boolean; onChange?: (checked: boolean) => void; children?: ReactNode }): ReactElement;
+export interface ConfirmAction {
+  id: string;
+  label: ReactNode;
+  onConfirm: () => unknown;
+  variant?: "default" | "destructive" | "outline";
+}
+/** An in-page confirmation card. Failed actions leave the card open and show their error. */
+export function Confirm(props: { title: ReactNode; actions: ConfirmAction[]; cancelLabel?: string; onCancel: () => void; children?: ReactNode }): ReactElement;
 /** A badge, like a label on a command or a branch name. `tone` is Wings' own: a colour that says something. */
 export function Badge(props: { variant?: BadgeVariant; tone?: Exclude<Tone, "muted">; size?: "sm"; children?: ReactNode }): ReactElement;
 /** What shows before the first data comes: "Loading…", unless `children` say otherwise. */
@@ -61,3 +75,20 @@ export function ListItem(props: { children?: ReactNode }): ReactElement;
 export function Disclosure(props: { summary: ReactNode; children?: ReactNode }): ReactElement;
 /** A select of `options`; without a `value` it starts on the first. `onChange` gets the value picked. */
 export function Select<V extends string>(props: { label?: string; options: (Option<V> & { label: string; disabled?: boolean })[]; value?: V; onChange?: (value: V) => void }): ReactElement;
+
+export function Chips<V extends string>(props: { label: string; options: { value: V; label: string; disabled?: boolean }[]; value: V; onChange: (value: V) => void }): ReactElement;
+export function ListButton(props: { onClick?: (event: NativeEvent) => void; disabled?: boolean; align?: "baseline"; layout?: "column"; title?: string; indent?: number; "aria-expanded"?: boolean; children?: ReactNode }): ReactElement;
+export function SearchField(props: { label: string; placeholder?: string; defaultValue?: string; onInput?: (event: NativeEvent & { currentTarget: { value: string }; target: { value: string } }) => void }): ReactElement;
+export interface GraphRow {
+  hash: string;
+  subject: string;
+  author: string;
+  date: string;
+  refs: string[];
+  lane: number;
+  color: number;
+  merge: boolean;
+  lines: number[];
+}
+/** A virtual list of at most 10,000 rows. At most 256 rows may be supplied in a window. */
+export function Graph(props: { total: number; lanes: number; selected: number; offset: number; rows: GraphRow[]; onRangeChange: (range: { start: number; end: number }) => void; onSelect: (index: number) => void }): ReactElement;

@@ -18,6 +18,126 @@ const COMPONENTS: &str = include_str!("../../pages/dist/components-page.js");
 const FIXTURE_MAIN: &str = include_str!("../../pages/dist/fixture-main.js");
 const FIXTURE_PAGE: &str = include_str!("../../pages/dist/fixture-page.js");
 
+const GRAPH: &str = r#"
+let selected = -1, offset = 0, end = 64, requests = 0;
+function render() {
+  const rows = Array.from({length:end-offset}, (_,i)=>({hash:String(offset+i), subject:'Commit '+(offset+i), author:'Ada', date:'2026-11-06', refs:[], lane:0, color:0, merge:false, lines:[0,0,2,0]}));
+  wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+    {id:3,type:'Text',children:[{id:4,type:'#text',text:'Selected '+selected+', requests '+requests}]},
+    {id:5,type:'Graph',props:{total:10000,lanes:1,selected,offset,rows,onRangeChange:'5:range',onSelect:'5:select'}}
+  ]}],props:{flush:true}}]}));
+}
+globalThis.__wingsEvent=(handler,json)=>{ const e=JSON.parse(json); if(handler==='5:range'){offset=e.start;end=e.end;requests++;}else selected=e.index;render();return true;};
+render();
+"#;
+
+const SEARCH: &str = r#"
+let query = '';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+{id:3,type:'SearchField',props:{label:'Search commits',placeholder:'Search commits',onInput:'3:input'}},
+{id:4,type:'Text',children:[{id:5,type:'#text',text:'Query='+query}]}]}]}]}));}
+globalThis.__wingsEvent=(_,json)=>{query=JSON.parse(json).value;render();return true;};render();
+"#;
+
+#[test]
+fn search_field_physical_input_reaches_the_query_and_backspace_edits_it() {
+    let (app, mut window) = open(SEARCH);
+    settle(&app, &mut window, shows("Query="));
+    window.simulate_click(point(px(70.0), px(27.0)), MouseButton::Left);
+    window.simulate_input("coupon");
+    settle(&app, &mut window, shows("Query=coupon"));
+    key(&mut window, "backspace");
+    settle(&app, &mut window, shows("Query=coupo"));
+}
+
+#[test]
+fn search_field_can_be_reached_with_tab() {
+    let (app, mut window) = open(SEARCH);
+    settle(&app, &mut window, shows("Query="));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("coupon");
+    settle(&app, &mut window, shows("Query=coupon"));
+}
+
+#[test]
+fn built_changes_sidebar_supports_keyboard_chips_and_live_history_search_in_quickjs() {
+    let root = Root::new();
+    let host = Arc::new(PluginHost::new(root.config("changes")));
+    host.start_main(
+        include_str!("../../../../plugins/changes/preview/native-host.js"),
+        |_| {},
+    )
+    .unwrap();
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let page_host = host.clone();
+    let mut window = app.open_window(move |_, cx| {
+        PageView::in_plugin(
+            &page_host,
+            include_str!("../../../../plugins/changes/dist/native/sidebar.js"),
+            cx,
+        )
+    });
+    settle(&app, &mut window, shows("Coupon.tsx"));
+    window.simulate_click(point(px(45.0), px(78.0)), MouseButton::Left);
+    // Arrow through Branch to History. Focus must follow the selected chip.
+    key(&mut window, "right");
+    settle(&app, &mut window, shows("against main"));
+    key(&mut window, "right");
+    settle(&app, &mut window, shows("Add coupon validation"));
+    window.simulate_click(point(px(70.0), px(116.0)), MouseButton::Left);
+    window.simulate_input("not-a-commit");
+    settle(&app, &mut window, shows("No commits match."));
+    assert!(window.read(|view, _| view.error().is_none()));
+}
+
+fn key(window: &mut View, key: &'static str) {
+    window.simulate_event(gpui::KeyDownEvent {
+        keystroke: Keystroke::parse(key).unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    window.simulate_event(gpui::KeyUpEvent {
+        keystroke: Keystroke::parse(key).unwrap(),
+    });
+}
+
+#[test]
+fn graph_virtualizes_ten_thousand_commits_and_keyboard_scrolls_before_opening() {
+    let (app, mut window) = open(GRAPH);
+    settle(&app, &mut window, |view| {
+        view.graph_window()
+            .is_some_and(|(_, _, n)| n > 0 && n <= 256)
+    });
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    key(&mut window, "end");
+    settle(&app, &mut window, |view| {
+        view.graph_window()
+            .is_some_and(|(total, offset, n)| total == 10000 && offset > 9900 && n <= 256)
+    });
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Selected 9999"));
+    let before = window.read(|view, _| view.text());
+    for _ in 0..8 {
+        window.draw();
+        app.run_until_parked();
+    }
+    assert_eq!(
+        window.read(|view, _| view.text()),
+        before,
+        "unchanged range must not request another tree"
+    );
+    key(&mut window, "home");
+    settle(&app, &mut window, |view| {
+        view.graph_window()
+            .is_some_and(|(_, offset, _)| offset == 0)
+    });
+    window.simulate_click(point(px(230.0), px(40.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Selected 0"));
+}
+
 type View = TestAppWindow<PageView>;
 
 fn open(source: &'static str) -> (TestApp, View) {
@@ -100,6 +220,25 @@ wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
     ] }] }] }));
 "#;
 
+const CHECKBOX: &str = r#"
+let checked = false;
+const render = () => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
+  { id: 1, type: 'Page', props: {}, children: [{ id: 2, type: 'Slot', props: { name: 'body' }, children: [
+    { id: 3, type: 'Checkbox', props: { checked, onChange: '3:onChange' }, children: [{ id: 4, type: '#text', text: 'Delete branch' }] }
+  ] }] }
+] }));
+globalThis.__wingsEvent = (_handler, payload) => { checked = JSON.parse(payload).checked; render(); return true; };
+render();
+"#;
+
+const DISABLED_CHECKBOX: &str = r#"
+wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
+  { id: 1, type: 'Page', props: {}, children: [{ id: 2, type: 'Slot', props: { name: 'body' }, children: [
+    { id: 3, type: 'Checkbox', props: { checked: false, disabled: true, onChange: '3:onChange' }, children: [{ id: 4, type: '#text', text: 'Delete branch' }] }
+  ] }] }
+] }));
+"#;
+
 #[test]
 fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not_drawn() {
     let (app, mut window) = open(THROWS);
@@ -109,6 +248,46 @@ fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not
     settle(&app, &mut window, |view| {
         view.error().is_some_and(|error| error.contains("nope"))
     });
+}
+
+#[test]
+fn a_checkbox_is_keyboard_operable_and_its_disabled_state_is_skipped() {
+    let (app, mut window) = open(CHECKBOX);
+    settle(&app, &mut window, shows("Delete branch"));
+    assert_eq!(window.read(|view, _| view.checkbox_checked()), Some(false));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_event(gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    settle(&app, &mut window, |view| {
+        view.checkbox_checked() == Some(true)
+    });
+    window.simulate_event(gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    settle(&app, &mut window, |view| {
+        view.checkbox_checked() == Some(false)
+    });
+
+    let (disabled_app, mut disabled) = open(DISABLED_CHECKBOX);
+    settle(&disabled_app, &mut disabled, shows("Delete branch"));
+    disabled.update(|_, window, cx| window.focus_next(cx));
+    disabled.draw();
+    disabled.simulate_event(gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    nothing_happens(&disabled_app);
+    assert_eq!(
+        disabled.read(|view, _| view.checkbox_checked()),
+        Some(false)
+    );
 }
 
 #[test]

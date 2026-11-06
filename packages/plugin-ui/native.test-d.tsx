@@ -3,22 +3,30 @@ import {
   Badge as NativeBadge,
   Button as NativeButton,
   Card as NativeCard,
+  Checkbox as NativeCheckbox,
+  Chips as NativeChips,
+  Confirm as NativeConfirm,
   Disclosure as NativeDisclosure,
   Dot as NativeDot,
   Empty as NativeEmpty,
   Gauge as NativeGauge,
+  Graph as NativeGraph,
   Heading as NativeHeading,
   List as NativeList,
   ListItem as NativeListItem,
+  ListButton as NativeListButton,
   Loading as NativeLoading,
+  Notice as NativeNotice,
   Page as NativePage,
   Row as NativeRow,
   Select as NativeSelect,
+  SearchField as NativeSearchField,
   Stack as NativeStack,
+  Spinner as NativeSpinner,
   Text as NativeText,
   Toolbar as NativeToolbar,
 } from "./native";
-import type { Badge, Button, Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Page, Row, Select, Stack, Text, Toolbar } from "./ui";
+import type { Badge, Button, Card, Checkbox, Confirm, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Notice, Page, Row, Select, Spinner, Stack, Text, Toolbar } from "./ui";
 
 // What a native component takes, a ui component takes too.
 type Props<F> = F extends (props: infer P) => unknown ? P : never;
@@ -26,6 +34,8 @@ type Takes<Native, Web> = Props<Native> extends Props<Web> ? true : never;
 export const sameProps: [
   Takes<typeof NativeBadge, typeof Badge>,
   Takes<typeof NativeCard, typeof Card>,
+  Takes<typeof NativeCheckbox, typeof Checkbox>,
+  Takes<typeof NativeConfirm, typeof Confirm>,
   Takes<typeof NativeDisclosure, typeof Disclosure>,
   Takes<typeof NativeDot, typeof Dot>,
   Takes<typeof NativeEmpty, typeof Empty>,
@@ -34,15 +44,17 @@ export const sameProps: [
   Takes<typeof NativeList, typeof List>,
   Takes<typeof NativeListItem, typeof ListItem>,
   Takes<typeof NativeLoading, typeof Loading>,
+  Takes<typeof NativeNotice, typeof Notice>,
   Takes<typeof NativePage, typeof Page>,
   Takes<typeof NativeRow, typeof Row>,
   Takes<typeof NativeSelect, typeof Select>,
   Takes<typeof NativeStack, typeof Stack>,
+  Takes<typeof NativeSpinner, typeof Spinner>,
   Takes<typeof NativeText, typeof Text>,
   Takes<typeof NativeToolbar, typeof Toolbar>,
   // A button's handler gets the native event, so only its other props are the same.
   Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick"> ? true : never,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 export const page = (
   <NativePage toolbar={<NativeToolbar title="Pilot" actions={<NativeBadge tone="info">ready</NativeBadge>} />}>
@@ -50,6 +62,14 @@ export const page = (
       Add
     </NativeButton>
     <NativeButton onClick={() => {}}>No event needed</NativeButton>
+    <NativeCheckbox checked onChange={() => {}}>Delete branch</NativeCheckbox>
+    <NativeNotice tone="warn">Careful</NativeNotice>
+    <NativeSpinner label="Loading" />
+    <NativeChips label="Show" options={[{ value: "history", label: "History" }]} value="history" onChange={(value) => value.toUpperCase()} />
+    <NativeSearchField label="Search commits" defaultValue="coupon" onInput={(event) => event.currentTarget.value.toUpperCase()} />
+    <NativeListButton layout="column" indent={12} onClick={(event) => event.stopPropagation()}>Open commit</NativeListButton>
+    <NativeGraph total={10000} lanes={2} offset={0} rows={[]} selected={-1} onRangeChange={({ start, end }) => end - start} onSelect={(index) => index.toFixed()} />
+    <NativeConfirm title="Remove?" actions={[{ id: "remove", label: "Remove", onConfirm: () => {} }]} onCancel={() => {}} />
     <NativeCard>
       <NativeHeading>Usage</NativeHeading>
       <NativeGauge label="Memory" percent={42} note="5 of 12 GB" levels={[75, 90]} />

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, latestOnly } from "wings-plugin-sdk/async";
 import { plural } from "wings-plugin-sdk/format";
 import { defaultBranch, onGitChange, repoRoot } from "wings-plugin-sdk/git";
-import { Button, Empty, Loading, Notice, Row, Spinner, Stack, Text } from "wings-plugin-ui";
+import { Button, Empty, Loading, Notice, Page, Row, Spinner, Text, Toolbar } from "wings-plugin-ui";
 
 import { elsewhere, elsewhereRepos, findRepoFolders, reposWithWorktrees } from "../lib/elsewhere";
 import { loadRepos, prune, removeWorktrees, rowsOf, type Outcome, type Repo } from "../lib/git";
@@ -186,37 +186,23 @@ export default function Worktrees() {
   const elsewhereSections = elsewhereRepos(others, repos).map((repo) => ({ repo, rows: rowsOf(repo, cwds) }));
 
   return (
-    <>
-      <Row>
-        <Stack gap="none" grow>
-          <Text as="div" weight="strong">
-            Worktrees
-          </Text>
-          <Text as="div" tone="muted" truncate>
-            {removable ? `${plural(removable, "worktree")} merged and clean` : "Of your projects"}
-          </Text>
-        </Stack>
-        {loading ? <Spinner label="Refreshing" /> : null}
-        <Button
+    <Page toolbar={<Toolbar title="Worktrees" actions={<Row gap="xs">{loading ? <Spinner label="Refreshing" /> : null}<Button
           variant="outline"
-          size="sm"
           onClick={() => {
             // The button only: focus and pane changes keep what was found.
             repoRoot.forget();
             defaultBranch.forget();
             void refresh();
           }}
-        >
-          Refresh
-        </Button>
-      </Row>
+        >Refresh</Button></Row>} />}>
+      <Text tone="muted" truncate>{removable ? `${plural(removable, "worktree")} merged and clean` : "Of your projects"}</Text>
       {notes.map((n, i) => (
-        <Notice key={i} tone={n.tone} className="note">
+        <Notice key={i} tone={n.tone}>
           {n.text}
         </Notice>
       ))}
       {errors.map((e) => (
-        <Notice key={e} tone="warn" className="note">
+        <Notice key={e} tone="warn">
           {e}
         </Notice>
       ))}
@@ -224,13 +210,13 @@ export default function Worktrees() {
       {sections.map(({ repo, rows }) => section(repo, rows, openPane))}
       <Elsewhere at={scannedAt} scanning={scanning} error={scanError} found={elsewhereSections.length} onScan={() => void scanMac()} onStop={() => stopScan.current?.abort()}>
         {otherErrors.map((e) => (
-          <Notice key={e} tone="warn" className="note">
+          <Notice key={e} tone="warn">
             {e}
           </Notice>
         ))}
         {/* Wings opens panes only in your projects, so these have no "Open in new pane". */}
         {elsewhereSections.map(({ repo, rows }) => section(repo, rows))}
       </Elsewhere>
-    </>
+    </Page>
   );
 }

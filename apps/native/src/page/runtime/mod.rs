@@ -99,6 +99,11 @@ enum Command {
 /// What the host can tell a frame of a plugin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Message {
+    Projects,
+    Focus,
+    Git,
+    DiffRefresh,
+    DiffClosed,
     /// JSON from another frame of the plugin, for `onBroadcast`.
     Broadcast,
     /// The JSON list of panes, for `onPanes`.
@@ -118,6 +123,11 @@ pub enum Message {
 impl Message {
     fn name(self) -> &'static str {
         match self {
+            Message::Projects => "projects",
+            Message::Focus => "focus",
+            Message::Git => "git",
+            Message::DiffRefresh => "diffRefresh",
+            Message::DiffClosed => "diffClosed",
             Message::Broadcast => "broadcast",
             Message::Panes => "panes",
             Message::Transcript => "transcript",
@@ -220,6 +230,7 @@ impl Inbox {
 }
 
 pub struct PageRuntime {
+    link: Option<Arc<dyn Link>>,
     inbox: Inbox,
     /// Set when the frame is let go of. A frame keeps a sender of its own for the answers to its calls, so its queue
     /// never runs out of senders to say so.
@@ -283,6 +294,7 @@ impl PageRuntime {
         let (commands, received) = mpsc::sync_channel(QUEUED_COMMANDS);
         let closed = Arc::new(AtomicBool::new(false));
         services.queue = services.link.is_some().then(|| commands.clone());
+        let link = services.link.clone();
         thread::Builder::new()
             .name("page-runtime".into())
             .stack_size(THREAD_STACK_BYTES)
@@ -291,6 +303,7 @@ impl PageRuntime {
                 move || serve(&source, limits, &services, &received, &closed, on_event)
             })?;
         Ok(Self {
+            link,
             inbox: Inbox(commands),
             closed,
             _attached: None,
@@ -305,6 +318,13 @@ impl PageRuntime {
 
     pub fn inbox(&self) -> Inbox {
         self.inbox.clone()
+    }
+
+    /// A hidden plugin page pauses focused work without stopping its frame.
+    pub fn set_visible(&self, visible: bool) {
+        if let Some(link) = &self.link {
+            link.set_visible(visible);
+        }
     }
 
     /// Sends the frame an event for the handler it named in its tree. False when it can't take it: it has stopped, or

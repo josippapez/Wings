@@ -220,7 +220,7 @@ function fakeUi(dir, { ui, native }) {
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "wings-plugin-ui", type: "module", exports: { ".": "./index.js", "./native": "./native.js" } }));
   const names = (list) => list.map((name) => `export const ${name} = () => null;`).join("\n");
-  writeFileSync(join(root, "index.js"), `${names(ui)}\n${names(["showBlock", "showPopover", "showSettings", "showSidebar", "showTab", "showView"])}`);
+  writeFileSync(join(root, "index.js"), `${names(ui)}\n${["showBlock", "showPopover", "showSettings", "showSidebar", "showTab", "showView"].map((name) => `export const ${name} = (element) => { globalThis.shown = { element }; };`).join("\n")}`);
   writeFileSync(join(root, "native.js"), `${names(native)}\nexport const mount = (element) => { globalThis.mounted = element; };`);
   if (!existsSync(join(dir, "node_modules", "react"))) symlinkSync(join(import.meta.dirname, "node_modules", "react"), join(dir, "node_modules", "react"));
 }
@@ -259,6 +259,40 @@ test("a native plugin without src/main.ts gets an empty dist/native/main.js", as
   t.after(() => rmSync(dir, { recursive: true }));
   await buildPlugin(dir);
   assert.match(readFileSync(join(dir, "dist", "native", "main.js"), "utf8"), /^\/\/ Built from src\/[^\n]*\n$/);
+});
+
+test("WINGS_NATIVE leaves browser-only dynamic imports out of native bundles", async (t) => {
+  const files = {
+    "src/pages/sidebar.ts": null,
+    "src/pages/sidebar.css": null,
+    "src/pages/sidebar.tsx": 'import { lazy } from "react";\nimport { Page } from "wings-plugin-ui";\nconst Graph = WINGS_NATIVE ? lazy(() => import("../graph.native")) : lazy(() => import("../graph.browser"));\nexport const page = { place: "sidebar" };\nexport default function Sidebar() { return <Page><Graph /></Page>; }',
+    "src/graph.browser.tsx": 'document.body.dataset.graph = "browser";\nglobalThis.browserGraphLoaded = true;\nexport default function BrowserGraph() { return <p>browser graph</p>; }',
+    "src/graph.native.tsx": 'import { Text } from "wings-plugin-ui";\nglobalThis.nativeGraphLoaded = true;\nexport default function NativeGraph() { return <Text>native graph</Text>; }',
+  };
+  const dir = plugin(files, { native: true });
+  t.after(() => rmSync(dir, { recursive: true }));
+  fakeUi(dir, { ui: ["Page"], native: ["Page", "Text"] });
+  await buildPlugin(dir);
+
+  const native = readFileSync(join(dir, "dist", "native", "sidebar.js"), "utf8");
+  assert.match(native, /native graph/);
+  assert.doesNotMatch(native, /browser graph|document\.body/);
+  const nativeContext = {};
+  runInNewContext(native, nativeContext);
+  const nativeGraph = nativeContext.mounted.type().props.children;
+  await nativeGraph.type._payload._result();
+  assert.equal(nativeContext.nativeGraphLoaded, true);
+  assert.equal(nativeContext.browserGraphLoaded, undefined);
+
+  const browser = readFileSync(join(dir, "dist", "sidebar.js"), "utf8");
+  assert.match(browser, /browser graph|document\.body/);
+  assert.doesNotMatch(browser, /native graph/);
+  const browserContext = { document: { body: { dataset: {} } } };
+  runInNewContext(browser, browserContext);
+  const browserGraph = browserContext.shown.element.type().props.children;
+  await browserGraph.type._payload._result();
+  assert.equal(browserContext.browserGraphLoaded, true);
+  assert.equal(browserContext.nativeGraphLoaded, undefined);
 });
 
 test("a native build names each component the native renderer lacks and the file that imports it, and the browser build doesn't care", async (t) => {

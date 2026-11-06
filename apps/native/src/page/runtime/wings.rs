@@ -3,7 +3,7 @@
 //! A bare page has `wings.render` and `setTimeout`/`clearTimeout`. A frame of a plugin, given a `Link` by the host that
 //! runs it, has these too, as the desktop's frames do: `wings.broadcast`, `wings.onBroadcast` and `wings.storage`;
 //! `setInterval` and `clearInterval`; a `console` that discards what it's given; and `wings.focused` and
-//! `wings.onFocus`, which the native app doesn't report yet (`focused` is always true and `onFocus` never fires).
+//! `wings.onFocus`, which follow the native window's activation state.
 //! Those are what `wings-plugin-sdk`'s `channel` and `useQuery` need to run.
 //!
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
@@ -26,6 +26,10 @@ use std::{
 /// What a frame of a plugin reaches through `wings`. The host that runs the frame implements it; each call is made on
 /// the frame's own thread, so it must not wait for another frame.
 pub trait Link: Send + Sync + 'static {
+    fn focused(&self) -> bool {
+        true
+    }
+    fn set_visible(&self, _visible: bool) {}
     /// The frame broadcast `json`: the host sends it to the plugin's other frames. An error rejects the frame's promise.
     fn broadcast(&self, json: String) -> Result<(), String>;
     /// One call of `wings.storage`. The answer is JSON: the value, a list of keys or of `[key, value]`, or `null`.
@@ -56,7 +60,27 @@ const SETUP: &str = r#"
     let deliver;
     if (native.broadcast) {
         const none = () => {};
-        const listeners = { broadcast: [], panes: [], transcript: [], action: [] };
+        const listeners = { broadcast: [], panes: [], transcript: [], action: [], projects: [], focus: [], git: [], diffClosed: [] };
+        let diffRefreshHandler = null;
+        let projects = null, focused = native.focused, focusKnown = false;
+        // QuickJS has no browser abort globals. Only the signal contract needed by diskFind is supplied.
+        class AbortSignal {
+            constructor() { this.aborted = false; this.listeners = []; }
+            addEventListener(type, fn, options) { if (type === 'abort') this.listeners.push({ fn, once: options?.once }); }
+            removeEventListener(type, fn) { if (type === 'abort') this.listeners = this.listeners.filter((entry) => entry.fn !== fn); }
+            throwIfAborted() { if (this.aborted) { const error = new Error('The scan was stopped'); error.name = 'AbortError'; throw error; } }
+        }
+        defined.AbortController = class AbortController {
+            constructor() { this.signal = new AbortSignal(); }
+            abort() {
+                if (this.signal.aborted) return;
+                this.signal.aborted = true;
+                for (const entry of [...this.signal.listeners]) {
+                    if (entry.once) this.signal.removeEventListener('abort', entry.fn);
+                    try { entry.fn(); } catch (error) { defined.console.error(error); }
+                }
+            }
+        };
         const subscribe = (list, listener) => {
             list.push(listener);
             return () => {
@@ -125,6 +149,22 @@ const SETUP: &str = r#"
 
         deliver = (kind, id, text) => {
             switch (kind) {
+                case 'projects': projects = JSON.parse(text); hear(listeners.projects, projects); break;
+                case 'focus': {
+                    const value = JSON.parse(text).focused === true;
+                    if (focusKnown && value === focused) break;
+                    focused = value; focusKnown = true;
+                    hear(listeners.focus, { focused }); break;
+                }
+                case 'git': hear(listeners.git, JSON.parse(text)); break;
+                case 'diffClosed': hear(listeners.diffClosed, JSON.parse(text)); break;
+                case 'diffRefresh': {
+                    Promise.resolve().then(() => diffRefreshHandler?.(JSON.parse(text))).then(
+                        () => call('actionDone', { token: id, error: null }),
+                        error => call('actionDone', { token: id, error: String(error?.message ?? error) })
+                    ).catch(none);
+                    break;
+                }
                 case 'broadcast': hear(listeners.broadcast, JSON.parse(text)); break;
                 case 'panes':
                     panes = JSON.parse(text);
@@ -172,7 +212,34 @@ const SETUP: &str = r#"
                 keys: async () => store('keys', ''),
                 entries: async (prefix = '') => store('entries', String(prefix)),
             }),
-            onFocus: () => none,
+            onFocus: (listener) => {
+                const off = subscribe(listeners.focus, listener);
+                if (focusKnown) Promise.resolve().then(() => { try { listener({ focused }); } catch (error) { defined.console.error(error); } });
+                return off;
+            },
+            projects: () => call('projects', {}),
+            onProjects: (listener) => {
+                const off = subscribe(listeners.projects, listener);
+                if (projects) Promise.resolve().then(() => { try { listener(projects); } catch (error) { defined.console.error(error); } });
+                return off;
+            },
+            onGitChange: (listener) => subscribe(listeners.git, listener),
+            disks: () => call('disks', {}),
+            diskFind: (path, { names, skip, onProgress, signal } = {}) => {
+                if (signal?.aborted) return Promise.reject(new Error('The scan was stopped'));
+                const token = String(nextCall);
+                const stop = () => { call('diskUsageCancel', { token }).catch(none); };
+                signal?.addEventListener('abort', stop, { once: true });
+                return call('diskFind', { path, names, skip, token, stream: typeof onProgress === 'function' },
+                    typeof onProgress === 'function' ? (line) => onProgress(JSON.parse(line)) : undefined)
+                    .finally(() => signal?.removeEventListener('abort', stop));
+            },
+            openPane: ({ command = null, args = [], cwd = null, placement = 'tab' } = {}) => call('openPane', { command, args, cwd, placement }),
+            openView: (id, { as, args, newTab } = {}) => call('openView', { id, as, args, newTab: newTab === true }),
+            openDiff: (diff) => call('openDiff', diff ?? {}),
+            updateDiff: (id, update) => call('updateDiff', { id, ...update }),
+            onDiffRefresh: (handler) => void (diffRefreshHandler = handler),
+            onDiffClosed: (listener) => subscribe(listeners.diffClosed, listener),
             // Every terminal pane, on every change, and once more for a listener that comes after the first list.
             onPanes: (listener) => {
                 const off = subscribe(listeners.panes, listener);
@@ -206,7 +273,7 @@ const SETUP: &str = r#"
             onTranscript: (listener) => subscribe(listeners.transcript, listener),
             statusline: () => call('statusline', {}),
         });
-        Object.defineProperty(wings, 'focused', { get: () => true, enumerable: true });
+        Object.defineProperty(wings, 'focused', { get: () => focused, enumerable: true });
         defined.setInterval = native.setInterval;
         defined.clearInterval = native.clearInterval;
         defined.console = Object.freeze({ log: none, info: none, debug: none, warn: none, error: none });
@@ -235,6 +302,7 @@ pub(super) fn install<'js>(
             .map_err(message)?;
     }
     if let Some(link) = &services.link {
+        native.set("focused", link.focused()).map_err(message)?;
         native
             .set("broadcast", broadcast(ctx, link).map_err(message)?)
             .map_err(message)?;

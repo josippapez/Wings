@@ -56,7 +56,7 @@ impl TextField {
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             role,
             label: label.into(),
             placeholder: placeholder.into(),

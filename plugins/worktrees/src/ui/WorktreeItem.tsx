@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ago } from "wings-plugin-sdk/format";
-import { Badge, Button, Row, Text } from "wings-plugin-ui";
+import { Badge, Button, Card, Row, Stack, Text } from "wings-plugin-ui";
 
 import { shortenPath, type Row as WorktreeRow } from "../lib/worktrees";
 
@@ -30,7 +30,8 @@ export function WorktreeItem(p: {
   // git prints seconds; ago wants milliseconds.
   const when = row.lastCommit === null ? "" : ago(row.lastCommit * 1000);
   return (
-    <li className="wt" data-removable={row.removable}>
+    <Card>
+      <Stack gap="xs">
       <Row>
         <Text weight="strong" truncate grow title={wt.branch ?? undefined}>
           {wt.branch ?? (wt.bare ? "(bare)" : wt.head ? `detached ${wt.head.slice(0, 7)}` : "(no branch)")}
@@ -41,27 +42,27 @@ export function WorktreeItem(p: {
           </Text>
         ) : null}
       </Row>
-      <Text as="div" tone="muted" size="small" mono truncate title={wt.path}>
+      <Text tone="muted" size="small" mono truncate>
         {shortenPath(wt.path)}
       </Text>
       {flags.length ? (
-        <Row wrap gap="xs" className="flags">
+        <Row wrap gap="xs">
           {flags.map((f) => (
-            <Badge key={f.label} variant={f.tone ? undefined : "outline"} tone={f.tone} title={f.title}>
+            <Badge key={f.label} variant={f.tone ? undefined : "outline"} tone={f.tone}>
               {f.label}
             </Badge>
           ))}
         </Row>
       ) : null}
       {p.confirm ?? (
-        <Row gap="s" className="item-actions">
+        <Row gap="s" justify="end" wrap>
           {!row.missing && p.onOpen ? (
-            <Button variant="ghost" size="xs" className="open-pane" onClick={p.onOpen}>
+            <Button variant="ghost" onClick={p.onOpen}>
               Open in new pane
             </Button>
           ) : null}
           {row.removable ? (
-            <Button variant="outline" size="xs" disabled={p.working} onClick={p.onAsk}>
+            <Button variant="outline" disabled={p.working} onClick={p.onAsk}>
               Remove
             </Button>
           ) : (
@@ -71,6 +72,7 @@ export function WorktreeItem(p: {
           )}
         </Row>
       )}
-    </li>
+      </Stack>
+    </Card>
   );
 }

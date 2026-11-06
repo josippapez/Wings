@@ -11,13 +11,15 @@ import { fill, makeRow } from "../ui/graph-rows";
 import { layout, type Placed } from "../lib/graph-layout";
 import { LOG, parseLog } from "../lib/log";
 import { ch } from "../lib/messages";
-import "./graph.css";
+import "../pages/graph.css";
 
 /** Rows drawn above and below the screen, so a fast scroll doesn't show gaps. */
 const OVERSCAN = 12;
 const LIMIT = 10_000;
 
 // Wings gives the page its frame; the graph lays itself out edge to edge inside it.
+export function mountGraph() {
+let disposed = false;
 const head = h("header", { id: "head", class: "w-row", "aria-live": "polite" });
 const canvas = h("canvas", { id: "lanes", "aria-hidden": "true" }) as HTMLCanvasElement;
 const list = h("ul", { id: "rows", "aria-label": "Commits" });
@@ -57,7 +59,8 @@ function update(force = false) {
 }
 
 scroller.addEventListener("scroll", () => (frame ||= requestAnimationFrame(() => update())), { passive: true });
-new ResizeObserver(() => update()).observe(scroller);
+const observer = new ResizeObserver(() => update());
+observer.observe(scroller);
 
 function openCommit(i: number) {
   const c = state.commits[i];
@@ -121,7 +124,7 @@ async function load() {
   if (!root) return;
   try {
     const out = await git(root, ["log", "--all", "--topo-order", ...LOG, `--max-count=${LIMIT}`], { raw: true });
-    if (stale()) return;
+    if (stale() || disposed) return;
     const { rows, lanes } = layout(parseLog(out));
     state = { ...state, loading: false, commits: rows, lanes };
     selected = Math.min(selected, rows.length - 1);
@@ -130,7 +133,7 @@ async function load() {
     for (const b of pool) delete b.dataset.i;
     update(true);
   } catch (error) {
-    if (stale()) return;
+    if (stale() || disposed) return;
     state = { ...state, loading: false, error: errorMessage(error) };
   }
   renderHead();
@@ -146,6 +149,7 @@ async function show() {
     return renderHead();
   }
   // A second Graph click while it loads would only load it again.
+  if (disposed) return;
   if (state.root && repo.root === state.root && state.loading) return;
   if (repo.root !== state.root) {
     state = { root: repo.root, name: repo.name ?? undefined, loading: false, commits: [], lanes: 1 };
@@ -158,6 +162,15 @@ async function show() {
 }
 
 // Main tells when the Graph button was clicked again, maybe for another repo.
-ch.on("graph-repo-changed", () => void show());
+const off = ch.on("graph-repo-changed", () => void show());
 renderHead();
 void show();
+return () => {
+  disposed = true;
+  off();
+  observer.disconnect();
+  if (frame) cancelAnimationFrame(frame);
+  head.remove();
+  scroller.remove();
+};
+}

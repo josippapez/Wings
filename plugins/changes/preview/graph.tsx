@@ -27,7 +27,12 @@ export default function Fixture() {
   // The graph builds its own DOM into the page, as it does when Wings loads graph.js; its git log is the made-up one.
   useEffect(() => {
     (window as unknown as { wings: { exec: unknown } }).wings.exec = () => Promise.resolve({ code: 0, stdout: out, stderr: "" });
-    void import("../src/pages/graph");
+    let cleanup: (() => void) | undefined;
+    let disposed = false;
+    void import("../src/ui/graph-browser").then(({ mountGraph }) => {
+      if (!disposed) cleanup = mountGraph();
+    });
+    return () => { disposed = true; cleanup?.(); };
   }, []);
   return null;
 }

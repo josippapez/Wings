@@ -507,6 +507,7 @@ impl Workspace {
             self.sidebar_pages.insert(key.clone(), page);
         }
         self.right = Some(key);
+        self.sync_plugin_visibility(cx);
         cx.notify();
     }
 
@@ -518,6 +519,7 @@ impl Workspace {
             .is_some_and(|(open, page)| open == plugin && page == sidebar);
         if shown {
             self.right = None;
+            self.sync_plugin_visibility(cx);
             cx.notify();
         } else {
             self.show_sidebar(plugin, sidebar, cx);
@@ -624,6 +626,7 @@ impl Workspace {
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.right = None;
+                                this.sync_plugin_visibility(cx);
                                 cx.notify();
                             })),
                         ),

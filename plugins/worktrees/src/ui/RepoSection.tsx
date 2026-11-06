@@ -32,28 +32,28 @@ export function RepoSection(p: {
     <ConfirmCard ask={ask} branch={branch} outside={!repo.checked} deleteBranch={p.deleteBranch} onDeleteBranch={p.onDeleteBranch} onConfirm={p.onConfirm} onCancel={p.onCancel} />
   );
   return (
-    <section aria-label={name}>
-      <Heading level={3}>{name}</Heading>
-      <Text as="div" tone="muted" truncate className="repo-path" title={repo.root}>
+    <Stack gap="s">
+      <Heading>{name}</Heading>
+      <Text tone="muted" truncate>
         {shortenPath(repo.root)}
         {repo.facts.defaultBranch ? ` · default ${repo.facts.defaultBranch}` : ""}
       </Text>
       {rows.length > 1 && (missing.length > 0 || bulk.length > 0) ? (
-        <Row wrap gap="s" className="repo-actions">
+        <Row wrap gap="s">
           {missing.length > 0 ? (
-            <Button variant="outline" size="xs" disabled={working} onClick={() => p.onAsk({ kind: "prune", root: repo.root, paths: missing.map((r) => r.wt.path) })}>
+            <Button variant="outline" disabled={working} onClick={() => p.onAsk({ kind: "prune", root: repo.root, paths: missing.map((r) => r.wt.path) })}>
               {`Prune ${missing.length} missing`}
             </Button>
           ) : null}
           {bulk.length > 0 ? (
-            <Button variant="outline" size="xs" disabled={working} onClick={() => p.onAsk({ kind: "bulk", root: repo.root, paths: bulk.map((r) => r.wt.path) })}>
+            <Button variant="outline" disabled={working} onClick={() => p.onAsk({ kind: "bulk", root: repo.root, paths: bulk.map((r) => r.wt.path) })}>
               {`Remove ${bulk.length} merged & clean`}
             </Button>
           ) : null}
         </Row>
       ) : null}
       {asked && asked.kind !== "remove" ? card(asked, null) : null}
-      <Stack gap="s" as="ul" className="rows">
+      <Stack gap="s">
         {rows.map((row) => (
           <WorktreeItem
             key={row.wt.path}
@@ -65,6 +65,6 @@ export function RepoSection(p: {
           />
         ))}
       </Stack>
-    </section>
+    </Stack>
   );
 }

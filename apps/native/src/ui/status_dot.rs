@@ -11,7 +11,7 @@ use crate::{agents::AgentState, theme};
 
 /// A faint ring with its top quarter in full color, turned by `angle`, like the desktop's
 /// `border-working/30 border-t-working` circle.
-fn spinner(angle: f32) -> impl IntoElement {
+pub fn spinner(angle: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {

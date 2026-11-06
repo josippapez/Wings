@@ -20,7 +20,7 @@ use wings_plugins::transcript::{Line, transcript_event};
 use crate::{
     agents::AgentKind,
     page::plugin::{
-        Env, PaneEntry, PanePort, SessionEntry,
+        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, SessionEntry,
         ui::{Badge, PaneStatus},
     },
     ports,
@@ -34,8 +34,53 @@ pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(310);
 /// How long a notice the system couldn't show stays in the window.
 const NOTICE_FOR: Duration = Duration::from_secs(8);
 
+#[cfg(test)]
+#[test]
+fn dropping_plugin_ui_stops_its_git_watcher() {
+    struct End(std::sync::mpsc::Sender<()>);
+    impl Drop for End {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    let (ended, rx) = std::sync::mpsc::channel();
+    let end = End(ended);
+    let ui = PluginUi {
+        watcher: Some(wings_gitwatch::Watcher::start(
+            move || {
+                let _keep = &end;
+                Vec::new()
+            },
+            |_| {},
+        )),
+        ..PluginUi::default()
+    };
+    drop(ui);
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("the watcher thread outlived the workspace's plugin UI");
+}
+
 /// What a plugin asked of the window, for the window to do.
 pub(super) enum UiEvent {
+    OpenDiff(crate::diff::View),
+    UpdateDiff {
+        plugin: String,
+        id: String,
+        update: crate::diff::Update,
+    },
+    CloseDiff {
+        plugin: String,
+        id: String,
+    },
+    OpenPane {
+        plan: OpenPane,
+        reply: crate::page::runtime::Reply,
+    },
+    OpenView {
+        plan: OpenView,
+        reply: crate::page::runtime::Reply,
+    },
+    Git(Vec<String>),
     Badge {
         plugin: String,
         pane: String,
@@ -47,7 +92,10 @@ pub(super) enum UiEvent {
         status: Option<PaneStatus>,
     },
     /// A notification the system couldn't show, for the window to show itself.
-    Notice { title: String, body: String },
+    Notice {
+        title: String,
+        body: String,
+    },
 }
 
 /// What the system does for a plugin: open a URL, show a notification. Faked in tests, which must not open anything.
@@ -108,6 +156,7 @@ impl System for Os {
 #[derive(Default)]
 struct Known {
     projects: Vec<PathBuf>,
+    current: Option<PathBuf>,
     shells: Vec<(String, Option<u32>)>,
 }
 
@@ -146,6 +195,60 @@ impl AppEnv {
 }
 
 impl Env for AppEnv {
+    fn open_diff(&self, view: crate::diff::View) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::OpenDiff(view))
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+    fn update_diff(
+        &self,
+        plugin: &str,
+        id: &str,
+        update: crate::diff::Update,
+    ) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::UpdateDiff {
+                plugin: plugin.into(),
+                id: id.into(),
+                update,
+            })
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+    fn close_diff(&self, plugin: &str, id: &str) {
+        self.send(UiEvent::CloseDiff {
+            plugin: plugin.into(),
+            id: id.into(),
+        });
+    }
+    fn current_project(&self) -> Option<PathBuf> {
+        self.known.lock().unwrap().current.clone()
+    }
+
+    fn open_pane(&self, plan: OpenPane, reply: crate::page::runtime::Reply) {
+        if self
+            .events
+            .try_send(UiEvent::OpenPane {
+                plan,
+                reply: reply.clone(),
+            })
+            .is_err()
+        {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
+
+    fn open_view(&self, plan: OpenView, reply: crate::page::runtime::Reply) {
+        if self
+            .events
+            .try_send(UiEvent::OpenView {
+                plan,
+                reply: reply.clone(),
+            })
+            .is_err()
+        {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
     fn projects(&self) -> Vec<PathBuf> {
         self.known.lock().unwrap().projects.clone()
     }
@@ -201,6 +304,16 @@ pub(super) struct Notice {
 /// The plugins' panes, badges and status strips of a window, kept by the window.
 #[derive(Default)]
 pub(super) struct PluginUi {
+    pub(super) diff: Option<(
+        gpui::Entity<crate::diff::viewer::Viewer>,
+        gpui::Subscription,
+    )>,
+    pub(super) windows:
+        HashMap<(String, String), gpui::WindowHandle<super::plugin_windows::PluginViewWindow>>,
+    pub(super) windows_release: Option<gpui::Subscription>,
+    pub(super) windows_closed: Option<gpui::Subscription>,
+    watcher: Option<wings_gitwatch::Watcher>,
+    watched_projects: Vec<PathBuf>,
     /// A hash of what the plugins were last told of the panes and projects, to tell them only of a change.
     signature: u64,
     /// By pane, then plugin id, which is also the order they are drawn in.
@@ -213,9 +326,92 @@ pub(super) struct PluginUi {
 }
 
 impl Workspace {
+    pub(super) fn sync_plugin_visibility(&self, cx: &gpui::App) {
+        for tab in &self.plugin_tabs {
+            tab.page
+                .read(cx)
+                .set_visible(self.active == Active::Plugin(tab.id));
+        }
+        for parked in self.parked.values() {
+            for tab in &parked.plugin_tabs {
+                tab.page.read(cx).set_visible(false);
+            }
+        }
+        for (key, page) in &self.sidebar_pages {
+            page.read(cx).set_visible(self.right.as_ref() == Some(key));
+        }
+    }
     /// What the window is doing for plugins, on its own thread.
-    pub(super) fn apply_plugin_event(&mut self, event: UiEvent, cx: &mut Context<Self>) {
+    pub(super) fn apply_plugin_event(
+        &mut self,
+        event: UiEvent,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         match event {
+            UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
+            UiEvent::UpdateDiff { plugin, id, update } => {
+                if let Some((viewer, _)) = &self.plugin_ui.diff {
+                    let current = &viewer.read(cx).view;
+                    if current.plugin_id == plugin && current.id == id {
+                        viewer.update(cx, |viewer, cx| viewer.update(update, cx));
+                    }
+                }
+            }
+            UiEvent::CloseDiff { plugin, id } => {
+                if self.plugin_ui.diff.as_ref().is_some_and(|(viewer, _)| {
+                    let view = &viewer.read(cx).view;
+                    view.plugin_id == plugin && view.id == id
+                }) {
+                    self.close_diff_view(window, cx);
+                }
+            }
+            UiEvent::Git(ids) => {
+                for installed in &self.plugins {
+                    installed.host.publish_git(&ids);
+                }
+            }
+            UiEvent::OpenPane { plan, reply } => {
+                self.open_plugin_pane(plan, reply, window, cx);
+            }
+            UiEvent::OpenView { plan, reply } => {
+                if plan.args.is_some() {
+                    reply.err("Native view arguments aren't available yet".into());
+                } else if plan.place == "sidebar" {
+                    self.show_sidebar(&plan.plugin, &plan.id, cx);
+                    let shown = self
+                        .right
+                        .as_ref()
+                        .is_some_and(|(plugin, id)| plugin == &plan.plugin && id == &plan.id);
+                    reply.done(if shown {
+                        Ok("null".into())
+                    } else {
+                        Err("The view has no native sidebar page".into())
+                    });
+                } else if plan.place == "tab" {
+                    let opened = if plan.new_tab {
+                        self.new_plugin_tab(&plan.plugin, &plan.id, cx)
+                            .map(|id| {
+                                self.show(Active::Plugin(id), window, cx);
+                            })
+                            .is_some()
+                    } else {
+                        self.open_plugin_view(&plan.plugin, &plan.id, window, cx)
+                    };
+                    reply.done(if opened {
+                        Ok("null".into())
+                    } else {
+                        Err("The view has no native tab page".into())
+                    });
+                } else if plan.place == "window" {
+                    reply.done(
+                        self.open_plugin_window(&plan.plugin, &plan.id, cx)
+                            .map(|_| "null".into()),
+                    );
+                } else {
+                    reply.err(format!("Native views don't open as {} yet", plan.place));
+                }
+            }
             UiEvent::Badge {
                 plugin,
                 pane,
@@ -239,6 +435,77 @@ impl Workspace {
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
         }
         cx.notify();
+    }
+
+    fn open_plugin_pane(
+        &mut self,
+        plan: OpenPane,
+        reply: crate::page::runtime::Reply,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui::EntityInputHandler;
+        if !self
+            .projects
+            .iter()
+            .any(|project| project.path == plan.project)
+        {
+            return reply.err("The pane's project is no longer open".into());
+        }
+        let roots: Vec<_> = self
+            .projects
+            .iter()
+            .map(|project| project.path.clone())
+            .collect();
+        let cwd = match wings_plugins::panes::pane_cwd(&plan.cwd, &roots, None) {
+            Ok((_, cwd)) => cwd,
+            Err(error) => return reply.err(error),
+        };
+        self.switch_project(plan.project, window, cx);
+        let pane = self.open_pane(Some(cwd), None, cx);
+        if let Err(error) = &self.panes[&pane].view {
+            let error = error.to_string();
+            self.panes.remove(&pane);
+            return reply.err(error);
+        }
+        let split =
+            (plan.placement != "tab")
+                .then_some(self.active)
+                .and_then(|active| match active {
+                    Active::Terminal(id) => Some(id),
+                    _ => None,
+                });
+        let active = if let Some(id) = split {
+            let tab = self.terminals.iter_mut().find(|tab| tab.id == id).unwrap();
+            let dir = if plan.placement == "right" {
+                crate::layout::Dir::Row
+            } else {
+                crate::layout::Dir::Column
+            };
+            tab.layout.split(tab.focused, dir, pane);
+            tab.focused = pane;
+            tab.zoomed = None;
+            Active::Terminal(id)
+        } else {
+            let id = self.next_tab;
+            self.next_tab += 1;
+            self.terminals.push(super::TerminalTab {
+                id,
+                layout: crate::layout::Layout::Pane(pane),
+                focused: pane,
+                zoomed: None,
+                focus: cx.focus_handle().tab_stop(true),
+            });
+            Active::Terminal(id)
+        };
+        if let Some(input) = plan.input {
+            self.terminal(pane).unwrap().update(cx, |view, cx| {
+                view.replace_text_in_range(None, &input, window, cx)
+            });
+        }
+        self.show(active, window, cx);
+        self.sync_plugins(cx);
+        reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string());
     }
 
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.
@@ -272,6 +539,7 @@ impl Workspace {
     /// opens, closes, moves or gets an agent is covered without each saying so. A quiet frame only hashes what the
     /// plugins would be told, which allocates once.
     pub(super) fn sync_plugins(&mut self, cx: &mut Context<Self>) {
+        self.sync_plugin_visibility(cx);
         if self.plugins.is_empty() {
             return;
         }
@@ -304,11 +572,44 @@ impl Workspace {
         {
             let mut known = self.plugin_env.known.lock().unwrap();
             known.projects = projects;
+            known.current = Some(self.config.project.clone());
             known.shells = self.pane_shells(cx);
         }
         for installed in &self.plugins {
             installed.host.publish_panes(entries.clone());
+            installed.host.publish_projects(
+                self.projects
+                    .iter()
+                    .map(|project| Project {
+                        id: project.path.to_string_lossy().into_owned(),
+                        name: project.name.clone(),
+                        path: project.path.to_string_lossy().into_owned(),
+                    })
+                    .collect(),
+            );
+            installed.host.publish_focus(self.window_active);
         }
+        let paths = self.plugin_env.projects();
+        if let Some(watcher) = &self.plugin_ui.watcher {
+            if self.plugin_ui.watched_projects != paths {
+                watcher.resync();
+            }
+        } else {
+            let env = self.plugin_env.clone();
+            let events = env.events.clone();
+            self.plugin_ui.watcher = Some(wings_gitwatch::Watcher::start(
+                move || {
+                    env.projects()
+                        .into_iter()
+                        .map(|path| (path.to_string_lossy().into_owned(), path))
+                        .collect()
+                },
+                move |ids| {
+                    let _ = events.try_send(UiEvent::Git(ids));
+                },
+            ));
+        }
+        self.plugin_ui.watched_projects = paths;
     }
 
     /// Every pane of every project, shown or not, with its project's folder, by pane id.
@@ -346,6 +647,7 @@ impl Workspace {
     fn plugin_signature(&self, panes: &[(usize, &std::path::Path)]) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.config.project.hash(&mut hasher);
         for project in &self.projects {
             (&project.path, &project.name).hash(&mut hasher);
         }

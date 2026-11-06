@@ -1,7 +1,7 @@
 // The card that asks before anything is removed: what git will do, the branches to delete with it, and the two buttons.
 
 import { plural } from "wings-plugin-sdk/format";
-import { Checkbox, Confirm, Notice, Text } from "wings-plugin-ui";
+import { Checkbox, Confirm, Notice, Stack, Text } from "wings-plugin-ui";
 
 import { shortenPath } from "../lib/worktrees";
 
@@ -33,15 +33,15 @@ export function ConfirmCard(p: {
     <Confirm title={title} cancelLabel="Cancel" onCancel={p.onCancel} actions={[{ id: kind, label: kind === "prune" ? "Prune" : "Remove", onConfirm: p.onConfirm }]}>
       {kind === "remove" && p.outside ? <Notice tone="warn">{OUTSIDE_WARNING}</Notice> : null}
       {kind !== "remove" ? (
-        <ul className="confirm-list">
+        <Stack gap="xs">
           {paths.map((path) => (
-            <li key={path}>
+            <Text key={path}>
               <Text mono size="small">
                 {shortenPath(path)}
               </Text>
-            </li>
+            </Text>
           ))}
-        </ul>
+        </Stack>
       ) : null}
       {branches ? (
         <Checkbox checked={p.deleteBranch} onChange={p.onDeleteBranch}>

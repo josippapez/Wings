@@ -2,6 +2,7 @@
 //! Issues tab, with the desktop app's shortcuts.
 
 mod agent_list;
+mod diff;
 mod pane_card;
 mod panes;
 mod persist;
@@ -9,6 +10,7 @@ mod plugin_env;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 mod plugin_ui;
+mod plugin_windows;
 mod plugins;
 mod project;
 mod settings;
@@ -203,10 +205,12 @@ impl Workspace {
             window_active: window.is_window_active(),
             settings: None,
             _detection: None,
-            _plugin_events: cx.spawn(async move |this, cx| {
+            _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
                     if this
-                        .update(cx, |this, cx| this.apply_plugin_event(event, cx))
+                        .update_in(cx, |this, window, cx| {
+                            this.apply_plugin_event(event, window, cx)
+                        })
                         .is_err()
                     {
                         break;
@@ -215,6 +219,9 @@ impl Workspace {
             }),
             _activation: cx.observe_window_activation(window, |this, window, _| {
                 this.window_active = window.is_window_active();
+                for installed in &this.plugins {
+                    installed.host.publish_focus(this.window_active);
+                }
             }),
             _quit: quit,
         };
@@ -296,6 +303,9 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_plugins(cx);
+        if let Some((viewer, _)) = &self.plugin_ui.diff {
+            return div().size_full().child(viewer.clone()).into_any_element();
+        }
         // A click in a terminal focuses it directly, so the tab learns which pane has focus here.
         if let Active::Terminal(id) = self.active
             && let Some(index) = self.terminals.iter().position(|tab| tab.id == id)
@@ -509,5 +519,6 @@ impl Render for Workspace {
             )
             .children(self.settings_dialog(cx))
             .children(notices)
+            .into_any_element()
     }
 }

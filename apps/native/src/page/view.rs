@@ -1,14 +1,20 @@
 //! Draws a page's tree with the UI kit, in the look of the desktop's plugin pages, and sends its clicks back.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use gpui::{
-    AnyElement, Context, ElementId, FontWeight, IntoElement, Pixels, Render, Role, SharedString,
-    Task, Window, canvas, div, prelude::*, px, relative, rgb, rgba,
+    Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, IntoElement, KeyDownEvent,
+    Pixels, Render, Role, SharedString, Task, Toggled, Window, canvas, div, prelude::*, px,
+    relative, rgb, rgba,
 };
+
+#[path = "graph_view.rs"]
+mod graph_view;
 
 use super::{
     plugin::PluginHost,
@@ -25,6 +31,11 @@ struct Pending {
     error: Option<String>,
 }
 
+struct SearchState {
+    field: gpui::Entity<crate::text_field::TextField>,
+    handler: Option<String>,
+}
+
 pub struct PageView {
     runtime: Option<PageRuntime>,
     tree: Option<Tree>,
@@ -38,12 +49,21 @@ pub struct PageView {
     pressed_open: bool,
     /// How wide each select was drawn, by node id: its menu is as wide.
     select_widths: HashMap<u64, Pixels>,
+    fields: RefCell<HashMap<u64, SearchState>>,
+    graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
+    chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
     _events: Task<()>,
 }
 
 impl PageView {
+    pub fn set_visible(&self, visible: bool) {
+        if let Some(runtime) = &self.runtime {
+            runtime.set_visible(visible);
+        }
+    }
+
     /// Starts the page bundle `source`; its first tree is drawn when it arrives.
     pub fn new(source: &str, cx: &mut Context<Self>) -> Self {
         Self::start(cx, |on_event| PageRuntime::spawn(source, on_event))
@@ -51,7 +71,18 @@ impl PageView {
 
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
-        Self::start(cx, |on_event| host.open_page(source, on_event))
+        Self::start(cx, |on_event| host.open_hidden_page(source, on_event))
+    }
+
+    pub fn in_plugin_window(
+        host: &PluginHost,
+        window_id: u64,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::start(cx, |on_event| {
+            host.open_window_page(source, window_id, on_event)
+        })
     }
 
     fn start(
@@ -83,6 +114,32 @@ impl PageView {
                 if view
                     .update(cx, |view, cx| {
                         if let Some(tree) = taken.tree {
+                            let mut ids = HashSet::new();
+                            fn controls(nodes: &[Node], ids: &mut HashSet<u64>) {
+                                for node in nodes {
+                                    match node {
+                                        Node::SearchField(field) => {
+                                            ids.insert(field.id);
+                                        }
+                                        Node::Graph(graph) => {
+                                            ids.insert(graph.id);
+                                        }
+                                        Node::Chips(chips) => {
+                                            ids.insert(chips.id);
+                                        }
+                                        _ => {}
+                                    }
+                                    for part in node.parts() {
+                                        controls(part, ids);
+                                    }
+                                }
+                            }
+                            controls(&tree.children, &mut ids);
+                            view.fields.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.chip_focus
+                                .borrow_mut()
+                                .retain(|(id, _), _| ids.contains(id));
                             view.tree = Some(tree);
                             view.error = None;
                         }
@@ -104,6 +161,9 @@ impl PageView {
             menu: None,
             pressed_open: false,
             select_widths: HashMap::new(),
+            fields: RefCell::new(HashMap::new()),
+            graphs: RefCell::new(HashMap::new()),
+            chip_focus: RefCell::new(HashMap::new()),
             error,
             _events: events,
         }
@@ -137,8 +197,8 @@ impl PageView {
         cx.notify();
     }
 
-    #[cfg(all(test, feature = "test-support"))]
-    pub(crate) fn text(&self) -> String {
+    #[cfg(feature = "test-support")]
+    pub fn text(&self) -> String {
         self.tree.as_ref().map(Tree::text).unwrap_or_default()
     }
 
@@ -155,6 +215,28 @@ impl PageView {
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn checkbox_checked(&self) -> Option<bool> {
+        fn find(nodes: &[Node]) -> Option<bool> {
+            nodes.iter().find_map(|node| match node {
+                Node::Checkbox(checkbox) => Some(checkbox.checked),
+                other => other.parts().into_iter().find_map(find),
+            })
+        }
+        self.tree.as_ref().and_then(|tree| find(&tree.children))
+    }
+
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn graph_window(&self) -> Option<(usize, usize, usize)> {
+        fn find(nodes: &[Node]) -> Option<(usize, usize, usize)> {
+            nodes.iter().find_map(|node| match node {
+                Node::Graph(graph) => Some((graph.total, graph.offset, graph.rows.len())),
+                other => other.parts().into_iter().find_map(find),
+            })
+        }
+        self.tree.as_ref().and_then(|tree| find(&tree.children))
     }
 
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -305,6 +387,143 @@ impl PageView {
                     None => element.into_any_element(),
                 }
             }
+            Node::Notice(notice) => div()
+                .id(ElementId::NamedInteger("page-notice".into(), notice.id))
+                .role(if matches!(notice.tone, Some(Tone::Warn | Tone::Danger)) {
+                    Role::Alert
+                } else {
+                    Role::Status
+                })
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(rgba(notice.tone.map_or(theme::INFO, tone_color)))
+                .bg(rgba(
+                    notice.tone.map_or(theme::INFO, tone_color) << 8 | 0x20,
+                ))
+                .px(px(10.0))
+                .py(px(7.0))
+                .text_size(px(12.0))
+                .text_color(rgb(notice.tone.map_or(theme::INFO, tone_color)))
+                .child(self.inline(&notice.children, cx))
+                .into_any_element(),
+            Node::Spinner(spinner) => div()
+                .id(ElementId::NamedInteger("page-spinner".into(), spinner.id))
+                .role(Role::Status)
+                .when(!spinner.label.is_empty(), |el| {
+                    el.aria_label(spinner.label.clone())
+                })
+                .size(px(if spinner.large { 18.0 } else { 14.0 }))
+                .flex_none()
+                .with_animation(
+                    ElementId::NamedInteger("page-spinner-animation".into(), spinner.id),
+                    Animation::new(Duration::from_secs(1))
+                        .repeat()
+                        .with_max_fps(30.0),
+                    |ring, turn| ring.child(ui::working_spinner(turn * std::f32::consts::TAU)),
+                )
+                .into_any_element(),
+            Node::Checkbox(checkbox) => {
+                let label = plain_text(&checkbox.children);
+                let checked = checkbox.checked;
+                let element = div()
+                    .id(ElementId::NamedInteger("page-checkbox".into(), checkbox.id))
+                    .role(Role::Button)
+                    .aria_label(label)
+                    .aria_toggled(if checkbox.checked {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .cursor_pointer()
+                    .opacity(if checkbox.disabled { 0.5 } else { 1.0 })
+                    .child(
+                        div()
+                            .size(px(16.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(rgba(ui::HAIRLINE))
+                            .bg(rgba(if checkbox.checked {
+                                theme::INFO << 8 | 0xff
+                            } else {
+                                0
+                            }))
+                            .text_size(px(12.0))
+                            .text_color(rgb(theme::BACKGROUND))
+                            .child(if checkbox.checked {
+                                "✓".into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }),
+                    )
+                    .child(self.inline(&checkbox.children, cx));
+                match checkbox.on_change.clone() {
+                    Some(handler) => {
+                        let keyboard_handler = handler.clone();
+                        element
+                            .focusable()
+                            .tab_stop(true)
+                            .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, _| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "space" | "enter")
+                                {
+                                    view.send(
+                                        &keyboard_handler,
+                                        Some(&serde_json::json!({ "checked": !checked })),
+                                    );
+                                }
+                            }))
+                            .on_click(cx.listener(move |view, _, _, _| {
+                                view.send(
+                                    &handler,
+                                    Some(&serde_json::json!({ "checked": !checked })),
+                                )
+                            }))
+                            .into_any_element()
+                    }
+                    None => element
+                        .cursor_default()
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().set_disabled();
+                        })
+                        .into_any_element(),
+                }
+            }
+            Node::Confirm(confirm) => ui::plain_card(vec![
+                div()
+                    .px(px(12.0))
+                    .pt(px(12.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.inline(&confirm.title, cx))
+                    .into_any_element(),
+                div()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .children(self.nodes(&confirm.body, cx))
+                    .into_any_element(),
+                div()
+                    .px(px(12.0))
+                    .pb(px(12.0))
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(4.0))
+                    .children(self.nodes(&confirm.actions, cx))
+                    .into_any_element(),
+            ])
+            .into_any_element(),
             Node::Badge(badge) => ui::badge(
                 variant(badge.variant),
                 badge.tone.map(tone_color),
@@ -370,13 +589,230 @@ impl PageView {
             )
             .into_any_element(),
             Node::List(list) => ui::list(self.nodes(&list.children, cx)).into_any_element(),
-            Node::ListItem(item) => ui::list_item(
-                ElementId::NamedInteger("page-list-item".into(), item.id),
-                self.nodes(&item.children, cx),
-            )
-            .into_any_element(),
+            Node::ListItem(item) => {
+                if item
+                    .children
+                    .iter()
+                    .any(|node| matches!(node, Node::ListButton(_)))
+                {
+                    div()
+                        .min_w_0()
+                        .w_full()
+                        .children(self.nodes(&item.children, cx))
+                        .into_any_element()
+                } else {
+                    ui::list_item(
+                        ElementId::NamedInteger("page-list-item".into(), item.id),
+                        self.nodes(&item.children, cx),
+                    )
+                    .into_any_element()
+                }
+            }
             Node::Disclosure(disclosure) => self.disclosure(disclosure, cx),
             Node::Select(select) => self.select(select, cx),
+            Node::Chips(select) => {
+                let focus = select
+                    .options
+                    .iter()
+                    .filter(|o| !o.disabled)
+                    .map(|option| {
+                        let handle = self
+                            .chip_focus
+                            .borrow_mut()
+                            .entry((select.id, option.value.clone()))
+                            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                            .clone();
+                        (option.value.clone(), handle)
+                    })
+                    .collect::<HashMap<_, _>>();
+                let options = select
+                    .options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, option)| {
+                        let handler = select.on_change.clone();
+                        let value = option.value.clone();
+                        let keyboard_handler = handler.clone();
+                        let keyboard_value = value.clone();
+                        let next = select
+                            .options
+                            .iter()
+                            .filter(|o| !o.disabled)
+                            .map(|o| o.value.clone())
+                            .collect::<Vec<_>>();
+                        let selected = select.current() == Some(value.as_str());
+                        let disabled = option.disabled;
+                        let keyboard_focus = focus.clone();
+                        let click_focus = focus.get(&value).cloned();
+                        ui::button(
+                            ElementId::NamedInteger(
+                                format!("page-chips-{}", select.id).into(),
+                                index as u64,
+                            ),
+                            option.label.clone(),
+                            if selected {
+                                ui::Variant::Secondary
+                            } else {
+                                ui::Variant::Ghost
+                            },
+                            option.disabled,
+                            option.label.clone(),
+                        )
+                        .role(Role::Button)
+                        .aria_toggled(if selected {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                        .when_some(focus.get(&value), |button, focus| button.track_focus(focus))
+                        .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                            let at = next
+                                .iter()
+                                .position(|v| v == &keyboard_value)
+                                .unwrap_or_default();
+                            let target = match event.keystroke.key.as_str() {
+                                "left" => next
+                                    .get(at.checked_sub(1).unwrap_or(next.len().saturating_sub(1))),
+                                "right" => next.get((at + 1) % next.len().max(1)),
+                                "home" => next.first(),
+                                "end" => next.last(),
+                                "space" | "enter" => next.get(at),
+                                _ => return,
+                            };
+                            if let (Some(handler), Some(value)) = (&keyboard_handler, target) {
+                                view.send(handler, Some(&serde_json::json!({ "value": value })));
+                                if let Some(focus) = keyboard_focus.get(value) {
+                                    focus.focus(window, cx);
+                                }
+                            }
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            if !disabled {
+                                if let Some(focus) = &click_focus {
+                                    focus.focus(window, cx);
+                                }
+                                if let Some(handler) = &handler {
+                                    view.send(
+                                        handler,
+                                        Some(&serde_json::json!({ "value": value })),
+                                    );
+                                }
+                            }
+                        }))
+                        .into_any_element()
+                    })
+                    .collect::<Vec<_>>();
+                div()
+                    .id(ElementId::NamedInteger("page-chips".into(), select.id))
+                    .role(Role::Group)
+                    .aria_label(select.label.clone())
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(4.0))
+                    .children(options)
+                    .into_any_element()
+            }
+            Node::ListButton(item) => {
+                let button = &item.button;
+                let handler = button.on_click.clone();
+                let keyboard = handler.clone();
+                let mut element = div()
+                    .id(ElementId::NamedInteger(
+                        "page-list-button".into(),
+                        button.id,
+                    ))
+                    .role(Role::Button)
+                    .aria_label(plain_text(&button.children))
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .px(px(6.0))
+                    .pl(px(6.0 + item.indent))
+                    .py(px(2.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgba(0))
+                    .when(item.vertical, |el| el.flex_col().items_stretch())
+                    .when_some(item.expanded, |el, expanded| {
+                        el.aria_expanded(expanded)
+                            .child(if expanded { "⌄" } else { "›" })
+                    })
+                    .children(self.nodes(&button.children, cx));
+                if !button.disabled {
+                    element = element
+                        .focusable()
+                        .tab_stop(true)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgba(theme::HOVER)))
+                        .focus_visible(|s| s.border_color(rgb(theme::FOREGROUND)))
+                        .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                if let Some(handler) = &keyboard {
+                                    view.send(handler, None);
+                                }
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .on_click(cx.listener(move |view, _, _, _| {
+                            if let Some(handler) = &handler {
+                                view.send(handler, None);
+                            }
+                        }));
+                }
+                element.into_any_element()
+            }
+            Node::SearchField(field) => {
+                let mut fields = self.fields.borrow_mut();
+                let state = fields.entry(field.id).or_insert_with(|| {
+                    let value = field.value.clone().unwrap_or_default();
+                    let entity = cx.new(|cx| {
+                        let mut input = crate::text_field::TextField::new(
+                            Role::SearchInput,
+                            field.label.clone(),
+                            field.placeholder.clone(),
+                            px(280.0),
+                            cx,
+                        );
+                        input.text = value;
+                        input
+                    });
+                    let id = field.id;
+                    cx.subscribe(&entity, move |view, entity, event, cx| {
+                        if matches!(event, crate::text_field::FieldEvent::Changed)
+                            && let Some(handler) = view
+                                .fields
+                                .borrow()
+                                .get(&id)
+                                .and_then(|state| state.handler.as_deref())
+                        {
+                            view.send(
+                                handler,
+                                Some(&serde_json::json!({ "value": entity.read(cx).text })),
+                            );
+                        }
+                    })
+                    .detach();
+                    SearchState {
+                        field: entity,
+                        handler: field.on_input.clone(),
+                    }
+                });
+                state.handler = field.on_input.clone();
+                let entity = state.field.clone();
+                div()
+                    .min_w_0()
+                    .border_1()
+                    .border_color(rgba(ui::HAIRLINE))
+                    .rounded(px(6.0))
+                    .child(entity)
+                    .into_any_element()
+            }
+            Node::Graph(graph) => self.graph(graph, cx),
         }
     }
 

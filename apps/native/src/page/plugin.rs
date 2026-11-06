@@ -21,8 +21,8 @@
 //!   and `setPaneStatus`, each under the permission `wings-plugins` says the manifest grants. The app tells it the panes
 //!   (`publish_panes`), which every frame hears with `onPanes`, and the transcript entries Claude writes
 //!   (`publish_transcript`); a click on a badge's button is `send_action`, which the main frame's `onAction` listeners
-//!   answer. A host without that access refuses all of them. The desktop's other calls (fetch, secrets, opening panes
-//!   and views, diffs and so on) aren't here until a native plugin needs them.
+//!   answer. Projects, focus and permission-gated git events follow the workspace. Disk searches and opening panes or
+//!   views use the desktop's contracts too. A host without access refuses calls. Fetch, secrets and diffs aren't here.
 
 use super::runtime::{
     Delivery, Event, Inbox, Limits, Link, Message, PageRuntime, Reply, Role, Store,
@@ -31,21 +31,50 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use wings_plugin_storage::Storage;
 use wings_plugins::permissions::NotifyLog;
 
 mod calls;
+mod diff;
+mod disk;
 mod env;
+#[cfg(test)]
+mod focus_tests;
 pub mod ui;
 
-pub use env::{Access, Env, PaneEntry, PanePort, SessionEntry};
+pub use env::{Access, Env, OpenPane, OpenView, PaneEntry, PanePort, Project, SessionEntry};
 
 /// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.
 pub const MAX_BROADCAST_CHARS: usize = 64_000;
+
+fn effective_focus(windows: &HashMap<u64, bool>, role: Role, window: u64) -> bool {
+    if role == Role::Main {
+        windows.values().any(|active| *active)
+    } else {
+        windows.get(&window).copied().unwrap_or(false)
+    }
+}
+
+pub struct PluginWindow {
+    pub id: u64,
+    shared: Arc<Shared>,
+}
+
+impl PluginWindow {
+    pub fn set_active(&self, active: bool) {
+        self.shared.window_focus(self.id, Some(active));
+    }
+}
+
+impl Drop for PluginWindow {
+    fn drop(&mut self) {
+        self.shared.window_focus(self.id, None);
+    }
+}
 
 /// Which plugin this is and where it keeps what it saves. The storage root and scope come from the app, as the Issues
 /// tab's do, never from the plugin.
@@ -68,6 +97,8 @@ struct Open {
     id: u64,
     role: Role,
     inbox: Inbox,
+    visible: Arc<AtomicBool>,
+    window: u64,
 }
 
 /// The pane list the app last published, and its JSON, which is what each frame is sent.
@@ -99,9 +130,38 @@ struct Shared {
     panes: Mutex<Panes>,
     actions: Mutex<Actions>,
     notified: Mutex<NotifyLog>,
+    projects: Mutex<Vec<Project>>,
+    focused: Mutex<HashMap<u64, bool>>,
+    next_window: AtomicU64,
+    diffs: Mutex<HashMap<String, (u64, Option<u32>)>>,
+    next_diff: AtomicU64,
+    scans: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 impl Shared {
+    fn window_focus(&self, id: u64, active: Option<bool>) {
+        let mut windows = self.focused.lock().unwrap();
+        if windows.get(&id).copied() == active {
+            return;
+        }
+        let previous_main = windows.values().any(|active| *active);
+        match active {
+            Some(active) => {
+                windows.insert(id, active);
+            }
+            None => {
+                windows.remove(&id);
+            }
+        }
+        let main = windows.values().any(|active| *active);
+        for frame in self.frames.lock().unwrap().iter() {
+            if (frame.role == Role::Main && previous_main != main)
+                || (frame.role == Role::Page && frame.window == id)
+            {
+                frame.inbox.send(Message::Focus, 0, serde_json::json!({ "focused": effective_focus(&windows, frame.role, frame.window) && frame.visible.load(Ordering::Relaxed) }).to_string());
+            }
+        }
+    }
     fn broadcast(&self, from: u64, json: String) -> Result<(), String> {
         if json.encode_utf16().count() > MAX_BROADCAST_CHARS {
             return Err("A broadcast is limited to 64 KB".into());
@@ -123,6 +183,11 @@ impl Shared {
 
     /// The plugin's main answered a badge button, or failed to: ends the wait for `token`.
     fn settle_action(&self, token: u32, error: Option<String>) {
+        for (_, pending) in self.diffs.lock().unwrap().values_mut() {
+            if *pending == Some(token) {
+                *pending = None;
+            }
+        }
         let done = self.actions.lock().unwrap().waiting.remove(&token);
         if let Some(done) = done {
             done(error.map_or(Ok(()), Err));
@@ -161,9 +226,43 @@ impl Shared {
 struct FrameLink {
     id: u64,
     shared: Arc<Shared>,
+    visible: Arc<AtomicBool>,
+    role: Role,
+    window: u64,
+    /// The focus the frame was first told, set once it's registered. Its bundle reads this, not the live value,
+    /// so `wings.focused` agrees with the first focus message it hears.
+    ready: Arc<(Mutex<Option<bool>>, Condvar)>,
 }
 
 impl Link for FrameLink {
+    fn focused(&self) -> bool {
+        let (ready, wake) = &*self.ready;
+        let mut started = ready.lock().unwrap();
+        loop {
+            if let Some(focused) = *started {
+                return focused;
+            }
+            started = wake.wait(started).unwrap();
+        }
+    }
+
+    fn set_visible(&self, visible: bool) {
+        if self.visible.load(Ordering::Relaxed) == visible {
+            return;
+        }
+        let focused = self.shared.focused.lock().unwrap();
+        let frames = self.shared.frames.lock().unwrap();
+        if self.visible.swap(visible, Ordering::Relaxed) == visible {
+            return;
+        }
+        if let Some(frame) = frames.iter().find(|frame| frame.id == self.id) {
+            frame.inbox.send(
+                Message::Focus,
+                0,
+                serde_json::json!({ "focused": effective_focus(&focused, self.role, self.window) && visible }).to_string(),
+            );
+        }
+    }
     fn broadcast(&self, json: String) -> Result<(), String> {
         self.shared.broadcast(self.id, json)
     }
@@ -172,7 +271,21 @@ impl Link for FrameLink {
         self.shared.store(call)
     }
 
-    fn call(&self, method: &str, params: serde_json::Value, reply: Reply) {
+    fn call(&self, method: &str, mut params: serde_json::Value, reply: Reply) {
+        if matches!(method, "openDiff" | "updateDiff") {
+            return self.shared.diff_call(self.id, method, params, reply);
+        }
+        if matches!(method, "diskFind" | "diskUsageCancel") {
+            let Some(token) = params
+                .get("token")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| (1..=64).contains(&s.encode_utf16().count()))
+            else {
+                return reply.err("A scan needs a token of 1 to 64 characters".into());
+            };
+            let token = format!("{}:{token}", self.id);
+            params["token"] = token.into();
+        }
         self.shared.call(method, params, reply)
     }
 }
@@ -185,6 +298,13 @@ struct Membership {
 
 impl Drop for Membership {
     fn drop(&mut self) {
+        self.shared.close_frame_diffs(self.id);
+        let prefix = format!("{}:", self.id);
+        for (token, flag) in self.shared.scans.lock().unwrap().iter() {
+            if token.starts_with(&prefix) {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
         self.shared
             .frames
             .lock()
@@ -227,6 +347,12 @@ impl PluginHost {
                 panes: Mutex::default(),
                 actions: Mutex::default(),
                 notified: Mutex::default(),
+                projects: Mutex::default(),
+                focused: Mutex::new(HashMap::from([(0, true)])),
+                next_window: AtomicU64::new(1),
+                diffs: Mutex::default(),
+                next_diff: AtomicU64::new(1),
+                scans: Mutex::default(),
             }),
             limits,
             main: Mutex::default(),
@@ -240,7 +366,7 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<()> {
-        let main = self.spawn(Role::Main, source, on_event)?;
+        let main = self.spawn(Role::Main, true, 0, source, on_event)?;
         // The old main leaves the list as it drops, after the new one joined: a message in between reaches the new one.
         let old = self.main.lock().unwrap().replace(main);
         if old.is_some() {
@@ -267,6 +393,38 @@ impl PluginHost {
             };
         }
         self.shared.tell_all(Message::Panes, &json);
+    }
+
+    pub fn publish_projects(&self, projects: Vec<Project>) {
+        let mut old = self.shared.projects.lock().unwrap();
+        if *old != projects {
+            self.shared
+                .tell_all(Message::Projects, &json(&projects).unwrap());
+            *old = projects;
+        }
+    }
+
+    pub fn publish_focus(&self, focused: bool) {
+        self.shared.window_focus(0, Some(focused));
+    }
+
+    pub fn publish_git(&self, project_ids: &[String]) {
+        if self.shared.access.as_ref().is_some_and(|access| {
+            access.plugin.manifest.permissions.exec.iter().any(|entry| {
+                entry
+                    .split('[')
+                    .next()
+                    .unwrap_or("")
+                    .split_ascii_whitespace()
+                    .next()
+                    == Some("git")
+            })
+        }) {
+            self.shared.tell_all(
+                Message::Git,
+                &serde_json::json!({ "projectIds": project_ids }).to_string(),
+            );
+        }
     }
 
     /// A transcript entry Claude wrote, as the JSON `{ sessionId, paneId, entry }`, for the frames' `onTranscript`. The
@@ -323,32 +481,92 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        self.spawn(Role::Page, source, on_event)
+        self.spawn(Role::Page, true, 0, source, on_event)
+    }
+
+    /// Starts unfocused even during bundle evaluation, until its view is shown.
+    pub fn open_hidden_page(
+        &self,
+        source: &str,
+        on_event: impl FnMut(Event) + Send + 'static,
+    ) -> std::io::Result<PageRuntime> {
+        self.spawn(Role::Page, false, 0, source, on_event)
+    }
+
+    pub fn register_window(&self) -> PluginWindow {
+        let id = self.shared.next_window.fetch_add(1, Ordering::Relaxed);
+        self.shared.window_focus(id, Some(false));
+        PluginWindow {
+            id,
+            shared: self.shared.clone(),
+        }
+    }
+
+    pub fn open_window_page(
+        &self,
+        source: &str,
+        window_id: u64,
+        on_event: impl FnMut(Event) + Send + 'static,
+    ) -> std::io::Result<PageRuntime> {
+        self.spawn(Role::Page, true, window_id, source, on_event)
     }
 
     fn spawn(
         &self,
         role: Role,
+        visible: bool,
+        window: u64,
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
         let id = self.shared.next_frame.fetch_add(1, Ordering::Relaxed);
+        let visible = Arc::new(AtomicBool::new(visible));
+        let ready = Arc::new((Mutex::new(None), Condvar::new()));
         let link = Arc::new(FrameLink {
             id,
             shared: self.shared.clone(),
+            visible: visible.clone(),
+            role,
+            window,
+            ready: ready.clone(),
         });
-        let runtime = PageRuntime::spawn_plugin(source, role, self.limits, link, on_event)?;
+        let shared = Arc::downgrade(&self.shared);
+        let mut on_event = on_event;
+        let runtime = PageRuntime::spawn_plugin(source, role, self.limits, link, move |event| {
+            if matches!(&event, Event::Error { fatal: true, .. })
+                && let Some(shared) = shared.upgrade()
+            {
+                shared.close_frame_diffs(id);
+            }
+            on_event(event);
+        })?;
         let inbox = runtime.inbox();
+        let focused = self.shared.focused.lock().unwrap();
         self.shared.frames.lock().unwrap().push(Open {
             id,
             role,
             inbox: inbox.clone(),
+            visible: visible.clone(),
+            window,
         });
         // The frame hears the panes once its bundle has run, which is when its listeners exist.
         let panes = self.shared.panes.lock().unwrap().json.clone();
         if let Some(json) = panes {
             inbox.send(Message::Panes, 0, json);
         }
+        inbox.send(
+            Message::Projects,
+            0,
+            json(&*self.shared.projects.lock().unwrap()).unwrap(),
+        );
+        let initial = effective_focus(&focused, role, window) && visible.load(Ordering::Relaxed);
+        inbox.send(
+            Message::Focus,
+            0,
+            serde_json::json!({ "focused": initial }).to_string(),
+        );
+        *ready.0.lock().unwrap() = Some(initial);
+        ready.1.notify_all();
         Ok(runtime.attach(Membership {
             id,
             shared: self.shared.clone(),
@@ -358,6 +576,10 @@ impl PluginHost {
 
 impl Drop for PluginHost {
     fn drop(&mut self) {
+        self.shared.close_all_diffs();
+        for flag in self.shared.scans.lock().unwrap().values() {
+            flag.store(true, Ordering::Relaxed);
+        }
         self.shared.fail_actions("The plugin was turned off");
     }
 }

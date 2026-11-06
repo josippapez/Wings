@@ -50,7 +50,7 @@ fn js_string(value: Option<&Value>) -> String {
 }
 
 /// A plugin may draw a kind of UI only when its manifest lists it in `contributes.ui`.
-fn needs(plugin: &Plugin, kind: &str) -> Result<(), String> {
+pub(super) fn needs(plugin: &Plugin, kind: &str) -> Result<(), String> {
     if plugin.manifest.contributes.ui.iter().any(|ui| ui == kind) {
         Ok(())
     } else {
@@ -108,6 +108,108 @@ fn timeout_ms(value: Option<f64>) -> Result<Option<u64>, String> {
 }
 
 impl Shared {
+    fn open_pane(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
+        let placement = match params.get("placement") {
+            None | Some(Value::Null) => "tab",
+            Some(Value::String(value)) => value,
+            _ => return Err("openPane placement is \"tab\", \"right\" or \"down\"".into()),
+        };
+        if !["tab", "right", "down"].contains(&placement) {
+            return Err("openPane placement is \"tab\", \"right\" or \"down\"".into());
+        }
+        let text = |key: &str| match params.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.as_str())),
+            _ => Err(format!("openPane {key} must be a string")),
+        };
+        let args: Vec<String> = match params.get("args") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(values)) => values
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .ok_or("openPane args must be a list of strings".to_owned())
+                })
+                .collect::<Result<_, _>>()?,
+            _ => return Err("openPane args must be a list of strings".into()),
+        };
+        let input = wings_plugins::panes::pane_input(&access.plugin, text("command")?, &args)?;
+        let projects = access.env.projects();
+        let current_path = access.env.current_project();
+        let current = current_path
+            .as_ref()
+            .and_then(|path| projects.iter().position(|root| root == path));
+        let (index, cwd) = match text("cwd")? {
+            Some(cwd) => {
+                wings_plugins::panes::pane_cwd(std::path::Path::new(cwd), &projects, current)?
+            }
+            None => {
+                let index = current.ok_or("No project is open in Wings")?;
+                (index, projects[index].clone())
+            }
+        };
+        access.env.open_pane(
+            super::OpenPane {
+                cwd,
+                project: projects[index].clone(),
+                input: input.map(|line| line + "\r"),
+                placement: placement.into(),
+            },
+            reply,
+        );
+        Ok(())
+    }
+
+    fn open_view(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
+        let id = js_string(params.get("id"));
+        let contributes = &access.plugin.manifest.contributes;
+        let opens = if contributes.sidebars.iter().any(|page| page.id == id) {
+            vec!["sidebar".to_owned()]
+        } else if let Some(view) = contributes.views.iter().find(|view| view.id == id) {
+            view.opens.clone()
+        } else {
+            return Err(format!("{} has no view {id}", access.plugin.manifest.id));
+        };
+        let place = params
+            .get("as")
+            .filter(|v| !v.is_null())
+            .map(|v| js_string(Some(v)))
+            .unwrap_or_else(|| opens[0].clone());
+        if !opens.contains(&place) {
+            return Err(format!("{id} opens as {}, not {place}", opens.join(" or ")));
+        }
+        let args = params.get("args").filter(|v| !v.is_null()).cloned();
+        if args.is_some() && place != "tab" {
+            return Err("openView args only work with as: \"tab\"".into());
+        }
+        if args
+            .as_ref()
+            .is_some_and(|args| args.to_string().encode_utf16().count() > 16 * 1024)
+        {
+            return Err("openView args is limited to 16 KB".into());
+        }
+        let new_tab = match params.get("newTab") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err("openView newTab must be true or false".into()),
+        };
+        if new_tab && place != "tab" {
+            return Err("openView newTab only works with as: \"tab\"".into());
+        }
+        access.env.open_view(
+            super::OpenView {
+                plugin: access.plugin.manifest.id.clone(),
+                id,
+                place,
+                args,
+                new_tab,
+            },
+            reply,
+        );
+        Ok(())
+    }
+
     /// A frame's call of `wings.<method>`, answered through `reply`.
     pub(super) fn call(self: &Arc<Self>, method: &str, params: Value, reply: Reply) {
         let Some(access) = self.access.clone() else {
@@ -116,6 +218,12 @@ impl Shared {
         };
         let this = self.clone();
         match method {
+            "projects" => reply.done(to_json(&*self.projects.lock().unwrap())),
+            "disks" | "diskFind" | "diskUsageCancel" => {
+                self.disk_call(method, params, reply, access)
+            }
+            "openPane" => reply_if_error(reply.clone(), self.open_pane(&access, &params, reply)),
+            "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, reply)),
             "setBadge" => reply.done(self.set_badge(&access, &params)),
             "setPaneStatus" => reply.done(self.set_pane_status(&access, &params)),
             "actionDone" => {
@@ -144,7 +252,7 @@ impl Shared {
     }
 
     /// Runs `work` on a thread of its own and answers with what it returns.
-    fn off_thread(
+    pub(super) fn off_thread(
         &self,
         reply: Reply,
         work: impl FnOnce(&Reply) -> Result<String, String> + Send + 'static,
@@ -265,6 +373,12 @@ impl Shared {
     }
 }
 
+fn reply_if_error(reply: Reply, result: Result<(), String>) {
+    if let Err(error) = result {
+        reply.err(error);
+    }
+}
+
 /// What the desktop's `wings statusline` holds before Claude Code has told it anything. The native app doesn't receive
 /// status lines yet, so this is all there is: no limits, and no session's context.
 fn statusline(plugin: &Plugin) -> Result<String, String> {
@@ -310,5 +424,7 @@ fn open_url(access: &Access, params: &Value) -> Result<String, String> {
     Ok("null".into())
 }
 
+#[cfg(test)]
+mod prerequisites;
 #[cfg(test)]
 mod tests;

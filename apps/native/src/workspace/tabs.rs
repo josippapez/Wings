@@ -91,6 +91,7 @@ impl Workspace {
 
     pub fn show(&mut self, active: Active, window: &mut Window, cx: &mut Context<Self>) {
         self.active = active;
+        self.sync_plugin_visibility(cx);
         let shown: Vec<usize> = match active {
             Active::Terminal(id) => self
                 .terminals

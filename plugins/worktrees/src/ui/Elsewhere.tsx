@@ -3,7 +3,7 @@
 
 import type { ReactNode } from "react";
 import { ago, plural } from "wings-plugin-sdk/format";
-import { Button, Heading, Notice, Row, Text } from "wings-plugin-ui";
+import { Button, Heading, Notice, Row, Stack, Text } from "wings-plugin-ui";
 
 /** What a running scan is doing: looking at the files and folders on the disks, then asking git about the repos it found. */
 export type Scanning = { step: "finding" | "checking"; count: number };
@@ -32,33 +32,25 @@ export function Elsewhere(p: {
         ? `Scanned ${ago(at)} · ${plural(found, "repo")} with worktrees`
         : `Scanned ${ago(at)}. No repo outside your projects has more than one worktree.`;
   return (
-    <section aria-label="Elsewhere on this Mac" className="elsewhere">
-      <Heading
-        level={2}
-        actions={
-          <Row gap="xs">
-            <Button variant="outline" size="xs" busy={scanning !== null} onClick={p.onScan}>
-              {at === 0 ? "Scan this Mac" : "Scan again"}
-            </Button>
-            {scanning ? (
-              <Button variant="outline" size="xs" onClick={p.onStop}>
-                Stop
-              </Button>
-            ) : null}
-          </Row>
-        }
-      >
-        Elsewhere on this Mac
-      </Heading>
-      <Text as="div" tone="muted" size="small" numeric={scanning !== null} className="elsewhere-note">
+    <Stack gap="s">
+      <Row justify="between" wrap>
+        <Heading>Elsewhere on this Mac</Heading>
+        <Row gap="xs">
+          <Button variant="outline" disabled={scanning !== null} onClick={p.onScan}>
+            {at === 0 ? "Scan this Mac" : "Scan again"}
+          </Button>
+          {scanning ? <Button variant="outline" onClick={p.onStop}>Stop</Button> : null}
+        </Row>
+      </Row>
+      <Text tone="muted" size="small" numeric={scanning !== null}>
         {note}
       </Text>
       {p.error ? (
-        <Notice tone="danger" className="note">
+        <Notice tone="danger">
           {p.error}
         </Notice>
       ) : null}
       {p.children}
-    </section>
+    </Stack>
   );
 }

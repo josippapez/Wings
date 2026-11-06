@@ -67,7 +67,7 @@ impl Workspace {
     }
 
     /// The tab's id: it starts the page's frame, so nothing but the tab and its place in the strip is left to do.
-    fn new_plugin_tab(
+    pub(super) fn new_plugin_tab(
         &mut self,
         plugin: &str,
         view: &str,

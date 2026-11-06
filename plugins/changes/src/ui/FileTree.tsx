@@ -49,7 +49,7 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     const path = f.path;
     out.push(
       <ListItem key={`d:${path}`}>
-        <ListButton className="folder" style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
+        <ListButton className="folder" {...(WINGS_NATIVE ? { indent: depth * 12 } : {})} style={{ paddingLeft: `${6 + depth * 12}px` }} aria-expanded={isOpen} onClick={() => props.onToggle(path, isOpen)}>
           <span className={`chevron${isOpen ? " open" : ""}`} aria-hidden="true" />
           <Text grow truncate>
             {label}
@@ -64,10 +64,10 @@ function rows(folder: Folder, depth: number, props: Props): ReactNode[] {
     const what = STATUS[status as keyof typeof STATUS] ?? status;
     out.push(
       <ListItem key={`f:${path}`}>
-        <ListButton style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
-          <span className={`status s-${status === "?" ? "new" : status}`} title={what} aria-label={what}>
+        <ListButton {...(WINGS_NATIVE ? { indent: 12 + depth * 12 } : {})} style={{ paddingLeft: `${18 + depth * 12}px` }} title={oldPath ? `${oldPath} → ${path}` : path} onClick={() => props.onOpen(path)}>
+          {WINGS_NATIVE ? <Text tone={status === "D" || status === "U" ? "danger" : status === "A" || status === "?" ? "success" : "warn"} size="tiny" mono>{status}</Text> : <span className={`status s-${status === "?" ? "new" : status}`} title={what} aria-label={what}>
             {status}
-          </span>
+          </span>}
           <Text grow truncate>
             {name}
           </Text>
