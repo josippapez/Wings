@@ -213,7 +213,8 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
             .selected_file()),
         1
     );
-    window.simulate_click(point(px(900.0), px(32.0)), MouseButton::Left);
+    // Refresh: the 28px icon button left of the hairline and Close, inside the header's 12px of right padding.
+    window.simulate_click(point(px(929.0), px(32.0)), MouseButton::Left);
     until(&app, &mut window, "refresh did not reach main", |_| {
         data.saved("differ", "diff-scope", "refreshed") == Some(json!(true))
     });

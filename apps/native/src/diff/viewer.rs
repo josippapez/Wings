@@ -26,6 +26,8 @@ pub struct Viewer {
     host: Arc<PluginHost>,
     selected: usize,
     rows: Vec<Row>,
+    /// Each file's added and removed lines, for the file list and the header's totals.
+    counts: Vec<(usize, usize)>,
     code_width: f32,
     scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
@@ -63,6 +65,7 @@ impl Viewer {
             host,
             selected: 0,
             rows: Vec::new(),
+            counts: Vec::new(),
             code_width: 0.0,
             scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
@@ -103,6 +106,18 @@ impl Viewer {
         let Some(diff) = &self.view.update.patch else {
             return;
         };
+        self.counts = diff
+            .files
+            .iter()
+            .map(|file| {
+                let lines = file.hunks.iter().flat_map(|hunk| &hunk.lines);
+                lines.fold((0, 0), |(added, removed), line| match line.kind {
+                    DiffLineKind::Added => (added + 1, removed),
+                    DiffLineKind::Deleted => (added, removed + 1),
+                    DiffLineKind::Context => (added, removed),
+                })
+            })
+            .collect();
         if let Some(focus) = &self.view.update.focus
             && let Some(index) = diff.files.iter().position(|file| {
                 file.new_path.as_deref() == Some(&focus.path)
@@ -360,43 +375,87 @@ impl Viewer {
                             .or(file.old_path.as_ref())
                             .cloned()
                             .unwrap_or_default();
-                        let mark = match file.status {
-                            DiffStatus::Added => "A",
-                            DiffStatus::Deleted => "D",
-                            DiffStatus::Modified => "M",
-                            DiffStatus::Renamed => "R",
-                            DiffStatus::Copied => "C",
+                        // The desktop's `changeMark`: a coloured letter for how the file changed.
+                        let (mark, color) = match file.status {
+                            DiffStatus::Added => ("A", theme::DONE),
+                            DiffStatus::Deleted => ("D", theme::BLOCKED),
+                            DiffStatus::Modified => ("M", theme::WORKING),
+                            DiffStatus::Renamed => ("R", theme::INFO),
+                            DiffStatus::Copied => ("C", theme::INFO),
                         };
-                        div()
-                            .id(index)
-                            .h(px(32.0))
-                            .w_full()
-                            .px(px(10.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .bg(rgba(if index == this.selected {
-                                theme::HOVER_STRONG
-                            } else {
-                                0
-                            }))
-                            .cursor_pointer()
-                            .role(Role::ListBoxOption)
-                            .aria_label(path.clone())
-                            .aria_selected(index == this.selected)
-                            .hover(|style| style.bg(rgba(theme::HOVER)))
-                            .child(mark)
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(path),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.files_focus.focus(window, cx);
-                                this.select_file(index, cx);
-                            }))
+                        let (added, removed) = this.counts.get(index).copied().unwrap_or_default();
+                        let (folder, name) = match path.rsplit_once('/') {
+                            Some((folder, name)) => (Some(folder.to_owned()), name.to_owned()),
+                            None => (None, path.clone()),
+                        };
+                        // The desktop's `Item size="xs"` row in a list with 8px sides: the file name, its folder
+                        // after it, and its line counts.
+                        div().w_full().px(px(8.0)).child(
+                            div()
+                                .id(index)
+                                .h(px(28.0))
+                                .w_full()
+                                .px(px(8.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .rounded(px(8.0))
+                                .text_size(px(12.0))
+                                .bg(rgba(if index == this.selected {
+                                    0xffffff14
+                                } else {
+                                    0
+                                }))
+                                .cursor_pointer()
+                                .role(Role::ListBoxOption)
+                                .aria_label(path.clone())
+                                .aria_selected(index == this.selected)
+                                .when(index != this.selected, |row| {
+                                    row.hover(|style| style.bg(rgba(theme::HOVER)))
+                                })
+                                .child(
+                                    div()
+                                        .w(px(12.0))
+                                        .flex_none()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(color))
+                                        .child(mark),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .gap(px(6.0))
+                                        .overflow_hidden()
+                                        .child(div().flex_none().child(name))
+                                        .when_some(folder, |text, folder| {
+                                            text.child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                                    .child(folder),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(rgb(theme::DONE))
+                                        .child(format!("+{added}")),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(rgb(theme::BLOCKED))
+                                        .child(format!("−{removed}")),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.files_focus.focus(window, cx);
+                                    this.select_file(index, cx);
+                                })),
+                        )
                     })
                     .collect::<Vec<_>>()
             }),
@@ -465,7 +524,8 @@ impl Viewer {
             .child(
                 div()
                     .id("diff-file-panel")
-                    .w(px(200.0))
+                    // The desktop's `w-72` when the diff fills the window.
+                    .w(px(288.0))
                     .flex_none()
                     .flex()
                     .flex_col()
@@ -547,18 +607,22 @@ impl Render for Viewer {
             .aria_label(self.view.title.clone())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
+            // The desktop's header when the diff fills the window: `py-3 pr-3 pl-5`, a 15px title, and under it the
+            // subtitle, the number of files and the lines added and removed.
             .child(
                 div()
-                    .h(px(66.0))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(12.0))
-                    .px(px(16.0))
+                    .gap(px(4.0))
+                    .py(px(12.0))
+                    .pr(px(12.0))
+                    .pl(px(20.0))
                     .border_b_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(ui::HAIRLINE))
                     .child(
                         div()
+                            .mr(px(12.0))
                             .flex_1()
                             .min_w_0()
                             .flex()
@@ -566,36 +630,75 @@ impl Render for Viewer {
                             .child(
                                 div()
                                     .text_size(px(15.0))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .truncate()
                                     .child(self.view.title.clone()),
                             )
                             .child(
                                 div()
+                                    .mt(px(2.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .whitespace_nowrap()
                                     .text_size(px(12.0))
                                     .text_color(rgb(theme::MUTED_FOREGROUND))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(self.view.subtitle.clone()),
+                                    .when(!self.view.subtitle.is_empty(), |line| {
+                                        line.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .child(self.view.subtitle.clone()),
+                                        )
+                                    })
+                                    .when_some(self.view.update.patch.as_ref(), |line, patch| {
+                                        let (added, removed) = self
+                                            .counts
+                                            .iter()
+                                            .fold((0, 0), |(a, r), (fa, fr)| (a + fa, r + fr));
+                                        line.child(format!("{} files", patch.files.len()))
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(theme::DONE))
+                                                    .child(format!("+{added}")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(theme::BLOCKED))
+                                                    .child(format!("−{removed}")),
+                                            )
+                                    }),
                             ),
                     )
                     .when(self.view.refresh, |bar| {
                         bar.child(
-                            ui::button(
+                            ui::icon_button(
                                 "diff-refresh",
-                                "Refresh diff",
-                                ui::Variant::Ghost,
-                                self.refreshing,
+                                Icon::RefreshCw,
                                 if self.refreshing {
                                     "Refreshing…"
                                 } else {
                                     "Refresh"
                                 },
+                                ui::ButtonSize::Sm,
                             )
                             .track_focus(&self.refresh_focus)
-                            .on_click(cx.listener(|this, _, _, cx| this.request_refresh(cx))),
+                            .when(self.refreshing, |button| button.opacity(0.5))
+                            .when(!self.refreshing, |button| {
+                                button.on_click(
+                                    cx.listener(|this, _, _, cx| this.request_refresh(cx)),
+                                )
+                            }),
                         )
                     })
+                    .child(
+                        div()
+                            .mx(px(4.0))
+                            .h(px(16.0))
+                            .w(px(1.0))
+                            .bg(rgba(ui::HAIRLINE)),
+                    )
                     .child(
                         ui::icon_button("diff-close", Icon::X, "Close diff", ui::ButtonSize::Sm)
                             .track_focus(&self.close_focus)
