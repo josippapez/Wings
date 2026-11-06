@@ -27,6 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 wings-agents = { path = "../../../crates/wings-agents" }
 wings-disk-usage = { path = "../../../crates/wings-disk-usage" }
+wings-editors = { path = "../../../crates/wings-editors" }
 wings-gitwatch = { path = "../../../crates/wings-gitwatch" }
 wings-plugin-storage = { path = "../../../crates/wings-plugin-storage" }
 wings-plugins = { path = "../../../crates/wings-plugins" }

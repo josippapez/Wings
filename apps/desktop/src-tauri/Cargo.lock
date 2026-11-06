@@ -6026,6 +6026,7 @@ dependencies = [
  "wings-agents",
  "wings-bench-grid",
  "wings-disk-usage",
+ "wings-editors",
  "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",
@@ -6060,6 +6061,15 @@ dependencies = [
  "rayon",
  "serde",
  "sysinfo",
+]
+
+[[package]]
+name = "wings-editors"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "wings-plugins",
 ]
 
 [[package]]

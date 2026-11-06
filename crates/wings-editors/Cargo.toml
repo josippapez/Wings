@@ -1,0 +1,16 @@
+[package]
+name = "wings-editors"
+version = "0.1.0"
+edition = "2021"
+description = "The code editors installed on this computer, and opening a project folder in one"
+publish = false
+
+[lib]
+name = "wings_editors"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# For ~/Applications, the same crate the apps find their data folders with.
+dirs = "7.0.0"
+# `find_program` finds an editor's command-line tool the way the plugin runner finds any program.
+wings-plugins = { path = "../wings-plugins" }
