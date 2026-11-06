@@ -164,6 +164,8 @@ pub struct TerminalView {
     _look: Subscription,
     error: Option<String>,
     marked: String,
+    /// Keys you typed are waiting in the prompt, not yet sent with Enter or cleared with Ctrl-C (the desktop's PaneInput).
+    typed: bool,
     visible: bool,
     autofocus: bool,
     /// Wheel movement smaller than one line, kept for the next event.
@@ -271,6 +273,7 @@ impl TerminalView {
             _look: look_changed,
             error: None,
             marked: String::new(),
+            typed: false,
             visible: true,
             autofocus: true,
             scroll_rest: 0.0,

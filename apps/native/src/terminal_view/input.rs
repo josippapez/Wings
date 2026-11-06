@@ -101,6 +101,21 @@ fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
+/// Whether input you typed leaves a draft in the prompt (`Some(true)`), sends or clears it (`Some(false)`), or says
+/// nothing about it (`None`), as the desktop's `PaneInput.note`.
+fn drafts(data: &[u8]) -> Option<bool> {
+    // A lone Escape interrupts or closes a menu, it adds nothing to the prompt.
+    if data.is_empty() || data == b"\x1b" {
+        return None;
+    }
+    // Enter submits what is typed, Ctrl-C clears it. A paste that ends in Enter is still a paste.
+    let sends = !data.starts_with(b"\x1b[200~")
+        && data
+            .last()
+            .is_some_and(|&last| last == b'\r' || last == 0x03);
+    Some(!sends)
+}
+
 /// Keys the desktop terminal sends differently from xterm (`src/lib/edit-keys.ts` and its
 /// Shift-Return setting, on by default). Shift-Return is Meta-Return, a new line in Claude Code.
 /// On macOS, Option-arrows move a word and Cmd-arrows and Cmd-Backspace edit the line.
@@ -162,6 +177,9 @@ impl TerminalView {
                 .or_else(|| key_bytes(key, mode, event.prefer_character_input))
                 .map(Command::Input),
         };
+        if let Some(Command::Input(bytes)) = &command {
+            self.note_typed(bytes);
+        }
         if let Some(command) = command {
             self.send(command, cx);
             window.prevent_default();
@@ -171,19 +189,46 @@ impl TerminalView {
 
     pub(super) fn paste(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.paste_text(&text, cx);
+            let bytes = self.pasted(&text);
+            self.note_typed(&bytes);
+            self.send(Command::Input(bytes), cx);
         }
     }
 
     /// Pastes `text` as the clipboard's would be, without pressing Enter: a plugin's message to the agent in the pane.
     pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let bytes = self.pasted(text);
+        self.send(Command::Input(bytes), cx);
+    }
+
+    fn pasted(&self, text: &str) -> Vec<u8> {
         let bracketed = self
             .latest
             .lock()
             .unwrap()
             .mode
             .contains(TermMode::BRACKETED_PASTE);
-        self.send(Command::Input(paste_bytes(text, bracketed)), cx);
+        paste_bytes(text, bracketed)
+    }
+
+    fn note_typed(&mut self, data: &[u8]) {
+        if let Some(typed) = drafts(data) {
+            self.typed = typed;
+        }
+    }
+
+    /// Something you typed waits in the prompt and wasn't sent.
+    pub fn has_typed(&self) -> bool {
+        self.typed
+    }
+
+    /// Writes `text` as Wings' own input, like a command typed for a plugin or Enter for an agent: it isn't your typing,
+    /// and Enter (`\r`) sends the prompt with whatever waited in it.
+    pub fn write_input(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text.ends_with('\r') {
+            self.typed = false;
+        }
+        self.send(Command::Input(text.as_bytes().to_vec()), cx);
     }
 }
 
@@ -235,6 +280,7 @@ impl EntityInputHandler for TerminalView {
         }
         self.marked.clear();
         if !text.is_empty() {
+            self.note_typed(text.as_bytes());
             self.send(Command::Input(text.as_bytes().to_vec()), cx);
         }
         window.notify_text_input_changed(&self.focus);
@@ -335,6 +381,17 @@ mod tests {
             paste_bytes("x\x1b[201~echo injected\n", true),
             b"\x1b[200~x[201~echo injected\r\x1b[201~"
         );
+    }
+
+    #[test]
+    fn typing_leaves_a_draft_until_enter_or_ctrl_c_and_a_lone_escape_changes_nothing() {
+        assert_eq!(drafts(b"hello"), Some(true));
+        assert_eq!(drafts(b"\r"), Some(false));
+        assert_eq!(drafts(b"ls\r"), Some(false));
+        assert_eq!(drafts(&[3]), Some(false));
+        assert_eq!(drafts(b"\x1b"), None);
+        // A paste that ends in Enter is still a paste.
+        assert_eq!(drafts(b"\x1b[200~x\r\x1b[201~\r"), Some(true));
     }
 
     #[test]
