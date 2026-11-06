@@ -232,6 +232,7 @@ impl Workspace {
             .as_ref()
             .map(|paths| installed::start(installed::discover(paths), paths, &env))
             .unwrap_or_default();
+        this.plugin_env.set_plugins(&this.plugins);
         this.transcript_plugins = this
             .plugins
             .iter()

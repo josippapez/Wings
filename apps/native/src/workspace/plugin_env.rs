@@ -20,7 +20,7 @@ use wings_plugins::transcript::{Line, transcript_event};
 use crate::{
     agents::AgentKind,
     page::plugin::{
-        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, SessionEntry,
+        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SessionEntry, ToolCall,
         ui::{Badge, PaneStatus},
     },
     ports,
@@ -79,6 +79,10 @@ pub(super) enum UiEvent {
     OpenView {
         plan: OpenView,
         reply: crate::page::runtime::Reply,
+    },
+    CloseView {
+        plugin: String,
+        view: String,
     },
     Git(Vec<String>),
     Badge {
@@ -164,6 +168,7 @@ struct Known {
 pub(super) struct AppEnv {
     events: Sender<UiEvent>,
     known: Mutex<Known>,
+    running: Running,
     claude_dir: PathBuf,
     system: Mutex<Arc<dyn System>>,
 }
@@ -173,6 +178,7 @@ impl AppEnv {
         Self {
             events,
             known: Mutex::default(),
+            running: Running::default(),
             claude_dir,
             system: Mutex::new(Arc::new(Os)),
         }
@@ -249,6 +255,21 @@ impl Env for AppEnv {
             reply.err("The Wings window is closed or busy".into());
         }
     }
+    fn close_view(&self, plugin: &str, view: &str) {
+        self.send(UiEvent::CloseView {
+            plugin: plugin.to_owned(),
+            view: view.to_owned(),
+        });
+    }
+
+    fn builtin(&self, plugin: &str) -> Option<bool> {
+        self.running.builtin(plugin)
+    }
+
+    fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
+        self.running.call_tool(call, reply);
+    }
+
     fn projects(&self) -> Vec<PathBuf> {
         self.known.lock().unwrap().projects.clone()
     }
@@ -323,6 +344,16 @@ pub(super) struct PluginUi {
     pub(super) notices: Vec<Notice>,
     next_notice: usize,
     notice_timers: Vec<Task<()>>,
+}
+
+impl AppEnv {
+    /// Tells `callTool` which plugins run, once they have started.
+    pub(super) fn set_plugins(&self, plugins: &[crate::installed::Installed]) {
+        for installed in plugins {
+            self.running
+                .add(&installed.plugin, installed.builtin, &installed.host);
+        }
+    }
 }
 
 impl Workspace {
@@ -411,6 +442,9 @@ impl Workspace {
                 } else {
                     reply.err(format!("Native views don't open as {} yet", plan.place));
                 }
+            }
+            UiEvent::CloseView { plugin, view } => {
+                self.close_plugin_view(&plugin, &view, window, cx)
             }
             UiEvent::Badge {
                 plugin,

@@ -1,6 +1,6 @@
 // The form that adds or changes a schedule, or an entry that waits for something to be assigned to you.
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { Button, Card, Chip, Chips, Combobox, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
 import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, WATCH_NAME, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
@@ -72,7 +72,8 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
   const [days, setDays] = useState(schedule?.when.kind === "daily" ? schedule.when.days : WEEKDAYS);
 
-  const submit = (e: FormEvent) => {
+  // The Save button runs it on a click, which also covers Enter in a field, and stops the form from submitting a second time.
+  const submit = (e: { preventDefault(): void }) => {
     e.preventDefault();
     // Another project has other states, so it picks its own at its first check.
     if (kind === "assigned") {
@@ -215,7 +216,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
         {projects.length === 0 ? <Notice tone="warn">Add a project in Wings first. An entry runs inside one.</Notice> : null}
         {error ? <Notice tone="danger">{error}</Notice> : null}
         <Row gap="m" wrap>
-          <Button type="submit" busy={busy} disabled={projects.length === 0}>
+          <Button type="submit" onClick={submit} busy={busy} disabled={projects.length === 0}>
             {schedule || watch ? "Save" : "Add entry"}
           </Button>
           <Button variant="ghost" onClick={onCancel}>

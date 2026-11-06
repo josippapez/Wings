@@ -50,6 +50,31 @@ fn search_field_physical_input_reaches_the_query_and_backspace_edits_it() {
     settle(&app, &mut window, shows("Query=coupo"));
 }
 
+const FORM: &str = r#"
+let name = 'x', note = '';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+{id:3,type:'TextInput',props:{label:'Name',value:name,maxLength:5,onChange:'3:change'}},
+{id:4,type:'Textarea',props:{label:'Note',rows:3,value:note,onChange:'4:change'}},
+{id:5,type:'Text',children:[{id:6,type:'#text',text:'Name='+name+' Note='+JSON.stringify(note)}]}]}]}]}));}
+globalThis.__wingsEvent=(handler,json)=>{const v=JSON.parse(json).value;if(handler==='3:change')name=v;else note=v;render();return true;};render();
+"#;
+
+#[test]
+fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea_takes_enter() {
+    let (app, mut window) = open(FORM);
+    settle(&app, &mut window, shows("Name=x "));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("abcdefgh");
+    settle(&app, &mut window, shows("Name=xabcd "));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("hi");
+    key(&mut window, "enter");
+    window.simulate_input("yo");
+    settle(&app, &mut window, shows(r#"Note="hi\nyo""#));
+}
+
 #[test]
 fn search_field_can_be_reached_with_tab() {
     let (app, mut window) = open(SEARCH);

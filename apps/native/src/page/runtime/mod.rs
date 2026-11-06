@@ -112,6 +112,9 @@ pub enum Message {
     Transcript,
     /// A badge action was clicked: `id` names it for `Link::call("actionDone")`, the text is the JSON of `{ paneId, actionId }`.
     Action,
+    /// Another plugin calls one of this plugin's tools: `id` names the call for `Link::call("toolDone")`, the text is
+    /// the JSON of `{ name, arguments, project }`.
+    Tool,
     /// The call `id` succeeded; the text is its JSON result.
     Resolve,
     /// The call `id` failed; the text is the error.
@@ -132,6 +135,7 @@ impl Message {
             Message::Panes => "panes",
             Message::Transcript => "transcript",
             Message::Action => "action",
+            Message::Tool => "tool",
             Message::Resolve => "resolve",
             Message::Reject => "reject",
             Message::Output => "output",

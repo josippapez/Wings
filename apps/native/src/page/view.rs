@@ -36,6 +36,15 @@ struct SearchState {
     handler: Option<String>,
 }
 
+/// A form input. The page owns its text; the field has its own between the page's renders.
+struct InputState {
+    field: gpui::Entity<crate::text_field::TextField>,
+    handler: Option<String>,
+    /// The text the page last gave it. The field takes the page's text when this changes, which is when the page set it
+    /// (a form filled in once it loaded), and not on every render, which would undo a key the page hasn't heard yet.
+    given: String,
+}
+
 pub struct PageView {
     runtime: Option<PageRuntime>,
     tree: Option<Tree>,
@@ -50,6 +59,7 @@ pub struct PageView {
     /// How wide each select was drawn, by node id: its menu is as wide.
     select_widths: HashMap<u64, Pixels>,
     fields: RefCell<HashMap<u64, SearchState>>,
+    inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
@@ -121,6 +131,9 @@ impl PageView {
                                         Node::SearchField(field) => {
                                             ids.insert(field.id);
                                         }
+                                        Node::Input(input) => {
+                                            ids.insert(input.id);
+                                        }
                                         Node::Graph(graph) => {
                                             ids.insert(graph.id);
                                         }
@@ -136,6 +149,7 @@ impl PageView {
                             }
                             controls(&tree.children, &mut ids);
                             view.fields.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.inputs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.chip_focus
                                 .borrow_mut()
@@ -162,6 +176,7 @@ impl PageView {
             pressed_open: false,
             select_widths: HashMap::new(),
             fields: RefCell::new(HashMap::new()),
+            inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
             chip_focus: RefCell::new(HashMap::new()),
             error,
@@ -195,6 +210,32 @@ impl PageView {
             self.send(handler, Some(&serde_json::json!({ "value": value })));
         }
         cx.notify();
+    }
+
+    /// Presses the `nth` button labelled `label`, as a click would. False when the page has no such button.
+    #[cfg(feature = "test-support")]
+    pub fn press(&self, label: &str, nth: usize) -> bool {
+        fn find<'a>(nodes: &'a [Node], label: &str, found: &mut Vec<&'a str>) {
+            for node in nodes {
+                if let Node::Button(button) = node
+                    && plain_text(&button.children).trim() == label
+                    && let Some(handler) = &button.on_click
+                {
+                    found.push(handler);
+                }
+                for part in node.parts() {
+                    find(part, label, found);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        if let Some(tree) = &self.tree {
+            find(&tree.children, label, &mut found);
+        }
+        found.get(nth).is_some_and(|handler| {
+            self.send(handler, None);
+            true
+        })
     }
 
     #[cfg(feature = "test-support")]
@@ -375,7 +416,10 @@ impl PageView {
             Node::Button(button) => {
                 let element = ui::button(
                     ElementId::NamedInteger("page-button".into(), button.id),
-                    plain_text(&button.children),
+                    button
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| plain_text(&button.children)),
                     variant(button.variant),
                     button.disabled,
                     self.inline(&button.children, cx),
@@ -601,9 +645,17 @@ impl PageView {
                         .children(self.nodes(&item.children, cx))
                         .into_any_element()
                 } else {
+                    // A card in a row takes the row's width, as a page's own style would have it do.
                     ui::list_item(
                         ElementId::NamedInteger("page-list-item".into(), item.id),
-                        self.nodes(&item.children, cx),
+                        item.children.iter().map(|child| {
+                            let element = self.node(child, cx);
+                            if matches!(child, Node::Card(_)) {
+                                div().flex_1().min_w_0().child(element).into_any_element()
+                            } else {
+                                element
+                            }
+                        }),
                     )
                     .into_any_element()
                 }
@@ -812,8 +864,78 @@ impl PageView {
                     .child(entity)
                     .into_any_element()
             }
+            Node::Input(input) => self.input(input, cx),
+            Node::Icon(icon) => crate::icons::icon(
+                match icon.name {
+                    tree::IconName::Check => crate::icons::Icon::Check,
+                    tree::IconName::ChevronDown => crate::icons::Icon::ChevronDown,
+                    tree::IconName::Copy => crate::icons::Icon::Copy,
+                    tree::IconName::Trash => crate::icons::Icon::Trash,
+                },
+                16.0,
+                theme::FOREGROUND,
+            )
+            .into_any_element(),
             Node::Graph(graph) => self.graph(graph, cx),
         }
+    }
+
+    fn input(&self, input: &tree::Input, cx: &mut Context<Self>) -> AnyElement {
+        let mut inputs = self.inputs.borrow_mut();
+        let state = inputs.entry(input.id).or_insert_with(|| {
+            let entity = cx.new(|cx| {
+                let role = if input.rows.is_some() {
+                    Role::MultilineTextInput
+                } else {
+                    Role::TextInput
+                };
+                let mut field = crate::text_field::TextField::new(
+                    role,
+                    input.label.clone(),
+                    input.placeholder.clone(),
+                    px(0.0),
+                    cx,
+                );
+                field.fill = true;
+                field.rows = input.rows;
+                field
+            });
+            let id = input.id;
+            cx.subscribe(&entity, move |view, entity, event, cx| {
+                if matches!(event, crate::text_field::FieldEvent::Changed)
+                    && let Some(handler) = view
+                        .inputs
+                        .borrow()
+                        .get(&id)
+                        .and_then(|state| state.handler.clone())
+                {
+                    view.send(
+                        &handler,
+                        Some(&serde_json::json!({ "value": entity.read(cx).text })),
+                    );
+                }
+            })
+            .detach();
+            InputState {
+                field: entity,
+                handler: None,
+                given: String::new(),
+            }
+        });
+        state.handler = input.on_change.clone();
+        let (disabled, max_chars) = (input.disabled, input.max_length);
+        state.field.update(cx, |field, cx| {
+            if state.given != input.value && field.text != input.value {
+                field.text = input.value.clone();
+                cx.notify();
+            }
+            if field.disabled != disabled || field.max_chars != max_chars {
+                (field.disabled, field.max_chars) = (disabled, max_chars);
+                cx.notify();
+            }
+        });
+        state.given = input.value.clone();
+        state.field.clone().into_any_element()
     }
 
     fn disclosure(&self, disclosure: &tree::Disclosure, cx: &mut Context<Self>) -> AnyElement {

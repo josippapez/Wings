@@ -8,7 +8,8 @@
 //!
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
-//! `notify`, `transcript`, `onTranscript` and `statusline`. Each call is a promise the host answers through
+//! `notify`, `transcript`, `onTranscript`, `statusline`, `onTool` and `callTool`, `closeView` and `project`. The calls
+//! that make a project of a worktree, and `setProjectSection`, are there so a plugin gets the host's refusal. Each call is a promise the host answers through
 //! `Link::call`, when it likes and from any thread, which comes back as a message to this frame's loop. Nothing else
 //! is added: no files, network or process of the frame's own.
 //!
@@ -63,6 +64,7 @@ const SETUP: &str = r#"
         const listeners = { broadcast: [], panes: [], transcript: [], action: [], projects: [], focus: [], git: [], diffClosed: [] };
         let diffRefreshHandler = null;
         let projects = null, focused = native.focused, focusKnown = false;
+        const tools = new Map();
         // QuickJS has no browser abort globals. Only the signal contract needed by diskFind is supplied.
         class AbortSignal {
             constructor() { this.aborted = false; this.listeners = []; }
@@ -147,8 +149,24 @@ const SETUP: &str = r#"
             call('actionDone', { token, error }).catch(none);
         };
 
+        // Another plugin called one of this plugin's tools. A thrown error goes back to the caller as a failed call.
+        const runTool = async (token, { name, arguments: input, project }) => {
+            let text, isError = false;
+            try {
+                const handler = tools.get(name);
+                if (!handler) throw new Error(`The plugin has no handler for ${name}`);
+                const result = await handler(input ?? {}, { paneId: null, project: project ?? null, session: null });
+                text = typeof result === 'string' ? result : result === undefined ? 'Done' : JSON.stringify(result, null, 2);
+            } catch (e) {
+                text = String(e?.message ?? e);
+                isError = true;
+            }
+            call('toolDone', { token, text, isError }).catch(none);
+        };
+
         deliver = (kind, id, text) => {
             switch (kind) {
+                case 'tool': void runTool(id, JSON.parse(text)); break;
                 case 'projects': projects = JSON.parse(text); hear(listeners.projects, projects); break;
                 case 'focus': {
                     const value = JSON.parse(text).focused === true;
@@ -234,8 +252,16 @@ const SETUP: &str = r#"
                     typeof onProgress === 'function' ? (line) => onProgress(JSON.parse(line)) : undefined)
                     .finally(() => signal?.removeEventListener('abort', stop));
             },
+            project: () => call('project', {}),
             openPane: ({ command = null, args = [], cwd = null, placement = 'tab' } = {}) => call('openPane', { command, args, cwd, placement }),
             openView: (id, { as, args, newTab } = {}) => call('openView', { id, as, args, newTab: newTab === true }),
+            closeView: (id) => call('closeView', { id }),
+            onTool: (name, handler) => void tools.set(name, handler),
+            callTool: (name, args, options) => call('callTool', { name, arguments: args ?? {}, project: options?.project ?? null }),
+            createWorktree: (options) => call('createWorktree', options),
+            worktreeSetup: (projectId) => call('worktreeSetup', { projectId: projectId ?? null }),
+            setWorktreeSetup: (projectId, options) => call('setWorktreeSetup', { projectId: projectId ?? null, include: options?.include, setup: options?.setup }),
+            setProjectSection: (projectId, sectionId, rows) => call('setProjectSection', { projectId, sectionId, rows }),
             openDiff: (diff) => call('openDiff', diff ?? {}),
             updateDiff: (id, update) => call('updateDiff', { id, ...update }),
             onDiffRefresh: (handler) => void (diffRefreshHandler = handler),

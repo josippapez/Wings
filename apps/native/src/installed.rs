@@ -93,6 +93,8 @@ pub struct Installed {
     pub sidebars: Vec<Sidebar>,
     /// The plugin as the desktop loads it, with its icon's SVG.
     pub plugin: Plugin,
+    /// One of Wings' own plugins.
+    pub builtin: bool,
 }
 
 /// A page of the right-hand sidebar.
@@ -239,6 +241,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                 pages,
                 sidebars,
                 plugin: found.plugin,
+                builtin: found.builtin,
             })
         })
         .collect()

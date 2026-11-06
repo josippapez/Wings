@@ -4,12 +4,19 @@
 //! Every method may be called from any thread, a frame's or a worker's, so an implementation hands work on rather than
 //! touching the window.
 
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex, Weak},
+};
 
 use serde::Serialize;
 use wings_plugins::manifest::Plugin;
 
-use super::ui::{Badge, PaneStatus};
+use super::{
+    PluginHost,
+    ui::{Badge, PaneStatus},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Project {
@@ -33,6 +40,75 @@ pub struct OpenView {
     pub place: String,
     pub args: Option<serde_json::Value>,
     pub new_tab: bool,
+}
+
+/// One plugin's call of another's tool, as the app is asked to run it. The caller's permission is checked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCall {
+    pub target: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub project: Option<Project>,
+}
+
+/// A running plugin, as another plugin's `callTool` finds it.
+struct Target {
+    builtin: bool,
+    /// The tools its manifest declares.
+    tools: Vec<String>,
+    host: Weak<PluginHost>,
+}
+
+/// The plugins an app runs, for the calls between them. It holds no plugin alive.
+#[derive(Default)]
+pub struct Running(Mutex<HashMap<String, Target>>);
+
+impl Running {
+    /// Makes `host` the plugin `plugin` is run by, `builtin` if it is one of Wings' own.
+    pub fn add(&self, plugin: &Plugin, builtin: bool, host: &Arc<PluginHost>) {
+        self.0.lock().unwrap().insert(
+            plugin.manifest.id.clone(),
+            Target {
+                builtin,
+                tools: plugin
+                    .manifest
+                    .contributes
+                    .mcp_tools
+                    .iter()
+                    .map(|tool| tool.name.clone())
+                    .collect(),
+                host: Arc::downgrade(host),
+            },
+        );
+    }
+
+    /// Whether the plugin is one of Wings' own, or `None` when it doesn't run here.
+    pub fn builtin(&self, plugin: &str) -> Option<bool> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(plugin)
+            .map(|target| target.builtin)
+    }
+
+    /// Hands the call to the plugin's main, or answers `reply` with why it can't.
+    pub fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
+        let target = {
+            let running = self.0.lock().unwrap();
+            running
+                .get(&call.target)
+                .map(|target| (target.tools.contains(&call.tool), target.host.upgrade()))
+        };
+        match target {
+            Some((true, Some(host))) => {
+                host.run_tool(&call.tool, call.input, call.project.as_ref(), reply)
+            }
+            Some((false, Some(_))) => {
+                reply.err(format!("{} has no tool {}", call.target, call.tool))
+            }
+            _ => reply.err(format!("{} is turned off or not installed", call.target)),
+        }
+    }
 }
 
 /// One program listening for TCP connections that `localhost` reaches, as `wings.ports` lists them.
@@ -70,6 +146,16 @@ pub trait Env: Send + Sync + 'static {
     }
     fn open_view(&self, _plan: OpenView, reply: crate::page::runtime::Reply) {
         reply.err("Opening views isn't available".into());
+    }
+    /// Closes the plugin's page `view` wherever the app shows it.
+    fn close_view(&self, _plugin: &str, _view: &str) {}
+    /// Whether the plugin is one of Wings' own, or `None` when it doesn't run here.
+    fn builtin(&self, _plugin: &str) -> Option<bool> {
+        None
+    }
+    /// Runs the tool of another running plugin, and answers `reply` with `{ text, isError }`, now or later.
+    fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
+        reply.err(format!("{} is turned off or not installed", call.target));
     }
     /// The folders of the app's projects, which `exec` may run in.
     fn projects(&self) -> Vec<PathBuf>;

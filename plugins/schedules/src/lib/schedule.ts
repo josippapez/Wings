@@ -87,12 +87,22 @@ export const nameOf = (s: Pick<Schedule, "name" | "prompt">): string => {
   return s.prompt.length > 48 ? `${s.prompt.slice(0, 47).trimEnd()}…` : s.prompt;
 };
 
+/** The bytes `text` takes as UTF-8, counted by hand: the native app's JS engine has no `TextEncoder`. */
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
 /** The prompt as `openPane` takes it: one line, and nothing a shell or the agent's own flags could read. Throws what the form shows. */
 export function cleanPrompt(raw: string): string {
   const prompt = raw.replace(/\s*[\x00-\x1f\x7f]+\s*/g, " ").trim();
   if (!prompt) throw new Error("Write what the agent should do.");
   if (prompt.startsWith("-")) throw new Error("The prompt can't start with a dash. Begin it with a word.");
-  if (new TextEncoder().encode(prompt).length > MAX_PROMPT_BYTES) throw new Error("The prompt is too long. Keep it under 4 KB.");
+  if (utf8Length(prompt) > MAX_PROMPT_BYTES) throw new Error("The prompt is too long. Keep it under 4 KB.");
   return prompt;
 }
 

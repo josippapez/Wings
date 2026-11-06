@@ -4,29 +4,39 @@ import {
   Button as NativeButton,
   Card as NativeCard,
   Checkbox as NativeCheckbox,
+  Chip as NativeChip,
   Chips as NativeChips,
+  Combobox as NativeCombobox,
   Confirm as NativeConfirm,
   Disclosure as NativeDisclosure,
   Dot as NativeDot,
   Empty as NativeEmpty,
+  Field as NativeField,
+  FieldGroup as NativeFieldGroup,
   Gauge as NativeGauge,
   Graph as NativeGraph,
   Heading as NativeHeading,
+  Icon as NativeIcon,
   List as NativeList,
   ListItem as NativeListItem,
   ListButton as NativeListButton,
   Loading as NativeLoading,
+  Menu as NativeMenu,
   Notice as NativeNotice,
   Page as NativePage,
+  Properties as NativeProperties,
   Row as NativeRow,
   Select as NativeSelect,
   SearchField as NativeSearchField,
   Stack as NativeStack,
   Spinner as NativeSpinner,
   Text as NativeText,
+  TextInput as NativeTextInput,
+  Textarea as NativeTextarea,
+  Time as NativeTime,
   Toolbar as NativeToolbar,
 } from "./native";
-import type { Badge, Button, Card, Checkbox, Confirm, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Notice, Page, Row, Select, Spinner, Stack, Text, Toolbar } from "./ui";
+import type { Badge, Button, Card, Checkbox, Chip, Combobox, Confirm, Disclosure, Dot, Empty, Field, FieldGroup, Gauge, Heading, Icon, List, ListItem, Loading, Menu, Notice, Page, Properties, Row, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Toolbar } from "./ui";
 
 // What a native component takes, a ui component takes too.
 type Props<F> = F extends (props: infer P) => unknown ? P : never;
@@ -52,9 +62,19 @@ export const sameProps: [
   Takes<typeof NativeSpinner, typeof Spinner>,
   Takes<typeof NativeText, typeof Text>,
   Takes<typeof NativeToolbar, typeof Toolbar>,
-  // A button's handler gets the native event, so only its other props are the same.
+  Takes<typeof NativeCombobox, typeof Combobox>,
+  Takes<typeof NativeField, typeof Field>,
+  Takes<typeof NativeFieldGroup, typeof FieldGroup>,
+  Takes<typeof NativeIcon, typeof Icon>,
+  Takes<typeof NativeMenu, typeof Menu>,
+  Takes<typeof NativeProperties, typeof Properties>,
+  Takes<typeof NativeTime, typeof Time>,
+  // A handler gets the native event, so only the other props are the same.
   Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick"> ? true : never,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  Props<typeof NativeChip> extends Omit<Props<typeof Chip>, "onClick"> ? true : never,
+  Props<typeof NativeTextInput> extends Omit<Props<typeof TextInput>, "onChange"> ? true : never,
+  Props<typeof NativeTextarea> extends Omit<Props<typeof Textarea>, "onChange"> ? true : never,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 export const page = (
   <NativePage toolbar={<NativeToolbar title="Pilot" actions={<NativeBadge tone="info">ready</NativeBadge>} />}>

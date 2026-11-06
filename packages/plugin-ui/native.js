@@ -1,9 +1,11 @@
 // wings-plugin-ui/native: the components of ui.js that the native Wings app draws, rendered by React into a JSON tree
 // instead of into a DOM. The page runs in a JS engine with no document, and the app turns each tree into its own
 // controls. Handlers never leave the page: the tree names them by id, and the app sends the id back when one fires.
-import { createContext, createElement as h, useState } from "react";
+import { createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useState } from "react";
 import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
+import { errorMessage } from "wings-plugin-sdk/async";
+import { ago } from "wings-plugin-sdk/format";
 
 const root = { id: 0, type: "#root", props: {}, children: [] };
 let nextId = 1;
@@ -171,9 +173,15 @@ export function Row(props) {
 export function Text(props) {
   return h("Text", pick(props, ["tone", "size", "weight", "mono", "numeric", "truncate", "clamp", "grow"]), props.children);
 }
-/** A button. `onClick` gets an event with `preventDefault` and `stopPropagation`, which do nothing here. */
+/** A button. `onClick` gets an event with `preventDefault` and `stopPropagation`, which do nothing here. `busy` shows a spinner and ignores clicks. */
 export function Button(props) {
-  return h("Button", pick(props, ["variant", "onClick", "disabled"]), props.children);
+  const { busy } = props;
+  const label = props["aria-label"];
+  return h("Button", { ...pick(props, ["variant", "onClick", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
+}
+/** A small quiet button; with `pressed` it is on or off, drawn as a chip of `Chips` is. */
+export function Chip({ pressed, onClick, disabled, children, ...rest }) {
+  return h(Button, { variant: pressed ? "secondary" : "ghost", onClick, disabled, "aria-label": rest["aria-label"] }, children);
 }
 /** A short message in a tinted box. */
 export function Notice({ tone, children }) {
@@ -277,4 +285,117 @@ export function SearchField(props) {
 /** Only the requested window crosses the engine boundary, never the full history. */
 export function Graph(props) {
   return h("Graph", { ...pick(props, ["total", "lanes", "selected", "offset", "rows", "onRangeChange"]), onSelect: (event) => props.onSelect(event.index) });
+}
+
+const FieldName = createContext(undefined);
+const hintOf = (hint, error) => ((error ?? hint) ? h(Text, { size: "small", tone: error ? "danger" : "muted" }, error ?? hint) : null);
+
+/** A labelled field with a `hint` or an `error` under it, for the input in `children`, which takes the label as its name. */
+export function Field({ label, hint, error, inline, children }) {
+  const name = h(Text, { weight: "medium" }, label);
+  return h(
+    FieldName.Provider,
+    { value: typeof label === "string" ? label : undefined },
+    h(Stack, { gap: "s" }, inline ? h(Row, null, name, children) : name, inline ? null : children, hintOf(hint, error)),
+  );
+}
+/** Several controls under one label, with a `hint` or an `error` under them. */
+export function FieldGroup({ label, hint, error, children }) {
+  return h(Stack, { gap: "m" }, h(Text, { weight: "medium" }, label), children, hintOf(hint, error));
+}
+
+/** What `onChange` of an input is given: the app's event, with the text as `target.value`. */
+const changed = (value) => ({ type: "change", preventDefault() {}, stopPropagation() {}, target: { value }, currentTarget: { value } });
+const input = (type, props, extra) => {
+  const { onChange } = props;
+  return h(type, { ...pick(props, ["value", "placeholder", "disabled", "maxLength"]), ...extra, ...(onChange && { onChange: (event) => onChange(changed(event.value)) }) });
+};
+/** A one-line text input. Outside a `Field`, give it a `label`. */
+export function TextInput(props) {
+  const name = useContext(FieldName);
+  return input("TextInput", props, { label: props.label ?? name });
+}
+/** A multi-line text input, `rows` high at first. Outside a `Field`, give it a `label`. */
+export function Textarea(props) {
+  const name = useContext(FieldName);
+  return input("Textarea", props, { label: props.label ?? name, rows: props.rows });
+}
+
+const matches = (option, query) => `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.toLowerCase());
+const MOST_SUGGESTIONS = 8;
+/** A text field with its matching `options` under it as chips: the app has no popup list yet. Picking one calls `onPick`. */
+export function Combobox({ label, value, onInput, options, onPick, filter = matches, empty = "No matches.", placeholder, maxLength, disabled }) {
+  const found = options.filter((option) => filter(option, value)).slice(0, MOST_SUGGESTIONS);
+  // What the field holds is an option: nothing is left to pick.
+  const done = found.length === 1 && found[0].value === value;
+  return h(
+    Stack,
+    { gap: "s" },
+    h(TextInput, { label, value, placeholder, maxLength, disabled, onChange: (event) => onInput?.(event.target.value) }),
+    done ? null : found.length
+      ? h(Row, { gap: "s", wrap: true }, found.map((option) => h(Chip, { key: option.value, onClick: () => onPick(option) }, option.label)))
+      : value ? h(Text, { size: "small", tone: "muted" }, empty) : null,
+  );
+}
+
+/** A button that shows its `items` under it when pressed: the app has no popup menu yet. */
+export function Menu({ label, items, variant, disabled }) {
+  const [open, setOpen] = useState(false);
+  return h(
+    Stack,
+    { gap: "xs" },
+    h(Button, { variant, disabled, onClick: () => setOpen(!open) }, label, " ▾"),
+    open ? items.map((item) => h(Button, { key: item.id, variant: item.variant === "destructive" ? "destructive" : "ghost", onClick: () => (setOpen(false), item.onSelect()) }, item.label)) : null,
+  );
+}
+
+/** One of Lucide's icons, in the colour of the text. */
+export function Icon({ name }) {
+  return h("Icon", { name });
+}
+/** Label and value pairs, one per line. */
+export function Properties({ items }) {
+  return h(
+    Stack,
+    { gap: "s" },
+    items.map((item) => h(Row, { key: item.label, gap: "m", align: "baseline" }, h(Text, { tone: "muted", size: "small" }, item.label), h(Text, { size: "small", grow: true }, item.value))),
+  );
+}
+/** How long ago `iso` was, after `prefix`. Nothing when `iso` isn't a date. */
+export function Time({ iso, prefix, now }) {
+  const text = ago(iso, now);
+  return text ? h(Fragment, null, prefix, text) : null;
+}
+
+/** The project the page is about, read once: `undefined` until the app says, then the project, or `null` when none is open. */
+export function useProject() {
+  const [project, setProject] = useState(undefined);
+  useEffect(() => {
+    globalThis.wings.project().then(setProject, () => setProject(null));
+  }, []);
+  return project;
+}
+/** What `wings.openView` opened the tab with. The app opens a native page without arguments, so it is always `null`. */
+export function useViewArgs() {
+  return null;
+}
+/** Runs the page's async actions and keeps what its buttons and error card show, as `useAction` of `wings-plugin-ui` does. */
+export function useAction() {
+  const [running, setRunning] = useState(0);
+  const [error, setError] = useState(null);
+  const run = useCallback(async (fn) => {
+    setRunning((n) => n + 1);
+    setError(null);
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      setError(errorMessage(e));
+      return false;
+    } finally {
+      setRunning((n) => n - 1);
+    }
+  }, []);
+  const clear = useCallback(() => setError(null), []);
+  return { run, busy: running > 0, error, clear };
 }

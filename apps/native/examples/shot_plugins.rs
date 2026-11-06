@@ -1,5 +1,6 @@
 //! Renders Worktrees' installed native sidebar offscreen at 1000 and 640 points wide. The plugin installation and
-//! project are made up in a temporary desktop data folder, never the user's.
+//! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
+//! pages, and with `--schedules` Schedules' list and forms, each over made-up data.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -54,6 +55,10 @@ fn main() {
     std::fs::create_dir_all(&out).expect("create the output folder");
     if std::env::args().any(|arg| arg == "--changes") {
         changes(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--schedules") {
+        schedules(out);
         return;
     }
     let data = Data::temp();
@@ -111,8 +116,9 @@ fn main() {
     }
 }
 
-struct ChangesEnv(PathBuf);
-impl Env for ChangesEnv {
+/// An app with one project, which does nothing for a plugin.
+struct FixtureEnv(PathBuf);
+impl Env for FixtureEnv {
     fn projects(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
     }
@@ -203,7 +209,7 @@ fn changes(out: PathBuf) {
                 icon_svg: None,
             },
             builtin: false,
-            env: std::sync::Arc::new(ChangesEnv(root.clone())),
+            env: std::sync::Arc::new(FixtureEnv(root.clone())),
         },
     );
     let fixture = include_str!("../../../plugins/changes/preview/native-host.js")
@@ -293,6 +299,148 @@ fn changes(out: PathBuf) {
                     out.join(format!("changes-history-{width}.png")),
                 );
             }
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+/// Schedules' real main over made-up schedules and one paused "assigned" entry with tickets, and its built page. The
+/// entries are kept in a storage folder of their own, so nothing runs: no schedule is due, and the entry is paused.
+fn schedules(out: PathBuf) {
+    let project = out.join("fixture-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let id = project.to_string_lossy().into_owned();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let hour = 3_600_000;
+    let storage = out.join("fixture-storage-schedules");
+    let _ = std::fs::remove_dir_all(&storage);
+    let store = wings_plugin_storage::Storage::new(storage.clone());
+    store
+        .set(
+            "schedules",
+            "shot",
+            "schedules",
+            json!([
+                { "id": "a1", "name": "Morning review", "projectId": id, "agent": "claude",
+                  "prompt": "Check yesterday's failed CI runs and open a fix for the flaky test.",
+                  "when": { "kind": "daily", "time": "09:00", "days": [1, 2, 3, 4, 5] }, "enabled": true, "anchor": now,
+                  "lastRun": { "at": now - 2 * hour, "paneId": "3", "ok": true } },
+                { "id": "a2", "name": "", "projectId": id, "agent": "opencode",
+                  "prompt": "Update the dependencies that have a patch release and run the tests.",
+                  "when": { "kind": "every", "hours": 6 }, "enabled": false, "anchor": now,
+                  "lastRun": { "at": now - 26 * hour, "ok": false, "error": "The project is no longer in Wings." } },
+            ]),
+        )
+        .unwrap();
+    store
+        .set(
+            "schedules",
+            "shot",
+            "assigned",
+            json!([{
+                "id": "w1", "name": "Frontend tickets", "projectId": id, "agent": "claude",
+                "prompt": "Work on the ticket at {url}, titled \"{title}\".", "minFreeGb": 10, "enabled": false,
+                "primed": true, "seen": ["41", "42", "43"], "states": ["Open"], "prefixes": ["FE"],
+                "waiting": [
+                    { "id": "42", "title": "FE: Show the coupon field on mobile", "url": "https://github.com/example/shop/issues/42", "at": now - hour },
+                    { "id": "43", "title": "FE: Round shipping rates in the cart", "url": "https://github.com/example/shop/issues/43", "at": now - hour / 2 },
+                ],
+                "source": { "kind": "github", "host": "github.com", "path": "example/shop" },
+                "tickets": [
+                    { "id": "42", "title": "FE: Show the coupon field on mobile", "url": "https://github.com/example/shop/issues/42", "state": "Open", "type": "bug" },
+                    { "id": "40", "title": "BE: Cache the rates", "url": "https://github.com/example/shop/issues/40", "state": "In review" },
+                ],
+                "lastCheck": { "at": now - 20 * 60_000, "ok": true, "count": 2 },
+            }]),
+        )
+        .unwrap();
+    let manifest: wings_plugins::manifest::Manifest =
+        serde_json::from_str(include_str!("../../../plugins/schedules/wings-plugin.json")).unwrap();
+    let host = PluginHost::with_access(
+        PluginConfig {
+            id: "schedules".into(),
+            root: storage,
+            scope: "shot".into(),
+        },
+        Access {
+            plugin: wings_plugins::manifest::Plugin {
+                manifest,
+                dir: project.clone(),
+                icon_svg: None,
+            },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(project.clone())),
+        },
+    );
+    host.publish_projects(vec![wings_native::page::plugin::Project {
+        id: id.clone(),
+        name: "shop".into(),
+        path: id,
+    }]);
+    host.start_main(
+        include_str!("../../../plugins/schedules/dist/native/main.js"),
+        |event| {
+            if let wings_native::page::runtime::Event::Error { message, .. } = event {
+                panic!("{message}");
+            }
+        },
+    )
+    .unwrap();
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.update(actions::bind);
+    let source = include_str!("../../../plugins/schedules/dist/native/schedules.js");
+    // What to press to reach each view, and a text it shows.
+    let views = [
+        ("list", None, "Frontend tickets"),
+        ("new", Some(("Add entry", 0)), "Start an agent"),
+        ("edit-entry", Some(("Edit", 2)), "Keep free"),
+    ];
+    for width in [1000.0, 640.0] {
+        for (name, press, expected) in views {
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
+                })
+                .unwrap();
+            let window = handle.into();
+            // A page starts hidden and loads once its tab is shown.
+            handle
+                .read_with(&cx, |view, _| view.set_visible(true))
+                .unwrap();
+            let until = |cx: &mut VisualTestAppContext, text: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle
+                    .read_with(cx, |view, _| view.text().contains(text))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "page did not show {text:?}: {}",
+                        handle.read_with(cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            until(&mut cx, "Frontend tickets");
+            if let Some((label, nth)) = press {
+                let pressed = handle
+                    .read_with(&cx, |view, _| view.press(label, nth))
+                    .unwrap();
+                assert!(pressed, "no button {label}");
+            }
+            until(&mut cx, expected);
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(
+                &mut cx,
+                window,
+                out.join(format!("schedules-{name}-{width}.png")),
+            );
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }

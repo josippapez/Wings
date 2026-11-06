@@ -5,7 +5,7 @@ import { createElement as h, useEffect, useState } from "react";
 
 const trees = [];
 globalThis.wings = { render: (json) => trees.push(JSON.parse(json)) };
-const { Badge, Button, Card, Checkbox, Chips, Confirm, Disclosure, Dot, Empty, Gauge, Graph, Heading, List, ListButton, ListItem, Loading, Notice, Page, Row, SearchField, Select, Spinner, Stack, Text, Toolbar, mount } = await import("./native.js");
+const { Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Toolbar, mount, useAction } = await import("./native.js");
 
 const find = (node, type) => (node.type === type ? node : node.children?.map((child) => find(child, type)).find(Boolean));
 const all = (node, type) => [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap((child) => all(child, type))];
@@ -158,4 +158,67 @@ test("confirmation cancel never runs the destructive action, and its action is d
   release();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(buttons().every((button) => button.props.disabled !== true));
+});
+
+test("a form's inputs take the field's label, hold the page's text and give its handler a change event with target.value", () => {
+  function Form() {
+    const [name, setName] = useState("Morning");
+    const [prompt, setPrompt] = useState("");
+    return h(Stack, null,
+      h(Field, { label: "Name", hint: "Optional." }, h(TextInput, { value: name, maxLength: 80, onChange: (e) => setName(e.target.value) })),
+      h(Field, { label: "Prompt", error: "Needed." }, h(Textarea, { value: prompt, rows: 4, onChange: (e) => setPrompt(e.currentTarget.value) })),
+      h(Text, null, `${name}|${prompt}`));
+  }
+  mount(h(Form));
+  const input = find(last(), "TextInput");
+  assert.deepEqual({ ...input.props, onChange: undefined }, { value: "Morning", maxLength: 80, label: "Name", onChange: undefined });
+  const area = find(last(), "Textarea");
+  assert.equal(area.props.rows, 4);
+  assert.equal(area.props.label, "Prompt");
+  assert.equal(globalThis.__wingsEvent(input.props.onChange, '{"value":"Evening"}'), true);
+  assert.equal(globalThis.__wingsEvent(find(last(), "Textarea").props.onChange, '{"value":"Check CI"}'), true);
+  assert.equal(text(all(last(), "Text").at(-1)), "Evening|Check CI");
+  assert.match(text(last()), /Optional\./);
+  assert.match(text(last()), /Needed\./);
+});
+
+test("a busy button ignores clicks and shows a spinner, an icon button is named by its aria-label, and the small parts render as text", () => {
+  mount(h(Page, null,
+    h(Button, { busy: true, onClick: () => {} }, "Start"),
+    h(Button, { "aria-label": "Delete x", size: "icon-sm" }, h(Icon, { name: "trash" })),
+    h(Properties, { items: [{ label: "Project", value: "wings" }] }),
+    h(Time, { iso: new Date(Date.now() - 3 * 3_600_000).toISOString(), prefix: "Checked " })));
+  const [busy, icon] = all(last(), "Button");
+  assert.equal(busy.props.disabled, true);
+  assert.ok(find(busy, "Spinner"));
+  assert.equal(icon.props.label, "Delete x");
+  assert.deepEqual(find(icon, "Icon").props, { name: "trash" });
+  assert.match(text(last()), /Projectwings/);
+  assert.match(text(last()), /Checked 3 h ago/);
+});
+
+test("a combobox lists the options that match as chips, a menu opens its items, and useAction keeps busy and error", async () => {
+  const picked = [];
+  let action;
+  function Probe() {
+    action = useAction();
+    return h(Stack, null,
+      h(Combobox, { label: "Base", freeText: true, value: "dev", onInput: () => {}, onPick: (o) => picked.push(o.value), options: [{ value: "develop", label: "develop" }, { value: "main", label: "main" }] }),
+      h(Menu, { label: "Start", items: [{ id: "a", label: "In A", onSelect: () => picked.push("a") }] }));
+  }
+  mount(h(Probe));
+  const chips = all(last(), "Button").filter((button) => text(button) === "develop");
+  assert.equal(chips.length, 1);
+  assert.equal(all(last(), "Button").some((button) => text(button) === "main"), false);
+  globalThis.__wingsEvent(chips[0].props.onClick, "");
+  assert.deepEqual(picked, ["develop"]);
+  assert.equal(all(last(), "Button").some((button) => text(button) === "In A"), false);
+  globalThis.__wingsEvent(all(last(), "Button").find((button) => text(button).startsWith("Start")).props.onClick, "");
+  const item = all(last(), "Button").find((button) => text(button) === "In A");
+  globalThis.__wingsEvent(item.props.onClick, "");
+  assert.deepEqual(picked, ["develop", "a"]);
+  assert.equal(all(last(), "Button").some((button) => text(button) === "In A"), false);
+  assert.equal(await action.run(() => { throw new Error("nope"); }), false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(action.error, "nope");
 });

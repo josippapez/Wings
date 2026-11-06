@@ -97,6 +97,34 @@ impl Workspace {
         Some(id)
     }
 
+    /// Closes the plugin's page `view` wherever it shows: its tabs in this project, its place in the panel on the right,
+    /// and its window. A view a plugin has no page for is left alone.
+    pub(super) fn close_plugin_view(
+        &mut self,
+        plugin: &str,
+        view: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        while let Some(index) = self
+            .plugin_tabs
+            .iter()
+            .position(|tab| tab.plugin == plugin && tab.view == view)
+        {
+            self.close_plugin_tab(index, window, cx);
+        }
+        let key = (plugin.to_owned(), view.to_owned());
+        if self.right.as_ref() == Some(&key) {
+            self.right = None;
+        }
+        self.sidebar_pages.remove(&key);
+        if let Some(handle) = self.plugin_ui.windows.remove(&key) {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        self.sync_plugin_visibility(cx);
+        cx.notify();
+    }
+
     /// Opens the pages a project had open, except those whose plugin is off, gone or no longer has the page, as the
     /// desktop drops the view tabs of a plugin that is turned off. Each saved page's new tab, if it got one.
     pub(super) fn restore_plugin_tabs(

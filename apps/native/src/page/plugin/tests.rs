@@ -35,8 +35,11 @@ show();
 
 /// Everything a plugin frame has on `wings`, sorted: broadcast, storage and focus, and the calls the host answers
 /// (`calls`). A page has `render` too.
-const WINGS_CALLS: [&str; 27] = [
+const WINGS_CALLS: &[&str] = &[
     "broadcast",
+    "callTool",
+    "closeView",
+    "createWorktree",
     "diskFind",
     "disks",
     "exec",
@@ -50,22 +53,30 @@ const WINGS_CALLS: [&str; 27] = [
     "onGitChange",
     "onPanes",
     "onProjects",
+    "onTool",
     "onTranscript",
     "openDiff",
     "openPane",
     "openUrl",
     "openView",
     "ports",
+    "project",
     "projects",
     "setBadge",
     "setPaneStatus",
+    "setProjectSection",
+    "setWorktreeSetup",
     "statusline",
     "storage",
     "transcript",
     "updateDiff",
+    "worktreeSetup",
 ];
-const WINGS_CALLS_AND_RENDER: [&str; 28] = [
+const WINGS_CALLS_AND_RENDER: &[&str] = &[
     "broadcast",
+    "callTool",
+    "closeView",
+    "createWorktree",
     "diskFind",
     "disks",
     "exec",
@@ -79,20 +90,25 @@ const WINGS_CALLS_AND_RENDER: [&str; 28] = [
     "onGitChange",
     "onPanes",
     "onProjects",
+    "onTool",
     "onTranscript",
     "openDiff",
     "openPane",
     "openUrl",
     "openView",
     "ports",
+    "project",
     "projects",
     "render",
     "setBadge",
     "setPaneStatus",
+    "setProjectSection",
+    "setWorktreeSetup",
     "statusline",
     "storage",
     "transcript",
     "updateDiff",
+    "worktreeSetup",
 ];
 
 /// A folder for a plugin's storage, removed when the test ends.

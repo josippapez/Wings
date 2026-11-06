@@ -3,7 +3,7 @@
 // `className`, `style` or `aria-*` props, and a handler gets `NativeEvent`, not a DOM event.
 import type { ReactElement, ReactNode } from "react";
 
-import type { BadgeVariant, ButtonVariant, Gap, Option, Tone } from "./ui";
+import type { ActionState, BadgeVariant, ButtonVariant, Check, ComboboxOption, Gap, IconName, MenuItem, Option, Tone } from "./ui";
 
 /** What a handler is given: the app's event, not a DOM one. The two methods do nothing, so code written for `ui` can call them. */
 export interface NativeEvent {
@@ -37,8 +37,10 @@ export function Text(props: {
   grow?: boolean;
   children?: ReactNode;
 }): ReactElement;
-/** A button. `variant` "default" is the filled one. */
-export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; disabled?: boolean; children?: ReactNode }): ReactElement;
+/** A button. `variant` "default" is the filled one. `busy` shows a spinner and ignores clicks. An `aria-label` names a button that holds only an icon. */
+export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
+/** A small quiet button. With `pressed` it's a toggle. */
+export function Chip(props: { pressed?: boolean; onClick?: (event: NativeEvent) => void; disabled?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A short message in a tinted box. */
 export function Notice(props: { tone?: "info" | "success" | "warn" | "danger"; children?: ReactNode }): ReactElement;
 /** A spinner. With a label it is announced by the app. */
@@ -92,3 +94,48 @@ export interface GraphRow {
 }
 /** A virtual list of at most 10,000 rows. At most 256 rows may be supplied in a window. */
 export function Graph(props: { total: number; lanes: number; selected: number; offset: number; rows: GraphRow[]; onRangeChange: (range: { start: number; end: number }) => void; onSelect: (index: number) => void }): ReactElement;
+/** A labelled field with a `hint` or an `error` under it, for the input in `children`, which takes the label as its name. */
+export function Field(props: { label: ReactNode; hint?: ReactNode; error?: ReactNode; inline?: boolean; children?: ReactNode }): ReactElement;
+/** Several controls under one label, with a `hint` or an `error` under them. */
+export function FieldGroup(props: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children?: ReactNode }): ReactElement;
+/** What an input's `onChange` is given: the text is `target.value`. */
+export interface NativeInputEvent {
+  type: "change";
+  preventDefault(): void;
+  stopPropagation(): void;
+  target: { value: string };
+  currentTarget: { value: string };
+}
+/** A one-line text input. The page holds the text: give it `value` and set it in `onChange`. Outside a `Field`, give it a `label`. */
+export function TextInput(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; onChange?: (event: NativeInputEvent) => void }): ReactElement;
+/** A multi-line text input, `rows` high at first. Outside a `Field`, give it a `label`. */
+export function Textarea(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; rows?: number; onChange?: (event: NativeInputEvent) => void }): ReactElement;
+/** A text field with the options that match it under it as chips; the app has no popup list yet. */
+export function Combobox(props: {
+  label?: string;
+  value: string;
+  onInput?: (text: string) => void;
+  options: ComboboxOption[];
+  onPick: (option: ComboboxOption) => void;
+  freeText?: boolean;
+  placeholder?: string;
+  maxLength?: number;
+  disabled?: boolean;
+  filter?: (option: ComboboxOption, query: string) => boolean;
+  empty?: ReactNode;
+}): ReactElement;
+/** A button that shows its `items` under it when pressed; the app has no popup menu yet. */
+export function Menu(props: { label: ReactNode; items: MenuItem[]; variant?: ButtonVariant; disabled?: boolean }): ReactElement;
+/** One of Lucide's icons, in the colour of the text. */
+export function Icon(props: { name: IconName; label?: string }): ReactElement;
+/** Label and value pairs, one per line. */
+export function Properties(props: { items: { label: string; value: ReactNode }[] }): ReactElement;
+/** How long ago `iso` was (after `prefix`), as text. Renders nothing when `iso` isn't a date. */
+export function Time(props: { iso: string; prefix?: string; now?: number }): ReactElement | null;
+
+/** The project the page is about: `undefined` until the app says, then the project, or `null` when none is open. Read once. */
+export function useProject(): WingsProject | null | undefined;
+/** What the tab was opened with. The app opens a native page without arguments, so this is `null`. */
+export function useViewArgs<T>(check: Check<T>): T | null;
+/** Runs the page's async actions and keeps what its buttons and error card show: `busy`, the last `error`, `run` and `clear`. */
+export function useAction(): ActionState;

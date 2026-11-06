@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use wings_plugins::manifest::Plugin;
 
 use super::{
-    Access, Env, PaneEntry, PanePort, PluginHost,
+    Access, Env, PaneEntry, PanePort, PluginHost, Running, ToolCall,
     tests::Root,
     ui::{Badge, PaneStatus},
 };
@@ -27,6 +27,7 @@ pub(super) enum Seen {
     DiffClose(String, String),
     OpenPane(super::OpenPane),
     OpenView(super::OpenView),
+    CloseView(String, String),
     Badge(String, String, Option<Badge>),
     Status(String, String, Option<PaneStatus>),
     Url(String),
@@ -39,6 +40,8 @@ pub(super) struct FakeEnv {
     pub ports: Mutex<Result<Vec<PanePort>, String>>,
     /// Why opening a URL or showing a notification fails, if it should.
     pub refuse: Mutex<Option<String>>,
+    /// The other plugins running in the app, which `callTool` reaches.
+    pub running: Running,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -50,6 +53,7 @@ impl FakeEnv {
             claude: Mutex::default(),
             ports: Mutex::new(Ok(Vec::new())),
             refuse: Mutex::default(),
+            running: Running::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -111,6 +115,18 @@ impl Env for FakeEnv {
         self.record(Seen::OpenView(plan));
         reply.ok("null".into());
     }
+    fn close_view(&self, plugin: &str, view: &str) {
+        self.record(Seen::CloseView(plugin.into(), view.into()));
+    }
+
+    fn builtin(&self, plugin: &str) -> Option<bool> {
+        self.running.builtin(plugin)
+    }
+
+    fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
+        self.running.call_tool(call, reply);
+    }
+
     fn projects(&self) -> Vec<PathBuf> {
         self.projects.lock().unwrap().clone()
     }

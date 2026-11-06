@@ -4,16 +4,18 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, Context, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, KeyDownEvent, Pixels, Point, Role, SharedString, UTF16Selection, Window, canvas,
-    div, prelude::*, px, rgb, rgba,
+    App, Bounds, Context, ElementId, ElementInputHandler, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, KeyDownEvent, Pixels, Point, Role, SharedString, UTF16Selection,
+    Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
     actions::Paste,
-    theme::{FOREGROUND, MUTED_FOREGROUND},
+    theme::{FOREGROUND, HOVER, MUTED_FOREGROUND},
 };
 
+/// The border of a field that draws its own frame: the desktop's `--input`.
+const FRAME: u32 = 0xffffff1a;
 /// The desktop terminal's `selectionBackground`.
 const SELECTED: u32 = 0xffffff33;
 
@@ -33,6 +35,14 @@ pub struct TextField {
     placeholder: SharedString,
     width: Pixels,
     pub text: String,
+    /// The lines a multi-line field shows at least. Enter then starts a new line, and a one-line field (`None`) submits.
+    pub rows: Option<usize>,
+    /// Takes the width of its place, not `width`.
+    pub fill: bool,
+    /// Dimmed, and takes no typing.
+    pub disabled: bool,
+    /// The most characters it holds: what is typed or pasted past that is dropped.
+    pub max_chars: Option<usize>,
     /// Opening the bar selects the term, so typing replaces it, as in the desktop find bar.
     selected: bool,
     marked: String,
@@ -62,6 +72,10 @@ impl TextField {
             placeholder: placeholder.into(),
             width,
             text: String::new(),
+            rows: None,
+            fill: false,
+            disabled: false,
+            max_chars: None,
             selected: false,
             marked: String::new(),
             bounds: None,
@@ -76,10 +90,18 @@ impl TextField {
     }
 
     fn edit(&mut self, edit: impl FnOnce(&mut String), cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if std::mem::take(&mut self.selected) {
             self.text.clear();
         }
         edit(&mut self.text);
+        if let Some(max) = self.max_chars
+            && let Some((end, _)) = self.text.char_indices().nth(max)
+        {
+            self.text.truncate(end);
+        }
         cx.emit(FieldEvent::Changed);
         cx.notify();
     }
@@ -89,8 +111,12 @@ impl TextField {
         let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        // The term is one line, so pasted line breaks become spaces.
-        let pasted = pasted.replace(['\r', '\n'], " ");
+        // A one-line field takes its text as one line, so pasted line breaks become spaces.
+        let pasted = if self.rows.is_some() {
+            pasted.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            pasted.replace(['\r', '\n'], " ")
+        };
         self.edit(|text| text.push_str(&pasted), cx);
     }
 
@@ -104,6 +130,7 @@ impl TextField {
         };
         match key.key.as_str() {
             "escape" => cx.emit(FieldEvent::Cancel),
+            "enter" if self.rows.is_some() => self.edit(|text| text.push('\n'), cx),
             "enter" => cx.emit(FieldEvent::Submit { back: mods.shift }),
             "backspace" if self.marked.is_empty() => self.edit(
                 |text| {
@@ -134,8 +161,11 @@ impl Render for TextField {
         .absolute()
         .size_full();
         let empty = self.text.is_empty() && self.marked.is_empty();
-        div()
-            .id("text-field")
+        let field = div()
+            .id(ElementId::NamedInteger(
+                "text-field".into(),
+                cx.entity_id().as_u64(),
+            ))
             .role(self.role)
             .aria_label(self.label.clone())
             .aria_placeholder(self.placeholder.clone())
@@ -145,15 +175,56 @@ impl Render for TextField {
             .on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(Self::paste))
             .relative()
-            .h(px(28.0))
-            .w(self.width)
+            .when(self.fill, |field| {
+                // A form input draws its own frame, shadcn's `Input`, so focus shows on it.
+                field
+                    .w_full()
+                    .min_w_0()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(rgba(FRAME))
+                    .bg(rgba(HOVER))
+                    .focus(|style| style.border_color(rgb(FOREGROUND)))
+            })
+            .when(!self.fill, |field| field.w(self.width))
             .px(px(8.0))
             .flex()
-            .items_center()
             .overflow_hidden()
             .text_size(px(13.0))
             .cursor_text()
-            .child(register)
+            .opacity(if self.disabled { 0.5 } else { 1.0 })
+            .child(register);
+        if let Some(rows) = self.rows {
+            // The caret is a thin block after the last character, so it stays there when the text wraps.
+            let caret = if focused && !self.selected && !self.disabled {
+                "\u{258F}"
+            } else {
+                ""
+            };
+            let shown = format!("{}{}{caret}", self.text, self.marked);
+            return field
+                .min_h(px(rows as f32 * 19.0 + 14.0))
+                .py(px(7.0))
+                .flex_col()
+                .when(empty, |field| {
+                    field.child(
+                        div()
+                            .absolute()
+                            .text_color(rgb(MUTED_FOREGROUND))
+                            .child(self.placeholder.clone()),
+                    )
+                })
+                .children(shown.split('\n').map(|line| {
+                    div()
+                        .min_h(px(19.0))
+                        .text_color(rgb(FOREGROUND))
+                        .child(line.to_owned())
+                }))
+                .into_any_element();
+        }
+        field
+            .h(px(if self.fill { 32.0 } else { 28.0 }))
+            .items_center()
             .when(empty, |field| {
                 field.child(
                     div()
@@ -182,6 +253,7 @@ impl Render for TextField {
             .when(focused && !self.selected, |field| {
                 field.child(div().flex_none().w(px(1.0)).h(px(16.0)).bg(rgb(FOREGROUND)))
             })
+            .into_any_element()
     }
 }
 
@@ -244,6 +316,9 @@ impl EntityInputHandler for TextField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         if std::mem::take(&mut self.selected) {
             self.text.clear();
         }

@@ -18,6 +18,9 @@ pub const MAX_TEXT_CHARS: usize = 2_000;
 const MAX_HANDLER_BYTES: usize = 64;
 /// A select shows this many of its options; the rest are dropped.
 pub const MAX_OPTIONS: usize = 200;
+/// A text input holds this many characters of what the page gave it. The rest of the page's text is cut to
+/// `MAX_TEXT_CHARS`, which would cut what the person typed in a long field.
+pub const MAX_INPUT_CHARS: usize = 20_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TreeError {
@@ -71,6 +74,10 @@ choice!(Align { Center = "center", Start = "start", Baseline = "baseline" });
 choice!(Justify { Start = "start", End = "end", Between = "between" });
 choice!(TextSize { Normal = "normal", Small = "small", Tiny = "tiny" });
 choice!(Weight { Normal = "normal", Medium = "medium", Strong = "strong" });
+choice!(
+    /// The names `Icon` draws.
+    IconName { Check = "check", ChevronDown = "chevron-down", Copy = "copy", Trash = "trash" }
+);
 choice!(
     /// The variants of both `Button` and `Badge`.
     Variant { Default = "default", Secondary = "secondary", Outline = "outline", Ghost = "ghost", Destructive = "destructive", Link = "link" }
@@ -136,6 +143,8 @@ pub enum Node {
     Chips(Select),
     ListButton(ListButton),
     SearchField(SearchField),
+    Input(Input),
+    Icon(Icon),
     Graph(Graph),
 }
 
@@ -199,6 +208,8 @@ pub struct Button {
     pub id: u64,
     pub variant: Variant,
     pub disabled: bool,
+    /// The name a screen reader says, when it isn't the button's text (an icon button's).
+    pub label: Option<String>,
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub children: Vec<Node>,
@@ -358,6 +369,26 @@ pub struct SearchField {
     pub placeholder: String,
     pub value: Option<String>,
     pub on_input: Option<String>,
+}
+
+/// A `TextInput`, or with `rows` a `Textarea`. The page holds its text: the one in the tree is what to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Input {
+    pub id: u64,
+    pub label: String,
+    pub placeholder: String,
+    pub value: String,
+    pub rows: Option<usize>,
+    pub disabled: bool,
+    pub max_length: Option<usize>,
+    /// What to send back to the page, with the text after each edit.
+    pub on_change: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Icon {
+    pub id: u64,
+    pub name: IconName,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -553,6 +584,8 @@ impl Node {
             | Node::Select(_)
             | Node::Chips(_)
             | Node::SearchField(_)
+            | Node::Input(_)
+            | Node::Icon(_)
             | Node::Graph(_) => vec![],
             Node::Gauge(n) => vec![&n.note],
             Node::List(n) => vec![&n.children],
@@ -626,6 +659,9 @@ impl Walk {
                 | "Chips"
                 | "ListButton"
                 | "SearchField"
+                | "TextInput"
+                | "Textarea"
+                | "Icon"
                 | "Graph"
         ) {
             return Ok(None);
@@ -688,6 +724,7 @@ impl Walk {
                     id,
                     variant: choice(&props, "variant"),
                     disabled,
+                    label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
                     on_click: str_prop(&props, "onClick")
                         .filter(|handler| !disabled && valid_handler(handler))
                         .map(str::to_owned),
@@ -792,11 +829,40 @@ impl Walk {
                     .filter(|s| valid_handler(s))
                     .map(str::to_owned),
             }),
+            "TextInput" | "Textarea" => {
+                let disabled = on("disabled");
+                Node::Input(Input {
+                    id,
+                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    placeholder: cut(str_prop(&props, "placeholder")
+                        .unwrap_or_default()
+                        .to_owned()),
+                    value: str_prop(&props, "value")
+                        .unwrap_or_default()
+                        .chars()
+                        .take(MAX_INPUT_CHARS)
+                        .collect(),
+                    rows: (kind == "Textarea")
+                        .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
+                    disabled,
+                    max_length: number(&props, "maxLength")
+                        .filter(|max| *max >= 0.0)
+                        .map(|max| max as usize),
+                    on_change: str_prop(&props, "onChange")
+                        .filter(|handler| !disabled && valid_handler(handler))
+                        .map(str::to_owned),
+                })
+            }
+            "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
+                Some(name) => Node::Icon(Icon { id, name }),
+                None => return Ok(None),
+            },
             "ListButton" => Node::ListButton(ListButton {
                 button: Button {
                     id,
                     variant: Variant::Ghost,
                     disabled: on("disabled"),
+                    label: None,
                     on_click: str_prop(&props, "onClick")
                         .filter(|s| !on("disabled") && valid_handler(s))
                         .map(str::to_owned),

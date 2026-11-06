@@ -37,6 +37,7 @@ icons!(
     Claude = "claude",
     ChevronRight = "chevron-right",
     Columns = "columns-2",
+    Copy = "copy",
     Folder = "folder",
     GitBranch = "git-branch",
     Keyboard = "keyboard",
@@ -50,6 +51,7 @@ icons!(
     Settings = "settings",
     Terminal = "terminal",
     TextCursor = "text-cursor",
+    Trash = "trash",
     Type = "type",
     X = "x",
 );

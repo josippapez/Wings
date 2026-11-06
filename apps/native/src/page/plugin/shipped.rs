@@ -124,6 +124,17 @@ fn tree(received: &mpsc::Receiver<Event>, what: &str, done: impl Fn(&Tree) -> bo
     }
 }
 
+/// The handler of the text input named `label`.
+fn input_named(nodes: &[Node], label: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Input(input) if input.label == label => input.on_change.clone(),
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| input_named(part, label)),
+    })
+}
+
 fn buttons_named(nodes: &[Node], label: &str, found: &mut Vec<String>) {
     for node in nodes {
         if let Node::Button(button) = node
@@ -592,4 +603,70 @@ fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
         json!({ "rateLimits": null, "sessions": {} })
     );
     let _ = fs::remove_dir_all(claude);
+}
+
+#[test]
+fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_listed() {
+    let rig = Rig::with(load("schedules"), true, vec![]);
+    let work = PathBuf::from("/work/api");
+    *rig.env.projects.lock().unwrap() = vec![work.clone()];
+    rig.host.publish_projects(vec![Project {
+        id: "/work/api".into(),
+        path: "/work/api".into(),
+        name: "Api".into(),
+    }]);
+    let (on_event, main_errors) = errors();
+    rig.host
+        .start_main(&native("schedules", "main.js"), on_event)
+        .unwrap();
+
+    let (page, events) = open_page(&rig.host, &native("schedules", "schedules.js"));
+    let empty = tree(&events, "the empty list", |tree| {
+        tree.text().contains("Nothing set up yet")
+    });
+    let mut add = Vec::new();
+    buttons_named(&empty.children, "Add entry", &mut add);
+    assert!(page.dispatch(&add[0], None));
+
+    let form = tree(&events, "the form", |tree| {
+        tree.text().contains("Start an agent") && input_named(&tree.children, "Prompt").is_some()
+    });
+    for (label, value) in [
+        ("Name", "Morning review"),
+        ("Prompt", "Check yesterday's CI"),
+    ] {
+        let handler = input_named(&form.children, label).expect(label);
+        assert!(page.dispatch(&handler, Some(&json!({ "value": value }))));
+    }
+    let filled = tree(&events, "the typed text", |tree| {
+        let value = |label: &str| {
+            fn find(nodes: &[Node], label: &str) -> Option<String> {
+                nodes.iter().find_map(|node| match node {
+                    Node::Input(input) if input.label == label => Some(input.value.clone()),
+                    other => other.parts().into_iter().find_map(|part| find(part, label)),
+                })
+            }
+            find(&tree.children, label)
+        };
+        value("Name").as_deref() == Some("Morning review")
+            && value("Prompt").as_deref() == Some("Check yesterday's CI")
+    });
+    let mut save = Vec::new();
+    buttons_named(&filled.children, "Add entry", &mut save);
+    assert!(page.dispatch(&save[0], None));
+
+    let listed = tree(&events, "the saved schedule", |tree| {
+        let text = tree.text();
+        text.contains("Morning review") && text.contains("Next run")
+    });
+    assert!(
+        listed.text().contains("Api · Claude Code"),
+        "{}",
+        listed.text()
+    );
+    assert!(
+        main_errors.try_recv().is_err(),
+        "main reported {:?}",
+        main_errors.try_recv()
+    );
 }

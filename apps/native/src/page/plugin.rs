@@ -22,7 +22,8 @@
 //!   (`publish_panes`), which every frame hears with `onPanes`, and the transcript entries Claude writes
 //!   (`publish_transcript`); a click on a badge's button is `send_action`, which the main frame's `onAction` listeners
 //!   answer. Projects, focus and permission-gated git events follow the workspace. Disk searches and opening panes or
-//!   views use the desktop's contracts too. A host without access refuses calls. Fetch, secrets and diffs aren't here.
+//!   views use the desktop's contracts too. A plugin's main answers the tools another of Wings' own plugins calls (`onTool`;
+//!   `callTool` hands the call over with `run_tool`). A host without access refuses calls. Fetch, secrets and diffs aren't here.
 
 use super::runtime::{
     Delivery, Event, Inbox, Limits, Link, Message, PageRuntime, Reply, Role, Store,
@@ -46,7 +47,9 @@ mod env;
 mod focus_tests;
 pub mod ui;
 
-pub use env::{Access, Env, OpenPane, OpenView, PaneEntry, PanePort, Project, SessionEntry};
+pub use env::{
+    Access, Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SessionEntry, ToolCall,
+};
 
 /// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.
 pub const MAX_BROADCAST_CHARS: usize = 64_000;
@@ -118,6 +121,13 @@ struct Actions {
     waiting: HashMap<u32, Done>,
 }
 
+/// Tool calls from other plugins that this plugin's main hasn't answered, by the token it answers with.
+#[derive(Default)]
+struct Tools {
+    last: u32,
+    waiting: HashMap<u32, Reply>,
+}
+
 /// What all of a plugin's frames share.
 struct Shared {
     config: PluginConfig,
@@ -129,6 +139,7 @@ struct Shared {
     frames: Mutex<Vec<Open>>,
     panes: Mutex<Panes>,
     actions: Mutex<Actions>,
+    tools: Mutex<Tools>,
     notified: Mutex<NotifyLog>,
     projects: Mutex<Vec<Project>>,
     focused: Mutex<HashMap<u64, bool>>,
@@ -191,6 +202,22 @@ impl Shared {
         let done = self.actions.lock().unwrap().waiting.remove(&token);
         if let Some(done) = done {
             done(error.map_or(Ok(()), Err));
+        }
+    }
+
+    /// The plugin's main answered a tool call: the caller's promise resolves with `{ text, isError }`.
+    fn settle_tool(&self, token: u32, text: &str, is_error: bool) {
+        let waiting = self.tools.lock().unwrap().waiting.remove(&token);
+        if let Some(reply) = waiting {
+            reply.ok(serde_json::json!({ "text": text, "isError": is_error }).to_string());
+        }
+    }
+
+    /// Answers every tool call still waiting as failed, as the desktop does for a plugin that is turned off.
+    fn fail_tools(&self, why: &str) {
+        let waiting = std::mem::take(&mut self.tools.lock().unwrap().waiting);
+        for reply in waiting.into_values() {
+            reply.ok(serde_json::json!({ "text": why, "isError": true }).to_string());
         }
     }
 
@@ -346,6 +373,7 @@ impl PluginHost {
                 frames: Mutex::default(),
                 panes: Mutex::default(),
                 actions: Mutex::default(),
+                tools: Mutex::default(),
                 notified: Mutex::default(),
                 projects: Mutex::default(),
                 focused: Mutex::new(HashMap::from([(0, true)])),
@@ -372,6 +400,10 @@ impl PluginHost {
         if old.is_some() {
             // Whatever it was asked is lost with it.
             self.shared.fail_actions("The plugin was turned off");
+            self.shared.fail_tools(&format!(
+                "{} was turned off in Wings",
+                self.shared.config.id
+            ));
         }
         Ok(())
     }
@@ -466,6 +498,46 @@ impl PluginHost {
         if main.send(Message::Action, token, text) != Delivery::Queued {
             self.shared
                 .settle_action(token, Some("The plugin didn't respond".into()));
+        }
+    }
+
+    /// Another plugin calls this one's tool `name`: its main runs the handler `onTool` registered, and `reply` gets
+    /// `{ text, isError }`. It fails at once if the plugin has no main running yet.
+    pub fn run_tool(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        project: Option<&Project>,
+        reply: Reply,
+    ) {
+        let main = self
+            .shared
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|frame| frame.role == Role::Main)
+            .map(|frame| frame.inbox.clone());
+        let Some(main) = main else {
+            return reply.err(format!(
+                "{} is still starting in Wings. Try again in a moment.",
+                self.shared.config.id
+            ));
+        };
+        let token = {
+            let mut tools = self.shared.tools.lock().unwrap();
+            tools.last += 1;
+            let token = tools.last;
+            tools.waiting.insert(token, reply);
+            token
+        };
+        let text =
+            serde_json::json!({ "name": name, "arguments": input, "project": project }).to_string();
+        if main.send(Message::Tool, token, text) != Delivery::Queued {
+            let waiting = self.shared.tools.lock().unwrap().waiting.remove(&token);
+            if let Some(reply) = waiting {
+                reply.err("The plugin didn't respond".into());
+            }
         }
     }
 
@@ -581,6 +653,10 @@ impl Drop for PluginHost {
             flag.store(true, Ordering::Relaxed);
         }
         self.shared.fail_actions("The plugin was turned off");
+        self.shared.fail_tools(&format!(
+            "{} was turned off in Wings",
+            self.shared.config.id
+        ));
     }
 }
 

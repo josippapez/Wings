@@ -15,13 +15,16 @@ use wings_plugins::{
     fetch::may_open_url,
     manifest::Plugin,
     panes::{exec_cwd, worktrees_call_in_any_repo},
-    permissions::{NOTIFY_LIMIT, may_read_ports, may_read_statusline, notification},
+    permissions::{
+        NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_read_ports, may_read_statusline,
+        notification,
+    },
     transcript::transcript_entries,
 };
 
 use super::{
     Shared,
-    env::Access,
+    env::{Access, ToolCall},
     ui::{clean_badge, clean_pane_status},
 };
 use crate::page::runtime::Reply;
@@ -106,6 +109,10 @@ fn timeout_ms(value: Option<f64>) -> Result<Option<u64>, String> {
         _ => Ok(None),
     }
 }
+
+/// Why a plugin can't make worktrees or change their setup: they belong to a project, and the native app only reads
+/// the project list the desktop app keeps, so it has nowhere to add a worktree to or to keep a project's setup.
+const NO_PROJECT_STORE: &str = "The native app can't change your projects yet: it reads the list the desktop app keeps and doesn't write it";
 
 impl Shared {
     fn open_pane(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
@@ -210,6 +217,82 @@ impl Shared {
         Ok(())
     }
 
+    /// Runs a tool of another of Wings' own plugins: the desktop's `callTool` and `plugin_call_tool_check`.
+    fn call_tool(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
+        let name = match params.get("name") {
+            None | Some(Value::Null) => String::new(),
+            name => js_string(name),
+        };
+        let mut parts = name.split("__");
+        let (Some(target), Some(tool)) = (
+            parts.next().filter(|part| !part.is_empty()),
+            parts.next().filter(|part| !part.is_empty()),
+        ) else {
+            return Err(r#"callTool takes a name like "tasks__list""#.into());
+        };
+        let input = match params.get("arguments") {
+            Some(arguments @ Value::Object(_)) => arguments.clone(),
+            _ => json!({}),
+        };
+        let caller = &access.plugin.manifest.id;
+        if !access.builtin || access.env.builtin(target) == Some(false) {
+            return Err("Only Wings' own plugins can call each other's tools".into());
+        }
+        if !may_call_tool(&access.plugin, target, tool) {
+            return Err(format!("{caller} may not call {target}'s {tool}"));
+        }
+        let projects = self.projects.lock().unwrap();
+        let project = match params.get("project").filter(|value| !value.is_null()) {
+            Some(id) => {
+                let id = js_string(Some(id));
+                Some(
+                    projects
+                        .iter()
+                        .find(|project| project.id == id)
+                        .ok_or_else(|| format!("no project {id}"))?,
+                )
+            }
+            None => access.env.current_project().and_then(|path| {
+                projects
+                    .iter()
+                    .find(|project| std::path::Path::new(&project.path) == path)
+            }),
+        }
+        .cloned();
+        drop(projects);
+        access.env.call_tool(
+            ToolCall {
+                target: target.to_owned(),
+                tool: tool.to_owned(),
+                input,
+                project,
+            },
+            reply,
+        );
+        Ok(())
+    }
+
+    /// The project on screen, as the desktop's `project` call gives the project a page is about.
+    fn project(&self, access: &Access) -> Result<String, String> {
+        let projects = self.projects.lock().unwrap();
+        to_json(&access.env.current_project().and_then(|path| {
+            projects
+                .iter()
+                .find(|project| std::path::Path::new(&project.path) == path)
+        }))
+    }
+
+    /// `closeView`: the plugin's sidebar or view, closed wherever the app shows it.
+    fn close_view(&self, access: &Access, params: &Value) -> Result<String, String> {
+        let id = js_string(params.get("id"));
+        let plugin = &access.plugin.manifest.id;
+        if !pages(&access.plugin).contains(&id) {
+            return Err(format!("{plugin} has no view {id}"));
+        }
+        access.env.close_view(plugin, &id);
+        Ok("null".into())
+    }
+
     /// A frame's call of `wings.<method>`, answered through `reply`.
     pub(super) fn call(self: &Arc<Self>, method: &str, params: Value, reply: Reply) {
         let Some(access) = self.access.clone() else {
@@ -224,6 +307,26 @@ impl Shared {
             }
             "openPane" => reply_if_error(reply.clone(), self.open_pane(&access, &params, reply)),
             "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, reply)),
+            "project" => reply.done(self.project(&access)),
+            "closeView" => reply.done(self.close_view(&access, &params)),
+            "callTool" => reply_if_error(reply.clone(), self.call_tool(&access, &params, reply)),
+            "toolDone" => {
+                let token = js_string(params.get("token")).parse().unwrap_or(0);
+                let text = params.get("text").and_then(Value::as_str).unwrap_or("");
+                let is_error = params.get("isError") == Some(&Value::Bool(true));
+                self.settle_tool(token, text, is_error);
+                reply.ok("null".into());
+            }
+            "createWorktree" => reply.done(worktrees(&access, "create worktrees", false)),
+            "worktreeSetup" => reply.done(worktrees(&access, "read worktree setup", false)),
+            "setWorktreeSetup" => reply.done(worktrees(
+                &access,
+                "change worktree setup",
+                params.get("setup").is_some(),
+            )),
+            "setProjectSection" => {
+                reply.err("The native app doesn't show project sections yet".into())
+            }
             "setBadge" => reply.done(self.set_badge(&access, &params)),
             "setPaneStatus" => reply.done(self.set_pane_status(&access, &params)),
             "actionDone" => {
@@ -373,6 +476,19 @@ impl Shared {
     }
 }
 
+/// The permission checks of the desktop's worktree commands, then the native app's refusal. `sets_command` is a call
+/// that changes a project's setup command, which only Wings' own plugins may do.
+fn worktrees(access: &Access, what: &str, sets_command: bool) -> Result<String, String> {
+    let id = &access.plugin.manifest.id;
+    if !may_create_worktrees(&access.plugin) {
+        return Err(format!("{id} may not {what}"));
+    }
+    if sets_command && !access.builtin {
+        return Err("Only Wings' own plugins can change a project's setup command".into());
+    }
+    Err(NO_PROJECT_STORE.into())
+}
+
 fn reply_if_error(reply: Reply, result: Result<(), String>) {
     if let Err(error) = result {
         reply.err(error);
@@ -426,5 +542,7 @@ fn open_url(access: &Access, params: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod prerequisites;
+#[cfg(test)]
+mod schedules;
 #[cfg(test)]
 mod tests;
