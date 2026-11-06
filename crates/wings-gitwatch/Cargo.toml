@@ -1,0 +1,12 @@
+[package]
+name = "wings-gitwatch"
+version = "0.1.0"
+edition = "2021"
+description = "Tells an app which projects' git repos changed, as soon as HEAD, the index or a ref moves"
+publish = false
+
+[lib]
+name = "wings_gitwatch"
+
+[dependencies]
+notify = "8"

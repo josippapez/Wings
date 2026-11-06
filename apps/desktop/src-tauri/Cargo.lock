@@ -6003,13 +6003,11 @@ dependencies = [
  "dirs",
  "keyring",
  "libc",
- "notify",
  "notify-rust",
  "objc2",
  "objc2-foundation",
  "objc2-service-management",
  "portable-pty",
- "rayon",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6027,6 +6025,8 @@ dependencies = [
  "vte",
  "wings-agents",
  "wings-bench-grid",
+ "wings-disk-usage",
+ "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",
  "wings-terminal",
@@ -6048,6 +6048,24 @@ name = "wings-bench-grid"
 version = "0.1.0"
 dependencies = [
  "wings-terminal",
+]
+
+[[package]]
+name = "wings-disk-usage"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "libc",
+ "rayon",
+ "serde",
+ "sysinfo",
+]
+
+[[package]]
+name = "wings-gitwatch"
+version = "0.1.0"
+dependencies = [
+ "notify",
 ]
 
 [[package]]

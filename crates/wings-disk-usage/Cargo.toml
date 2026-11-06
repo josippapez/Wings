@@ -1,0 +1,21 @@
+[package]
+name = "wings-disk-usage"
+version = "0.1.0"
+edition = "2021"
+description = "What takes the space on a disk: a parallel folder scan, a name search and the mounted disks"
+publish = false
+
+[lib]
+name = "wings_disk_usage"
+
+[dependencies]
+# The scan walks folders on a work-stealing pool, which std has none of.
+rayon = "1.12.0"
+serde = { version = "1", features = ["derive"] }
+# For the home folder, the same crate the app finds its data folder with.
+dirs = "7.0.0"
+sysinfo = "0.39.6"
+
+# The scan asks APFS which files share blocks with a clone (getattrlist).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

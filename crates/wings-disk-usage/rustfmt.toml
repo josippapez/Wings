@@ -1,0 +1,3 @@
+# The apps' own files are laid out to about this width, not rustfmt's default 100.
+max_width = 160
+use_small_heuristics = "Max"

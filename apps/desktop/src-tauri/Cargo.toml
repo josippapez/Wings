@@ -26,6 +26,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 wings-agents = { path = "../../../crates/wings-agents" }
+wings-disk-usage = { path = "../../../crates/wings-disk-usage" }
+wings-gitwatch = { path = "../../../crates/wings-gitwatch" }
 wings-plugin-storage = { path = "../../../crates/wings-plugin-storage" }
 wings-plugins = { path = "../../../crates/wings-plugins" }
 wings-terminal = { path = "../../../crates/wings-terminal" }
@@ -40,12 +42,9 @@ ureq = "3.4.2"
 keyring = "4.2.0"
 # Already built for Tauri; the CLI finds the app data folder the same way.
 dirs = "7.0.0"
-notify = "8"
 # Only for the Rust-parsed canvas renderer prototype in the benchmark (`--features bench-canvas`).
 wings-bench-grid = { path = "bench-grid", optional = true }
 sha2 = "0.11"
-# The disk scan walks folders on a work-stealing pool, which std has none of.
-rayon = "1.12.0"
 
 
 # Clicking a system notification focuses its pane: the plugin's builder can't wait for the click, notify-rust can.
