@@ -11,7 +11,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import { api } from "@/lib/api";
+import { api, type ClaudeAccountPick } from "@/lib/api";
 import { commandForKey, shortcutOf } from "@/lib/commands";
 import { DEFAULT_QUICK_TERMINAL_KEY, isQuickTerminalKey, type QuickTerminalKey } from "@/lib/quick-terminal";
 import { editKey } from "@/lib/edit-keys";
@@ -269,6 +269,8 @@ export class TerminalSession {
     private savedCwd: string | null = null,
     /** Names the output saved for this pane when Wings quits. */
     private historyId: string | null = null,
+    /** The Claude Code account the pane's shell runs under when it isn't its project's. */
+    private claudeAccount: ClaudeAccountPick | null = null,
   ) {
     this.el.className = "h-full w-full";
     this.term.loadAddon(this.fit);
@@ -389,8 +391,10 @@ export class TerminalSession {
 
   private create(initialInput: string | null, output: () => Channel<ArrayBuffer>) {
     const { cols, rows } = this.term;
-    if (this.cwd || !this.savedCwd) return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.cwd, this.historyId);
-    return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.savedCwd, this.historyId).catch(() => api.paneCreate(this.spaceId, cols, rows, initialInput, output(), null, this.historyId));
+    if (this.cwd || !this.savedCwd) return api.paneCreate(this.spaceId, cols, rows, initialInput, output(), this.cwd, this.historyId, this.claudeAccount);
+    return api
+      .paneCreate(this.spaceId, cols, rows, initialInput, output(), this.savedCwd, this.historyId, this.claudeAccount)
+      .catch(() => api.paneCreate(this.spaceId, cols, rows, initialInput, output(), null, this.historyId, this.claudeAccount));
   }
 
   /**

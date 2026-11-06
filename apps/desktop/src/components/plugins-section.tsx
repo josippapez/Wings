@@ -113,7 +113,7 @@ function Permissions({ plugin }: { plugin: PluginView }) {
     { title: "Show desktop notifications, up to 20 a minute", items: [], on: notify },
     { title: "Type messages into the prompts of the agents in your terminals", items: [], on: sendToAgents },
     { title: "Make git worktrees of your projects, on new branches beside the repo", items: [], on: worktrees },
-    { title: "Choose which Claude Code account each project's new terminals use, and see the email each one is signed in with", items: [], on: claudeAccounts },
+    { title: "Choose which Claude Code account each project's new terminals use, open a terminal in another account, share your default setup with an account, and see the email each one is signed in with", items: [], on: claudeAccounts },
     { title: "Use these Wings plugins' tools and data", items: callTools },
     { title: "Hear these events from other Wings plugins", items: events },
     { title: "Read these parts of your Claude Code sessions", items: transcript },

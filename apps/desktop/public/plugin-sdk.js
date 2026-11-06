@@ -338,17 +338,19 @@
      * Opens a terminal in a new tab, or in a split beside the focused pane with `placement` "right" or "down".
      * Resolves `{ paneId }` once the pane is in `onPanes`. `command` is typed into its shell and must be covered
      * by `permissions.panes`. `cwd` must be inside one of your projects; without it the pane opens at the root
-     * of the project on screen.
+     * of the project on screen. With `permissions.claudeAccounts`, `claudeAccount` runs the pane under another Claude Code
+     * account than its project's: an account name, or null for the default account.
      */
-    openPane: ({ command = null, args = [], cwd = null, placement = "tab" } = {}) => call("openPane", { command, args, cwd, placement }),
+    openPane: ({ command = null, args = [], cwd = null, placement = "tab", claudeAccount } = {}) => call("openPane", { command, args, cwd, placement, claudeAccount }),
     /** Shows an open pane and moves the keyboard to it. Needs `permissions.panes`. */
     focusPane: (paneId) => call("focusPane", { paneId }),
     /** With `permissions.sendToAgents`: pastes a message into the prompt of the agent in a pane, and resolves `{ submitted }`. */
     sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
     /**
-     * With `permissions.claudeAccounts`: the Claude Code accounts, `{ accounts: [{ name, dir, email, signedIn }], projects }`, and the
+     * With `permissions.claudeAccounts`: the Claude Code accounts, `{ accounts: [{ name, dir, email, signedIn, sharesSetup }], projects }`, and the
      * account name each project's new terminals use by project id (a project without one uses the default account, `name` null).
-     * `signedIn` is a hint from Claude Code's own config; `email` is read from it.
+     * `signedIn` is a hint from Claude Code's own config; `email` is read from it. `sharesSetup` is whether the account uses the
+     * default account's setup (settings, rules, skills, plugins); false for the default account itself.
      */
     claudeAccounts: () => call("claudeAccounts", {}),
     /**
@@ -356,6 +358,14 @@
      * up to 32; Wings makes `~/.claude-<name>`), or the default account with null. Terminals already open keep theirs.
      */
     setClaudeAccount: (projectId, name) => call("setClaudeAccount", { projectId, name: name ?? null }),
+    /**
+     * With `permissions.claudeAccounts`: turns on or off that the named account uses the default account's setup. On (it is for
+     * every account until turned off), Wings links the default folder's settings, `*.md` files, rules, skills, agents, commands,
+     * hooks, output styles, plugins and `*.sh` scripts into the account's folder, keeping what the account had in
+     * `.before-shared-setup/`, and copies the default account's user-scope MCP servers the account lacks. Off, the links go and
+     * what the account had comes back. Resolves once it is done.
+     */
+    shareClaudeSetup: (name, on) => call("shareClaudeSetup", { name, on: on === true }),
     /** With `permissions.worktrees`: makes a worktree on a new branch and adds it as a project; resolves `{ projectId, path }`. */
     createWorktree: (options) => call("createWorktree", options),
     /** With `permissions.worktrees`: what a project's new worktrees get, `{ include, defaults, hasIncludeFile, setup }`. */

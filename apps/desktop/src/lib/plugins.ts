@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { api, pagesOf, type AgentKind, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace, type WorktreeMade } from "@/lib/api";
+import { api, pagesOf, type AgentKind, type ClaudeAccountPick, type McpCall, type PluginAgentActivityEvent, type PluginTranscriptEvent, type PluginView, type ToolStatus, type ViewPlace, type WorktreeMade } from "@/lib/api";
 import { blockStateJson, clampBlockHeight, findBlock, MAX_LIVE_BLOCKS, type BlockMount } from "@/lib/plugin-blocks";
 import { diskFindRequest, diskToken, diskUsageRequest } from "@/lib/plugin-disk";
 import { boundedJson, cleanNewTab, requireUi, TAB_STATE_MAX, VIEW_ARGS_MAX } from "@/lib/plugin-pages";
@@ -105,7 +105,7 @@ export type PageTab = { tabId: string; spaceId: string; args?: unknown };
 export type PanePlacement = "tab" | "right" | "down";
 const placements: unknown[] = ["tab", "right", "down"] satisfies PanePlacement[];
 /** Where Rust approved a plugin's pane: its project, a folder inside it, and the line to type into its shell. */
-export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; placement: PanePlacement; /** The plugin that asked for it. */ pluginId?: string; /** A new tab that opens behind the one on screen. */ background?: boolean };
+export type PanePlan = { spaceId: string; cwd: string | null; input: string | null; /** The Claude Code account the pane's shell runs under, when the plugin chose one apart from the project's. */ claudeAccount?: ClaudeAccountPick | null; placement: PanePlacement; /** The plugin that asked for it. */ pluginId?: string; /** A new tab that opens behind the one on screen. */ background?: boolean };
 
 
 type Callbacks = {
@@ -780,10 +780,13 @@ export class PluginHost {
         };
         const args = p.args ?? [];
         if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) throw new Error("openPane args must be a list of strings");
-        // Rust checks the command, args and folder; the pane is then opened here, where tabs and splits live.
+        // Absent is the project's own account, null the default account, a string a named one.
+        const account = p.claudeAccount;
+        if (account !== undefined && account !== null && typeof account !== "string") throw new Error("openPane claudeAccount is an account name, or null for the default account");
+        // Rust checks the command, args, folder and account; the pane is then opened here, where tabs and splits live.
         const plan = await invoke<Omit<PanePlan, "placement">>("plugin_open_pane", {
           pluginId,
-          request: { command: text("command"), args, cwd: text("cwd"), spaceId: this.callbacks.currentProject() },
+          request: { command: text("command"), args, cwd: text("cwd"), spaceId: this.callbacks.currentProject(), claudeAccount: account === undefined ? null : { name: account } },
         });
         if (p.focus !== undefined && typeof p.focus !== "boolean") throw new Error("openPane focus must be true or false");
         const paneId = await this.callbacks.openPane({ ...plan, placement: placement as PanePlacement, background: p.focus === false, pluginId });
@@ -853,6 +856,12 @@ export class PluginHost {
         if (p.name !== null && typeof p.name !== "string") throw new Error("setClaudeAccount name is an account name, or null for the default account");
         // Rust checks the permission, the project and the name, and makes the account's folder.
         await invoke("plugin_set_claude_account", { pluginId, projectId: p.projectId, name: p.name });
+        return null;
+      }
+      case "shareClaudeSetup": {
+        if (typeof p.name !== "string" || typeof p.on !== "boolean") throw new Error("shareClaudeSetup takes an account name and true or false");
+        // Rust checks the permission and the name, and links the default account's setup in (or out of) the account's folder.
+        await invoke("plugin_share_claude_setup", { pluginId, name: p.name, on: p.on });
         return null;
       }
       case "sendToAgent": {

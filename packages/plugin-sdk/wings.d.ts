@@ -142,6 +142,12 @@ interface WingsClaudeAccount {
   email: string | null;
   /** Whether `.claude.json` names a signed-in account. A hint: an expired sign-in still counts. */
   signedIn: boolean;
+  /**
+   * Whether the account uses the default account's setup (settings, rules, skills, plugins), see `shareClaudeSetup`. True
+   * until turned off, so an account Wings has not connected to since 0.1.121 shows true before it is linked. Always false for the
+   * default account. Needs Wings 0.1.121.
+   */
+  sharesSetup: boolean;
 }
 
 /** One block of a message's `content`. Which fields it has depends on `type`: `text` has `text`, `tool_use` has `id`, `name` and `input`, `tool_result` has `tool_use_id`, `content` and `is_error`. */
@@ -592,6 +598,14 @@ interface Wings {
     placement?: "tab" | "right" | "down";
     /** Wings 0.1.93: false opens a new tab behind the one on screen, without taking the keyboard. */
     focus?: boolean;
+    /**
+     * Needs `permissions.claudeAccounts` and Wings 0.1.121. Runs the pane under another Claude Code account than its
+     * project's: an account name (the folder `~/.claude-<name>`, made if missing, with Wings and the default account's setup in
+     * it as when a project is assigned to it), or null for the default account. The pane's shell gets `CLAUDE_CONFIG_DIR` for it
+     * for as long as it lives, and again when Wings restores it. Absent uses the project's account. Rejects for a name that is not
+     * one: up to 32 lowercase letters, digits and dashes, starting with a letter or digit.
+     */
+    claudeAccount?: string | null;
   }): Promise<{ paneId: string }>;
   /** Needs `permissions.panes`. Shows an open pane and moves the keyboard to it. */
   focusPane(paneId: string): Promise<void>;
@@ -637,6 +651,24 @@ interface Wings {
    * Claude Code in that folder, unless the user disconnected Claude Code. Rejects for a project Wings does not have.
    */
   setClaudeAccount(projectId: string, name: string | null): Promise<void>;
+  /**
+   * Needs `permissions.claudeAccounts` and Wings 0.1.121. Turns on or off that the named account uses the default account's
+   * setup. Every account does until it is turned off, and Wings applies it each time it connects to the account (a project is
+   * assigned to it, `openPane` with `claudeAccount`, Wings starts), so `sharesSetup` in `claudeAccounts()` is the choice, not
+   * whether the links are there yet.
+   *
+   * On: each of these the default account's folder (`~/.claude`) has becomes a link to it in the account's folder: `settings.json`,
+   * `settings.local.json`, the top-level `*.md` files (`CLAUDE.md`), `rules`, `skills`, `agents`, `commands`, `hooks`,
+   * `output-styles`, `plugins` and the top-level `*.sh` scripts. Never the sign-in, `.claude.json`, projects, sessions, history or
+   * caches. A file or folder the account had at one of those names moves to `.before-shared-setup/` in its folder first (a
+   * number is added to the name if that one is taken), nothing is deleted. Claude Code and Wings write settings through the
+   * links, so a change in either account is a change in both. The default account's user-scope MCP servers (in `.claude.json`,
+   * which cannot be linked) that the account does not have are copied into it, except Wings' own.
+   *
+   * Off: the links Wings made go and everything in `.before-shared-setup/` goes back where it was. MCP servers already copied
+   * stay. Rejects for a name that is not an account name, or for the account that is the folder Wings runs Claude Code under.
+   */
+  shareClaudeSetup(name: string, on: boolean): Promise<void>;
   /**
    * Needs `permissions.callTools` naming the tool or its plugin, and Wings 0.1.94. Only between Wings' own plugins
    * (installed from the Wings repo's `plugins/`). Runs another plugin's tool, `name` like `tasks__list`, as if Claude

@@ -269,16 +269,50 @@ fn plugin_set_claude_account(app: AppHandle, state: State<AppState>, plugin_id: 
         }
         store.set_claude_account(&project_id, name.as_deref())?;
     }
-    // Claude Code in the account's folder needs Wings too. The assignment stands if that fails.
+    // The account's setup and Wings in its Claude Code. The assignment stands if that fails.
+    if let Some(name) = &name {
+        prepare_claude_account(&app, name);
+    }
+    Ok(())
+}
+
+/// A plugin with `claudeAccounts` turns on or off that a named account uses the default account's setup. Applied now,
+/// and again each time Wings connects to the account. Needs the account's name, never a path.
+#[tauri::command(async)]
+fn plugin_share_claude_setup(app: AppHandle, state: State<AppState>, plugin_id: String, name: String, on: bool) -> Res<()> {
+    let name = plugins::claude_account_name(&plugin(&state, &plugin_id)?, &name)?;
+    claude_accounts::create_dir(name).map_err(err)?;
+    claude_accounts::set_shared_setup(name, on)?;
+    // Turned off, the account has its own settings.json back, which may lack Wings.
+    connect_claude_account_if_needed(&app, name);
+    Ok(())
+}
+
+/// Gets a named account ready for a terminal: its share of the default account's setup (unless turned off), then Wings in
+/// its Claude Code. Neither stops the other, and a failure is logged, not raised: the terminal starts all the same.
+fn prepare_claude_account(app: &AppHandle, name: &str) {
+    if let Err(e) = claude_accounts::sync_shared_setup(name) {
+        applog::log_line!("[claude] couldn't share the default account's setup with {name}: {e}");
+    }
+    connect_claude_account_if_needed(app, name);
+}
+
+/// Wings in the Claude Code of a named account, unless the user disconnected it or it is there already: reading the
+/// account's files tells, where asking `claude` takes half a second.
+fn connect_claude_account_if_needed(app: &AppHandle, name: &str) {
     #[cfg(unix)]
-    if let (Some(name), Some((claude, exe))) = (&name, claude_to_connect(&app)) {
-        if let Err(e) = ensure_claude_connected(&app, &claude, &exe, Some(name)) {
-            applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
+    if let Some((claude, exe)) = claude_to_connect(app) {
+        let account = Some(name);
+        let there = wings_mcp_entry(&claude_accounts::user_config(account)).is_some_and(|e| e["command"].as_str().is_some_and(|c| std::path::Path::new(c) == exe))
+            && claude_settings::connected(&claude_settings::settings_path(account));
+        if !there {
+            if let Err(e) = ensure_claude_connected(app, &claude, &exe, account) {
+                applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
+            }
         }
     }
     #[cfg(not(unix))]
-    let _ = app;
-    Ok(())
+    let _ = (app, name);
 }
 
 #[tauri::command(async)]
@@ -322,6 +356,7 @@ fn pane_create(
     on_output: Channel<InvokeResponseBody>,
     cwd: Option<String>,
     history_id: Option<String>,
+    claude_account: Option<claude_accounts::AccountPick>,
 ) -> Res<String> {
     let projectless = space_id == ptyd::NO_PROJECT;
     let root = if projectless {
@@ -340,7 +375,11 @@ fn pane_create(
         None => root,
     };
     let exit_app = app.clone();
-    let claude_config_dir = claude_accounts::pane_dir(&state.spaces.lock().unwrap().spaces, &space_id);
+    // The account a plugin's `openPane` asked for, else the project's. `plugin_open_pane` checked the plugin may.
+    let claude_config_dir = match &claude_account {
+        Some(pick) => claude_accounts::pick_dir(pick)?,
+        None => claude_accounts::pane_dir(&state.spaces.lock().unwrap().spaces, &space_id),
+    };
     let id = state
         .terminals
         .spawn(
@@ -917,12 +956,19 @@ fn ensure_claude_connected(app: &AppHandle, claude: &std::path::Path, exe: &std:
     }
 }
 
-/// Wings adds itself to Claude Code when it starts, in the default account and in each one a project uses.
+/// Wings adds itself to Claude Code when it starts, in the default account and in each one a project uses, and gives each of
+/// those accounts the default account's setup.
 fn connect_claude_on_start(app: AppHandle) {
     #[cfg(unix)]
     thread::spawn(move || {
-        let Some((claude, exe)) = claude_to_connect(&app) else { return };
         let accounts = claude_accounts::connect_targets(&app.state::<AppState>().spaces.lock().unwrap().spaces);
+        // The default account's setup for the others, whether or not Wings may touch Claude Code's own config here.
+        for name in accounts.iter().flatten() {
+            if let Err(e) = claude_accounts::sync_shared_setup(name) {
+                applog::log_line!("[claude] couldn't share the default account's setup with {name}: {e}");
+            }
+        }
+        let Some((claude, exe)) = claude_to_connect(&app) else { return };
         for account in &accounts {
             if let Err(e) = ensure_claude_connected(&app, &claude, &exe, account.as_deref()) {
                 applog::log_line!("[claude] couldn't connect Claude Code ({}): {e}", account.as_deref().unwrap_or("default account"));
@@ -1517,6 +1563,8 @@ struct OpenPaneRequest {
     cwd: Option<String>,
     /// The project on screen, where a pane without a `cwd` opens.
     space_id: Option<String>,
+    /// The Claude Code account the pane runs under, apart from its project's. Absent is the project's.
+    claude_account: Option<claude_accounts::AccountPick>,
 }
 
 /// Where the UI should open a plugin's pane, and what to type into its shell.
@@ -1526,14 +1574,16 @@ struct PanePlan {
     space_id: String,
     cwd: Option<String>,
     input: Option<String>,
+    claude_account: Option<claude_accounts::AccountPick>,
 }
 
 /// Checks a plugin's `openPane` against its manifest and your projects. The UI then opens the pane, and
 /// `pane_create` checks its folder again.
 #[tauri::command(async)]
-fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPaneRequest) -> Res<PanePlan> {
+fn plugin_open_pane(app: AppHandle, state: State<AppState>, plugin_id: String, request: OpenPaneRequest) -> Res<PanePlan> {
     let plugin = plugin(&state, &plugin_id)?;
     let input = plugins::pane_input(&plugin, request.command.as_deref(), &request.args)?;
+    plugins::pane_account(&plugin, request.claude_account.as_ref())?;
     let spaces = state.spaces.lock().unwrap().spaces.clone();
     let current = request.space_id.and_then(|id| spaces.iter().position(|s| s.id == id));
     let (project, cwd) = match request.cwd {
@@ -1544,8 +1594,13 @@ fn plugin_open_pane(state: State<AppState>, plugin_id: String, request: OpenPane
         }
         None => (current.ok_or("No project is open in Wings")?, None),
     };
+    // A named account has its folder and Wings in it by the time its terminal starts, as when a project is assigned to it.
+    if let Some(name) = request.claude_account.as_ref().and_then(|pick| pick.name.as_deref()) {
+        claude_accounts::create_dir(name).map_err(err)?;
+        prepare_claude_account(&app, name);
+    }
     // Typed like a resumed session, so the shell is still there when the command exits.
-    Ok(PanePlan { space_id: spaces[project].id.clone(), cwd, input: input.map(|line| line + "\r") })
+    Ok(PanePlan { space_id: spaces[project].id.clone(), cwd, input: input.map(|line| line + "\r"), claude_account: request.claude_account })
 }
 
 /// The command-line tools an installed plugin runs, on or off, and whether each is installed.
@@ -2170,6 +2225,7 @@ pub fn run() {
             plugin_worktree_setup_set,
             plugin_claude_accounts,
             plugin_set_claude_account,
+            plugin_share_claude_setup,
             editors_list,
             editor_open,
             sessions_list,
