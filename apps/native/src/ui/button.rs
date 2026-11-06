@@ -90,6 +90,56 @@ pub fn button(
         .child(content)
 }
 
+/// plugin-ui.css's `.w-chip`: a small quiet button, 28px tall with 12.8px text, tinted while `pressed` as when
+/// pointed at. A disabled one is dimmed and the keyboard skips it. Add the click handler to the result.
+pub fn chip(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    pressed: bool,
+    disabled: bool,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_toggled(if pressed {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .h(px(28.0))
+        .min_w(px(28.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(4.0))
+        .px(px(10.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgba(0))
+        .when(pressed, |chip| chip.bg(rgba(theme::HOVER)))
+        .text_color(rgb(theme::FOREGROUND))
+        .text_size(px(12.8))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .when(disabled, |chip| {
+            chip.opacity(0.5).a11y_synthetic_children(|builder| {
+                builder.parent_node().set_disabled();
+            })
+        })
+        .when(!disabled, |chip| {
+            chip.focusable()
+                .tab_stop(true)
+                .cursor_pointer()
+                .hover(|style| style.bg(rgba(theme::HOVER)))
+        })
+        .child(content)
+}
+
 /// shadcn's `Badge`: a small pill. `tone` is a colour that says something (plugin pages' `tone`), as an RGB; it
 /// tints the pill and colours the text, and with it a badge no longer has its variant's fill.
 pub fn badge(variant: Variant, tone: Option<u32>, small: bool, content: impl IntoElement) -> Div {

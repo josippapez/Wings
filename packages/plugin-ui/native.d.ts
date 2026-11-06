@@ -52,7 +52,7 @@ export function Text(props: {
   children?: ReactNode;
 }): ReactElement;
 /** A button. `variant` "default" is the filled one. `busy` shows a spinner and ignores clicks. An `aria-label` names a button that holds only an icon. */
-export function Button(props: { variant?: ButtonVariant; onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
+export function Button(props: { variant?: ButtonVariant; size?: "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg"; onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A small quiet button. With `pressed` it's a toggle. */
 export function Chip(props: { pressed?: boolean; onClick?: (event: NativeEvent) => void; disabled?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A short message in a tinted box. */

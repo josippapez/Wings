@@ -5,7 +5,7 @@ import { createElement as h, useEffect, useState } from "react";
 
 const trees = [];
 globalThis.wings = { render: (json) => trees.push(JSON.parse(json)) };
-const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, Timeline, TimelineCard, TimelineNote, mount, useAction, useTabState } = await import("./native.js");
+const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chip, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, Timeline, TimelineCard, TimelineNote, mount, useAction, useTabState } = await import("./native.js");
 
 const find = (node, type) => (node.type === type ? node : node.children?.map((child) => find(child, type)).find(Boolean));
 const all = (node, type) => [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap((child) => all(child, type))];
@@ -192,9 +192,16 @@ test("a busy button ignores clicks and shows a spinner, an icon button is named 
   assert.equal(busy.props.disabled, true);
   assert.ok(find(busy, "Spinner"));
   assert.equal(icon.props.label, "Delete x");
+  assert.equal(icon.props.size, "icon-sm");
   assert.deepEqual(find(icon, "Icon").props, { name: "trash" });
   assert.match(text(last()), /Projectwings/);
   assert.match(text(last()), /Checked 3 h ago/);
+});
+
+test("a chip is a button the app draws as a chip, pressed or not", () => {
+  mount(h(Page, null, h(Chip, { pressed: true, onClick: () => {} }, "Mon"), h(Chip, { onClick: () => {} }, "Tue")));
+  const [on, off] = all(last(), "Button");
+  assert.deepEqual([on.props.chip, on.props.pressed, off.props.pressed], [true, true, false]);
 });
 
 test("a combobox lists the options that match as chips, a menu opens its items, and useAction keeps busy and error", async () => {

@@ -76,11 +76,18 @@ choice!(Gap { M = "m", None = "none", Xs = "xs", S = "s", L = "l" });
 choice!(Align { Center = "center", Start = "start", Baseline = "baseline" });
 choice!(Justify { Start = "start", End = "end", Between = "between" });
 choice!(Edge { None = "none", Top = "top", Bottom = "bottom" });
-choice!(TextSize { Normal = "normal", Small = "small", Tiny = "tiny", Large = "large" });
+choice!(
+    /// `field` is native.js's own, for a `Field`'s label and hint.
+    TextSize { Normal = "normal", Small = "small", Tiny = "tiny", Large = "large", Field = "field" }
+);
 choice!(Weight { Normal = "normal", Medium = "medium", Strong = "strong" });
 choice!(
     /// The names `Icon` draws.
     IconName { Check = "check", ChevronDown = "chevron-down", Copy = "copy", Trash = "trash" }
+);
+choice!(
+    /// A button's `size`, as plugin-ui.css's `.w-button[data-size]`.
+    ButtonSize { Default = "default", Xs = "xs", Sm = "sm", Lg = "lg", Icon = "icon", IconXs = "icon-xs", IconSm = "icon-sm", IconLg = "icon-lg" }
 );
 choice!(
     /// The variants of both `Button` and `Badge`.
@@ -225,6 +232,10 @@ pub struct Text {
 pub struct Button {
     pub id: u64,
     pub variant: Variant,
+    pub size: ButtonSize,
+    /// A `Chip`: plugin-ui.css's `.w-chip`, tinted while `pressed`.
+    pub chip: bool,
+    pub pressed: bool,
     pub disabled: bool,
     /// The name a screen reader says, when it isn't the button's text (an icon button's).
     pub label: Option<String>,
@@ -879,6 +890,9 @@ impl Walk {
                 Node::Button(Button {
                     id,
                     variant: choice(&props, "variant"),
+                    size: choice(&props, "size"),
+                    chip: on("chip"),
+                    pressed: on("pressed"),
                     disabled,
                     label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
                     on_click: str_prop(&props, "onClick")
@@ -1090,6 +1104,9 @@ impl Walk {
                 button: Button {
                     id,
                     variant: Variant::Ghost,
+                    size: ButtonSize::Default,
+                    chip: false,
+                    pressed: false,
                     disabled: on("disabled"),
                     label: None,
                     on_click: str_prop(&props, "onClick")
@@ -1248,6 +1265,32 @@ mod tests {
         assert_eq!(button.variant, Variant::Outline);
         assert_eq!(button.on_click.as_deref(), Some("2:onClick"));
         assert_eq!(parsed.text(), "Pilot Go");
+    }
+
+    #[test]
+    fn a_button_keeps_its_size_and_a_chip_its_pressed_state() {
+        let parsed = tree(json!([
+            button(json!({"size":"sm"})),
+            button(json!({"chip":true,"pressed":true})),
+            button(json!({"size":"huge"})),
+        ]))
+        .unwrap();
+        let buttons: Vec<_> = parsed
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::Button(button) => (button.size, button.chip, button.pressed),
+                _ => panic!("a button"),
+            })
+            .collect();
+        assert_eq!(
+            buttons,
+            [
+                (ButtonSize::Sm, false, false),
+                (ButtonSize::Default, true, true),
+                (ButtonSize::Default, false, false),
+            ]
+        );
     }
 
     #[test]

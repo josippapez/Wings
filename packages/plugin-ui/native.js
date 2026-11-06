@@ -179,11 +179,11 @@ export function Text(props) {
 export function Button(props) {
   const { busy } = props;
   const label = props["aria-label"];
-  return h("Button", { ...pick(props, ["variant", "onClick", "onKeyDown", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
+  return h("Button", { ...pick(props, ["variant", "size", "chip", "pressed", "onClick", "onKeyDown", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
 }
 /** A small quiet button; with `pressed` it is on or off, drawn as a chip of `Chips` is. */
 export function Chip({ pressed, onClick, disabled, children, ...rest }) {
-  return h(Button, { variant: pressed ? "secondary" : "ghost", onClick, disabled, "aria-label": rest["aria-label"] }, children);
+  return h(Button, { chip: true, pressed: pressed === true, onClick, disabled, "aria-label": rest["aria-label"] }, children);
 }
 /** A short message in a tinted box. */
 export function Notice({ tone, children }) {
@@ -323,11 +323,12 @@ export function Graph(props) {
 }
 
 const FieldName = createContext(undefined);
-const hintOf = (hint, error) => ((error ?? hint) ? h(Text, { size: "small", tone: error ? "danger" : "muted" }, error ?? hint) : null);
+// A field's label and hint are 14px, as plugin-ui.css's `.w-field-label` and `.w-field-hint`.
+const hintOf = (hint, error) => ((error ?? hint) ? h(Text, { size: "field", tone: error ? "danger" : "muted" }, error ?? hint) : null);
 
 /** A labelled field with a `hint` or an `error` under it, for the input in `children`, which takes the label as its name. */
 export function Field({ label, hint, error, inline, children }) {
-  const name = h(Text, { weight: "medium" }, label);
+  const name = h(Text, { weight: "medium", size: "field" }, label);
   return h(
     FieldName.Provider,
     { value: typeof label === "string" ? label : undefined },
@@ -336,7 +337,7 @@ export function Field({ label, hint, error, inline, children }) {
 }
 /** Several controls under one label, with a `hint` or an `error` under them. */
 export function FieldGroup({ label, hint, error, children }) {
-  return h(Stack, { gap: "m" }, h(Text, { weight: "medium" }, label), children, hintOf(hint, error));
+  return h(Stack, { gap: "m" }, h(Text, { weight: "medium", size: "field" }, label), children, hintOf(hint, error));
 }
 
 /** What `onChange` of an input is given: the app's event, with the text as `target.value`. */

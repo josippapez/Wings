@@ -536,6 +536,7 @@ impl PageView {
                         TextSize::Small => el.text_size(px(12.0)),
                         TextSize::Tiny => el.text_size(px(11.0)),
                         TextSize::Large => el.text_size(px(20.0)).line_height(px(26.0)),
+                        TextSize::Field => el.text_size(px(14.0)).line_height(relative(1.5)),
                     })
                     .map(|el| match text.weight {
                         Weight::Normal => el,
@@ -555,16 +556,20 @@ impl PageView {
                 }
             }
             Node::Button(button) => {
-                let element = ui::button(
-                    ElementId::NamedInteger("page-button".into(), button.id),
-                    button
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| plain_text(&button.children)),
-                    variant(button.variant),
-                    button.disabled,
-                    self.inline(&button.children, cx),
-                );
+                let id = ElementId::NamedInteger("page-button".into(), button.id);
+                let label = button
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| plain_text(&button.children));
+                let content = self.inline(&button.children, cx);
+                let element = if button.chip {
+                    ui::chip(id, label, button.pressed, button.disabled, content)
+                } else {
+                    sized(
+                        ui::button(id, label, variant(button.variant), button.disabled, content),
+                        button.size,
+                    )
+                };
                 let key_handler = button.on_key_down.clone();
                 let element = element.on_key_down(cx.listener(
                     move |view, event: &KeyDownEvent, window, cx| {
@@ -914,26 +919,16 @@ impl PageView {
                         let disabled = option.disabled;
                         let keyboard_focus = focus.clone();
                         let click_focus = focus.get(&value).cloned();
-                        ui::button(
+                        ui::chip(
                             ElementId::NamedInteger(
                                 format!("page-chips-{}", select.id).into(),
                                 index as u64,
                             ),
                             option.label.clone(),
-                            if selected {
-                                ui::Variant::Secondary
-                            } else {
-                                ui::Variant::Ghost
-                            },
+                            selected,
                             option.disabled,
                             option.label.clone(),
                         )
-                        .role(Role::Button)
-                        .aria_toggled(if selected {
-                            Toggled::True
-                        } else {
-                            Toggled::False
-                        })
                         .when_some(focus.get(&value), |button, focus| button.track_focus(focus))
                         .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
                             let at = next
@@ -977,7 +972,8 @@ impl PageView {
                     .aria_label(select.label.clone())
                     .flex()
                     .flex_wrap()
-                    .gap(px(4.0))
+                    // plugin-ui.css's `.w-chips`.
+                    .gap(px(8.0))
                     .children(options)
                     .into_any_element()
             }
@@ -1424,5 +1420,31 @@ fn variant(variant: tree::Variant) -> ui::Variant {
         tree::Variant::Ghost => ui::Variant::Ghost,
         tree::Variant::Destructive => ui::Variant::Destructive,
         tree::Variant::Link => ui::Variant::Link,
+    }
+}
+
+/// A button at its `size`, as plugin-ui.css's `.w-button[data-size]`: `xs` and `sm` are smaller with smaller text, the
+/// `icon` sizes square.
+fn sized(button: gpui::Stateful<gpui::Div>, size: tree::ButtonSize) -> gpui::Stateful<gpui::Div> {
+    use tree::ButtonSize as Size;
+    match size {
+        Size::Default => button,
+        Size::Xs => button
+            .h(px(24.0))
+            .gap(px(4.0))
+            .px(px(8.0))
+            .rounded(px(8.0))
+            .text_size(px(12.0)),
+        Size::Sm => button
+            .h(px(28.0))
+            .gap(px(4.0))
+            .px(px(10.0))
+            .rounded(px(8.0))
+            .text_size(px(12.8)),
+        Size::Lg => button.h(px(36.0)),
+        Size::Icon => button.w(px(32.0)).px_0(),
+        Size::IconXs => button.size(px(24.0)).px_0().rounded(px(8.0)),
+        Size::IconSm => button.size(px(28.0)).px_0().rounded(px(8.0)),
+        Size::IconLg => button.size(px(36.0)).px_0(),
     }
 }
