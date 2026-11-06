@@ -52,6 +52,12 @@ pub(super) struct Sections {
 }
 
 impl Sections {
+    /// Drops what a plugin that stopped listed, so a new start begins with nothing.
+    pub(super) fn forget_plugin(&mut self, plugin: &str) {
+        let prefix = format!("{plugin}:");
+        self.rows.retain(|(_, key), _| !key.starts_with(&prefix));
+    }
+
     /// Sets or, with no rows, removes one section. Whether anything changed.
     pub(super) fn set(&mut self, project: &Path, key: &str, rows: Option<Vec<SectionRow>>) -> bool {
         let at = (project.to_path_buf(), key.to_owned());

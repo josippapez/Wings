@@ -21,7 +21,7 @@ use crate::{host::Config, installed::fixture::Data};
 
 /// What the system was asked to do, instead of doing it.
 #[derive(Default)]
-struct FakeSystem {
+pub(super) struct FakeSystem {
     opened: Mutex<Vec<String>>,
     notified: Mutex<Vec<(String, String)>>,
     /// The system can't show notifications.
@@ -47,7 +47,7 @@ impl System for FakeSystem {
 }
 
 /// A 1000 x 640 window of the plugins in `data`, with `system` standing in for the system before anything is drawn.
-fn open_plugins(
+pub(super) fn open_plugins(
     data: &Data,
     system: &Arc<FakeSystem>,
     change: impl FnOnce(&mut Config),
@@ -63,7 +63,7 @@ fn open_plugins(
 }
 
 /// Runs the window until `done`, redrawing so the plugins hear of what changed.
-fn until(
+pub(super) fn until(
     app: &TestApp,
     window: &mut TestAppWindow<Workspace>,
     what: &str,

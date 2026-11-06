@@ -37,6 +37,8 @@ use super::{Active, Workspace};
 /// How long a badge's button waits for the plugin before it says the plugin didn't respond: just over the 5 minutes
 /// `exec` may take, so an action waiting on a long exec can finish (the desktop's `ask`).
 pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(310);
+/// How long after pasting a message Enter is pressed, as the desktop's `sendToPane`.
+const SUBMIT_AFTER: Duration = Duration::from_millis(150);
 /// How long a notice the system couldn't show stays in the window.
 const NOTICE_FOR: Duration = Duration::from_secs(8);
 
@@ -218,6 +220,10 @@ pub(super) struct AppEnv {
     system: Mutex<Arc<dyn System>>,
     /// What Claude Code last told `wings statusline`, for `wings.statusline()`.
     pub(super) statusline: Mutex<wings_connect::statusline::Statusline>,
+    /// The installed plugins, which the window and the `wings plugin` CLI change, as the desktop's `AppState.plugins`.
+    pub(super) store: Option<Arc<Mutex<wings_plugins::store::Store>>>,
+    /// The connections of the socket, told when the plugins' tools change.
+    pub(super) clients: Arc<wings_connect::server::Clients>,
 }
 
 impl AppEnv {
@@ -240,6 +246,7 @@ impl AppEnv {
         events: Sender<UiEvent>,
         claude_dir: PathBuf,
         projects: Arc<Projects>,
+        store: Option<wings_plugins::store::Store>,
     ) -> Self {
         Self {
             events,
@@ -249,7 +256,28 @@ impl AppEnv {
             claude_dir,
             system: Mutex::new(Arc::new(Os)),
             statusline: Mutex::default(),
+            store: store.map(|store| Arc::new(Mutex::new(store))),
+            clients: Arc::default(),
         }
+    }
+
+    /// Records in `plugins.json` that the plugin stored or deleted the secret, as the desktop does, so removing the
+    /// plugin deletes it. Only under the scope on file: a dev plugin's `dev` scope has no entry to record it in.
+    fn note_secret(
+        &self,
+        plugin: &str,
+        scope: &str,
+        name: &str,
+        stored: bool,
+    ) -> Result<(), String> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        let mut store = store.lock().unwrap();
+        if store.known_storage_scope(plugin).as_deref() != Some(scope) {
+            return Ok(());
+        }
+        store.note_secret(plugin, name, stored)
     }
 
     /// Runs `task` on the window's thread and waits up to `wait` for what it returns, for a call from Claude Code.
@@ -391,11 +419,13 @@ impl Env for AppEnv {
     }
 
     fn secret_set(&self, plugin: &str, scope: &str, name: &str, value: &str) -> Result<(), String> {
-        crate::secrets::set(plugin, scope, name, value)
+        crate::secrets::set(plugin, scope, name, value)?;
+        self.note_secret(plugin, scope, name, true)
     }
 
     fn secret_delete(&self, plugin: &str, scope: &str, name: &str) -> Result<(), String> {
-        crate::secrets::delete(plugin, scope, name)
+        crate::secrets::delete(plugin, scope, name)?;
+        self.note_secret(plugin, scope, name, false)
     }
 
     fn send_to_agent(&self, pane: &str, text: &str, reply: crate::page::runtime::Reply) {
@@ -569,7 +599,7 @@ pub(super) struct PluginUi {
     watcher: Option<wings_gitwatch::Watcher>,
     watched_projects: Vec<PathBuf>,
     /// A hash of what the plugins were last told of the panes and projects, to tell them only of a change.
-    signature: u64,
+    pub(super) signature: u64,
     /// By pane, then plugin id, which is also the order they are drawn in.
     pub(super) badges: HashMap<usize, BTreeMap<String, Badge>>,
     pub(super) statuses: HashMap<usize, BTreeMap<String, PaneStatus>>,
@@ -762,7 +792,6 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui::EntityInputHandler;
         if !self
             .projects
             .iter()
@@ -817,9 +846,9 @@ impl Workspace {
             Active::Terminal(id)
         };
         if let Some(input) = plan.input {
-            self.terminal(pane).unwrap().update(cx, |view, cx| {
-                view.replace_text_in_range(None, &input, window, cx)
-            });
+            self.terminal(pane)
+                .unwrap()
+                .update(cx, |view, cx| view.write_input(&input, cx));
         }
         self.show(active, window, cx);
         self.sync_plugins(cx);
@@ -828,8 +857,8 @@ impl Workspace {
 
     /// Pastes a plugin's message into the prompt of the agent in `pane`, as the desktop's `sendToAgent` does: only an agent
     /// gets it, since a shell would run the text, and not one waiting on an answer, which the text would be taken for.
-    /// Enter is never pressed (the desktop presses it only while "Let agents message each other" is on, a setting this
-    /// app doesn't have), so the answer is `{ submitted: false }`.
+    /// Nor one where you typed into the prompt and haven't sent it, which the text would be sent with. Enter is pressed
+    /// a moment after the paste only while "Let agents message each other" is on, and the answer says so: `{ submitted }`.
     pub(super) fn send_to_agent(
         &mut self,
         pane: &str,
@@ -854,8 +883,23 @@ impl Workspace {
         let Some(view) = self.terminal(id) else {
             return reply.err(format!("unknown pane {pane}"));
         };
+        if view.read(cx).has_typed() {
+            return reply.err(format!(
+                "Someone typed into the prompt of the agent in pane {pane} and hasn't sent it. Wings won't type over it."
+            ));
+        }
+        let submit = self.prefs.agents_message;
         view.update(cx, |view, cx| view.paste_text(text, cx));
-        reply.ok(serde_json::json!({ "submitted": false }).to_string());
+        if submit {
+            // Enter in a write of its own, a moment later, as the desktop's `sendToPane`: one in the paste would be text.
+            let view = view.downgrade();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(SUBMIT_AFTER).await;
+                let _ = view.update(cx, |view, cx| view.write_input("\r", cx));
+            })
+            .detach();
+        }
+        reply.ok(serde_json::json!({ "submitted": submit }).to_string());
     }
 
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.

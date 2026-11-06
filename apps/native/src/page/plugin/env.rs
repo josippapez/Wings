@@ -112,6 +112,11 @@ impl Running {
         );
     }
 
+    /// The plugin stopped: other plugins' calls to it fail as for one that never ran.
+    pub fn remove(&self, plugin: &str) {
+        self.0.lock().unwrap().remove(plugin);
+    }
+
     /// Whether the plugin is one of Wings' own, or `None` when it doesn't run here.
     pub fn builtin(&self, plugin: &str) -> Option<bool> {
         self.0

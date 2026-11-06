@@ -46,6 +46,8 @@ fn the_new_settings_are_saved_and_come_back() {
                     prefs.editor = Some("zed".into());
                     prefs.new_tab = "project".into();
                     prefs.new_project_page = true;
+                    prefs.agents_run_commands = true;
+                    prefs.agents_message = true;
                 },
                 cx,
             );
@@ -71,6 +73,8 @@ fn the_new_settings_are_saved_and_come_back() {
                 editor: Some("zed".into()),
                 new_tab: "project".into(),
                 new_project_page: true,
+                agents_run_commands: true,
+                agents_message: true,
             }
         );
     });
@@ -78,7 +82,7 @@ fn the_new_settings_are_saved_and_come_back() {
 }
 
 #[test]
-fn the_plugins_section_lists_the_desktops_plugins_without_writing_its_file() {
+fn the_plugins_section_lists_the_plugins_and_writes_plugins_json_only_for_a_change() {
     let data = Data::temp();
     data.install("demo", WINGS_VERSION, true, true, Approval::Current, "s1");
     data.install("idle", WINGS_VERSION, false, false, Approval::Current, "s2");
@@ -86,20 +90,20 @@ fn the_plugins_section_lists_the_desktops_plugins_without_writing_its_file() {
     let before = std::fs::read(data.paths().state).unwrap();
     let (_app, mut window) = open_config(|config| config.plugins = Some(data.paths()));
     press(&mut window, ",");
-    let rows = window.read(|w, _| {
-        let dialog = w.settings.as_ref().unwrap();
-        dialog
-            .plugins
-            .iter()
-            .map(|row| (row.name.clone(), row.status.clone(), row.on))
-            .collect::<Vec<_>>()
-    });
+    let rows = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            w.plugin_views()
+                .iter()
+                .map(|view| (view.manifest.name.clone(), w.plugin_status(view)))
+                .collect::<Vec<_>>()
+        })
+    };
     assert_eq!(
-        rows,
+        rows(&window),
         [
-            ("Plugin demo".into(), "On · Runs here".into(), true),
-            ("Plugin idle".into(), "Off".into(), false),
-            ("Plugin new".into(), "Waiting for approval".into(), false),
+            ("Plugin demo".into(), "On · Runs here".into()),
+            ("Plugin idle".into(), "Off".into()),
+            ("Plugin new".into(), "Waiting for approval".into()),
         ]
     );
     window.update(|w, _, cx| {
@@ -107,7 +111,21 @@ fn the_plugins_section_lists_the_desktops_plugins_without_writing_its_file() {
         cx.notify();
     });
     window.draw();
+    // Looking writes nothing.
     assert_eq!(std::fs::read(data.paths().state).unwrap(), before);
+    // Turning one on writes it, as the desktop's switch does; without a native build it is on but doesn't run here.
+    window.update(|w, window, cx| {
+        let idle = w
+            .plugin_views()
+            .into_iter()
+            .find(|v| v.manifest.id == "idle")
+            .unwrap();
+        w.toggle_plugin(idle, true, window, cx);
+    });
+    assert_eq!(rows(&window)[1].1, "On · No native build");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.paths().state).unwrap()).unwrap();
+    assert_eq!(saved["idle"]["enabled"], true);
 }
 
 #[test]

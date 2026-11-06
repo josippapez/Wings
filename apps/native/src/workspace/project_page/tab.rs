@@ -30,19 +30,45 @@ impl Workspace {
             return;
         };
         if self.project_page.is_none() {
-            let path = self.config.project.clone();
-            let entry = self.projects.iter().find(|entry| entry.path == path);
-            let name = entry.map_or_else(
-                || path.to_string_lossy().into_owned(),
-                |entry| entry.name.clone(),
-            );
-            let branch = entry.and_then(|entry| entry.branch.clone());
-            let blocks = self.plugins.iter().flat_map(installed::blocks).collect();
-            self.project_page = Some(
-                cx.new(|cx| ProjectPage::new(&path, &name, branch.as_deref(), info, blocks, cx)),
-            );
+            self.project_page = Some(self.new_project_page(info, cx));
         }
         self.show(Active::Project, window, cx);
+    }
+
+    /// The shown project's page, with the blocks of the plugins running now.
+    fn new_project_page(
+        &self,
+        info: super::InfoStore,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<ProjectPage> {
+        let path = self.config.project.clone();
+        let entry = self.projects.iter().find(|entry| entry.path == path);
+        let name = entry.map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |entry| entry.name.clone(),
+        );
+        let branch = entry.and_then(|entry| entry.branch.clone());
+        let blocks = self.plugins.iter().flat_map(installed::blocks).collect();
+        cx.new(|cx| ProjectPage::new(&path, &name, branch.as_deref(), info, blocks, cx))
+    }
+
+    /// A plugin with blocks started or stopped: the open page starts over with the blocks that run now. The pages of
+    /// projects not on screen close, so none keeps a stopped plugin's blocks running.
+    pub(in crate::workspace) fn reload_project_pages(&mut self, cx: &mut Context<Self>) {
+        for parked in self.parked.values_mut() {
+            parked.project_page = None;
+            if parked.active == Active::Project {
+                parked.active = parked
+                    .terminals
+                    .first()
+                    .map_or(Active::Issues, |tab| Active::Terminal(tab.id));
+            }
+        }
+        if self.project_page.is_some()
+            && let Some(info) = self.project_info.clone()
+        {
+            self.project_page = Some(self.new_project_page(info, cx));
+        }
     }
 
     /// Closes the tab. The page and its blocks stop with it.

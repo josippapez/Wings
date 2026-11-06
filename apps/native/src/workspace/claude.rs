@@ -24,15 +24,14 @@ use wings_connect::{
     panes::{self, Host, OpenPlan, Opened, PaneRow},
     register::{self, Status},
     server::{
-        self, Clients, Handler, SEPARATOR, ToolResult, caller, hook_event, hook_session,
-        merge_hook_answers, session_pane,
+        self, Handler, SEPARATOR, ToolResult, caller, hook_event, hook_session, merge_hook_answers,
+        session_pane,
     },
 };
 use wings_plugins::permissions::NotifyLog;
 use wings_spaces::{claude_accounts, project_info::Store, spaces::Space};
 
 use crate::{
-    host::PluginPaths,
     page::{
         plugin::{ClaudeCaller, OpenPane},
         runtime::Reply,
@@ -132,8 +131,8 @@ impl Workspace {
     }
 
     /// `open_pane`: a terminal in the project, as a split below the caller's pane when it is given and on screen,
-    /// with the command typed and never run (this app has no "Let Claude run commands in new tabs" yet).
-    fn claude_open_pane(
+    /// with the command typed, and run only while "Let Claude run commands in new tabs" is on.
+    pub(super) fn claude_open_pane(
         &mut self,
         plan: OpenPlan,
         window: &mut Window,
@@ -156,7 +155,14 @@ impl Workspace {
             }
         }
         let placement = if below.is_some() { "below" } else { "tab" };
-        let input = with_setup(self.spaces.take_setup(&project).as_deref(), plan.input);
+        // Enter only while the user lets Claude run commands in new tabs, as the desktop's `onMcpOpenPane`.
+        let ran = plan.run && plan.input.is_some() && self.prefs.agents_run_commands;
+        let typed = if ran {
+            plan.input.map(|input| input + "\r")
+        } else {
+            plan.input
+        };
+        let input = with_setup(self.spaces.take_setup(&project).as_deref(), typed);
         let cwd = plan.cwd.map_or_else(|| project.clone(), PathBuf::from);
         let (reply, answer) = Reply::channel();
         let plan = OpenPane {
@@ -175,7 +181,7 @@ impl Workspace {
             .ok_or("The window didn't say which pane it opened")?;
         Ok(Opened {
             pane_id: pane_id.to_owned(),
-            ran: false,
+            ran,
             reused: false,
         })
     }
@@ -209,7 +215,6 @@ pub(super) struct Server {
     env: Arc<AppEnv>,
     sessions: Sessions,
     info: Option<Arc<Store>>,
-    plugins: Option<PluginPaths>,
     /// The panes Claude opened with `open_pane`, the only ones `close_pane` closes.
     opened: std::sync::Mutex<Vec<String>>,
     /// One allowance for every Claude session together, the size of a plugin's.
@@ -222,17 +227,16 @@ pub(super) fn start(
     env: Arc<AppEnv>,
     sessions: Sessions,
     info: Option<Arc<Store>>,
-    plugins: Option<PluginPaths>,
 ) -> std::io::Result<()> {
+    let clients = env.clients.clone();
     let server = Arc::new(Server {
         env,
         sessions,
         info,
-        plugins,
         opened: Default::default(),
         notified: Default::default(),
     });
-    server::start(path, server, Arc::new(Clients::default()))
+    server::start(path, server, clients)
 }
 
 impl Server {
@@ -411,21 +415,109 @@ impl Handler for Server {
     fn control(&self, op: &str, request: &Value) -> Option<Result<Value, String>> {
         Some(match op {
             "statusline" => {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-                self.env.statusline.lock().unwrap().record(request.get("status").unwrap_or(&Value::Null), now);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+                self.env
+                    .statusline
+                    .lock()
+                    .unwrap()
+                    .record(request.get("status").unwrap_or(&Value::Null), now);
                 Ok(Value::Null)
             }
-            "pane_busy" => self.pane_busy(request.get("pane").and_then(Value::as_str).unwrap_or_default()),
-            // The desktop's plugin list, which this app reads and never writes.
-            "plugins" => Ok(self.plugins.as_ref().map_or_else(
-                || json!([]),
-                |paths| json!(wings_plugins::store::Store::load(paths.dir.clone(), paths.state.clone(), paths.dev.as_deref()).list()),
-            )),
+            "pane_busy" => self.pane_busy(
+                request
+                    .get("pane")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            "plugins" => Ok(self
+                .env
+                .store
+                .as_ref()
+                .map_or_else(|| json!([]), |store| json!(store.lock().unwrap().list()))),
             "install" | "link" | "update" | "enable" | "disable" | "remove" => {
-                Err("This Wings doesn't change plugins yet. Install, update, turn on or off and remove them in the desktop app.".into())
+                let arg = |key: &str| {
+                    request
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                self.change_plugin(op, arg)
             }
             _ => return None,
         })
+    }
+}
+
+impl Server {
+    /// The `wings plugin` CLI's changes, through the same code as Settings, Plugins, as the desktop's `control.rs`. A
+    /// plugin still turns on only once you approve it in the window, which opens its review when it needs one.
+    fn change_plugin(&self, op: &str, arg: impl Fn(&str) -> String) -> Result<Value, String> {
+        let store = self
+            .env
+            .store
+            .clone()
+            .ok_or("This Wings has no plugin folder")?;
+        // Downloads and reads happen here, off the window's thread.
+        let package = match op {
+            // The CLI sends files as absolute paths; anything else is a GitHub link.
+            "install" => {
+                let source = arg("source");
+                Some(if Path::new(&source).is_absolute() {
+                    wings_plugins::store::read_package(Path::new(&source))
+                        .map(|bytes| (bytes, wings_plugins::store::Source::File))?
+                } else {
+                    wings_plugins::store::fetch_github(&source)?
+                })
+            }
+            "update" => {
+                let source = store.lock().unwrap().source(&arg("plugin"));
+                let (repo, folder) = wings_plugins::store::update_source(source)?;
+                let bytes = wings_plugins::store::download_github(&repo, folder.as_deref())?;
+                Some((bytes, wings_plugins::store::Source::Github { repo, folder }))
+            }
+            _ => None,
+        };
+        let (op, id, folder) = (op.to_owned(), arg("plugin"), arg("folder"));
+        self.env.on_window(WINDOW_WAIT, move |workspace, window, cx| -> Result<Value, String> {
+            // The window lists it again, and opens the review of one that isn't on yet.
+            let installed = |workspace: &mut Workspace, view: wings_plugins::store::PluginView, window: &mut Window, cx: &mut Context<Workspace>| {
+                if !(view.enabled && view.approved) {
+                    workspace.review_plugin(&view.manifest.id, window, cx);
+                }
+                json!(view)
+            };
+            match op.as_str() {
+                "install" | "update" => {
+                    let (bytes, source) = package.expect("read above");
+                    let expected = (op == "update").then_some(id.as_str());
+                    let view = workspace.install_package(&bytes, source, expected, window, cx)?;
+                    Ok(installed(workspace, view, window, cx))
+                }
+                // `wings-plugin dev` sends this after each build. Linking a linked folder again is the reload.
+                "link" => {
+                    let linked = workspace.link_plugin(Path::new(&folder), window, cx)?;
+                    if linked.review {
+                        workspace.review_plugin(&linked.view.manifest.id, window, cx);
+                    }
+                    Ok(json!(linked.view))
+                }
+                "enable" => {
+                    let grant = store.lock().unwrap().current_grant(&id)?;
+                    match grant {
+                        Some(grant) => workspace.set_plugin_enabled(&id, true, Some(grant), window, cx).map(|view| json!(view)),
+                        None => {
+                            workspace.review_plugin(&id, window, cx);
+                            Err(format!("{id} needs your approval first. Review its access in Wings, which has it open now."))
+                        }
+                    }
+                }
+                "disable" => workspace.set_plugin_enabled(&id, false, None, window, cx).map(|view| json!(view)),
+                _ => workspace.remove_plugin(&id, window, cx).map(|()| Value::Null),
+            }
+        })?
     }
 }
 
@@ -542,14 +634,62 @@ impl Host for NativeHost<'_> {
             .update_worktree_settings(space_id, include, setup)
     }
 
+    /// Asks in the window, as the desktop's `approve_setup`: one prompt per project at a time, so a second request can't
+    /// take the place of the one the user is reading, and a notification when the window isn't in front.
     fn approve_setup(
         &self,
-        _project: &str,
-        _pane: &str,
-        _current: Option<&str>,
-        _proposed: &str,
+        project: &str,
+        pane: &str,
+        current: Option<&str>,
+        proposed: &str,
     ) -> Result<bool, String> {
-        Err("This Wings can't ask the user to approve a setup command yet. Ask them to set it in the desktop app, or change only include.".into())
+        static WAITING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        struct Waiting(String);
+        impl Drop for Waiting {
+            fn drop(&mut self) {
+                WAITING.lock().unwrap().retain(|p| p != &self.0);
+            }
+        }
+        let _waiting = {
+            let mut waiting = WAITING.lock().unwrap();
+            if waiting.iter().any(|p| p == project) {
+                return Err(format!(
+                    "A setup command for {project} is already waiting for the user. Try again after they answer."
+                ));
+            }
+            waiting.push(project.to_owned());
+            Waiting(project.to_owned())
+        };
+        let ask = (
+            project.to_owned(),
+            pane.to_owned(),
+            current.map(str::to_owned),
+            proposed.to_owned(),
+        );
+        let (answered, behind) =
+            self.server
+                .env
+                .on_window(WINDOW_WAIT, move |workspace, _, cx| {
+                    let (project, pane, current, proposed) = ask;
+                    let behind = !workspace.window_active;
+                    (
+                        workspace.ask_setup_approval(project, pane, current, proposed, cx),
+                        behind,
+                    )
+                })?;
+        if behind {
+            // So the user comes back to answer; a refused one (rate limit) doesn't stop the prompt.
+            let _ = self.notify(
+                "Claude: Setup command".into(),
+                wings_plugins::permissions::clip(
+                    &format!("An agent asks to set the setup command for {project}"),
+                    200,
+                ),
+            );
+        }
+        answered
+            .recv_timeout(panes::SETUP_APPROVAL_WAIT)
+            .map_err(|_| "The user didn't answer".to_string())
     }
 }
 

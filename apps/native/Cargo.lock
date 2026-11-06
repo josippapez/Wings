@@ -7472,6 +7472,7 @@ dependencies = [
  "wings-plugins",
  "wings-spaces",
  "wings-terminal",
+ "zip",
 ]
 
 [[package]]

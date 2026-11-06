@@ -1,10 +1,11 @@
-//! The plugins the desktop app has installed and turned on, found and started for the native app.
+//! The plugins installed and turned on, found and started for the native app.
 //!
 //! The rules are the desktop's, because the code is: `wings-plugins` reads the desktop's plugin folder and its
 //! `plugins.json` (which plugins are on, and whether their permissions are approved), so a plugin loads here exactly
-//! when it would there. Everything is read only: this never installs, enables or approves, and never writes
-//! `plugins.json`. A plugin shares the desktop's data too: its main and pages get the desktop's storage root and the
-//! install scope `plugins.json` names, so what the desktop saved for it is what it reads.
+//! when it would there. Finding them only reads: installing, turning on, approving and removing go through the
+//! window's `Store` (`workspace/plugin_manage.rs`), which writes `plugins.json` as the desktop does. A plugin shares the
+//! desktop's data too: its main and pages get the desktop's storage root and the install scope `plugins.json` names,
+//! so what the desktop saved for it is what it reads.
 //!
 //! A plugin runs here only if it ships a native build, which sits beside its web one in `dist/native/`: `main.js` is
 //! its main, and a view that opens as a tab and sets `newTab` (what the desktop's + menu lists) has a page at
@@ -127,8 +128,17 @@ fn native_file(dir: &Path, name: &str) -> Option<PathBuf> {
 /// The plugins that are installed, turned on, approved and have a native build, by name. Plugins the desktop skips
 /// (too new for it, broken, not built) never show up, as `wings-plugins` skips them while loading.
 pub fn discover(paths: &PluginPaths) -> Vec<Found> {
+    discover_in(&load_store(paths))
+}
+
+/// The plugin store at `paths`, read with this Wings' version, which the window keeps and changes.
+pub fn load_store(paths: &PluginPaths) -> Store {
     wings_plugins::set_wings_version(WINGS_VERSION);
-    let store = Store::load(paths.dir.clone(), paths.state.clone(), paths.dev.as_deref());
+    Store::load(paths.dir.clone(), paths.state.clone(), paths.dev.as_deref())
+}
+
+/// `discover`, of a store already loaded. It never writes `plugins.json`.
+pub fn discover_in(store: &Store) -> Vec<Found> {
     store
         .list()
         .into_iter()

@@ -5,7 +5,6 @@ use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Role,
     SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
-use wings_plugins::store::Store;
 
 use crate::{
     icons::{Icon, icon},
@@ -83,6 +82,10 @@ pub(super) struct Prefs {
     pub(super) new_tab: String,
     /// A project you add opens its Project page instead of a terminal.
     pub(super) new_project_page: bool,
+    /// "Let Claude run commands in new tabs": `open_pane` presses Enter after the command it types.
+    pub(super) agents_run_commands: bool,
+    /// "Let agents message each other": a message for an agent is submitted with Enter.
+    pub(super) agents_message: bool,
 }
 
 impl Default for Prefs {
@@ -92,29 +95,23 @@ impl Default for Prefs {
             editor: None,
             new_tab: "terminal".into(),
             new_project_page: false,
+            agents_run_commands: false,
+            agents_message: false,
         }
     }
 }
 
-/// An installed plugin as the Plugins section lists it.
-pub(super) struct PluginRow {
-    pub(super) name: String,
-    version: String,
-    description: String,
-    /// The desktop's "On", "Off" or "Waiting for approval", and whether it runs here.
-    pub(super) status: String,
-    pub(super) on: bool,
-}
-
 pub(super) struct SettingsDialog {
     pub(super) section: Section,
-    focus: FocusHandle,
+    pub(super) focus: FocusHandle,
     pub(super) family: Entity<TextField>,
     pub(super) family_error: Option<SharedString>,
     _family_events: Subscription,
     /// The select whose menu is open.
     menu: Option<&'static str>,
-    pub(super) plugins: Vec<PluginRow>,
+    /// The Plugins section's GitHub link field.
+    pub(super) link: Entity<TextField>,
+    _link_events: Subscription,
 }
 
 /// What choosing a select's item does.
@@ -147,6 +144,23 @@ impl Workspace {
             FieldEvent::Cancel => this.close_settings(window, cx),
             FieldEvent::Changed => {}
         });
+        let link = cx.new(|cx| {
+            let mut field = TextField::new(
+                Role::TextInput,
+                "GitHub repo link",
+                "github.com/owner/plugin",
+                px(176.0),
+                cx,
+            );
+            field.fill = true;
+            field
+        });
+        let link_events =
+            cx.subscribe_in(&link, window, |this, _, event, window, cx| match event {
+                FieldEvent::Submit { .. } => this.install_from_link(window, cx),
+                FieldEvent::Cancel => this.close_settings(window, cx),
+                FieldEvent::Changed => cx.notify(),
+            });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         self.settings = Some(SettingsDialog {
@@ -156,48 +170,10 @@ impl Workspace {
             family_error: None,
             _family_events: events,
             menu: None,
-            plugins: self.plugin_rows(),
+            link,
+            _link_events: link_events,
         });
         cx.notify();
-    }
-
-    /// The desktop's installed plugins with their state, read from its files and never written: turning one on or off
-    /// and approving it happen in the desktop app.
-    fn plugin_rows(&self) -> Vec<PluginRow> {
-        let Some(paths) = &self.config.plugins else {
-            return Vec::new();
-        };
-        let store = Store::load(paths.dir.clone(), paths.state.clone(), paths.dev.as_deref());
-        store
-            .list()
-            .into_iter()
-            .map(|view| {
-                let on = view.enabled && view.approved;
-                let runs = self
-                    .plugins
-                    .iter()
-                    .any(|installed| installed.id == view.manifest.id);
-                let state = if !view.approved {
-                    "Waiting for approval"
-                } else if view.enabled {
-                    "On"
-                } else {
-                    "Off"
-                };
-                let status = match (on, runs) {
-                    (true, true) => format!("{state} · Runs here"),
-                    (true, false) => format!("{state} · No native build yet"),
-                    _ => state.to_owned(),
-                };
-                PluginRow {
-                    name: view.manifest.name,
-                    version: view.manifest.version,
-                    description: view.manifest.description,
-                    status,
-                    on,
-                }
-            })
-            .collect()
     }
 
     /// Keeps what was typed in the font field, then gives the keys back to the terminal.
@@ -720,137 +696,36 @@ impl Workspace {
             .py(px(12.0))
             .text_size(px(12.0))
             .text_color(rgb(theme::MUTED_FOREGROUND))
-            .child(
-                "Not here yet: this app never presses Enter for an agent, so a command Claude opens in a tab and a \
-                 message one agent sends another wait for you, and a setup command an agent proposes is refused. \
-                 OpenCode is connected from the desktop app.",
-            )
+            .child("Not here yet: OpenCode is connected from the desktop app.")
             .into_any_element();
+        let enter = vec![
+            self.switch_row(
+                "agents-run-commands",
+                "Let Claude run commands in new tabs",
+                "When Claude opens a tab for a command, like a dev server, Wings presses Enter for it. Claude Code still \
+                 asks you before it opens the tab, unless you allowed open_pane without asking. Off: the command waits \
+                 for you to press Enter.",
+                self.prefs.agents_run_commands,
+                |this, on, cx| this.set_prefs(|prefs| prefs.agents_run_commands = on, cx),
+                cx,
+            ),
+            self.switch_row(
+                "agents-message",
+                "Let agents message each other",
+                "When an agent, or a plugin like the PR tracker, sends a message to another agent, Wings presses Enter \
+                 for it, so that agent starts on it. Off: the message waits in its prompt for you to press Enter.",
+                self.prefs.agents_message,
+                |this, on, cx| this.set_prefs(|prefs| prefs.agents_message = on, cx),
+                cx,
+            ),
+        ];
         let mut cards = vec![main];
         if !accounts.is_empty() {
             cards.push(accounts);
         }
+        cards.push(enter);
         cards.push(vec![note]);
         cards
-    }
-
-    /// The desktop's plugin list, read only: what is installed and whether it is on, and whether it runs here.
-    fn plugins_section(&self) -> AnyElement {
-        let rows: Vec<AnyElement> = self
-            .settings
-            .as_ref()
-            .map_or(&[][..], |dialog| &dialog.plugins)
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.0))
-                    .px(px(16.0))
-                    .py(px(10.0))
-                    .child(
-                        div()
-                            .size(px(32.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(8.0))
-                            .bg(rgba(if row.on { 0xb392f026 } else { 0xffffff0f }))
-                            .child(icon(
-                                Icon::Puzzle,
-                                16.0,
-                                if row.on {
-                                    0xc9b2f7
-                                } else {
-                                    theme::MUTED_FOREGROUND
-                                },
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(row.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(px(11.0))
-                                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                                            .child(row.version.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                                    .child(row.status.clone()),
-                            )
-                            .when(!row.description.is_empty(), |text| {
-                                text.child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                                        .line_clamp(2)
-                                        .child(row.description.clone()),
-                                )
-                            }),
-                    )
-                    // Read only: the desktop app owns which plugins are on.
-                    .child(
-                        ui::switch(("plugin-on", index), row.on)
-                            .aria_label(format!(
-                                "{} {}",
-                                row.name,
-                                if row.on { "on" } else { "off" }
-                            ))
-                            .cursor_default()
-                            .opacity(0.6),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child(
-                        "Plugins add features to Wings. Install, approve and turn them on or off in the desktop app; \
-                         this app runs the ones that are on and have a native build.",
-                    ),
-            )
-            .child(if rows.is_empty() {
-                ui::card([div()
-                    .px(px(16.0))
-                    .py(px(16.0))
-                    .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child("No plugins yet. Add them in the desktop app's Settings, Plugins.")
-                    .into_any_element()])
-            } else {
-                ui::card(rows)
-            })
-            .into_any_element()
     }
 
     pub(super) fn settings_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -912,7 +787,7 @@ impl Workspace {
             )
             .map(|content| {
                 if section == Section::Plugins {
-                    content.child(self.plugins_section())
+                    content.child(self.plugins_section(cx))
                 } else {
                     content.children(self.section_cards(section, cx).into_iter().map(ui::card))
                 }

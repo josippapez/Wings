@@ -169,6 +169,8 @@ impl Workspace {
                 }
                 .into(),
             ),
+            agents_run_commands: Some(self.prefs.agents_run_commands),
+            agents_message: Some(self.prefs.agents_message),
             ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {

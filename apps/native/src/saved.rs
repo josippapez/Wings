@@ -117,6 +117,12 @@ pub struct Settings {
     /// The first tab of a project you add: `terminal` or `project`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_project_opens: Option<String>,
+    /// Claude's `open_pane` may press Enter after the command it types, as the desktop's `agentsRunCommands`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_run_commands: Option<bool>,
+    /// A message an agent or plugin sends to another agent is submitted with Enter, as the desktop's `agentsMessage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_message: Option<bool>,
     /// The sidebar's width in points, as last dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<f32>,

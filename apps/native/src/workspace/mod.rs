@@ -13,12 +13,16 @@ mod editor;
 mod finder_tests;
 mod history;
 mod inbox;
+#[cfg(all(test, feature = "test-support"))]
+mod manage_tests;
 mod nav;
 mod palette;
 mod pane_card;
 mod panes;
 mod persist;
 mod plugin_env;
+mod plugin_manage;
+mod plugin_manage_ui;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 mod plugin_ui;
@@ -30,6 +34,7 @@ mod project_sections;
 mod quick;
 mod rank;
 mod settings;
+mod setup_approval;
 mod sidebar;
 mod status;
 mod tabs;
@@ -209,6 +214,12 @@ pub struct Workspace {
     claude: claude::Connection,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
+    /// What the Plugins section is doing: installs, reviews waiting, updates found.
+    manage: plugin_manage::Manage,
+    /// The plugin review and the setup approval, which show one at a time over everything.
+    review_focus: FocusHandle,
+    /// Setup commands agents asked to set, waiting for you.
+    setup_asks: setup_approval::SetupAsks,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -268,6 +279,7 @@ impl Workspace {
             plugin_events,
             config.agents.clone().unwrap_or_default(),
             spaces.clone(),
+            config.plugins.as_ref().map(installed::load_store),
         ));
         let sessions = history::Sessions::new(config.sessions.clone());
         let mut this = Self {
@@ -325,6 +337,9 @@ impl Workspace {
             inbox: Default::default(),
             menu: None,
             claude: Default::default(),
+            manage: Default::default(),
+            review_focus: cx.focus_handle(),
+            setup_asks: Default::default(),
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -347,20 +362,19 @@ impl Workspace {
             _quit: quit,
         };
         let env: Arc<dyn Env> = this.plugin_env.clone();
-        this.plugins = this
-            .config
-            .plugins
-            .as_ref()
-            .map(|paths| installed::start(installed::discover(paths), paths, &env))
-            .unwrap_or_default();
+        this.plugins = match (&this.config.plugins, &this.plugin_env.store) {
+            (Some(paths), Some(store)) => {
+                let found = installed::discover_in(&store.lock().unwrap());
+                installed::start(found, paths, &env)
+            }
+            _ => Vec::new(),
+        };
         this.plugin_env.set_plugins(&this.plugins);
         // Claude Code reaches this app through the socket, as it reaches the desktop's.
         if let Some(socket) = this.config.socket.clone() {
             let info = this.project_info.as_ref().map(|info| info.store.clone());
-            let (sessions, plugins) = (this.sessions.clone(), this.config.plugins.clone());
-            if let Err(error) =
-                claude::start(&socket, this.plugin_env.clone(), sessions, info, plugins)
-            {
+            let sessions = this.sessions.clone();
+            if let Err(error) = claude::start(&socket, this.plugin_env.clone(), sessions, info) {
                 eprintln!("Couldn't listen on {}: {error}", socket.display());
             }
             claude::connect_on_start(socket, this.config.state.clone(), this.spaces.spaces());
@@ -429,6 +443,9 @@ impl Workspace {
             editor: settings.editor.clone(),
             new_tab: settings.new_tab.clone().unwrap_or(prefs.new_tab),
             new_project_page: settings.new_project_opens.as_deref() == Some("project"),
+            // Off unless turned on, as the desktop's `saved.agentsRunCommands === true`.
+            agents_run_commands: settings.agents_run_commands == Some(true),
+            agents_message: settings.agents_message == Some(true),
         };
         this.find_editors(cx);
         this.enter_project(window, cx);
@@ -766,6 +783,8 @@ impl Render for Workspace {
                     .children(self.sidebar_peek(cx)),
             )
             .children(self.settings_dialog(cx))
+            .children(self.plugin_review_dialog(cx))
+            .children(self.setup_approval_dialog(cx))
             .children(self.sheet_layer(cx))
             .children(self.palette_layer(window, cx))
             .children(self.remove_dialog(cx))

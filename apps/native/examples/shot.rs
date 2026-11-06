@@ -130,6 +130,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("parity") {
         return parity(&mut cx, &config, &out);
     }
+    // `-- <out-dir> plugins-install` renders only managing plugins and the agent approvals.
+    if std::env::args().nth(2).as_deref() == Some("plugins-install") {
+        return plugins_install(&mut cx, &config, &out);
+    }
     // `-- <out-dir> finder` renders only the command palette and the history sheet.
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
@@ -867,6 +871,93 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_millis(800));
         save(cx, window, &name("history-empty"));
         cx.simulate_keystrokes(window, "escape");
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// Settings, Plugins with made-up plugins (one running, one from GitHub with an update, one waiting for approval), the
+/// review before a plugin runs, a setup command an agent proposes, and Settings, Agents. Temp folders only.
+fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    data.install("demo", WINGS_VERSION, true, true, Approval::Current, "shot");
+    data.install_script(
+        "tracker",
+        serde_json::json!({ "name": "Pull requests", "version": "1.2.0", "description": "Shows each pane's pull request and its checks.",
+            "permissions": { "exec": ["gh pr view", "gh pr checks"], "notify": true, "fetch": ["https://api.github.com/"] },
+            "contributes": { "ui": ["badges"], "mcpTools": [{ "name": "pr_status" }] } }),
+        "",
+        &[],
+        "tracker-scope",
+    );
+    data.install_script(
+        "notes",
+        serde_json::json!({ "name": "Notes", "version": "0.3.0", "description": "Keeps notes beside each project.",
+            "permissions": { "panes": [], "sendToAgents": true, "secrets": { "notes-token": "https://notes.example.com/" } },
+            "contributes": { "sidebars": [{ "id": "notes", "title": "Notes", "page": "dist/notes.html" }] } }),
+        "",
+        &[("notes", "")],
+        "notes-scope",
+    );
+    // The tracker came from GitHub, and Notes was never approved.
+    let state = data.paths().state;
+    let mut entries: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    entries["tracker"]["source"] = serde_json::json!({ "kind": "github", "repo": "owner/tracker" });
+    entries["notes"]["approved"] = serde_json::Value::Null;
+    entries["notes"]["enabled"] = serde_json::json!(false);
+    std::fs::write(&state, entries.to_string()).unwrap();
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        let show = |cx: &mut VisualTestAppContext, selected: &'static str| {
+            handle
+                .update(cx, |w, window, cx| {
+                    w.close_dialogs(cx);
+                    w.show_plugins(selected, &[("tracker", "1.3.0")], window, cx)
+                })
+                .unwrap();
+            wait(cx, window, Duration::from_millis(300));
+        };
+        show(cx, "tracker");
+        save(cx, window, &name("plugins-update"));
+        show(cx, "notes");
+        save(cx, window, &name("plugins-waiting"));
+        handle
+            .update(cx, |w, window, cx| {
+                w.show_plugin_review("notes", window, cx)
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("plugins-review"));
+        handle
+            .update(cx, |w, _, cx| {
+                w.close_dialogs(cx);
+                w.show_setup_approval(
+                    "acme-web",
+                    "Claude in acme-web",
+                    Some("pnpm install"),
+                    "pnpm install && pnpm run build:types",
+                    cx,
+                )
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_millis(1300));
+        save(cx, window, &name("setup-approval"));
+        show(cx, "demo");
+        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
+        click(cx, window, point(px(left + 70.0), px(150.0 + 34.0 * 6.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("settings-agents"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }

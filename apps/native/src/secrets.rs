@@ -2,8 +2,7 @@
 //! per plugin and install scope, so a token saved in either app is there for both. A plugin can store one and have
 //! `wings.fetch` send it, but never read it back.
 //!
-//! The desktop also notes the names a plugin stored in `plugins.json`, to delete them when the plugin is removed. This
-//! app never writes that file, so a token saved here is not on that list.
+//! The names a plugin stored are noted in `plugins.json`, as the desktop notes them, so removing the plugin deletes them.
 
 const SERVICE: &str = "dev.wings.app.plugin";
 
