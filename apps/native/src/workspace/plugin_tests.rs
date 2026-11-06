@@ -1,0 +1,736 @@
+//! Plugins in the window: what they are told of the panes, the badges and strips they draw on them, the sidebars they show
+//! on the right, what they ask the system for, and the transcripts they read, all with real plugin mains in real frames.
+
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use gpui::{MouseButton, TestApp, TestAppWindow, point, px, size};
+use serde_json::{Value, json};
+use wings_plugins::transcript::Line;
+
+use super::{
+    Workspace,
+    plugin_env::System,
+    tests::{open_sized, press, wait_for},
+};
+use crate::{host::Config, installed::fixture::Data};
+
+/// What the system was asked to do, instead of doing it.
+#[derive(Default)]
+struct FakeSystem {
+    opened: Mutex<Vec<String>>,
+    notified: Mutex<Vec<(String, String)>>,
+    /// The system can't show notifications.
+    no_notifications: bool,
+}
+
+impl System for FakeSystem {
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        self.opened.lock().unwrap().push(url.to_owned());
+        Ok(())
+    }
+
+    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+        if self.no_notifications {
+            return Err("no notification centre".into());
+        }
+        self.notified
+            .lock()
+            .unwrap()
+            .push((title.to_owned(), body.to_owned()));
+        Ok(())
+    }
+}
+
+/// A 1000 x 640 window of the plugins in `data`, with `system` standing in for the system before anything is drawn.
+fn open_plugins(
+    data: &Data,
+    system: &Arc<FakeSystem>,
+    change: impl FnOnce(&mut Config),
+) -> (TestApp, TestAppWindow<Workspace>) {
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.plugins = Some(data.paths());
+        change(config);
+    });
+    let system: Arc<dyn System> = system.clone();
+    window.read(|w, _| w.plugin_env.use_system(system));
+    window.draw();
+    (app, window)
+}
+
+/// Runs the window until `done`, redrawing so the plugins hear of what changed.
+fn until(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    what: &str,
+    done: impl Fn(&Workspace) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !window.read(|w, _| done(w)) {
+        assert!(Instant::now() < deadline, "{what}");
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+const BADGER: &str = r#"
+wings.onPanes(async (panes) => {
+  for (const p of panes) {
+    await wings.setBadge(p.paneId, { label: 'hello', tone: 'success', title: 'Hi', actions: [{ id: 'go', label: 'Go', primary: true }, { id: 'bad', label: 'Bad' }] });
+    await wings.setPaneStatus(p.paneId, { items: [{ label: 'cpu', value: '12%', percent: 12, tone: 'warning' }], rows: [{ label: 'Load', value: 'low' }] });
+  }
+});
+wings.onAction(async ({ paneId, actionId }) => {
+  await wings.storage.set('clicked', { paneId, actionId });
+  if (actionId === 'bad') throw new Error('It broke');
+});
+"#;
+
+fn install_badger(data: &Data) {
+    data.install_script(
+        "badger",
+        json!({ "contributes": { "ui": ["badges", "status"] } }),
+        BADGER,
+        &[],
+        "badger-scope",
+    );
+}
+
+#[test]
+fn a_plugins_badge_and_status_show_on_the_pane_and_a_click_on_a_button_reaches_the_plugin() {
+    let data = Data::temp();
+    install_badger(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(
+        &app,
+        &mut window,
+        "the badge and the strip never showed",
+        |w| w.plugin_ui.badges.contains_key(&0) && w.plugin_ui.statuses.contains_key(&0),
+    );
+    window.read(|w, _| {
+        let badge = &w.plugin_ui.badges[&0]["badger"];
+        assert_eq!(
+            (badge.label.as_str(), badge.title.as_deref()),
+            ("hello", Some("Hi"))
+        );
+        let status = &w.plugin_ui.statuses[&0]["badger"];
+        assert_eq!(status.items[0].value, "12%");
+        assert!(w.badge_card.is_none());
+    });
+
+    // The pill is the last thing before the pane's buttons, on the right of a 30px header 84px down.
+    window.draw();
+
+    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    window.draw();
+    assert_eq!(
+        window.read(|w, _| w.badge_card.as_ref().map(|c| (c.pane, c.plugin.clone()))),
+        Some((0, "badger".into()))
+    );
+    // The card's first button is the primary one: a click asks the plugin's main, which saves what it heard.
+    window.simulate_click(point(px(588.0), px(180.0)), MouseButton::Left);
+    until(
+        &app,
+        &mut window,
+        "the plugin never heard the click",
+        |_| data.saved("badger", "badger-scope", "clicked").is_some(),
+    );
+    assert_eq!(
+        data.saved("badger", "badger-scope", "clicked"),
+        Some(json!({ "paneId": "0", "actionId": "go" }))
+    );
+    until(&app, &mut window, "the button stayed busy", |w| {
+        w.badge_card
+            .as_ref()
+            .is_some_and(|card| card.pending.is_none())
+    });
+    assert!(window.read(|w, _| w.badge_card.as_ref().unwrap().error.is_none()));
+
+    // A click on the pill again closes the card; one outside it does too.
+    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.badge_card.is_none()));
+    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.badge_card.is_some()));
+    window.simulate_click(point(px(500.0), px(400.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.badge_card.is_none()));
+}
+
+#[test]
+fn a_button_whose_listener_throws_shows_its_message_in_the_card() {
+    let data = Data::temp();
+    install_badger(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(&app, &mut window, "the badge never showed", |w| {
+        w.plugin_ui.badges.contains_key(&0)
+    });
+    window.update(|w, _, cx| {
+        w.toggle_badge_card(0, "badger".into(), cx);
+        w.run_badge_action(0, "badger".into(), "bad".into(), cx);
+    });
+    until(&app, &mut window, "the error never showed", |w| {
+        w.badge_card
+            .as_ref()
+            .is_some_and(|card| card.error.is_some())
+    });
+    window.read(|w, _| {
+        let card = w.badge_card.as_ref().unwrap();
+        assert_eq!(card.error.as_deref(), Some("It broke"));
+        assert_eq!(card.pending, None);
+    });
+    // The next click clears it while it waits.
+    window.update(|w, _, cx| w.run_badge_action(0, "badger".into(), "go".into(), cx));
+    until(&app, &mut window, "the second click never settled", |w| {
+        w.badge_card
+            .as_ref()
+            .is_some_and(|card| card.pending.is_none() && card.error.is_none())
+    });
+    window.draw();
+}
+
+#[test]
+fn a_closed_panes_badge_strip_and_card_go_with_it() {
+    let data = Data::temp();
+    install_badger(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    press(&mut window, "d");
+    until(&app, &mut window, "both panes never got a badge", |w| {
+        w.plugin_ui.badges.len() == 2 && w.plugin_ui.statuses.len() == 2
+    });
+    window.update(|w, _, cx| w.toggle_badge_card(1, "badger".into(), cx));
+    press(&mut window, "w");
+    window.draw();
+    window.read(|w, _| {
+        assert_eq!(w.plugin_ui.badges.keys().copied().collect::<Vec<_>>(), [0]);
+        assert_eq!(
+            w.plugin_ui.statuses.keys().copied().collect::<Vec<_>>(),
+            [0]
+        );
+        assert!(w.badge_card.is_none());
+    });
+}
+
+const SHELL: &str = r#"
+const heard = [];
+wings.onPanes((panes) => { heard.push(panes); wings.storage.set('panes', heard); });
+"#;
+
+#[test]
+fn plugins_are_told_the_panes_as_the_desktop_lists_them_when_they_change() {
+    let data = Data::temp();
+    data.install_script("watcher", json!({}), SHELL, &[], "watcher-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let saved = || {
+        data.saved("watcher", "watcher-scope", "panes")
+            .unwrap_or(json!([]))
+    };
+    until(
+        &app,
+        &mut window,
+        "the plugin was never told of the pane",
+        |_| !saved().as_array().unwrap().is_empty(),
+    );
+    let project = window.read(|w, _| w.config.project.clone());
+    let name = project.file_name().unwrap().to_string_lossy().into_owned();
+    let first = saved();
+    assert_eq!(
+        first[0],
+        json!([{ "paneId": "0", "cwd": project, "command": "", "project": name, "projectId": project, "session": null, "focused": true }])
+    );
+
+    // A split is a new pane, and the focus moved to it. Nothing else changed, so there is one list per change.
+    press(&mut window, "d");
+    until(&app, &mut window, "the split was never heard", |_| {
+        saved().as_array().unwrap().len() >= 2
+    });
+    let second = &saved()[1];
+    assert_eq!(second.as_array().unwrap().len(), 2);
+    assert_eq!(
+        (second[0]["paneId"].clone(), second[0]["focused"].clone()),
+        (json!("0"), json!(false))
+    );
+    assert_eq!(
+        (second[1]["paneId"].clone(), second[1]["focused"].clone()),
+        (json!("1"), json!(true))
+    );
+    for _ in 0..5 {
+        app.run_until_parked();
+        window.draw();
+    }
+    assert_eq!(
+        saved().as_array().unwrap().len(),
+        2,
+        "a redraw told the plugin again"
+    );
+}
+
+// Notifications, URLs.
+
+const REACTOR: &str = r#"
+wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }, { id: 'open', label: 'Open' }, { id: 'refused', label: 'Refused' }] }); });
+wings.onAction(async ({ actionId }) => {
+  if (actionId === 'notify') await wings.notify({ title: ' Done ', body: 'all green' });
+  if (actionId === 'open') await wings.openUrl('http://localhost:5173/');
+  if (actionId === 'refused') await wings.openUrl('https://evil.example/');
+});
+"#;
+
+fn install_reactor(data: &Data) {
+    data.install_script(
+        "reactor",
+        json!({ "contributes": { "ui": ["badges"] }, "permissions": { "notify": true, "openUrl": ["http://localhost:"] } }),
+        REACTOR,
+        &[],
+        "reactor-scope",
+    );
+}
+
+fn click_action(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    action: &str,
+) -> Option<String> {
+    until(app, window, "the badge never showed", |w| {
+        w.plugin_ui.badges.contains_key(&0)
+    });
+    window.update(|w, _, cx| {
+        if w.badge_card.is_none() {
+            w.toggle_badge_card(0, "reactor".into(), cx);
+        }
+        w.run_badge_action(0, "reactor".into(), action.into(), cx);
+    });
+    until(app, window, "the click never settled", |w| {
+        w.badge_card.as_ref().is_some_and(|c| c.pending.is_none())
+    });
+    window.read(|w, _| {
+        w.badge_card
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .map(|e| e.to_string())
+    })
+}
+
+#[test]
+fn a_notification_goes_to_the_system_with_the_plugins_name_and_a_url_opens_in_the_browser() {
+    let data = Data::temp();
+    install_reactor(&data);
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_plugins(&data, &system, |_| {});
+    assert_eq!(click_action(&app, &mut window, "notify"), None);
+    assert_eq!(
+        *system.notified.lock().unwrap(),
+        [("Plugin reactor: Done".to_owned(), "all green".to_owned())]
+    );
+    assert!(window.read(|w, _| w.plugin_ui.notices.is_empty()));
+
+    assert_eq!(click_action(&app, &mut window, "open"), None);
+    assert_eq!(*system.opened.lock().unwrap(), ["http://localhost:5173/"]);
+    // What the manifest doesn't name never reaches the system.
+    assert_eq!(
+        click_action(&app, &mut window, "refused").as_deref(),
+        Some("reactor may not open https://evil.example/")
+    );
+    assert_eq!(system.opened.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_notification_the_system_cannot_show_is_shown_in_the_window_and_goes_away() {
+    let data = Data::temp();
+    install_reactor(&data);
+    let system = Arc::new(FakeSystem {
+        no_notifications: true,
+        ..Default::default()
+    });
+    let (app, mut window) = open_plugins(&data, &system, |_| {});
+    assert_eq!(click_action(&app, &mut window, "notify"), None);
+    until(&app, &mut window, "the notice never showed", |w| {
+        !w.plugin_ui.notices.is_empty()
+    });
+    window.read(|w, _| {
+        assert_eq!(w.plugin_ui.notices.len(), 1);
+        assert_eq!(
+            w.plugin_ui.notices[0].title.as_ref(),
+            "Plugin reactor: Done"
+        );
+        assert_eq!(w.plugin_ui.notices[0].body.as_ref(), "all green");
+    });
+    // Clicking it puts it away, at the bottom right of the window.
+    window.draw();
+    window.simulate_click(point(px(850.0), px(620.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.plugin_ui.notices.is_empty()));
+}
+
+// Sidebars.
+
+const SIDEBAR_PAGE: &str = r#"
+wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'Side page' }] }));
+"#;
+
+const SIDEBAR_MAIN: &str = r#"
+wings.onPanes(async (panes) => {
+  for (const p of panes) await wings.setPaneStatus(p.paneId, { items: [{ label: 'ctx', value: '10%' }], open: 'side' });
+});
+"#;
+
+fn install_sider(data: &Data) {
+    data.install_script(
+        "sider",
+        json!({ "contributes": { "ui": ["status"], "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] } }),
+        SIDEBAR_MAIN,
+        &[("side", SIDEBAR_PAGE)],
+        "sider-scope",
+    );
+}
+
+#[test]
+fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_title_bar_button_and_keeps_running() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    assert_eq!(window.read(|w, _| w.plugins[0].sidebars.len()), 1);
+    assert!(window.read(|w, _| w.right.is_none() && w.sidebar_pages.is_empty()));
+
+    // The button is the last thing in the title bar, 10px from the right edge.
+    window.simulate_click(point(px(976.0), px(20.0)), MouseButton::Left);
+    assert_eq!(
+        window.read(|w, _| w.right.clone()),
+        Some(("sider".into(), "side".into()))
+    );
+    let text = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            w.sidebar_pages[&("sider".to_owned(), "side".to_owned())]
+                .read(cx)
+                .text()
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !text(&window).contains("Side page") {
+        assert!(
+            Instant::now() < deadline,
+            "the sidebar shows {:?}",
+            text(&window)
+        );
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Closed, the panel goes and the page's frame stays. Opened again, it is the same page.
+    window.simulate_click(point(px(976.0), px(20.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.right.is_none()));
+    assert_eq!(window.read(|w, _| w.plugins[0].host.frames()), 2);
+    window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
+    assert!(window.read(|w, _| w.right.is_some() && w.sidebar_pages.len() == 1));
+}
+
+#[test]
+fn a_click_on_a_status_strip_that_names_a_sidebar_opens_it() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(&app, &mut window, "the strip never showed", |w| {
+        w.plugin_ui.statuses.contains_key(&0)
+    });
+    assert_eq!(
+        window.read(|w, _| w.plugin_ui.statuses[&0]["sider"].open.clone()),
+        Some("side".into())
+    );
+    // The strip is the card's last 22px: the card ends 8px above the window's bottom, and the project bar is 36px.
+    window.draw();
+    window.simulate_click(point(px(290.0), px(620.0)), MouseButton::Left);
+    assert_eq!(
+        window.read(|w, _| w.right.clone()),
+        Some(("sider".into(), "side".into()))
+    );
+    // The close button shuts the panel.
+    window.draw();
+    window.simulate_click(
+        point(px(1000.0 - 8.0 - 12.0 - 8.0), px(40.0 + 16.0)),
+        MouseButton::Left,
+    );
+    assert!(window.read(|w, _| w.right.is_none()));
+}
+
+// Transcripts.
+
+const READER: &str = r#"
+wings.onPanes((panes) => wings.storage.set('session', panes[0]?.session ?? null));
+wings.onTranscript((event) => wings.storage.set(`heard-${event.entry.n}`, event));
+"#;
+
+const DEAF: &str = r#"
+wings.onTranscript((event) => wings.storage.set('deaf', event));
+"#;
+
+const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+
+#[test]
+fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_its_type() {
+    let data = Data::temp();
+    data.install_script(
+        "reader",
+        json!({ "permissions": { "transcript": ["assistant"] } }),
+        READER,
+        &[],
+        "reader-scope",
+    );
+    data.install_script("deaf", json!({}), DEAF, &[], "deaf-scope");
+    let dir = std::env::temp_dir().join(format!("wings-native-transcripts-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let claude = dir.join("claude");
+    fs::create_dir_all(claude.join("sessions")).unwrap();
+    fs::create_dir_all(claude.join("projects/-x")).unwrap();
+    fs::create_dir_all(dir.join("bin")).unwrap();
+    let fake = dir.join("bin/claude");
+    std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+    let transcript = claude.join(format!("projects/-x/{SESSION}.jsonl"));
+    fs::write(&transcript, "{\"type\":\"assistant\",\"n\":0}\n").unwrap();
+
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.agents = Some(claude.clone())
+    });
+    wait_for(
+        &app,
+        &window,
+        |w| w.pane_info.contains_key(&0),
+        "the shell was never detected",
+    );
+    window.simulate_input(&format!("exec '{}' 60", fake.display()));
+    window.simulate_keystroke("enter");
+    wait_for(
+        &app,
+        &window,
+        |w| w.agents.contains_key(&0),
+        "the agent was never detected",
+    );
+    let pid = window.read(|w, _| w.agents[&0].pid);
+    fs::write(
+        claude.join(format!("sessions/{pid}.json")),
+        format!(r#"{{"sessionId":"{SESSION}","status":"idle","name":"fix it"}}"#),
+    )
+    .unwrap();
+    wait_for(
+        &app,
+        &window,
+        |w| w.agents[&0].session_id.is_some(),
+        "the session was never read",
+    );
+    window.draw();
+
+    // The plugin sees the session in the pane, as `WingsPane` has it.
+    let saved = |plugin: &str, key: &str| data.saved(plugin, &format!("{plugin}-scope"), key);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while saved("reader", "session").is_none_or(|s| s.is_null()) {
+        assert!(
+            Instant::now() < deadline,
+            "the plugin never saw the session"
+        );
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let session = saved("reader", "session").unwrap();
+    assert_eq!(session["sessionId"], SESSION);
+    assert_eq!(
+        (session["kind"].clone(), session["name"].clone()),
+        (json!("claude"), json!("fix it"))
+    );
+    assert!(session["startedAt"].as_u64().unwrap() > 0, "{session}");
+
+    // Lines Claude appends: the first poll binds the session at the transcript's end, so append until one is heard.
+    let append = |n: u32, kind: &str| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(file, "{}", json!({ "type": kind, "n": n })).unwrap();
+    };
+    let mut n = 1;
+    while saved("reader", &format!("heard-{n}")).is_none() {
+        assert!(Instant::now() < deadline, "no transcript entry was heard");
+        append(n, "user");
+        n += 1;
+        append(n, "assistant");
+        for _ in 0..4 {
+            app.run_until_parked();
+            app.advance_clock(crate::agents::EVERY);
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if saved("reader", &format!("heard-{n}")).is_some() {
+            break;
+        }
+        n += 1;
+    }
+    let heard = saved("reader", &format!("heard-{n}")).unwrap();
+    assert_eq!(
+        (heard["sessionId"].clone(), heard["paneId"].clone()),
+        (json!(SESSION), json!("0"))
+    );
+    assert_eq!(heard["entry"], json!({ "type": "assistant", "n": n }));
+    // A user entry isn't one the reader may read, and the plugin that may read nothing heard nothing.
+    assert!(saved("reader", &format!("heard-{}", n - 1)).is_none());
+    assert!(saved("deaf", "deaf").is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn transcript_entries_are_handed_only_to_plugins_whose_manifest_names_the_type() {
+    let data = Data::temp();
+    data.install_script(
+        "reader",
+        json!({ "permissions": { "transcript": ["assistant"] } }),
+        READER,
+        &[],
+        "reader-scope",
+    );
+    data.install_script("deaf", json!({}), DEAF, &[], "deaf-scope");
+    let (app, window) = open_plugins(&data, &Arc::default(), |_| {});
+    let line = |entry: Value| Line {
+        pane_id: "0".into(),
+        session_id: SESSION.into(),
+        bytes: entry.to_string().into_bytes(),
+    };
+    window.read(|w, _| {
+        w.publish_transcripts(vec![
+            line(json!({ "type": "user", "n": 1 })),
+            line(json!({ "type": "assistant", "n": 2 })),
+            Line {
+                pane_id: "0".into(),
+                session_id: SESSION.into(),
+                bytes: b"not json".to_vec(),
+            },
+        ])
+    });
+    let heard = |key: &str| data.saved("reader", "reader-scope", key);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while heard("heard-2").is_none() {
+        assert!(Instant::now() < deadline, "the entry never arrived");
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        heard("heard-2"),
+        Some(
+            json!({ "sessionId": SESSION, "paneId": "0", "entry": { "type": "assistant", "n": 2 } })
+        )
+    );
+    assert!(heard("heard-1").is_none());
+    assert!(data.saved("deaf", "deaf-scope", "deaf").is_none());
+}
+
+// A debug build's dev root, with the repo's own plugins.
+
+fn repo_plugins() -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins")
+        .canonicalize()
+        .unwrap()
+}
+
+/// Whether `python3` can listen, for the test that starts a server in a pane.
+fn has_python() -> bool {
+    std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import socket")
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[test]
+fn dev_servers_from_the_dev_root_badges_a_pane_that_listens_and_its_button_opens_the_browser() {
+    if !has_python() {
+        return;
+    }
+    let data = Data::temp();
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.plugins = Some(crate::host::PluginPaths {
+            dev: Some(repo_plugins()),
+            ..data.paths()
+        });
+    });
+    let fake: Arc<dyn System> = system.clone();
+    window.read(|w, _| w.plugin_env.use_system(fake));
+    window.draw();
+    // The repo's plugins run with no `plugins.json` entry: always on, approved, and with a scope of their own.
+    let ids = window.read(|w, _| w.plugins.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
+    assert!(
+        ids.contains(&"dev-servers".to_owned()) && ids.contains(&"hud".to_owned()),
+        "{ids:?}"
+    );
+    assert!(
+        !data.paths().state.exists(),
+        "the dev root wrote plugins.json"
+    );
+
+    // A program in the pane starts listening on a port.
+    wait_for(
+        &app,
+        &window,
+        |w| w.panes[&0].view.as_ref().is_ok_and(|_| true),
+        "no pane",
+    );
+    window.simulate_input(
+        "python3 -c \"import socket,time;s=socket.socket();s.bind(('127.0.0.1',0));s.listen(1);print('LISTENING',s.getsockname()[1],flush=True);time.sleep(120)\"",
+    );
+    window.simulate_keystroke("enter");
+    let output = |window: &TestAppWindow<Workspace>| {
+        String::from_utf8_lossy(
+            &window.read(|w, cx| w.terminal(0).unwrap().read(cx).recent_output()),
+        )
+        .into_owned()
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let port = loop {
+        let text = output(&window);
+        // The program's output follows an escape sequence on its line; the typed command has no space after the word.
+        if let Some(port) = text.split("LISTENING ").skip(1).find_map(|after| {
+            let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u16>().ok()
+        }) {
+            break port;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server never started: {text:?}"
+        );
+        app.run_until_parked();
+        app.advance_clock(Duration::from_millis(50));
+        window.draw();
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    // A new pane is a change the plugin looks at, and the port is found in the first pane's process tree.
+    press(&mut window, "d");
+    let label = format!("localhost:{port}");
+    until(&app, &mut window, "the pane never got its badge", |w| {
+        w.plugin_ui
+            .badges
+            .get(&0)
+            .and_then(|b| b.get("dev-servers"))
+            .is_some_and(|badge| badge.label == label)
+    });
+    assert!(window.read(|w, _| !w.plugin_ui.badges.contains_key(&1)));
+    window.update(|w, _, cx| {
+        w.toggle_badge_card(0, "dev-servers".into(), cx);
+        w.run_badge_action(0, "dev-servers".into(), format!("browser:{port}"), cx);
+    });
+    until(&app, &mut window, "the browser never opened", |_| {
+        !system.opened.lock().unwrap().is_empty()
+    });
+    assert_eq!(
+        *system.opened.lock().unwrap(),
+        [format!("http://localhost:{port}/")]
+    );
+    // Stop the server, so the shell isn't left holding it.
+    window.update(|w, window, cx| w.focus_pane(0, window, cx));
+    window.simulate_keystroke("ctrl-c");
+}
