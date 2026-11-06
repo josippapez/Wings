@@ -657,6 +657,55 @@ fn a_notifications_buttons_keep_three_with_short_labels_and_open_only_tab_views_
     );
 }
 
+// copyText
+
+#[test]
+fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_a_megabyte() {
+    const REFUSED: &str = "A page can copy only right after you click or type in it";
+    let rig = Rig::new(json!({}), panes());
+    // Main has no clicks of yours, so it never copies.
+    rig.host
+        .start_main(
+            "wings.copyText('from main').then(() => 'copied', (e) => e.message).then((r) => wings.storage.set('copy', r));",
+            |_| {},
+        )
+        .unwrap();
+    // Nor does a page on its own, or on a hover, a blur or another event that isn't a gesture of yours. A click lets it
+    // copy once, and never a megabyte and more.
+    let page = Frame::start(
+        &rig.host,
+        "const show = (value) => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
+           { id: 1, type: '#text', text: JSON.stringify(value) }] }));
+         const copy = (handler) => wings.copyText(handler === 'big' ? 'x'.repeat(1024 * 1024 + 1) : 'fix/login')
+           .then(() => show({ handler, result: 'copied' }), (error) => show({ handler, result: error.message }));
+         copy('unasked');
+         globalThis.__wingsEvent = (handler) => { copy(handler); return true; };",
+    );
+    let result = |handler: &str| {
+        page.report(handler, |r| r["handler"] == handler)["result"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(result("unasked"), REFUSED);
+    assert!(page.dispatch("hover"));
+    assert_eq!(result("hover"), REFUSED);
+    assert!(page.click("click"));
+    assert_eq!(result("click"), "copied");
+    // The click is used up by its copy.
+    assert!(page.dispatch("again"));
+    assert_eq!(result("again"), REFUSED);
+    assert!(page.click("big"));
+    assert_eq!(result("big"), "copyText is limited to 1 MB of text");
+    let deadline = std::time::Instant::now() + WAIT;
+    while rig.root.saved("probe", "copy").is_none() {
+        assert!(std::time::Instant::now() < deadline, "main never settled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rig.root.saved("probe", "copy"), Some(json!(REFUSED)));
+    assert_eq!(rig.env.seen(), [Seen::Copied("fix/login".into())]);
+}
+
 #[test]
 fn notifications_are_rate_limited_per_plugin() {
     let rig = notifier();

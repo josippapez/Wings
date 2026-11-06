@@ -37,6 +37,7 @@ pub(super) enum Seen {
     Status(String, String, Option<PaneStatus>),
     Url(String),
     Notice(String, String),
+    Copied(String),
     SendToAgent(String, String),
     OpenSettings(String),
     /// A plugin's section under a project: plugin, project, section, rows.
@@ -288,6 +289,11 @@ impl Env for FakeEnv {
         Ok(())
     }
 
+    fn copy_text(&self, text: String) -> Result<(), String> {
+        self.record(Seen::Copied(text));
+        Ok(())
+    }
+
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {
         self.record(Seen::Badge(plugin.into(), pane.into(), badge));
     }
@@ -446,6 +452,16 @@ impl Frame {
 
     pub fn hidden(host: &PluginHost, source: &str) -> Self {
         Self::with_visibility(host, source, false)
+    }
+
+    /// Hands the page an event for `handler` that isn't a gesture, like a hover or a blur.
+    pub fn dispatch(&self, handler: &str) -> bool {
+        self._runtime.dispatch(handler, None)
+    }
+
+    /// Hands the page a click of yours for `handler`.
+    pub fn click(&self, handler: &str) -> bool {
+        self._runtime.dispatch_gesture(handler, None)
     }
 
     pub fn set_visible(&self, visible: bool) {

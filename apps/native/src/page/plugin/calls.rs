@@ -30,6 +30,9 @@ use super::{
 };
 use crate::page::runtime::Reply;
 
+/// The most a page may put on the clipboard at once, in UTF-8 bytes: far more than a branch name or a code block.
+const COPY_MAX: usize = 1024 * 1024;
+
 /// The text JS makes of a value with `String(value)`, for the arguments the desktop turns into strings.
 fn js_string(value: Option<&Value>) -> String {
     match value {
@@ -367,13 +370,15 @@ impl Shared {
             "notify" => {
                 self.off_thread(reply, move |_| this.notify(&access, &params));
             }
-            // Any page may copy, as a desktop page's frame may use the clipboard API.
-            "copyText" => reply.done(
-                access
-                    .env
-                    .copy_text(js_string(params.get("text")))
-                    .map(|_| "null".into()),
-            ),
+            // Any page may copy right after your click or key, as a desktop page's frame may use the clipboard API;
+            // the frame has checked that (`FrameLink::call`).
+            "copyText" => {
+                let text = js_string(params.get("text"));
+                if text.len() > COPY_MAX {
+                    return reply.err("copyText is limited to 1 MB of text".into());
+                }
+                reply.done(access.env.copy_text(text).map(|_| "null".into()))
+            }
             _ => reply.err(format!("unknown method {method}")),
         }
     }

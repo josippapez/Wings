@@ -236,6 +236,13 @@ impl PageView {
         }
     }
 
+    /// `send` for a click, a key press or a pick, which lets the page copy right after.
+    fn act(&self, handler: &str, payload: Option<&serde_json::Value>) {
+        if let Some(runtime) = &self.runtime {
+            runtime.dispatch_gesture(handler, payload);
+        }
+    }
+
     fn toggle_disclosure(&mut self, id: u64, cx: &mut Context<Self>) {
         if !self.open.remove(&id) {
             self.open.insert(id);
@@ -253,7 +260,7 @@ impl PageView {
     fn pick(&mut self, on_change: Option<&str>, value: &str, cx: &mut Context<Self>) {
         self.menu = None;
         if let Some(handler) = on_change {
-            self.send(handler, Some(&serde_json::json!({ "value": value })));
+            self.act(handler, Some(&serde_json::json!({ "value": value })));
         }
         cx.notify();
     }
@@ -279,7 +286,7 @@ impl PageView {
             find(&tree.children, label, &mut found);
         }
         found.get(nth).is_some_and(|handler| {
-            self.send(handler, None);
+            self.act(handler, None);
             true
         })
     }
@@ -306,7 +313,7 @@ impl PageView {
             find(&tree.children, text, &mut found);
         }
         found.get(nth).is_some_and(|handler| {
-            self.send(handler, None);
+            self.act(handler, None);
             true
         })
     }
@@ -327,7 +334,7 @@ impl PageView {
             .as_ref()
             .and_then(|tree| find(&tree.children, text));
         handler.is_some_and(|handler| {
-            self.send(handler, None);
+            self.act(handler, None);
             true
         })
     }
@@ -351,7 +358,7 @@ impl PageView {
             .as_ref()
             .and_then(|tree| find(&tree.children, label));
         found.is_some_and(|(handler, value)| {
-            self.send(&handler, Some(&serde_json::json!({ "value": value })));
+            self.act(&handler, Some(&serde_json::json!({ "value": value })));
             true
         })
     }
@@ -542,7 +549,7 @@ impl PageView {
                         .id(ElementId::NamedInteger("page-text".into(), text.id))
                         .cursor_pointer()
                         .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
-                        .on_click(cx.listener(move |view, _, _, _| view.send(&handler, None)))
+                        .on_click(cx.listener(move |view, _, _, _| view.act(&handler, None)))
                         .into_any_element(),
                     None => element.into_any_element(),
                 }
@@ -570,7 +577,7 @@ impl PageView {
                     Some(handler) => element
                         .on_click(cx.listener(move |view, _, _, cx| {
                             cx.stop_propagation();
-                            view.send(&handler, None);
+                            view.act(&handler, None);
                         }))
                         .into_any_element(),
                     None => element.into_any_element(),
@@ -666,14 +673,14 @@ impl PageView {
                                 if !event.keystroke.modifiers.modified()
                                     && matches!(event.keystroke.key.as_str(), "space" | "enter")
                                 {
-                                    view.send(
+                                    view.act(
                                         &keyboard_handler,
                                         Some(&serde_json::json!({ "checked": !checked })),
                                     );
                                 }
                             }))
                             .on_click(cx.listener(move |view, _, _, _| {
-                                view.send(
+                                view.act(
                                     &handler,
                                     Some(&serde_json::json!({ "checked": !checked })),
                                 )
@@ -943,7 +950,7 @@ impl PageView {
                                 _ => return,
                             };
                             if let (Some(handler), Some(value)) = (&keyboard_handler, target) {
-                                view.send(handler, Some(&serde_json::json!({ "value": value })));
+                                view.act(handler, Some(&serde_json::json!({ "value": value })));
                                 if let Some(focus) = keyboard_focus.get(value) {
                                     focus.focus(window, cx);
                                 }
@@ -957,10 +964,7 @@ impl PageView {
                                     focus.focus(window, cx);
                                 }
                                 if let Some(handler) = &handler {
-                                    view.send(
-                                        handler,
-                                        Some(&serde_json::json!({ "value": value })),
-                                    );
+                                    view.act(handler, Some(&serde_json::json!({ "value": value })));
                                 }
                             }
                         }))
@@ -1021,7 +1025,7 @@ impl PageView {
                             }
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                 if let Some(handler) = &keyboard {
-                                    view.send(handler, None);
+                                    view.act(handler, None);
                                 }
                                 window.prevent_default();
                                 cx.stop_propagation();
@@ -1030,7 +1034,7 @@ impl PageView {
                         .on_click(cx.listener(move |view, _, _, cx| {
                             cx.stop_propagation();
                             if let Some(handler) = &handler {
-                                view.send(handler, None);
+                                view.act(handler, None);
                             }
                         }));
                 }
@@ -1137,10 +1141,13 @@ impl PageView {
                         } else {
                             "Enter"
                         };
-                        view.send(
-                            &handler,
-                            Some(&serde_json::json!({"type":"keydown", "key":key})),
-                        );
+                        let payload = serde_json::json!({"type":"keydown", "key":key});
+                        // Escape gives no user activation in a browser either.
+                        if key == "Enter" {
+                            view.act(&handler, Some(&payload));
+                        } else {
+                            view.send(&handler, Some(&payload));
+                        }
                     }
                     return;
                 }
@@ -1207,7 +1214,7 @@ impl PageView {
         .on_click(cx.listener(move |view, _, _, cx| {
             cx.stop_propagation();
             if let Some(handler) = &handler {
-                view.send(handler, Some(&serde_json::json!({"open":!open})));
+                view.act(handler, Some(&serde_json::json!({"open":!open})));
             } else {
                 view.toggle_disclosure(id, cx);
             }
@@ -1373,7 +1380,7 @@ fn send_shortcut(
         _ => return false,
     };
     let modifiers = event.keystroke.modifiers;
-    view.send(handler, Some(&serde_json::json!({"type":"keydown", "key":key, "altKey":modifiers.alt, "metaKey":modifiers.platform, "ctrlKey":modifiers.control, "shiftKey":modifiers.shift})));
+    view.act(handler, Some(&serde_json::json!({"type":"keydown", "key":key, "altKey":modifiers.alt, "metaKey":modifiers.platform, "ctrlKey":modifiers.control, "shiftKey":modifiers.shift})));
     window.prevent_default();
     cx.stop_propagation();
     true

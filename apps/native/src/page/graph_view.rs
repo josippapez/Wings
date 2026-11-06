@@ -119,7 +119,7 @@ impl PageView {
                 } else if matches!(key, "enter" | "space") {
                     drop(graphs);
                     if let Some(handler) = &keyboard_graph.on_select {
-                        view.send(handler, Some(&serde_json::json!({ "index": current })));
+                        view.act(handler, Some(&serde_json::json!({ "index": current })));
                     }
                 } else {
                     return;
@@ -310,7 +310,7 @@ impl PageView {
                     focus.focus(window, cx);
                 }
                 if let Some(handler) = &handler {
-                    view.send(handler, Some(&serde_json::json!({ "index": index })));
+                    view.act(handler, Some(&serde_json::json!({ "index": index })));
                 }
                 cx.notify();
             }))

@@ -128,7 +128,7 @@ impl PageView {
             InteractiveText::new(ElementId::NamedInteger("page-rich".into(), id), styled)
                 .on_click(ranges, move |index, _, cx| {
                     if let Some(handler) = handlers.get(index) {
-                        let _ = view.update(cx, |view, _| view.send(handler, None));
+                        let _ = view.update(cx, |view, _| view.act(handler, None));
                     }
                 })
                 .into_any_element(),

@@ -72,7 +72,7 @@ impl PageView {
                     .mouse_position()
                     .and_then(|position| view.sunburst_hit(&clicked, position));
                 if let Some(hit) = found {
-                    view.send(
+                    view.act(
                         handler,
                         Some(&serde_json::json!({
                             "index": Hit::index(Some(hit)),

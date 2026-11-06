@@ -164,7 +164,7 @@ export function Properties(props: { items: { label: string; value: ReactNode }[]
 export { ago } from "wings-plugin-sdk/format";
 /** The language to highlight a file as, from its path. */
 export function languageOf(path: string | undefined | null): string | undefined;
-/** Puts `text` on the clipboard, through the app. */
+/** Puts `text` on the clipboard, through the app, within 5 s of a click or key in the page (up to 1 MB), as a browser allows. */
 export function copyText(text: string): Promise<void>;
 /** A page's or a card's title: 14px, or 15px with `size="large"`. `truncate` cuts it to one line. */
 export function Title(props: { size?: "large"; truncate?: boolean; children?: ReactNode }): ReactElement;

@@ -351,6 +351,15 @@ impl PageRuntime {
             })
             .is_ok()
     }
+
+    /// `dispatch` for a click, a key press or a pick of yours, which lets the page copy for a moment after, as a
+    /// browser's user activation does. Hovers, blurs, typing and scrolling are plain `dispatch`es.
+    pub fn dispatch_gesture(&self, handler: &str, payload: Option<&serde_json::Value>) -> bool {
+        if let Some(link) = &self.link {
+            link.user_event();
+        }
+        self.dispatch(handler, payload)
+    }
 }
 
 /// When the turn the frame is in has to end. The engine asks `expired` while it runs.

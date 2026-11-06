@@ -445,7 +445,7 @@ export function Time({ iso, prefix, now }) {
 }
 
 export { ago, languageOf };
-/** Puts `text` on the clipboard, through the app. */
+/** Puts `text` on the clipboard, through the app, within 5 s of a click or key in the page (up to 1 MB), as a browser allows. */
 export function copyText(text) {
   return globalThis.wings.copyText(text);
 }

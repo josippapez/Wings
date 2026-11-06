@@ -35,6 +35,7 @@ use std::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 use wings_plugin_storage::Storage;
 use wings_plugins::permissions::{NotifyLog, may_read_agent_activity};
@@ -266,9 +267,19 @@ struct FrameLink {
     /// What the page was opened with, as JSON, for `wings.viewArgs`.
     args: Option<String>,
     state: Option<FrameState>,
+    /// When the app last handed the page a click, key or other event of yours.
+    acted: Mutex<Option<Instant>>,
 }
 
+/// How long after your click or key a page may still put text on the clipboard: a browser's transient user activation,
+/// which is what lets a desktop page's `navigator.clipboard.writeText` work.
+const USER_ACTION: Duration = Duration::from_secs(5);
+
 impl Link for FrameLink {
+    fn user_event(&self) {
+        *self.acted.lock().unwrap() = Some(Instant::now());
+    }
+
     fn focused(&self) -> bool {
         let (ready, wake) = &*self.ready;
         let mut started = ready.lock().unwrap();
@@ -337,6 +348,19 @@ impl Link for FrameLink {
                 reply.done(state.write(place, value).map(|()| "null".into()))
             });
             return;
+        }
+        if method == "copyText" {
+            // Each click or key lets the page try to copy once.
+            let acted = self
+                .acted
+                .lock()
+                .unwrap()
+                .take()
+                .is_some_and(|at| at.elapsed() < USER_ACTION);
+            if self.role != Role::Page || !acted {
+                return reply
+                    .err("A page can copy only right after you click or type in it".into());
+            }
         }
         if matches!(method, "openDiff" | "updateDiff") {
             return self.shared.diff_call(self.id, method, params, reply);
@@ -739,6 +763,7 @@ impl PluginHost {
             ready: ready.clone(),
             args,
             state,
+            acted: Mutex::new(None),
         });
         let shared = Arc::downgrade(&self.shared);
         let mut on_event = on_event;

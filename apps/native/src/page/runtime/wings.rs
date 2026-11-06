@@ -35,6 +35,8 @@ pub trait Link: Send + Sync + 'static {
         true
     }
     fn set_visible(&self, _visible: bool) {}
+    /// The app is handing the frame a click, key press or pick of yours.
+    fn user_event(&self) {}
     /// The frame broadcast `json`: the host sends it to the plugin's other frames. An error rejects the frame's promise.
     fn broadcast(&self, json: String) -> Result<(), String>;
     /// One call of `wings.storage`. The answer is JSON: the value, a list of keys or of `[key, value]`, or `null`.
