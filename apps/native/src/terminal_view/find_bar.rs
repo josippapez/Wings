@@ -5,6 +5,7 @@ use gpui::{
 };
 
 use crate::{
+    icons::{Icon, icon},
     text_field::{FieldEvent, TextField},
     theme,
     ui::{self, ButtonSize},
@@ -109,13 +110,14 @@ impl TerminalView {
             .role(Role::Search)
             .aria_label("Find")
             .absolute()
-            .top(px(8.0))
+            // The desktop's `top-10` from the card's top is 10px under the pane header.
+            .top(px(10.0))
             .right(px(12.0))
             .flex()
             .items_center()
             .gap(px(4.0))
             .p(px(4.0))
-            .rounded(px(12.0))
+            .rounded(px(14.0))
             .border_1()
             .border_color(rgba(theme::HAIRLINE_STRONG))
             .bg(rgba(theme::POPOVER))
@@ -130,7 +132,14 @@ impl TerminalView {
             .cursor_default()
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .on_scroll(|_, _, cx| cx.stop_propagation())
-            .child(find.field.clone())
+            // The desktop's `Input`, borderless with its `dark:bg-input/30` fill.
+            .child(
+                div()
+                    .flex_none()
+                    .rounded(px(theme::RADIUS))
+                    .bg(rgba(INPUT_FILL))
+                    .child(find.field.clone()),
+            )
             .child(
                 div()
                     .id("find-results")
@@ -144,7 +153,7 @@ impl TerminalView {
             .child(find_button(
                 case,
                 "Match case",
-                "Aa",
+                Icon::CaseSensitive,
                 Some(find.case_sensitive),
                 cx,
                 |view, _, cx| view.toggle_find_option(false, cx),
@@ -152,7 +161,7 @@ impl TerminalView {
             .child(find_button(
                 regex,
                 "Regular expression",
-                ".*",
+                Icon::Regex,
                 Some(find.regex),
                 cx,
                 |view, _, cx| view.toggle_find_option(true, cx),
@@ -160,7 +169,7 @@ impl TerminalView {
             .child(find_button(
                 previous,
                 "Previous match",
-                "↑",
+                Icon::ArrowUp,
                 None,
                 cx,
                 |view, _, cx| view.search(FindMove::Previous, cx),
@@ -168,7 +177,7 @@ impl TerminalView {
             .child(find_button(
                 next,
                 "Next match",
-                "↓",
+                Icon::ArrowDown,
                 None,
                 cx,
                 |view, _, cx| view.search(FindMove::Next, cx),
@@ -176,7 +185,7 @@ impl TerminalView {
             .child(find_button(
                 close,
                 "Close find",
-                "✕",
+                Icon::X,
                 None,
                 cx,
                 Self::close_find,
@@ -184,11 +193,15 @@ impl TerminalView {
     }
 }
 
-/// The kit's 28px ghost button, or a toggle when `toggled` is set, like the desktop find bar's.
+/// `--input` at 30%.
+const INPUT_FILL: u32 = 0xffffff08;
+
+/// The kit's 28px ghost button with a 16px icon, or a toggle when `toggled` is set, like the desktop find bar's: its
+/// toggles are shadcn's small `Toggle`, a 14px icon in the text colour.
 fn find_button(
     focus: &FocusHandle,
     label: &'static str,
-    glyph: &'static str,
+    glyph: Icon,
     toggled: Option<bool>,
     cx: &mut Context<TerminalView>,
     action: fn(&mut TerminalView, &mut Window, &mut Context<TerminalView>),
@@ -199,6 +212,10 @@ fn find_button(
         "Next match" => Some("↩".into()),
         "Close find" => Some("Esc".into()),
         _ => None,
+    };
+    let glyph = match toggled {
+        Some(_) => icon(glyph, 14.0, theme::FOREGROUND),
+        None => icon(glyph, 16.0, theme::MUTED_FOREGROUND),
     };
     ui::ghost_button(label, label, shortcut, ButtonSize::Sm, toggled, glyph)
         .track_focus(focus)
