@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.124 · 2026-11-06
+
+- **Usage limits per Claude Code account.** With more than one account, the HUD keeps each account's limits apart, so it no longer alerts again every time a session of the other account replies. Each terminal's strip shows its own account's limits, and the sidebar lists every account.
+
 ## 0.1.123 · 2026-11-06
 
 - **Claude accounts show whether they're signed in.** Plugins get each account's real sign-in from Claude Code, so a logged-out account no longer looks signed in.
