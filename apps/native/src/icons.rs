@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use gpui::{AssetSource, SharedString, Svg, prelude::*, px, rgb, svg};
+use gpui::{AnyElement, AssetSource, SharedString, Svg, prelude::*, px, rgb, svg};
 
 macro_rules! icons {
     ($($name:ident = $file:literal),* $(,)?) => {
@@ -32,12 +32,16 @@ macro_rules! icons {
 }
 
 icons!(
+    Activity = "activity",
     ArrowDown = "arrow-down",
     ArrowLeft = "arrow-left",
     ArrowRight = "arrow-right",
     ArrowUp = "arrow-up",
     ArrowUpDown = "arrow-up-down",
     Bot = "bot",
+    Calendar = "calendar",
+    CaseSensitive = "case-sensitive",
+    ChartColumn = "chart-column",
     Check = "check",
     Circle = "circle",
     CircleCheck = "circle-check",
@@ -46,6 +50,7 @@ icons!(
     CircleX = "circle-x",
     ChevronDown = "chevron-down",
     Claude = "claude",
+    Clock = "clock",
     Code = "code",
     ChevronRight = "chevron-right",
     Columns = "columns-2",
@@ -55,15 +60,23 @@ icons!(
     Folder = "folder",
     FolderPlus = "folder-plus",
     FolderOpen = "folder-open",
+    FolderTree = "folder-tree",
+    Gauge = "gauge",
     GitBranch = "git-branch",
+    GitCompareArrows = "git-compare-arrows",
     GitFork = "git-fork",
+    GitGraph = "git-graph",
     GitMerge = "git-merge",
     GitPullRequest = "git-pull-request",
     GitPullRequestClosed = "git-pull-request-closed",
     GitPullRequestDraft = "git-pull-request-draft",
+    Globe = "globe",
     Inbox = "inbox",
     Keyboard = "keyboard",
+    List = "list",
+    ListTodo = "list-todo",
     Maximize = "maximize-2",
+    MessageSquareText = "message-square-text",
     Minimize = "minimize-2",
     Minus = "minus",
     Opencode = "opencode",
@@ -74,18 +87,22 @@ icons!(
     Plus = "plus",
     Puzzle = "puzzle",
     RefreshCw = "refresh-cw",
+    Regex = "regex",
     Rows = "rows-2",
     ScrollText = "scroll-text",
     Search = "search",
     SearchX = "search-x",
+    Server = "server",
     Settings = "settings",
     SlidersHorizontal = "sliders-horizontal",
     Sparkles = "sparkles",
+    SquareKanban = "square-kanban",
     SquarePlus = "square-plus",
     SquareTerminal = "square-terminal",
     StickyNote = "sticky-note",
     Terminal = "terminal",
     TextCursor = "text-cursor",
+    Timer = "timer",
     Trash = "trash",
     Type = "type",
     User = "user",
@@ -111,4 +128,43 @@ pub fn icon(icon: Icon, size: f32, color: u32) -> Svg {
         .size(px(size))
         .flex_none()
         .text_color(rgb(color))
+}
+
+/// A plugin's icon, as the desktop's `PluginGlyph`: the built-in icon its manifest names (one of
+/// `plugin-icons.json`), else the plugin's own SVG, else a globe for a name it doesn't know or a puzzle piece when it
+/// names none.
+pub fn plugin_glyph(name: &str, own: Option<&str>, size: f32, color: u32) -> AnyElement {
+    let named = match name {
+        "clock" => Some(Icon::Clock),
+        "globe" => Some(Icon::Globe),
+        "calendar" => Some(Icon::Calendar),
+        "chart" => Some(Icon::ChartColumn),
+        "list" => Some(Icon::List),
+        "git-compare" => Some(Icon::GitCompareArrows),
+        "git-graph" => Some(Icon::GitGraph),
+        "git-branch" => Some(Icon::GitBranch),
+        "folder-tree" => Some(Icon::FolderTree),
+        "message" => Some(Icon::MessageSquareText),
+        "scroll" => Some(Icon::ScrollText),
+        "kanban" => Some(Icon::SquareKanban),
+        "gauge" => Some(Icon::Gauge),
+        "activity" => Some(Icon::Activity),
+        "timer" => Some(Icon::Timer),
+        "server" => Some(Icon::Server),
+        "terminal" => Some(Icon::SquareTerminal),
+        "todo" => Some(Icon::ListTodo),
+        "puzzle" => Some(Icon::Puzzle),
+        _ => None,
+    };
+    match (named, own) {
+        (Some(glyph), _) => icon(glyph, size, color).into_any_element(),
+        (None, Some(own)) => svg()
+            .data(own.as_bytes())
+            .size(px(size))
+            .flex_none()
+            .text_color(rgb(color))
+            .into_any_element(),
+        (None, None) if name.is_empty() => icon(Icon::Puzzle, size, color).into_any_element(),
+        (None, None) => icon(Icon::Globe, size, color).into_any_element(),
+    }
 }

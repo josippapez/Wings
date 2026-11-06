@@ -1,14 +1,14 @@
 //! The tab strip: opening, closing, moving and switching tabs, and showing the active one.
 
 use gpui::{
-    App, BoxShadow, Context, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, Role,
-    SharedString, Window, div, hsla, point, prelude::*, px, rgb, rgba,
+    AnyElement, App, BoxShadow, Context, FocusHandle, Focusable, FontWeight, MouseButton,
+    MouseDownEvent, Role, SharedString, Window, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
     agents::AgentState,
-    icons::{Icon, icon},
-    layout::Layout,
+    icons::{Icon, icon, plugin_glyph},
+    layout::{Dir, Layout},
     theme,
     ui::{self, ButtonSize},
 };
@@ -17,6 +17,8 @@ use super::{Active, TerminalTab, Workspace, context_menu::MenuTarget, quick, sho
 
 /// The desktop's shown tab, `bg-white/[0.07]`.
 const SELECTED_TAB: u32 = 0xffffff12;
+/// The close button's `top-1 right-1`, measured inside the tab's 1px border.
+const CLOSE_INSET: f32 = 3.0;
 
 impl Workspace {
     pub fn active(&self) -> Active {
@@ -310,13 +312,26 @@ impl Workspace {
             (None, Active::Terminal(_)) => {
                 icon(Icon::Terminal, 14.0, theme::MUTED_FOREGROUND).into_any_element()
             }
-            (None, Active::Plugin(_)) => {
-                icon(Icon::Puzzle, 14.0, theme::MUTED_FOREGROUND).into_any_element()
-            }
+            (None, Active::Plugin(tab)) => self.plugin_tab_glyph(tab),
             (None, Active::Project) => {
                 icon(Icon::FileText, 14.0, theme::MUTED_FOREGROUND).into_any_element()
             }
-            (None, Active::Issues) => div().into_any_element(),
+            (None, Active::Issues) => {
+                icon(Icon::List, 14.0, theme::MUTED_FOREGROUND).into_any_element()
+            }
+        };
+        let color = if selected {
+            theme::FOREGROUND
+        } else {
+            theme::MUTED_FOREGROUND
+        };
+        let splits = match active {
+            Active::Terminal(id) => self
+                .terminals
+                .iter()
+                .find(|tab| tab.id == id)
+                .and_then(|tab| layout_glyph(tab.id, &tab.layout, tab.focused, color)),
+            _ => None,
         };
         let group = SharedString::from(format!("{id}-group"));
         let close = match active {
@@ -327,6 +342,9 @@ impl Workspace {
                     "Close tab",
                     ButtonSize::Tiny,
                 )
+                .absolute()
+                .top(px(CLOSE_INSET))
+                .right(px(CLOSE_INSET))
                 .opacity(0.0)
                 .group_hover(group.clone(), |style| style.opacity(1.0))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -343,6 +361,9 @@ impl Workspace {
                     "Close tab",
                     ButtonSize::Tiny,
                 )
+                .absolute()
+                .top(px(CLOSE_INSET))
+                .right(px(CLOSE_INSET))
                 .opacity(0.0)
                 .group_hover(group.clone(), |style| style.opacity(1.0))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -359,6 +380,9 @@ impl Workspace {
                     "Close tab",
                     ButtonSize::Tiny,
                 )
+                .absolute()
+                .top(px(CLOSE_INSET))
+                .right(px(CLOSE_INSET))
                 .opacity(0.0)
                 .group_hover(group.clone(), |style| style.opacity(1.0))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -373,6 +397,9 @@ impl Workspace {
                     "Close tab",
                     ButtonSize::Tiny,
                 )
+                .absolute()
+                .top(px(CLOSE_INSET))
+                .right(px(CLOSE_INSET))
                 .opacity(0.0)
                 .group_hover(group.clone(), |style| style.opacity(1.0))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -406,12 +433,14 @@ impl Workspace {
             .flex_1()
             .min_w(px(144.0))
             .h(px(28.0))
+            .relative()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(6.0))
             .pl(px(10.0))
-            .pr(px(4.0))
-            .rounded(px(8.0))
+            // `pr-7`: the close button sits over this room, so the title never runs under it.
+            .pr(px(28.0))
+            .rounded(px(theme::RADIUS))
             .border_1()
             .border_color(rgba(0))
             .cursor_pointer()
@@ -454,7 +483,99 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| this.show(active, window, cx)))
             .child(glyph)
-            .child(div().flex_1().min_w_0().truncate().child(label))
+            .child(div().min_w_0().truncate().child(label))
+            .children(splits)
             .children(close)
     }
+
+    /// A plugin page's tab icon: the one its view names in the manifest, as the desktop's `PluginGlyph`.
+    fn plugin_tab_glyph(&self, tab: usize) -> AnyElement {
+        let page = self.plugin_tabs.iter().find(|page| page.id == tab);
+        let installed = page.and_then(|page| self.plugins.iter().find(|p| p.id == page.plugin));
+        let name = installed
+            .zip(page)
+            .and_then(|(installed, page)| {
+                let views = &installed.plugin.manifest.contributes.views;
+                views.iter().find(|view| view.id == page.view)
+            })
+            .map_or("", |view| view.icon.as_str());
+        let own = installed.and_then(|installed| installed.plugin.icon_svg.as_deref());
+        plugin_glyph(name, own, 14.0, theme::MUTED_FOREGROUND)
+    }
+}
+
+/// The desktop's `LayoutGlyph`: a 16 by 12 map of a tab's splits after its title, the focused pane filled. Only for a
+/// tab of more than one pane.
+fn layout_glyph(tab: usize, layout: &Layout, focused: usize, color: u32) -> Option<AnyElement> {
+    const W: f32 = 16.0;
+    const H: f32 = 12.0;
+    const GAP: f32 = 1.5;
+    fn rects(node: &Layout, x: f32, y: f32, w: f32, h: f32, out: &mut Vec<(usize, [f32; 4])>) {
+        match node {
+            Layout::Pane(id) => out.push((*id, [x, y, w, h])),
+            Layout::Split {
+                dir: Dir::Row,
+                ratio,
+                a,
+                b,
+            } => {
+                let first = (w - GAP) * ratio;
+                rects(a, x, y, first, h, out);
+                rects(b, x + first + GAP, y, w - first - GAP, h, out);
+            }
+            Layout::Split {
+                dir: Dir::Column,
+                ratio,
+                a,
+                b,
+            } => {
+                let first = (h - GAP) * ratio;
+                rects(a, x, y, w, first, out);
+                rects(b, x, y + first + GAP, w, h - first - GAP, out);
+            }
+        }
+    }
+    let mut boxes = Vec::new();
+    rects(layout, 0.5, 0.5, W - 1.0, H - 1.0, &mut boxes);
+    if boxes.len() < 2 {
+        return None;
+    }
+    let count = boxes.len();
+    Some(
+        div()
+            .id(SharedString::from(format!("layout-glyph-{tab}")))
+            .role(Role::Image)
+            .aria_label(format!("{count} panes"))
+            .relative()
+            .flex_none()
+            .w(px(W))
+            .h(px(H))
+            .children(boxes.into_iter().map(|(id, [x, y, w, h])| {
+                let (w, h) = (w.max(1.0), h.max(1.0));
+                // An SVG stroke sits on the edge: half of it outside the box, so the outline is drawn half a point out.
+                if id == focused {
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(w))
+                        .h(px(h))
+                        .rounded(px(1.5))
+                        .bg(rgb(color))
+                        .opacity(0.7)
+                } else {
+                    div()
+                        .absolute()
+                        .left(px(x - 0.5))
+                        .top(px(y - 0.5))
+                        .w(px(w + 1.0))
+                        .h(px(h + 1.0))
+                        .rounded(px(2.0))
+                        .border_1()
+                        .border_color(rgb(color))
+                        .opacity(0.5)
+                }
+            }))
+            .into_any_element(),
+    )
 }
