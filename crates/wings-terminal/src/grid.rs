@@ -34,6 +34,8 @@ pub struct GridPane<L = VoidListener> {
     parser: Processor,
     rows: usize,
     cols: usize,
+    /// Lines of scrollback kept, which `set_options` changes.
+    history_limit: usize,
 }
 
 fn indexed(i: u8) -> u32 {
@@ -95,20 +97,28 @@ impl<L: EventListener> GridPane<L> {
             parser: Processor::new(),
             rows,
             cols,
+            history_limit: HISTORY_LINES,
         }
     }
 
-    /// The cursor programs get until they set their own, like the desktop's cursor setting.
-    pub fn set_default_cursor(&mut self, shape: CursorShape) {
+    /// The cursor programs get until they set their own and the lines of history kept, like the desktop's cursor
+    /// and scrollback settings. Fewer lines drop the oldest.
+    pub fn set_options(&mut self, shape: CursorShape, scrollback: usize) {
         let default_cursor_style = CursorStyle {
             shape,
             blinking: false,
         };
         self.term.set_options(Config {
-            scrolling_history: HISTORY_LINES,
+            scrolling_history: scrollback,
             default_cursor_style,
             ..Config::default()
         });
+        self.history_limit = scrollback;
+    }
+
+    /// Lines of scrollback kept.
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {

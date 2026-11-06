@@ -9,10 +9,10 @@ use alacritty_terminal::{
     grid::{Dimensions, GridCell, Row, Scroll},
     index::{Column, Line},
     term::cell::{Cell, Flags},
-    vte::ansi::{Color, NamedColor},
+    vte::ansi::{Color, CursorShape, NamedColor},
 };
 
-use crate::grid::{GridPane, HISTORY_LINES};
+use crate::grid::GridPane;
 
 /// Fewer lines than this save too little to be worth storing (the desktop's `MIN_HISTORY_LINES`).
 pub const MIN_LINES: usize = 500;
@@ -165,13 +165,15 @@ impl<L: EventListener> GridPane<L> {
         }
         let (cols, rows) = (self.model().columns(), self.model().screen_lines());
         let mut scratch = GridPane::new(cols, rows);
+        scratch.set_options(CursorShape::Block, self.history_limit());
         scratch.feed(stored);
         let source = scratch.model().grid();
         let last = source.cursor.point.line.0;
         let first = -(source.history_size() as i32);
+        let limit = self.history_limit();
         let grid = self.model_mut().grid_mut();
         let kept = grid.history_size() as i32;
-        let count = ((last - first + 1) as usize).min(HISTORY_LINES - kept as usize) as i32;
+        let count = ((last - first + 1) as usize).min(limit.saturating_sub(kept as usize)) as i32;
         if count == 0 {
             return;
         }
@@ -192,6 +194,7 @@ impl<L: EventListener> GridPane<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::HISTORY_LINES;
 
     /// Each line's cells as text and style, without the wrap flag: the seam between stored and kept
     /// lines starts a new line, as in the desktop terminal.
@@ -286,5 +289,26 @@ mod tests {
         };
         assert_eq!(text(-(HISTORY_LINES as i32)).trim(), "old 1996");
         assert_eq!(text(-1).trim(), "new 5995");
+    }
+
+    #[test]
+    fn a_longer_scrollback_setting_gets_all_its_stored_lines_back() {
+        let mut pane = GridPane::new(20, 5);
+        pane.set_options(CursorShape::Block, 25_000);
+        pane.feed(
+            &(0..15_000)
+                .flat_map(|i| format!("old {i}\r\n").into_bytes())
+                .collect::<Vec<_>>(),
+        );
+        let before = pane.model().grid().history_size();
+        assert!(before > HISTORY_LINES);
+        let bytes = pane.store_history();
+        pane.restore_history(&bytes);
+        let grid = pane.model().grid();
+        assert_eq!(grid.history_size(), before);
+        let first: String = (0..5)
+            .map(|col| grid[Line(-(before as i32))][Column(col)].c)
+            .collect();
+        assert_eq!(first, "old 0");
     }
 }
