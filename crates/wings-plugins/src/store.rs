@@ -42,7 +42,8 @@ pub struct Grant {
 }
 
 impl Grant {
-    fn of(manifest: &Manifest) -> Self {
+    /// What the manifest asks for: what an approval dialog shows, and what turning the plugin on approves.
+    pub fn of(manifest: &Manifest) -> Self {
         Self { permissions: manifest.permissions.clone(), contributes: manifest.contributes.clone() }
     }
 }
@@ -542,6 +543,39 @@ fn pick(repo: &str, folder: Option<&str>, release: Option<Release>) -> Result<Pi
         (Some(a), None) => Ok(Pick { url: a.url, accept: "application/octet-stream" }),
         (None, _) => Ok(Pick { url: release.zipball_url, accept: JSON }),
     }
+}
+
+/// Packages are read whole, so a huge file is refused before it's loaded.
+pub const PACKAGE_LIMIT: u64 = MAX_BYTES;
+
+/// A `.wings-plugin` file's bytes, for `Store::install` with `Source::File`. One over 50 MB is refused unread.
+pub fn read_package(path: &Path) -> Result<Vec<u8>, String> {
+    let size = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > PACKAGE_LIMIT {
+        return Err("The package is larger than 50 MB".into());
+    }
+    fs::read(path).map_err(|e| e.to_string())
+}
+
+/// The package a GitHub link names, downloaded, and the source to install it as.
+pub fn fetch_github(link: &str) -> Result<(Vec<u8>, Source), String> {
+    let (repo, folder) =
+        parse_github(link).ok_or("That isn't a GitHub repo link, like github.com/owner/name or github.com/owner/name/plugins/<id>")?;
+    let bytes = download_github(&repo, folder.as_deref())?;
+    Ok((bytes, Source::Github { repo, folder }))
+}
+
+/// Where an update of a plugin installed from `source` comes from: only GitHub plugins update.
+pub fn update_source(source: Option<Source>) -> Result<(String, Option<String>), String> {
+    match source {
+        Some(Source::Github { repo, folder }) => Ok((repo, folder)),
+        _ => Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into()),
+    }
+}
+
+/// The newer version of a plugin at `installed`, if `latest` is one, as the desktop's `newerVersion` says.
+pub fn newer_version(installed: &str, latest: Option<&str>) -> Option<String> {
+    latest.filter(|latest| !latest.is_empty() && *latest != installed.trim_start_matches('v')).map(str::to_string)
 }
 
 pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, String> {

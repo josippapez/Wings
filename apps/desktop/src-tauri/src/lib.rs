@@ -419,9 +419,6 @@ fn plugins_list(state: State<AppState>) -> Vec<PluginView> {
     state.plugins.lock().unwrap().list()
 }
 
-/// Packages are read whole, so a huge file is refused before it's loaded.
-const PACKAGE_LIMIT: u64 = 50 * 1024 * 1024;
-
 #[tauri::command(async)]
 fn plugin_install_file(app: AppHandle, path: String) -> Res<PluginView> {
     install_file(&app, &path)
@@ -430,11 +427,7 @@ fn plugin_install_file(app: AppHandle, path: String) -> Res<PluginView> {
 // The Plugins sheet and the `wings plugin` CLI (control.rs) both change plugins through these.
 
 fn install_file(app: &AppHandle, path: &str) -> Res<PluginView> {
-    let size = std::fs::metadata(path).map_err(err)?.len();
-    if size > PACKAGE_LIMIT {
-        return Err("The package is larger than 50 MB".into());
-    }
-    let bytes = std::fs::read(path).map_err(err)?;
+    let bytes = plugin_store::read_package(std::path::Path::new(path))?;
     install(app, &bytes, Source::File, None)
 }
 
@@ -449,16 +442,14 @@ fn link_folder(app: &AppHandle, folder: &str) -> Res<plugin_store::Linked> {
 }
 
 fn install_github(app: &AppHandle, url: &str) -> Res<PluginView> {
-    let (repo, folder) = plugin_store::parse_github(url).ok_or("That isn't a GitHub repo link, like github.com/owner/name or github.com/owner/name/plugins/<id>")?;
-    let bytes = plugin_store::download_github(&repo, folder.as_deref())?;
-    install(app, &bytes, Source::Github { repo, folder }, None)
+    let (bytes, source) = plugin_store::fetch_github(url)?;
+    install(app, &bytes, source, None)
 }
 
 /// Reinstalls a GitHub plugin from its newest release or default branch.
 fn update_plugin(app: &AppHandle, id: &str) -> Res<PluginView> {
-    let Some(Source::Github { repo, folder }) = app.state::<AppState>().plugins.lock().unwrap().source(id) else {
-        return Err("Only plugins installed from GitHub can update. Install the new .wings-plugin file instead.".into());
-    };
+    let source = app.state::<AppState>().plugins.lock().unwrap().source(id);
+    let (repo, folder) = plugin_store::update_source(source)?;
     let bytes = plugin_store::download_github(&repo, folder.as_deref())?;
     install(app, &bytes, Source::Github { repo, folder }, Some(id))
 }
