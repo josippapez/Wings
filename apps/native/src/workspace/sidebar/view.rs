@@ -49,11 +49,20 @@ impl Workspace {
             .h_full()
             .flex()
             .flex_col()
-            .child(div().p(px(8.0)).pb_0().child(self.inbox_row(cx)))
+            // The desktop's `nav px-2 pb-2`, the Projects heading, the list, the sections under it, then Settings in
+            // `mx-2 mt-1` above the sidebar's `pb-2`.
+            .child(div().px(px(8.0)).pb(px(8.0)).child(self.inbox_row(cx)))
+            .child(self.projects_header(cx))
             .child(self.project_list(cx))
             .children(self.plugin_list(cx))
             .children(self.agent_list(cx))
-            .child(div().p(px(8.0)).pt_0().child(self.settings_row(cx)))
+            .child(
+                div()
+                    .mx(px(8.0))
+                    .mt(px(4.0))
+                    .mb(px(8.0))
+                    .child(self.settings_row(cx)),
+            )
     }
 
     fn project_order(&self) -> Ordered {
@@ -89,10 +98,10 @@ impl Workspace {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap(px(2.0))
-            .p(px(8.0))
+            .gap(px(1.0))
+            .px(px(8.0))
+            .pb(px(8.0))
             .overflow_y_scroll()
-            .child(self.projects_header(cx))
             .children(self.sidebar_rows(&shown, cx))
             .when(tops > 0, |list| {
                 list.child(
@@ -142,13 +151,15 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, _, cx| this.set_sort(sort, cx)))
             .into_any_element()
         });
+        // The desktop's `h-8 pr-2 pl-4`, above the list rather than in it, so it stays put while the list scrolls.
         div()
-            .h(px(28.0))
+            .h(px(32.0))
             .flex_none()
             .flex()
             .items_center()
             .justify_between()
-            .pl(px(8.0))
+            .pl(px(16.0))
+            .pr(px(8.0))
             .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(theme::MUTED_FOREGROUND))
@@ -262,7 +273,7 @@ impl Workspace {
             .aria_label(entry.name.clone())
             .aria_selected(active)
             .relative()
-            .rounded(px(8.0))
+            .rounded(px(theme::RADIUS))
             .cursor_pointer()
             .when(active, |row| row.bg(rgba(SIDEBAR_ACCENT)))
             .when(!active, |row| {
@@ -289,10 +300,13 @@ impl Workspace {
                 }),
             )
             .child(
+                // The desktop's `Item`, with its transparent 1px border: 42px with a branch line.
                 div()
                     .flex()
                     .items_center()
                     .gap(px(10.0))
+                    .border_1()
+                    .border_color(rgba(0))
                     .py(px(3.0))
                     .pr(px(if hovered { 86.0 } else { 32.0 }))
                     .pl(px(if entry.child { 24.0 } else { 8.0 }))

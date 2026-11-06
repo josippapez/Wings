@@ -998,28 +998,37 @@ impl Workspace {
         )
     }
 
-    /// The desktop sidebar's last row: Settings, with its shortcut.
+    /// The desktop sidebar's last row: Settings, with its shortcut, as its `SidebarNavRow`, muted until pointed at.
     pub(super) fn settings_row(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("open-settings")
             .role(Role::Button)
             .aria_label("Settings")
-            .h(px(32.0))
+            .h(px(28.0))
             .flex()
             .items_center()
             .gap(px(10.0))
             .px(px(8.0))
-            .rounded(px(8.0))
+            .rounded(px(theme::RADIUS))
             .cursor_pointer()
             .text_size(px(13.0))
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .hover(|style| {
+                style
+                    .bg(rgba(theme::HOVER))
+                    .text_color(rgb(theme::FOREGROUND))
+            })
             .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx)))
             .child(icon(Icon::Settings, 16.0, theme::MUTED_FOREGROUND))
             .child(div().flex_1().child("Settings"))
+            // The desktop's `RowHint`: plain text at 60%, not a keycap.
             .child(
                 div()
                     .text_size(px(11.0))
+                    .font_weight(FontWeight::NORMAL)
                     .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .opacity(0.6)
                     .child(shortcut_label(",", false)),
             )
             .into_any_element()

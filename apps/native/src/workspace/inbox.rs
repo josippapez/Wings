@@ -249,7 +249,7 @@ impl Workspace {
             .items_center()
             .gap(px(10.0))
             .px(px(8.0))
-            .rounded(px(8.0))
+            .rounded(px(theme::RADIUS))
             .cursor_pointer()
             .text_size(px(13.0))
             .font_weight(FontWeight::MEDIUM)
