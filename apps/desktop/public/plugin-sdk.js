@@ -279,8 +279,8 @@
     onGitChange: (listener) => subscribe(listeners.git, listener),
     /**
      * What Claude Code last told its status line, with `permissions.statusline`, once `wings statusline` is your
-     * `statusLine` command. Resolves `{ rateLimits, sessions }`: the 5-hour and weekly limits, or `null` until a
-     * session reports them, and each session's context window, token counts and prompt cache by session id.
+     * `statusLine` command. Resolves `{ rateLimits, sessions }`: each Claude Code account's 5-hour and weekly limits,
+     * newest first, and each session's account, context window, token counts and prompt cache by session id.
      */
     statusline: () => call("statusline", {}),
     /**

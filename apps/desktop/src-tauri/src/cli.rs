@@ -215,6 +215,14 @@ fn tool_request(name: &str, arguments: serde_json::Map<String, Value>, session_i
 /// Claude Code's status JSON is a few KB.
 const STATUS_LIMIT: u64 = 256 * 1024;
 
+/// The Claude Code account this runs under: Claude Code passes its `CLAUDE_CONFIG_DIR` on, and a named account's folder
+/// is `~/.claude-<name>`. `None` is the default account.
+fn claude_account() -> Option<String> {
+    let dir = PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR")?);
+    let name = dir.file_name()?.to_str()?.strip_prefix(".claude-")?;
+    (crate::claude_accounts::valid_name(name) && crate::claude_accounts::dir(Some(name)) == dir).then(|| name.to_string())
+}
+
 /// `wings statusline`, for Claude Code's `statusLine` setting. Passes the status JSON Claude Code writes to stdin
 /// on to the running Wings, for plugins to show. With `--pass` it also prints that input for the status line
 /// you had before Wings, which runs after it; without, it prints nothing. Without Wings open it only does that.
@@ -238,7 +246,7 @@ pub fn statusline(pass: bool) -> i32 {
     if let Ok(stream) = socket().and_then(|s| UnixStream::connect(s).map_err(|e| e.to_string())) {
         // Claude Code waits for this command, so a stuck Wings mustn't hold it up.
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(1)));
-        let _ = writeln!(&stream, "{}", json!({ "op": "statusline", "id": 1, "status": status }));
+        let _ = writeln!(&stream, "{}", json!({ "op": "statusline", "id": 1, "status": status, "account": claude_account() }));
     }
     0
 }

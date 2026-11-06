@@ -3,15 +3,15 @@ import { clock, tokens } from "wings-plugin-sdk/format";
 import { names, text, until } from "./format";
 import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "./levels";
 import { servers, type Session } from "./session";
-import type { Limit, Overview, Snapshot } from "./types";
+import type { AccountLimits, Limit, Overview, Snapshot } from "./types";
 
-type Limits = NonNullable<WingsStatusline["rateLimits"]>;
+type Limits = WingsStatusline["rateLimits"];
 type Cache = WingsStatusline["sessions"][string]["promptCache"];
 
 export const state = {
   reported: null as WingsStatusline | null,
   /** The last limits Claude Code reported, kept in storage so the title bar shows them before this run's first reply. */
-  savedLimits: null as Limits | null,
+  savedLimits: [] as Limits,
   memory: null as { used: number; total: number } | null,
 };
 
@@ -50,7 +50,7 @@ const ROW_VALUE = 200;
  */
 export function paneStatus(s: Session, now = Date.now()): WingsPaneStatus {
   const ctx = context(s);
-  const o = overview(now);
+  const o = sessionLimits(s, now);
   const all = servers(s);
   const failed = all.filter((x) => x.state === "failed");
   const lastFailed = all.filter((x) => x.lastFailed);
@@ -68,7 +68,8 @@ export function paneStatus(s: Session, now = Date.now()): WingsPaneStatus {
   const rows = [
     ...limitRow("5-hour limit", o.fiveHour),
     ...limitRow("Weekly limit", o.sevenDay),
-    ...(!o.statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
+    ...(o.account ? [{ label: "Account", value: o.account }] : []),
+    ...(!overview(now).statusline ? [{ label: "Usage limits", value: "After Claude Code's next reply" }] : []),
     { label: "Context", value: ctx ? `${tokens(ctx.tokens)} of ${tokens(ctx.window)} tokens (${ctx.percent}%)` : "No reply yet", tone: contextTone },
     ...(cache ? [{ label: "Prompt cache", value: cache }] : []),
     { label: "MCP servers", value: [`${on.length} connected`, failed.length && `${failed.length} failed`, signIn && `${signIn} need sign-in`].filter(Boolean).join(", ") },
@@ -89,15 +90,36 @@ export function paneStatus(s: Session, now = Date.now()): WingsPaneStatus {
   };
 }
 
+/** Each account's limits, newest first: the last report, else the ones saved from an earlier run. */
+function allLimits(): Limits {
+  const reported = state.reported?.rateLimits ?? [];
+  return reported.length ? reported : state.savedLimits;
+}
+
+function accountLimits(l: Limits[number], now: number): AccountLimits {
+  return { account: l.account, fiveHour: limit(l.fiveHour, now), sevenDay: limit(l.sevenDay, now) };
+}
+
+/**
+ * The limits of the account a session runs as, named when there is more than one. Before Claude Code has reported the
+ * session, the newest account's.
+ */
+function sessionLimits(s: Session, now: number): AccountLimits {
+  const all = allLimits();
+  const account = state.reported?.sessions?.[s.id]?.account;
+  const l = (account !== undefined && all.find((x) => x.account === account)) || all[0];
+  if (!l) return { account: null, fiveHour: null, sevenDay: null };
+  return { ...accountLimits(l, now), account: all.length > 1 ? (l.account ?? "default") : null };
+}
+
 /** The account-wide part: usage limits and memory, for the title bar and the sidebar. */
 export function overview(now = Date.now()): Overview {
   const { reported, memory } = state;
-  const limits = reported?.rateLimits ?? state.savedLimits;
+  const limits = allLimits();
   return {
-    fiveHour: limit(limits?.fiveHour, now),
-    sevenDay: limit(limits?.sevenDay, now),
+    limits: limits.map((l) => accountLimits(l, now)),
     // Without the status line Wings can't get the limits, so the sidebar explains how to turn it on.
-    statusline: reported !== null && (limits != null || Object.keys(reported.sessions).length > 0),
+    statusline: reported !== null && (limits.length > 0 || Object.keys(reported.sessions).length > 0),
     memory: memory && { used: memory.used, total: memory.total, percent: Math.round((memory.used / memory.total) * 100) },
   };
 }

@@ -77,7 +77,7 @@ pub fn handle(app: &AppHandle, op: &str, request: &Value) -> Option<Res<Value>> 
         // From `wings statusline`, each time Claude Code updates its status line.
         "statusline" => {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-            app.state::<AppState>().statusline.lock().unwrap().record(request.get("status").unwrap_or(&Value::Null), now);
+            app.state::<AppState>().statusline.lock().unwrap().record(request.get("status").unwrap_or(&Value::Null), request.get("account").unwrap_or(&Value::Null), now);
             Ok(Value::Null)
         }
         _ => return None,

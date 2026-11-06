@@ -69,20 +69,28 @@ const follow = followSessions({
   changed,
 });
 
-/** The highest level each limit window has alerted at, so a refresh doesn't repeat it. A new resetsAt is a new window. */
-const alerted = { fiveHour: { resetsAt: null as number | null, level: 0 }, sevenDay: { resetsAt: null as number | null, level: 0 } };
+/**
+ * The highest level each account's limit windows have alerted at, so a refresh doesn't repeat it. A new resetsAt is a
+ * new window. Each Claude Code account has limits of its own.
+ */
+const alerted = new Map<string, { resetsAt: number | null; level: number }>();
 
 function alertLimits() {
-  const o = overview();
-  for (const [key, name] of [["fiveHour", "5-hour"], ["sevenDay", "weekly"]] as const) {
-    const l = o[key];
-    if (!l) continue;
-    const seen = alerted[key];
-    if (seen.resetsAt !== (l.resetsAt ?? null)) Object.assign(seen, { resetsAt: l.resetsAt ?? null, level: 0 });
-    const level = l.percent >= LIMIT_CRITICAL ? LIMIT_CRITICAL : l.percent >= LIMIT_WARN ? LIMIT_WARN : 0;
-    if (level <= seen.level) continue;
-    seen.level = level;
-    void wings.notify({ title: `${l.percent}% of your ${name} Claude limit used`, body: l.resets ? `Resets in ${l.resets}` : undefined }).catch(() => {});
+  const { limits } = overview();
+  for (const a of limits) {
+    for (const [key, name] of [["fiveHour", "5-hour"], ["sevenDay", "weekly"]] as const) {
+      const l = a[key];
+      if (!l) continue;
+      const id = `${a.account ?? ""}:${key}`;
+      const seen = alerted.get(id) ?? { resetsAt: l.resetsAt ?? null, level: 0 };
+      alerted.set(id, seen);
+      if (seen.resetsAt !== (l.resetsAt ?? null)) Object.assign(seen, { resetsAt: l.resetsAt ?? null, level: 0 });
+      const level = l.percent >= LIMIT_CRITICAL ? LIMIT_CRITICAL : l.percent >= LIMIT_WARN ? LIMIT_WARN : 0;
+      if (level <= seen.level) continue;
+      seen.level = level;
+      const account = limits.length > 1 ? ` (${a.account ?? "default"} account)` : "";
+      void wings.notify({ title: `${l.percent}% of your ${name} Claude limit used${account}`, body: l.resets ? `Resets in ${l.resets}` : undefined }).catch(() => {});
+    }
   }
 }
 
@@ -98,7 +106,7 @@ async function refreshStatus(redraw = true) {
     lastStatus = json;
     state.reported = reported;
     const limits = state.reported?.rateLimits;
-    if (limits && JSON.stringify(limits) !== JSON.stringify(state.savedLimits)) {
+    if (limits?.length && JSON.stringify(limits) !== JSON.stringify(state.savedLimits)) {
       state.savedLimits = limits;
       void wings.storage.set("limits", limits).catch(() => {});
     }
@@ -134,7 +142,8 @@ void wings.storage
   .get("limits")
   .then(
     (limits) => {
-      state.savedLimits ??= limits as typeof state.savedLimits;
+      // Saved before limits were kept per account, it is a single object: start over.
+      if (Array.isArray(limits)) state.savedLimits = limits as typeof state.savedLimits;
       changed();
     },
     () => {},

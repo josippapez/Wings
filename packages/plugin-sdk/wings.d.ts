@@ -343,12 +343,17 @@ interface WingsLimitWindow {
 
 /** What Claude Code last told `wings statusline`. `at` is when Wings got it, in ms. */
 interface WingsStatusline {
-  /** Your account's 5-hour and weekly limits, from the newest session that reported them. `null` until one has. */
-  rateLimits: { fiveHour: WingsLimitWindow | null; sevenDay: WingsLimitWindow | null; at: number } | null;
+  /**
+   * Each Claude Code account's 5-hour and weekly limits, from its newest session that reported them, newest first.
+   * `account` is the account's name, `null` for the default one. Empty until a session has reported them.
+   */
+  rateLimits: { account: string | null; fiveHour: WingsLimitWindow | null; sevenDay: WingsLimitWindow | null; at: number }[];
   /** By session id. Token counts are from the session's last API response. */
   sessions: Record<
     string,
     {
+      /** The Claude Code account it runs as, `null` for the default one. */
+      account: string | null;
       /** Like `Opus 5.5 (1M context)`. */
       model: string | null;
       contextWindowSize: number | null;
