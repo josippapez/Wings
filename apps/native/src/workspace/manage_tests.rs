@@ -99,6 +99,8 @@ fn a_package_installs_off_asks_for_review_and_runs_once_approved() {
     assert!(!runs(&window, "demo"));
     assert_eq!(state(&data)["demo"]["enabled"], false);
     assert_eq!(state(&data)["demo"]["approved"], Value::Null);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
     window.update(|w, window, cx| w.approve_review(window, cx));
     assert!(window.read(|w, _| w.manage.reviews.is_empty()));
     assert!(runs(&window, "demo"));
@@ -114,6 +116,36 @@ fn a_package_installs_off_asks_for_review_and_runs_once_approved() {
         state(&data)["demo"]["approved"]["permissions"]["exec"],
         json!(["git status"])
     );
+}
+
+#[test]
+fn turn_on_does_nothing_until_each_review_has_been_up_a_moment() {
+    use crate::installed::{WINGS_VERSION, fixture::Approval::Never};
+    let data = Data::temp();
+    data.install("one", WINGS_VERSION, true, false, Never, "s1");
+    data.install("two", WINGS_VERSION, true, false, Never, "s2");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| {
+        w.review_plugin("one", window, cx);
+        w.review_plugin("two", window, cx);
+        // A click that lands as the review opens approves nothing.
+        w.approve_review(window, cx);
+    });
+    assert_eq!(window.read(|w, _| w.manage.reviews.len()), 2);
+    assert!(!runs(&window, "one"));
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    window.update(|w, window, cx| {
+        w.approve_review(window, cx);
+        // The next review shows, and a second click meant for the first lands on nothing.
+        w.approve_review(window, cx);
+    });
+    assert!(runs(&window, "one") && !runs(&window, "two"));
+    assert_eq!(window.read(|w, _| w.manage.reviews.len()), 1);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    window.update(|w, window, cx| w.approve_review(window, cx));
+    assert!(runs(&window, "two"));
 }
 
 #[test]
@@ -155,7 +187,7 @@ fn an_update_restarts_the_plugin_with_its_new_version_and_keeps_its_approval() {
 #[test]
 fn an_update_that_asks_for_more_access_stops_the_plugin_until_it_is_approved_again() {
     let data = Data::temp();
-    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     install(
         &mut window,
         package("demo", "1.0.0", &["git status"]),
@@ -188,6 +220,8 @@ fn an_update_that_asks_for_more_access_stops_the_plugin_until_it_is_approved_aga
     // The switch asks for a review instead of turning it on.
     window.update(|w, window, cx| w.toggle_plugin(grown.clone(), true, window, cx));
     assert_eq!(window.read(|w, _| w.manage.reviews.len()), 1);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
     window.update(|w, window, cx| w.approve_review(window, cx));
     assert!(runs(&window, "demo"));
 }
@@ -260,11 +294,28 @@ fn agent(pane: usize, state: crate::agents::AgentState) -> crate::agents::Agent 
 }
 
 /// Sends `text` to the agent in pane 0 as a plugin's `sendToAgent` does, and the answer.
-fn send(window: &mut TestAppWindow<Workspace>, text: &str) -> Result<Value, String> {
+fn send(app: &TestApp, window: &mut TestAppWindow<Workspace>, text: &str) -> Result<Value, String> {
+    let answer = paste(window, text);
+    answered(app, &answer)
+}
+
+/// Starts sending `text` to the agent in pane 0; the answer comes once Enter was pressed or skipped.
+fn paste(window: &mut TestAppWindow<Workspace>, text: &str) -> crate::page::runtime::Answer {
     let (reply, answer) = crate::page::runtime::Reply::channel();
     window.update(|w, _, cx| w.send_to_agent("0", text, reply, cx));
-    let answer = answer.wait(Duration::ZERO).expect("answered at once")?;
-    Ok(serde_json::from_str(&answer).unwrap())
+    answer
+}
+
+/// Runs the clock past the moment Enter waits for, until the answer is there.
+fn answered(app: &TestApp, answer: &crate::page::runtime::Answer) -> Result<Value, String> {
+    for _ in 0..50 {
+        if let Some(answer) = answer.wait(Duration::ZERO) {
+            return Ok(serde_json::from_str(&answer?).unwrap());
+        }
+        app.advance_clock(Duration::from_millis(50));
+        app.run_until_parked();
+    }
+    panic!("never answered");
 }
 
 fn output(window: &TestAppWindow<Workspace>) -> String {
@@ -283,13 +334,13 @@ fn enter_is_pressed_for_an_agent_only_with_the_setting_on_and_never_over_a_promp
     });
     // Off, as on the desktop by default: the message is pasted and waits for you.
     assert_eq!(
-        send(&mut window, "echo off-$((1+1))").unwrap()["submitted"],
+        send(&app, &mut window, "echo off-$((1+1))").unwrap()["submitted"],
         false
     );
     // On: Enter follows a moment later, so the shell standing in for the agent runs it.
     window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agents_message = true, cx));
     assert_eq!(
-        send(&mut window, "; echo on-$((2+2))").unwrap()["submitted"],
+        send(&app, &mut window, "; echo on-$((2+2))").unwrap()["submitted"],
         true
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -308,7 +359,7 @@ fn enter_is_pressed_for_an_agent_only_with_the_setting_on_and_never_over_a_promp
         w.agents.insert(0, agent(0, AgentState::Blocked));
     });
     assert!(
-        send(&mut window, "hi")
+        send(&app, &mut window, "hi")
             .unwrap_err()
             .contains("waiting for permission to run Bash")
     );
@@ -320,9 +371,50 @@ fn enter_is_pressed_for_an_agent_only_with_the_setting_on_and_never_over_a_promp
         });
     });
     assert!(
-        send(&mut window, "hi")
+        send(&app, &mut window, "hi")
             .unwrap_err()
             .contains("hasn't sent it")
+    );
+}
+
+#[test]
+fn enter_is_skipped_when_you_type_or_the_agent_comes_to_a_prompt_before_it_is_pressed() {
+    use crate::agents::AgentState;
+    let (app, mut window) = super::tests::open_config(|_| {});
+    super::tests::press(&mut window, "d");
+    window.update(|w, _, cx| {
+        w.agents.insert(0, agent(0, AgentState::Idle));
+        w.set_prefs(|prefs| prefs.agents_message = true, cx);
+    });
+    // You type in the moment between the paste and Enter.
+    let answer = paste(&mut window, "echo typed-$((3+3))");
+    window.update(|w, window, cx| {
+        w.terminal(0).unwrap().update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "x", window, cx)
+        });
+    });
+    assert_eq!(answered(&app, &answer).unwrap()["submitted"], false);
+    // The agent comes to a permission prompt in that moment. Ctrl-C clears the prompt and your draft first.
+    window.update(|w, window, cx| {
+        w.terminal(0).unwrap().update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "\u{3}", window, cx)
+        });
+    });
+    let answer = paste(&mut window, "echo blocked-$((4+4))");
+    window.update(|w, _, _| {
+        w.agents.insert(0, agent(0, AgentState::Blocked));
+    });
+    assert_eq!(answered(&app, &answer).unwrap()["submitted"], false);
+    // Neither was run: no Enter reached the shell.
+    for _ in 0..20 {
+        app.advance_clock(Duration::from_millis(100));
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let shown = output(&window);
+    assert!(
+        !shown.contains("typed-6") && !shown.contains("blocked-8"),
+        "{shown}"
     );
 }
 

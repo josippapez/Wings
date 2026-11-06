@@ -615,8 +615,10 @@ impl Host for NativeHost<'_> {
             .on_window(WINDOW_WAIT, move |workspace, _, cx| {
                 let (reply, answer) = Reply::channel();
                 workspace.send_to_agent(&pane, &text, reply, cx);
-                answer.wait(Duration::ZERO)
+                answer
             })?;
+        // With Enter on, the answer comes once Enter was pressed or skipped, a moment after the paste.
+        let answer = answer.wait(WINDOW_WAIT);
         let answer: Value = serde_json::from_str(&answer.ok_or("The window didn't answer")??)
             .map_err(|e| e.to_string())?;
         Ok(answer["submitted"] == true)

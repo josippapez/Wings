@@ -858,7 +858,8 @@ impl Workspace {
     /// Pastes a plugin's message into the prompt of the agent in `pane`, as the desktop's `sendToAgent` does: only an agent
     /// gets it, since a shell would run the text, and not one waiting on an answer, which the text would be taken for.
     /// Nor one where you typed into the prompt and haven't sent it, which the text would be sent with. Enter is pressed
-    /// a moment after the paste only while "Let agents message each other" is on, and the answer says so: `{ submitted }`.
+    /// a moment after the paste only while "Let agents message each other" is on and the checks still pass then; the
+    /// answer comes after that and says whether it was: `{ submitted }`.
     pub(super) fn send_to_agent(
         &mut self,
         pane: &str,
@@ -888,18 +889,33 @@ impl Workspace {
                 "Someone typed into the prompt of the agent in pane {pane} and hasn't sent it. Wings won't type over it."
             ));
         }
-        let submit = self.prefs.agents_message;
         view.update(cx, |view, cx| view.paste_text(text, cx));
-        if submit {
-            // Enter in a write of its own, a moment later, as the desktop's `sendToPane`: one in the paste would be text.
-            let view = view.downgrade();
-            cx.spawn(async move |_, cx| {
-                cx.background_executor().timer(SUBMIT_AFTER).await;
-                let _ = view.update(cx, |view, cx| view.write_input("\r", cx));
-            })
-            .detach();
+        if !self.prefs.agents_message {
+            return reply.ok(serde_json::json!({ "submitted": false }).to_string());
         }
-        reply.ok(serde_json::json!({ "submitted": submit }).to_string());
+        // Enter in a write of its own, a moment later, as the desktop's `sendToPane`: one in the paste would be text. The
+        // checks run again first, since the agent may have come to a prompt or you may have typed meanwhile; the answer
+        // waits for them, so `submitted` says whether Enter was pressed.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SUBMIT_AFTER).await;
+            let submitted = this
+                .update(cx, |this, cx| {
+                    let agent = this.agents.get(&id)?;
+                    let view = this.terminal(id)?;
+                    if agent.state == crate::agents::AgentState::Blocked
+                        || view.read(cx).has_typed()
+                    {
+                        return None;
+                    }
+                    view.update(cx, |view, cx| view.write_input("\r", cx));
+                    Some(())
+                })
+                .ok()
+                .flatten()
+                .is_some();
+            reply.ok(serde_json::json!({ "submitted": submitted }).to_string());
+        })
+        .detach();
     }
 
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.
