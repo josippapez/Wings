@@ -595,7 +595,7 @@ impl Workspace {
                                 .child("Review access to turn it on"),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.manage.enqueue([review.clone()]);
+                            this.queue_reviews([review.clone()], cx);
                             cx.notify();
                         })),
                     ),
@@ -630,7 +630,8 @@ impl Workspace {
     pub(super) fn plugin_review_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let shown = self.manage.reviews.first()?;
         let more = self.manage.reviews.len() > 1;
-        let busy = self.manage.busy.contains(&shown.manifest.id);
+        // Turn on answers only once the review has been up its moment.
+        let busy = self.manage.busy.contains(&shown.manifest.id) || !self.manage.review_armed;
         let focus = &self.review_focus;
         let (backdrop, panel) = ui::dialog(
             "plugin-review",

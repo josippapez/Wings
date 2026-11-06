@@ -35,24 +35,65 @@ pub(super) struct Manage {
     /// Newer versions the last check found, by plugin id.
     pub(super) updates: HashMap<String, String>,
     pub(super) checking: bool,
+    /// The review shown has been up long enough for Turn on to count, as the setup approval's Allow.
+    pub(super) review_armed: bool,
+    review_arm: Option<Task<()>>,
 }
 
-impl Manage {
-    /// Queues plugins for review, each once, as the desktop's `enqueue`.
-    pub(super) fn enqueue(&mut self, plugins: impl IntoIterator<Item = PluginView>) {
+/// How long a review shows before Turn on answers, so a click meant for one can't land on the next.
+const REVIEW_ARM_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl Workspace {
+    /// Queues plugins for review, each once, as the desktop's `enqueue`. A review that comes on screen arms after its
+    /// moment.
+    pub(super) fn queue_reviews(
+        &mut self,
+        plugins: impl IntoIterator<Item = PluginView>,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self
+            .manage
+            .reviews
+            .first()
+            .map(|view| view.manifest.id.clone());
         for plugin in plugins {
             if !self
+                .manage
                 .reviews
                 .iter()
                 .any(|queued| queued.manifest.id == plugin.manifest.id)
             {
-                self.reviews.push(plugin);
+                self.manage.reviews.push(plugin);
             }
         }
+        if shown.is_none() && !self.manage.reviews.is_empty() {
+            self.arm_review(cx);
+        }
     }
-}
 
-impl Workspace {
+    /// Turn on waits a moment each time the plugin shown changes.
+    fn arm_review(&mut self, cx: &mut Context<Self>) {
+        self.manage.review_armed = false;
+        self.manage.review_arm = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REVIEW_ARM_AFTER).await;
+            let _ = this.update(cx, |this, cx| {
+                this.manage.review_armed = true;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// The review shown is done: the next one, if any, arms after its moment.
+    fn next_review(&mut self, cx: &mut Context<Self>) {
+        if !self.manage.reviews.is_empty() {
+            self.manage.reviews.remove(0);
+        }
+        if !self.manage.reviews.is_empty() {
+            self.arm_review(cx);
+        }
+        cx.notify();
+    }
+
     fn store(&self) -> Result<Arc<Mutex<Store>>, String> {
         self.plugin_env
             .store
@@ -358,7 +399,7 @@ impl Workspace {
                         }
                         // A new plugin, or one whose update asks for more, waits for you to approve it.
                         if !view.approved || !view.enabled {
-                            this.manage.enqueue([view]);
+                            this.queue_reviews([view], cx);
                         }
                     }
                     Err(error) => this.manage.error = Some(error),
@@ -378,7 +419,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if on && !view.approved {
-            self.manage.enqueue([view]);
+            self.queue_reviews([view], cx);
             cx.notify();
             return;
         }
@@ -390,23 +431,26 @@ impl Workspace {
 
     /// Approves the plugin the review shows, with what it showed, and moves on to the next one.
     pub(super) fn approve_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(shown) = self.manage.reviews.first().cloned() else {
+        // Before the review has been up its moment, Turn on does nothing.
+        let Some(shown) = self
+            .manage
+            .reviews
+            .first()
+            .filter(|_| self.manage.review_armed)
+            .cloned()
+        else {
             return;
         };
         let id = shown.manifest.id.clone();
         let result =
             self.set_plugin_enabled(&id, true, Some(Grant::of(&shown.manifest)), window, cx);
         self.note_row(&id, result.map(drop));
-        self.manage.reviews.remove(0);
-        cx.notify();
+        self.next_review(cx);
     }
 
     /// Closes the review shown, leaving the plugin off: Cancel, or Not now with more waiting.
     pub(super) fn skip_review(&mut self, cx: &mut Context<Self>) {
-        if !self.manage.reviews.is_empty() {
-            self.manage.reviews.remove(0);
-        }
-        cx.notify();
+        self.next_review(cx);
     }
 
     /// Opens Settings, Plugins with the plugin's review, as the desktop does for `wings plugin enable` and new installs.
@@ -423,7 +467,7 @@ impl Workspace {
             dialog.section = Section::Plugins;
         }
         self.manage.selected = Some(id.to_owned());
-        self.manage.enqueue([view]);
+        self.queue_reviews([view], cx);
         cx.notify();
     }
 
@@ -496,7 +540,7 @@ impl Workspace {
                 });
             }
             let _ = this.update(cx, |this, cx| {
-                this.manage.enqueue(asking);
+                this.queue_reviews(asking, cx);
                 cx.notify();
             });
         });
