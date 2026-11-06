@@ -641,6 +641,8 @@ impl Workspace {
                         .border_1()
                         .border_color(rgba(HAIRLINE))
                         .bg(rgb(theme::SURFACE))
+                        // A sidebar page sits in the desktop's `.w-shell`, 14px in from the card's edge.
+                        .p(px(14.0))
                         .child(page),
                 )
                 .into_any_element(),

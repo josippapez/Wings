@@ -216,6 +216,28 @@ pub struct Workspace {
 }
 
 /// How a shortcut reads in a button's name. The keys themselves are bound in `actions`.
+/// A page tab's body, as the desktop's `PluginTab` and `ProjectPageTab`: a card like a pane's, in the same `p-2 pt-0`.
+fn page_card(page: impl IntoElement) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .p(px(8.0))
+        .pt_0()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .rounded(px(14.0))
+                .border_1()
+                .border_color(rgba(HAIRLINE))
+                .bg(rgb(theme::SURFACE))
+                .child(page),
+        )
+        .into_any_element()
+}
+
 fn shortcut_label(key: &str, extra: bool) -> String {
     if cfg!(target_os = "macos") {
         format!("{}⌘{key}", if extra { "⇧" } else { "" })
@@ -510,14 +532,14 @@ impl Render for Workspace {
                     None => div().into_any_element(),
                 },
                 Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
-                    Some(tab) => tab.page.clone().into_any_element(),
+                    Some(tab) => page_card(tab.page.clone()),
                     None => div().into_any_element(),
                 },
                 Active::Project => match &self.project_page {
-                    Some(page) => page.clone().into_any_element(),
+                    Some(page) => page_card(page.clone()),
                     None => div().into_any_element(),
                 },
-                Active::Issues => self.issues.clone().into_any_element(),
+                Active::Issues => page_card(self.issues.clone()),
             }
         };
         let mut tabs: Vec<AnyElement> = self

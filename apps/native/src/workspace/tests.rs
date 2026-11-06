@@ -95,12 +95,7 @@ fn switching_projects_keeps_each_projects_tabs_and_shells() {
 
     // The pinned project is the first row: below the 40px title bar, the 28px Inbox row and its 8px of padding and the
     // 32px Projects heading, rows of 24px and their 1px border, 1px apart.
-    let row = |index: f32| {
-        point(
-            px(60.0),
-            px(40.0 + 28.0 + 8.0 + 32.0 + 13.0 + index * 27.0),
-        )
-    };
+    let row = |index: f32| point(px(60.0), px(40.0 + 28.0 + 8.0 + 32.0 + 13.0 + index * 27.0));
     window.draw();
     window.simulate_click(row(0.0), MouseButton::Left);
     assert_eq!(window.read(|w, _| w.project().to_path_buf()), beta);
@@ -773,12 +768,12 @@ fn settings_open_with_the_shortcut_and_change_every_terminal() {
     assert!(window.read(|w, _| w.settings.is_none()));
 }
 
-/// The sidebar's Plugins row for the only page, in a 1000 x 640 window: the settings row (32px, with 8px under it) is
-/// last, and above it the section's 8px of padding, its 28px heading, 2px and the 24px row.
-const PLUGIN_ROW: (f32, f32) = (60.0, 640.0 - 8.0 - 32.0 - 8.0 - 12.0);
-/// Where the fixture page's button is in that window: 248px of sidebar, then below the 40px title bar and 36px project
-/// bar, the page's 44px toolbar and 14px of padding.
-const PAGE_BUTTON: (f32, f32) = (248.0 + 22.0, 40.0 + 36.0 + 44.0 + 14.0 + 16.0);
+/// The sidebar's Plugins row for the only page, in a 1000 x 640 window: the settings row (28px, 4px above it and 8px
+/// under it) is last, and above it the section's 8px of padding under the 24px row.
+const PLUGIN_ROW: (f32, f32) = (60.0, 640.0 - 8.0 - 28.0 - 4.0 - 8.0 - 12.0);
+/// Where the fixture page's button is in that window: 248px of sidebar and the card's 8px gutter and border, then below
+/// the 40px title bar, the 36px project bar and the card's border, the page's 44px toolbar and 14px of padding.
+const PAGE_BUTTON: (f32, f32) = (248.0 + 9.0 + 22.0, 40.0 + 36.0 + 1.0 + 44.0 + 14.0 + 16.0);
 
 /// A workspace whose desktop data folder holds the fixture plugin, turned on and approved, as the plugin `demo`.
 fn open_with_plugin(

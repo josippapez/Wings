@@ -1340,7 +1340,8 @@ impl Render for PageView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(rgb(theme::BACKGROUND))
+            // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it.
+            .bg(rgb(theme::SURFACE))
             .text_color(rgb(theme::FOREGROUND))
             .text_size(px(13.0))
             // plugin-ui.css's body line height, so rows come out as tall as the desktop's.
