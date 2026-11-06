@@ -19,7 +19,10 @@ fn run() -> Result<(), String> {
     // The desktop app's socket: the `wings` command finds Wings there, whichever app serves it.
     #[cfg(unix)]
     {
-        config.socket = wings_connect::cli::socket().ok();
+        // Taking it from a Wings that is still running would cut that app off from Claude Code and the `wings` command.
+        config.socket = wings_connect::cli::socket()
+            .ok()
+            .filter(|socket| !wings_connect::server::served(socket));
     }
     // The first run starts the native project list as a copy of the desktop's.
     if let (Some(native), Some(desktop)) = (&config.projects, projects::desktop_path())

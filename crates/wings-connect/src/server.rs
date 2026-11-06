@@ -57,6 +57,12 @@ impl Clients {
     }
 }
 
+/// Whether another running app already answers on the socket at `path`. `start` replaces the socket file, which would
+/// leave that app listening on a file no one can reach any more.
+pub fn served(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
+}
+
 /// Listens on the socket at `path`. A stale socket from an earlier run is replaced, and the new one is made readable by
 /// this user only.
 pub fn start(path: &Path, handler: Arc<dyn Handler>, clients: Arc<Clients>) -> std::io::Result<()> {
@@ -212,6 +218,22 @@ pub fn pane_of(shells: &HashMap<u32, String>, pid: u32) -> Option<String> {
 mod tests {
     use super::*;
     use wings_agents::detect::AgentState;
+
+    #[test]
+    fn a_socket_counts_as_served_only_while_an_app_listens_on_it() {
+        let dir = std::env::temp_dir().join(format!("wings-served-{}", std::process::id()));
+        let socket = dir.join("mcp.sock");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!served(&socket));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file left by an app that quit: bound once, nobody listening now.
+        drop(UnixListener::bind(&socket).unwrap());
+        assert!(!served(&socket));
+        std::fs::remove_file(&socket).unwrap();
+        let _listener = UnixListener::bind(&socket).unwrap();
+        assert!(served(&socket));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn agent(kind: AgentKind, session_id: Option<&str>, name: Option<&str>) -> Agent {
         let (session_id, name) = (session_id.map(String::from), name.map(String::from));
