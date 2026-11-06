@@ -293,9 +293,27 @@ fn main() {
         cx.simulate_keystrokes(window, "cmd-,");
         wait(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("settings"));
-        // The Cursor section, with its style menu open. The dialog is centred, 820 wide at most.
+        // The dialog is centred, 820 wide at most.
         let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
         let right = left + 820.0f32.min(width * 0.92);
+        // The font field: a click in it, a name typed, the caret moved back into the name and then a part of it selected
+        // with Shift. It is at the card's right edge, and lower at 640, where the description wraps.
+        let field = point(
+            px(right - 131.0),
+            px(if width < 800.0 { 154.0 } else { 125.0 }),
+        );
+        click(&mut cx, window, field);
+        cx.simulate_input(window, "JetBrains Mono");
+        cx.simulate_keystrokes(window, "left left left left left left");
+        wait(&mut cx, window, Duration::from_millis(200));
+        save(&mut cx, window, &name("settings-caret"));
+        cx.simulate_keystrokes(
+            window,
+            "shift-left shift-left shift-left shift-left shift-left",
+        );
+        wait(&mut cx, window, Duration::from_millis(200));
+        save(&mut cx, window, &name("settings-selection"));
+        // The Cursor section, with its style menu open.
         click(&mut cx, window, point(px(left + 70.0), px(184.0)));
         wait(&mut cx, window, Duration::from_millis(200));
         // The description wraps at 640, so the row and its select sit lower.
