@@ -95,12 +95,7 @@ pub fn find_transcript(claude_dir: &Path, session_id: &str) -> Option<PathBuf> {
     fs::read_dir(claude_dir.join("projects")).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file())
 }
 
-/// A line one session appended, from the pane it runs in.
-pub struct Line {
-    pub pane_id: String,
-    pub session_id: String,
-    pub bytes: Vec<u8>,
-}
+pub use wings_plugins::transcript::Line;
 
 struct Bound {
     session_id: String,

@@ -1,0 +1,16 @@
+[package]
+name = "wings-plugins"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Wings plugin rules: manifests, permission checks, the exec runner and the plugin store"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+url = "2.5.8"
+ureq = "3.4.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+wings-plugin-storage = { path = "../wings-plugin-storage" }

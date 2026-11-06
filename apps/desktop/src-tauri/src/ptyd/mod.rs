@@ -32,9 +32,7 @@ pub fn socket_path(app_data: &Path) -> PathBuf {
     app_data.join("ptyd").join(if cfg!(debug_assertions) { "ptyd-dev.sock" } else { "ptyd.sock" })
 }
 
-/// The `space_id` of a pane that belongs to no project (the quick terminal): it starts in the home folder, and no
-/// agent is detected in it, since the Agents list is grouped by project.
-pub const NO_PROJECT: &str = "";
+pub use wings_agents::NO_PROJECT;
 
 /// A pane's id, from the number its backend gave it. The terminal host numbers its panes, so the ids Wings saved
 /// still name the same panes after it restarts.

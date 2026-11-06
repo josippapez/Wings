@@ -3,9 +3,7 @@
 
 const SERVICE: &str = "dev.wings.app.plugin";
 
-pub fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
+pub use wings_plugins::fetch::valid_secret_name as valid_name;
 
 /// `scope` is the plugin's per-install namespace (see `plugin_store`), so a later plugin with the same
 /// id never reads these.

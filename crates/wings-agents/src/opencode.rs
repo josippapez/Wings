@@ -834,7 +834,7 @@ fn session_path(id: &str, tail: &str) -> String {
 }
 
 /// A session id goes into a url path, so anything but the characters opencode ids are made of is refused.
-pub(crate) fn plausible_id(id: &str) -> bool {
+pub fn plausible_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
@@ -925,7 +925,7 @@ pub fn spawn(shared: Arc<Shared>) {
                 Ok(up) => up,
                 Err((up, e)) => {
                     if cfg!(debug_assertions) {
-                        crate::applog::log_line!("[opencode] {e}");
+                        crate::log_line!("[opencode] {e}");
                     }
                     up
                 }

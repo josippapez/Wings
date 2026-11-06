@@ -1,0 +1,1089 @@
+//! Installing, turning on and off, and removing plugins. A package is a `.wings-plugin` file: a zip with
+//! `wings-plugin.json` at its root, or one folder down like GitHub's source zips.
+
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::{Cursor, Read},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    exec, loading, log_line,
+    manifest::{Contributes, Manifest, Permissions, Plugin},
+};
+
+const MAX_FILES: usize = 2_000;
+const MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Source {
+    /// Installed from a `.wings-plugin` file.
+    File,
+    /// Installed from a GitHub repo, `owner/name`, or from `folder` in it, like `plugins/hud` in a repo that
+    /// holds several plugins.
+    Github {
+        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+    },
+}
+
+/// What the user agreed to: the access a plugin asks for and what it adds, like MCP tools.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Grant {
+    permissions: Permissions,
+    contributes: Contributes,
+}
+
+impl Grant {
+    fn of(manifest: &Manifest) -> Self {
+        Self { permissions: manifest.permissions.clone(), contributes: manifest.contributes.clone() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Entry {
+    enabled: bool,
+    /// The plugin only runs while its manifest asks for exactly what was approved.
+    approved: Option<Grant>,
+    source: Source,
+    /// Names of the keychain secrets it stored, so they go when it does.
+    #[serde(default)]
+    secrets: Vec<String>,
+    /// Namespaces its keychain secrets. A new install from somewhere else gets a new one, so it can't
+    /// reach the old plugin's tokens even if deleting them failed.
+    #[serde(default = "new_scope")]
+    scope: String,
+    /// A plugin folder the user linked (`wings-plugin dev`) and runs in place, instead of a copy in the plugins
+    /// folder. `source` stays `File` for these: a new kind would make an older build drop the whole state file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<PathBuf>,
+}
+
+/// Unique, not secret: it only has to differ between installs.
+fn new_scope() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("{nanos:x}{:x}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Where a plugin's secrets live, and the names it's known to have stored.
+#[derive(Debug)]
+pub struct SecretScope {
+    pub scope: String,
+    pub names: Vec<String>,
+}
+
+impl Entry {
+    fn new(source: Source) -> Self {
+        Self { enabled: false, approved: None, source, secrets: Vec::new(), scope: new_scope(), folder: None }
+    }
+}
+
+/// A plugin as the manager shows it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginView {
+    #[serde(flatten)]
+    pub manifest: Manifest,
+    pub enabled: bool,
+    /// False until the user approves this version's permissions, and again after an update changes them.
+    pub approved: bool,
+    pub source: Option<Source>,
+    /// The checked SVG markup of the manifest's `icon`. The UI draws it only as a CSS mask.
+    pub icon_svg: Option<String>,
+    /// Loaded from the repo's `plugins/` folder by a dev build: always approved, can't be removed.
+    pub dev: bool,
+    /// The folder a linked plugin runs from.
+    pub folder: Option<PathBuf>,
+}
+
+/// What `Store::link` did, for the caller to tell the UI and Claude's sessions.
+#[derive(Debug)]
+pub struct Linked {
+    pub view: PluginView,
+    /// A new link or a changed grant: the UI should open the approval.
+    pub review: bool,
+    /// Its MCP tools, their instructions or whether they're offered changed.
+    pub tools_changed: bool,
+}
+
+pub struct Store {
+    root: PathBuf,
+    state_file: PathBuf,
+    plugins: HashMap<String, Plugin>,
+    entries: HashMap<String, Entry>,
+    dev: HashSet<String>,
+}
+
+impl Store {
+    /// Installed plugins from `root`, plus the repo's plugins in dev builds, which replace installed copies.
+    pub fn load(root: PathBuf, state_file: PathBuf, dev_root: Option<&Path>) -> Self {
+        let entries = fs::read_to_string(&state_file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut store = Self { plugins: HashMap::new(), root, state_file, entries, dev: HashSet::new() };
+        // debt: on Windows WebView2 runs Tauri's IPC script in child frames too, and pages on the
+        // wings-plugin scheme count as local, so a plugin frame could call any command. Plugins stay
+        // off there until each one runs in its own webview with only plugin commands allowed.
+        if cfg!(windows) {
+            return store;
+        }
+        store.plugins = loading::discover(std::slice::from_ref(&store.root));
+        for (id, folder) in store.entries.iter().filter_map(|(id, e)| Some((id.clone(), e.folder.clone()?))) {
+            match loading::load(&folder) {
+                Ok(plugin) => {
+                    store.plugins.insert(id, plugin);
+                }
+                Err(e) => log_line!("[plugins] skipped linked {}: {e}", folder.display()),
+            }
+        }
+        if let Some(dev) = dev_root {
+            for (id, plugin) in loading::discover(&[dev.to_path_buf()]) {
+                store.dev.insert(id.clone());
+                store.plugins.insert(id, plugin);
+            }
+        }
+        store
+    }
+
+    pub fn list(&self) -> Vec<PluginView> {
+        let mut list: Vec<PluginView> = self.plugins.keys().filter_map(|id| self.view(id)).collect();
+        list.sort_by_key(|p| p.manifest.name.to_lowercase());
+        list
+    }
+
+    pub fn view(&self, id: &str) -> Option<PluginView> {
+        let plugin = self.plugins.get(id)?;
+        let entry = self.entries.get(id);
+        let dev = self.dev.contains(id);
+        Some(PluginView {
+            manifest: plugin.manifest.clone(),
+            // Dev plugins start on; everything else starts off until you approve it.
+            enabled: entry.map_or(dev, |e| e.enabled),
+            approved: dev || entry.and_then(|e| e.approved.as_ref()) == Some(&Grant::of(&plugin.manifest)),
+            source: entry.map(|e| e.source.clone()),
+            icon_svg: plugin.icon_svg.clone(),
+            dev,
+            folder: entry.and_then(|e| e.folder.clone()),
+        })
+    }
+
+    /// The plugin, if it's turned on and its permissions are approved. Everything a plugin does goes through this.
+    pub fn active(&self, id: &str) -> Option<Plugin> {
+        let view = self.view(id)?;
+        (view.enabled && view.approved).then(|| self.plugins[id].clone())
+    }
+
+    /// Where the plugin's files are.
+    pub fn dir(&self, id: &str) -> Option<PathBuf> {
+        self.plugins.get(id).map(|p| p.dir.clone())
+    }
+
+    pub fn source(&self, id: &str) -> Option<Source> {
+        self.entries.get(id).map(|e| e.source.clone())
+    }
+
+    /// One of Wings' own plugins: installed from a folder of the Wings repo's `plugins/`, or loaded from it by a dev build.
+    pub fn is_builtin(&self, id: &str) -> bool {
+        self.dev.contains(id)
+            || matches!(self.source(id), Some(Source::Github { repo, folder: Some(folder) }) if repo.eq_ignore_ascii_case(OFFICIAL_REPO) && folder.starts_with("plugins/"))
+    }
+
+    /// Unpacks a package and installs it, replacing an older version. The previous approval carries over only
+    /// for a reinstall from the same GitHub repo, and still only counts if the new version asks for the same
+    /// access and adds the same things. A file can come from anyone, so a file install always asks again.
+    /// `expected_id` makes an update fail if the package turns out to be a different plugin. Also returns
+    /// the secrets of a plugin it replaced from somewhere else, for the caller to delete. A newcomer gets a
+    /// new secret scope either way, so it can't use them.
+    pub fn install(&mut self, bytes: &[u8], source: Source, expected_id: Option<&str>) -> Result<(PluginView, Option<SecretScope>), String> {
+        if cfg!(windows) {
+            return Err("Plugins aren't available on Windows yet".into());
+        }
+        let staging = self.root.with_file_name(format!(".plugin-install-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&staging);
+        fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        let folder = match &source {
+            Source::Github { folder, .. } => folder.as_deref(),
+            Source::File => None,
+        };
+        let checked = unpack(bytes, &staging, folder).and_then(|()| loading::load(&staging));
+        let id = match checked {
+            Ok(plugin) if self.dev.contains(&plugin.manifest.id) => Err(format!("{} is loaded from the repo in this dev build", plugin.manifest.id)),
+            Ok(plugin) if self.entries.get(&plugin.manifest.id).is_some_and(|e| e.folder.is_some()) => {
+                Err(format!("{} is linked from a folder. Remove it first to install it", plugin.manifest.id))
+            }
+            Ok(plugin) if expected_id.is_some_and(|id| id != plugin.manifest.id) => {
+                Err(format!("The update is a different plugin ({}), so it wasn't installed", plugin.manifest.id))
+            }
+            Ok(plugin) => Ok(plugin.manifest.id),
+            Err(e) => Err(e),
+        }
+        .inspect_err(|_| {
+            let _ = fs::remove_dir_all(&staging);
+        })?;
+        let dest = self.root.join(&id);
+        fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
+        let _ = fs::remove_dir_all(&dest);
+        fs::rename(&staging, &dest).map_err(|e| e.to_string())?;
+        let plugin = loading::load(&dest)?;
+        let (old, dropped) = match self.entries.remove(&id) {
+            Some(e) if matches!(source, Source::Github { .. }) && e.source == source => (Some(e), None),
+            Some(e) => (None, Some(SecretScope { scope: e.scope, names: e.secrets })),
+            None => (None, None),
+        };
+        let approved = old.as_ref().and_then(|e| e.approved.clone());
+        let enabled = old.as_ref().is_some_and(|e| e.enabled) && approved.as_ref() == Some(&Grant::of(&plugin.manifest));
+        let (secrets, scope) = old.map_or_else(|| (Vec::new(), new_scope()), |e| (e.secrets, e.scope));
+        self.entries.insert(id.clone(), Entry { enabled, approved, source, secrets, scope, folder: None });
+        self.plugins.insert(id.clone(), plugin);
+        self.save()?;
+        Ok((self.view(&id).expect("just installed"), dropped))
+    }
+
+    /// Runs the plugin in `folder` where it is, and reads it again when it's already linked. A new link starts off
+    /// and unapproved. An existing one keeps its approval for as long as the manifest asks for the same access
+    /// and adds the same things. A folder that doesn't load leaves the plugin that's running as it was.
+    pub fn link(&mut self, folder: &Path) -> Result<Linked, String> {
+        if cfg!(windows) {
+            return Err("Plugins aren't available on Windows yet".into());
+        }
+        let folder = folder.canonicalize().map_err(|e| format!("Couldn't read {}: {e}", folder.display()))?;
+        let plugin = loading::load(&folder)?;
+        let id = plugin.manifest.id.clone();
+        let offered = |s: &Store| s.active(&id).map(|p| (p.manifest.contributes.mcp_tools, p.manifest.contributes.mcp_instructions));
+        let (tools_before, old_grant) = (offered(self), self.plugins.get(&id).map(|p| Grant::of(&p.manifest)));
+        let mut is_new = false;
+        if self.dev.contains(&id) {
+            // A debug build's own repo plugin: only to read it again.
+            if self.plugins[&id].dir.canonicalize().ok().as_deref() != Some(folder.as_path()) {
+                return Err(format!("{id} is loaded from the repo in this dev build"));
+            }
+        } else {
+            match self.entries.get(&id) {
+                Some(e) if e.folder.as_deref() == Some(folder.as_path()) => {}
+                Some(Entry { folder: Some(other), .. }) => return Err(format!("{id} is already linked from {}. Remove it first", other.display())),
+                Some(_) => return Err(format!("{id} is installed from a file or GitHub. Remove it first to link a folder")),
+                None => {
+                    is_new = true;
+                    self.entries.insert(id.clone(), Entry { folder: Some(folder), ..Entry::new(Source::File) });
+                }
+            }
+        }
+        let review = is_new || old_grant.is_none_or(|grant| grant != Grant::of(&plugin.manifest));
+        self.plugins.insert(id.clone(), plugin);
+        self.save()?;
+        let tools_changed = tools_before != offered(self);
+        Ok(Linked { view: self.view(&id).expect("just linked"), review: review && !self.dev.contains(&id), tools_changed })
+    }
+
+    /// Turning a plugin on approves `shown`, what the user was shown, and only if that's still what the
+    /// installed manifest asks for. A plugin replaced while the dialog was open isn't approved by mistake.
+    pub fn set_enabled(&mut self, id: &str, enabled: bool, shown: Option<Grant>) -> Result<PluginView, String> {
+        let plugin = self.plugins.get(id).ok_or_else(|| format!("unknown plugin {id}"))?;
+        let grant = Grant::of(&plugin.manifest);
+        if enabled && shown.as_ref() != Some(&grant) {
+            return Err("This plugin changed since you looked at it. Review it again to turn it on.".into());
+        }
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
+        entry.enabled = enabled;
+        if enabled {
+            entry.approved = Some(grant);
+        }
+        self.save()?;
+        Ok(self.view(id).expect("known plugin"))
+    }
+
+    /// What the plugin was approved for, while that still matches what its manifest asks for.
+    pub fn current_grant(&self, id: &str) -> Result<Option<Grant>, String> {
+        let plugin = self.plugins.get(id).ok_or_else(|| format!("unknown plugin {id}"))?;
+        let grant = Grant::of(&plugin.manifest);
+        Ok(self.entries.get(id).and_then(|e| e.approved.clone()).filter(|approved| *approved == grant))
+    }
+
+    /// Returns the plugin's secrets, for the caller to delete from the keychain.
+    pub fn remove(&mut self, id: &str) -> Result<Option<SecretScope>, String> {
+        if self.dev.contains(id) {
+            return Err(format!("{id} is loaded from the repo in this dev build"));
+        }
+        let plugin = self.plugins.remove(id).ok_or_else(|| format!("unknown plugin {id}"))?;
+        let entry = self.entries.remove(id);
+        // A linked folder is the author's own: only the link goes.
+        if entry.as_ref().is_none_or(|e| e.folder.is_none()) {
+            fs::remove_dir_all(&plugin.dir).map_err(|e| e.to_string())?;
+        }
+        let secrets = entry.map(|e| SecretScope { scope: e.scope, names: e.secrets });
+        self.save()?;
+        Ok(secrets)
+    }
+
+    /// The plugin's current secret scope and the names it stored there.
+    pub fn secret_scope(&mut self, id: &str) -> Result<SecretScope, String> {
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
+        let scope = SecretScope { scope: entry.scope.clone(), names: entry.secrets.clone() };
+        self.save()?;
+        Ok(scope)
+    }
+
+    /// The scope its storage lives under (see `plugin_storage`), the same one its secrets use, so it's
+    /// dropped in the same places. Only writes `plugins.json` when the entry is new.
+    pub fn storage_scope(&mut self, id: &str) -> Result<String, String> {
+        match self.entries.get(id) {
+            Some(entry) => Ok(entry.scope.clone()),
+            None => Ok(self.secret_scope(id)?.scope),
+        }
+    }
+
+    /// The scope `storage_scope` would return, if the plugin already has one. Never writes `plugins.json`, for an app that only
+    /// reads another app's state, and a plugin without a scope has stored nothing yet.
+    pub fn known_storage_scope(&self, id: &str) -> Option<String> {
+        self.entries.get(id).map(|entry| entry.scope.clone())
+    }
+
+    /// Records that the plugin stored (or deleted) a keychain secret with this name.
+    pub fn note_secret(&mut self, id: &str, name: &str, stored: bool) -> Result<(), String> {
+        let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
+        entry.secrets.retain(|n| n != name);
+        if stored {
+            entry.secrets.push(name.to_string());
+        }
+        self.save()
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(&self.entries).map_err(|e| e.to_string())?;
+        let tmp = self.state_file.with_extension("json.tmp");
+        fs::write(&tmp, json).and_then(|()| fs::rename(&tmp, &self.state_file)).map_err(|e| e.to_string())
+    }
+}
+
+/// Extracts the folder that holds `wings-plugin.json`. Refuses paths that leave the folder and oversized packages.
+/// With `folder`, a repo's source zip gives only that folder (`<top>/<folder>/`). A release's
+/// `<id>.wings-plugin` has no such folder, so it's read like any package.
+fn unpack(bytes: &[u8], into: &Path, folder: Option<&str>) -> Result<(), String> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("Not a .wings-plugin file: {e}"))?;
+    if zip.len() > MAX_FILES {
+        return Err(format!("The package has more than {MAX_FILES} files"));
+    }
+    let mut base: Option<PathBuf> = None;
+    let manifests = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok()?.enclosed_name())
+        .filter(|p| p.file_name().is_some_and(|n| n == "wings-plugin.json"))
+        .collect::<Vec<_>>();
+    if let Some(folder) = folder.map(Path::new) {
+        base = manifests
+            .iter()
+            .filter_map(|p| p.parent())
+            .find(|parent| *parent == folder || parent.components().skip(1).eq(folder.components()))
+            .map(Path::to_path_buf);
+    }
+    if base.is_none() {
+        for path in manifests.iter().filter(|p| p.components().count() <= 2) {
+            let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            if base.as_ref().is_none_or(|b| parent.components().count() < b.components().count()) {
+                base = Some(parent);
+            }
+        }
+    }
+    let base = base.ok_or("No wings-plugin.json at the top of the package")?;
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
+        let path = file.enclosed_name().ok_or_else(|| format!("Unsafe path in package: {}", file.name()))?;
+        let Ok(relative) = path.strip_prefix(&base) else { continue };
+        // A `.git` folder or file makes its folder a repo whose config runs commands when a plugin's git, az, gh or glab
+        // starts there. The disk ignores case, so `.GIT` counts too.
+        if relative.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+            return Err(format!("The package has a .git folder or file: {}", file.name()));
+        }
+        if file.is_dir() || relative.as_os_str().is_empty() {
+            continue;
+        }
+        // Count what actually comes out, since the size in the header can lie.
+        let mut data = Vec::new();
+        (&mut file).take(MAX_BYTES - total + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
+        total += data.len() as u64;
+        if total > MAX_BYTES {
+            return Err("The package is larger than 50 MB".into());
+        }
+        let out = into.join(relative);
+        if let Some(dir) = out.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        fs::write(&out, data).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The repo from a GitHub URL (https, ssh or `github.com/owner/name`) or from `owner/name` itself. A link to a
+/// plugin folder, `github.com/owner/name/plugins/<id>` or `.../tree/<ref>/plugins/<id>`, also names that folder.
+pub fn parse_github(input: &str) -> Option<(String, Option<String>)> {
+    let s = input.trim().trim_end_matches('/');
+    let s = s.strip_prefix("git@github.com:").or_else(|| s.split_once("github.com/").map(|(_, rest)| rest)).unwrap_or(s);
+    let mut parts = s.split('/');
+    let owner = parts.next()?;
+    let name = parts.next()?.trim_end_matches(".git");
+    let ok = |p: &str| !matches!(p, "" | "." | "..") && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+    let folder = match parts.collect::<Vec<_>>().as_slice() {
+        [] | ["tree"] | ["tree", _] | ["releases", ..] => None,
+        ["plugins", id] | ["tree", _, "plugins", id] if ok(id) => Some(format!("plugins/{id}")),
+        _ => return None,
+    };
+    (ok(owner) && ok(name)).then(|| (format!("{owner}/{name}"), folder))
+}
+
+#[derive(Clone, Deserialize)]
+struct Release {
+    tag_name: String,
+    zipball_url: String,
+    assets: Vec<Asset>,
+}
+
+#[derive(Clone, Deserialize)]
+struct Asset {
+    name: String,
+    /// The API address. Asked for `application/octet-stream`, it redirects to the file, for private repos too.
+    url: String,
+}
+
+const API: &str = "https://api.github.com/";
+const JSON: &str = "application/vnd.github+json";
+
+/// A sign-in token goes only to GitHub's API, never to an address taken from a response. ureq also drops it
+/// when the API redirects to the download.
+fn auth_for<'a>(url: &str, token: Option<&'a str>) -> Option<&'a str> {
+    token.filter(|_| url.starts_with(API))
+}
+
+fn get(url: &str, accept: &str, token: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let request = ureq::get(url).header("User-Agent", "Wings").header("Accept", accept);
+    match auth_for(url, token) {
+        Some(token) => request.header("Authorization", format!("Bearer {token}")).call(),
+        None => request.call(),
+    }
+}
+
+/// Your `gh` sign-in, read once, for every API call: signed in, GitHub allows 5,000 calls an hour instead of 60
+/// for the whole address, and private repos work too. Without one, public repos still do.
+fn access() -> Option<String> {
+    static TOKEN: OnceLock<Option<String>> = OnceLock::new();
+    TOKEN.get_or_init(gh_token).clone()
+}
+
+fn gh_token() -> Option<String> {
+    let gh = exec::find_program("gh")?;
+    let out = std::process::Command::new(gh).args(["auth", "token", "--hostname", "github.com"]).stdin(std::process::Stdio::null()).output().ok()?;
+    let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !token.is_empty()).then_some(token)
+}
+
+fn github_error(repo: &str, error: ureq::Error) -> String {
+    match error {
+        ureq::Error::StatusCode(404) => format!(
+            "Couldn't find {repo} on GitHub. If it's private, sign in with `gh auth login` as someone who can see it, or install its .wings-plugin file."
+        ),
+        ureq::Error::StatusCode(403 | 429) => "GitHub's rate limit was hit. Try again in a few minutes.".into(),
+        e => format!("Couldn't reach GitHub: {e}"),
+    }
+}
+
+/// How long a repo's latest release is reused, so checking several plugins from one repo asks GitHub once.
+const RELEASE_REUSE: Duration = Duration::from_secs(60);
+
+/// Each repo's latest release (`None`: it has none), and when it was asked for.
+type SeenReleases = HashMap<String, (Instant, Option<Release>)>;
+
+fn latest_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, String> {
+    static SEEN: Mutex<Option<SeenReleases>> = Mutex::new(None);
+    if let Some((at, release)) = SEEN.lock().unwrap().get_or_insert_default().get(repo) {
+        if at.elapsed() < RELEASE_REUSE {
+            return Ok(release.clone());
+        }
+    }
+    let release = fetch_release(repo, token)?;
+    SEEN.lock().unwrap().get_or_insert_default().insert(repo.to_string(), (Instant::now(), release.clone()));
+    Ok(release)
+}
+
+fn fetch_release(repo: &str, token: Option<&str>) -> Result<Option<Release>, String> {
+    match get(&format!("{API}repos/{repo}/releases/latest"), JSON, token) {
+        Ok(mut response) => {
+            let text = response.body_mut().read_to_string().map_err(|e| e.to_string())?;
+            serde_json::from_str(&text).map(Some).map_err(|e| e.to_string())
+        }
+        // No releases yet, which is fine: the default branch is installed instead.
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(e) => Err(github_error(repo, e)),
+    }
+}
+
+/// What to download for a plugin: an address and what to ask for.
+#[derive(Debug)]
+struct Pick {
+    url: String,
+    accept: &'static str,
+}
+
+/// The newest release's `.wings-plugin` file, or its source zip, or the default branch when there's no release.
+/// A folder in a repo of several plugins always comes from the default branch, so pushing a plugin's new
+/// version ships it without a release of the whole repo.
+fn pick(repo: &str, folder: Option<&str>, release: Option<Release>) -> Result<Pick, String> {
+    let branch = || Pick { url: format!("{API}repos/{repo}/zipball"), accept: JSON };
+    let (None, Some(release)) = (folder, release) else { return Ok(branch()) };
+    let mut packages = release.assets.into_iter().filter(|a| a.name.ends_with(".wings-plugin"));
+    match (packages.next(), packages.next()) {
+        (Some(_), Some(_)) => Err(format!("{repo} has several plugins. Link the one you want, like github.com/{repo}/plugins/<id>")),
+        (Some(a), None) => Ok(Pick { url: a.url, accept: "application/octet-stream" }),
+        (None, _) => Ok(Pick { url: release.zipball_url, accept: JSON }),
+    }
+}
+
+pub fn download_github(repo: &str, folder: Option<&str>) -> Result<Vec<u8>, String> {
+    let token = access();
+    // A folder never uses the release, so it doesn't ask for it.
+    let release = if folder.is_some() { None } else { latest_release(repo, token.as_deref())? };
+    let Pick { url, accept } = pick(repo, folder, release)?;
+    let mut response = get(&url, accept, token.as_deref()).map_err(|e| github_error(repo, e))?;
+    response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())
+}
+
+/// The version an update would install, without a leading `v`. For a repo that's the newest release's tag.
+/// A folder in a repo of several plugins has its own version, in its manifest on the default branch. One
+/// that needs a newer Wings than this one isn't offered.
+pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>, String> {
+    let token = access();
+    let Some(folder) = folder else {
+        return Ok(latest_release(repo, token.as_deref())?.map(|r| r.tag_name.trim_start_matches('v').to_string()));
+    };
+    let mut response = get(&manifest_url(repo, folder), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(repo, e))?;
+    let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
+    Ok(manifest_version(&text))
+}
+
+/// The repo whose `plugins/` folder Settings offers to install from.
+const OFFICIAL_REPO: &str = "josippapez/Wings";
+
+/// A plugin in the official repo, as Settings offers it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Available {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    /// What the GitHub install takes.
+    pub link: String,
+}
+
+/// Every plugin in the official repo's `plugins/` folder that runs on this Wings, from the default branch.
+pub fn available() -> Result<Vec<Available>, String> {
+    #[derive(Deserialize)]
+    struct Item {
+        name: String,
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    let token = access();
+    let mut response = get(&format!("{API}repos/{OFFICIAL_REPO}/contents/plugins"), JSON, token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
+    let items: Vec<Item> = serde_json::from_str(&response.body_mut().read_to_string().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut list = Vec::new();
+    for item in items.into_iter().filter(|i| i.kind == "dir") {
+        let folder = format!("plugins/{}", item.name);
+        let mut response =
+            get(&manifest_url(OFFICIAL_REPO, &folder), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
+        let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
+        list.extend(available_from(&folder, &text));
+    }
+    Ok(list)
+}
+
+fn available_from(folder: &str, manifest_text: &str) -> Option<Available> {
+    let version = manifest_version(manifest_text)?;
+    let manifest: serde_json::Value = serde_json::from_str(manifest_text).ok()?;
+    let text = |key: &str| manifest[key].as_str().unwrap_or_default().to_string();
+    Some(Available {
+        id: manifest["id"].as_str()?.to_string(),
+        name: text("name"),
+        description: text("description"),
+        version,
+        link: format!("github.com/{OFFICIAL_REPO}/{folder}"),
+    })
+}
+
+fn manifest_url(repo: &str, folder: &str) -> String {
+    format!("{API}repos/{repo}/contents/{folder}/wings-plugin.json")
+}
+
+fn manifest_version(text: &str) -> Option<String> {
+    let manifest: serde_json::Value = serde_json::from_str(text).ok()?;
+    if let Some(min) = manifest["minWingsVersion"].as_str() {
+        if !loading::runs_on_this_wings(min).ok()? {
+            return None;
+        }
+    }
+    Some(manifest["version"].as_str()?.trim_start_matches('v').to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn a_github_token_only_goes_to_the_api() {
+        assert_eq!(auth_for("https://api.github.com/repos/o/r/zipball", Some("t")), Some("t"));
+        for url in
+            ["https://codeload.github.com/o/r/zip", "https://api.github.com.evil.dev/x", "http://api.github.com/x", "https://evil.dev/?https://api.github.com/"]
+        {
+            assert_eq!(auth_for(url, Some("t")), None, "{url}");
+        }
+    }
+
+    fn package(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn manifest(id: &str, exec: &[&str]) -> String {
+        serde_json::json!({ "id": id, "name": id, "version": "1.0.0", "api": 1, "main": "main.js", "permissions": { "exec": exec } }).to_string()
+    }
+
+    fn manifest_with_tools(id: &str, tools: &[&str]) -> String {
+        let tools: Vec<_> = tools.iter().map(|t| serde_json::json!({ "name": t })).collect();
+        serde_json::json!({ "id": id, "name": id, "version": "1.0.0", "api": 1, "main": "main.js", "contributes": { "mcpTools": tools } }).to_string()
+    }
+
+    fn store() -> (Store, PathBuf) {
+        // new_scope adds a counter: tests started in the same nanosecond would share a folder.
+        let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), new_scope()));
+        fs::create_dir_all(&dir).unwrap();
+        (Store::load(dir.join("plugins"), dir.join("plugins.json"), None), dir)
+    }
+
+    #[test]
+    fn only_a_plugin_from_the_wings_repo_plugins_folder_is_builtin() {
+        let (mut s, dir) = store();
+        let pkg = |id: &str| package(&[("wings-plugin.json", &manifest(id, &[])), ("main.js", "")]);
+        s.install(&pkg("ours"), Source::Github { repo: "josippapez/Wings".into(), folder: Some("plugins/ours".into()) }, None).unwrap();
+        s.install(&pkg("fork"), Source::Github { repo: "someone/Wings".into(), folder: Some("plugins/fork".into()) }, None).unwrap();
+        s.install(&pkg("file"), Source::File, None).unwrap();
+        assert!(s.is_builtin("ours"));
+        assert!(!s.is_builtin("fork") && !s.is_builtin("file") && !s.is_builtin("missing"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn installs_off_and_needs_approval_again_when_permissions_grow() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let v1 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), None).unwrap().0;
+        assert!(!v1.enabled && !v1.approved && s.active("demo").is_none());
+        let stale = Grant::of(&s.plugins["demo"].manifest);
+        assert!(s.set_enabled("demo", true, None).is_err());
+        assert!(s.set_enabled("demo", true, Some(stale.clone())).unwrap().approved && s.active("demo").is_some());
+
+        // Same repo, same permissions: stays on. More permissions: off until approved again.
+        s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status"])), ("main.js", "")]), repo(), Some("demo")).unwrap();
+        assert!(s.active("demo").is_some());
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), repo(), Some("demo")).unwrap().0;
+        assert!(!v2.enabled && !v2.approved && s.active("demo").is_none());
+        // What the dialog showed before the update doesn't approve the new permissions.
+        assert!(s.set_enabled("demo", true, Some(stale)).unwrap_err().contains("changed since"));
+
+        // A file or another repo with the same id doesn't inherit the approval.
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let same = |s: &mut Store, source| {
+            s.install(&package(&[("wings-plugin.json", &manifest("demo", &["git status", "gh api"])), ("main.js", "")]), source, None).unwrap().0
+        };
+        assert!(!same(&mut s, Source::File).approved);
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        assert!(!same(&mut s, Source::Github { repo: "someone/else".into(), folder: None }).approved);
+
+        // An update that turns out to be another plugin is refused.
+        let other = package(&[("wings-plugin.json", &manifest("other", &[])), ("main.js", "")]);
+        assert!(s.install(&other, repo(), Some("demo")).unwrap_err().contains("different plugin"));
+        assert!(s.view("other").is_none());
+
+        // State survives a restart.
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let again = Store::load(dir.join("plugins"), dir.join("plugins.json"), None);
+        assert!(again.active("demo").is_some());
+        s.remove("demo").unwrap();
+        assert!(s.view("demo").is_none() && !dir.join("plugins/demo").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn secrets_stay_with_the_same_repo_and_go_with_a_newcomer() {
+        let (mut s, dir) = store();
+        let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        s.install(&pkg(), repo(), None).unwrap();
+        s.note_secret("demo", "token", true).unwrap();
+        let first = s.secret_scope("demo").unwrap().scope;
+        assert!(s.install(&pkg(), repo(), Some("demo")).unwrap().1.is_none());
+        assert_eq!(s.secret_scope("demo").unwrap().scope, first);
+        let dropped = s.install(&pkg(), Source::File, None).unwrap().1.unwrap();
+        assert_eq!((dropped.scope.as_str(), dropped.names.as_slice()), (first.as_str(), ["token".to_string()].as_slice()));
+        // The newcomer gets its own scope and no recorded secrets.
+        let fresh = s.secret_scope("demo").unwrap();
+        assert!(fresh.scope != first && fresh.names.is_empty());
+        s.note_secret("demo", "token", true).unwrap();
+        assert_eq!(s.remove("demo").unwrap().unwrap().names, ["token"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The same steps as `install` and `remove_plugin` in lib.rs.
+    #[test]
+    fn storage_stays_with_the_same_repo_and_goes_with_a_newcomer_or_a_remove() {
+        let (mut s, dir) = store();
+        let storage = wings_plugin_storage::Storage::new(dir.join("plugin-storage"));
+        let pkg = || package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let value = serde_json::json!({ "tasks": ["private"] });
+        let install = |s: &mut Store, source| {
+            if let Some(old) = s.install(&pkg(), source, None).unwrap().1 {
+                storage.remove("demo", &old.scope).unwrap();
+            }
+        };
+
+        install(&mut s, repo());
+        let first = s.storage_scope("demo").unwrap();
+        assert_eq!(first, s.secret_scope("demo").unwrap().scope);
+        storage.set("demo", &first, "history", value.clone()).unwrap();
+        install(&mut s, repo());
+        assert_eq!(storage.get("demo", &s.storage_scope("demo").unwrap(), "history").unwrap(), Some(value.clone()));
+
+        // A file with the same id starts empty, and the old data is gone from disk.
+        install(&mut s, Source::File);
+        let fresh = s.storage_scope("demo").unwrap();
+        assert!(fresh != first && storage.keys("demo", &fresh).unwrap().is_empty());
+        assert!(!dir.join(format!("plugin-storage/demo.{first}")).exists());
+
+        storage.set("demo", &fresh, "history", value).unwrap();
+        let old = s.remove("demo").unwrap().unwrap();
+        storage.remove("demo", &old.scope).unwrap();
+        assert_eq!(fs::read_dir(dir.join("plugin-storage")).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adding_mcp_tools_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &[])), ("main.js", "")]), repo(), None).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let v2 = s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["get_status"])), ("main.js", "")]), repo(), Some("demo")).unwrap().0;
+        assert!(!v2.approved && s.active("demo").is_none());
+        assert!(s.install(&package(&[("wings-plugin.json", &manifest_with_tools("demo", &["Bad Name"])), ("main.js", "")]), repo(), None).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn asking_for_panes_or_notifications_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let with = |permissions: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "permissions": permissions });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
+        };
+        s.install(&with(serde_json::json!({})), repo(), None).unwrap();
+        // Plain shells only (`[]`) is still more than no panes at all.
+        for permissions in
+            [serde_json::json!({ "panes": [] }), serde_json::json!({ "panes": ["lazygit"] }), serde_json::json!({ "panes": ["lazygit"], "notify": true })]
+        {
+            s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+            let next = s.install(&with(permissions.clone()), repo(), Some("demo")).unwrap().0;
+            assert!(!next.approved && s.active("demo").is_none(), "{permissions}");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adding_a_settings_page_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let with = |contributes: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "contributes": contributes });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", ""), ("settings.html", "")])
+        };
+        s.install(&with(serde_json::json!({})), repo(), None).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let v2 = s.install(&with(serde_json::json!({ "settings": { "page": "settings.html" } })), repo(), Some("demo")).unwrap().0;
+        assert!(!v2.approved && s.active("demo").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn panels_need_an_https_url_and_a_known_icon() {
+        let (mut s, dir) = store();
+        let with_panel = |icon: &str, url: &str| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js",
+                "contributes": { "panels": [{ "id": "tracker", "title": "Tracker", "icon": icon, "url": url }] } });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
+        };
+        assert!(s.install(&with_panel("clock", "https://example.com/"), Source::File, None).is_ok());
+        assert!(s.install(&with_panel("clock", "http://example.com/"), Source::File, None).unwrap_err().contains("https"));
+        assert!(s.install(&with_panel("rocket", "https://example.com/"), Source::File, None).unwrap_err().contains("icon"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn views_open_in_known_places_with_their_own_ids() {
+        let (mut s, dir) = store();
+        let with = |contributes: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "contributes": contributes });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", ""), ("page.html", "<p>board</p>")])
+        };
+        let view = |opens: serde_json::Value| serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html", "opens": opens }] });
+        let installed = s.install(&with(view(serde_json::json!(["modal", "window"]))), Source::File, None).unwrap().0;
+        assert_eq!(installed.manifest.contributes.views[0].opens, ["modal", "window"]);
+        let tab = s.install(&with(view(serde_json::json!(["tab", "sidebar"]))), Source::File, None).unwrap().0;
+        assert_eq!(tab.manifest.contributes.views[0].opens, ["tab", "sidebar"]);
+        // Without `opens` a view is a sidebar, like an entry in `sidebars`.
+        let plain = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html" }] });
+        assert_eq!(s.install(&with(plain), Source::File, None).unwrap().0.manifest.contributes.views[0].opens, ["sidebar"]);
+        for opens in [serde_json::json!([]), serde_json::json!(["popup"]), serde_json::json!(["modal", "modal"]), serde_json::json!(["tab", "tab"])] {
+            assert!(s.install(&with(view(opens.clone())), Source::File, None).unwrap_err().contains("opens"), "{opens}");
+        }
+        let clash = serde_json::json!({
+            "sidebars": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html" }],
+            "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "page.html", "opens": ["window"] }],
+        });
+        assert!(s.install(&with(clash), Source::File, None).unwrap_err().contains("used twice"));
+        let outside = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "../page.html" }] });
+        assert!(s.install(&with(outside), Source::File, None).unwrap_err().contains("isn't in the plugin folder"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unpacks_from_one_top_folder_and_refuses_escapes() {
+        let (mut s, dir) = store();
+        let github = package(&[("owner-demo-abc123/wings-plugin.json", &manifest("demo", &[])), ("owner-demo-abc123/main.js", "x")]);
+        s.install(&github, Source::Github { repo: "owner/demo".into(), folder: None }, None).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("plugins/demo/main.js")).unwrap(), "x");
+
+        let escape = package(&[("wings-plugin.json", &manifest("evil", &[])), ("main.js", ""), ("../../outside.txt", "x")]);
+        assert!(s.install(&escape, Source::File, None).unwrap_err().contains("Unsafe path"));
+        assert!(!dir.join("outside.txt").exists() && s.view("evil").is_none());
+        // A `.git` would make the plugin's folder a repo whose config runs commands when a plugin's git starts there.
+        for name in ["repo/.git/config", ".GIT/config", "x/.git"] {
+            let repo = package(&[("wings-plugin.json", &manifest("repo", &[])), ("main.js", ""), (name, "[core]\n\tfsmonitor = touch /tmp/x\n")]);
+            assert!(s.install(&repo, Source::File, None).unwrap_err().contains(".git"), "{name}");
+        }
+        assert!(s.view("repo").is_none());
+        assert!(s.install(b"not a zip", Source::File, None).unwrap_err().contains("Not a .wings-plugin"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parses_github_repo_urls() {
+        for input in [
+            "owner/repo",
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo.git",
+            "github.com/owner/repo/",
+            "git@github.com:owner/repo.git",
+            "https://github.com/owner/repo/tree/main",
+            "github.com/owner/repo/releases/tag/v1",
+        ] {
+            assert_eq!(parse_github(input), Some(("owner/repo".into(), None)), "{input}");
+        }
+        for input in ["", "owner", "https://github.com/owner/repo/blob/x", "owner/re po", "../etc/passwd", "../etc"] {
+            assert_eq!(parse_github(input), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn parses_links_to_a_plugin_folder() {
+        let hud = Some(("owner/repo".into(), Some("plugins/hud".into())));
+        for input in [
+            "github.com/owner/repo/plugins/hud",
+            "https://github.com/owner/repo/plugins/hud/",
+            "https://github.com/owner/repo/tree/main/plugins/hud",
+            "owner/repo/tree/v1.2.0/plugins/hud",
+        ] {
+            assert_eq!(parse_github(input), hud, "{input}");
+        }
+        for input in [
+            "github.com/owner/repo/plugins/..",
+            "github.com/owner/repo/plugins/.",
+            "github.com/owner/repo/plugins/../../etc",
+            "github.com/owner/repo/tree/main/plugins/..",
+            "github.com/owner/repo/plugins",
+            "github.com/owner/repo/plugins/hud/extra",
+            "github.com/owner/repo/tree/main/plugins/hud/extra",
+            "github.com/owner/repo/tree/main/other/hud",
+            "github.com/owner/repo/other/hud",
+            "github.com/owner/repo/plugins/h d",
+            "github.com/../repo/plugins/hud",
+        ] {
+            assert_eq!(parse_github(input), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn a_plugin_folder_comes_from_a_repo_zip_alone() {
+        let (mut s, dir) = store();
+        let hud = || Source::Github { repo: "owner/repo".into(), folder: Some("plugins/hud".into()) };
+        let repo_zip = package(&[
+            ("owner-repo-abc123/README.md", "repo"),
+            ("owner-repo-abc123/plugins/other/wings-plugin.json", &manifest("other", &[])),
+            ("owner-repo-abc123/plugins/other/main.js", "other"),
+            ("owner-repo-abc123/plugins/hud/wings-plugin.json", &manifest("hud", &[])),
+            ("owner-repo-abc123/plugins/hud/main.js", "hud"),
+            ("owner-repo-abc123/plugins/hud/lib/util.js", "util"),
+        ]);
+        assert_eq!(s.install(&repo_zip, hud(), None).unwrap().0.manifest.id, "hud");
+        assert_eq!(fs::read_to_string(dir.join("plugins/hud/lib/util.js")).unwrap(), "util");
+        assert!(!dir.join("plugins/hud/README.md").exists() && !dir.join("plugins/hud/plugins").exists() && s.view("other").is_none());
+
+        // The release's hud.wings-plugin has the manifest at its root.
+        let asset = package(&[("wings-plugin.json", &manifest("hud", &["git status"])), ("main.js", "v2")]);
+        s.install(&asset, hud(), Some("hud")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("plugins/hud/main.js")).unwrap(), "v2");
+
+        // A repo zip without the folder isn't installed as some other plugin.
+        let missing = package(&[("owner-repo-abc123/plugins/other/wings-plugin.json", &manifest("other", &[]))]);
+        assert!(s.install(&missing, hud(), None).unwrap_err().contains("No wings-plugin.json"));
+        let escape = package(&[
+            ("owner-repo-abc123/plugins/hud/wings-plugin.json", &manifest("hud", &[])),
+            ("owner-repo-abc123/plugins/hud/../../../../outside.txt", "x"),
+        ]);
+        assert!(s.install(&escape, hud(), None).unwrap_err().contains("Unsafe path"));
+        assert!(!dir.join("outside.txt").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_plugin_folder_is_saved_and_older_entries_still_load() {
+        let folder = Source::Github { repo: "owner/repo".into(), folder: Some("plugins/hud".into()) };
+        let json = serde_json::to_value(&folder).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "github", "repo": "owner/repo", "folder": "plugins/hud" }));
+        assert_eq!(serde_json::from_value::<Source>(json).unwrap(), folder);
+        // An entry saved before folders existed reads as the whole repo, and is written back the same way.
+        let old: Source = serde_json::from_str(r#"{ "kind": "github", "repo": "owner/demo" }"#).unwrap();
+        assert_eq!(old, Source::Github { repo: "owner/demo".into(), folder: None });
+        assert_eq!(serde_json::to_value(&old).unwrap(), serde_json::json!({ "kind": "github", "repo": "owner/demo" }));
+    }
+
+    fn release(tag: &str, assets: &[&str]) -> Release {
+        Release {
+            tag_name: tag.into(),
+            zipball_url: format!("{API}repos/owner/repo/zipball/{tag}"),
+            assets: assets.iter().map(|n| Asset { name: (*n).into(), url: format!("{API}repos/owner/repo/releases/assets/{n}") }).collect(),
+        }
+    }
+
+    #[test]
+    fn a_plugin_folder_comes_from_the_default_branch() {
+        let app = || release("v0.1.7", &["Wings.app.tar.gz", "dev-servers.wings-plugin", "hud.wings-plugin"]);
+        // Even when a release carries the plugin's file, so a pushed version ships without a release.
+        for release in [Some(app()), Some(release("v0.1.6", &["Wings.app.tar.gz"])), None] {
+            assert_eq!(pick("owner/repo", Some("plugins/hud"), release).unwrap().url, format!("{API}repos/owner/repo/zipball"));
+        }
+        assert_eq!(manifest_url("owner/repo", "plugins/hud"), format!("{API}repos/owner/repo/contents/plugins/hud/wings-plugin.json"));
+        assert_eq!(manifest_version(&manifest("hud", &[])).as_deref(), Some("1.0.0"));
+
+        // A whole repo still takes its one package, and asks which one when there are several.
+        assert!(pick("owner/repo", None, Some(release("v1", &["demo.wings-plugin"]))).unwrap().url.ends_with("/demo.wings-plugin"));
+        assert!(pick("owner/repo", None, Some(app())).unwrap_err().contains("plugins/<id>"));
+    }
+
+    #[test]
+    fn an_update_that_needs_a_newer_wings_is_not_offered() {
+        crate::set_wings_version(env!("CARGO_PKG_VERSION"));
+        let with_min = |min: &str| manifest("hud", &[]).replacen('{', &format!("{{ \"minWingsVersion\": \"{min}\","), 1);
+        assert_eq!(manifest_version(&with_min(env!("CARGO_PKG_VERSION"))).as_deref(), Some("1.0.0"));
+        assert_eq!(manifest_version(&with_min("999.0.0")), None);
+
+        // Installed anyway, from a file, it's refused.
+        let (mut s, _dir) = store();
+        let err = s.install(&package(&[("wings-plugin.json", &with_min("999.0.0")), ("main.js", "")]), Source::File, None).unwrap_err();
+        assert!(err.contains("needs Wings 999.0.0 or newer"), "{err}");
+    }
+
+    #[test]
+    fn settings_offers_official_plugins_that_run_on_this_wings() {
+        crate::set_wings_version(env!("CARGO_PKG_VERSION"));
+        let offered = available_from("plugins/hud", &manifest("hud", &[])).unwrap();
+        assert_eq!((offered.id.as_str(), offered.version.as_str(), offered.link.as_str()), ("hud", "1.0.0", "github.com/josippapez/Wings/plugins/hud"));
+        assert_eq!(parse_github(&offered.link), Some(("josippapez/Wings".into(), Some("plugins/hud".into()))));
+        let newer = manifest("hud", &[]).replacen('{', "{ \"minWingsVersion\": \"999.0.0\",", 1);
+        assert_eq!(available_from("plugins/hud", &newer), None);
+    }
+    /// A plugin folder like an author's: the manifest and a main.js.
+    fn folder(dir: &Path, manifest: &str) -> PathBuf {
+        let folder = dir.join("mine");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("wings-plugin.json"), manifest).unwrap();
+        fs::write(folder.join("main.js"), "").unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_link_starts_off_and_asks_again_only_when_the_grant_changes() {
+        let (mut s, dir) = store();
+        let path = folder(&dir, &manifest_with_tools("demo", &[]));
+        let first = s.link(&path).unwrap();
+        assert!(first.review && !first.view.enabled && !first.view.approved && s.active("demo").is_none());
+        // Source stays `file`, and the folder is a new field next to it.
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join("plugins.json")).unwrap()).unwrap();
+        assert_eq!(saved["demo"]["source"], serde_json::json!({ "kind": "file" }));
+        assert_eq!(saved["demo"]["folder"], serde_json::json!(path.canonicalize().unwrap()));
+
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        let again = Store::load(dir.join("plugins"), dir.join("plugins.json"), None);
+        assert!(again.active("demo").is_some() && again.view("demo").unwrap().folder.is_some());
+
+        // Reading it again after a code change keeps the approval and leaves the tools alone.
+        fs::write(path.join("main.js"), "// edited").unwrap();
+        let same = s.link(&path).unwrap();
+        assert!(!same.review && !same.tools_changed && same.view.approved);
+        // A tool changes what Claude is offered, and what was approved no longer matches.
+        fs::write(path.join("wings-plugin.json"), manifest_with_tools("demo", &["get_status"])).unwrap();
+        let more = s.link(&path).unwrap();
+        assert!(more.review && more.tools_changed && !more.view.approved && s.active("demo").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_folder_that_doesnt_load_leaves_the_linked_plugin_running() {
+        let (mut s, dir) = store();
+        let path = folder(&dir, &manifest("demo", &[]));
+        s.link(&path).unwrap();
+        s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+        fs::write(path.join("wings-plugin.json"), "{ not json").unwrap();
+        assert!(s.link(&path).is_err());
+        assert!(s.active("demo").is_some());
+        // A new id in the same folder is a different plugin and links on its own.
+        fs::write(path.join("wings-plugin.json"), manifest("other", &[])).unwrap();
+        assert!(s.link(&path).unwrap().review && s.view("demo").is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn linking_and_installing_refuse_each_others_ids_and_remove_keeps_the_folder() {
+        let (mut s, dir) = store();
+        let pkg = package(&[("wings-plugin.json", &manifest("demo", &[])), ("main.js", "")]);
+        s.install(&pkg, Source::File, None).unwrap();
+        let path = folder(&dir, &manifest("demo", &[]));
+        assert!(s.link(&path).unwrap_err().contains("Remove it first"));
+        s.remove("demo").unwrap();
+
+        s.link(&path).unwrap();
+        assert!(s.install(&pkg, Source::File, None).unwrap_err().contains("linked"));
+        s.remove("demo").unwrap();
+        assert!(s.view("demo").is_none() && path.join("wings-plugin.json").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+}

@@ -273,4 +273,51 @@ mod tests {
         assert_eq!(kept.codex_status.map(|s| s.state), None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn codex_osc_reports_drive_working_blocked_done_and_focus_acknowledgement() {
+        use std::{fs, path::PathBuf, process::Command};
+        use wings_agents::detect::{AgentKind, AgentState, Detector, PaneProbe};
+        let tmp = std::env::temp_dir().join(format!("wings-codex-state-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let fake = tmp.join("codex");
+        std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
+        let mut child = Command::new(&fake).arg("30").spawn().unwrap();
+        struct Cleanup<'a>(&'a mut std::process::Child, PathBuf);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); let _ = fs::remove_dir_all(&self.1); }
+        }
+        let pid = child.id();
+        let _cleanup = Cleanup(&mut child, tmp.clone());
+        let mut detector = Detector::new(&tmp);
+        let mut kept = Kept::default();
+        let mut parser = vte::Parser::new();
+        let title = std::sync::Mutex::new(String::new());
+        let mut scan = |report: &[u8], focused| {
+            kept.push(&mut parser, &title, report);
+            let probe = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: title.lock().unwrap().clone(), codex_status: kept.codex_status };
+            detector.scan(&[probe], focused).agents.remove(0)
+        };
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x1b\\", None).state, AgentState::Working);
+        for (kind, reason) in [("permission", "permission prompt"), ("question", "question"), ("auth", "sign in")] {
+            let a = scan(format!("\x1b]7501;state=blocked:app=codex:kind={kind}\x07").as_bytes(), None);
+            assert_eq!((a.kind, a.state, a.waiting_for.as_deref()), (AgentKind::Codex, AgentState::Blocked, Some(reason)));
+        }
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x07", None).state, AgentState::Working);
+        assert_eq!(scan(b"\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done);
+        assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
+        assert_eq!(scan(b"", None).state, AgentState::Idle, "looking away does not re-arm the done report");
+        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x07\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done, "a fast complete turn between scans still needs acknowledgement");
+        assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
+        assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle);
+        assert_eq!(scan(b"\x1b]7501;state=error:app=codex\x07", None).waiting_for.as_deref(), Some("Codex reported an error"));
+        let a = scan(b"\x1b]7501;state=clear\x07\x1b]2;\xe2\xa0\x8b Fix session labels\x07", None);
+        assert_eq!(a.state, AgentState::Working, "older hosts and versions use the default activity title");
+        assert_eq!(scan(b"\x1b]2;[ . ] Action Required | Fix labels\x07", None).state, AgentState::Blocked);
+        assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle, "explicit status wins over a stale title");
+        drop(scan);
+        let stale = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: String::new(), codex_status: Some(crate::program_status::CodexReport { state: crate::program_status::CodexStatus::Working, generation: 100, pid: Some(pid + 1) }) };
+        assert_eq!(detector.scan(&[stale], None).agents[0].state, AgentState::Idle, "a new agent cannot inherit another process's status");
+    }
+
 }

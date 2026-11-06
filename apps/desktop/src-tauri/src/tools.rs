@@ -117,6 +117,7 @@ mod tests {
 
     #[test]
     fn the_shipped_plugins_need_their_clis() {
+        wings_plugins::set_wings_version(env!("CARGO_PKG_VERSION"));
         let need = |id: &str| {
             let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../plugins")).join(id);
             needed(&crate::plugins::load(&dir).unwrap().manifest.permissions).iter().map(|t| t.program).collect::<Vec<_>>()

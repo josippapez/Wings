@@ -5,8 +5,6 @@ mod bench;
 mod claude;
 #[cfg(unix)]
 mod claude_settings;
-mod detect;
-mod program_status;
 mod disk_usage;
 mod editors;
 mod gitwatch;
@@ -14,7 +12,6 @@ mod harnesses;
 mod history;
 mod hotkey;
 mod menu;
-mod opencode;
 mod journal_sink;
 mod opencode_config;
 #[cfg(unix)]
@@ -57,6 +54,8 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
+// The agent modules live in the shared crate; the rest of the app still names them `crate::detect` and so on.
+use wings_agents::{detect, opencode, program_status};
 
 use claude::SessionSummary;
 use detect::{Agent, AgentKind, AgentState, Detector, PaneInfo, PaneProbe};
@@ -1934,6 +1933,9 @@ fn start_git_status(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    wings_agents::set_logger(applog::line);
+    wings_plugins::set_logger(applog::line);
+    wings_plugins::set_wings_version(env!("CARGO_PKG_VERSION"));
     if !cfg!(debug_assertions) {
         applog::init();
     }

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{Read, Write},
+    io::Read,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
@@ -8,13 +8,12 @@ use std::{
     thread,
 };
 
-use portable_pty::{native_pty_system, Child, MasterPty, PtySize};
 use tauri::ipc::{Channel, InvokeResponseBody};
+use wings_terminal::PtyProcess;
 
 use super::{
     output::Kept,
     pane_id,
-    shell::{pane_command, pane_env},
     OnExit, PaneMeta, PaneMirror, PtyBackend, SpawnRequest,
 };
 
@@ -24,9 +23,7 @@ pub struct Pane {
     /// Latest OSC 0/2 window title the program set. Claude Code puts its state glyph here.
     pub title: Arc<Mutex<String>>,
     output: Arc<Mutex<Output>>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    child: Mutex<Box<dyn Child + Send + Sync>>,
+    process: PtyProcess,
 }
 
 impl Pane {
@@ -36,29 +33,19 @@ impl Pane {
         output: Channel<InvokeResponseBody>,
         on_exit: impl FnOnce(&str) + Send + 'static,
     ) -> anyhow::Result<Arc<Pane>> {
-        let pair = native_pty_system().openpty(PtySize {
-            rows: req.rows,
-            cols: req.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-
-        let child = pair.slave.spawn_command(pane_command(req.cwd, pane_env(), &id))?;
-        drop(pair.slave);
+        let process = PtyProcess::spawn(req.cwd, &id, req.cols, req.rows)?;
 
         let pane = Arc::new(Pane {
             meta: Arc::new(PaneMeta {
                 id,
                 space_id: req.space_id,
-                shell_pid: child.process_id(),
+                shell_pid: process.process_id(),
                 cwd: req.cwd.to_path_buf(),
                 history_id: req.history_id,
             }),
             title: Arc::new(Mutex::new(String::new())),
             output: Arc::new(Mutex::new(Output::default())),
-            writer: Mutex::new(pair.master.take_writer()?),
-            child: Mutex::new(child),
-            master: Mutex::new(pair.master),
+            process,
         });
 
         {
@@ -72,7 +59,7 @@ impl Pane {
             kept.channel = Some(output);
         }
 
-        let mut reader = pane.master.lock().unwrap().try_clone_reader()?;
+        let mut reader = pane.process.reader()?;
         let title = pane.title.clone();
         let shared = pane.output.clone();
         let pane_id = pane.meta.id.clone();
@@ -97,6 +84,7 @@ impl Pane {
                         }
                     }
                 }
+                status_source.process.reap();
                 on_exit(&pane_id);
             })?;
 
@@ -109,34 +97,20 @@ impl Pane {
     }
 
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
-        writer.write_all(data)?;
-        writer.flush()?;
-        Ok(())
+        self.process.write(data)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.master.lock().unwrap().resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+        self.process.resize(cols, rows)
     }
 
     pub fn kill(&self) {
-        let _ = self.child.lock().unwrap().kill();
+        self.process.kill();
     }
 
     /// The running command's process (the shell itself at a prompt), from the PTY's foreground process group.
-    #[cfg(unix)]
     pub fn foreground_pid(&self) -> Option<u32> {
-        self.master.lock().unwrap().process_group_leader().map(|pid| pid as u32)
-    }
-
-    #[cfg(not(unix))]
-    pub fn foreground_pid(&self) -> Option<u32> {
-        None
+        self.process.foreground_pid()
     }
 
     /// The raw output kept for this pane (up to `REPLAY_BYTES`), oldest first, for `read_pane`.

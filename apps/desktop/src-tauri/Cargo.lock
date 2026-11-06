@@ -6025,15 +6025,57 @@ dependencies = [
  "tauri-plugin-window-state",
  "ureq",
  "vte",
+ "wings-agents",
  "wings-bench-grid",
- "zip 8.6.0",
+ "wings-plugin-storage",
+ "wings-plugins",
+ "wings-terminal",
+]
+
+[[package]]
+name = "wings-agents"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "ureq",
 ]
 
 [[package]]
 name = "wings-bench-grid"
 version = "0.1.0"
 dependencies = [
+ "wings-terminal",
+]
+
+[[package]]
+name = "wings-plugin-storage"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "wings-plugins"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+ "url",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "wings-terminal"
+version = "0.1.0"
+dependencies = [
  "alacritty_terminal",
+ "anyhow",
+ "libc",
+ "portable-pty",
 ]
 
 [[package]]

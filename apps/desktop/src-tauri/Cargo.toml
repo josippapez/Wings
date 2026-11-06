@@ -25,6 +25,10 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+wings-agents = { path = "../../../crates/wings-agents" }
+wings-plugin-storage = { path = "../../../crates/wings-plugin-storage" }
+wings-plugins = { path = "../../../crates/wings-plugins" }
+wings-terminal = { path = "../../../crates/wings-terminal" }
 tauri-plugin-dialog = "2.8.1"
 portable-pty = "0.9.0"
 sysinfo = "0.39.6"
@@ -33,7 +37,6 @@ anyhow = "1"
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-notification = "2.5.1"
 ureq = "3.4.2"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 keyring = "4.2.0"
 # Already built for Tauri; the CLI finds the app data folder the same way.
 dirs = "7.0.0"
