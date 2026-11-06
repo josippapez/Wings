@@ -16,6 +16,22 @@ The storage root and installation scope must be supplied together. Use the trust
 
 `--project` defaults to the current directory. An absolute project path is kept exactly as supplied, including its symlink spelling, so use the same path as the existing saved project. Relative paths are made absolute without resolving symlinks. `--help` lists the options.
 
+## macOS package staging
+
+```sh
+cd apps/native
+sh scripts/package-mac-app.sh
+node --test scripts/package-mac-app.test.mjs
+```
+
+`package-mac-app.sh "Release notes"` builds the archive, `native-latest-darwin-<architecture>.json` and its detached `.sig` in `target/release/bundle/macos/darwin-<architecture>/`. It requires `WINGS_UPDATER_KEY` (default `~/.tauri/wings-updater.key`) and uses the desktop's Tauri signing CLI and embedded public key. Run `sh scripts/build-mac-app.sh` when you only need a local bundle. The native app uses its own `[package]` version from `apps/native/Cargo.toml`, not the desktop version used for plugin compatibility.
+
+The bundle carries `wings-native`, `wings-plugin-worker`, `wings` and `wings-terminal-server`. Updates require all four executables to support the running Mac's architecture.
+
+Packaged release builds check on startup and every six hours while focused. App menu > Check for Updates… and the command palette open the native update dialog. Download update authenticates the metadata, archive and staged bundle off the UI thread. Install and restart saves the workspace through normal quit, waits for the app process to exit, atomically exchanges the bundles and relaunches the exact installed executable with its original arguments. Running terminals and agents may stop. Source/debug runs explain why automatic installation is unavailable. Nothing is installed without confirmation.
+
+Publish the three staged files yourself in `josippapez/Wings` under `native-v<version>` and make that release latest. The fixed feed URL is `https://github.com/josippapez/Wings/releases/latest/download/native-latest-darwin-<architecture>.json`. Include both architecture feeds when shipping both. Native never reads desktop `latest.json`. See [releasing](../../docs/releasing.md) for the signed contract and recovery.
+
 Checks:
 
 ```sh

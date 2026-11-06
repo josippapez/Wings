@@ -52,6 +52,14 @@ unicode-segmentation = { version = "1.13", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 keyring = "4.2.0"
 ureq = "3.4.2"
+base64 = "0.22.1"
+minisign-verify = "=0.2.5"
+sha2 = "0.10.9"
+semver = "1.0.28"
+tar = "0.4.46"
+flate2 = "1.1.10"
+tempfile = "3.27.0"
+plist = "1.10.1"
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

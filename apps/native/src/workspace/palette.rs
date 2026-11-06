@@ -337,6 +337,12 @@ impl Workspace {
                 true,
             ),
             ("Settings", "App", Rc::new(OpenSettings), true),
+            (
+                "Check for Updates",
+                "App",
+                Rc::new(crate::actions::CheckForUpdates),
+                true,
+            ),
         ];
         // Only with an editor installed, as on the desktop.
         if self.default_editor().is_some() {

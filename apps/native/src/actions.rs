@@ -37,6 +37,7 @@ actions!(
         DecreaseFontSize,
         ResetFontSize,
         OpenSettings,
+        CheckForUpdates,
         TogglePalette,
         OpenHistory,
         OpenProjectInEditor,
@@ -147,6 +148,7 @@ pub fn menus() -> Vec<Menu> {
     if MAC {
         menus.push(Menu::new("Wings Native").items([
             MenuItem::action("Settings…", OpenSettings),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
@@ -226,7 +228,7 @@ mod tests {
     fn every_menu_command_with_a_desktop_shortcut_has_its_key() {
         let mut app = TestApp::new();
         app.update(bind);
-        let unbound: [&dyn Action; 8] = [
+        let unbound: [&dyn Action; 9] = [
             &CloseTab,
             &OpenHistory,
             &MoveTabLeft,
@@ -235,6 +237,7 @@ mod tests {
             &ShowAll,
             &Zoom,
             &CloseWindow,
+            &CheckForUpdates,
         ];
         app.update(|cx| {
             let keymap = cx.key_bindings();

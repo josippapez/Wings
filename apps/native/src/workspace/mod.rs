@@ -42,6 +42,7 @@ mod tabs;
 #[cfg(all(test, feature = "test-support"))]
 mod tests;
 mod title_bar;
+mod updater;
 mod welcome;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -189,6 +190,7 @@ pub struct Workspace {
     pane_info: HashMap<usize, PaneInfo>,
     window_active: bool,
     settings: Option<settings::SettingsDialog>,
+    updates: updater::Updates,
     /// What the app keeps besides how terminals look: the quick terminal key, the editor, what new tabs open.
     prefs: settings::Prefs,
     /// The editors found on this computer, looked up once.
@@ -324,6 +326,7 @@ impl Workspace {
             pane_info: HashMap::new(),
             window_active: window.is_window_active(),
             settings: None,
+            updates: updater::Updates::new(cx),
             prefs: settings::Prefs::default(),
             editors: Vec::new(),
             editor_menu: false,
@@ -452,6 +455,7 @@ impl Workspace {
         };
         this.find_editors(cx);
         this.enter_project(window, cx);
+        this.start_update_checks(window, cx);
         this
     }
 
@@ -643,6 +647,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &crate::actions::CheckForUpdates, window, cx| {
+                    this.check_updates(true, window, cx)
+                }),
+            )
             .text_color(rgb(theme::FOREGROUND))
             .text_size(px(13.0))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_terminal(window, cx)))
@@ -794,6 +803,7 @@ impl Render for Workspace {
             .children(self.inbox_layer(cx))
             .children(notices)
             .children(self.menu_layer(cx))
+            .children(self.update_dialog(cx))
             .into_any_element()
     }
 }

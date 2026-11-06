@@ -12,7 +12,8 @@ use wings_native::{
 
 fn run() -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let Some(mut config) = Config::parse(std::env::args_os().skip(1), &cwd)? else {
+    let (args, restart_ack) = wings_native::updater::startup_args();
+    let Some(mut config) = Config::parse(args, &cwd)? else {
         println!("{USAGE}");
         return Ok(());
     };
@@ -73,6 +74,11 @@ fn run() -> Result<(), String> {
                 |window, cx| cx.new(|cx| Workspace::new(config, window, cx)),
             )
             .expect("Could not open the Wings native window");
+            if let Some(path) = &restart_ack
+                && let Err(error) = wings_native::updater::acknowledge_startup(path)
+            {
+                eprintln!("Could not confirm update startup: {error}");
+            }
             cx.activate(true);
         });
     Ok(())
@@ -101,6 +107,13 @@ fn without_large_malloc_cache() {
 }
 
 fn main() {
+    if let Some(result) = wings_native::updater::installer_entry() {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     #[cfg(target_os = "macos")]
     without_large_malloc_cache();
     if let Err(error) = run() {
