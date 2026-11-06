@@ -36,6 +36,7 @@ fn the_new_settings_are_saved_and_come_back() {
                     look.min_contrast = 4.5;
                     look.inactive_cursor = InactiveCursor::Hidden;
                     look.cursor_blink = false;
+                    look.option_as_meta = crate::terminal_view::OptionAsMeta::Both;
                     look.scrollback = 50_000;
                     look.copy_on_select = true;
                     look.clipboard_write = false;
@@ -75,6 +76,10 @@ fn the_new_settings_are_saved_and_come_back() {
             (1.5, 4.5, InactiveCursor::Hidden, 50_000)
         );
         assert!(look.copy_on_select && !look.clipboard_write && !look.cursor_blink);
+        assert_eq!(
+            look.option_as_meta,
+            crate::terminal_view::OptionAsMeta::Both
+        );
         assert_eq!(
             w.prefs,
             settings::Prefs {

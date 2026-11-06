@@ -25,6 +25,7 @@ use gpui::{
     SharedString, Subscription, Task, Window, prelude::*, px,
 };
 
+pub use input::{OPTION_AS_META, OptionAsMeta};
 pub use wings_terminal::grid::CursorShape;
 
 use crate::text_field::TextField;
@@ -95,6 +96,8 @@ pub struct TerminalLook {
     pub family: SharedString,
     /// Shift-Return sends Meta-Return, a new line in Claude Code.
     pub shift_return_meta: bool,
+    /// Which Option key types Meta.
+    pub option_as_meta: OptionAsMeta,
     /// The cursor programs get until they set their own.
     pub cursor: CursorShape,
     /// The focused pane's cursor turns off and on, as xterm's `cursorBlink`.
@@ -118,6 +121,7 @@ impl Default for TerminalLook {
         Self {
             family: DEFAULT_FONT_FAMILY.into(),
             shift_return_meta: true,
+            option_as_meta: OptionAsMeta::Left,
             cursor: CursorShape::Block,
             cursor_blink: true,
             inactive_cursor: InactiveCursor::Outline,

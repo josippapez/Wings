@@ -5,7 +5,9 @@ use gpui::{App, Context, Window};
 use crate::{
     layout::{Dir, Layout},
     saved::{self, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedTab},
-    terminal_view::{CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, font_size, look},
+    terminal_view::{
+        CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, OPTION_AS_META, font_size, look,
+    },
 };
 
 use super::{Active, TerminalTab, Workspace};
@@ -145,6 +147,10 @@ impl Workspace {
             sidebar_open: Some(self.sidebar),
             font_family: (look.family != DEFAULT_FONT_FAMILY).then(|| look.family.to_string()),
             shift_return_meta: Some(look.shift_return_meta),
+            option_as_meta: OPTION_AS_META
+                .iter()
+                .find(|(choice, ..)| *choice == look.option_as_meta)
+                .map(|(_, name, _)| name.to_string()),
             cursor_style: CURSOR_STYLES
                 .iter()
                 .find(|(shape, ..)| *shape == look.cursor)

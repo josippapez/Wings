@@ -348,3 +348,20 @@ fn the_focused_cursor_blinks_until_blink_is_turned_off() {
     }
     window.update(|view, _, _| view.runtime.shutdown());
 }
+
+#[test]
+fn left_option_types_meta_and_right_option_is_left_to_text_input() {
+    let (app, mut window) = open(
+        r#"stty raw -echo; printf ready; v=$(dd bs=2 count=1 2>/dev/null | od -An -c); printf 'got:%s' "$v"; sleep 30"#,
+    );
+    settle(&app, &mut window, shows("ready"));
+    // The right Option alone isn't Meta by default: nothing goes to the shell, AppKit types its character instead.
+    super::input::OPTION_KEYS.set((false, true));
+    window.simulate_keystroke("alt-a");
+    super::input::OPTION_KEYS.set((true, false));
+    window.simulate_keystroke("alt-b");
+    // The shell reads two bytes: Escape and b, so nothing came before them.
+    settle(&app, &mut window, shows("got:033b"));
+    super::input::OPTION_KEYS.set((false, false));
+    window.update(|view, _, _| view.runtime.shutdown());
+}

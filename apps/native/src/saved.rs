@@ -103,6 +103,9 @@ pub struct Settings {
     pub font_family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shift_return_meta: Option<bool>,
+    /// `off`, `left`, `right` or `both`, as the desktop's `optionAsMeta`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_as_meta: Option<String>,
     /// `block`, `bar` or `underline`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_style: Option<String>,

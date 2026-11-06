@@ -72,8 +72,8 @@ use crate::{
     saved,
     terminal_view::{
         CONTRASTS, CURSOR_STYLES, CursorShape, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE,
-        INACTIVE_CURSORS, LINE_HEIGHTS, MAX_FONT_SIZE, MIN_FONT_SIZE, SCROLLBACKS, TerminalFont,
-        TerminalLook, TerminalView, font_size,
+        INACTIVE_CURSORS, LINE_HEIGHTS, MAX_FONT_SIZE, MIN_FONT_SIZE, OPTION_AS_META, SCROLLBACKS,
+        TerminalFont, TerminalLook, TerminalView, font_size,
     },
     text_field::TextField,
     theme,
@@ -420,6 +420,10 @@ impl Workspace {
                 .filter(installed)
                 .map_or(DEFAULT_FONT_FAMILY.into(), Into::into),
             shift_return_meta: settings.shift_return_meta.unwrap_or(true),
+            option_as_meta: OPTION_AS_META
+                .iter()
+                .find(|(_, name, _)| settings.option_as_meta.as_deref() == Some(*name))
+                .map_or(defaults.option_as_meta, |(choice, ..)| *choice),
             cursor: CURSOR_STYLES
                 .iter()
                 .find(|(_, name, _)| settings.cursor_style.as_deref() == Some(*name))

@@ -10,8 +10,8 @@ use crate::{
     icons::{Icon, icon},
     installed::WINGS_VERSION,
     terminal_view::{
-        CONTRASTS, CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, LINE_HEIGHTS, SCROLLBACKS,
-        TerminalLook, look,
+        CONTRASTS, CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, LINE_HEIGHTS,
+        OPTION_AS_META, SCROLLBACKS, TerminalLook, look,
     },
     text_field::{FieldEvent, TextField},
     theme,
@@ -522,6 +522,21 @@ impl Workspace {
                 )],
             ],
             Section::Keyboard => vec![vec![
+                ui::setting_row(
+                    "Use Option as Meta",
+                    "The other Option key still types characters like ~ and @.",
+                    None,
+                    self.select(
+                        "option-as-meta",
+                        "Use Option as Meta",
+                        Self::look_choices(
+                            OPTION_AS_META.map(|(choice, _, label)| (choice, label.to_owned())),
+                            current.option_as_meta,
+                            |look, choice| look.option_as_meta = choice,
+                        ),
+                        cx,
+                    ),
+                ),
                 self.switch_row(
                     "shift-return-meta",
                     "Shift-Return sends Meta Return",

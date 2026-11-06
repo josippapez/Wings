@@ -70,7 +70,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-fe
 # only AppKit's NSSound bindings to the build.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"], optional = true }
 
 [[example]]

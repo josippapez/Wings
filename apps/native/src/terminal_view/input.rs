@@ -10,6 +10,84 @@ use wings_terminal::grid::{Scroll, TermMode};
 
 use super::{TerminalView, worker::Command};
 
+/// Which Option key types Meta (Escape, then the key) in a terminal, as the desktop's `optionAsMeta`. The other one
+/// still types characters like ~ and @ on layouts that need it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionAsMeta {
+    Off,
+    Left,
+    Right,
+    Both,
+}
+
+/// The desktop's choices: each one, its saved name and its label.
+pub const OPTION_AS_META: [(OptionAsMeta, &str, &str); 4] = [
+    (OptionAsMeta::Off, "off", "Off"),
+    (OptionAsMeta::Left, "left", "Left Option only"),
+    (OptionAsMeta::Right, "right", "Right Option only"),
+    (OptionAsMeta::Both, "both", "Both Option keys"),
+];
+
+/// Escape and the key's own character, for an Option key that types Meta. `held` is which Option keys are down:
+/// left, right. Keys without a character of their own (Enter, the arrows) are left to `edit_key` and `key_bytes`.
+fn meta_bytes(key: &Keystroke, setting: OptionAsMeta, held: (bool, bool)) -> Option<Vec<u8>> {
+    let mods = key.modifiers;
+    if !mods.alt || mods.control || mods.platform || mods.function {
+        return None;
+    }
+    let meta = match setting {
+        OptionAsMeta::Off => false,
+        OptionAsMeta::Left => held.0,
+        OptionAsMeta::Right => held.1,
+        OptionAsMeta::Both => true,
+    };
+    let mut chars = key.key.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    if !meta || !c.is_ascii_graphic() {
+        return None;
+    }
+    // Shift makes a letter capital; what Shift does to other keys depends on the layout, so those type as usual.
+    let c = match (mods.shift, c.is_ascii_lowercase()) {
+        (false, _) => c,
+        (true, true) => c.to_ascii_uppercase(),
+        (true, false) => return None,
+    };
+    Some(vec![0x1b, c as u8])
+}
+
+/// Which Option keys are down for the key being handled: left, right. GPUI's modifiers say only that one is, so this
+/// reads AppKit's event, which GPUI is still handling, for its device bits (`NX_DEVICELALTKEYMASK` and
+/// `NX_DEVICERALTKEYMASK` in IOKit's `IOLLEvent.h`).
+#[cfg(all(target_os = "macos", not(test)))]
+fn option_keys() -> (bool, bool) {
+    let Some(main) = objc2::MainThreadMarker::new() else {
+        return (false, false);
+    };
+    let Some(event) = objc2_app_kit::NSApplication::sharedApplication(main).currentEvent() else {
+        return (false, false);
+    };
+    let flags = event.modifierFlags().0;
+    (flags & 0x20 != 0, flags & 0x40 != 0)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The Option keys a test holds down: left, right.
+    pub(super) static OPTION_KEYS: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, false)) };
+}
+
+#[cfg(test)]
+fn option_keys() -> (bool, bool) {
+    OPTION_KEYS.get()
+}
+
+#[cfg(not(any(target_os = "macos", test)))]
+fn option_keys() -> (bool, bool) {
+    (false, false)
+}
+
 fn key_bytes(key: &Keystroke, mode: TermMode, prefer_character: bool) -> Option<Vec<u8>> {
     let mods = key.modifiers;
     if mods.platform || prefer_character {
@@ -174,6 +252,7 @@ impl TerminalView {
             }
             () => edit_key(key, super::look(cx).shift_return_meta)
                 .map(<[u8]>::to_vec)
+                .or_else(|| meta_bytes(key, super::look(cx).option_as_meta, option_keys()))
                 .or_else(|| key_bytes(key, mode, event.prefer_character_input))
                 .map(Command::Input),
         };
@@ -334,6 +413,48 @@ mod tests {
 
     fn key(binding: &'static str, mode: TermMode) -> Option<Vec<u8>> {
         key_bytes(&Keystroke::parse(binding).unwrap(), mode, false)
+    }
+
+    #[test]
+    fn the_chosen_option_key_types_meta_and_the_other_types_characters() {
+        fn meta(
+            binding: &'static str,
+            setting: OptionAsMeta,
+            held: (bool, bool),
+        ) -> Option<Vec<u8>> {
+            meta_bytes(&Keystroke::parse(binding).unwrap(), setting, held)
+        }
+        let (left, right) = ((true, false), (false, true));
+        assert_eq!(
+            meta("alt-b", OptionAsMeta::Left, left),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(
+            meta("alt-b", OptionAsMeta::Left, right),
+            None,
+            "right Option types ∫"
+        );
+        assert_eq!(
+            meta("alt-b", OptionAsMeta::Right, right),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(
+            meta("alt-b", OptionAsMeta::Both, (false, false)),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(meta("alt-b", OptionAsMeta::Off, left), None);
+        assert_eq!(
+            meta("alt-shift-f", OptionAsMeta::Left, left),
+            Some(b"\x1bF".to_vec())
+        );
+        assert_eq!(
+            meta("alt-.", OptionAsMeta::Left, left),
+            Some(b"\x1b.".to_vec())
+        );
+        assert_eq!(meta("alt-shift-2", OptionAsMeta::Left, left), None);
+        assert_eq!(meta("alt-enter", OptionAsMeta::Left, left), None);
+        assert_eq!(meta("ctrl-alt-b", OptionAsMeta::Left, left), None);
+        assert_eq!(meta("b", OptionAsMeta::Both, left), None);
     }
 
     #[test]
