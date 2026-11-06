@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.122 · 2026-11-06
+
+- **Each Claude Code account keeps its own model.** An account that shares your default setup gets a copy of your settings with its own model kept, so a work seat no longer starts on your personal default model.
+
 ## 0.1.121 · 2026-11-06
 
 - **Every Claude Code account gets your setup.** A second account links your default account's settings, plugins, skills and rules, and gets its MCP servers. Turn it off per account in the Claude accounts plugin and the account's own files come back.
