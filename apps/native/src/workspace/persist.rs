@@ -173,6 +173,8 @@ impl Workspace {
             agents_run_commands: Some(self.prefs.agents_run_commands),
             agents_message: Some(self.prefs.agents_message),
             notify_sound: Some(self.prefs.notify_sound.to_saved()),
+            diff_wrap: Some(self.prefs.diff_wrap),
+            diff_tree: Some(self.prefs.diff_tree),
             ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {

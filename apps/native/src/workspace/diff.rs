@@ -22,9 +22,21 @@ impl Workspace {
         };
         self.plugin_ui.diff = None;
         window.activate_window();
-        let viewer = cx.new(|cx| Viewer::new(view, host, cx));
+        let (wrap, tree) = (self.prefs.diff_wrap, self.prefs.diff_tree);
+        let viewer = cx.new(|cx| {
+            let mut viewer = Viewer::new(view, host, cx);
+            viewer.set_layout(wrap, tree, cx);
+            viewer
+        });
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
             Event::Close => this.close_diff_view(window, cx),
+            Event::Layout { wrap, tree } => this.set_prefs(
+                |prefs| {
+                    prefs.diff_wrap = *wrap;
+                    prefs.diff_tree = *tree;
+                },
+                cx,
+            ),
         });
         viewer.focus_handle(cx).focus(window, cx);
         self.plugin_ui.diff = Some((viewer, events));

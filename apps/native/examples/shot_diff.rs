@@ -7,7 +7,7 @@ use wings_native::{
     page::plugin::{PluginConfig, PluginHost},
 };
 
-const PATCH: &str = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,4 +1,5 @@\n pub fn load() {\n-    let timeout = 10;\n+    let timeout = 30;\n+    validate(timeout);\n     connect(timeout);\n }\ndiff --git a/old-name.txt b/new-name.txt\nsimilarity index 100%\nrename from old-name.txt\nrename to new-name.txt\n";
+const PATCH: &str = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,4 +1,6 @@\n pub fn load() {\n-    let timeout = 10;\n+    // Thirty seconds gives a slow network room to answer before the client gives up and reports the server as unreachable.\n+    let timeout = 30;\n+    validate(timeout);\n     connect(timeout);\n }\ndiff --git a/old-name.txt b/new-name.txt\nsimilarity index 100%\nrename from old-name.txt\nrename to new-name.txt\n";
 
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).expect("output directory"));
@@ -22,7 +22,15 @@ fn main() {
         Arc::new(Assets),
     );
     for width in [1000.0, 640.0] {
-        for state in ["normal", "loading", "error", "binary", "selection"] {
+        for state in [
+            "normal",
+            "loading",
+            "error",
+            "binary",
+            "selection",
+            "tree",
+            "wrap",
+        ] {
             let payload = match state {
                 "loading" => serde_json::json!({}),
                 "error" => {
@@ -48,6 +56,15 @@ fn main() {
                     cx.new(|cx| Viewer::new(view, host, cx))
                 })
                 .unwrap();
+            // The folder tree; and one wrapped column, with a long line.
+            if state == "tree" || state == "wrap" {
+                handle
+                    .update(&mut cx, |viewer, _, cx| {
+                        viewer.set_layout(state == "wrap", state == "tree", cx);
+                        viewer.set_split(state != "wrap", cx);
+                    })
+                    .unwrap();
+            }
             if state == "selection" {
                 handle
                     .update(&mut cx, |viewer, _, cx| viewer.select_file(1, cx))

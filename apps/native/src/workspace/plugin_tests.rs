@@ -201,7 +201,11 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
     });
     app.run_until_parked();
     window.draw();
-    window.simulate_click(point(px(80.0), px(114.0)), MouseButton::Left);
+    // The folder tree, which is kept for the next diff. Both files are at the top, so their rows stay put.
+    window.simulate_click(point(px(263.0), px(95.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.prefs.diff_tree));
+    window.draw();
+    window.simulate_click(point(px(80.0), px(162.0)), MouseButton::Left);
     assert_eq!(
         window.read(|w, cx| w
             .plugin_ui
@@ -213,8 +217,9 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
             .selected_file()),
         1
     );
-    // Refresh: the 28px icon button left of the hairline and Close, inside the header's 12px of right padding.
-    window.simulate_click(point(px(929.0), px(32.0)), MouseButton::Left);
+    // Refresh, by its shortcut: the button's place depends on the toggles' label widths, which the test text system
+    // doesn't measure like the real one.
+    window.simulate_keystroke("cmd-r");
     until(&app, &mut window, "refresh did not reach main", |_| {
         data.saved("differ", "diff-scope", "refreshed") == Some(json!(true))
     });
@@ -225,6 +230,24 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
     until(&app, &mut window, "close event did not reach main", |_| {
         data.saved("differ", "diff-scope", "closed").is_some()
     });
+    // The next diff opens with the kept choices.
+    window.update(|w, window, cx| {
+        w.prefs.diff_wrap = true;
+        let view = crate::diff::View {
+            id: "differ:again".into(),
+            plugin_id: "differ".into(),
+            title: "Again".into(),
+            subtitle: String::new(),
+            cwd: String::new(),
+            refresh: false,
+            update: Default::default(),
+        };
+        w.open_diff_view(view, window, cx);
+    });
+    assert!(window.read(|w, cx| {
+        let viewer = w.plugin_ui.diff.as_ref().unwrap().0.read(cx);
+        viewer.tree && viewer.wrap
+    }));
 }
 
 #[test]

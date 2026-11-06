@@ -154,6 +154,12 @@ pub struct Settings {
     pub last_active: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_sound: Option<NotifySound>,
+    /// The diff viewer wraps long lines, as the desktop's `wings.diff.wrap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_wrap: Option<bool>,
+    /// The diff viewer lists files as a folder tree, as the desktop's `wings.diff.tree`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_tree: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

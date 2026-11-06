@@ -452,6 +452,8 @@ impl Workspace {
             agents_run_commands: settings.agents_run_commands == Some(true),
             agents_message: settings.agents_message == Some(true),
             notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
+            diff_wrap: settings.diff_wrap == Some(true),
+            diff_tree: settings.diff_tree == Some(true),
         };
         this.find_editors(cx);
         this.enter_project(window, cx);

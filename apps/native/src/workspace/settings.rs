@@ -95,6 +95,10 @@ pub(super) struct Prefs {
     pub(super) agents_message: bool,
     /// The sound for new notifications.
     pub(super) notify_sound: SoundSettings,
+    /// The diff viewer wraps long lines.
+    pub(super) diff_wrap: bool,
+    /// The diff viewer lists files as a folder tree.
+    pub(super) diff_tree: bool,
 }
 
 impl Default for Prefs {
@@ -107,6 +111,8 @@ impl Default for Prefs {
             agents_run_commands: false,
             agents_message: false,
             notify_sound: SoundSettings::default(),
+            diff_wrap: false,
+            diff_tree: false,
         }
     }
 }

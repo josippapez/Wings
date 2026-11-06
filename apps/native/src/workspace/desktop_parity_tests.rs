@@ -55,6 +55,8 @@ fn the_new_settings_are_saved_and_come_back() {
                         sound: SoundId::Ping,
                         watching: false,
                     };
+                    prefs.diff_wrap = true;
+                    prefs.diff_tree = true;
                 },
                 cx,
             );
@@ -87,6 +89,8 @@ fn the_new_settings_are_saved_and_come_back() {
                     sound: SoundId::Ping,
                     watching: false,
                 },
+                diff_wrap: true,
+                diff_tree: true,
             }
         );
     });
