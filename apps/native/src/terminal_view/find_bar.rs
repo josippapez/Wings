@@ -193,7 +193,14 @@ fn find_button(
     cx: &mut Context<TerminalView>,
     action: fn(&mut TerminalView, &mut Window, &mut Context<TerminalView>),
 ) -> impl IntoElement {
-    ui::ghost_button(label, label, ButtonSize::Sm, toggled, glyph)
+    // The keys the desktop's find bar shows in these buttons' tooltips.
+    let shortcut = match label {
+        "Previous match" => Some("⇧↩".into()),
+        "Next match" => Some("↩".into()),
+        "Close find" => Some("Esc".into()),
+        _ => None,
+    };
+    ui::ghost_button(label, label, shortcut, ButtonSize::Sm, toggled, glyph)
         .track_focus(focus)
         .on_click(cx.listener(move |view, _, window, cx| action(view, window, cx)))
 }

@@ -554,6 +554,7 @@ impl Workspace {
                 ui::ghost_button(
                     SharedString::from(format!("plugin-sidebar-{plugin}-{page}")),
                     sidebar.title.clone(),
+                    None,
                     ButtonSize::Sm,
                     Some(open),
                     mark,

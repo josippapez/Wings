@@ -4,10 +4,12 @@
 mod button;
 mod parts;
 mod status_dot;
+mod tooltip;
 
 pub use button::{Variant, badge, button};
 pub use parts::{disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use status_dot::{spinner as working_spinner, status_dot};
+pub use tooltip::tooltip;
 
 use gpui::{
     AnyElement, BoxShadow, Div, ElementId, Entity, FocusHandle, FontWeight, IntoElement,
@@ -66,19 +68,23 @@ impl ButtonSize {
 }
 
 /// shadcn's ghost button around any content: a soft hover, a focus ring, and pressed while `on`
-/// for a toggle. A click on it never reaches what's behind, like a window drag or pane focus.
+/// for a toggle. Its tooltip names it, with `shortcut` where it has one. A click on it never reaches what's behind,
+/// like a window drag or pane focus.
 pub fn ghost_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
+    shortcut: Option<SharedString>,
     size: ButtonSize,
     on: Option<bool>,
     content: impl IntoElement,
 ) -> Stateful<Div> {
     let pressed = on == Some(true);
+    let label = label.into();
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(label.clone())
+        .tooltip(tooltip(label, shortcut))
         .when_some(on, |button, on| {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
         })
@@ -115,9 +121,21 @@ pub fn icon_button(
     label: impl Into<SharedString>,
     size: ButtonSize,
 ) -> Stateful<Div> {
+    shortcut_icon_button(id, glyph, label, None, size)
+}
+
+/// An `icon_button` whose tooltip shows its shortcut too, as the desktop's `IconButton shortcut=`.
+pub fn shortcut_icon_button(
+    id: impl Into<ElementId>,
+    glyph: Icon,
+    label: impl Into<SharedString>,
+    shortcut: Option<SharedString>,
+    size: ButtonSize,
+) -> Stateful<Div> {
     ghost_button(
         id,
         label,
+        shortcut,
         size,
         None,
         icon(glyph, size.icon(), theme::MUTED_FOREGROUND),

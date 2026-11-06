@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, MouseButton, MouseDownEvent, Role, div, prelude:
 use crate::{
     actions::ToggleSidebar,
     icons::Icon,
-    ui::{ButtonSize, icon_button},
+    ui::{ButtonSize, shortcut_icon_button},
 };
 
 use super::{Workspace, shortcut_label};
@@ -48,18 +48,15 @@ impl Workspace {
                     .when(sidebar, |left| left.w(px(self.side.width + 12.0)))
                     .when(!sidebar, |left| left.pr(px(4.0)))
                     .child(
-                        icon_button(
+                        shortcut_icon_button(
                             "toggle-sidebar",
                             Icon::PanelLeft,
-                            format!(
-                                "{} ({})",
-                                if sidebar {
-                                    "Hide sidebar"
-                                } else {
-                                    "Show sidebar"
-                                },
-                                shortcut_label("B", false)
-                            ),
+                            if sidebar {
+                                "Hide sidebar"
+                            } else {
+                                "Show sidebar"
+                            },
+                            Some(shortcut_label("B", false).into()),
                             ButtonSize::Sm,
                         )
                         .on_click(|_, window, cx| {
@@ -85,10 +82,11 @@ impl Workspace {
             // With no project there is nothing to open a tab in.
             .when(!self.welcome, |bar| {
                 bar.child(
-                    icon_button(
+                    shortcut_icon_button(
                         "new-terminal",
                         Icon::Plus,
-                        format!("New tab ({})", shortcut_label("T", false)),
+                        "New tab",
+                        Some(shortcut_label("T", false).into()),
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(|this, _, window, cx| this.new_tab_button(window, cx)))

@@ -208,7 +208,8 @@ impl Workspace {
                     .group_hover(group.clone(), |style| style.opacity(1.0))
                     .child(pane_button(
                         pane,
-                        format!("Split right ({})", shortcut_label("D", false)),
+                        "Split right",
+                        Some(shortcut_label("D", false)),
                         Icon::Columns,
                         cx,
                         |this, pane, window, cx| {
@@ -218,7 +219,8 @@ impl Workspace {
                     ))
                     .child(pane_button(
                         pane,
-                        format!("Split down ({})", shortcut_label("D", true)),
+                        "Split down",
+                        Some(shortcut_label("D", true)),
                         Icon::Rows,
                         cx,
                         |this, pane, window, cx| {
@@ -228,7 +230,8 @@ impl Workspace {
                     ))
                     .child(pane_button(
                         pane,
-                        if zoomed { "Restore" } else { "Zoom" }.to_string(),
+                        if zoomed { "Restore" } else { "Zoom" },
+                        None,
                         if zoomed {
                             Icon::Minimize
                         } else {
@@ -239,7 +242,8 @@ impl Workspace {
                     ))
                     .child(pane_button(
                         pane,
-                        format!("Close pane ({})", shortcut_label("W", false)),
+                        "Close pane",
+                        Some(shortcut_label("W", false)),
                         Icon::X,
                         cx,
                         |this, pane, window, cx| this.close_pane(pane, window, cx),
@@ -292,15 +296,17 @@ impl Workspace {
 /// A pane header's button: the kit's 24px icon button, aimed at this pane.
 fn pane_button(
     pane: usize,
-    label: String,
+    label: &'static str,
+    shortcut: Option<String>,
     glyph: Icon,
     cx: &mut Context<Workspace>,
     action: fn(&mut Workspace, usize, &mut Window, &mut Context<Workspace>),
 ) -> impl IntoElement + use<> {
-    ui::icon_button(
+    ui::shortcut_icon_button(
         SharedString::from(format!("{label}-{pane}")),
         glyph,
         label,
+        shortcut.map(Into::into),
         ButtonSize::Xs,
     )
     .on_click(cx.listener(move |this, _, window, cx| action(this, pane, window, cx)))

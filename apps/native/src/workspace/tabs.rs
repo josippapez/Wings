@@ -295,7 +295,7 @@ impl Workspace {
                 ui::icon_button(
                     SharedString::from(format!("{id}-close")),
                     Icon::X,
-                    format!("Close tab ({})", shortcut_label("W", true)),
+                    "Close tab",
                     ButtonSize::Tiny,
                 )
                 .opacity(0.0)
@@ -311,7 +311,7 @@ impl Workspace {
                 ui::icon_button(
                     SharedString::from(format!("{id}-close")),
                     Icon::X,
-                    format!("Close tab ({})", shortcut_label("W", true)),
+                    "Close tab",
                     ButtonSize::Tiny,
                 )
                 .opacity(0.0)
@@ -327,7 +327,7 @@ impl Workspace {
                 ui::icon_button(
                     SharedString::from(format!("{id}-close")),
                     Icon::X,
-                    format!("Close tab ({})", shortcut_label("W", true)),
+                    "Close tab",
                     ButtonSize::Tiny,
                 )
                 .opacity(0.0)
@@ -341,7 +341,7 @@ impl Workspace {
                 ui::icon_button(
                     SharedString::from(format!("{id}-close")),
                     Icon::X,
-                    format!("Close tab ({})", shortcut_label("W", true)),
+                    "Close tab",
                     ButtonSize::Tiny,
                 )
                 .opacity(0.0)
@@ -352,12 +352,20 @@ impl Workspace {
                 })),
             ),
         };
+        // Cmd-1 to Cmd-9 reach the first nine.
+        let key = self
+            .tabs()
+            .iter()
+            .position(|tab| *tab == active)
+            .filter(|index| *index < 9)
+            .map(|index| shortcut_label(&(index + 1).to_string(), false).into());
         // The desktop's tab: equal widths, and a raised pill for the one shown.
         div()
             .id(id)
             .group(group)
             .role(Role::Tab)
             .aria_label(label.clone())
+            .tooltip(ui::tooltip(label.clone(), key))
             .aria_selected(selected)
             .track_focus(focus)
             .flex_1()
