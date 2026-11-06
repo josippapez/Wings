@@ -253,7 +253,6 @@ impl Workspace {
         let (shown, pinned) = (entry.path.clone(), entry.pinned);
         let (pin_it, remove_it) = (entry.path.clone(), entry.path.clone());
         let page_of = entry.path.clone();
-        let lone = self.projects.len() == 1;
         div()
             .id(("project", index))
             .role(Role::Button)
@@ -391,21 +390,19 @@ impl Workspace {
                                 )),
                             )
                         })
-                        .when(!lone, |buttons| {
-                            buttons.child(
-                                ui::icon_button(
-                                    ("remove-project", index),
-                                    Icon::X,
-                                    "Remove from sidebar",
-                                    ButtonSize::Xs,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.request_remove(remove_it.clone(), window, cx)
-                                    },
-                                )),
+                        .child(
+                            ui::icon_button(
+                                ("remove-project", index),
+                                Icon::X,
+                                "Remove from sidebar",
+                                ButtonSize::Xs,
                             )
-                        })
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.request_remove(remove_it.clone(), window, cx)
+                                },
+                            )),
+                        )
                     }),
             )
             .into_any_element()

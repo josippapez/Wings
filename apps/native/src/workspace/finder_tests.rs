@@ -216,10 +216,10 @@ fn the_palette_lists_the_commands_with_their_keys_and_none_the_native_app_lacks(
         assert_eq!(shortcut("Increase Font Size"), keys("⌘+", "Ctrl+Shift++"));
         assert_eq!(shortcut("Settings"), keys("⌘,", "Ctrl+,"));
         assert_eq!(shortcut("Close Tab"), None);
+        assert_eq!(shortcut("Quick Terminal"), keys("⌃`", "Ctrl+`"));
         // The desktop's palette doesn't list itself, nor what the native app can't do.
         for missing in [
             "Command Palette",
-            "Quick Terminal",
             "Go Back",
             "Check for Updates",
             "Show Notifications",

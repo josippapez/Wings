@@ -31,7 +31,7 @@ use self::{
     links::Link,
     mouse::Hit,
     snapshot::{Latest, Snapshot},
-    worker::{Command, Geometry, Runtime, fit, start},
+    worker::{Command, Geometry, Options, Runtime, fit, start},
 };
 
 /// The desktop terminal's default size. Increase and Decrease Font Size go from 9 to 24.
@@ -59,6 +59,32 @@ pub const CURSOR_STYLES: [(CursorShape, &str, &str); 3] = [
 /// The desktop's default terminal font on macOS.
 pub const DEFAULT_FONT_FAMILY: &str = "Menlo";
 
+/// The desktop's line heights, as multiples of the font size.
+pub const LINE_HEIGHTS: [f32; 7] = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6];
+/// The desktop's minimum contrast choices: the ratio and its label. 1 is off.
+pub const CONTRASTS: [(f32, &str); 3] = [(1.0, "Off"), (4.5, "Readable (4.5)"), (7.0, "High (7)")];
+/// The desktop's scrollback choices, in lines per pane.
+pub const SCROLLBACKS: [usize; 6] = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
+
+/// How the cursor of a pane without focus looks, as the desktop's `cursorInactiveStyle`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InactiveCursor {
+    Outline,
+    Block,
+    Bar,
+    Underline,
+    Hidden,
+}
+
+/// The desktop's choices: each style, its saved name and its label.
+pub const INACTIVE_CURSORS: [(InactiveCursor, &str, &str); 5] = [
+    (InactiveCursor::Outline, "outline", "Outline"),
+    (InactiveCursor::Block, "block", "Block"),
+    (InactiveCursor::Bar, "bar", "Bar"),
+    (InactiveCursor::Underline, "underline", "Underline"),
+    (InactiveCursor::Hidden, "none", "Hidden"),
+];
+
 /// The Settings that change how every terminal draws and types, like the desktop's terminal look.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalLook {
@@ -68,6 +94,18 @@ pub struct TerminalLook {
     pub shift_return_meta: bool,
     /// The cursor programs get until they set their own.
     pub cursor: CursorShape,
+    /// The cursor of a pane without focus.
+    pub inactive_cursor: InactiveCursor,
+    /// Spacing between lines, as a multiple of the font size.
+    pub line_height: f32,
+    /// Text below this contrast with its background is lightened or darkened; 1 leaves it.
+    pub min_contrast: f32,
+    /// Lines of history each pane keeps.
+    pub scrollback: usize,
+    /// A selection goes to the clipboard when the mouse button is let go.
+    pub copy_on_select: bool,
+    /// Programs may put text on the clipboard (OSC 52).
+    pub clipboard_write: bool,
 }
 
 impl Default for TerminalLook {
@@ -76,6 +114,12 @@ impl Default for TerminalLook {
             family: DEFAULT_FONT_FAMILY.into(),
             shift_return_meta: true,
             cursor: CursorShape::Block,
+            inactive_cursor: InactiveCursor::Outline,
+            line_height: 1.2,
+            min_contrast: 1.0,
+            scrollback: wings_terminal::grid::HISTORY_LINES,
+            copy_on_select: false,
+            clipboard_write: true,
         }
     }
 }
@@ -86,9 +130,10 @@ pub fn look(cx: &App) -> TerminalLook {
     cx.try_global::<TerminalLook>().cloned().unwrap_or_default()
 }
 
-/// 20px lines at 14px, about what the desktop's `lineHeight: 1.2` gives in Menlo.
-fn line_height(font_size: f32) -> f32 {
-    (font_size * 1.4).round()
+/// A row's height in points. xterm multiplies the font's own line height, about 7/6 of its size in Menlo, so the
+/// desktop's default 1.2 gives 20px lines at 14px.
+fn line_height(font_size: f32, factor: f32) -> f32 {
+    (font_size * factor * 7.0 / 6.0).round()
 }
 const RESIZE_DELAY: Duration = Duration::from_millis(80);
 const REDRAW_DELAY: Duration = Duration::from_millis(16);
@@ -199,15 +244,15 @@ impl TerminalView {
             view.runtime.shutdown();
             async {}
         });
-        let cursor = look(cx).cursor;
-        if cursor != CursorShape::Block {
-            let _ = runtime.commands.try_send(Command::Cursor(cursor));
+        let options = Options::of(&look(cx));
+        if options != Options::default() {
+            let _ = runtime.commands.try_send(Command::Options(options));
         }
         let look_changed = cx.observe_global::<TerminalLook>(|view, cx| {
             let _ = view
                 .runtime
                 .commands
-                .try_send(Command::Cursor(look(cx).cursor));
+                .try_send(Command::Options(Options::of(&look(cx))));
         });
         Self {
             focus: cx.focus_handle(),
@@ -216,7 +261,7 @@ impl TerminalView {
             latest: latest.clone(),
             bounds: None,
             cell_width: px(8.0),
-            line_height: line_height(DEFAULT_FONT_SIZE),
+            line_height: line_height(DEFAULT_FONT_SIZE, 1.2),
             geometry: None,
             resize_task: None,
             _updates: update_task,

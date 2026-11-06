@@ -47,7 +47,10 @@ fn the_cursor_setting_applies_until_a_program_sets_its_own() {
     let shape = |frame: &Snapshot| frame.cursor.map(|(.., shape)| shape);
     runtime
         .commands
-        .send_blocking(worker::Command::Cursor(CursorShape::Beam))
+        .send_blocking(worker::Command::Options(worker::Options {
+            cursor: CursorShape::Beam,
+            ..Default::default()
+        }))
         .unwrap();
     wait_snapshot(&latest, |frame| shape(frame) == Some(CursorShape::Beam));
     // DECSCUSR 4 asks for a steady underline, which wins over the setting.
@@ -94,6 +97,35 @@ fn replayed_output_ends_its_modes_and_never_answers_into_the_new_shell() {
         .copied()
         .collect::<Vec<_>>();
     assert!(recent.starts_with(&history));
+    drop(runtime);
+    wait_reaped(&process);
+}
+
+#[test]
+fn with_clipboard_writes_off_a_program_cannot_copy() {
+    let mut command = wings_terminal::CommandBuilder::new("/bin/sh");
+    command.args([
+        "-c",
+        r#"printf ready; read go; printf '\033]52;c;%s\007' "$(printf secret | base64)"; printf done; sleep 30"#,
+    ]);
+    let process =
+        Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
+    let (runtime, latest, _updates) =
+        start_process(process.clone(), "clipboard-off-test".into(), Vec::new()).unwrap();
+    wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
+    runtime
+        .commands
+        .send_blocking(worker::Command::Options(worker::Options {
+            clipboard_write: false,
+            ..Default::default()
+        }))
+        .unwrap();
+    runtime
+        .commands
+        .send_blocking(worker::Command::Input(b"go\r".to_vec()))
+        .unwrap();
+    wait_snapshot(&latest, |frame| visible_text(frame).contains("done"));
+    assert!(runtime.clipboard.try_recv().is_err());
     drop(runtime);
     wait_reaped(&process);
 }

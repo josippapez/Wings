@@ -2,7 +2,10 @@
 //! Issues tab, with the desktop app's shortcuts.
 
 mod agent_list;
+#[cfg(all(test, feature = "test-support"))]
+mod desktop_parity_tests;
 mod diff;
+mod editor;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
 mod history;
@@ -19,6 +22,7 @@ mod plugins;
 mod project;
 mod project_page;
 mod project_sections;
+mod quick;
 mod rank;
 mod settings;
 mod sidebar;
@@ -27,6 +31,7 @@ mod tabs;
 #[cfg(all(test, feature = "test-support"))]
 mod tests;
 mod title_bar;
+mod welcome;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -40,8 +45,9 @@ use crate::{
     actions::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
         FocusRight, FocusUp, IncreaseFontSize, Minimize, MoveTabLeft, MoveTabRight, NewTab,
-        NextTab, OpenHistory, OpenSettings, PreviousTab, ResetFontSize, SplitDown, SplitRight,
-        ToggleFullScreen, TogglePalette, ToggleSidebar, Zoom, ZoomPane,
+        NextTab, OpenHistory, OpenProjectInEditor, OpenSettings, PreviousTab, ResetFontSize,
+        SplitDown, SplitRight, ToggleFullScreen, TogglePalette, ToggleQuickTerminal, ToggleSidebar,
+        Zoom, ZoomPane,
     },
     agents::{Agent, PaneInfo},
     host::Config,
@@ -53,8 +59,9 @@ use crate::{
     projects::{ProjectEntry, Projects},
     saved,
     terminal_view::{
-        CURSOR_STYLES, CursorShape, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MAX_FONT_SIZE,
-        MIN_FONT_SIZE, TerminalFont, TerminalLook, TerminalView, font_size,
+        CONTRASTS, CURSOR_STYLES, CursorShape, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE,
+        INACTIVE_CURSORS, LINE_HEIGHTS, MAX_FONT_SIZE, MIN_FONT_SIZE, SCROLLBACKS, TerminalFont,
+        TerminalLook, TerminalView, font_size,
     },
     text_field::TextField,
     theme,
@@ -171,6 +178,18 @@ pub struct Workspace {
     pane_info: HashMap<usize, PaneInfo>,
     window_active: bool,
     settings: Option<settings::SettingsDialog>,
+    /// What the app keeps besides how terminals look: the quick terminal key, the editor, what new tabs open.
+    prefs: settings::Prefs,
+    /// The editors found on this computer, looked up once.
+    editors: Vec<wings_editors::EditorView>,
+    /// The project bar's menu of the other editors is open.
+    editor_menu: bool,
+    /// The terminal Ctrl-` shows and hides, once started.
+    quick: Option<quick::QuickTerminal>,
+    /// The last project was removed: the window shows what to do first, with no tabs.
+    welcome: bool,
+    /// The project being entered was just added, so its first tab is what Settings, General says.
+    just_added: bool,
     /// The command palette and the history sheet, one at a time, and the past sessions both search.
     palette: Option<palette::Palette>,
     sheet: Option<history::Sheet>,
@@ -255,6 +274,12 @@ impl Workspace {
             pane_info: HashMap::new(),
             window_active: window.is_window_active(),
             settings: None,
+            prefs: settings::Prefs::default(),
+            editors: Vec::new(),
+            editor_menu: false,
+            quick: None,
+            welcome: false,
+            just_added: false,
             palette: None,
             sheet: None,
             sessions,
@@ -310,9 +335,17 @@ impl Workspace {
         this.sidebar = settings.sidebar_open.unwrap_or(true);
         this.start_sidebar(&settings, window, cx);
         let installed = |family: &String| cx.text_system().all_font_names().contains(family);
+        let defaults = TerminalLook::default();
+        // Only the desktop's choices, so a hand-edited file can't ask for a million lines.
+        let offered = |value: Option<f32>, choices: &[f32], default: f32| {
+            value
+                .filter(|value| choices.contains(value))
+                .unwrap_or(default)
+        };
         cx.set_global(TerminalLook {
             family: settings
                 .font_family
+                .clone()
                 .filter(installed)
                 .map_or(DEFAULT_FONT_FAMILY.into(), Into::into),
             shift_return_meta: settings.shift_return_meta.unwrap_or(true),
@@ -320,7 +353,31 @@ impl Workspace {
                 .iter()
                 .find(|(_, name, _)| settings.cursor_style.as_deref() == Some(*name))
                 .map_or(CursorShape::Block, |(shape, ..)| *shape),
+            inactive_cursor: INACTIVE_CURSORS
+                .iter()
+                .find(|(_, name, _)| settings.cursor_inactive_style.as_deref() == Some(*name))
+                .map_or(defaults.inactive_cursor, |(style, ..)| *style),
+            line_height: offered(settings.line_height, &LINE_HEIGHTS, defaults.line_height),
+            min_contrast: offered(
+                settings.minimum_contrast_ratio,
+                &CONTRASTS.map(|(ratio, _)| ratio),
+                defaults.min_contrast,
+            ),
+            scrollback: settings
+                .scrollback
+                .filter(|lines| SCROLLBACKS.contains(lines))
+                .unwrap_or(defaults.scrollback),
+            copy_on_select: settings.copy_on_select.unwrap_or(defaults.copy_on_select),
+            clipboard_write: settings.clipboard_write.unwrap_or(defaults.clipboard_write),
         });
+        let prefs = settings::Prefs::default();
+        this.prefs = settings::Prefs {
+            quick_terminal: settings.quick_terminal.unwrap_or(prefs.quick_terminal),
+            editor: settings.editor.clone(),
+            new_tab: settings.new_tab.clone().unwrap_or(prefs.new_tab),
+            new_project_page: settings.new_project_opens.as_deref() == Some("project"),
+        };
+        this.find_editors(cx);
         this.enter_project(window, cx);
         this
     }
@@ -357,69 +414,75 @@ impl Render for Workspace {
                 self.terminals[index].focused = pane;
             }
         }
-        let body: AnyElement = match self.active {
-            Active::Terminal(id) => match self.terminals.iter().find(|tab| tab.id == id) {
-                Some(tab) => {
-                    let entity = cx.entity();
-                    let measure = canvas(
-                        move |bounds, _, cx| entity.update(cx, |this, _| this.area = Some(bounds)),
-                        {
-                            let entity = cx.entity();
-                            move |_, _, window, _| {
-                                let moved = entity.clone();
-                                window.on_mouse_event(
-                                    move |event: &MouseMoveEvent, phase, _, cx| {
-                                        if phase == DispatchPhase::Bubble && event.dragging() {
-                                            moved.update(cx, |this, cx| {
-                                                this.drag_to(event.position, cx)
+        let body: AnyElement = if self.welcome {
+            self.welcome(cx)
+        } else {
+            match self.active {
+                Active::Terminal(id) => match self.terminals.iter().find(|tab| tab.id == id) {
+                    Some(tab) => {
+                        let entity = cx.entity();
+                        let measure = canvas(
+                            move |bounds, _, cx| {
+                                entity.update(cx, |this, _| this.area = Some(bounds))
+                            },
+                            {
+                                let entity = cx.entity();
+                                move |_, _, window, _| {
+                                    let moved = entity.clone();
+                                    window.on_mouse_event(
+                                        move |event: &MouseMoveEvent, phase, _, cx| {
+                                            if phase == DispatchPhase::Bubble && event.dragging() {
+                                                moved.update(cx, |this, cx| {
+                                                    this.drag_to(event.position, cx)
+                                                });
+                                            }
+                                        },
+                                    );
+                                    let released = entity.clone();
+                                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                                        if phase == DispatchPhase::Bubble {
+                                            released.update(cx, |this, cx| {
+                                                if this.drag.take().is_some() {
+                                                    this.save(cx);
+                                                }
                                             });
                                         }
-                                    },
-                                );
-                                let released = entity.clone();
-                                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                                    if phase == DispatchPhase::Bubble {
-                                        released.update(cx, |this, cx| {
-                                            if this.drag.take().is_some() {
-                                                this.save(cx);
-                                            }
-                                        });
-                                    }
-                                });
-                            }
-                        },
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full();
-                    let layout = match tab.zoomed {
-                        Some(pane) => self.pane_card(pane, true, true, cx),
-                        None => self.layout_element(
-                            tab.id,
-                            &tab.layout,
-                            &mut Vec::new(),
-                            tab.focused,
-                            cx,
-                        ),
-                    };
-                    div()
-                        .size_full()
-                        .p(px(8.0))
-                        .child(div().relative().size_full().child(layout).child(measure))
-                        .into_any_element()
-                }
-                None => div().into_any_element(),
-            },
-            Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
-                Some(tab) => tab.page.clone().into_any_element(),
-                None => div().into_any_element(),
-            },
-            Active::Project => match &self.project_page {
-                Some(page) => page.clone().into_any_element(),
-                None => div().into_any_element(),
-            },
-            Active::Issues => self.issues.clone().into_any_element(),
+                                    });
+                                }
+                            },
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full();
+                        let layout = match tab.zoomed {
+                            Some(pane) => self.pane_card(pane, true, true, cx),
+                            None => self.layout_element(
+                                tab.id,
+                                &tab.layout,
+                                &mut Vec::new(),
+                                tab.focused,
+                                cx,
+                            ),
+                        };
+                        div()
+                            .size_full()
+                            .p(px(8.0))
+                            .child(div().relative().size_full().child(layout).child(measure))
+                            .into_any_element()
+                    }
+                    None => div().into_any_element(),
+                },
+                Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
+                    Some(tab) => tab.page.clone().into_any_element(),
+                    None => div().into_any_element(),
+                },
+                Active::Project => match &self.project_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => div().into_any_element(),
+                },
+                Active::Issues => self.issues.clone().into_any_element(),
+            }
         };
         let mut tabs: Vec<AnyElement> = self
             .terminals
@@ -485,6 +548,9 @@ impl Render for Workspace {
                 self.tab_scroll.scroll_to_item(index);
             }
             self.tab_layout = Some(tab_layout);
+        }
+        if self.welcome {
+            tabs.clear();
         }
         let title_bar = self.title_bar(tabs, cx);
         let sidebar = self.sidebar.then(|| self.sidebar_panel(cx));
@@ -569,6 +635,19 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenHistory, window, cx| this.open_history(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleQuickTerminal, window, cx| {
+                if this.prefs.quick_terminal {
+                    this.toggle_quick(window, cx);
+                } else {
+                    // Turned off, the key goes on to the terminal, as in the desktop app.
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &OpenProjectInEditor, _, cx| {
+                if let Some(editor) = this.default_editor().map(|editor| editor.id.clone()) {
+                    this.open_in_editor(&editor, cx);
+                }
+            }))
             .child(title_bar)
             .child(
                 div()
@@ -583,8 +662,15 @@ impl Render for Workspace {
                             .flex_col()
                             .flex_1()
                             .min_w_0()
-                            .child(self.project_bar())
-                            .child(div().flex_1().min_h_0().child(body)),
+                            .when(!self.welcome, |column| column.child(self.project_bar(cx)))
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(body)
+                                    .children(self.quick_layer(cx)),
+                            ),
                     )
                     .children(right)
                     .children(self.sidebar_peek(cx)),

@@ -278,9 +278,19 @@ fn adding_a_project_shows_it_and_removing_one_asks_when_it_has_tabs_then_closes_
         app.run_until_parked();
         std::thread::sleep(Duration::from_millis(20));
     }
-    // The only project stays: there would be nothing to show.
+    // Removing the last one closes its tabs and shows the welcome, as the desktop does with no project.
     window.update(|w, window, cx| w.remove_project(folders[0].clone(), window, cx));
-    assert_eq!(names(&window), ["alpha"]);
+    assert!(names(&window).is_empty());
+    window.read(|w, _| assert!(w.welcome && w.terminals.is_empty() && w.panes.is_empty()));
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    assert!(window.read(|w, _| w.terminals.is_empty()));
+    // Adding a project from there opens it with a terminal.
+    window.update(|w, window, cx| w.add_project(&gamma, window, cx));
+    window.read(|w, _| {
+        assert!(!w.welcome);
+        assert_eq!(w.project(), gamma);
+        assert_eq!(w.terminals.len(), 1);
+    });
     std::fs::remove_dir_all(dir).unwrap();
 }
 

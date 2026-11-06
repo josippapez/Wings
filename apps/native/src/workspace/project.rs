@@ -26,9 +26,13 @@ impl Workspace {
         self.issues_open = !restored
             .as_ref()
             .is_some_and(|project| project.issues_closed);
+        let just_added = std::mem::take(&mut self.just_added);
         match restored {
             Some(project) if !(project.tabs.is_empty() && project.plugin_tabs.is_empty()) => {
                 self.restore(project, window, cx)
+            }
+            _ if just_added && self.prefs.new_project_page && self.project_info.is_some() => {
+                self.open_project_page(self.config.project.clone(), window, cx)
             }
             _ => self.new_terminal(window, cx),
         }
@@ -61,6 +65,12 @@ impl Workspace {
 
     /// Shows another project. The one shown now keeps its tabs and shells for when it comes back.
     pub fn switch_project(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.welcome {
+            // The removed project left nothing to keep.
+            self.welcome = false;
+            self.config.project = path;
+            return self.enter_project(window, cx);
+        }
         if path == self.config.project {
             return;
         }
@@ -89,8 +99,8 @@ impl Workspace {
         }
     }
 
-    /// The desktop's project bar above the panes: the project's name and its branch.
-    pub(super) fn project_bar(&self) -> AnyElement {
+    /// The desktop's project bar above the panes: the project's name and its branch, and Open in <editor>.
+    pub(super) fn project_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let entry = self.projects.iter().find(|p| p.path == self.config.project);
         let name = entry.map_or_else(
             || self.config.project.to_string_lossy().into_owned(),
@@ -129,6 +139,8 @@ impl Workspace {
                             .child(branch),
                     )
             })
+            .child(div().flex_1())
+            .children(self.editor_button(cx))
             .into_any_element()
     }
 

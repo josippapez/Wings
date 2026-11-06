@@ -26,6 +26,7 @@ wings-terminal = { path = "../../crates/wings-terminal", features = ["grid"], op
 wings-agents = { path = "../../crates/wings-agents", optional = true }
 wings-plugins = { path = "../../crates/wings-plugins" }
 wings-disk-usage = { path = "../../crates/wings-disk-usage" }
+wings-editors = { path = "../../crates/wings-editors" }
 wings-gitwatch = { path = "../../crates/wings-gitwatch" }
 wings-spaces = { path = "../../crates/wings-spaces" }
 sysinfo = { version = "0.39.6", optional = true }

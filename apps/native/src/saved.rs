@@ -92,6 +92,31 @@ pub struct Settings {
     /// `block`, `bar` or `underline`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_style: Option<String>,
+    /// `outline`, `block`, `bar`, `underline` or `none`, as the desktop app names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_inactive_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_contrast_ratio: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_on_select: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_write: Option<bool>,
+    /// Ctrl-` shows and hides the quick terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_terminal: Option<bool>,
+    /// The id of the editor "Open in" uses first, as the desktop's `wings.defaultEditor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
+    /// What the new tab button opens: `terminal`, `project`, or a plugin page as `plugin:view`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_tab: Option<String>,
+    /// The first tab of a project you add: `terminal` or `project`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_project_opens: Option<String>,
     /// The sidebar's width in points, as last dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<f32>,

@@ -126,6 +126,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("sidebar") {
         return sidebar(&mut cx, &config, &out);
     }
+    // `-- <out-dir> parity` renders only Settings' sections, Open in editor, the welcome and the quick terminal.
+    if std::env::args().nth(2).as_deref() == Some("parity") {
+        return parity(&mut cx, &config, &out);
+    }
     // `-- <out-dir> finder` renders only the command palette and the history sheet.
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
@@ -324,8 +328,8 @@ fn main() {
         );
         wait(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("settings-selection"));
-        // The Cursor section, with its style menu open.
-        click(&mut cx, window, point(px(left + 70.0), px(184.0)));
+        // The Cursor section, third in the list, with its style menu open.
+        click(&mut cx, window, point(px(left + 70.0), px(218.0)));
         wait(&mut cx, window, Duration::from_millis(200));
         // The description wraps at 640, so the row and its select sit lower.
         let select_y = if width < 800.0 { 155.0 } else { 125.0 };
@@ -734,6 +738,114 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_millis(800));
         save(cx, window, &name("history-empty"));
         cx.simulate_keystrokes(window, "escape");
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// Settings' sections, the project bar's Open in editor with its menu, the quick terminal floating, minimised and filling
+/// the window, and the welcome once the last project is removed. Made-up editors and the fixture plugin only.
+fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let mut config = base.clone();
+    config.projects = None;
+    config.editors = Some(
+        [("vscode", "VS Code"), ("zed", "Zed"), ("xcode", "Xcode")]
+            .map(|(id, name)| wings_editors::EditorView {
+                id: id.into(),
+                name: name.into(),
+            })
+            .into(),
+    );
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &name("editor"));
+        // The chevron at the project bar's right end, under the 40px title bar.
+        let chevron = point(px(width - 8.0 - 14.0), px(40.0 + 18.0));
+        click(cx, window, chevron);
+        wait(cx, window, Duration::from_millis(200));
+        save(cx, window, &name("editor-menu"));
+        click(cx, window, chevron);
+
+        // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 150.
+        cx.simulate_keystrokes(window, "cmd-,");
+        wait(cx, window, Duration::from_millis(300));
+        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
+        let sections = [
+            "general", "text", "cursor", "history", "keyboard", "editor", "plugins",
+        ];
+        for (index, section) in sections.into_iter().enumerate() {
+            let row = point(px(left + 70.0), px(150.0 + 34.0 * index as f32));
+            click(cx, window, row);
+            wait(cx, window, Duration::from_millis(200));
+            save(cx, window, &name(&format!("settings-{section}")));
+        }
+        cx.simulate_keystrokes(window, "escape");
+        wait(cx, window, Duration::from_millis(200));
+
+        // The quick terminal: its first show starts a shell, a second press hides it, a third shows the same one.
+        let timed = |cx: &mut VisualTestAppContext, what: &str| {
+            let started = Instant::now();
+            let _ = cx.update_window(window, |_, window, cx| {
+                window.dispatch_action(Box::new(actions::ToggleQuickTerminal), cx);
+                window.draw(cx).clear(cx);
+            });
+            println!(
+                "quick terminal {what} at {width}: {:?} to the next frame",
+                started.elapsed()
+            );
+        };
+        let started = Instant::now();
+        let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+        println!(
+            "a frame with nothing changed at {width}: {:?}",
+            started.elapsed()
+        );
+        timed(cx, "first show");
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &name("quick"));
+        timed(cx, "hide");
+        timed(cx, "show again");
+        wait(cx, window, Duration::from_millis(300));
+        // The header's buttons from the right: close, minimise, fill. The panel sits 24px in from the area's corner.
+        let top = 640.0 - 24.0 - 380.0;
+        let button =
+            |from_right: f32| point(px(width - 24.0 - 4.0 - 12.0 - from_right), px(top + 16.0));
+        click(cx, window, button(30.0));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("quick-minimised"));
+        timed(cx, "hide");
+        timed(cx, "show again");
+        wait(cx, window, Duration::from_millis(300));
+        click(cx, window, button(60.0));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("quick-full"));
+        timed(cx, "hide");
+
+        // The only project's remove button, at the right of its row while the pointer is over it, then Remove.
+        mouse_move(cx, window, point(px(60.0), px(90.0)), false);
+        wait(cx, window, Duration::from_millis(200));
+        click(cx, window, point(px(248.0 - 8.0 - 6.0 - 12.0), px(90.0)));
+        wait(cx, window, Duration::from_millis(200));
+        save(cx, window, &name("welcome-remove"));
+        // The dialog's Remove button: 400 x 176 in the middle, buttons at the bottom right inside 20px of padding.
+        click(
+            cx,
+            window,
+            point(
+                px(width / 2.0 + 200.0 - 20.0 - 36.0),
+                px(320.0 + 88.0 - 20.0 - 16.0),
+            ),
+        );
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("welcome"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }

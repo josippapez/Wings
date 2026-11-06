@@ -13,7 +13,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{Active, TerminalTab, Workspace, shortcut_label};
+use super::{Active, TerminalTab, Workspace, quick, shortcut_label};
 
 /// The desktop's shown tab, `bg-white/[0.07]`.
 const SELECTED_TAB: u32 = 0xffffff12;
@@ -42,7 +42,24 @@ impl Workspace {
             .map_or_else(|| "Terminal".into(), |t| self.pane_title(t.focused, cx))
     }
 
+    /// The + button: what Settings, General says it opens. A plugin page that is gone opens a terminal.
+    pub(super) fn new_tab_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.prefs.new_tab == "project" && self.project_info.is_some() {
+            return self.open_project_page(self.config.project.clone(), window, cx);
+        }
+        if let Some((plugin, view)) = self.prefs.new_tab.clone().split_once(':')
+            && self.open_plugin_view(plugin, view, None, window, cx)
+        {
+            return;
+        }
+        self.new_terminal(window, cx);
+    }
+
     pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // With no project there is no folder to open it in.
+        if self.welcome {
+            return;
+        }
         let pane = self.open_pane(None, None, cx);
         let id = self.next_tab;
         self.next_tab += 1;
@@ -98,8 +115,19 @@ impl Workspace {
             self.open_plugin_view("tasks", "board", None, window, cx);
             return;
         }
+        let moved = self.active != active;
         self.active = active;
         self.issues_open |= active == Active::Issues;
+        // Going to a tab puts a quick terminal that fills the window away, as going to another tab would.
+        if let Some(quick) = &mut self.quick
+            && moved
+            && quick.place == quick::Place::Full
+        {
+            quick.place = quick::Place::Hidden;
+            quick
+                .view()
+                .update(cx, |view, cx| view.set_visible(false, cx));
+        }
         if let Some(index) = self.tabs().iter().position(|tab| *tab == active) {
             self.tab_scroll.scroll_to_item(index);
         }

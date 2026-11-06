@@ -51,7 +51,7 @@ fn cell(window: &View, col: usize, right: bool) -> Point<Pixels> {
         let half = if right { 0.75 } else { 0.25 };
         point(
             bounds.left() + view.cell_width * (col as f32 + half),
-            bounds.top() + px(line_height(DEFAULT_FONT_SIZE) / 2.0),
+            bounds.top() + px(line_height(DEFAULT_FONT_SIZE, 1.2) / 2.0),
         )
     })
 }
@@ -88,6 +88,52 @@ fn a_new_font_size_refits_the_rows() {
         "{} rows at 20px vs {before}",
         rows(&window)
     );
+    window.update(|view, _, _| view.runtime.shutdown());
+}
+
+#[test]
+fn the_line_height_setting_spaces_the_rows() {
+    let (app, mut window) = open("printf ready; sleep 30");
+    settle(&app, &mut window, shows("ready"));
+    let rows = |window: &View| window.read(|view, _| view.geometry.unwrap().rows);
+    let before = rows(&window);
+    window.update(|_, _, cx| {
+        cx.set_global(TerminalLook {
+            line_height: 1.6,
+            ..TerminalLook::default()
+        })
+    });
+    window.draw();
+    // 13px at 1.6, by the font's own 7/6 line.
+    assert_eq!(window.read(|view, _| view.line_height), 24.0);
+    assert!(rows(&window) < before);
+    window.update(|view, _, _| view.runtime.shutdown());
+}
+
+#[test]
+fn with_copy_on_select_letting_go_of_a_drag_copies_it() {
+    let (app, mut window) = open("printf 'alpha beta'; sleep 30");
+    settle(&app, &mut window, shows("beta"));
+    window.update(|_, _, cx| {
+        cx.set_global(TerminalLook {
+            copy_on_select: true,
+            ..TerminalLook::default()
+        })
+    });
+    let (from, to) = (cell(&window, 6, false), cell(&window, 9, true));
+    window.simulate_mouse_down(from, MouseButton::Left);
+    window.simulate_event(MouseMoveEvent {
+        position: to,
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::default(),
+    });
+    window.simulate_mouse_up(to, MouseButton::Left);
+    settle(&app, &mut window, |_| {
+        app.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some("beta")
+    });
     window.update(|view, _, _| view.runtime.shutdown());
 }
 
@@ -249,7 +295,7 @@ fn the_wheel_scrolls_history_and_typing_returns_to_the_bottom() {
     let middle = cell(&window, 10, false);
     window.simulate_scroll(
         middle,
-        point(px(0.0), px(line_height(DEFAULT_FONT_SIZE) * 5.0)),
+        point(px(0.0), px(line_height(DEFAULT_FONT_SIZE, 1.2) * 5.0)),
     );
     settle(&app, &mut window, |view| view.snapshot.display_offset == 5);
     window.simulate_input("x");

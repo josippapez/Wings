@@ -5,7 +5,7 @@ use gpui::{App, Context, Window};
 use crate::{
     layout::{Dir, Layout},
     saved::{self, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedTab},
-    terminal_view::{CURSOR_STYLES, DEFAULT_FONT_FAMILY, font_size, look},
+    terminal_view::{CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, font_size, look},
 };
 
 use super::{Active, TerminalTab, Workspace};
@@ -149,6 +149,26 @@ impl Workspace {
                 .iter()
                 .find(|(shape, ..)| *shape == look.cursor)
                 .map(|(_, name, _)| name.to_string()),
+            cursor_inactive_style: INACTIVE_CURSORS
+                .iter()
+                .find(|(style, ..)| *style == look.inactive_cursor)
+                .map(|(_, name, _)| name.to_string()),
+            line_height: Some(look.line_height),
+            minimum_contrast_ratio: Some(look.min_contrast),
+            scrollback: Some(look.scrollback),
+            copy_on_select: Some(look.copy_on_select),
+            clipboard_write: Some(look.clipboard_write),
+            quick_terminal: Some(self.prefs.quick_terminal),
+            editor: self.prefs.editor.clone(),
+            new_tab: Some(self.prefs.new_tab.clone()),
+            new_project_opens: Some(
+                if self.prefs.new_project_page {
+                    "project"
+                } else {
+                    "terminal"
+                }
+                .into(),
+            ),
             ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {

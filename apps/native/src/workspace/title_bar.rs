@@ -82,17 +82,20 @@ impl Workspace {
                     .track_scroll(&self.tab_scroll)
                     .children(tabs),
             )
-            .child(
-                icon_button(
-                    "new-terminal",
-                    Icon::Plus,
-                    format!("New tab ({})", shortcut_label("T", false)),
-                    ButtonSize::Sm,
+            // With no project there is nothing to open a tab in.
+            .when(!self.welcome, |bar| {
+                bar.child(
+                    icon_button(
+                        "new-terminal",
+                        Icon::Plus,
+                        format!("New tab ({})", shortcut_label("T", false)),
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.new_tab_button(window, cx)))
+                    .ml(px(4.0))
+                    .track_focus(&self.new_focus),
                 )
-                .on_click(cx.listener(|this, _, window, cx| this.new_terminal(window, cx)))
-                .ml(px(4.0))
-                .track_focus(&self.new_focus),
-            )
+            })
             .when(!plugin_buttons.is_empty(), |bar| {
                 bar.child(
                     div()

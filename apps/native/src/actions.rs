@@ -39,6 +39,8 @@ actions!(
         OpenSettings,
         TogglePalette,
         OpenHistory,
+        OpenProjectInEditor,
+        ToggleQuickTerminal,
         PaletteNext,
         PalettePrevious,
         PaletteFirst,
@@ -101,6 +103,8 @@ pub fn bind(cx: &mut App) {
         key("cmd-,", "ctrl-,", OpenSettings),
         key("cmd-\\", "ctrl-shift-\\", ToggleSidebar),
         key("cmd-k", "ctrl-shift-k", TogglePalette),
+        // The desktop's default, Ctrl+Backquote, on every platform.
+        KeyBinding::new("ctrl-`", ToggleQuickTerminal, None),
         // The palette's list, which the arrow keys would otherwise move the search field's caret in.
         KeyBinding::new("down", PaletteNext, Some("Palette")),
         KeyBinding::new("ctrl-n", PaletteNext, Some("Palette")),
@@ -186,6 +190,7 @@ pub fn menus() -> Vec<Menu> {
         MenuItem::action("Find in Pane", Find),
         MenuItem::action("Command Palette", TogglePalette),
         MenuItem::action("Past Sessions", OpenHistory),
+        MenuItem::action("Quick Terminal", ToggleQuickTerminal),
         MenuItem::separator(),
         MenuItem::action("Increase Font Size", IncreaseFontSize),
         MenuItem::action("Decrease Font Size", DecreaseFontSize),

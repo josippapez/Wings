@@ -30,7 +30,7 @@ use wings_terminal::{
 };
 
 use super::{
-    DEFAULT_FONT_SIZE,
+    DEFAULT_FONT_SIZE, TerminalLook,
     find::{Find, FindMove, FindQuery, REFIND_EVERY, find_step, refind},
     line_height,
     mouse::Hit,
@@ -91,8 +91,7 @@ pub(super) enum Command {
     Input(Vec<u8>),
     Resize(Geometry),
     Refresh,
-    /// The cursor programs get until they set their own.
-    Cursor(CursorShape),
+    Options(Options),
     Scroll(Scroll),
     SelectFrom(Hit, SelectionType),
     SelectTo(Hit),
@@ -102,6 +101,31 @@ pub(super) enum Command {
     /// Stores the scrollback as text if the pane is still hidden.
     Unload,
     Eof(Option<String>),
+}
+
+/// What the Settings change in the model: the cursor programs get until they set their own, the lines of history
+/// kept, and whether programs may write the clipboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Options {
+    pub(super) cursor: CursorShape,
+    pub(super) scrollback: usize,
+    pub(super) clipboard_write: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self::of(&TerminalLook::default())
+    }
+}
+
+impl Options {
+    pub(super) fn of(look: &TerminalLook) -> Self {
+        Self {
+            cursor: look.cursor,
+            scrollback: look.scrollback,
+            clipboard_write: look.clipboard_write,
+        }
+    }
 }
 
 pub(super) struct Runtime {
@@ -288,8 +312,9 @@ fn run_model(
         cols: 80,
         rows: 24,
         cell_width: 8,
-        cell_height: line_height(DEFAULT_FONT_SIZE) as u16,
+        cell_height: line_height(DEFAULT_FONT_SIZE, 1.2) as u16,
     };
+    let mut options = Options::default();
     let mut status = None;
     let mut find: Option<Find> = None;
     let mut last_refind = Instant::now();
@@ -331,7 +356,9 @@ fn run_model(
                             // Like the desktop terminal, programs may write the clipboard. Alacritty's
                             // default OSC 52 policy already refuses reads.
                             Event::ClipboardStore(_, text) => {
-                                let _ = clipboard.try_send(text.clone());
+                                if options.clipboard_write {
+                                    let _ = clipboard.try_send(text.clone());
+                                }
                                 None
                             }
                             Event::Title(text) => {
@@ -408,8 +435,9 @@ fn run_model(
                     }
                 }
                 Command::Refresh => Ok(()),
-                Command::Cursor(shape) => {
-                    pane.set_default_cursor(shape);
+                Command::Options(next) => {
+                    pane.set_options(next.cursor, next.scrollback);
+                    options = next;
                     Ok(())
                 }
                 Command::Unload => {

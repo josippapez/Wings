@@ -7418,6 +7418,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wings-editors"
+version = "0.1.0"
+dependencies = [
+ "dirs 7.0.0",
+ "serde",
+ "wings-plugins",
+]
+
+[[package]]
 name = "wings-gitwatch"
 version = "0.1.0"
 dependencies = [
@@ -7442,6 +7451,7 @@ dependencies = [
  "ureq",
  "wings-agents",
  "wings-disk-usage",
+ "wings-editors",
  "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",

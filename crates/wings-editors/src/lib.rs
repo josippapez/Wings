@@ -50,7 +50,7 @@ enum Launch {
     App(&'static str),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorView {
     pub id: String,

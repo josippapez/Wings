@@ -16,7 +16,7 @@ fn open() -> (TestApp, TestAppWindow<Workspace>) {
     open_with(None)
 }
 
-fn open_with(state: Option<std::path::PathBuf>) -> (TestApp, TestAppWindow<Workspace>) {
+pub(super) fn open_with(state: Option<std::path::PathBuf>) -> (TestApp, TestAppWindow<Workspace>) {
     open_config(|config| config.state = state)
 }
 
@@ -42,6 +42,7 @@ pub(super) fn open_sized(
     config.plugins = None;
     config.project_info = None;
     config.sessions = None;
+    config.editors = Some(Vec::new());
     change(&mut config);
     let build =
         move |window: &mut Window, cx: &mut Context<Workspace>| Workspace::new(config, window, cx);
@@ -705,7 +706,12 @@ fn settings_open_with_the_shortcut_and_change_every_terminal() {
 
     window.update(|w, _, cx| w.set_shift_return_meta(false, cx));
     assert!(!window.read(|_, cx| look(cx).shift_return_meta));
-    window.update(|w, _, cx| w.set_cursor(crate::terminal_view::CursorShape::Beam, cx));
+    window.update(|w, _, cx| {
+        w.set_look(
+            |look| look.cursor = crate::terminal_view::CursorShape::Beam,
+            cx,
+        )
+    });
     assert_eq!(
         window.read(|_, cx| look(cx).cursor),
         crate::terminal_view::CursorShape::Beam

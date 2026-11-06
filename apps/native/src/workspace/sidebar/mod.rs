@@ -221,7 +221,11 @@ impl Workspace {
     }
 
     /// Asks for a folder, as the desktop's "Add project" does, and adds it.
-    fn choose_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::workspace) fn choose_project(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -246,9 +250,12 @@ impl Workspace {
             eprintln!("Couldn't add {}: its path isn't UTF-8", folder.display());
             return;
         };
+        let listed = self.projects.iter().any(|project| project.path == folder);
         let space = self.spaces.add(text);
         self.projects_changed(cx);
+        self.just_added = !listed;
         self.switch_project(PathBuf::from(space.path), window, cx);
+        self.just_added = false;
     }
 
     /// Tabs the project has open, shells included.
@@ -281,15 +288,15 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Takes the project off the list and closes its tabs. The project on screen gives way to the first other one; the
-    /// only project stays, as there would be nothing to show.
+    /// Takes the project off the list and closes its tabs. The project on screen gives way to the first other one; with
+    /// none left, the window shows the welcome, as the desktop does with no project.
     fn remove_project(&mut self, project: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.side.removing = None;
         if project == self.config.project {
-            let Some(next) = self.projects.iter().find(|other| other.path != project) else {
-                return;
-            };
-            self.switch_project(next.path.clone(), window, cx);
+            match self.projects.iter().find(|other| other.path != project) {
+                Some(next) => self.switch_project(next.path.clone(), window, cx),
+                None => self.show_welcome(cx),
+            }
         }
         let closed = self.parked.remove(&project).map(|parked| parked.terminals);
         for tab in closed.into_iter().flatten() {

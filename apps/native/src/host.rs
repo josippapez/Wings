@@ -73,6 +73,8 @@ pub struct Config {
     pub project_info: Option<PathBuf>,
     /// Where the history sheet and the command palette look for past sessions. `None` finds none, as in tests.
     pub sessions: Option<SessionSource>,
+    /// The editors "Open in" offers: `None` looks for the installed ones; tests and screenshots list their own.
+    pub editors: Option<Vec<wings_editors::EditorView>>,
 }
 
 /// Where past sessions are read from.
@@ -150,6 +152,7 @@ impl Config {
             plugins: PluginPaths::desktop().map(|paths| PluginPaths { dev, ..paths }),
             project_info: crate::projects::desktop_dir(),
             sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
+            editors: None,
         }))
     }
 

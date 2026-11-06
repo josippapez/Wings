@@ -14,9 +14,10 @@ use wings_agents::history::{Filter, Hit};
 use crate::{
     actions::{
         ClosePane, CloseTab, DecreaseFontSize, Find, FocusDown, FocusLeft, FocusRight, FocusUp,
-        IncreaseFontSize, MoveTabLeft, MoveTabRight, NewTab, NextTab, OpenHistory, OpenSettings,
-        PaletteFirst, PaletteLast, PaletteNext, PalettePrevious, PreviousTab, ResetFontSize,
-        SplitDown, SplitRight, ToggleSidebar, ZoomPane,
+        IncreaseFontSize, MoveTabLeft, MoveTabRight, NewTab, NextTab, OpenHistory,
+        OpenProjectInEditor, OpenSettings, PaletteFirst, PaletteLast, PaletteNext, PalettePrevious,
+        PreviousTab, ResetFontSize, SplitDown, SplitRight, ToggleQuickTerminal, ToggleSidebar,
+        ZoomPane,
     },
     agents::{self, AgentState},
     icons::{Icon, icon},
@@ -74,7 +75,7 @@ pub(super) struct Palette {
 
 /// How the keymap writes a binding of `action`, as the desktop writes shortcuts: "⇧⌘D" on macOS, "Ctrl+Shift+Alt+D"
 /// elsewhere. The first binding is the one shown.
-fn shortcut_label(action: &dyn Action, cx: &App) -> Option<String> {
+pub(super) fn shortcut_label(action: &dyn Action, cx: &App) -> Option<String> {
     let keymap = cx.key_bindings();
     let keymap = keymap.borrow();
     let binding = keymap.bindings_for_action(action).next()?;
@@ -282,7 +283,9 @@ impl Workspace {
     }
 
     /// The commands the native app has, in the desktop's order, with their group and whether they can run now.
-    fn palette_commands(&self) -> Vec<(&'static str, &'static str, Rc<dyn Action>, bool)> {
+    pub(super) fn palette_commands(
+        &self,
+    ) -> Vec<(&'static str, &'static str, Rc<dyn Action>, bool)> {
         let terminal = matches!(self.active, Active::Terminal(_));
         let movable = match self.active {
             Active::Terminal(_) => self.terminals.len() > 1,
@@ -290,7 +293,7 @@ impl Workspace {
             Active::Project | Active::Issues => false,
         };
         let cycles = self.tabs().len() > 1;
-        let commands: [(&str, &str, Rc<dyn Action>, bool); 21] = [
+        let mut commands: Vec<(&str, &str, Rc<dyn Action>, bool)> = vec![
             ("New Tab", "Tab", Rc::new(NewTab), true),
             ("Close Tab", "Tab", Rc::new(CloseTab), true),
             ("Next Tab", "Tab", Rc::new(NextTab), cycles),
@@ -309,6 +312,12 @@ impl Workspace {
             ("Find in Pane", "View", Rc::new(Find), terminal),
             ("Past Sessions", "View", Rc::new(OpenHistory), true),
             (
+                "Quick Terminal",
+                "View",
+                Rc::new(ToggleQuickTerminal),
+                self.prefs.quick_terminal,
+            ),
+            (
                 "Increase Font Size",
                 "View",
                 Rc::new(IncreaseFontSize),
@@ -323,7 +332,16 @@ impl Workspace {
             ("Reset Font Size", "View", Rc::new(ResetFontSize), true),
             ("Settings", "App", Rc::new(OpenSettings), true),
         ];
-        commands.into()
+        // Only with an editor installed, as on the desktop.
+        if self.default_editor().is_some() {
+            commands.push((
+                "Open Project in Editor",
+                "App",
+                Rc::new(OpenProjectInEditor),
+                !self.welcome,
+            ));
+        }
+        commands
     }
 
     /// What the palette searches besides past sessions, built whenever it is drawn or used.

@@ -197,10 +197,14 @@ impl TerminalView {
     }
 
     pub(super) fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
-        if let Some(Drag::Report(code)) = self.drag.take()
-            && let Some(hit) = self.hit(event.position)
-        {
-            self.report(code, MouseAction::Release, hit, event.modifiers, cx);
+        match self.drag.take() {
+            Some(Drag::Report(code)) => {
+                if let Some(hit) = self.hit(event.position) {
+                    self.report(code, MouseAction::Release, hit, event.modifiers, cx);
+                }
+            }
+            Some(Drag::Select) if super::look(cx).copy_on_select => self.send(Command::Copy, cx),
+            _ => {}
         }
     }
 
