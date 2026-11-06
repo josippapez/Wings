@@ -42,6 +42,8 @@ actions!(
         OpenProjectInEditor,
         ToggleQuickTerminal,
         ShowNotifications,
+        GoBack,
+        GoForward,
         PaletteNext,
         PalettePrevious,
         PaletteFirst,
@@ -84,6 +86,9 @@ pub fn bind(cx: &mut App) {
         key("cmd-t", "ctrl-shift-t", NewTab),
         key("cmd-]", "ctrl-shift-]", NextTab),
         key("cmd-[", "ctrl-shift-[", PreviousTab),
+        // The desktop's Go Back and Go Forward: Alt with the bracket keys.
+        key("cmd-alt-[", "ctrl-shift-alt-[", GoBack),
+        key("cmd-alt-]", "ctrl-shift-alt-]", GoForward),
         key("cmd-d", "ctrl-shift-d", SplitRight),
         key("cmd-shift-d", "ctrl-shift-alt-d", SplitDown),
         key("cmd-w", "ctrl-shift-w", ClosePane),

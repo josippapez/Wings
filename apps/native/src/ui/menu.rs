@@ -57,6 +57,26 @@ pub fn menu_item(
     destructive: bool,
     disabled: bool,
 ) -> Stateful<Div> {
+    let glyph = icon(
+        glyph,
+        16.0,
+        if destructive {
+            theme::DANGER
+        } else {
+            theme::MUTED_FOREGROUND
+        },
+    );
+    menu_item_with(id, glyph, label, destructive, disabled)
+}
+
+/// A `menu_item` with any 16px icon, like a plugin's own.
+pub fn menu_item_with(
+    id: impl Into<ElementId>,
+    glyph: impl IntoElement,
+    label: impl Into<SharedString>,
+    destructive: bool,
+    disabled: bool,
+) -> Stateful<Div> {
     let label = label.into();
     let color = if destructive {
         theme::DANGER
@@ -76,15 +96,7 @@ pub fn menu_item(
         .text_size(px(14.0))
         .text_color(rgb(color))
         .whitespace_nowrap()
-        .child(icon(
-            glyph,
-            16.0,
-            if destructive {
-                theme::DANGER
-            } else {
-                theme::MUTED_FOREGROUND
-            },
-        ))
+        .child(glyph)
         .child(div().flex_1().min_w_0().truncate().child(label))
         .when(disabled, |item| {
             item.opacity(0.5).a11y_synthetic_children(|builder| {

@@ -224,8 +224,8 @@ fn main() {
         // Double-click the focused pane's title (the bottom-right one) to rename it.
         let title = point(
             px(width / 2.0 + 40.0),
-            // Below the 40px title bar and 36px project bar, inside the 8px padding.
-            px(76.0 + 8.0 + (640.0 - 76.0 - 16.0) / 2.0 + 4.0 + 15.0),
+            // Below the 40px title bar and 36px project bar, above the 8px padding at the bottom.
+            px(76.0 + (640.0 - 76.0 - 8.0) / 2.0 + 4.0 + 15.0),
         );
         cx.simulate_event(
             window,
@@ -312,9 +312,9 @@ fn main() {
         cx.simulate_keystrokes(window, "cmd-,");
         wait(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("settings"));
-        // The dialog is centred, 820 wide at most.
-        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
-        let right = left + 820.0f32.min(width * 0.92);
+        // The dialog is centred, 820 wide at most and 32px clear of each edge.
+        let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
+        let right = left + 820.0f32.min(width - 64.0);
         // The font field: a click in it, a name typed, the caret moved back into the name and then a part of it selected
         // with Shift. It is at the card's right edge, and lower at 640, where the description wraps.
         let field = point(
@@ -333,7 +333,7 @@ fn main() {
         wait(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("settings-selection"));
         // The Cursor section, third in the list, with its style menu open.
-        click(&mut cx, window, point(px(left + 70.0), px(218.0)));
+        click(&mut cx, window, point(px(left + 70.0), px(201.0)));
         wait(&mut cx, window, Duration::from_millis(200));
         // The description wraps at 640, so the row and its select sit lower.
         let select_y = if width < 800.0 { 155.0 } else { 125.0 };
@@ -641,10 +641,11 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let mut config = base.clone();
     config.agents = None;
     config.plugins = None;
-    // The 248 wide sidebar, then the tabs, which start 12 further; the panes start 8 in, under the 76 of bars.
+    // The 248 wide sidebar, then the tabs, which start 12 further; the panes start 8 in, right under the 76 of bars.
     let tab = point(px(248.0 + 12.0 + 60.0), px(20.0));
-    let title = point(px(248.0 + 8.0 + 40.0), px(76.0 + 8.0 + 15.0));
-    let project = point(px(60.0), px(40.0 + 36.0 + 8.0 + 28.0 + 2.0 + 12.0));
+    let title = point(px(248.0 + 8.0 + 40.0), px(76.0 + 15.0));
+    // The first project: under the 28px Inbox row and its 8px of padding, the 32px heading, and half a 26px row.
+    let project = point(px(60.0), px(40.0 + 28.0 + 8.0 + 32.0 + 13.0));
     for width in [1000.0, 640.0] {
         let config = config.clone();
         let handle = cx
@@ -657,7 +658,7 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-t cmd-d");
         wait(cx, window, Duration::from_secs(2));
-        let inbox = point(px(60.0), px(40.0 + 8.0 + 14.0));
+        let inbox = point(px(60.0), px(40.0 + 14.0));
         mouse(cx, window, inbox, Some(MouseButton::Left));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("inbox-empty"));
@@ -668,6 +669,16 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let _ = handle.update(cx, |workspace, _, cx| workspace.show_inbox(cx));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("inbox"));
+        cx.simulate_keystrokes(window, "escape");
+        // The new tab menu, from the 16px chevron at the title bar's right end, inside its 10px of padding.
+        mouse(
+            cx,
+            window,
+            point(px(width - 10.0 - 8.0), px(20.0)),
+            Some(MouseButton::Left),
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("menu-new-tab"));
         cx.simulate_keystrokes(window, "escape");
         for (state, at) in [
             ("menu-tab", tab),
@@ -691,8 +702,8 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("menu-move"));
         cx.simulate_keystrokes(window, "escape");
-        // A pane's close button sits at the header's right end, 4 in from the card's 8px gutter.
-        let close = point(px(width - 8.0 - 5.0 - 12.0), title.y);
+        // A pane's 28px close button sits at the header's right end, 4 in from the card's 8px gutter and border.
+        let close = point(px(width - 8.0 - 5.0 - 14.0), title.y);
         for (state, at) in [
             ("tooltip-sidebar", point(px(98.0), px(20.0))),
             ("tooltip-tab", tab),
@@ -914,15 +925,15 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 workspace.show_claude_accounts(accounts, cx)
             })
             .expect("show the made-up accounts");
-        // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 150.
+        // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117 as in the desktop.
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(300));
-        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
+        let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
         let sections = [
             "general", "text", "cursor", "history", "keyboard", "editor", "agents", "plugins",
         ];
         for (index, section) in sections.into_iter().enumerate() {
-            let row = point(px(left + 70.0), px(150.0 + 34.0 * index as f32));
+            let row = point(px(left + 70.0), px(133.0 + 34.0 * index as f32));
             click(cx, window, row);
             wait(cx, window, Duration::from_millis(200));
             save(cx, window, &name(&format!("settings-{section}")));

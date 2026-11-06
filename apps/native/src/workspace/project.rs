@@ -107,6 +107,7 @@ impl Workspace {
             |p| p.name.clone(),
         );
         let branch = entry.and_then(|p| p.branch.clone());
+        let buttons = self.sidebar_buttons(cx);
         div()
             .id("project-bar")
             .role(Role::Toolbar)
@@ -141,6 +142,17 @@ impl Workspace {
             })
             .child(div().flex_1())
             .children(self.editor_button(cx))
+            // The plugins' sidebar buttons at the right end, as in the desktop's project bar.
+            .when(!buttons.is_empty(), |bar| {
+                bar.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .children(buttons),
+                )
+            })
             .into_any_element()
     }
 

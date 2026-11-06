@@ -274,6 +274,33 @@ fn a_terminal_of_a_project_with_an_account_starts_with_that_accounts_config_fold
 }
 
 #[test]
+fn back_and_forward_return_to_the_tabs_shown_before() {
+    use Active::Terminal;
+    let (_app, mut window) = open();
+    press(&mut window, "t");
+    press(&mut window, "1");
+    let go = |window: &mut TestAppWindow<Workspace>, key: &str| {
+        window.draw();
+        window.simulate_keystroke(&if cfg!(target_os = "macos") {
+            format!("cmd-alt-{key}")
+        } else {
+            format!("ctrl-shift-alt-{key}")
+        });
+        window.read(|w, _| w.active())
+    };
+    assert_eq!(go(&mut window, "["), Terminal(1));
+    assert_eq!(go(&mut window, "["), Terminal(0));
+    assert_eq!(go(&mut window, "["), Terminal(0), "nothing further back");
+    assert_eq!(go(&mut window, "]"), Terminal(1));
+    // A closed tab is skipped.
+    press(&mut window, "t");
+    press(&mut window, "1");
+    window.draw();
+    window.update(|w, window, cx| w.close_tab_of(Terminal(2), window, cx));
+    assert_eq!(go(&mut window, "["), Terminal(1));
+}
+
+#[test]
 fn moving_a_tab_swaps_it_with_its_neighbour_and_issues_stays_last() {
     use Active::{Issues, Terminal};
     let (_app, mut window) = open();

@@ -343,6 +343,7 @@ impl Workspace {
             Section::General => {
                 let mut tabs: Vec<(String, String)> = vec![
                     ("terminal".into(), "Terminal".into()),
+                    ("ask".into(), "Choose each time".into()),
                     ("project".into(), "Project page".into()),
                 ];
                 for installed in &self.plugins {
@@ -381,9 +382,9 @@ impl Workspace {
                     ui::setting_row(
                         "New tab button opens",
                         format!(
-                            "What the + button does: open a terminal or the Project page, or open a plugin page. \
-                             Plugin pages that declare \"newTab\": true in their view show here. {} always opens a \
-                             terminal.",
+                            "What the + button does: open a terminal or the Project page, choose each time from the \
+                             menu, or open a plugin page. Plugin pages that declare \"newTab\": true in their view show \
+                             here and in the menu next to the button. {} always opens a terminal.",
                             shortcut_label("T", false)
                         ),
                         None,

@@ -526,7 +526,7 @@ impl Workspace {
         }
     }
 
-    /// The plugins' sidebar buttons, right of the new tab button: each opens its page in the panel on the right.
+    /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right.
     pub(super) fn sidebar_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.plugins
             .iter()

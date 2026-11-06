@@ -13,6 +13,7 @@ mod editor;
 mod finder_tests;
 mod history;
 mod inbox;
+mod nav;
 mod palette;
 mod pane_card;
 mod panes;
@@ -40,17 +41,17 @@ mod welcome;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseMoveEvent,
-    MouseUpEvent, Pixels, ScrollHandle, SharedString, Subscription, Task, Window, canvas, div,
-    prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, ScrollHandle,
+    SharedString, Subscription, Task, Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
     actions::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
-        FocusRight, FocusUp, IncreaseFontSize, Minimize, MoveTabLeft, MoveTabRight, NewTab,
-        NextTab, OpenHistory, OpenProjectInEditor, OpenSettings, PreviousTab, ResetFontSize,
-        ShowNotifications, SplitDown, SplitRight, ToggleFullScreen, TogglePalette,
+        FocusRight, FocusUp, GoBack, GoForward, IncreaseFontSize, Minimize, MoveTabLeft,
+        MoveTabRight, NewTab, NextTab, OpenHistory, OpenProjectInEditor, OpenSettings, PreviousTab,
+        ResetFontSize, ShowNotifications, SplitDown, SplitRight, ToggleFullScreen, TogglePalette,
         ToggleQuickTerminal, ToggleSidebar, Zoom, ZoomPane,
     },
     agents::{Agent, PaneInfo},
@@ -188,6 +189,10 @@ pub struct Workspace {
     editors: Vec<wings_editors::EditorView>,
     /// The project bar's menu of the other editors is open.
     editor_menu: bool,
+    /// The menu beside the new tab button is open.
+    new_tab_menu: bool,
+    /// Back and forward between the places shown.
+    nav: nav::Nav,
     /// The terminal Ctrl-` shows and hides, once started.
     quick: Option<quick::QuickTerminal>,
     /// The last project was removed: the window shows what to do first, with no tabs.
@@ -287,6 +292,8 @@ impl Workspace {
             prefs: settings::Prefs::default(),
             editors: Vec::new(),
             editor_menu: false,
+            new_tab_menu: false,
+            nav: Default::default(),
             quick: None,
             welcome: false,
             just_added: false,
@@ -417,6 +424,9 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_plugins(cx);
+        // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
+        let place = self.place();
+        self.nav.visit(place);
         if let Some((viewer, _)) = &self.plugin_ui.diff {
             return div().size_full().child(viewer.clone()).into_any_element();
         }
@@ -675,16 +685,37 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &ShowNotifications, _, cx| this.open_inbox(cx)))
-            // Escape closes a menu or the Inbox before the terminal under it gets the key.
-            .when(self.menu.is_some() || self.inbox.open.is_some(), |root| {
-                root.capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
-                        this.close_menu(cx);
-                        this.close_inbox(cx);
-                        cx.stop_propagation();
-                    }
-                }))
+            .on_action(cx.listener(|this, _: &GoBack, window, cx| this.navigate(true, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &GoForward, window, cx| this.navigate(false, window, cx)),
+            )
+            // The mouse's back and forward buttons, before a terminal can take them, as in the desktop app.
+            .capture_any_mouse_down(|event: &MouseDownEvent, _, cx| {
+                if matches!(event.button, MouseButton::Navigate(_)) {
+                    cx.stop_propagation();
+                }
             })
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                if let MouseButton::Navigate(direction) = event.button {
+                    cx.stop_propagation();
+                    this.navigate(direction == NavigationDirection::Back, window, cx);
+                }
+            }))
+            // Escape closes a menu or the Inbox before the terminal under it gets the key.
+            .when(
+                self.menu.is_some() || self.inbox.open.is_some() || self.new_tab_menu,
+                |root| {
+                    root.capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" {
+                            this.close_menu(cx);
+                            this.close_inbox(cx);
+                            this.new_tab_menu = false;
+                            cx.notify();
+                            cx.stop_propagation();
+                        }
+                    }))
+                },
+            )
             .child(title_bar)
             .child(
                 div()

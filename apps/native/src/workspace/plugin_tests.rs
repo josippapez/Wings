@@ -821,15 +821,15 @@ fn install_sider(data: &Data) {
 }
 
 #[test]
-fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_title_bar_button_and_keeps_running() {
+fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_and_keeps_running() {
     let data = Data::temp();
     install_sider(&data);
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     assert_eq!(window.read(|w, _| w.plugins[0].sidebars.len()), 1);
     assert!(window.read(|w, _| w.right.is_none() && w.sidebar_pages.is_empty()));
 
-    // The button is the last thing in the title bar, 10px from the right edge.
-    window.simulate_click(point(px(976.0), px(20.0)), MouseButton::Left);
+    // The button is the last thing in the project bar under the 40px title bar, 8px from the right edge.
+    window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
     assert_eq!(
         window.read(|w, _| w.right.clone()),
         Some(("sider".into(), "side".into()))
@@ -853,8 +853,12 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_title_bar_button_and
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // Closed, the panel goes and the page's frame stays. Opened again, it is the same page.
-    window.simulate_click(point(px(976.0), px(20.0)), MouseButton::Left);
+    // Closed, the panel goes and the page's frame stays. Opened again, it is the same page. The open panel narrows
+    // the project bar, so the button sits its width further left.
+    window.simulate_click(
+        point(px(978.0 - super::plugin_ui::RIGHT_WIDTH), px(58.0)),
+        MouseButton::Left,
+    );
     assert!(window.read(|w, _| w.right.is_none()));
     assert_eq!(window.read(|w, _| w.plugins[0].host.frames()), 2);
     window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
