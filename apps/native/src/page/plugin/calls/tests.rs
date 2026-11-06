@@ -625,10 +625,13 @@ const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
 
 fn transcripts(types: &[&str]) -> (Rig, std::path::PathBuf) {
     let rig = Rig::new(json!({ "permissions": { "transcript": types } }), panes());
+    // Tests run in parallel and each removes its folder, so every call gets its own.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let claude = tmp().join(format!(
-        "wings-native-calls-claude-{}-{}",
+        "wings-native-calls-claude-{}-{}-{}",
         std::process::id(),
-        types.join("-")
+        types.join("-"),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     fs::create_dir_all(claude.join("projects/-x")).unwrap();
     fs::write(
