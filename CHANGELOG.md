@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.123 · 2026-11-06
+
+- **Claude accounts show whether they're signed in.** Plugins get each account's real sign-in from Claude Code, so a logged-out account no longer looks signed in.
+
 ## 0.1.122 · 2026-11-06
 
 - **Each Claude Code account keeps its own model.** An account that shares your default setup gets a copy of your settings with its own model kept, so a work seat no longer starts on your personal default model.
