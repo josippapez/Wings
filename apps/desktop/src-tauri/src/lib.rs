@@ -380,6 +380,13 @@ fn pane_create(
         Some(pick) => claude_accounts::pick_dir(pick)?,
         None => claude_accounts::pane_dir(&state.spaces.lock().unwrap().spaces, &space_id),
     };
+    // What changed in the default account's settings.json reaches a named account the next time a terminal opens for it.
+    #[cfg(unix)]
+    if let Some(dir) = &claude_config_dir {
+        if let Err(e) = claude_accounts::sync_shared_settings(dir) {
+            applog::log_line!("[claude] couldn't copy the default account's settings to {}: {e}", dir.display());
+        }
+    }
     let id = state
         .terminals
         .spawn(

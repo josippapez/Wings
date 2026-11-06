@@ -657,16 +657,20 @@ interface Wings {
    * assigned to it, `openPane` with `claudeAccount`, Wings starts), so `sharesSetup` in `claudeAccounts()` is the choice, not
    * whether the links are there yet.
    *
-   * On: each of these the default account's folder (`~/.claude`) has becomes a link to it in the account's folder: `settings.json`,
+   * On: each of these the default account's folder (`~/.claude`) has becomes a link to it in the account's folder:
    * `settings.local.json`, the top-level `*.md` files (`CLAUDE.md`), `rules`, `skills`, `agents`, `commands`, `hooks`,
    * `output-styles`, `plugins` and the top-level `*.sh` scripts. Never the sign-in, `.claude.json`, projects, sessions, history or
-   * caches. A file or folder the account had at one of those names moves to `.before-shared-setup/` in its folder first (a
-   * number is added to the name if that one is taken), nothing is deleted. Claude Code and Wings write settings through the
-   * links, so a change in either account is a change in both. The default account's user-scope MCP servers (in `.claude.json`,
-   * which cannot be linked) that the account does not have are copied into it, except Wings' own.
+   * caches. `settings.json` is copied, not linked, so each account keeps its own `model`: it has every key of the default's, in
+   * its order, except `model`, which is the account's own (the one it has now, so a `/model` in the account stays; the first time,
+   * the one in the settings the account had, and none if they had none). Wings brings the copy up to date each time it connects to
+   * the account and each time a terminal opens in it. A file or folder the account had at one of those names moves to
+   * `.before-shared-setup/` in its folder first (a number is added to the name if that one is taken), nothing is deleted. The
+   * default account's user-scope MCP servers (in `.claude.json`, which cannot be linked) that the account does not have are
+   * copied into it, except Wings' own.
    *
-   * Off: the links Wings made go and everything in `.before-shared-setup/` goes back where it was. MCP servers already copied
-   * stay. Rejects for a name that is not an account name, or for the account that is the folder Wings runs Claude Code under.
+   * Off: the links and the `settings.json` copy Wings made go and everything in `.before-shared-setup/` goes back where it was.
+   * MCP servers already copied stay. Rejects for a name that is not an account name, or for the account that is the folder Wings
+   * runs Claude Code under.
    */
   shareClaudeSetup(name: string, on: boolean): Promise<void>;
   /**
