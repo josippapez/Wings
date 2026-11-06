@@ -195,19 +195,21 @@ pub(super) fn start(
     cwd: PathBuf,
     history: Vec<u8>,
     claude_config_dir: Option<PathBuf>,
+    options: Options,
 ) -> Result<(Runtime, Latest, Receiver<()>), String> {
     let id = format!("p{}", NEXT_PANE.fetch_add(1, Ordering::Relaxed));
     let process = Arc::new(
         PtyProcess::spawn(&cwd, &id, 80, 24, claude_config_dir.as_deref())
             .map_err(|error| error.to_string())?,
     );
-    start_process(process, id, history)
+    start_process(process, id, history, options)
 }
 
 pub(super) fn start_process(
     process: Arc<PtyProcess>,
     id: String,
     history: Vec<u8>,
+    options: Options,
 ) -> Result<(Runtime, Latest, Receiver<()>), String> {
     let mut reader = process.reader().map_err(|error| error.to_string())?;
     // Output uses only eight command slots, leaving room for control keys during a flood.
@@ -246,6 +248,7 @@ pub(super) fn start_process(
                     latest: state,
                 },
                 history,
+                options,
                 stopped,
                 visible,
             );
@@ -291,6 +294,7 @@ fn viewport_point<L: EventListener>(pane: &GridPane<L>, hit: Hit) -> GridPoint {
     )
 }
 
+#[allow(clippy::too_many_arguments)] // the model thread's whole starting state
 fn run_model(
     process: Arc<PtyProcess>,
     receiver: Receiver<Command>,
@@ -303,6 +307,7 @@ fn run_model(
         latest,
     }: Outputs,
     history: Vec<u8>,
+    mut options: Options,
     stopped: Arc<AtomicBool>,
     visible: Arc<AtomicBool>,
 ) {
@@ -314,7 +319,10 @@ fn run_model(
         cell_width: 8,
         cell_height: line_height(DEFAULT_FONT_SIZE, 1.2) as u16,
     };
-    let mut options = Options::default();
+    // The settings apply before the first output is read, so a program can't copy before clipboard writes are off.
+    if options != Options::default() {
+        pane.set_options(options.cursor, options.scrollback);
+    }
     let mut status = None;
     let mut find: Option<Find> = None;
     let mut last_refind = Instant::now();

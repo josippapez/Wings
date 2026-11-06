@@ -17,8 +17,13 @@ fn open(script: &str) -> (TestApp, View) {
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
     let window = app.open_window(move |_, cx| {
-        let (runtime, latest, updates) =
-            start_process(process, "window-test".into(), Vec::new()).unwrap();
+        let (runtime, latest, updates) = start_process(
+            process,
+            "window-test".into(),
+            Vec::new(),
+            Default::default(),
+        )
+        .unwrap();
         TerminalView::new(runtime, latest, updates, cx)
     });
     (app, window)

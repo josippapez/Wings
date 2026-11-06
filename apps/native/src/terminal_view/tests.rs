@@ -21,8 +21,13 @@ fn live_worker_keeps_the_title_a_program_sets() {
     ]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "title-test".into(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "title-test".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
     wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
     assert_eq!(
         runtime.title.lock().unwrap().as_deref(),
@@ -41,8 +46,13 @@ fn the_cursor_setting_applies_until_a_program_sets_its_own() {
     ]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "cursor-test".into(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "cursor-test".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
     wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
     let shape = |frame: &Snapshot| frame.cursor.map(|(.., shape)| shape);
     runtime
@@ -75,8 +85,13 @@ fn replayed_output_ends_its_modes_and_never_answers_into_the_new_shell() {
     ]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "history-test".into(), history.clone()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "history-test".into(),
+        history.clone(),
+        worker::Options::default(),
+    )
+    .unwrap();
     let frame = wait_snapshot(&latest, |frame| visible_text(frame).contains("got:[]"));
     assert!(
         visible_text(&frame).contains("before-alt"),
@@ -110,8 +125,13 @@ fn with_clipboard_writes_off_a_program_cannot_copy() {
     ]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "clipboard-off-test".into(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "clipboard-off-test".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
     wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
     runtime
         .commands
@@ -124,6 +144,32 @@ fn with_clipboard_writes_off_a_program_cannot_copy() {
         .commands
         .send_blocking(worker::Command::Input(b"go\r".to_vec()))
         .unwrap();
+    wait_snapshot(&latest, |frame| visible_text(frame).contains("done"));
+    assert!(runtime.clipboard.try_recv().is_err());
+    drop(runtime);
+    wait_reaped(&process);
+}
+
+#[test]
+fn with_clipboard_writes_off_from_the_start_a_program_cannot_copy_on_its_first_output() {
+    let mut command = wings_terminal::CommandBuilder::new("/bin/sh");
+    command.args([
+        "-c",
+        r#"printf '\033]52;c;%s\007' "$(printf secret | base64)"; printf done; sleep 30"#,
+    ]);
+    let process =
+        Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
+    let off = worker::Options {
+        clipboard_write: false,
+        ..Default::default()
+    };
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "clipboard-off-start".into(),
+        Vec::new(),
+        off,
+    )
+    .unwrap();
     wait_snapshot(&latest, |frame| visible_text(frame).contains("done"));
     assert!(runtime.clipboard.try_recv().is_err());
     drop(runtime);
@@ -152,8 +198,13 @@ sleep 30"#;
     command.args(["-c", script]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "selection-test".into(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "selection-test".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
     wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
     assert_eq!(recv_clipboard(&runtime), "osc-copy");
 
@@ -208,8 +259,13 @@ sleep 30"#;
         let process = Arc::new(
             PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap(),
         );
-        let (runtime, latest, _updates) =
-            start_process(process.clone(), "unload-test".into(), Vec::new()).unwrap();
+        let (runtime, latest, _updates) = start_process(
+            process.clone(),
+            "unload-test".into(),
+            Vec::new(),
+            worker::Options::default(),
+        )
+        .unwrap();
         let frame = wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
         runtime.visible.store(false, Ordering::Release);
         runtime.commands.send_blocking(Command::Unload).unwrap();
@@ -302,7 +358,8 @@ fn wait_reaped(process: &PtyProcess) {
 #[test]
 fn live_worker_runs_the_current_shell_in_its_project_and_refits_the_pty() {
     let cwd = std::env::temp_dir().canonicalize().unwrap();
-    let (runtime, latest, _updates) = start(cwd.clone(), Vec::new(), None).unwrap();
+    let (runtime, latest, _updates) =
+        start(cwd.clone(), Vec::new(), None, worker::Options::default()).unwrap();
     runtime
         .commands
         .send_blocking(Command::Input(b"printf '\\nnative-''cwd:'; pwd\r".to_vec()))
@@ -354,8 +411,13 @@ printf native-protocol-ok
     command.args(["-c", script]);
     let process =
         Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
-    let (runtime, latest, _updates) =
-        start_process(process.clone(), "protocol-test".into(), Vec::new()).unwrap();
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "protocol-test".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
     runtime
         .commands
         .send_blocking(Command::Resize(Geometry {

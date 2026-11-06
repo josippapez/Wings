@@ -204,7 +204,8 @@ impl TerminalView {
         claude_config_dir: Option<PathBuf>,
         cx: &mut App,
     ) -> Result<Entity<Self>, String> {
-        let (runtime, latest, updates) = start(cwd, history, claude_config_dir)?;
+        let options = Options::of(&look(cx));
+        let (runtime, latest, updates) = start(cwd, history, claude_config_dir, options)?;
         Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
     }
 
@@ -244,15 +245,12 @@ impl TerminalView {
             view.runtime.shutdown();
             async {}
         });
-        let options = Options::of(&look(cx));
-        if options != Options::default() {
-            let _ = runtime.commands.try_send(Command::Options(options));
-        }
+        // Blocking, not try_send: a dropped change could leave clipboard writes on after they were turned off.
         let look_changed = cx.observe_global::<TerminalLook>(|view, cx| {
             let _ = view
                 .runtime
                 .commands
-                .try_send(Command::Options(Options::of(&look(cx))));
+                .send_blocking(Command::Options(Options::of(&look(cx))));
         });
         Self {
             focus: cx.focus_handle(),
