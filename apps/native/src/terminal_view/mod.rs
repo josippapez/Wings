@@ -1,4 +1,4 @@
-//! First native terminal slice. The worker owns Alacritty; GPUI only paints immutable snapshots.
+//! First native terminal slice. The worker owns the libghostty-vt grid; GPUI only paints immutable snapshots.
 
 mod find;
 mod find_bar;
@@ -23,7 +23,7 @@ use gpui::{
     SharedString, Subscription, Task, prelude::*, px,
 };
 
-pub use wings_terminal::alacritty_terminal::vte::ansi::CursorShape;
+pub use wings_terminal::grid::CursorShape;
 
 use crate::text_field::TextField;
 

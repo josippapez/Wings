@@ -6,7 +6,7 @@ use gpui::{
     Bounds, Context, EntityInputHandler, Focusable, KeyDownEvent, Keystroke, Pixels, Point,
     UTF16Selection, Window, point, px, size,
 };
-use wings_terminal::alacritty_terminal::{grid::Scroll, term::TermMode};
+use wings_terminal::grid::{Scroll, TermMode};
 
 use super::{TerminalView, worker::Command};
 

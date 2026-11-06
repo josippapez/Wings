@@ -8,10 +8,7 @@ use gpui::{
     UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*, px, rgb, rgba,
     size,
 };
-use wings_terminal::{
-    alacritty_terminal::{term::cell::Flags, vte::ansi::CursorShape},
-    grid::{BACKGROUND, FOREGROUND},
-};
+use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags};
 
 use crate::actions::{self, Copy, Paste};
 
@@ -573,7 +570,7 @@ mod tests {
     fn text_is_shaped_per_style_run_and_odd_widths_on_their_own() {
         let mut pane = GridPane::new(20, 3);
         pane.feed("ab cd\x1b[31mef\x1b[0m界x  ─┼\r\ne\u{301}g".as_bytes());
-        let frame = snapshot(&pane, None, false, None);
+        let frame = snapshot(&mut pane, None, false, None);
         let base = TextRun {
             font: font("Menlo"),
             ..Default::default()

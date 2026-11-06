@@ -1,11 +1,9 @@
-//! The model thread: the PTY and its Alacritty grid, driven by commands, publishing snapshots.
+//! The model thread: the PTY and its terminal grid, driven by commands, publishing snapshots.
 
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     io::Read,
     path::PathBuf,
-    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -17,15 +15,7 @@ use std::{
 use async_channel::{Receiver, Sender};
 use wings_terminal::{
     PtyProcess,
-    alacritty_terminal::{
-        event::{Event, EventListener},
-        grid::{Dimensions, Scroll},
-        index::{Column, Point as GridPoint},
-        selection::{Selection, SelectionType},
-        term::{TermMode, viewport_to_point},
-        vte::ansi::CursorShape,
-    },
-    grid::GridPane,
+    grid::{CursorShape, Event, GridPane, Scroll, SelectionType, TermMode},
     history,
 };
 
@@ -73,16 +63,6 @@ pub(super) fn fit(width: f32, height: f32, cell_width: f32, line_height: f32) ->
         cell_width: cell_pixels,
         cell_height: line_height as u16,
     })
-}
-
-struct Listener(Rc<RefCell<Vec<Event>>>);
-impl EventListener for Listener {
-    fn send_event(&self, event: Event) {
-        // Every scroll sends this. Nothing uses it, and it would pile up until the next output.
-        if !matches!(event, Event::MouseCursorDirty) {
-            self.0.borrow_mut().push(event);
-        }
-    }
 }
 
 pub(super) enum Command {
@@ -287,13 +267,6 @@ struct Outputs {
     latest: Latest,
 }
 
-fn viewport_point<L: EventListener>(pane: &GridPane<L>, hit: Hit) -> GridPoint {
-    viewport_to_point(
-        pane.model().grid().display_offset(),
-        GridPoint::new(hit.row, Column(hit.col)),
-    )
-}
-
 #[allow(clippy::too_many_arguments)] // the model thread's whole starting state
 fn run_model(
     process: Arc<PtyProcess>,
@@ -311,14 +284,14 @@ fn run_model(
     stopped: Arc<AtomicBool>,
     visible: Arc<AtomicBool>,
 ) {
-    let events = Rc::new(RefCell::new(Vec::new()));
-    let mut pane = GridPane::with_listener(80, 24, Listener(events.clone()));
+    let mut pane = GridPane::new(80, 24);
     let mut geometry = Geometry {
         cols: 80,
         rows: 24,
         cell_width: 8,
         cell_height: line_height(DEFAULT_FONT_SIZE, 1.2) as u16,
     };
+    pane.set_cell_size(geometry.cell_width, geometry.cell_height);
     // The settings apply before the first output is read, so a program can't copy before clipboard writes are off.
     if options != Options::default() {
         pane.set_options(options.cursor, options.scrollback);
@@ -330,15 +303,15 @@ fn run_model(
     let mut stored: Option<Vec<u8>> = None;
     if !history.is_empty() {
         pane.feed(&history);
-        let end = history_end(*pane.model().mode());
+        let end = history_end(pane.mode());
         pane.feed(&end);
         // Replies, titles and clipboard writes belong to the old program. None reach the new shell.
-        events.borrow_mut().clear();
+        pane.take_events();
         let mut kept = recent.lock().unwrap();
         keep_recent(&mut kept, &history);
         keep_recent(&mut kept, &end);
         drop(kept);
-        *latest.lock().unwrap() = Arc::new(snapshot(&pane, None, false, None));
+        *latest.lock().unwrap() = Arc::new(snapshot(&mut pane, None, false, None));
     }
     while let Ok(first) = receiver.recv_blocking() {
         if stopped.load(Ordering::Acquire) {
@@ -357,65 +330,47 @@ fn run_model(
                         .expect("output notification follows its bytes");
                     pane.feed(&bytes);
                     keep_recent(&mut recent.lock().unwrap(), &bytes);
-                    let pending = std::mem::take(&mut *events.borrow_mut());
                     let mut result = Ok(());
-                    for event in pending {
-                        let reply = match &event {
-                            // Like the desktop terminal, programs may write the clipboard. Alacritty's
-                            // default OSC 52 policy already refuses reads.
-                            Event::ClipboardStore(_, text) => {
+                    for event in pane.take_events() {
+                        match event {
+                            // Like the desktop terminal, programs may write the clipboard. The grid never lets
+                            // them read it.
+                            Event::Clipboard(text) => {
                                 if options.clipboard_write {
-                                    let _ = clipboard.try_send(text.clone());
+                                    let _ = clipboard.try_send(text);
                                 }
-                                None
                             }
-                            Event::Title(text) => {
-                                *title.lock().unwrap() = Some(text.clone());
-                                None
+                            Event::Title(text) => *title.lock().unwrap() = text,
+                            Event::PtyWrite(reply) => {
+                                if let Err(error) = process.write(&reply) {
+                                    result = Err(error);
+                                    break;
+                                }
                             }
-                            Event::ResetTitle => {
-                                *title.lock().unwrap() = None;
-                                None
-                            }
-                            event => pane.protocol_reply(
-                                event,
-                                geometry.cell_width,
-                                geometry.cell_height,
-                            ),
-                        };
-                        if let Some(reply) = reply
-                            && let Err(error) = process.write(reply.as_bytes())
-                        {
-                            result = Err(error);
-                            break;
                         }
                     }
                     result
                 }
                 Command::Input(bytes) => {
-                    pane.model_mut().scroll_display(Scroll::Bottom);
+                    pane.scroll(Scroll::Bottom);
                     process.write(&bytes)
                 }
                 Command::Scroll(scroll) => {
-                    pane.model_mut().scroll_display(scroll);
+                    pane.scroll(scroll);
                     Ok(())
                 }
                 Command::SelectFrom(hit, ty) => {
-                    let point = viewport_point(&pane, hit);
-                    pane.model_mut().selection = Some(Selection::new(ty, point, hit.side));
+                    pane.select_from(hit.row, hit.col, hit.side, ty);
                     Ok(())
                 }
                 Command::SelectTo(hit) => {
-                    let point = viewport_point(&pane, hit);
-                    if let Some(selection) = pane.model_mut().selection.as_mut() {
-                        selection.update(point, hit.side);
-                    }
+                    pane.select_to(hit.row, hit.col, hit.side);
                     Ok(())
                 }
                 Command::Find(query, movement) => {
                     let previous = find.take().map(|find| {
                         if find.stale {
-                            refind(&pane, find)
+                            refind(&mut pane, find)
                         } else {
                             find
                         }
@@ -428,7 +383,7 @@ fn run_model(
                     Ok(())
                 }
                 Command::Copy => {
-                    if let Some(text) = pane.model().selection_to_string() {
+                    if let Some(text) = pane.selection_to_string() {
                         let _ = clipboard.try_send(text);
                     }
                     Ok(())
@@ -436,6 +391,7 @@ fn run_model(
                 Command::Resize(next) => {
                     if next != geometry {
                         pane.resize(next.cols as usize, next.rows as usize);
+                        pane.set_cell_size(next.cell_width, next.cell_height);
                         geometry = next;
                         process.resize(next.cols, next.rows)
                     } else {
@@ -449,14 +405,13 @@ fn run_model(
                     Ok(())
                 }
                 Command::Unload => {
-                    let term = pane.model();
                     // A full-screen program's screen isn't the history, so it stays as it is.
                     if !visible.load(Ordering::Acquire)
                         && stored.is_none()
-                        && !term.mode().contains(TermMode::ALT_SCREEN)
-                        && term.grid().history_size() >= history::MIN_LINES
+                        && !pane.mode().contains(TermMode::ALT_SCREEN)
+                        && pane.history_size() >= history::MIN_LINES
                     {
-                        stored = Some(pane.store_history());
+                        stored = pane.store_history();
                     }
                     Ok(())
                 }
@@ -483,7 +438,7 @@ fn run_model(
             command = receiver.try_recv().ok();
         }
         if visible.load(Ordering::Acquire)
-            && !pane.model().mode().contains(TermMode::ALT_SCREEN)
+            && !pane.mode().contains(TermMode::ALT_SCREEN)
             && let Some(lines) = stored.take()
         {
             pane.restore_history(&lines);
@@ -497,17 +452,16 @@ fn run_model(
             && last_refind.elapsed() >= REFIND_EVERY
             && let Some(current) = find.take()
         {
-            find = Some(refind(&pane, current));
+            find = Some(refind(&mut pane, current));
             last_refind = Instant::now();
         }
         if visible.load(Ordering::Acquire) || closed {
             *latest.lock().unwrap() =
-                Arc::new(snapshot(&pane, status.clone(), closed, find.as_mut()));
+                Arc::new(snapshot(&mut pane, status.clone(), closed, find.as_mut()));
             if visible.load(Ordering::Acquire) {
                 let _ = dirty.try_send(());
             }
         }
-        pane.reset_damage();
         if closed {
             break;
         }

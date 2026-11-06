@@ -1,6 +1,6 @@
 //! Web links on screen: which cells a link covers, for hovering and opening.
 
-use wings_terminal::alacritty_terminal::term::cell::Flags;
+use wings_terminal::grid::Flags;
 
 use super::snapshot::Snapshot;
 
@@ -91,7 +91,7 @@ mod tests {
     fn links_follow_the_desktop_pattern_across_wrapped_rows() {
         let mut pane = GridPane::new(20, 4);
         pane.feed(b"see https://example.com/a.b, next\r\n(http://x.y/z) ftp://no");
-        let frame = snapshot(&pane, None, false, None);
+        let frame = snapshot(&mut pane, None, false, None);
         let link = link_at(&frame, 1, 2).unwrap();
         assert_eq!(link.url, "https://example.com/a.b");
         assert_eq!(

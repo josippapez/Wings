@@ -5,7 +5,7 @@ use crate::terminal_view::worker::start_process;
 use std::{thread, time::Instant};
 use wings_terminal::{
     PtyProcess,
-    alacritty_terminal::{grid::Scroll, index::Side, selection::SelectionType, term::TermMode},
+    grid::{Scroll, SelectionType, Side, TermMode},
     history,
 };
 

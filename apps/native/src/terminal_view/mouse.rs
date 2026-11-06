@@ -4,9 +4,7 @@ use gpui::{
     Context, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     ScrollEvent, Window, px,
 };
-use wings_terminal::alacritty_terminal::{
-    grid::Scroll, index::Side, selection::SelectionType, term::TermMode,
-};
+use wings_terminal::grid::{Scroll, SelectionType, Side, TermMode};
 
 use super::{Drag, TerminalView, links::link_at, worker::Command};
 
