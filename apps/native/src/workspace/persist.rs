@@ -149,6 +149,7 @@ impl Workspace {
                 .iter()
                 .find(|(shape, ..)| *shape == look.cursor)
                 .map(|(_, name, _)| name.to_string()),
+            cursor_blink: Some(look.cursor_blink),
             cursor_inactive_style: INACTIVE_CURSORS
                 .iter()
                 .find(|(style, ..)| *style == look.inactive_cursor)

@@ -22,7 +22,7 @@ use std::{
 use async_channel::Receiver;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Pixels,
-    SharedString, Subscription, Task, prelude::*, px,
+    SharedString, Subscription, Task, Window, prelude::*, px,
 };
 
 pub use wings_terminal::grid::CursorShape;
@@ -97,6 +97,8 @@ pub struct TerminalLook {
     pub shift_return_meta: bool,
     /// The cursor programs get until they set their own.
     pub cursor: CursorShape,
+    /// The focused pane's cursor turns off and on, as xterm's `cursorBlink`.
+    pub cursor_blink: bool,
     /// The cursor of a pane without focus.
     pub inactive_cursor: InactiveCursor,
     /// Spacing between lines, as a multiple of the font size.
@@ -117,6 +119,7 @@ impl Default for TerminalLook {
             family: DEFAULT_FONT_FAMILY.into(),
             shift_return_meta: true,
             cursor: CursorShape::Block,
+            cursor_blink: true,
             inactive_cursor: InactiveCursor::Outline,
             line_height: 1.2,
             min_contrast: 1.0,
@@ -140,6 +143,8 @@ fn line_height(font_size: f32, factor: f32) -> f32 {
 }
 const RESIZE_DELAY: Duration = Duration::from_millis(80);
 const REDRAW_DELAY: Duration = Duration::from_millis(16);
+/// xterm's blink: the cursor turns off or on every 600 ms, and shows again whenever it moves.
+const BLINK_INTERVAL: Duration = Duration::from_millis(600);
 
 /// A pane hidden this long keeps its scrollback as text until it's shown (the desktop's
 /// `TERMINAL_UNLOAD_MS`). A full pane's 10,000 lines cost about 51 MB as cells at 213 columns, and
@@ -178,6 +183,10 @@ pub struct TerminalView {
     link: Option<Link>,
     /// Made on the first Cmd-F and kept, so the term is still there when it opens again.
     find: Option<FindBar>,
+    /// Turns the cursor off and on while it blinks; none while the pane isn't focused or blinking is off.
+    blink: Option<Task<()>>,
+    /// False in the off half of a blink.
+    cursor_lit: bool,
 }
 
 struct FindBar {
@@ -278,7 +287,11 @@ impl TerminalView {
                 if view
                     .update(cx, |view, cx| {
                         if view.visible {
+                            let cursor = view.snapshot.cursor;
                             view.snapshot = view.latest.lock().unwrap().clone();
+                            if view.blink.is_some() && view.snapshot.cursor != cursor {
+                                view.restart_blink(cx);
+                            }
                             if view.snapshot.find_stale {
                                 view.settle_find(cx);
                             }
@@ -335,7 +348,43 @@ impl TerminalView {
             last_hit: None,
             link: None,
             find: None,
+            blink: None,
+            cursor_lit: true,
         }
+    }
+
+    /// Blinks only in the focused pane of the active window, as xterm pauses on blur, so nothing redraws for it
+    /// otherwise. Called on every render, which a change of focus, of the active window or of Settings causes.
+    fn update_blink(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let blinking = look(cx).cursor_blink
+            && self.visible
+            && window.is_window_active()
+            && self.focus.is_focused(window);
+        if !blinking {
+            self.blink = None;
+            self.cursor_lit = true;
+        } else if self.blink.is_none() {
+            self.restart_blink(cx);
+        }
+    }
+
+    /// Shows the cursor and starts the next blink a whole interval from now, as xterm does when the cursor moves.
+    fn restart_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_lit = true;
+        self.blink = Some(cx.spawn(async move |view, cx| {
+            loop {
+                cx.background_executor().timer(BLINK_INTERVAL).await;
+                if view
+                    .update(cx, |view, cx| {
+                        view.cursor_lit = !view.cursor_lit;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
 
     /// The shell's process id, so its owner can check it ended.

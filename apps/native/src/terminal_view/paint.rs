@@ -205,6 +205,8 @@ struct PaintData {
     cell_width: Pixels,
     line_height: Pixels,
     focused: bool,
+    /// False in the off half of a blink, when the focused cursor isn't drawn.
+    lit: bool,
     inactive_cursor: InactiveCursor,
     link: Vec<(usize, usize)>,
 }
@@ -215,6 +217,7 @@ impl Render for TerminalView {
             self.focus.focus(window, cx);
             self.autofocus = false;
         }
+        self.update_blink(window, cx);
         let prepaint_view = cx.entity();
         let paint_view = cx.entity();
         let surface = canvas(
@@ -249,9 +252,10 @@ impl Render for TerminalView {
                 let view = prepaint_view.read(cx);
                 let snapshot = view.snapshot.clone();
                 let focused = view.focus.is_focused(window);
+                let lit = view.cursor_lit;
                 let mut glyphs = Vec::new();
                 for (row, col, text, run) in
-                    glyph_runs(&snapshot, focused, look.min_contrast, &base_run)
+                    glyph_runs(&snapshot, focused && lit, look.min_contrast, &base_run)
                 {
                     let line = window.text_system().shape_line(
                         text.into(),
@@ -299,6 +303,7 @@ impl Render for TerminalView {
                     cell_width,
                     line_height: px(row_height),
                     focused,
+                    lit,
                     inactive_cursor: look.inactive_cursor,
                     link: view
                         .link
@@ -361,6 +366,7 @@ impl Render for TerminalView {
                         ));
                     }
                     if data.focused
+                        && data.lit
                         && let Some((row, col, width, CursorShape::Block)) = data.snapshot.cursor
                     {
                         window.paint_quad(fill(
@@ -429,25 +435,27 @@ impl Render for TerminalView {
                             .corner_radii(px(2.0)),
                         );
                     }
-                    if data.focused
-                        && let Some((row, col, width, shape)) = data.snapshot.cursor
-                    {
-                        let origin = point(
-                            bounds.left() + data.cell_width * col,
-                            bounds.top() + data.line_height * row,
-                        );
-                        let cursor = match shape {
-                            CursorShape::Beam => {
-                                Some(Bounds::new(origin, size(px(2.0), data.line_height)))
+                    if data.focused {
+                        if let Some((row, col, width, shape)) = data.snapshot.cursor
+                            && data.lit
+                        {
+                            let origin = point(
+                                bounds.left() + data.cell_width * col,
+                                bounds.top() + data.line_height * row,
+                            );
+                            let cursor = match shape {
+                                CursorShape::Beam => {
+                                    Some(Bounds::new(origin, size(px(2.0), data.line_height)))
+                                }
+                                CursorShape::Underline => Some(Bounds::new(
+                                    point(origin.x, origin.y + data.line_height - px(2.0)),
+                                    size(data.cell_width * width, px(2.0)),
+                                )),
+                                _ => None,
+                            };
+                            if let Some(cursor) = cursor {
+                                window.paint_quad(fill(cursor, rgb(data.snapshot.cursor_color)));
                             }
-                            CursorShape::Underline => Some(Bounds::new(
-                                point(origin.x, origin.y + data.line_height - px(2.0)),
-                                size(data.cell_width * width, px(2.0)),
-                            )),
-                            _ => None,
-                        };
-                        if let Some(cursor) = cursor {
-                            window.paint_quad(fill(cursor, rgb(data.snapshot.cursor_color)));
                         }
                     } else if let Some((row, col, width, _)) = data.snapshot.cursor {
                         // Without focus the cursor takes the Settings' style, whatever the program set.

@@ -307,3 +307,44 @@ fn the_wheel_scrolls_history_and_typing_returns_to_the_bottom() {
     settle(&app, &mut window, |view| view.snapshot.display_offset == 0);
     window.update(|view, _, _| view.runtime.shutdown());
 }
+
+#[test]
+fn the_focused_cursor_blinks_until_blink_is_turned_off() {
+    let (app, mut window) = open("printf ready; sleep 30");
+    settle(&app, &mut window, shows("ready"));
+    window.update(|view, window, cx| {
+        window.activate_window();
+        view.focus.focus(window, cx);
+    });
+    let tick = |app: &TestApp, window: &mut View, by: Duration| {
+        app.advance_clock(by);
+        app.run_until_parked();
+        window.draw();
+        window.read(|view, _| view.cursor_lit)
+    };
+    assert!(tick(&app, &mut window, Duration::ZERO));
+    assert!(!tick(&app, &mut window, BLINK_INTERVAL), "off after 600 ms");
+    assert!(tick(&app, &mut window, BLINK_INTERVAL), "on again");
+    assert!(!tick(&app, &mut window, BLINK_INTERVAL));
+
+    // Losing focus shows the cursor and stops the timer, as xterm pauses on blur.
+    window.update(|_, window, cx| window.blur(cx));
+    assert!(tick(&app, &mut window, Duration::ZERO));
+    assert!(tick(&app, &mut window, BLINK_INTERVAL * 3));
+    assert!(window.read(|view, _| view.blink.is_none()));
+
+    window.update(|view, window, cx| {
+        view.focus.focus(window, cx);
+        cx.set_global(TerminalLook {
+            cursor_blink: false,
+            ..TerminalLook::default()
+        });
+    });
+    for _ in 0..4 {
+        assert!(
+            tick(&app, &mut window, BLINK_INTERVAL),
+            "steady with blink off"
+        );
+    }
+    window.update(|view, _, _| view.runtime.shutdown());
+}

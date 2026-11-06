@@ -432,6 +432,14 @@ impl Workspace {
                         cx,
                     ),
                 ),
+                self.switch_row(
+                    "cursor-blink",
+                    "Blink",
+                    "The cursor turns off and on in the pane you're typing in.",
+                    current.cursor_blink,
+                    |this, on, cx| this.set_look(|look| look.cursor_blink = on, cx),
+                    cx,
+                ),
                 ui::setting_row(
                     "When the pane isn't focused",
                     "How the cursor looks in the panes you aren't typing in.",

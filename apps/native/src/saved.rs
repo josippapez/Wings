@@ -92,6 +92,9 @@ pub struct Settings {
     /// `block`, `bar` or `underline`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_style: Option<String>,
+    /// The cursor blinks in the focused pane, as the desktop's `cursorBlink`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_blink: Option<bool>,
     /// `outline`, `block`, `bar`, `underline` or `none`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_inactive_style: Option<String>,

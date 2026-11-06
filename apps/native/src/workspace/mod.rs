@@ -420,6 +420,7 @@ impl Workspace {
                 .iter()
                 .find(|(_, name, _)| settings.cursor_style.as_deref() == Some(*name))
                 .map_or(CursorShape::Block, |(shape, ..)| *shape),
+            cursor_blink: settings.cursor_blink.unwrap_or(defaults.cursor_blink),
             inactive_cursor: INACTIVE_CURSORS
                 .iter()
                 .find(|(_, name, _)| settings.cursor_inactive_style.as_deref() == Some(*name))
