@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.120 · 2026-11-06
+
+- **A Claude Code account per project.** Plugins can set which Claude Code account (a `~/.claude-<name>` folder) a project's new terminals use, so two accounts work side by side. Wings connects to every account in use, and history and session tracking cover all of them. The Claude accounts plugin uses it.
+
 ## 0.1.119 · 2026-11-05
 
 - **Terminals in the sidebar.** Each click on Terminal opens a new shell that fills the window and gets its own row above Projects. While it's on screen no tab is selected, and closing (⌘W) closes the terminal, not the tab underneath. Detach one to float it over your tabs: its row stays, and clicking the row brings it back full.
