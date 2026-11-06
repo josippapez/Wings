@@ -8,22 +8,12 @@ fn main() {
     #[cfg(unix)]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        match args.first().map(String::as_str) {
-            Some("--mcp") => std::process::exit(wings_lib::bridge::run(args.get(1).cloned())),
-            #[cfg(target_os = "macos")]
-            Some("ptyd") => std::process::exit(wings_lib::ptyd(&args[1..])),
-            Some("plugin") => std::process::exit(wings_lib::cli::run(&args[1..])),
-            Some("hook") => std::process::exit(wings_lib::cli::hook()),
-            Some("wait") => std::process::exit(wings_lib::cli::wait(&args[1..])),
-            Some("journal") => std::process::exit(wings_lib::cli::journal()),
-            Some("statusline") => std::process::exit(wings_lib::cli::statusline(args.get(1).is_some_and(|a| a == "--pass"))),
-            Some("worktree-setup") => std::process::exit(wings_lib::cli::worktree_setup(&args[1..])),
-            Some("tools") => std::process::exit(wings_lib::cli::tools()),
-            // A plugin's id, like `tasks`: one of its commands. Anything starting with `-` is left to the app.
-            Some(id) if id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && !id.starts_with('-') => {
-                std::process::exit(wings_lib::cli::plugin_tool(&args))
-            }
-            _ => {}
+        #[cfg(target_os = "macos")]
+        if args.first().is_some_and(|a| a == "ptyd") {
+            std::process::exit(wings_lib::ptyd(&args[1..]));
+        }
+        if let Some(code) = wings_connect::run_command(&args, env!("CARGO_PKG_VERSION")) {
+            std::process::exit(code);
         }
     }
     wings_lib::run()

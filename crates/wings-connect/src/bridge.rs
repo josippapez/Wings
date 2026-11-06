@@ -36,11 +36,14 @@ const TOOL_WAIT: Duration = Duration::from_secs(310);
 const INSTRUCTIONS_WAIT: Duration = Duration::from_secs(2);
 
 struct Bridge {
-    stdout: Mutex<std::io::Stdout>,
+    /// Where the MCP messages to Claude Code go: stdout.
+    stdout: Mutex<Box<dyn Write + Send>>,
     app: Mutex<Option<UnixStream>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
     next: AtomicU64,
     initialized: AtomicBool,
+    /// The Wings version the server reports.
+    version: &'static str,
 }
 
 impl Bridge {
@@ -83,27 +86,39 @@ fn instructions(plugin_lines: &[&str]) -> String {
     text
 }
 
-pub fn run(socket: Option<String>) -> i32 {
+/// `version` is the Wings version the server reports to Claude Code.
+pub fn run(socket: Option<String>, version: &'static str) -> i32 {
     let Some(socket) = socket.map(PathBuf::from) else {
         eprintln!("usage: wings --mcp <socket>");
         return 2;
     };
     let bridge = Arc::new(Bridge {
-        stdout: Mutex::new(std::io::stdout()),
+        stdout: Mutex::new(Box::new(std::io::stdout())),
         app: Mutex::new(None),
         pending: Mutex::new(HashMap::new()),
         next: AtomicU64::new(1),
         initialized: AtomicBool::new(false),
+        version,
     });
+    link(&bridge, socket);
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+        let bridge = bridge.clone();
+        // Each request on its own thread, so a slow tool call doesn't hold up the others.
+        thread::spawn(move || handle(&bridge, message));
+    }
+    0
+}
 
+/// Links the bridge to the Wings app at `socket`, and keeps it linked: it reconnects after Wings quits or restarts.
+fn link(bridge: &Arc<Bridge>, socket: PathBuf) {
     // One connect before reading stdin, so `initialize` (Claude's first message) finds Wings already linked
     // instead of racing the thread below. With Wings closed this fails at once.
     let mut first = UnixStream::connect(&socket).ok();
     if let Some(app) = first.as_ref().and_then(|s| s.try_clone().ok()) {
         *bridge.app.lock().unwrap() = Some(app);
     }
-
-    // Keeps a connection to Wings, and reconnects after Wings quits or restarts.
     let link = bridge.clone();
     thread::spawn(move || loop {
         if let Some(stream) = first.take().or_else(|| UnixStream::connect(&socket).ok()) {
@@ -126,15 +141,6 @@ pub fn run(socket: Option<String>) -> i32 {
         }
         thread::sleep(Duration::from_secs(2));
     });
-
-    for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
-        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
-        let bridge = bridge.clone();
-        // Each request on its own thread, so a slow tool call doesn't hold up the others.
-        thread::spawn(move || handle(&bridge, message));
-    }
-    0
 }
 
 fn handle(bridge: &Bridge, message: Value) {
@@ -155,7 +161,7 @@ fn handle(bridge: &Bridge, message: Value) {
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": true } },
-                "serverInfo": { "name": "wings", "title": "Wings", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "wings", "title": "Wings", "version": bridge.version },
                 "instructions": instructions(&lines),
             }))
         }
@@ -197,11 +203,12 @@ mod tests {
         let (app, peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let bridge = Bridge {
-            stdout: Mutex::new(std::io::stdout()),
+            stdout: Mutex::new(Box::new(std::io::sink())),
             app: Mutex::new(Some(app)),
             pending: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
+            version: "0.0.0",
         };
         let sessions = [Some("ses_wings"), Some("ses_setup"), None];
         thread::scope(|scope| {
@@ -229,6 +236,72 @@ mod tests {
                 assert_eq!(request["ppid"], std::os::unix::process::parent_id());
             }
         });
+    }
+
+    /// The app's side for the round trip: one tool that says what it was called with.
+    struct Echo;
+
+    impl crate::server::Handler for Echo {
+        fn tools(&self) -> Vec<Value> {
+            vec![json!({ "name": "echo", "inputSchema": { "type": "object" } })]
+        }
+        fn instructions(&self) -> Vec<String> {
+            vec!["Echo (echo): says it back.".into()]
+        }
+        fn call(&self, name: &str, arguments: Value, _: Option<u32>, _: Option<&str>) -> Result<crate::server::ToolResult, String> {
+            Ok(crate::server::ToolResult { text: format!("{name} {arguments}"), is_error: false })
+        }
+        fn hook(&self, _: &Value, _: Option<u32>) -> Value {
+            json!({})
+        }
+        fn control(&self, _: &str, _: &Value) -> Option<Result<Value, String>> {
+            None
+        }
+    }
+
+    /// What the bridge writes to Claude Code.
+    #[derive(Clone, Default)]
+    struct Out(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Out {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_tool_call_goes_through_the_socket_to_the_app_and_back() {
+        let dir = std::env::temp_dir().join(format!("wings-bridge-{}", std::process::id()));
+        let socket = dir.join("mcp.sock");
+        crate::server::start(&socket, Arc::new(Echo), Arc::default()).unwrap();
+        let out = Out::default();
+        let bridge = Arc::new(Bridge {
+            stdout: Mutex::new(Box::new(out.clone())),
+            app: Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(1),
+            initialized: AtomicBool::new(false),
+            version: "1.2.3",
+        });
+        link(&bridge, socket);
+        let replies = |count: usize| -> Vec<Value> {
+            let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+            assert_eq!(text.lines().count(), count, "{text}");
+            text.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        };
+        handle(&bridge, json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }));
+        let init = &replies(1)[0]["result"];
+        assert_eq!((init["protocolVersion"].as_str(), init["serverInfo"]["version"].as_str()), (Some("2025-06-18"), Some("1.2.3")));
+        assert!(init["instructions"].as_str().unwrap().ends_with("\nEcho (echo): says it back."));
+        handle(&bridge, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+        assert_eq!(replies(2)[1]["result"]["tools"][0]["name"], "echo");
+        handle(&bridge, json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "echo", "arguments": { "a": 1 } } }));
+        assert_eq!(replies(3)[2], json!({ "jsonrpc": "2.0", "id": 3, "result": { "content": [{ "type": "text", "text": "echo {\"a\":1}" }], "isError": false } }));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

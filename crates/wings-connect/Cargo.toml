@@ -1,0 +1,23 @@
+[package]
+name = "wings-connect"
+version = "0.1.0"
+edition = "2021"
+description = "How Wings connects to Claude Code: its settings, the app's socket, the `wings` CLI, the MCP bridge and Wings' own tools"
+publish = false
+
+[lib]
+name = "wings_connect"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# Claude Code's settings keep their key order, and so does Wings when it edits them.
+serde_json = { version = "1", features = ["preserve_order"] }
+# The CLI finds the app data folder the way the desktop app does.
+dirs = "7.0.0"
+# Which pane a call comes from: up the caller's process tree to a pane's shell.
+sysinfo = "0.39.6"
+# `read_pane` takes the colors and cursor moves out of a pane's output, as the desktop's terminal does.
+vte = "0.15.0"
+wings-agents = { path = "../wings-agents" }
+wings-plugins = { path = "../wings-plugins" }
+wings-spaces = { path = "../wings-spaces" }

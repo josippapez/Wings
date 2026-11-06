@@ -6025,6 +6025,7 @@ dependencies = [
  "vte",
  "wings-agents",
  "wings-bench-grid",
+ "wings-connect",
  "wings-disk-usage",
  "wings-editors",
  "wings-gitwatch",
@@ -6050,6 +6051,20 @@ name = "wings-bench-grid"
 version = "0.1.0"
 dependencies = [
  "wings-terminal",
+]
+
+[[package]]
+name = "wings-connect"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "vte",
+ "wings-agents",
+ "wings-plugins",
+ "wings-spaces",
 ]
 
 [[package]]

@@ -3,8 +3,6 @@ mod ai;
 mod bench;
 mod claude;
 mod claude_accounts;
-#[cfg(unix)]
-mod claude_settings;
 mod disk_usage;
 mod editors;
 mod gitwatch;
@@ -14,8 +12,6 @@ mod hotkey;
 mod menu;
 mod journal_sink;
 mod opencode_config;
-#[cfg(unix)]
-pub mod bridge;
 #[cfg(unix)]
 pub mod cli;
 #[cfg(unix)]
@@ -257,8 +253,8 @@ fn plugin_set_claude_account(app: AppHandle, state: State<AppState>, plugin_id: 
     }
     // Claude Code in the account's folder needs Wings too. The assignment stands if that fails.
     #[cfg(unix)]
-    if let (Some(name), Some((claude, exe))) = (&name, claude_to_connect(&app)) {
-        if let Err(e) = ensure_claude_connected(&app, &claude, &exe, Some(name)) {
+    if let (Some(name), Some((claude, exe)), Ok(data)) = (&name, claude_to_connect(&app), app.path().app_data_dir()) {
+        if let Err(e) = register::ensure_connected(&claude, &exe, &mcp::socket_path(&data), Some(name)) {
             applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
         }
     }
@@ -596,21 +592,9 @@ fn mcp_tool_result(app: AppHandle, call_id: u64, text: String, is_error: bool) {
     let _ = (app, call_id, text, is_error);
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct McpStatus {
-    /// Claude Code's CLI is installed.
-    claude: bool,
-    /// The Wings MCP server is registered with it.
-    connected: bool,
-    /// Claude Code's status line goes through Wings, in front of yours.
-    statusline: bool,
-    /// The server's tools load at session start instead of waiting behind Claude's tool search.
-    always_load: bool,
-}
-
-/// You disconnected Claude Code in the Plugins sheet, so Wings doesn't connect it again when it starts.
-const CLAUDE_DISCONNECTED: &str = "claude-disconnected";
+// Adding Wings to Claude Code lives in the shared `wings-connect` crate, which the native app uses too. You disconnect
+// Claude Code in the Plugins sheet, and then Wings doesn't connect it again when it starts.
+use wings_connect::register::{self, Status as McpStatus, DISCONNECTED as CLAUDE_DISCONNECTED};
 
 #[derive(serde::Serialize)]
 struct OpencodeMcpStatus {
@@ -682,27 +666,7 @@ fn harnesses_status() -> Vec<harnesses::HarnessStatus> {
 /// Whether Claude Code has the Wings MCP server and status line. Reading Claude's own list keeps Wings from guessing.
 #[tauri::command(async)]
 fn mcp_status() -> McpStatus {
-    #[cfg(unix)]
-    let statusline = claude_settings::connected(&claude_settings::settings_path(None));
-    #[cfg(not(unix))]
-    let statusline = false;
-    let always_load = wings_mcp_entry(&claude_accounts::user_config(None)).is_some_and(|e| e["alwaysLoad"] == true);
-    let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false, statusline, always_load } };
-    let connected = claude_mcp(&claude, None, &["get", "wings"]).is_ok_and(|out| out.status.success());
-    McpStatus { claude: true, connected, statusline, always_load }
-}
-
-/// `claude` for an account: a named one runs under its own config folder, the default one under whatever Wings runs under.
-fn claude_command(claude: &std::path::Path, account: Option<&str>) -> std::process::Command {
-    let mut command = std::process::Command::new(claude);
-    if let Some(name) = account {
-        command.env("CLAUDE_CONFIG_DIR", claude_accounts::dir(Some(name)));
-    }
-    command
-}
-
-fn claude_mcp(claude: &std::path::Path, account: Option<&str>, args: &[&str]) -> std::io::Result<std::process::Output> {
-    claude_command(claude, account).arg("mcp").args(args).stdin(std::process::Stdio::null()).output()
+    register::status(None)
 }
 
 #[tauri::command(async)]
@@ -720,33 +684,6 @@ fn mcp_set_always_load(app: AppHandle, on: bool) -> Res<()> {
     connect_claude(&app, Some(on))
 }
 
-/// The JSON for re-adding the Wings server with the fields you set on it kept, and `alwaysLoad` set when given,
-/// or `None` when there are none and a plain `claude mcp add` will do. Wings owns `type`, `command`, `args` and `env`.
-fn mcp_add_json(existing: Option<&serde_json::Value>, always_load: Option<bool>, exe: &std::path::Path, socket: &std::path::Path) -> Option<serde_json::Value> {
-    let mut entry = existing.and_then(|e| e.as_object()).cloned().unwrap_or_default();
-    for owned in ["type", "command", "args", "env"] {
-        entry.remove(owned);
-    }
-    match always_load {
-        Some(true) => _ = entry.insert("alwaysLoad".into(), true.into()),
-        Some(false) => _ = entry.remove("alwaysLoad"),
-        None => {}
-    }
-    if entry.is_empty() {
-        return None;
-    }
-    entry.insert("type".into(), "stdio".into());
-    entry.insert("command".into(), exe.to_string_lossy().into());
-    entry.insert("args".into(), serde_json::json!(["--mcp", socket.to_string_lossy()]));
-    entry.insert("env".into(), serde_json::json!({}));
-    Some(entry.into())
-}
-
-fn wings_mcp_entry(config: &std::path::Path) -> Option<serde_json::Value> {
-    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
-    config.pointer("/mcpServers/wings").cloned()
-}
-
 /// Registers `wings --mcp` with Claude Code at user scope, so every session gets the plugin tools, and puts
 /// `wings statusline` in front of your status line. It does so in the default account and in each account a project
 /// uses; every one is tried, and the first to fail is the one reported.
@@ -760,38 +697,10 @@ fn connect_claude(app: &AppHandle, always_load: Option<bool>) -> Res<()> {
     {
         let claude = plugins::find_program("claude").ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
         let exe = std::env::current_exe().map_err(err)?;
+        let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
         let accounts = claude_accounts::connect_targets(&app.state::<AppState>().spaces.lock().unwrap().spaces);
-        let mut failed = None;
-        for account in &accounts {
-            if let Err(e) = connect_claude_account(app, &claude, &exe, account.as_deref(), always_load) {
-                failed.get_or_insert(match account {
-                    Some(name) => format!("{name}: {e}"),
-                    None => e,
-                });
-            }
-        }
-        failed.map_or(Ok(()), Err)
+        register::connect(&claude, &exe, &socket, &accounts, always_load)
     }
-}
-
-/// `connect_claude` for one account. The server is removed first so a moved app is repointed rather than left dangling.
-#[cfg(unix)]
-fn connect_claude_account(app: &AppHandle, claude: &std::path::Path, exe: &std::path::Path, account: Option<&str>, always_load: Option<bool>) -> Res<()> {
-    let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
-    // Read before the remove, which drops the entry: what you set on it yourself (`alwaysLoad`, say) goes back on.
-    let kept = mcp_add_json(wings_mcp_entry(&claude_accounts::user_config(account)).as_ref(), always_load, exe, &socket);
-    let _ = claude_mcp(claude, account, &["remove", "--scope", "user", "wings"]);
-    let mut add = claude_command(claude, account);
-    match &kept {
-        Some(entry) => add.args(["mcp", "add-json", "--scope", "user", "wings", &entry.to_string()]),
-        None => add.args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"]).arg(exe).arg("--mcp").arg(&socket),
-    };
-    let out = add.stdin(std::process::Stdio::null()).output().map_err(err)?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    claude_settings::add(&claude_settings::settings_path(account), exe)?;
-    Ok(())
 }
 
 /// Opens Privacy & Security > Files & Folders, where you let Wings read another app's data.
@@ -819,20 +728,8 @@ fn privacy_check(folder: String) -> bool {
 fn mcp_disconnect(app: AppHandle) -> Res<()> {
     #[cfg(unix)]
     {
-        let claude = plugins::find_program("claude");
         let spaces = app.state::<AppState>().spaces.lock().unwrap().spaces.clone();
-        let mut failed = None;
-        for account in disconnect_targets(&spaces) {
-            if let Err(e) = disconnect_claude_account(claude.as_deref(), account.as_deref()) {
-                failed.get_or_insert(match account {
-                    Some(name) => format!("{name}: {e}"),
-                    None => e,
-                });
-            }
-        }
-        if let Some(e) = failed {
-            return Err(e);
-        }
+        register::disconnect(plugins::find_program("claude").as_deref(), &spaces)?;
     }
     let dir = app.path().app_data_dir().map_err(err)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
@@ -841,44 +738,9 @@ fn mcp_disconnect(app: AppHandle) -> Res<()> {
     Ok(())
 }
 
-/// The accounts to take Wings out of: those it connects to, and any other with Wings registered, like one that no
-/// project uses any more.
-#[cfg(unix)]
-fn disconnect_targets(spaces: &[spaces::Space]) -> Vec<Option<String>> {
-    let mut accounts = claude_accounts::connect_targets(spaces);
-    for name in claude_accounts::existing_names() {
-        let account = Some(name);
-        if !accounts.contains(&account) && wings_mcp_entry(&claude_accounts::user_config(account.as_deref())).is_some() {
-            accounts.push(account);
-        }
-    }
-    accounts
-}
-
-#[cfg(unix)]
-fn disconnect_claude_account(claude: Option<&std::path::Path>, account: Option<&str>) -> Res<()> {
-    // `claude mcp` creates its config files in a folder that has none, so a named account without the server is left alone.
-    let registered = account.is_none() || wings_mcp_entry(&claude_accounts::user_config(account)).is_some();
-    if let Some(claude) = claude.filter(|_| registered) {
-        claude_mcp(claude, account, &["remove", "--scope", "user", "wings"]).map_err(err)?;
-    }
-    claude_settings::remove(&claude_settings::settings_path(account))?;
-    Ok(())
-}
-
-/// Whether this is an installed app, `<name>.app/Contents/MacOS/<binary>`, the only copy that may write itself into
-/// the agents' configs on start. A release binary run from `target/` would point them at the build folder.
-fn installed_app(exe: &std::path::Path) -> bool {
-    let mut parents = exe.ancestors().skip(1);
-    let (macos, contents, bundle) = (parents.next(), parents.next(), parents.next());
-    macos.and_then(|p| p.file_name()).is_some_and(|n| n == "MacOS")
-        && contents.and_then(|p| p.file_name()).is_some_and(|n| n == "Contents")
-        && bundle.and_then(|p| p.extension()).is_some_and(|e| e == "app")
-}
-
 /// The binary to write into the agents' configs on start, or `None` when this isn't the installed app.
 fn exe_to_connect() -> Option<std::path::PathBuf> {
-    std::env::current_exe().ok().filter(|exe| installed_app(exe))
+    std::env::current_exe().ok().filter(|exe| register::installed_app(exe))
 }
 
 /// The `claude` program and the Wings binary to add to it without being asked, unless you disconnected it. Only the
@@ -891,26 +753,16 @@ fn claude_to_connect(app: &AppHandle) -> Option<(std::path::PathBuf, std::path::
     Some((plugins::find_program("claude")?, exe_to_connect()?))
 }
 
-/// Makes sure Claude Code, under `account`, has Wings: registered, and in front of your status line and after your hooks.
-#[cfg(unix)]
-fn ensure_claude_connected(app: &AppHandle, claude: &std::path::Path, exe: &std::path::Path, account: Option<&str>) -> Res<()> {
-    let registered = claude_mcp(claude, account, &["get", "wings"])
-        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
-    if registered {
-        claude_settings::add(&claude_settings::settings_path(account), exe).map(|_| ())
-    } else {
-        connect_claude_account(app, claude, exe, account, None)
-    }
-}
-
 /// Wings adds itself to Claude Code when it starts, in the default account and in each one a project uses.
 fn connect_claude_on_start(app: AppHandle) {
     #[cfg(unix)]
     thread::spawn(move || {
         let Some((claude, exe)) = claude_to_connect(&app) else { return };
+        let Ok(data) = app.path().app_data_dir() else { return };
+        let socket = mcp::socket_path(&data);
         let accounts = claude_accounts::connect_targets(&app.state::<AppState>().spaces.lock().unwrap().spaces);
         for account in &accounts {
-            if let Err(e) = ensure_claude_connected(&app, &claude, &exe, account.as_deref()) {
+            if let Err(e) = register::ensure_connected(&claude, &exe, &socket, account.as_deref()) {
                 applog::log_line!("[claude] couldn't connect Claude Code ({}): {e}", account.as_deref().unwrap_or("default account"));
             }
         }
@@ -2281,45 +2133,6 @@ mod tests {
         assert_eq!(fetched(png, true).unwrap(), "iVBORw0KGgr//gA=");
         // A text body is still text.
         assert_eq!(fetched("héllo".as_bytes(), false).unwrap(), "héllo");
-    }
-
-    #[test]
-    fn only_the_installed_app_connects_the_agents_on_start() {
-        use std::path::Path;
-        assert!(super::installed_app(Path::new("/Applications/Wings.app/Contents/MacOS/wings")));
-        // A release binary in the build folder, the test harness, or a binary copied anywhere else does not.
-        for other in ["/w/apps/desktop/src-tauri/target/release/deps/wings-224b4daf414bfdd7", "/w/target/release/wings", "/usr/local/bin/wings", "/x/MacOS/wings", "wings"] {
-            assert!(!super::installed_app(Path::new(other)), "{other}");
-        }
-    }
-
-    #[test]
-    fn re_registering_keeps_what_you_set_on_the_server() {
-        use serde_json::json;
-        let (exe, socket) = (std::path::Path::new("/Apps/Wings"), std::path::Path::new("/data/mcp.sock"));
-        let old = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {}, "alwaysLoad": true });
-        assert_eq!(
-            super::mcp_add_json(Some(&old), None, exe, socket),
-            Some(json!({ "type": "stdio", "command": "/Apps/Wings", "args": ["--mcp", "/data/mcp.sock"], "env": {}, "alwaysLoad": true }))
-        );
-        // Nothing of yours on it, or no entry at all: the plain `claude mcp add`.
-        let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {} });
-        assert_eq!(super::mcp_add_json(Some(&plain), None, exe, socket), None);
-        assert_eq!(super::mcp_add_json(None, None, exe, socket), None);
-    }
-
-    #[test]
-    fn the_always_load_switch_sets_or_clears_only_that_field() {
-        use serde_json::json;
-        let (exe, socket) = (std::path::Path::new("/Apps/Wings"), std::path::Path::new("/data/mcp.sock"));
-        let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {}, "timeout": 9 });
-        assert_eq!(
-            super::mcp_add_json(Some(&plain), Some(true), exe, socket),
-            Some(json!({ "type": "stdio", "command": "/Apps/Wings", "args": ["--mcp", "/data/mcp.sock"], "env": {}, "timeout": 9, "alwaysLoad": true }))
-        );
-        assert_eq!(super::mcp_add_json(None, Some(true), exe, socket).unwrap()["alwaysLoad"], true);
-        let on = json!({ "type": "stdio", "command": "/Old/Wings", "args": [], "env": {}, "alwaysLoad": true });
-        assert_eq!(super::mcp_add_json(Some(&on), Some(false), exe, socket), None);
     }
 
     #[test]
