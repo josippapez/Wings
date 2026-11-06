@@ -241,14 +241,16 @@ fn plugin_worktree_setup_set(app: AppHandle, state: State<AppState>, plugin_id: 
     set_worktree_setup(&app, &space_id, include.as_deref(), setup.as_deref())
 }
 
-/// The Claude Code accounts and the one each project's terminals use, if the plugin may read them.
+/// The Claude Code accounts and the one each project's terminals use, if the plugin may read them. Asks `claude` whether each is
+/// signed in, side by side, so it takes about as long as one `claude auth status`.
 #[tauri::command(async)]
 fn plugin_claude_accounts(state: State<AppState>, plugin_id: String) -> Res<claude_accounts::Accounts> {
     if !plugins::may_use_claude_accounts(&plugin(&state, &plugin_id)?) {
         return Err(format!("{plugin_id} may not use Claude Code accounts"));
     }
     let spaces = state.spaces.lock().unwrap().spaces.clone();
-    Ok(claude_accounts::list(&spaces))
+    let claude = plugins::find_program("claude");
+    Ok(claude_accounts::list(&spaces, |account| claude.as_deref().map(|claude| claude_auth_status(claude, account)).unwrap_or_default()))
 }
 
 /// A plugin with `claudeAccounts` chooses the account the project's new terminals use, or the default one with no
@@ -759,6 +761,14 @@ fn claude_command(claude: &std::path::Path, account: Option<&str>) -> std::proce
         command.env("CLAUDE_CONFIG_DIR", claude_accounts::dir(Some(name)));
     }
     command
+}
+
+/// Whether `claude` has a sign-in under the account's config folder, from `claude auth status`. It takes half a second. Reading
+/// `.claude.json` instead says who the account was: its `oauthAccount` stays after the sign-in is gone. The answer is on
+/// stdout whatever the exit code, which is 1 when signed out. Not signed in if `claude` can't run.
+fn claude_auth_status(claude: &std::path::Path, account: Option<&str>) -> claude_accounts::AuthStatus {
+    let out = claude_command(claude, account).args(["auth", "status"]).stdin(std::process::Stdio::null()).output();
+    out.map(|out| claude_accounts::read_auth_status(&String::from_utf8_lossy(&out.stdout))).unwrap_or_default()
 }
 
 fn claude_mcp(claude: &std::path::Path, account: Option<&str>, args: &[&str]) -> std::io::Result<std::process::Output> {

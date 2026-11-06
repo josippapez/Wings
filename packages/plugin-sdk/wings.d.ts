@@ -138,10 +138,22 @@ interface WingsClaudeAccount {
   name: string | null;
   /** Its config folder, where Claude Code keeps the account's settings, `.claude.json`, sessions and sign-in. */
   dir: string;
-  /** The email Claude Code is signed in with there, from `oauthAccount` in `.claude.json`, or null. */
+  /**
+   * The email Claude Code was signed in with there, from `oauthAccount` in `.claude.json`, or null. It stays in the file
+   * after the sign-in itself is gone, so an email does not mean `signedIn`.
+   */
   email: string | null;
-  /** Whether `.claude.json` names a signed-in account. A hint: an expired sign-in still counts. */
+  /**
+   * Whether `claude auth status` (run with this account's `CLAUDE_CONFIG_DIR`) says there is a sign-in. False when the
+   * sign-in is gone, whatever `email` says. Also false when `claude` is not installed or its answer is not understood. Needs Wings 0.1.123; before it, a hint read from `.claude.json`.
+   */
   signedIn: boolean;
+  /**
+   * How `claude auth status` says the account is signed in, as it prints it: `"claude.ai"` for a Claude plan, `"none"`
+   * while signed out, and whatever else Claude Code names. Null when `claude` is not installed or its answer is not
+   * understood. Needs Wings 0.1.123.
+   */
+  authMethod: string | null;
   /**
    * Whether the account uses the default account's setup (settings, rules, skills, plugins), see `shareClaudeSetup`. True
    * until turned off, so an account Wings has not connected to since 0.1.121 shows true before it is linked. Always false for the

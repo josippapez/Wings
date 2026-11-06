@@ -117,9 +117,12 @@ pub struct Account {
     /// `None` for the default account.
     pub name: Option<String>,
     pub dir: String,
+    /// From the account Claude Code's config names. It stays after the sign-in itself is gone, so it doesn't say the account is signed in.
     pub email: Option<String>,
-    /// Claude Code's config names an account. A hint: it can't tell an expired sign-in from a good one.
+    /// What `claude auth status` says for the account. False when `claude` isn't installed or its answer isn't understood.
     pub signed_in: bool,
+    /// How `claude auth status` says the account signs in (`claude.ai`, `none`, ...), as it prints it. `None` when `claude` wasn't there or its answer wasn't understood.
+    pub auth_method: Option<String>,
     /// The account uses the default account's setup (see `set_shared_setup`). Always false for the default account.
     pub shares_setup: bool,
 }
@@ -138,6 +141,23 @@ pub struct Accounts {
     pub projects: BTreeMap<String, String>,
 }
 
+/// What `claude auth status` printed for an account.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AuthStatus {
+    pub logged_in: bool,
+    pub method: Option<String>,
+}
+
+/// Reads the JSON `claude auth status` prints on stdout, like `{"loggedIn": false, "authMethod": "none", ...}`: it exits 1
+/// when logged out and prints it all the same. Output without a boolean `loggedIn` counts as logged out.
+pub fn read_auth_status(out: &str) -> AuthStatus {
+    let read = || {
+        let status: Value = serde_json::from_str(out).ok()?;
+        Some(AuthStatus { logged_in: status.get("loggedIn")?.as_bool()?, method: status.get("authMethod").and_then(Value::as_str).map(String::from) })
+    };
+    read().unwrap_or_default()
+}
+
 /// The email of the account a Claude Code config file names, and whether it names one. Both are absent for a file that
 /// is missing or isn't JSON.
 fn signed_in_as(config: &Path) -> (Option<String>, bool) {
@@ -146,23 +166,25 @@ fn signed_in_as(config: &Path) -> (Option<String>, bool) {
     (oauth.and_then(|oauth| oauth.get("emailAddress")).and_then(Value::as_str).map(String::from), oauth.is_some())
 }
 
-fn account(name: Option<&str>) -> Account {
-    let (email, signed_in) = signed_in_as(&user_config(name));
+/// An account with the email its config names and `auth`'s answer for whether it is signed in. `auth` runs `claude`, so it takes a while.
+fn account(name: Option<&str>, auth: &(impl Fn(Option<&str>) -> AuthStatus + Sync)) -> Account {
+    let (email, _) = signed_in_as(&user_config(name));
+    let AuthStatus { logged_in, method } = auth(name);
     let dir = dir(name);
-    Account { name: name.map(String::from), shares_setup: name.is_some() && shares(&dir), dir: dir.to_string_lossy().into_owned(), email, signed_in }
+    Account { name: name.map(String::from), shares_setup: name.is_some() && shares(&dir), dir: dir.to_string_lossy().into_owned(), email, signed_in: logged_in, auth_method: method }
 }
 
-/// The default account, every `~/.claude-<name>` folder signed in to an account, and the names projects are assigned
-/// even if nobody signed in there yet. Other tools keep folders named `~/.claude-<something>` too, so a folder alone
-/// isn't an account.
-pub fn list(spaces: &[Space]) -> Accounts {
+/// The default account, every `~/.claude-<name>` folder whose config names an account (even if the sign-in is gone since),
+/// and the names projects are assigned even if nobody signed in there yet. Other tools keep folders named
+/// `~/.claude-<something>` too, so a folder alone isn't an account. `auth` says whether each is signed in; the accounts are
+/// asked side by side.
+pub fn list(spaces: &[Space], auth: impl Fn(Option<&str>) -> AuthStatus + Sync) -> Accounts {
     let projects: BTreeMap<String, String> = assigned(spaces).map(|(id, name)| (id.to_string(), name.to_string())).collect();
-    let assigned: BTreeSet<&String> = projects.values().collect();
-    let signed_in = existing_names().into_iter().map(|name| account(Some(&name))).filter(|a| a.signed_in);
-    let mut named: Vec<Account> = signed_in.filter(|a| !a.name.as_ref().is_some_and(|n| assigned.contains(n))).collect();
-    named.extend(assigned.iter().map(|name| account(Some(name))));
-    named.sort_by(|a, b| a.name.cmp(&b.name));
-    let accounts = std::iter::once(account(None)).chain(named).collect();
+    let used: BTreeSet<String> = projects.values().cloned().collect();
+    let named: BTreeSet<String> = existing_names().into_iter().filter(|name| signed_in_as(&user_config(Some(name))).1).chain(used).collect();
+    let names: Vec<Option<&str>> = std::iter::once(None).chain(named.iter().map(|name| Some(name.as_str()))).collect();
+    let auth = &auth;
+    let accounts = std::thread::scope(|s| names.iter().map(|name| s.spawn(move || account(*name, auth))).collect::<Vec<_>>().into_iter().map(|t| t.join().unwrap()).collect());
     Accounts { accounts, projects }
 }
 
@@ -1125,5 +1147,19 @@ mod tests {
         assert_eq!(read("not json"), (None, false));
         assert_eq!(signed_in_as(&dir.join("missing.json")), (None, false));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_account_list_reads_what_claude_auth_status_prints() {
+        let status = |logged_in, method: Option<&str>| AuthStatus { logged_in, method: method.map(String::from) };
+        let signed_in = "{\n  \"loggedIn\": true,\n  \"authMethod\": \"claude.ai\",\n  \"apiProvider\": \"firstParty\",\n  \"email\": \"me@example.com\"\n}";
+        let signed_out = "{\n  \"loggedIn\": false,\n  \"authMethod\": \"none\",\n  \"apiProvider\": \"firstParty\",\n  \"loginExpiresAt\": null\n}";
+        assert_eq!(read_auth_status(signed_in), status(true, Some("claude.ai")));
+        assert_eq!(read_auth_status(signed_out), status(false, Some("none")));
+        // Output that isn't the status, or has no boolean `loggedIn`, is not a sign-in.
+        for garbage in ["", "not json", "[]", "{}", r#"{"authMethod":"claude.ai"}"#, r#"{"loggedIn":"true","authMethod":"claude.ai"}"#] {
+            assert_eq!(read_auth_status(garbage), status(false, None), "{garbage:?}");
+        }
+        assert_eq!(read_auth_status(r#"{"loggedIn":true}"#), status(true, None));
     }
 }

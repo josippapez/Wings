@@ -347,10 +347,11 @@
     /** With `permissions.sendToAgents`: pastes a message into the prompt of the agent in a pane, and resolves `{ submitted }`. */
     sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
     /**
-     * With `permissions.claudeAccounts`: the Claude Code accounts, `{ accounts: [{ name, dir, email, signedIn, sharesSetup }], projects }`, and the
+     * With `permissions.claudeAccounts`: the Claude Code accounts, `{ accounts: [{ name, dir, email, signedIn, authMethod, sharesSetup }], projects }`, and the
      * account name each project's new terminals use by project id (a project without one uses the default account, `name` null).
-     * `signedIn` is a hint from Claude Code's own config; `email` is read from it. `sharesSetup` is whether the account uses the
-     * default account's setup (settings, rules, skills, plugins); false for the default account itself.
+     * `signedIn` is what `claude auth status` says for the account (Wings 0.1.123), and `authMethod` how it signs in as that prints it, like `"claude.ai"`
+     * or `"none"`; both say not signed in when `claude` is missing. `email` is read from Claude Code's config and stays after the sign-in is gone.
+     * `sharesSetup` is whether the account uses the default account's setup (settings, rules, skills, plugins); false for the default account itself.
      */
     claudeAccounts: () => call("claudeAccounts", {}),
     /**
