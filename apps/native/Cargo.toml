@@ -19,6 +19,12 @@ required-features = ["ui"]
 name = "wings-plugin-worker"
 path = "src/bin/wings-plugin-worker.rs"
 
+# Runs the terminals apart from the app so they outlive it, with `WINGS_TERMINAL_SERVER=1` (`terminal_server.rs`).
+# It ships beside `wings-native` in the bundle, and the app copies it out of the bundle before it runs it.
+[[bin]]
+name = "wings-terminal-server"
+path = "src/bin/wings-terminal-server.rs"
+
 # The `wings` command Claude Code runs (`wings --mcp`, `wings statusline`, `wings hook`) and the `wings` CLI, which talk to
 # the running app over its socket. It ships beside `wings-native` in the bundle, and Claude Code's settings point at it.
 [[bin]]
@@ -36,6 +42,9 @@ wings-editors = { path = "../../crates/wings-editors" }
 wings-gitwatch = { path = "../../crates/wings-gitwatch" }
 wings-spaces = { path = "../../crates/wings-spaces" }
 wings-connect = { path = "../../crates/wings-connect" }
+wings-ptyd = { path = "../../crates/wings-ptyd" }
+# The terminal server's folder must belong to this user (`getuid`).
+libc = "0.2"
 sysinfo = { version = "0.39.6", optional = true }
 async-channel = { version = "2.5", optional = true }
 unicode-segmentation = { version = "1.13", optional = true }

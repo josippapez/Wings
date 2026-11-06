@@ -7456,6 +7456,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "keyring",
+ "libc",
  "rquickjs",
  "serde",
  "serde_json",
@@ -7469,6 +7470,7 @@ dependencies = [
  "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",
+ "wings-ptyd",
  "wings-spaces",
  "wings-terminal",
  "zip",
@@ -7490,6 +7492,20 @@ dependencies = [
  "ureq",
  "url",
  "zip",
+]
+
+[[package]]
+name = "wings-ptyd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "vte",
+ "wings-agents",
+ "wings-terminal",
 ]
 
 [[package]]

@@ -7,6 +7,8 @@ pub mod plugin;
 pub mod projects;
 pub mod saved;
 pub mod secrets;
+#[cfg(unix)]
+pub mod terminal_server;
 pub mod theme;
 
 #[cfg(feature = "ui")]
