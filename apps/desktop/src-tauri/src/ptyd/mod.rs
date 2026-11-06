@@ -56,6 +56,9 @@ pub struct SpawnRequest<'a> {
     /// Output saved from this pane before Wings restarted, as `local::restored` gives it. It goes in the kept output
     /// only: the UI writes it into the terminal itself, before it listens for input.
     pub history: Vec<u8>,
+    /// The config folder of the Claude Code account the pane's project uses, for its `CLAUDE_CONFIG_DIR`. `None` is the
+    /// default account.
+    pub claude_config_dir: Option<PathBuf>,
 }
 
 /// What stays true of a pane from the moment it starts.

@@ -73,6 +73,8 @@
     "allow-plugin-worktree-create",
     "allow-plugin-worktree-setup",
     "allow-plugin-worktree-setup-set",
+    "allow-plugin-claude-accounts",
+    "allow-plugin-set-claude-account",
     "allow-plugin-call-tool-check",
     "allow-plugin-event-check",
     "allow-plugin-notify",

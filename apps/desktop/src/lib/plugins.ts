@@ -846,6 +846,15 @@ export class PluginHost {
         await invoke("plugin_worktree_setup_set", { pluginId, spaceId, include, setup });
         return null;
       }
+      case "claudeAccounts":
+        return invoke("plugin_claude_accounts", { pluginId });
+      case "setClaudeAccount": {
+        if (typeof p.projectId !== "string" || !p.projectId) throw new Error("setClaudeAccount needs a project id");
+        if (p.name !== null && typeof p.name !== "string") throw new Error("setClaudeAccount name is an account name, or null for the default account");
+        // Rust checks the permission, the project and the name, and makes the account's folder.
+        await invoke("plugin_set_claude_account", { pluginId, projectId: p.projectId, name: p.name });
+        return null;
+      }
       case "sendToAgent": {
         const paneId = String(p.paneId);
         const text = typeof p.text === "string" ? p.text.trim() : "";

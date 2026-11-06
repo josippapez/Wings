@@ -31,6 +31,9 @@ pub struct Space {
     /// A shell line run in a new worktree of this project before the first command typed there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_setup: Option<String>,
+    /// The Claude Code account (`claude_accounts`) this project's new terminals use. Unset means the default one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_account: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -105,6 +108,14 @@ impl SpaceStore {
     /// Changes only the settings given, on the project `id` belongs to. Blank means unset.
     pub fn update_worktree_settings(&mut self, id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
         update_worktree_settings(&mut self.spaces, id, include, setup)?;
+        self.save();
+        Ok(())
+    }
+
+    /// Sets the account new terminals of the project use, or clears it with `None`. The caller checks the name.
+    pub fn set_claude_account(&mut self, id: &str, name: Option<&str>) -> Result<(), String> {
+        let space = self.spaces.iter_mut().find(|s| s.id == id).ok_or("No such project in Wings")?;
+        space.claude_account = name.map(String::from);
         self.save();
         Ok(())
     }
@@ -200,7 +211,7 @@ fn new_space(path: &str) -> Space {
     let name = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     // The path is unique per space, so it doubles as a stable id.
     let added_at = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
-    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false, worktree_include: None, worktree_setup: None }
+    Space { id: path.to_string(), name, path: path.to_string(), parent: None, added_at, pinned: false, worktree_include: None, worktree_setup: None, claude_account: None }
 }
 
 pub fn view(space: &Space) -> SpaceView {
@@ -293,6 +304,19 @@ mod tests {
         store.set_pinned("/x/proj", true);
         let loaded = SpaceStore::load(file.clone());
         assert_eq!((loaded.spaces[0].added_at, loaded.spaces[0].pinned), (added.added_at, true));
+        let _ = fs::remove_file(&file);
+    }
+
+    #[test]
+    fn a_projects_claude_account_survives_a_restart() {
+        let file = std::env::temp_dir().join(format!("wings-spaces-account-{}.json", std::process::id()));
+        let mut store = SpaceStore { file: file.clone(), spaces: vec![] };
+        store.add("/x/proj");
+        store.set_claude_account("/x/proj", Some("work")).unwrap();
+        assert_eq!(SpaceStore::load(file.clone()).spaces[0].claude_account.as_deref(), Some("work"));
+        store.set_claude_account("/x/proj", None).unwrap();
+        assert_eq!(SpaceStore::load(file.clone()).spaces[0].claude_account, None);
+        assert!(store.set_claude_account("/nowhere", Some("work")).is_err());
         let _ = fs::remove_file(&file);
     }
 

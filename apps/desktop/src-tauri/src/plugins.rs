@@ -68,6 +68,9 @@ pub struct Permissions {
     /// Lets the plugin make a git worktree of one of your projects with `wings.createWorktree`: a new branch in a
     /// folder beside the repo, added to Wings as a project.
     pub worktrees: bool,
+    /// Lets the plugin list your Claude Code accounts with `wings.claudeAccounts` and choose the one each project's
+    /// new terminals use with `wings.setClaudeAccount`.
+    pub claude_accounts: bool,
     /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
     /// `<plugin> <tool>` for one, like `tasks list`.
     pub call_tools: Vec<String>,
@@ -1039,7 +1042,7 @@ pub const TRANSCRIPT_LAST_MAX: usize = 1000;
 
 /// With `last`, only the newest that many entries, read from the end. A long session's transcript runs to tens
 /// of MB, and most callers want only its latest state.
-pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
+pub fn transcript_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
     let allowed = &plugin.manifest.permissions.transcript;
     if let Some(t) = types.iter().find(|t| !allowed.contains(t)) {
         return Err(format!("{} may not read {t:?} transcript entries", plugin.manifest.id));
@@ -1047,13 +1050,7 @@ pub fn transcript_entries(plugin: &Plugin, claude_dir: &Path, session_id: &str, 
     if session_id.len() != 36 || !session_id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return Err("not a session id".into());
     }
-    let file = format!("{session_id}.jsonl");
-    let path = fs::read_dir(claude_dir.join("projects"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .map(|d| d.path().join(&file))
-        .find(|p| p.is_file())
-        .ok_or("no transcript for that session")?;
+    let path = crate::tail::find_transcript(claude_dirs, session_id).ok_or("no transcript for that session")?;
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let patterns: Vec<String> = types.iter().map(|t| type_marker(t)).collect();
     let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
@@ -1457,6 +1454,10 @@ pub fn may_hear_event(plugin: &Plugin, from: &str, name: &str) -> bool {
 
 pub fn may_create_worktrees(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.worktrees
+}
+
+pub fn may_use_claude_accounts(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.claude_accounts
 }
 
 pub fn may_send_to_agents(plugin: &Plugin) -> bool {
@@ -3035,11 +3036,11 @@ mod tests {
         )
         .unwrap();
         let p = plugin(&claude, &[], &["pr-link"]);
-        let entries = transcript_entries(&p, &claude, id, &["pr-link".into()], None).unwrap();
+        let entries = transcript_entries(&p, std::slice::from_ref(&claude), id, &["pr-link".into()], None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["prNumber"], 7);
-        assert!(transcript_entries(&p, &claude, id, &["user".into()], None).is_err());
-        assert!(transcript_entries(&p, &claude, "../../x", &["pr-link".into()], None).is_err());
+        assert!(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], None).is_err());
+        assert!(transcript_entries(&p, std::slice::from_ref(&claude), "../../x", &["pr-link".into()], None).is_err());
         let _ = fs::remove_dir_all(&claude);
     }
 
@@ -3059,9 +3060,9 @@ mod tests {
         fs::write(claude.join(format!("projects/-x/{id}.jsonl")), lines.join("\n")).unwrap();
         let p = plugin(&claude, &[], &["user"]);
         let n = |entries: Vec<Value>| entries.iter().map(|e| e["n"].as_i64().unwrap()).collect::<Vec<_>>();
-        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], Some(2)).unwrap()), [3, 4]);
-        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], Some(10)).unwrap()), [1, 3, 4]);
-        assert_eq!(n(transcript_entries(&p, &claude, id, &["user".into()], None).unwrap()), [1, 3, 4]);
+        assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], Some(2)).unwrap()), [3, 4]);
+        assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], Some(10)).unwrap()), [1, 3, 4]);
+        assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], None).unwrap()), [1, 3, 4]);
         let _ = fs::remove_dir_all(&claude);
     }
 
@@ -3108,14 +3109,14 @@ mod tests {
         let p = plugin(&claude, &[], &["attachment:model", "attachment:deferred_tools_delta"]);
         let kinds = |entries: Vec<Value>| entries.iter().map(|e| e["attachment"]["type"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         let both = ["attachment:model".into(), "attachment:deferred_tools_delta".into()];
-        assert_eq!(kinds(transcript_entries(&p, &claude, id, &both, None).unwrap()), ["model", "deferred_tools_delta"]);
-        assert_eq!(kinds(transcript_entries(&p, &claude, id, &["attachment:model".into()], Some(5)).unwrap()), ["model"]);
+        assert_eq!(kinds(transcript_entries(&p, std::slice::from_ref(&claude), id, &both, None).unwrap()), ["model", "deferred_tools_delta"]);
+        assert_eq!(kinds(transcript_entries(&p, std::slice::from_ref(&claude), id, &["attachment:model".into()], Some(5)).unwrap()), ["model"]);
         // One kind doesn't allow every attachment, or another kind.
-        assert!(transcript_entries(&p, &claude, id, &["attachment".into()], None).is_err());
-        assert!(transcript_entries(&p, &claude, id, &["attachment:file".into()], None).is_err());
+        assert!(transcript_entries(&p, std::slice::from_ref(&claude), id, &["attachment".into()], None).is_err());
+        assert!(transcript_entries(&p, std::slice::from_ref(&claude), id, &["attachment:file".into()], None).is_err());
         // A plain `attachment` permission still reads them all.
         let all = plugin(&claude, &[], &["attachment"]);
-        assert_eq!(transcript_entries(&all, &claude, id, &["attachment".into()], None).unwrap().len(), 3);
+        assert_eq!(transcript_entries(&all, std::slice::from_ref(&claude), id, &["attachment".into()], None).unwrap().len(), 3);
         let _ = fs::remove_dir_all(&claude);
 
         let mut narrow = plugin(Path::new("/tmp"), &[], &["attachment:model"]);
@@ -3142,6 +3143,22 @@ mod tests {
         assert!(!may_read_statusline(&manifest(serde_json::json!({}))));
         assert!(!may_read_statusline(&manifest(serde_json::json!({ "transcript": ["assistant"] }))));
         assert!(may_read_statusline(&manifest(serde_json::json!({ "statusline": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_accounts_need_their_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-claude-accounts-perm-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_use_claude_accounts(&manifest(serde_json::json!({}))));
+        assert!(!may_use_claude_accounts(&manifest(serde_json::json!({ "worktrees": true, "panes": ["claude"] }))));
+        assert!(may_use_claude_accounts(&manifest(serde_json::json!({ "claudeAccounts": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

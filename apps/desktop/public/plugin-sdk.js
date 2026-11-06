@@ -345,6 +345,17 @@
     focusPane: (paneId) => call("focusPane", { paneId }),
     /** With `permissions.sendToAgents`: pastes a message into the prompt of the agent in a pane, and resolves `{ submitted }`. */
     sendToAgent: (paneId, text) => call("sendToAgent", { paneId, text }),
+    /**
+     * With `permissions.claudeAccounts`: the Claude Code accounts, `{ accounts: [{ name, dir, email, signedIn }], projects }`, and the
+     * account name each project's new terminals use by project id (a project without one uses the default account, `name` null).
+     * `signedIn` is a hint from Claude Code's own config; `email` is read from it.
+     */
+    claudeAccounts: () => call("claudeAccounts", {}),
+    /**
+     * With `permissions.claudeAccounts`: new terminals in the project use the account `name` (lowercase letters, digits and dashes,
+     * up to 32; Wings makes `~/.claude-<name>`), or the default account with null. Terminals already open keep theirs.
+     */
+    setClaudeAccount: (projectId, name) => call("setClaudeAccount", { projectId, name: name ?? null }),
     /** With `permissions.worktrees`: makes a worktree on a new branch and adds it as a project; resolves `{ projectId, path }`. */
     createWorktree: (options) => call("createWorktree", options),
     /** With `permissions.worktrees`: what a project's new worktrees get, `{ include, defaults, hasIncludeFile, setup }`. */

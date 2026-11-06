@@ -132,6 +132,18 @@ interface WingsDisk {
   free: number;
 }
 
+/** A Claude Code account, from `wings.claudeAccounts`. */
+interface WingsClaudeAccount {
+  /** The account's name, or null for the default account (`~/.claude`, or the folder `CLAUDE_CONFIG_DIR` names where Wings runs). */
+  name: string | null;
+  /** Its config folder, where Claude Code keeps the account's settings, `.claude.json`, sessions and sign-in. */
+  dir: string;
+  /** The email Claude Code is signed in with there, from `oauthAccount` in `.claude.json`, or null. */
+  email: string | null;
+  /** Whether `.claude.json` names a signed-in account. A hint: an expired sign-in still counts. */
+  signedIn: boolean;
+}
+
 /** One block of a message's `content`. Which fields it has depends on `type`: `text` has `text`, `tool_use` has `id`, `name` and `input`, `tool_result` has `tool_use_id`, `content` and `is_error`. */
 interface TranscriptBlock {
   type: string;
@@ -610,6 +622,21 @@ interface Wings {
    */
   /** `setup` only from Wings' own plugins: it runs in every new worktree. */
   setWorktreeSetup(projectId: string | undefined, options: { include?: string[] | null; setup?: string | null }): Promise<void>;
+  /**
+   * Needs `permissions.claudeAccounts` and Wings 0.1.120. The Claude Code accounts, and which one each project's terminals
+   * use. Each account has a config folder of its own, picked with `CLAUDE_CONFIG_DIR`: the default account, every
+   * `~/.claude-<name>` folder there is, and any name a project is assigned before its folder exists. `projects` maps a
+   * project id to its account's name; a project that is absent uses the default account.
+   */
+  claudeAccounts(): Promise<{ accounts: WingsClaudeAccount[]; projects: Record<string, string> }>;
+  /**
+   * Needs `permissions.claudeAccounts` and Wings 0.1.120. Chooses the account that new terminals in a project use, by its
+   * `name`, or the default account with null. A name is up to 32 lowercase letters, digits and dashes, starting with a
+   * letter or digit, and anything else rejects: Wings makes `~/.claude-<name>` (for you only) if it is not there and sets
+   * `CLAUDE_CONFIG_DIR` to it in the terminal. Terminals that are open keep their account. Wings also adds itself to
+   * Claude Code in that folder, unless the user disconnected Claude Code. Rejects for a project Wings does not have.
+   */
+  setClaudeAccount(projectId: string, name: string | null): Promise<void>;
   /**
    * Needs `permissions.callTools` naming the tool or its plugin, and Wings 0.1.94. Only between Wings' own plugins
    * (installed from the Wings repo's `plugins/`). Runs another plugin's tool, `name` like `tasks__list`, as if Claude

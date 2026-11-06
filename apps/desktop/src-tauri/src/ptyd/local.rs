@@ -43,7 +43,7 @@ impl Pane {
             pixel_height: 0,
         })?;
 
-        let child = pair.slave.spawn_command(pane_command(req.cwd, pane_env(), &id))?;
+        let child = pair.slave.spawn_command(pane_command(req.cwd, pane_env(req.claude_config_dir.as_deref()), &id))?;
         drop(pair.slave);
 
         let pane = Arc::new(Pane {
@@ -286,7 +286,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
             "t".into(),
-            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history },
+            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history, claude_config_dir: None },
             channel,
             |_| {},
         )
@@ -303,7 +303,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let pane = Pane::spawn(
             "t".into(),
-            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() },
+            SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new(), claude_config_dir: None },
             first,
             |_| {},
         )
@@ -335,7 +335,7 @@ mod tests {
         let (output, _) = recorder();
         let (exited, exit_rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history: Vec::new() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: Some("h".into()), history: Vec::new(), claude_config_dir: None };
         let meta = backend.spawn(req, output, Box::new(move |id| exited.send(id.to_string()).unwrap())).unwrap();
         assert_eq!((meta.id.as_str(), meta.space_id.as_str(), meta.history_id.as_deref()), ("p1", "s", Some("h")));
         assert!(meta.shell_pid.is_some());
@@ -357,7 +357,7 @@ mod tests {
         assert!(backend.meta("p1").is_none() && backend.list().is_empty(), "forgotten as soon as it is killed");
         assert_eq!(exit_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "p1");
         let (output, _) = recorder();
-        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: Vec::new(), claude_config_dir: None };
         let next = backend.spawn(req, output, Box::new(|_| {})).unwrap();
         assert_eq!(next.id, "p2", "an id is never given twice");
         backend.kill("p2");
@@ -368,7 +368,7 @@ mod tests {
         let backend = LocalBackend::default();
         let (output, _) = recorder();
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: b"\x1b]7501;state=working:app=codex\x07".to_vec() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 80, rows: 24, history_id: None, history: b"\x1b]7501;state=working:app=codex\x07".to_vec(), claude_config_dir: None };
         let meta = backend.spawn(req, output, Box::new(|_| {})).unwrap();
         let mut status = None;
         backend.each_mirror(&mut |p| status = p.codex_status);
@@ -407,7 +407,7 @@ pub(super) mod bench {
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new(), claude_config_dir: None };
         let id = backend.spawn(req, channel, Box::new(move |_| tx.send(Instant::now()).unwrap())).unwrap().id.clone();
         backend.write(&id, b"exec sh -c 'yes | head -c 20000000'\r").unwrap();
         let end = rx.recv().unwrap();
@@ -435,7 +435,7 @@ pub(super) mod bench {
             Ok(())
         });
         let dir = std::env::temp_dir();
-        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new() };
+        let req = SpawnRequest { space_id: "s".into(), cwd: &dir, cols: 120, rows: 40, history_id: None, history: Vec::new(), claude_config_dir: None };
         let id = &backend.spawn(req, channel, Box::new(|_| {})).unwrap().id.clone();
         backend.write(id, b"stty raw -echo; echo RE''ADY; exec cat\r").unwrap();
         let ready_by = Instant::now() + std::time::Duration::from_secs(10);

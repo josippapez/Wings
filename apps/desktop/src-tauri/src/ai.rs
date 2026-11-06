@@ -464,11 +464,11 @@ impl Ai {
             return;
         }
         let state = app.state::<AppState>();
-        let mut excerpt = state.history.excerpt(&state.claude_dir, &job.id);
+        let mut excerpt = state.history.excerpt(&crate::claude_accounts::dirs(), &job.id);
         // A running OpenCode session is only known to History once its service has been read.
         if excerpt.is_none() && job.agent == history::Agent::OpenCode {
             state.history.sync_opencode();
-            excerpt = state.history.excerpt(&state.claude_dir, &job.id);
+            excerpt = state.history.excerpt(&crate::claude_accounts::dirs(), &job.id);
         }
         // A session that got a title of its own meanwhile needs no name.
         let Some(excerpt) = excerpt.filter(|e| job.task == Task::Summary || e.title.is_none()) else {
