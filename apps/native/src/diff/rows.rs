@@ -27,10 +27,14 @@ pub enum ListRow {
     File { index: usize, depth: Option<usize> },
 }
 
+/// The deepest folder the tree shows. A patch is plugin input, and a path of thousands of `/` parts would otherwise
+/// nest the tree, and the recursion that builds, lists and drops it, that deep; deeper parts join the file's name.
+const MAX_DEPTH: usize = 256;
+
 #[derive(Default)]
 struct Folder<'a> {
     folders: BTreeMap<&'a str, Folder<'a>>,
-    files: Vec<(usize, &'a str)>,
+    files: Vec<(usize, String)>,
 }
 
 /// The files whose path holds `filter`, ignoring case, as a flat list in patch order or as a tree: folders first, then
@@ -55,8 +59,10 @@ pub fn list_rows(
     let mut root = Folder::default();
     for (index, path) in shown {
         let mut node = &mut root;
-        let mut parts: Vec<&str> = path.split('/').collect();
-        let name = parts.pop().unwrap_or_default();
+        let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+        let name = parts
+            .split_off(parts.len().saturating_sub(1).min(MAX_DEPTH))
+            .join("/");
         for part in parts {
             node = node.folders.entry(part).or_default();
         }
@@ -278,5 +284,40 @@ mod tests {
             ]
         );
         assert_eq!(code_rows(hunks, false).len(), 1 + hunks[0].lines.len());
+    }
+
+    #[test]
+    fn a_path_of_very_many_parts_lists_without_nesting_that_deep() {
+        let deep = format!("{}file.rs", "d/".repeat(100_000));
+        let files = files(&[deep.as_str(), "a//b.rs"]);
+        let rows = list_rows(&files, "", true, &HashSet::new());
+        // Empty parts make no nameless folder.
+        assert_eq!(
+            rows[..2],
+            [
+                ListRow::Folder {
+                    path: "a".into(),
+                    label: "a".into(),
+                    depth: 0,
+                    open: true
+                },
+                ListRow::File {
+                    index: 1,
+                    depth: Some(1)
+                },
+            ]
+        );
+        // The lone folders join into one row, MAX_DEPTH deep at most, and the rest joins the file's name.
+        let ListRow::Folder { label, .. } = &rows[2] else {
+            panic!("{:?}", rows[2]);
+        };
+        assert_eq!(label.split('/').count(), MAX_DEPTH);
+        assert_eq!(
+            rows[3..],
+            [ListRow::File {
+                index: 0,
+                depth: Some(1)
+            }]
+        );
     }
 }
