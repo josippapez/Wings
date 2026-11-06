@@ -693,9 +693,10 @@ fn a_notification_goes_to_the_system_with_the_plugins_name_and_a_url_opens_in_th
 }
 
 const NOTIFIER: &str = r#"
-wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }] }); });
+wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }, { id: 'copy', label: 'Copy' }] }); });
 wings.onAction(async ({ actionId }) => {
   if (actionId === 'notify') await wings.notify({ title: 'Build passed', body: 'main is green', actions: [{ label: 'Open run', url: 'https://ci.example/run/1' }, { label: 'Elsewhere', url: 'https://evil.example/' }] });
+  if (actionId === 'copy') await wings.copyText('fix/login');
 });
 "#;
 
@@ -747,6 +748,24 @@ fn a_plugins_notification_waits_unread_in_the_inbox_and_its_button_opens_a_link_
             Some("reactor may not open https://evil.example/".into())
         );
     });
+}
+
+#[test]
+fn a_page_copies_text_to_the_clipboard() {
+    let data = Data::temp();
+    install_notifier(&data);
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_plugins(&data, &system, |_| {});
+    assert_eq!(click_action(&app, &mut window, "copy"), None);
+    until(&app, &mut window, "nothing was copied", |_| {
+        app.read_from_clipboard().is_some()
+    });
+    assert_eq!(
+        app.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("fix/login")
+    );
 }
 
 #[test]

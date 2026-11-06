@@ -183,7 +183,7 @@ above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `L
 and links are spans of their line, and an image shows as its alt text), `CodeBlock` (no colours by language),
 `ProjectGate` and `languageOf`, with the `useAction`, `useProject`, `useViewArgs`, `useTabState` and `useBlockState` hooks
 (the last two keep the state while the page is open, not across restarts). A `Text` inside a `Text` is a span with its own tone, weight, `mono`
-and `onClick`, which makes a link. `copyText` rejects: a native page has no clipboard call yet. It renders with
+and `onClick`, which makes a link. `copyText` puts the text on the clipboard through the app. It renders with
 `react-reconciler` into a JSON tree that the app draws with its own controls, so hooks, state and effects work but there
 is no DOM: no `className`, `style`, `title`, `as` or `aria-*`, and a handler gets a `NativeEvent`, not a DOM event. A
 `Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page. A plugin whose

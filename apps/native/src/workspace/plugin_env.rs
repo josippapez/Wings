@@ -125,6 +125,8 @@ pub(super) enum UiEvent {
     },
     /// A plugin's notification, for the inbox.
     Notified(Notification),
+    /// A page's `copyText`.
+    Copy(String),
     ProjectSection {
         plugin: String,
         project: String,
@@ -454,6 +456,12 @@ impl Env for AppEnv {
         Ok(())
     }
 
+    fn copy_text(&self, text: String) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::Copy(text))
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {
         self.send(UiEvent::Badge {
             plugin: plugin.to_owned(),
@@ -679,6 +687,7 @@ impl Workspace {
             }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
             UiEvent::Notified(notification) => self.inbox_plugin(notification),
+            UiEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
             UiEvent::ProjectSection {
                 plugin,
                 project,

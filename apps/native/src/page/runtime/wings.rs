@@ -11,7 +11,8 @@
 //! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
 //! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts` and `setClaudeAccount`, `fetch`, `secrets`
 //! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`. `onReply` is accepted and never called: the
-//! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal.
+//! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal. `copyText` is
+//! the native app's own, for `wings-plugin-ui/native`'s `copyText`: a desktop frame has the browser's clipboard instead.
 //! Each call is a promise the host answers through `Link::call`, when it likes and from any thread, which comes back as a
 //! message to this frame's loop. Nothing else
 //! is added: no files, network or process of the frame's own.
@@ -328,6 +329,7 @@ const SETUP: &str = r#"
             onEvent: (listener) => subscribe(listeners.pluginEvent, listener),
             ports: () => call('ports', {}),
             notify: ({ title, body = '', projectId, actions } = {}) => call('notify', { title, body, projectId, actions }),
+            copyText: (text) => call('copyText', { text: String(text) }),
             transcript: (sessionId, types, { last } = {}) =>
                 call('transcript', {
                     sessionId: String(sessionId),

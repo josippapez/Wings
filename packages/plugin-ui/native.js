@@ -445,9 +445,9 @@ export function Time({ iso, prefix, now }) {
 }
 
 export { ago, languageOf };
-/** The native app has no clipboard call for a page yet, so this rejects. */
-export function copyText() {
-  return Promise.reject(new Error("Copying isn't available in the native app yet"));
+/** Puts `text` on the clipboard, through the app. */
+export function copyText(text) {
+  return globalThis.wings.copyText(text);
 }
 /** A page's or a card's title: 14px, or 15px with `size="large"`. `truncate` cuts it to one line. */
 export function Title({ size, truncate, children }) {

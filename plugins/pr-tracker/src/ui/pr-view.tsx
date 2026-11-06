@@ -231,24 +231,21 @@ function Branch({ branch }: { branch: string }) {
           <Text mono size="small" truncate title={`Target branch ${target}`}>{target}</Text>
         </>
       ) : null}
-      {/* The native app has no clipboard call for a page yet. */}
-      {WINGS_NATIVE ? null : (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="pr-icon-button"
-          aria-label={copied ? "Copied" : `Copy branch name ${source}`}
-          title={copied ? "Copied" : "Copy branch name"}
-          onClick={() => {
-            void copyText(source).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-        >
-          {copied ? "✓" : "⧉"}
-        </Button>
-      )}
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="pr-icon-button"
+        aria-label={copied ? "Copied" : `Copy branch name ${source}`}
+        title={copied ? "Copied" : "Copy branch name"}
+        onClick={() => {
+          void copyText(source).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          });
+        }}
+      >
+        {copied ? "✓" : "⧉"}
+      </Button>
     </Row>
   );
 }

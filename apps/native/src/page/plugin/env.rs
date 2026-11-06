@@ -326,6 +326,10 @@ pub trait Env: Send + Sync + 'static {
     fn open_url(&self, url: &str) -> Result<(), String>;
     /// Shows a notification and keeps it in the inbox.
     fn notify(&self, notification: Notification) -> Result<(), String>;
+    /// Puts `text` on the clipboard, for a page's `copyText`.
+    fn copy_text(&self, _text: String) -> Result<(), String> {
+        Err("The clipboard isn't available in this host".into())
+    }
     /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
     /// has checked the plugin declares the section and the project is listed.
     fn set_project_section(

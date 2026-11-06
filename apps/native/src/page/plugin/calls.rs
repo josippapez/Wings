@@ -367,6 +367,13 @@ impl Shared {
             "notify" => {
                 self.off_thread(reply, move |_| this.notify(&access, &params));
             }
+            // Any page may copy, as a desktop page's frame may use the clipboard API.
+            "copyText" => reply.done(
+                access
+                    .env
+                    .copy_text(js_string(params.get("text")))
+                    .map(|_| "null".into()),
+            ),
             _ => reply.err(format!("unknown method {method}")),
         }
     }
