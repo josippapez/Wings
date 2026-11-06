@@ -173,7 +173,7 @@ pub(super) fn start(
 ) -> Result<(Runtime, Latest, Receiver<()>), String> {
     let id = format!("p{}", NEXT_PANE.fetch_add(1, Ordering::Relaxed));
     let process =
-        Arc::new(PtyProcess::spawn(&cwd, &id, 80, 24).map_err(|error| error.to_string())?);
+        Arc::new(PtyProcess::spawn(&cwd, &id, 80, 24, None).map_err(|error| error.to_string())?);
     start_process(process, id, history)
 }
 

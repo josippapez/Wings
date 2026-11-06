@@ -3,8 +3,8 @@
 pub mod shell;
 
 mod process;
-pub use process::PtyProcess;
 pub use portable_pty::{CommandBuilder, ExitStatus, PtySize};
+pub use process::PtyProcess;
 
 #[cfg(feature = "grid")]
 pub mod grid;

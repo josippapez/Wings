@@ -157,7 +157,7 @@ fn builtin(app: &AppHandle, name: &str, arguments: &Value, caller: &dyn Fn() -> 
         // The caller can't ask again later, so OpenCode's sessions are loaded before it searches.
         state.history.sync_opencode();
     }
-    let result = crate::history::call_tool(&state.history, &state.claude_dir, name, arguments)
+    let result = crate::history::call_tool(&state.history, &crate::claude_accounts::dirs(), name, arguments)
         .or_else(|| project_info_tool(app, name, arguments, caller))
         .or_else(|| crate::mcp_panes::call_tool(&WingsHost(app), name, arguments, caller))?;
     Some(match result {
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_carries_the_project_of_its_pane_and_the_agent_session_running_there() {
-        let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None, added_at: None, pinned: false, worktree_include: None, worktree_setup: None };
+        let web = Space { id: "s1".into(), name: "web".into(), path: "/work/web".into(), parent: None, added_at: None, pinned: false, worktree_include: None, worktree_setup: None, claude_account: None };
         let claude = agent(AgentKind::Claude, Some("abc"), Some("fix totals"));
         assert_eq!(caller(Some(&web), Some(&claude)), (json!({ "id": "s1", "name": "web", "path": "/work/web" }), json!({ "id": "abc", "name": "fix totals", "kind": "claude" })));
         // A session without a name yet is still a session.
@@ -512,7 +512,7 @@ mod tests {
             assert_eq!(caller(Some(&web), without_session.as_ref()).1, Value::Null);
         }
         // A worktree Wings made names the project it belongs to.
-        let tree = Space { id: "s2".into(), name: "web-fix".into(), path: "/work/web-fix".into(), parent: Some("s1".into()), added_at: None, pinned: false, worktree_include: None, worktree_setup: None };
+        let tree = Space { id: "s2".into(), name: "web-fix".into(), path: "/work/web-fix".into(), parent: Some("s1".into()), added_at: None, pinned: false, worktree_include: None, worktree_setup: None, claude_account: None };
         assert_eq!(caller(Some(&tree), None).0, json!({ "id": "s2", "name": "web-fix", "path": "/work/web-fix", "parentId": "s1" }));
         // A call from outside every pane has neither.
         assert_eq!(caller(None, None), (Value::Null, Value::Null));

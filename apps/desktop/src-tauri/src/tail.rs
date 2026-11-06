@@ -85,17 +85,7 @@ impl Tail {
     }
 }
 
-/// The transcript of a session, `<claude_dir>/projects/<project>/<session id>.jsonl`.
-pub fn find_transcript(claude_dir: &Path, session_id: &str) -> Option<PathBuf> {
-    // The id becomes a file name, so only the UUID shape Claude Code uses.
-    if session_id.len() != 36 || !session_id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
-        return None;
-    }
-    let file = format!("{session_id}.jsonl");
-    fs::read_dir(claude_dir.join("projects")).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file())
-}
-
-pub use wings_plugins::transcript::Line;
+pub use wings_plugins::transcript::{find_transcript, Line};
 
 struct Bound {
     session_id: String,
@@ -107,13 +97,18 @@ struct Bound {
 
 /// The transcripts of the sessions running in panes, by pane id.
 pub struct Tailer {
-    claude_dir: PathBuf,
+    claude_dirs: Vec<PathBuf>,
     panes: HashMap<String, Bound>,
 }
 
 impl Tailer {
     pub fn new(claude_dir: &Path) -> Self {
-        Self { claude_dir: claude_dir.to_path_buf(), panes: HashMap::new() }
+        Self { claude_dirs: vec![claude_dir.to_path_buf()], panes: HashMap::new() }
+    }
+
+    /// Looks for transcripts in these folders from now on: one per Claude Code account.
+    pub fn set_claude_dirs(&mut self, dirs: &[PathBuf]) {
+        self.claude_dirs = dirs.to_vec();
     }
 
     /// Follows the transcripts of `sessions`, `(pane id, session id)`, and returns what they appended since the
@@ -124,7 +119,7 @@ impl Tailer {
         for (pane_id, session_id) in sessions {
             let bound = self.panes.entry(pane_id.clone()).or_insert_with(|| Bound {
                 session_id: session_id.clone(),
-                tail: find_transcript(&self.claude_dir, session_id).map(Tail::at_end),
+                tail: find_transcript(&self.claude_dirs, session_id).map(Tail::at_end),
                 lookup_in: LOOKUP_EVERY,
             });
             if bound.tail.is_none() {
@@ -134,7 +129,7 @@ impl Tailer {
                 }
                 bound.lookup_in = LOOKUP_EVERY;
                 // Created since the session was bound, so all of it is new.
-                bound.tail = find_transcript(&self.claude_dir, session_id).map(Tail::at_start);
+                bound.tail = find_transcript(&self.claude_dirs, session_id).map(Tail::at_start);
             }
             let Some(tail) = bound.tail.as_mut() else { continue };
             lines.extend(tail.read().into_iter().map(|bytes| Line { pane_id: pane_id.clone(), session_id: session_id.clone(), bytes }));
@@ -241,8 +236,18 @@ mod tests {
         tailer.clear();
         append(&file(a), "{\"while-cleared\":1}\n");
         assert!(tailer.poll(&sessions).is_empty());
-        assert!(find_transcript(&dir, "../../etc/passwd").is_none());
+        assert!(find_transcript(std::slice::from_ref(&dir), "../../etc/passwd").is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finds_a_transcript_in_the_folder_of_any_account() {
+        let (default, work) = (scratch("account-default"), scratch("account-work"));
+        let id = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+        append(&work.join(format!("projects/-tmp-proj/{id}.jsonl")), "{}\n");
+        assert_eq!(find_transcript(&[default.clone(), work.clone()], id), Some(work.join(format!("projects/-tmp-proj/{id}.jsonl"))));
+        assert!(find_transcript(std::slice::from_ref(&default), id).is_none());
+        let _ = (fs::remove_dir_all(&default), fs::remove_dir_all(&work));
     }
 
     /// The whole Rust path: plugins installed on disk, a session's transcript in a scratch Claude folder, and

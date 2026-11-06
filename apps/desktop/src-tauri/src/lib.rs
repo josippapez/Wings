@@ -3,6 +3,7 @@ mod applog;
 mod ai;
 mod bench;
 mod claude;
+mod claude_accounts;
 #[cfg(unix)]
 mod claude_settings;
 mod disk_usage;
@@ -66,7 +67,6 @@ use spaces::{GitStatus, SpaceStore, SpaceView};
 
 struct AppState {
     ai: ai::Ai,
-    claude_dir: PathBuf,
     history: history::History,
     spaces: Mutex<SpaceStore>,
     terminals: Box<dyn PtyBackend>,
@@ -228,6 +228,46 @@ fn plugin_worktree_setup_set(app: AppHandle, state: State<AppState>, plugin_id: 
     set_worktree_setup(&app, &space_id, include.as_deref(), setup.as_deref())
 }
 
+/// The Claude Code accounts and the one each project's terminals use, if the plugin may read them.
+#[tauri::command(async)]
+fn plugin_claude_accounts(state: State<AppState>, plugin_id: String) -> Res<claude_accounts::Accounts> {
+    if !plugins::may_use_claude_accounts(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not use Claude Code accounts"));
+    }
+    let spaces = state.spaces.lock().unwrap().spaces.clone();
+    Ok(claude_accounts::list(&spaces))
+}
+
+/// A plugin with `claudeAccounts` chooses the account the project's new terminals use, or the default one with no
+/// name. Only a name becomes `~/.claude-<name>`: the plugin never passes a path or a variable.
+#[tauri::command(async)]
+fn plugin_set_claude_account(app: AppHandle, state: State<AppState>, plugin_id: String, project_id: String, name: Option<String>) -> Res<()> {
+    if !plugins::may_use_claude_accounts(&plugin(&state, &plugin_id)?) {
+        return Err(format!("{plugin_id} may not use Claude Code accounts"));
+    }
+    if let Some(name) = name.as_deref().filter(|name| !claude_accounts::valid_name(name)) {
+        return Err(format!("{name:?} isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit"));
+    }
+    {
+        let mut store = state.spaces.lock().unwrap();
+        store.get(&project_id).ok_or("No such project in Wings")?;
+        if let Some(name) = &name {
+            claude_accounts::create_dir(name).map_err(err)?;
+        }
+        store.set_claude_account(&project_id, name.as_deref())?;
+    }
+    // Claude Code in the account's folder needs Wings too. The assignment stands if that fails.
+    #[cfg(unix)]
+    if let (Some(name), Some((claude, exe))) = (&name, claude_to_connect(&app)) {
+        if let Err(e) = ensure_claude_connected(&app, &claude, &exe, Some(name)) {
+            applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = app;
+    Ok(())
+}
+
 #[tauri::command(async)]
 fn editors_list() -> Vec<editors::EditorView> {
     editors::list()
@@ -254,7 +294,7 @@ fn spaces_set_pinned(state: State<AppState>, id: String, pinned: bool) {
 #[tauri::command(async)]
 fn sessions_list(state: State<AppState>, space_id: String) -> Res<Vec<SessionSummary>> {
     let path = state.spaces.lock().unwrap().get(&space_id).ok_or("unknown space")?.path.clone();
-    Ok(claude::list_sessions(&state.claude_dir, &path))
+    Ok(claude::list_sessions(&claude_accounts::dirs(), &path))
 }
 
 #[tauri::command]
@@ -287,10 +327,19 @@ fn pane_create(
         None => root,
     };
     let exit_app = app.clone();
+    let claude_config_dir = claude_accounts::pane_dir(&state.spaces.lock().unwrap().spaces, &space_id);
     let id = state
         .terminals
         .spawn(
-            SpawnRequest { space_id: space_id.clone(), cwd: &cwd, cols, rows, history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(ptyd::output::restored).unwrap_or_default(), history_id },
+            SpawnRequest {
+                space_id: space_id.clone(),
+                cwd: &cwd,
+                cols,
+                rows,
+                history: history_id.as_deref().and_then(|h| saved_history(&app, h)).map(ptyd::output::restored).unwrap_or_default(),
+                history_id,
+                claude_config_dir,
+            },
             on_output,
             Box::new(move |pane_id| {
                 let _ = exit_app.emit("pane-exited", pane_id);
@@ -635,17 +684,26 @@ fn harnesses_status() -> Vec<harnesses::HarnessStatus> {
 #[tauri::command(async)]
 fn mcp_status() -> McpStatus {
     #[cfg(unix)]
-    let statusline = claude_settings::connected(&claude_settings::settings_path());
+    let statusline = claude_settings::connected(&claude_settings::settings_path(None));
     #[cfg(not(unix))]
     let statusline = false;
-    let always_load = wings_mcp_entry(&claude_user_config()).is_some_and(|e| e["alwaysLoad"] == true);
+    let always_load = wings_mcp_entry(&claude_accounts::user_config(None)).is_some_and(|e| e["alwaysLoad"] == true);
     let Some(claude) = plugins::find_program("claude") else { return McpStatus { claude: false, connected: false, statusline, always_load } };
-    let connected = claude_mcp(&claude, &["get", "wings"]).is_ok_and(|out| out.status.success());
+    let connected = claude_mcp(&claude, None, &["get", "wings"]).is_ok_and(|out| out.status.success());
     McpStatus { claude: true, connected, statusline, always_load }
 }
 
-fn claude_mcp(claude: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-    std::process::Command::new(claude).arg("mcp").args(args).stdin(std::process::Stdio::null()).output()
+/// `claude` for an account: a named one runs under its own config folder, the default one under whatever Wings runs under.
+fn claude_command(claude: &std::path::Path, account: Option<&str>) -> std::process::Command {
+    let mut command = std::process::Command::new(claude);
+    if let Some(name) = account {
+        command.env("CLAUDE_CONFIG_DIR", claude_accounts::dir(Some(name)));
+    }
+    command
+}
+
+fn claude_mcp(claude: &std::path::Path, account: Option<&str>, args: &[&str]) -> std::io::Result<std::process::Output> {
+    claude_command(claude, account).arg("mcp").args(args).stdin(std::process::Stdio::null()).output()
 }
 
 #[tauri::command(async)]
@@ -661,14 +719,6 @@ fn mcp_connect(app: AppHandle) -> Res<()> {
 #[tauri::command(async)]
 fn mcp_set_always_load(app: AppHandle, on: bool) -> Res<()> {
     connect_claude(&app, Some(on))
-}
-
-/// Claude Code's user-scope config, where `mcpServers` lives. Read only: every write goes through `claude mcp`.
-fn claude_user_config() -> std::path::PathBuf {
-    match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) => std::path::PathBuf::from(dir).join(".claude.json"),
-        None => std::env::home_dir().unwrap_or_default().join(".claude.json"),
-    }
 }
 
 /// The JSON for re-adding the Wings server with the fields you set on it kept, and `alwaysLoad` set when given,
@@ -699,8 +749,8 @@ fn wings_mcp_entry(config: &std::path::Path) -> Option<serde_json::Value> {
 }
 
 /// Registers `wings --mcp` with Claude Code at user scope, so every session gets the plugin tools, and puts
-/// `wings statusline` in front of your status line. The server is removed first so a moved app is repointed
-/// rather than left dangling.
+/// `wings statusline` in front of your status line. It does so in the default account and in each account a project
+/// uses; every one is tried, and the first to fail is the one reported.
 fn connect_claude(app: &AppHandle, always_load: Option<bool>) -> Res<()> {
     #[cfg(not(unix))]
     {
@@ -711,22 +761,38 @@ fn connect_claude(app: &AppHandle, always_load: Option<bool>) -> Res<()> {
     {
         let claude = plugins::find_program("claude").ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
         let exe = std::env::current_exe().map_err(err)?;
-        let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
-        // Read before the remove, which drops the entry: what you set on it yourself (`alwaysLoad`, say) goes back on.
-        let kept = mcp_add_json(wings_mcp_entry(&claude_user_config()).as_ref(), always_load, &exe, &socket);
-        let _ = claude_mcp(&claude, &["remove", "--scope", "user", "wings"]);
-        let mut add = std::process::Command::new(&claude);
-        match &kept {
-            Some(entry) => add.args(["mcp", "add-json", "--scope", "user", "wings", &entry.to_string()]),
-            None => add.args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"]).arg(&exe).arg("--mcp").arg(&socket),
-        };
-        let out = add.stdin(std::process::Stdio::null()).output().map_err(err)?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        let accounts = claude_accounts::connect_targets(&app.state::<AppState>().spaces.lock().unwrap().spaces);
+        let mut failed = None;
+        for account in &accounts {
+            if let Err(e) = connect_claude_account(app, &claude, &exe, account.as_deref(), always_load) {
+                failed.get_or_insert(match account {
+                    Some(name) => format!("{name}: {e}"),
+                    None => e,
+                });
+            }
         }
-        claude_settings::add(&claude_settings::settings_path(), &exe)?;
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
+}
+
+/// `connect_claude` for one account. The server is removed first so a moved app is repointed rather than left dangling.
+#[cfg(unix)]
+fn connect_claude_account(app: &AppHandle, claude: &std::path::Path, exe: &std::path::Path, account: Option<&str>, always_load: Option<bool>) -> Res<()> {
+    let socket = mcp::socket_path(&app.path().app_data_dir().map_err(err)?);
+    // Read before the remove, which drops the entry: what you set on it yourself (`alwaysLoad`, say) goes back on.
+    let kept = mcp_add_json(wings_mcp_entry(&claude_accounts::user_config(account)).as_ref(), always_load, exe, &socket);
+    let _ = claude_mcp(claude, account, &["remove", "--scope", "user", "wings"]);
+    let mut add = claude_command(claude, account);
+    match &kept {
+        Some(entry) => add.args(["mcp", "add-json", "--scope", "user", "wings", &entry.to_string()]),
+        None => add.args(["mcp", "add", "--scope", "user", "--transport", "stdio", "wings", "--"]).arg(exe).arg("--mcp").arg(&socket),
+    };
+    let out = add.stdin(std::process::Stdio::null()).output().map_err(err)?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    claude_settings::add(&claude_settings::settings_path(account), exe)?;
+    Ok(())
 }
 
 /// Opens Privacy & Security > Files & Folders, where you let Wings read another app's data.
@@ -754,15 +820,50 @@ fn privacy_check(folder: String) -> bool {
 fn mcp_disconnect(app: AppHandle) -> Res<()> {
     #[cfg(unix)]
     {
-        if let Some(claude) = plugins::find_program("claude") {
-            claude_mcp(&claude, &["remove", "--scope", "user", "wings"]).map_err(err)?;
+        let claude = plugins::find_program("claude");
+        let spaces = app.state::<AppState>().spaces.lock().unwrap().spaces.clone();
+        let mut failed = None;
+        for account in disconnect_targets(&spaces) {
+            if let Err(e) = disconnect_claude_account(claude.as_deref(), account.as_deref()) {
+                failed.get_or_insert(match account {
+                    Some(name) => format!("{name}: {e}"),
+                    None => e,
+                });
+            }
         }
-        claude_settings::remove(&claude_settings::settings_path())?;
+        if let Some(e) = failed {
+            return Err(e);
+        }
     }
     let dir = app.path().app_data_dir().map_err(err)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
     std::fs::write(dir.join(CLAUDE_DISCONNECTED), "").map_err(err)?;
     journal_sync(&app);
+    Ok(())
+}
+
+/// The accounts to take Wings out of: those it connects to, and any other with Wings registered, like one that no
+/// project uses any more.
+#[cfg(unix)]
+fn disconnect_targets(spaces: &[spaces::Space]) -> Vec<Option<String>> {
+    let mut accounts = claude_accounts::connect_targets(spaces);
+    for name in claude_accounts::existing_names() {
+        let account = Some(name);
+        if !accounts.contains(&account) && wings_mcp_entry(&claude_accounts::user_config(account.as_deref())).is_some() {
+            accounts.push(account);
+        }
+    }
+    accounts
+}
+
+#[cfg(unix)]
+fn disconnect_claude_account(claude: Option<&std::path::Path>, account: Option<&str>) -> Res<()> {
+    // `claude mcp` creates its config files in a folder that has none, so a named account without the server is left alone.
+    let registered = account.is_none() || wings_mcp_entry(&claude_accounts::user_config(account)).is_some();
+    if let Some(claude) = claude.filter(|_| registered) {
+        claude_mcp(claude, account, &["remove", "--scope", "user", "wings"]).map_err(err)?;
+    }
+    claude_settings::remove(&claude_settings::settings_path(account))?;
     Ok(())
 }
 
@@ -781,20 +882,38 @@ fn exe_to_connect() -> Option<std::path::PathBuf> {
     std::env::current_exe().ok().filter(|exe| installed_app(exe))
 }
 
-/// Wings adds itself to Claude Code when it starts, unless you disconnected it. Only the installed app: a dev build
-/// or a binary in `target/` would point Claude Code at itself.
+/// The `claude` program and the Wings binary to add to it without being asked, unless you disconnected it. Only the
+/// installed app: a dev build or a binary in `target/` would point Claude Code at itself.
+#[cfg(unix)]
+fn claude_to_connect(app: &AppHandle) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(CLAUDE_DISCONNECTED).exists()) {
+        return None;
+    }
+    Some((plugins::find_program("claude")?, exe_to_connect()?))
+}
+
+/// Makes sure Claude Code, under `account`, has Wings: registered, and in front of your status line and after your hooks.
+#[cfg(unix)]
+fn ensure_claude_connected(app: &AppHandle, claude: &std::path::Path, exe: &std::path::Path, account: Option<&str>) -> Res<()> {
+    let registered = claude_mcp(claude, account, &["get", "wings"])
+        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
+    if registered {
+        claude_settings::add(&claude_settings::settings_path(account), exe).map(|_| ())
+    } else {
+        connect_claude_account(app, claude, exe, account, None)
+    }
+}
+
+/// Wings adds itself to Claude Code when it starts, in the default account and in each one a project uses.
 fn connect_claude_on_start(app: AppHandle) {
     #[cfg(unix)]
     thread::spawn(move || {
-        if cfg!(debug_assertions) || app.path().app_data_dir().is_ok_and(|d| d.join(CLAUDE_DISCONNECTED).exists()) {
-            return;
-        }
-        let (Some(claude), Some(exe)) = (plugins::find_program("claude"), exe_to_connect()) else { return };
-        let registered = claude_mcp(&claude, &["get", "wings"])
-            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
-        let result = if registered { claude_settings::add(&claude_settings::settings_path(), &exe).map(|_| ()) } else { connect_claude(&app, None) };
-        if let Err(e) = result {
-            applog::log_line!("[claude] couldn't connect Claude Code: {e}");
+        let Some((claude, exe)) = claude_to_connect(&app) else { return };
+        let accounts = claude_accounts::connect_targets(&app.state::<AppState>().spaces.lock().unwrap().spaces);
+        for account in &accounts {
+            if let Err(e) = ensure_claude_connected(&app, &claude, &exe, account.as_deref()) {
+                applog::log_line!("[claude] couldn't connect Claude Code ({}): {e}", account.as_deref().unwrap_or("default account"));
+            }
         }
     });
     #[cfg(not(unix))]
@@ -1231,7 +1350,7 @@ fn plugin_exec(state: State<AppState>, plugin_id: String, request: ExecRequest, 
 
 #[tauri::command(async)]
 fn plugin_transcript(state: State<AppState>, plugin_id: String, session_id: String, types: Vec<String>, last: Option<usize>) -> Res<Vec<serde_json::Value>> {
-    plugins::transcript_entries(&plugin(&state, &plugin_id)?, &state.claude_dir, &session_id, &types, last)
+    plugins::transcript_entries(&plugin(&state, &plugin_id)?, &claude_accounts::dirs(), &session_id, &types, last)
 }
 
 /// What an OpenCode session is doing, if the plugin may read it. The service address and password stay here.
@@ -1759,11 +1878,15 @@ fn send_notification(app: &AppHandle, pane_id: &str, title: String, body: String
 fn start_detection(app: AppHandle) {
     thread::spawn(move || {
         let state = app.state::<AppState>();
-        let mut detector = Detector::new(&state.claude_dir);
-        let mut tailer = tail::Tailer::new(&state.claude_dir);
+        let mut detector = Detector::new(&claude::claude_dir());
+        let mut tailer = tail::Tailer::new(&claude::claude_dir());
         opencode::spawn(detector.opencode());
         forward_agent_activity(&app, &detector.opencode());
         loop {
+            // An account can appear while Wings runs, and each has its own session files and transcripts.
+            let claude_dirs = claude_accounts::dirs();
+            detector.set_claude_dirs(&claude_dirs);
+            tailer.set_claude_dirs(&claude_dirs);
             let mut probes: Vec<PaneProbe> = Vec::new();
             state.terminals.each_mirror(&mut |p| {
                 probes.push(PaneProbe {
@@ -1960,7 +2083,6 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let claude_dir = claude::claude_dir();
             let file = app.path().app_data_dir()?.join("spaces.json");
             let store = SpaceStore::load(file);
             let data = app.path().app_data_dir()?;
@@ -1973,7 +2095,6 @@ pub fn run() {
                 plugins,
                 storage: plugin_storage::Storage::new(data.join("plugin-storage")),
                 project_info: project_info::Store::new(data.join("projects"), data.join("plugin-storage")),
-                claude_dir,
                 history: history::History::default(),
                 spaces: Mutex::new(store),
                 terminals,
@@ -2037,6 +2158,8 @@ pub fn run() {
             worktree_local_set,
             plugin_worktree_setup,
             plugin_worktree_setup_set,
+            plugin_claude_accounts,
+            plugin_set_claude_account,
             editors_list,
             editor_open,
             sessions_list,

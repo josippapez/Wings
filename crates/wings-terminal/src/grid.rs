@@ -19,8 +19,8 @@ use alacritty_terminal::{
 
 /// Wings' terminal theme (`src/lib/terminal.ts`), so both renderers show the same colors.
 const ANSI: [u32; 16] = [
-    0x4a4650, 0xf2786a, 0x8fd19e, 0xe9c46a, 0x7aa7f2, 0xd59cf0, 0x6fd0d0, 0xd8d4ce, 0x6d6872, 0xff9285, 0xa7e3b3,
-    0xf3d68b, 0x9cc0ff, 0xe4b8f7, 0x93e2e2, 0xf4f1ec,
+    0x4a4650, 0xf2786a, 0x8fd19e, 0xe9c46a, 0x7aa7f2, 0xd59cf0, 0x6fd0d0, 0xd8d4ce, 0x6d6872,
+    0xff9285, 0xa7e3b3, 0xf3d68b, 0x9cc0ff, 0xe4b8f7, 0x93e2e2, 0xf4f1ec,
 ];
 pub const FOREGROUND: u32 = 0xe9e6e1;
 pub const BACKGROUND: u32 = 0x17151b;
@@ -86,14 +86,29 @@ impl GridPane {
 
 impl<L: EventListener> GridPane<L> {
     pub fn with_listener(cols: usize, rows: usize, listener: L) -> Self {
-        let config = Config { scrolling_history: HISTORY_LINES, ..Config::default() };
-        Self { term: Term::new(config, &TermSize::new(cols, rows), listener), parser: Processor::new(), rows, cols }
+        let config = Config {
+            scrolling_history: HISTORY_LINES,
+            ..Config::default()
+        };
+        Self {
+            term: Term::new(config, &TermSize::new(cols, rows), listener),
+            parser: Processor::new(),
+            rows,
+            cols,
+        }
     }
 
     /// The cursor programs get until they set their own, like the desktop's cursor setting.
     pub fn set_default_cursor(&mut self, shape: CursorShape) {
-        let default_cursor_style = CursorStyle { shape, blinking: false };
-        self.term.set_options(Config { scrolling_history: HISTORY_LINES, default_cursor_style, ..Config::default() });
+        let default_cursor_style = CursorStyle {
+            shape,
+            blinking: false,
+        };
+        self.term.set_options(Config {
+            scrolling_history: HISTORY_LINES,
+            default_cursor_style,
+            ..Config::default()
+        });
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -120,7 +135,11 @@ impl<L: EventListener> GridPane<L> {
     pub fn color(&self, index: usize) -> Rgb {
         self.term.colors()[index].unwrap_or_else(|| {
             let color = default_color(index);
-            Rgb { r: (color >> 16) as u8, g: (color >> 8) as u8, b: color as u8 }
+            Rgb {
+                r: (color >> 16) as u8,
+                g: (color >> 8) as u8,
+                b: color as u8,
+            }
         })
     }
 
@@ -134,7 +153,10 @@ impl<L: EventListener> GridPane<L> {
 
     /// The same inverse, dim, and hidden-cell colors for native and benchmark renderers.
     pub fn cell_colors(&self, cell: &alacritty_terminal::term::cell::Cell) -> (u32, u32) {
-        let (mut fg, mut bg) = (packed(self.resolve_color(cell.fg)), packed(self.resolve_color(cell.bg)));
+        let (mut fg, mut bg) = (
+            packed(self.resolve_color(cell.fg)),
+            packed(self.resolve_color(cell.bg)),
+        );
         if cell.flags.contains(Flags::INVERSE) {
             std::mem::swap(&mut fg, &mut bg);
         }
@@ -149,7 +171,12 @@ impl<L: EventListener> GridPane<L> {
 
     /// Drain listener events after feed and write these replies back through the host's PTY writer.
     /// Other events (title, clipboard, bell, etc.) remain the host's responsibility.
-    pub fn protocol_reply(&self, event: &Event, cell_width: u16, cell_height: u16) -> Option<String> {
+    pub fn protocol_reply(
+        &self,
+        event: &Event,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> Option<String> {
         match event {
             Event::PtyWrite(text) => Some(text.clone()),
             Event::ColorRequest(index, format) => Some(format(self.color(*index))),
@@ -186,7 +213,14 @@ impl<L: EventListener> GridPane<L> {
         }
         let cursor = self.term.renderable_content().cursor;
         let hidden = cursor.shape == CursorShape::Hidden || cursor.point.line.0 < 0;
-        put16(out, if hidden { 0xffff } else { cursor.point.line.0 as u16 });
+        put16(
+            out,
+            if hidden {
+                0xffff
+            } else {
+                cursor.point.line.0 as u16
+            },
+        );
         put16(out, cursor.point.column.0 as u16);
         put16(out, lines.len() as u16);
         let grid = self.term.grid();
@@ -223,7 +257,11 @@ impl<L: EventListener> GridPane<L> {
                     }
                 } else {
                     text.push(cell.c);
-                    col += if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                    col += if cell.flags.contains(Flags::WIDE_CHAR) {
+                        2
+                    } else {
+                        1
+                    };
                 }
                 if text.bytes().all(|b| b == b' ') {
                     text.clear();
@@ -259,8 +297,14 @@ pub struct Recording {
 
 impl Recording {
     pub fn parse(data: &[u8]) -> Option<Recording> {
-        let u16_at = |i: usize| data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
-        let u32_at = |i: usize| data.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let u16_at = |i: usize| {
+            data.get(i..i + 2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+        };
+        let u32_at = |i: usize| {
+            data.get(i..i + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
         let (cols, rows) = (u16_at(0)?, u16_at(2)?);
         let mut chunks = Vec::new();
         let mut i = 4;
@@ -280,7 +324,8 @@ mod tests {
     /// Reads the runs of a frame back as (row, col, text) with the fg color.
     fn runs(frame: &[u8]) -> Vec<(u16, u16, String, u32)> {
         let r16 = |i: usize| u16::from_le_bytes([frame[i], frame[i + 1]]);
-        let r32 = |i: usize| u32::from_le_bytes([frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]);
+        let r32 =
+            |i: usize| u32::from_le_bytes([frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]);
         let mut out = Vec::new();
         let mut i = 6;
         for _ in 0..r16(4) {
@@ -288,7 +333,12 @@ mod tests {
             i += 4;
             for _ in 0..n {
                 let (fg, col, len) = (r32(i), r16(i + 8), r16(i + 12) as usize);
-                out.push((row, col, String::from_utf8(frame[i + 14..i + 14 + len].to_vec()).unwrap(), fg));
+                out.push((
+                    row,
+                    col,
+                    String::from_utf8(frame[i + 14..i + 14 + len].to_vec()).unwrap(),
+                    fg,
+                ));
                 i += 14 + len;
             }
         }
@@ -333,7 +383,10 @@ mod tests {
         pane.feed(b"\x1b[7mx\x1b[0;2my\x1b[0;8mz");
         let row = &pane.model().grid()[Line(0)];
         assert_eq!(pane.cell_colors(&row[Column(0)]), (BACKGROUND, FOREGROUND));
-        assert_eq!(pane.cell_colors(&row[Column(1)]), (dim(FOREGROUND, BACKGROUND), BACKGROUND));
+        assert_eq!(
+            pane.cell_colors(&row[Column(1)]),
+            (dim(FOREGROUND, BACKGROUND), BACKGROUND)
+        );
         assert_eq!(pane.cell_colors(&row[Column(2)]), (BACKGROUND, BACKGROUND));
     }
 
@@ -346,7 +399,10 @@ mod tests {
         assert!(pane.model().mode().contains(TermMode::ALT_SCREEN));
         assert_eq!(pane.model().grid()[Line(0)][Column(0)].c, 'a');
         pane.resize(24, 6);
-        assert_eq!((pane.model().columns(), pane.model().screen_lines()), (24, 6));
+        assert_eq!(
+            (pane.model().columns(), pane.model().screen_lines()),
+            (24, 6)
+        );
         assert!(matches!(pane.damage(), TermDamage::Full));
         let mut frame = Vec::new();
         assert!(pane.frame(false, &mut frame));
@@ -361,7 +417,10 @@ mod tests {
             TermDamage::Full => panic!("cursor movement should not damage the full screen"),
         };
         assert!(lines.contains(&0) && lines.contains(&2), "{lines:?}");
-        assert_eq!(pane.model().renderable_content().cursor.shape, CursorShape::Hidden);
+        assert_eq!(
+            pane.model().renderable_content().cursor.shape,
+            CursorShape::Hidden
+        );
         frame.clear();
         pane.frame(false, &mut frame);
         assert_eq!(&frame[..2], &0xffffu16.to_le_bytes());
@@ -384,18 +443,27 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut pane = GridPane::with_listener(20, 4, Listener(tx));
         pane.feed(b"\x1b[6n\x1b[18t\x1b[14t\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
-        let replies: Vec<_> = rx.try_iter().filter_map(|event| pane.protocol_reply(&event, 8, 16)).collect();
+        let replies: Vec<_> = rx
+            .try_iter()
+            .filter_map(|event| pane.protocol_reply(&event, 8, 16))
+            .collect();
         assert!(replies.iter().any(|reply| reply == "\x1b[1;1R"));
         assert!(replies.iter().any(|reply| reply == "\x1b[8;4;20t"));
         assert!(replies.iter().any(|reply| reply == "\x1b[4;64;160t"));
         for (code, color) in [(10, FOREGROUND), (11, BACKGROUND), (12, CURSOR)] {
             let (r, g, b) = ((color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff);
-            let expected = format!("\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07");
+            let expected =
+                format!("\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x07");
             assert!(replies.contains(&expected), "{replies:?}");
         }
         pane.feed(b"\x1b]4;1;rgb:12/34/56\x07\x1b]4;1;?\x07\x1b[31mx");
-        let replies: Vec<_> = rx.try_iter().filter_map(|event| pane.protocol_reply(&event, 8, 16)).collect();
-        assert!(replies.iter().any(|reply| reply == "\x1b]4;1;rgb:1212/3434/5656\x07"));
+        let replies: Vec<_> = rx
+            .try_iter()
+            .filter_map(|event| pane.protocol_reply(&event, 8, 16))
+            .collect();
+        assert!(replies
+            .iter()
+            .any(|reply| reply == "\x1b]4;1;rgb:1212/3434/5656\x07"));
         let mut frame = Vec::new();
         pane.frame(true, &mut frame);
         assert_eq!(runs(&frame)[0].3, 0x123456);
@@ -403,7 +471,10 @@ mod tests {
         assert_eq!(packed(pane.color(1)), ANSI[1]);
         pane.resize(30, 8);
         pane.feed(b"\x1b[18t\x1b[14t");
-        let replies: Vec<_> = rx.try_iter().filter_map(|event| pane.protocol_reply(&event, 8, 16)).collect();
+        let replies: Vec<_> = rx
+            .try_iter()
+            .filter_map(|event| pane.protocol_reply(&event, 8, 16))
+            .collect();
         assert!(replies.iter().any(|reply| reply == "\x1b[8;8;30t"));
         assert!(replies.iter().any(|reply| reply == "\x1b[4;128;240t"));
     }

@@ -91,6 +91,8 @@ const COMMANDS: &[&str] = &[
     "plugin_worktree_create",
     "plugin_worktree_setup",
     "plugin_worktree_setup_set",
+    "plugin_claude_accounts",
+    "plugin_set_claude_account",
     "plugin_call_tool_check",
     "plugin_event_check",
     "plugin_notify",

@@ -391,7 +391,7 @@ impl Inner {
 impl PtyBackend for RemoteBackend {
     fn spawn(&self, req: SpawnRequest<'_>, output: Channel<InvokeResponseBody>, on_exit: OnExit) -> anyhow::Result<Arc<PaneMeta>> {
         // Only what JSON can carry: a variable that isn't UTF-8 doesn't reach a pane in the host.
-        let env = pane_env().into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
+        let env = pane_env(req.claude_config_dir.as_deref()).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
         let cwd: PathBuf = req.cwd.to_path_buf();
         let spawn = Spawn { space_id: req.space_id.clone(), cwd: cwd.clone(), cols: req.cols, rows: req.rows, history_id: req.history_id.clone(), env };
         let (tx, rx) = mpsc::channel();
@@ -528,7 +528,7 @@ mod tests {
     }
 
     fn request<'a>(name: &str, cwd: &'a Path, history: Vec<u8>) -> SpawnRequest<'a> {
-        SpawnRequest { space_id: "s".into(), cwd, cols: 80, rows: 24, history_id: Some(format!("h-{name}")), history }
+        SpawnRequest { space_id: "s".into(), cwd, cols: 80, rows: 24, history_id: Some(format!("h-{name}")), history, claude_config_dir: None }
     }
 
     #[test]

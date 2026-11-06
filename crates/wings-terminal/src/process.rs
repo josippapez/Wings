@@ -19,8 +19,22 @@ pub struct PtyProcess {
 }
 
 impl PtyProcess {
-    pub fn spawn(cwd: &Path, pane_id: &str, cols: u16, rows: u16) -> anyhow::Result<Self> {
-        Self::spawn_command(pane_command(cwd, pane_env(), pane_id), PtySize { rows, cols, ..PtySize::default() })
+    /// `claude_config_dir` is the Claude Code account folder the pane's project uses, or `None` for the default one.
+    pub fn spawn(
+        cwd: &Path,
+        pane_id: &str,
+        cols: u16,
+        rows: u16,
+        claude_config_dir: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_command(
+            pane_command(cwd, pane_env(claude_config_dir), pane_id),
+            PtySize {
+                rows,
+                cols,
+                ..PtySize::default()
+            },
+        )
     }
 
     pub fn spawn_command(command: CommandBuilder, size: PtySize) -> anyhow::Result<Self> {
@@ -63,8 +77,14 @@ impl PtyProcess {
             if read != size {
                 return None;
             }
-            let path: Vec<u8> =
-                info.pvi_cdir.vip_path.iter().flatten().take_while(|c| **c != 0).map(|c| *c as u8).collect();
+            let path: Vec<u8> = info
+                .pvi_cdir
+                .vip_path
+                .iter()
+                .flatten()
+                .take_while(|c| **c != 0)
+                .map(|c| *c as u8)
+                .collect();
             (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(path)))
         }
         #[cfg(target_os = "linux")]
@@ -90,12 +110,20 @@ impl PtyProcess {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.master.lock().unwrap().resize(PtySize { rows, cols, ..PtySize::default() })
+        self.master.lock().unwrap().resize(PtySize {
+            rows,
+            cols,
+            ..PtySize::default()
+        })
     }
 
     #[cfg(unix)]
     pub fn foreground_pid(&self) -> Option<u32> {
-        self.master.lock().unwrap().process_group_leader().map(|pid| pid as u32)
+        self.master
+            .lock()
+            .unwrap()
+            .process_group_leader()
+            .map(|pid| pid as u32)
     }
 
     #[cfg(not(unix))]
@@ -117,10 +145,21 @@ impl PtyProcess {
             // A child can close the PTY and keep running, so wait for the exit without reaping it.
             // The handle stays here until then, so kill and drop can still end the child.
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            while unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } == -1
-                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+            while unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            } == -1
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+            }
             // None when kill took the child first. It reaps the child itself.
-            let Some(mut child) = child.lock().unwrap().take() else { return };
+            let Some(mut child) = child.lock().unwrap().take() else {
+                return;
+            };
             *exit.lock().unwrap() = Some(child.wait());
         });
     }
@@ -131,7 +170,9 @@ impl PtyProcess {
     }
 
     fn finish(&self, terminate: bool) {
-        let Some(mut child) = self.child.lock().unwrap().take() else { return };
+        let Some(mut child) = self.child.lock().unwrap().take() else {
+            return;
+        };
         let exit = self.exit.clone();
         thread::spawn(move || {
             // portable-pty's kill can include a grace period. Neither it nor wait runs on the UI.
@@ -191,18 +232,29 @@ mod tests {
             let reader = thread::spawn(move || {
                 let mut buf = [0; 4096];
                 while let Ok(n) = reader.read(&mut buf) {
-                    if n == 0 || tx.send(buf[..n].to_vec()).is_err() { break; }
+                    if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
                 }
                 let _ = finished.send(());
             });
-            Self { process, output, done, reader: Some(reader) }
+            Self {
+                process,
+                output,
+                done,
+                reader: Some(reader),
+            }
         }
 
         fn until(&self, marker: &str) -> Vec<u8> {
             let deadline = Instant::now() + TIMEOUT;
             let mut bytes = Vec::new();
             while !String::from_utf8_lossy(&bytes).contains(marker) {
-                bytes.extend(self.output.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("PTY output timed out"));
+                bytes.extend(
+                    self.output
+                        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        .expect("PTY output timed out"),
+                );
             }
             bytes
         }
@@ -210,8 +262,14 @@ mod tests {
         fn reaped(&self) -> ExitStatus {
             let deadline = Instant::now() + TIMEOUT;
             loop {
-                if let Some(status) = self.process.exit_status().unwrap() { return status; }
-                assert!(Instant::now() < deadline, "child {:?} was not reaped", self.process.process_id());
+                if let Some(status) = self.process.exit_status().unwrap() {
+                    return status;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "child {:?} was not reaped",
+                    self.process.process_id()
+                );
                 thread::sleep(Duration::from_millis(10));
             }
         }
@@ -220,7 +278,11 @@ mod tests {
             if self.reader.is_some() && self.done.recv_timeout(TIMEOUT).is_ok() {
                 self.reader.take().unwrap().join().unwrap();
             }
-            assert!(self.reader.is_none(), "PTY reader did not exit for {:?}", self.process.process_id());
+            assert!(
+                self.reader.is_none(),
+                "PTY reader did not exit for {:?}",
+                self.process.process_id()
+            );
         }
     }
 
@@ -231,7 +293,10 @@ mod tests {
                 if self.done.recv_timeout(TIMEOUT).is_ok() {
                     let _ = self.reader.take().unwrap().join();
                 } else {
-                    eprintln!("PTY reader cleanup timed out for {:?}", self.process.process_id());
+                    eprintln!(
+                        "PTY reader cleanup timed out for {:?}",
+                        self.process.process_id()
+                    );
                 }
             }
         }
@@ -239,17 +304,25 @@ mod tests {
 
     #[test]
     fn real_shell_preserves_environment_input_resize_and_exit_status() {
-        let process = PtyProcess::spawn(&std::env::temp_dir(), "shared-test", 80, 24).unwrap();
+        let process =
+            PtyProcess::spawn(&std::env::temp_dir(), "shared-test", 80, 24, None).unwrap();
         let mut session = Session::new(process);
         assert!(session.process.process_id().is_some());
         session.process.write(b"printf '\\nshared-''env:%s:%s:%s:%s:%s\\n' \"$TERM\" \"$COLORTERM\" \"$TERM_PROGRAM\" \"$WINGS_ENV\" \"$WINGS_PANE_ID\"; stty size\r").unwrap();
         let output = session.until("24 80");
-        assert!(String::from_utf8_lossy(&output).contains("shared-env:xterm-256color:truecolor:Wings:1:shared-test"));
+        assert!(String::from_utf8_lossy(&output)
+            .contains("shared-env:xterm-256color:truecolor:Wings:1:shared-test"));
         assert!(session.process.foreground_pid().is_some());
         session.process.resize(92, 31).unwrap();
-        session.process.write(b"printf '\\nresized-''size:'; stty size\r").unwrap();
+        session
+            .process
+            .write(b"printf '\\nresized-''size:'; stty size\r")
+            .unwrap();
         session.until("resized-size:31 92");
-        session.process.write(b"read -r value; printf '\\nshared-''input:%s\\n' \"$value\"\rhello-world\r").unwrap();
+        session
+            .process
+            .write(b"read -r value; printf '\\nshared-''input:%s\\n' \"$value\"\rhello-world\r")
+            .unwrap();
         session.until("shared-input:hello-world");
         session.process.write(b"exit 7\r").unwrap();
         session.join_reader();
@@ -261,11 +334,15 @@ mod tests {
     fn kill_returns_without_waiting_for_a_shell_which_ignores_hangup_and_reaps_it() {
         let mut command = CommandBuilder::new("/bin/sh");
         command.args(["-c", "trap '' HUP; printf READY; read value"]);
-        let mut session = Session::new(PtyProcess::spawn_command(command, PtySize::default()).unwrap());
+        let mut session =
+            Session::new(PtyProcess::spawn_command(command, PtySize::default()).unwrap());
         session.until("READY");
         let start = Instant::now();
         session.process.kill();
-        assert!(start.elapsed() < Duration::from_millis(150), "kill blocked the caller");
+        assert!(
+            start.elapsed() < Duration::from_millis(150),
+            "kill blocked the caller"
+        );
         assert!(!session.reaped().success());
         session.join_reader();
         // Cleanup is idempotent even after a child was reaped.
@@ -286,7 +363,10 @@ mod tests {
                 assert!(status.is_ok(), "reaping dropped child {pid:?} failed");
                 break;
             }
-            assert!(Instant::now() < deadline, "dropped child {pid:?} was not reaped");
+            assert!(
+                Instant::now() < deadline,
+                "dropped child {pid:?} was not reaped"
+            );
             thread::sleep(Duration::from_millis(10));
         }
     }
@@ -299,9 +379,13 @@ mod tests {
 
     impl Drop for EofCleanup {
         fn drop(&mut self) {
-            if !self.armed { return; }
+            if !self.armed {
+                return;
+            }
             let mut kill = std::process::Command::new("/bin/kill")
-                .args(["-KILL", &self.pid.to_string()]).spawn().unwrap();
+                .args(["-KILL", &self.pid.to_string()])
+                .spawn()
+                .unwrap();
             let deadline = Instant::now() + Duration::from_secs(2);
             while kill.try_wait().unwrap().is_none() {
                 if Instant::now() >= deadline {
@@ -315,7 +399,9 @@ mod tests {
             while self.exit.lock().unwrap().is_none() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
             }
-            if self.exit.lock().unwrap().is_none() { eprintln!("test child {} still needs cleanup", self.pid); }
+            if self.exit.lock().unwrap().is_none() {
+                eprintln!("test child {} still needs cleanup", self.pid);
+            }
         }
     }
 
@@ -323,9 +409,16 @@ mod tests {
     // running. macOS keeps the terminal open for the session leader, so call reap directly.
     fn eof_before_exit() -> (Session, EofCleanup) {
         let mut command = CommandBuilder::new("/bin/sh");
-        command.args(["-c", "trap '' HUP; printf EOF_READY; while :; do sleep 1; done"]);
+        command.args([
+            "-c",
+            "trap '' HUP; printf EOF_READY; while :; do sleep 1; done",
+        ]);
         let session = Session::new(PtyProcess::spawn_command(command, PtySize::default()).unwrap());
-        let cleanup = EofCleanup { pid: session.process.process_id().unwrap(), exit: session.process.exit.clone(), armed: true };
+        let cleanup = EofCleanup {
+            pid: session.process.process_id().unwrap(),
+            exit: session.process.exit.clone(),
+            armed: true,
+        };
         session.until("EOF_READY");
         session.process.reap();
         (session, cleanup)
@@ -336,7 +429,11 @@ mod tests {
         while cleanup.exit.lock().unwrap().is_none() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(cleanup.exit.lock().unwrap().is_some(), "HUP-ignoring child {} survived EOF and termination", cleanup.pid);
+        assert!(
+            cleanup.exit.lock().unwrap().is_some(),
+            "HUP-ignoring child {} survived EOF and termination",
+            cleanup.pid
+        );
         cleanup.armed = false;
     }
 
@@ -348,13 +445,23 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
         let mut command = CommandBuilder::new("/bin/sh");
         command.cwd(&start);
-        command.args(["-c", "printf START; read go; cd \"$0\" && printf MOVED; sleep 30", target.to_str().unwrap()]);
+        command.args([
+            "-c",
+            "printf START; read go; cd \"$0\" && printf MOVED; sleep 30",
+            target.to_str().unwrap(),
+        ]);
         let session = Session::new(PtyProcess::spawn_command(command, PtySize::default()).unwrap());
         session.until("START");
-        assert_eq!(session.process.cwd().unwrap().canonicalize().unwrap(), start);
+        assert_eq!(
+            session.process.cwd().unwrap().canonicalize().unwrap(),
+            start
+        );
         session.process.write(b"go\r").unwrap();
         session.until("MOVED");
-        assert_eq!(session.process.cwd().unwrap().canonicalize().unwrap(), target);
+        assert_eq!(
+            session.process.cwd().unwrap().canonicalize().unwrap(),
+            target
+        );
         drop(session);
         std::fs::remove_dir(&target).unwrap();
     }
@@ -364,7 +471,10 @@ mod tests {
         let (session, mut cleanup) = eof_before_exit();
         let start = Instant::now();
         session.process.kill();
-        assert!(start.elapsed() < Duration::from_millis(150), "kill blocked the caller");
+        assert!(
+            start.elapsed() < Duration::from_millis(150),
+            "kill blocked the caller"
+        );
         assert_eof_child_reaped(&mut cleanup);
     }
 

@@ -8,8 +8,9 @@ use serde_json::{json, Map, Value};
 
 const PASS: &str = " statusline --pass | {\n";
 
-pub fn settings_path() -> PathBuf {
-    crate::claude::claude_dir().join("settings.json")
+/// The settings file of an account, `None` being the default one.
+pub fn settings_path(account: Option<&str>) -> PathBuf {
+    crate::claude_accounts::dir(account).join("settings.json")
 }
 
 fn quote(s: &str) -> String {

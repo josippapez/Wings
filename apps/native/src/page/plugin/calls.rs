@@ -576,7 +576,7 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
     let last = request.last.map(|last| last as usize);
     let entries = transcript_entries(
         &access.plugin,
-        &access.env.claude_dir(),
+        std::slice::from_ref(&access.env.claude_dir()),
         &request.session_id,
         &request.types,
         last,

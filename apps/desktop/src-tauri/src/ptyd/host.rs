@@ -828,7 +828,7 @@ mod tests {
             cols: 80,
             rows: 24,
             history_id: Some(format!("h-{name}")),
-            env: pane_env().into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
+            env: pane_env(None).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
         }
     }
 

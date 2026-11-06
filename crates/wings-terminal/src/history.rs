@@ -49,7 +49,9 @@ impl Style {
     };
 
     fn of(cell: &Cell) -> Style {
-        let attributes = ATTRIBUTES.iter().fold(Flags::empty(), |all, (flag, _)| all | *flag);
+        let attributes = ATTRIBUTES
+            .iter()
+            .fold(Flags::empty(), |all, (flag, _)| all | *flag);
         Style {
             fg: cell.fg,
             bg: cell.bg,
@@ -109,7 +111,9 @@ impl<L: EventListener> GridPane<L> {
         let mut continued = false;
         for line in -history..0 {
             let row = &grid[Line(line)];
-            let wraps = row.last().is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE));
+            let wraps = row
+                .last()
+                .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE));
             // A wrapped line fills its row so the terminal wraps it again. The line it continues on keeps
             // at least one cell, or the two would merge into one.
             let end = if wraps {
@@ -201,7 +205,14 @@ mod tests {
                     .map(|col| {
                         let cell = &row[Column(col)];
                         let flags = cell.flags - Flags::WRAPLINE;
-                        format!("{}{:?}{:?}{:?}{:?}", cell.c, cell.fg, cell.bg, flags, cell.zerowidth())
+                        format!(
+                            "{}{:?}{:?}{:?}{:?}",
+                            cell.c,
+                            cell.fg,
+                            cell.bg,
+                            flags,
+                            cell.zerowidth()
+                        )
                     })
                     .collect()
             })
@@ -214,7 +225,10 @@ mod tests {
             match i % 5 {
                 0 => write!(out, "\x1b[1;31mred {i}\x1b[0m plain\r\n"),
                 1 => write!(out, "\x1b[38;5;208;48;2;10;20;30mcolors {i}\x1b[0m\r\n"),
-                2 => write!(out, "wide 漢字 {i} e\u{301}\x1b[4:3;58;5;1m curl\x1b[0m\r\n"),
+                2 => write!(
+                    out,
+                    "wide 漢字 {i} e\u{301}\x1b[4:3;58;5;1m curl\x1b[0m\r\n"
+                ),
                 3 => write!(out, "{}{i}\r\n", "long ".repeat(30)),
                 _ => write!(out, "\x1b[7m inverse {i}\x1b[0m\ttab\r\n\r\n"),
             }
@@ -242,7 +256,10 @@ mod tests {
         kept.feed(&output(800..900));
         stored.restore_history(&bytes);
         assert_eq!(lines(&stored), lines(&kept));
-        assert_eq!(stored.model().grid().cursor.point, kept.model().grid().cursor.point);
+        assert_eq!(
+            stored.model().grid().cursor.point,
+            kept.model().grid().cursor.point
+        );
     }
 
     #[test]
@@ -262,7 +279,11 @@ mod tests {
         pane.restore_history(&bytes);
         let grid = pane.model().grid();
         assert_eq!(grid.history_size(), HISTORY_LINES);
-        let text = |line: i32| (0..9).map(|col| grid[Line(line)][Column(col)].c).collect::<String>();
+        let text = |line: i32| {
+            (0..9)
+                .map(|col| grid[Line(line)][Column(col)].c)
+                .collect::<String>()
+        };
         assert_eq!(text(-(HISTORY_LINES as i32)).trim(), "old 1996");
         assert_eq!(text(-1).trim(), "new 5995");
     }

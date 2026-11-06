@@ -455,12 +455,12 @@ fn modified_ms(meta: &fs::Metadata) -> u64 {
     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Brings the index up to date with the transcripts on disk: new files are parsed, grown ones read from
-/// where they ended, and deleted ones dropped. Files are parsed on every core.
-fn refresh(index: &mut HashMap<PathBuf, Transcript>, claude_dir: &Path) {
+/// Brings the index up to date with the transcripts on disk, in every account's folder: new files are parsed, grown
+/// ones read from where they ended, and deleted ones dropped. Files are parsed on every core.
+fn refresh(index: &mut HashMap<PathBuf, Transcript>, claude_dirs: &[PathBuf]) {
     let mut kept = HashMap::with_capacity(index.len());
     let mut work = Vec::new();
-    for folder in fs::read_dir(claude_dir.join("projects")).into_iter().flatten().flatten() {
+    for folder in claude_dirs.iter().flat_map(|dir| fs::read_dir(dir.join("projects")).into_iter().flatten().flatten()) {
         let folder_name = folder.file_name().to_string_lossy().into_owned();
         for file in fs::read_dir(folder.path()).into_iter().flatten().flatten() {
             let path = file.path();
@@ -670,9 +670,9 @@ pub struct Excerpt {
 }
 
 impl History {
-    pub fn search(&self, claude_dir: &Path, query: &str, filter: &Filter, limit: usize) -> Results {
+    pub fn search(&self, claude_dirs: &[PathBuf], query: &str, filter: &Filter, limit: usize) -> Results {
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dir);
+        refresh(&mut index, claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let terms = terms(query);
         let project = filter.project.as_deref().map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty());
@@ -780,9 +780,9 @@ impl History {
     /// What a session says at its two ends, for the generated names and summaries: its opening prompts and the
     /// latest one, each with the reply that follows the first. A short first prompt ("exit", "hi") says little, so
     /// the next prompts join it up to `OPENING_CHARS`. None when the session isn't loaded or has no prompt yet.
-    pub fn excerpt(&self, claude_dir: &Path, id: &str) -> Option<Excerpt> {
+    pub fn excerpt(&self, claude_dirs: &[PathBuf], id: &str) -> Option<Excerpt> {
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dir);
+        refresh(&mut index, claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let s = index.values().map(|t| &t.session).find(|s| s.id == id).or_else(|| opencode.sessions.get(id).map(|c| &c.session))?;
         let text = |i: usize| {
@@ -811,9 +811,9 @@ impl History {
 
     /// One session's summary and a page of its messages, for `read_session`. With a `query`, only the messages that
     /// match all of it and the one before and after each.
-    pub fn read_session(&self, claude_dir: &Path, id: &str, offset: usize, limit: usize, query: Option<&str>) -> Result<Value, String> {
+    pub fn read_session(&self, claude_dirs: &[PathBuf], id: &str, offset: usize, limit: usize, query: Option<&str>) -> Result<Value, String> {
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dir);
+        refresh(&mut index, claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let s = index
             .values()
@@ -890,7 +890,7 @@ pub fn history_search(app: AppHandle, state: State<AppState>, query: String, fil
     if state.history.begin_opencode() {
         std::thread::spawn(move || app.state::<AppState>().history.run_opencode());
     }
-    let mut results = state.history.search(&state.claude_dir, &query, &filter, limit);
+    let mut results = state.history.search(&crate::claude_accounts::dirs(), &query, &filter, limit);
     state.ai.name_hits(&mut results.sessions);
     results
 }
@@ -929,13 +929,13 @@ pub fn mcp_tools() -> Vec<Value> {
 }
 
 /// Runs a built-in tool. `None` when `name` isn't one.
-pub fn call_tool(history: &History, claude_dir: &Path, name: &str, args: &Value) -> Option<Result<String, String>> {
+pub fn call_tool(history: &History, claude_dirs: &[PathBuf], name: &str, args: &Value) -> Option<Result<String, String>> {
     let number = |key: &str, default: usize, max: usize| args.get(key).and_then(Value::as_u64).map_or(default, |n| (n as usize).min(max));
     Some(match name {
         "search_history" => match args.get("query").and_then(Value::as_str) {
             Some(query) => {
                 let filter = Filter { project: args.get("project").and_then(Value::as_str).map(String::from), ..Filter::default() };
-                let results = history.search(claude_dir, query, &filter, number("limit", 10, 50).max(1));
+                let results = history.search(claude_dirs, query, &filter, number("limit", 10, 50).max(1));
                 let sessions: Vec<Value> = results
                     .sessions
                     .into_iter()
@@ -958,7 +958,7 @@ pub fn call_tool(history: &History, claude_dir: &Path, name: &str, args: &Value)
             None => Err("search_history needs a query".into()),
         },
         "read_session" => match args.get("session_id").and_then(Value::as_str) {
-            Some(id) => history.read_session(claude_dir, id, number("offset", 0, usize::MAX), number("limit", 30, 100).max(1), args.get("query").and_then(Value::as_str)).map(|v| v.to_string()),
+            Some(id) => history.read_session(claude_dirs, id, number("offset", 0, usize::MAX), number("limit", 30, 100).max(1), args.get("query").and_then(Value::as_str)).map(|v| v.to_string()),
             None => Err("read_session needs a session_id".into()),
         },
         _ => return None,
@@ -993,8 +993,8 @@ mod tests {
         json!({ "type": "assistant", "timestamp": "2026-10-01T10:00:05.000Z", "message": { "model": "claude-opus-5-5", "role": "assistant", "content": [{ "type": "text", "text": text }] } }).to_string()
     }
 
-    fn texts(history: &History, claude_dir: &Path, id: &str) -> Vec<(String, String)> {
-        let page = history.read_session(claude_dir, id, 0, 100, None).unwrap();
+    fn texts(history: &History, claude_dirs: &[PathBuf], id: &str) -> Vec<(String, String)> {
+        let page = history.read_session(claude_dirs, id, 0, 100, None).unwrap();
         page["messages"].as_array().unwrap().iter().map(|m| (m["role"].as_str().unwrap().to_string(), m["text"].as_str().unwrap().to_string())).collect()
     }
 
@@ -1029,10 +1029,10 @@ mod tests {
         transcript(&dir, cwd, "s1", &lines);
         let history = History::default();
         assert_eq!(
-            texts(&history, &dir, "s1"),
+            texts(&history, std::slice::from_ref(&dir), "s1"),
             [pair("user", "Fix the login bug"), pair("assistant", "Looking.\n\nFixed it."), pair("user", "Now the signup page")]
         );
-        let page = history.read_session(&dir, "s1", 0, 100, None).unwrap();
+        let page = history.read_session(std::slice::from_ref(&dir), "s1", 0, 100, None).unwrap();
         let s = &page["session"];
         assert_eq!(s["title"], "My login fix", "a custom title beats the AI's");
         assert_eq!(s["filesEdited"], json!(["/tmp/proj/src/login.rs"]));
@@ -1051,7 +1051,7 @@ mod tests {
         let (head, tail) = half.split_at(20);
         fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(head.as_bytes()).unwrap();
         let history = History::default();
-        assert_eq!(texts(&history, &dir, "s1").len(), 1, "a half-written line waits");
+        assert_eq!(texts(&history, std::slice::from_ref(&dir), "s1").len(), 1, "a half-written line waits");
 
         // Garbage in place of the first line proves the next read starts after it.
         let mut bytes = fs::read(&path).unwrap();
@@ -1060,14 +1060,14 @@ mod tests {
         bytes.extend_from_slice(format!("{tail}\n{}\n", user("/tmp/proj", "main", "second prompt")).as_bytes());
         fs::write(&path, bytes).unwrap();
         assert_eq!(
-            texts(&history, &dir, "s1"),
+            texts(&history, std::slice::from_ref(&dir), "s1"),
             [pair("user", "first prompt"), pair("assistant", "a reply being written"), pair("user", "second prompt")]
         );
 
         fs::write(&path, format!("{}\n", user("/tmp/proj", "main", "rewritten"))).unwrap();
-        assert_eq!(texts(&history, &dir, "s1"), [pair("user", "rewritten")], "a shrunk file is read again");
+        assert_eq!(texts(&history, std::slice::from_ref(&dir), "s1"), [pair("user", "rewritten")], "a shrunk file is read again");
         fs::remove_file(&path).unwrap();
-        assert!(history.read_session(&dir, "s1", 0, 10, None).is_err(), "a deleted transcript drops out");
+        assert!(history.read_session(std::slice::from_ref(&dir), "s1", 0, 10, None).is_err(), "a deleted transcript drops out");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1086,14 +1086,14 @@ mod tests {
         transcript(&dir, "/tmp/proj", "s1", &lines);
         let history = History::default();
         let index = |page: &Value| page["messages"].as_array().unwrap().iter().map(|m| m["index"].as_u64().unwrap()).collect::<Vec<_>>();
-        let page = history.read_session(&dir, "s1", 0, 100, Some("baseline")).unwrap();
+        let page = history.read_session(std::slice::from_ref(&dir), "s1", 0, 100, Some("baseline")).unwrap();
         assert_eq!(index(&page), [1, 2, 3, 5, 6]);
         assert_eq!(page["matchingMessages"], 2);
-        let first = history.read_session(&dir, "s1", 0, 2, Some("baseline")).unwrap();
+        let first = history.read_session(std::slice::from_ref(&dir), "s1", 0, 2, Some("baseline")).unwrap();
         assert_eq!((index(&first), first["nextOffset"].clone()), (vec![1, 2], json!(3)));
-        assert_eq!(index(&history.read_session(&dir, "s1", 3, 100, Some("baseline")).unwrap()), [3, 5, 6]);
-        assert_eq!(index(&history.read_session(&dir, "s1", 0, 100, Some("\"baseline method\" durations")).unwrap()), Vec::<u64>::new());
-        assert_eq!(history.read_session(&dir, "s1", 0, 100, None).unwrap()["matchingMessages"], Value::Null);
+        assert_eq!(index(&history.read_session(std::slice::from_ref(&dir), "s1", 3, 100, Some("baseline")).unwrap()), [3, 5, 6]);
+        assert_eq!(index(&history.read_session(std::slice::from_ref(&dir), "s1", 0, 100, Some("\"baseline method\" durations")).unwrap()), Vec::<u64>::new());
+        assert_eq!(history.read_session(std::slice::from_ref(&dir), "s1", 0, 100, None).unwrap()["matchingMessages"], Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1114,7 +1114,7 @@ mod tests {
         transcript(&dir, "/w/app-old", "e", &[user("/w/app-old", "main", "login bug in a sibling folder")]);
         transcript(&dir, "/w/app", "empty", &[r#"{"type":"last-prompt","lastPrompt":"x"}"#.to_string()]);
         let history = History::default();
-        let search = |q: &str, filter: Filter| history.search(&dir, q, &filter, 10);
+        let search = |q: &str, filter: Filter| history.search(std::slice::from_ref(&dir), q, &filter, 10);
         let app = || Filter { project: Some("/w/app/".into()), ..Filter::default() };
 
         assert_eq!(sorted_ids(&search("", Filter::default())), ["a", "b", "c", "d", "e"], "sessions without messages are left out");
@@ -1144,8 +1144,8 @@ mod tests {
         let dir = temp_claude_dir("phrase");
         transcript(&dir, "/p", "a", &[user("/p", "main", "ends with foo"), assistant("bar starts this")]);
         let history = History::default();
-        assert_eq!(history.search(&dir, "foo bar", &Filter::default(), 10).total, 1);
-        assert_eq!(history.search(&dir, "\"foo bar\"", &Filter::default(), 10).total, 0);
+        assert_eq!(history.search(std::slice::from_ref(&dir), "foo bar", &Filter::default(), 10).total, 1);
+        assert_eq!(history.search(std::slice::from_ref(&dir), "\"foo bar\"", &Filter::default(), 10).total, 0);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1180,12 +1180,12 @@ mod tests {
         let dir = temp_claude_dir("opening");
         let long = "Now move the resume button into the session list and keep the old one in the toolbar. ".repeat(4).trim_end().to_string();
         transcript(&dir, "/p", "s1", &[user("/p", "main", "hi"), assistant("Hello."), user("/p", "main", "fix the login redirect"), assistant("Done."), user("/p", "main", &long), user("/p", "main", "never reached")]);
-        let e = History::default().excerpt(&dir, "s1").unwrap();
+        let e = History::default().excerpt(std::slice::from_ref(&dir), "s1").unwrap();
         assert_eq!(e.first_prompt, format!("hi\nfix the login redirect\n{long}"));
         assert_eq!(e.first_reply.as_deref(), Some("Hello."));
         // A first prompt that says enough stands alone.
         transcript(&dir, "/p", "s2", &[user("/p", "main", &long), user("/p", "main", "second")]);
-        assert_eq!(History::default().excerpt(&dir, "s2").unwrap().first_prompt, long);
+        assert_eq!(History::default().excerpt(std::slice::from_ref(&dir), "s2").unwrap().first_prompt, long);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1201,7 +1201,7 @@ mod tests {
         lines.push(user("/p", "main", &format!("huge {}", "x".repeat(20_000))));
         transcript(&dir, "/p", "s1", &lines);
         let history = History::default();
-        let call = |name: &str, args: Value| call_tool(&history, &dir, name, &args).unwrap();
+        let call = |name: &str, args: Value| call_tool(&history, std::slice::from_ref(&dir), name, &args).unwrap();
 
         let found: Value = serde_json::from_str(&call("search_history", json!({ "query": "prompt 7", "project": "/p" })).unwrap()).unwrap();
         assert_eq!(found["total"], 1);
@@ -1230,7 +1230,7 @@ mod tests {
 
         assert!(call("search_history", json!({})).is_err());
         assert!(call("read_session", json!({ "session_id": "nope" })).is_err());
-        assert!(call_tool(&history, &dir, "cyclops__start_timer", &json!({})).is_none());
+        assert!(call_tool(&history, std::slice::from_ref(&dir), "cyclops__start_timer", &json!({})).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1332,31 +1332,31 @@ mod tests {
         transcript(&dir, "/w/app", "a", &[user("/w/app", "main", "Fix the config loader"), assistant("Config::load fixed.")]);
         let service = fake_opencode();
         let history = History::default();
-        assert!(!history.search(&dir, "", &Filter::default(), 10).opencode_loading);
+        assert!(!history.search(std::slice::from_ref(&dir), "", &Filter::default(), 10).opencode_loading);
         assert!(history.begin_opencode());
-        assert!(history.search(&dir, "", &Filter::default(), 10).opencode_loading, "a refresh is running");
+        assert!(history.search(std::slice::from_ref(&dir), "", &Filter::default(), 10).opencode_loading, "a refresh is running");
         assert!(!history.begin_opencode(), "one at a time");
         history.refresh_opencode(&service);
 
-        let all = history.search(&dir, "", &Filter::default(), 10);
+        let all = history.search(std::slice::from_ref(&dir), "", &Filter::default(), 10);
         assert!(!all.opencode_loading);
         let ids: Vec<(&str, Agent)> = all.sessions.iter().map(|h| (h.id.as_str(), h.agent)).collect();
         assert_eq!(ids, [("a", Agent::Claude), ("ses_root1", Agent::OpenCode), ("ses_root2", Agent::OpenCode)], "child and empty sessions are left out");
-        let found = history.search(&dir, "MCP-CONFIG.json", &Filter::default(), 10);
+        let found = history.search(std::slice::from_ref(&dir), "MCP-CONFIG.json", &Filter::default(), 10);
         assert_eq!(found.sessions.len(), 1, "a system notice is not searched");
         let hit = &found.sessions[0];
         assert_eq!((hit.id.as_str(), hit.agent, hit.last_active_ms), ("ses_root1", Agent::OpenCode, 1_790_000_900_000));
         assert_eq!((hit.snippets[0].role, hit.snippets[0].text.as_str()), (Role::User, "Where is mcp-config.json read?"));
-        let reply = history.search(&dir, "config::load", &Filter::default(), 10);
+        let reply = history.search(std::slice::from_ref(&dir), "config::load", &Filter::default(), 10);
         assert_eq!(reply.sessions.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "ses_root1"], "a reply is searched, newest first");
         assert_eq!(reply.sessions[1].snippets[0].role, Role::Assistant);
-        assert!(history.search(&dir, "secret thoughts", &Filter::default(), 10).sessions.is_empty(), "reasoning is not searched");
-        assert_eq!(history.search(&dir, "wire up", &Filter::default(), 10).sessions.len(), 1, "titles are searched");
+        assert!(history.search(std::slice::from_ref(&dir), "secret thoughts", &Filter::default(), 10).sessions.is_empty(), "reasoning is not searched");
+        assert_eq!(history.search(std::slice::from_ref(&dir), "wire up", &Filter::default(), 10).sessions.len(), 1, "titles are searched");
 
         let app = Filter { project: Some("/w/app".into()), ..Filter::default() };
-        assert_eq!(history.search(&dir, "", &app, 10).sessions.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "ses_root1"], "the project filter uses the session's folder");
-        assert!(history.search(&dir, "", &Filter { branch: Some("main".into()), project: Some("/w/other".into()), ..Filter::default() }, 10).sessions.is_empty());
-        assert_eq!(history.search(&dir, "čakovec", &Filter { since_ms: Some(1_790_000_100_000), ..Filter::default() }, 10).total, 1);
+        assert_eq!(history.search(std::slice::from_ref(&dir), "", &app, 10).sessions.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "ses_root1"], "the project filter uses the session's folder");
+        assert!(history.search(std::slice::from_ref(&dir), "", &Filter { branch: Some("main".into()), project: Some("/w/other".into()), ..Filter::default() }, 10).sessions.is_empty());
+        assert_eq!(history.search(std::slice::from_ref(&dir), "čakovec", &Filter { since_ms: Some(1_790_000_100_000), ..Filter::default() }, 10).total, 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1377,7 +1377,7 @@ mod tests {
         service.sessions.lock().unwrap().remove(0);
         history.refresh_opencode(&service);
         assert_eq!(*service.fetched.lock().unwrap(), ["ses_root2"]);
-        let ids: Vec<String> = history.search(&dir, "", &Filter::default(), 10).sessions.into_iter().map(|h| h.id).collect();
+        let ids: Vec<String> = history.search(std::slice::from_ref(&dir), "", &Filter::default(), 10).sessions.into_iter().map(|h| h.id).collect();
         assert_eq!(ids, ["ses_root2"], "a session the service no longer lists is dropped");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1388,13 +1388,13 @@ mod tests {
         let service = fake_opencode();
         let history = History::default();
         history.refresh_opencode(&service);
-        let page = history.read_session(&dir, "ses_root1", 0, 1, None).unwrap();
+        let page = history.read_session(std::slice::from_ref(&dir), "ses_root1", 0, 1, None).unwrap();
         assert_eq!((page["session"]["agent"].as_str(), page["session"]["project"].as_str(), page["session"]["messages"].as_u64()), (Some("opencode"), Some("/w/app"), Some(2)));
         assert_eq!((page["messages"][0]["role"].as_str(), page["nextOffset"].as_u64()), (Some("user"), Some(1)));
-        let next = history.read_session(&dir, "ses_root1", 1, 10, None).unwrap();
+        let next = history.read_session(std::slice::from_ref(&dir), "ses_root1", 1, 10, None).unwrap();
         assert_eq!((next["messages"][0]["text"].as_str(), next["nextOffset"].as_u64()), (Some("It is read in Config::load.\n\nDone."), None));
-        assert!(history.read_session(&dir, "ses_child", 0, 10, None).is_err());
-        let found: Value = serde_json::from_str(&call_tool(&history, &dir, "search_history", &json!({ "query": "Čakovec" })).unwrap().unwrap()).unwrap();
+        assert!(history.read_session(std::slice::from_ref(&dir), "ses_child", 0, 10, None).is_err());
+        let found: Value = serde_json::from_str(&call_tool(&history, std::slice::from_ref(&dir), "search_history", &json!({ "query": "Čakovec" })).unwrap().unwrap()).unwrap();
         assert_eq!((found["sessions"][0]["sessionId"].as_str(), found["sessions"][0]["agent"].as_str()), (Some("ses_root2"), Some("opencode")));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1418,10 +1418,10 @@ mod tests {
         let roots = opencode_roots(&client).unwrap().len();
         println!("{roots} root sessions listed, {} failed to load", roots - sessions);
         let real = crate::claude::claude_dir();
-        history.search(&real, "", &Filter::default(), 1);
+        history.search(std::slice::from_ref(&real), "", &Filter::default(), 1);
         for query in ["mcp-config.json", "the", "xyzzy-nowhere"] {
             let start = Instant::now();
-            let found = history.search(&real, query, &Filter::default(), 100);
+            let found = history.search(std::slice::from_ref(&real), query, &Filter::default(), 100);
             let opencode = found.sessions.iter().filter(|h| h.agent == Agent::OpenCode).count();
             println!("search {query:?} over Claude and OpenCode: {:?}, {} sessions ({opencode} OpenCode)", start.elapsed(), found.total);
         }
@@ -1466,7 +1466,7 @@ mod tests {
 
         let history = History::default();
         let start = Instant::now();
-        let all = history.search(&dir, "", &Filter::default(), 1);
+        let all = history.search(std::slice::from_ref(&dir), "", &Filter::default(), 1);
         println!("cold build: {:?} for {} sessions with messages", start.elapsed(), all.total);
         {
             let index = history.index.lock().unwrap();
@@ -1477,7 +1477,7 @@ mod tests {
         let mut runs: Vec<Duration> = (0..7)
             .map(|_| {
                 let start = Instant::now();
-                history.search(&dir, "", &Filter::default(), 1);
+                history.search(std::slice::from_ref(&dir), "", &Filter::default(), 1);
                 start.elapsed()
             })
             .collect();
@@ -1497,7 +1497,7 @@ mod tests {
             let mut runs: Vec<Duration> = (0..7)
                 .map(|_| {
                     let start = Instant::now();
-                    total = history.search(&dir, query, &filter, 100).total;
+                    total = history.search(std::slice::from_ref(&dir), query, &filter, 100).total;
                     start.elapsed()
                 })
                 .collect();
@@ -1512,14 +1512,14 @@ mod tests {
         for _ in 0..5 {
             fs::OpenOptions::new().append(true).open(&copy).unwrap().write_all(&tail).unwrap();
             let start = Instant::now();
-            history.search(&dir, "", &Filter::default(), 1);
+            history.search(std::slice::from_ref(&dir), "", &Filter::default(), 1);
             runs.push(start.elapsed());
         }
         println!("refresh after {} KB appended: {:?} (median of 5)", tail.len() / 1000, median(&mut runs));
 
         if let Some(cwd) = biggest_cwd {
             let start = Instant::now();
-            let listed = crate::claude::list_sessions(&real, &cwd).len();
+            let listed = crate::claude::list_sessions(std::slice::from_ref(&real), &cwd).len();
             println!("before, for comparison: claude::list_sessions({cwd}) took {:?} for {listed} sessions", start.elapsed());
         }
         let _ = fs::remove_dir_all(&dir);

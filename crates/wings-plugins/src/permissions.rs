@@ -30,6 +30,10 @@ pub fn may_create_worktrees(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.worktrees
 }
 
+pub fn may_use_claude_accounts(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.claude_accounts
+}
+
 pub fn may_send_to_agents(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.send_to_agents
 }
@@ -104,6 +108,22 @@ mod tests {
     use crate::{loading::load, test_support::plugin};
     use serde_json::Value;
     use std::{fs, path::Path};
+
+    #[test]
+    fn claude_accounts_need_their_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-claude-accounts-perm-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_use_claude_accounts(&manifest(serde_json::json!({}))));
+        assert!(!may_use_claude_accounts(&manifest(serde_json::json!({ "worktrees": true, "panes": ["claude"] }))));
+        assert!(may_use_claude_accounts(&manifest(serde_json::json!({ "claudeAccounts": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn statusline_needs_its_permission() {

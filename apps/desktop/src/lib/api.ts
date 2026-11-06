@@ -100,6 +100,8 @@ export type PluginPermissions = {
   sendToAgents: boolean;
   /** Makes git worktrees of your projects. */
   worktrees: boolean;
+  /** Lists your Claude Code accounts and chooses the one each project's terminals use. */
+  claudeAccounts: boolean;
   /** Other plugins' tools it calls: a plugin id, or `<plugin> <tool>`. Only between Wings' own plugins. */
   callTools: string[];
   /** Events of other plugins it hears: `<plugin> <event>`. Only between Wings' own plugins. */

@@ -54,6 +54,9 @@ pub struct Permissions {
     /// Lets the plugin make a git worktree of one of your projects with `wings.createWorktree`: a new branch in a
     /// folder beside the repo, added to Wings as a project.
     pub worktrees: bool,
+    /// Lets the plugin list your Claude Code accounts with `wings.claudeAccounts` and choose the one each project's
+    /// new terminals use with `wings.setClaudeAccount`.
+    pub claude_accounts: bool,
     /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
     /// `<plugin> <tool>` for one, like `tasks list`.
     pub call_tools: Vec<String>,

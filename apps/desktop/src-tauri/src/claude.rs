@@ -47,11 +47,11 @@ fn transcripts(folder: &Path) -> Vec<(PathBuf, u64, u64)> {
         .collect()
 }
 
-/// Past sessions for one project, most recent first.
-pub fn list_sessions(claude_dir: &Path, cwd: &str) -> Vec<SessionSummary> {
-    let folder = claude_dir.join("projects").join(project_folder_name(cwd));
-    let mut out: Vec<SessionSummary> = transcripts(&folder)
-        .into_iter()
+/// Past sessions for one project in every account's folder, most recent first.
+pub fn list_sessions(claude_dirs: &[PathBuf], cwd: &str) -> Vec<SessionSummary> {
+    let mut out: Vec<SessionSummary> = claude_dirs
+        .iter()
+        .flat_map(|dir| transcripts(&dir.join("projects").join(project_folder_name(cwd))))
         .filter_map(|(path, mtime, size)| summarize(&path, mtime, size))
         .collect();
     out.sort_by_key(|s| std::cmp::Reverse(s.last_active_ms));
@@ -143,7 +143,7 @@ mod tests {
         fs::write(folder.join("s1.jsonl"), lines.join("\n")).unwrap();
         fs::write(folder.join("empty.jsonl"), r#"{"type":"last-prompt","lastPrompt":"x"}"#).unwrap();
 
-        let sessions = list_sessions(&dir, "/tmp/proj");
+        let sessions = list_sessions(std::slice::from_ref(&dir), "/tmp/proj");
         assert_eq!(sessions.len(), 1, "sessions without messages are skipped");
         let s = &sessions[0];
         assert_eq!(s.id, "s1");
@@ -151,5 +151,20 @@ mod tests {
         assert_eq!(s.first_prompt.as_deref(), Some("Fix the login bug"));
         assert_eq!(s.git_branch.as_deref(), Some("main"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_the_sessions_of_every_account_folder() {
+        let root = std::env::temp_dir().join(format!("wings-claude-accounts-{}", std::process::id()));
+        let dirs = [root.join("default"), root.join("work")];
+        for (dir, id) in dirs.iter().zip(["s1", "s2"]) {
+            let folder = dir.join("projects").join(project_folder_name("/tmp/proj"));
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join(format!("{id}.jsonl")), r#"{"type":"user","message":{"role":"user","content":"hi"}}"#).unwrap();
+        }
+        let mut ids: Vec<String> = list_sessions(&dirs, "/tmp/proj").into_iter().map(|s| s.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["s1", "s2"]);
+        let _ = fs::remove_dir_all(&root);
     }
 }

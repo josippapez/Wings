@@ -110,7 +110,8 @@ pub struct PaneProbe {
 
 pub struct Detector {
     system: System,
-    sessions_dir: PathBuf,
+    /// Where Claude Code's session files are, one folder per account.
+    sessions_dirs: Vec<PathBuf>,
     last: HashMap<String, AgentState>,
     unseen_done: HashMap<String, bool>,
     last_codex: HashMap<String, (u32, u64, Option<crate::program_status::CodexReport>)>,
@@ -123,13 +124,18 @@ impl Detector {
     pub fn new(claude_dir: &Path) -> Self {
         Self {
             system: System::new(),
-            sessions_dir: claude_dir.join("sessions"),
+            sessions_dirs: vec![claude_dir.join("sessions")],
             last: HashMap::new(),
             unseen_done: HashMap::new(),
             last_codex: HashMap::new(),
             traced: HashMap::new(),
             opencode: Default::default(),
         }
+    }
+
+    /// Reads Claude Code's session files from these accounts' folders from now on.
+    pub fn set_claude_dirs(&mut self, dirs: &[PathBuf]) {
+        self.sessions_dirs = dirs.iter().map(|dir| dir.join("sessions")).collect();
     }
 
     /// What the opencode threads read the panes from and write the state to.
@@ -217,7 +223,7 @@ impl Detector {
             }
             let (file, state) = match kind {
                 AgentKind::Claude => {
-                    let file = read_session_file(&self.sessions_dir, pid.as_u32()).unwrap_or_default();
+                    let file = read_session_file(&self.sessions_dirs, pid.as_u32()).unwrap_or_default();
                     let raw = file
                         .status
                         .as_deref()
@@ -451,9 +457,9 @@ fn is_agent(name: &OsStr, cmd: &[OsString]) -> Option<AgentKind> {
     }
 }
 
-fn read_session_file(dir: &Path, pid: u32) -> Option<SessionFile> {
-    let text = std::fs::read_to_string(dir.join(format!("{pid}.json"))).ok()?;
-    serde_json::from_str(&text).ok()
+/// The registry entry of a process, from the account folder it runs under: a pid is unique, so the first folder that has one.
+fn read_session_file(dirs: &[PathBuf], pid: u32) -> Option<SessionFile> {
+    dirs.iter().find_map(|dir| serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{pid}.json"))).ok()?).ok())
 }
 
 /// `status` values documented for `claude agents --json`: busy, waiting, idle.
@@ -621,6 +627,19 @@ mod tests {
         assert_eq!(state_from_title("✳ Refactor auth"), Some(AgentState::Idle));
         assert_eq!(state_from_title("zsh"), None);
         assert_eq!(strip_title_glyph("✳ Refactor auth").as_deref(), Some("Refactor auth"));
+    }
+
+    #[test]
+    fn reads_a_session_file_from_the_folder_of_any_account() {
+        let root = std::env::temp_dir().join(format!("wings-detect-accounts-{}", std::process::id()));
+        let dirs = [root.join("default/sessions"), root.join("work/sessions")];
+        fs::create_dir_all(&dirs[0]).unwrap();
+        fs::create_dir_all(&dirs[1]).unwrap();
+        fs::write(dirs[1].join("4242.json"), r#"{"sessionId":"abc","status":"busy"}"#).unwrap();
+        let file = read_session_file(&dirs, 4242).unwrap();
+        assert_eq!((file.session_id.as_deref(), file.status.as_deref()), (Some("abc"), Some("busy")));
+        assert!(read_session_file(&dirs, 1).is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
