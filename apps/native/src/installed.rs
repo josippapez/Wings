@@ -54,6 +54,8 @@ pub struct Found {
     pub pages: Vec<FoundPage>,
     /// Its pages for the right-hand sidebar, which open from a title bar button.
     pub sidebars: Vec<FoundPage>,
+    /// Its page for Wings Settings, which `wings.openSettings` shows.
+    pub settings: Option<FoundPage>,
     /// The plugin as the desktop loads it: what every call it makes is checked against.
     pub plugin: Plugin,
     /// One of Wings' own plugins.
@@ -91,6 +93,8 @@ pub struct Installed {
     pub pages: Vec<Page>,
     /// Its right-hand sidebar pages.
     pub sidebars: Vec<Sidebar>,
+    /// Its page for Wings Settings.
+    pub settings: Option<Sidebar>,
     /// The plugin as the desktop loads it, with its icon's SVG.
     pub plugin: Plugin,
     /// One of Wings' own plugins.
@@ -163,6 +167,14 @@ pub fn discover(paths: &PluginPaths) -> Vec<Found> {
                     })
                 })
                 .collect();
+            let settings = contributes.settings.as_ref().and_then(|settings| {
+                Some(FoundPage {
+                    id: "settings".into(),
+                    title: format!("{} settings", plugin.manifest.name),
+                    bundle: bundle(&settings.page)?,
+                    multiple: false,
+                })
+            });
             Some(Found {
                 id: id.clone(),
                 name: plugin.manifest.name.clone(),
@@ -170,6 +182,7 @@ pub fn discover(paths: &PluginPaths) -> Vec<Found> {
                 main,
                 pages,
                 sidebars,
+                settings,
                 builtin: store.is_builtin(id),
                 plugin,
             })
@@ -234,14 +247,58 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                     })
                 })
                 .collect();
+            let settings = found.settings.as_ref().and_then(|settings| {
+                Some(Sidebar {
+                    id: settings.id.clone(),
+                    title: settings.title.clone(),
+                    source: read(&settings.bundle)?.into(),
+                })
+            });
             Some(Installed {
                 id,
                 name: found.name,
                 host,
                 pages,
                 sidebars,
+                settings,
                 plugin: found.plugin,
                 builtin: found.builtin,
+            })
+        })
+        .collect()
+}
+
+/// A page of a running plugin that can be placed on a project's page, with the plugin that runs it.
+#[derive(Clone)]
+pub struct BlockPage {
+    pub plugin: String,
+    pub id: String,
+    pub title: String,
+    /// The least height in points, within the manifest's range.
+    pub min_height: u32,
+    pub host: Arc<PluginHost>,
+    pub source: Arc<str>,
+}
+
+/// The blocks of `installed` that have a native build (`dist/native/<page>.js`), read now.
+pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
+    let (least, most) = wings_plugins::manifest::BLOCK_MIN_HEIGHT;
+    installed
+        .plugin
+        .manifest
+        .contributes
+        .blocks
+        .iter()
+        .filter_map(|block| {
+            let stem = Path::new(&block.page).file_stem()?.to_str()?;
+            let file = native_file(&installed.plugin.dir, stem)?;
+            Some(BlockPage {
+                plugin: installed.id.clone(),
+                id: block.id.clone(),
+                title: block.title.clone(),
+                min_height: block.min_height.unwrap_or(160).clamp(least, most),
+                host: installed.host.clone(),
+                source: fs::read_to_string(file).ok()?.into(),
             })
         })
         .collect()

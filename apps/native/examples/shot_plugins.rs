@@ -1,6 +1,7 @@
 //! Renders Worktrees' installed native sidebar offscreen at 1000 and 640 points wide. The plugin installation and
 //! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
-//! pages, and with `--schedules` Schedules' list and forms, each over made-up data.
+//! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
+//! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, each over made-up data.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -21,7 +22,7 @@ use wings_native::{
     page::{
         PageView,
         plugin::{
-            Access, Env, PanePort, PluginConfig, PluginHost,
+            Access, Env, PaneEntry, PanePort, PluginConfig, PluginHost, SessionEntry,
             ui::{Badge, PaneStatus},
         },
     },
@@ -59,6 +60,18 @@ fn main() {
     }
     if std::env::args().any(|arg| arg == "--schedules") {
         schedules(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--pr-tracker") {
+        pr_tracker(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--session-detail") {
+        session_detail(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--disk") {
+        disk(out);
         return;
     }
     let data = Data::temp();
@@ -125,6 +138,35 @@ impl Env for FixtureEnv {
     fn claude_dirs(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
     }
+    /// The OpenCode session of `session_detail`.
+    fn agent_activity(&self, _: &str) -> Result<serde_json::Value, String> {
+        let info = json!({ "location": { "directory": "/work/api" }, "model": { "id": "gpt-5.1-codex" }, "cost": 0.42,
+            "tokens": { "input": 12_000, "output": 3_100, "reasoning": 900, "cache": { "read": 88_000, "write": 4_000 } } });
+        let now = now_ms();
+        // A call that is still running has no time it completed.
+        let tool = |id: &str, name: &str, ago: u64, took: Option<u64>, state: serde_json::Value| {
+            let mut time = json!({ "created": now - ago });
+            if let Some(took) = took {
+                time["completed"] = (now - ago + took).into();
+            }
+            json!({ "type": "tool", "id": id, "name": name, "state": state, "time": time })
+        };
+        // The service sends the newest message first.
+        let messages = [
+            json!({ "id": "m3", "type": "assistant", "model": { "id": "gpt-5.1-codex" },
+                "tokens": { "input": 2_000, "output": 300, "cache": { "read": 60_000, "write": 0 } }, "content": [
+                tool("c3", "shell", 20_000, None, json!({ "status": "running", "input": { "command": "cargo test" }, "metadata": {} })),
+                tool("c2", "shell", 90_000, Some(1_200), json!({ "status": "completed", "input": { "command": "git commit -m 'Cache the shipping rates'" },
+                    "content": [{ "type": "text", "text": "[main 4f2a9c1] Cache the shipping rates\n 2 files changed" }], "metadata": {} })),
+                tool("c1", "patch", 300_000, Some(80), json!({ "status": "completed", "input": { "patchText": "*** Update File: src/rates.rs" },
+                    "content": [{ "type": "text", "text": "Success. Updated the following files:\nM src/rates.rs" }],
+                    "metadata": { "files": [{ "file": "src/rates.rs" }, { "file": "src/cache.rs" }] } })),
+            ] }),
+            json!({ "id": "m1", "type": "user", "text": "Cache the shipping rates so the cart stops asking for them twice", "time": { "created": now - 330_000 } }),
+        ];
+        serde_json::to_value(wings_agents::agent_activity::normalize(&info, &messages))
+            .map_err(|error| error.to_string())
+    }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         Ok(vec![])
     }
@@ -136,6 +178,35 @@ impl Env for FixtureEnv {
     }
     fn set_badge(&self, _: &str, _: &str, _: Option<Badge>) {}
     fn set_pane_status(&self, _: &str, _: &str, _: Option<PaneStatus>) {}
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+/// An ISO time for a transcript entry, `ago_ms` before now.
+fn iso(ago_ms: u64) -> String {
+    let secs = (now_ms() - ago_ms) / 1000;
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Days since 1970 to a civil date (Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 /// Actual built pages in a fixture host. This does not exercise workspace openView/window routing.
@@ -440,6 +511,542 @@ fn schedules(out: PathBuf) {
                 &mut cx,
                 window,
                 out.join(format!("schedules-{name}-{width}.png")),
+            );
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+/// Session detail's real main and built sidebar over a made-up Claude Code session, whose transcript is written to a
+/// folder of its own, and a made-up OpenCode one. It shows the session working, with rows opened, then the OpenCode
+/// session, then no session at all.
+fn session_detail(out: PathBuf) {
+    const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+    let root = out.join("fixture-session-detail");
+    let minute = 60_000;
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("projects/-work-web")).unwrap();
+    let read = |id: &str, name: &str, ago: u64, input: serde_json::Value| {
+        json!({ "type": "assistant", "uuid": format!("a-{id}"), "timestamp": iso(ago), "message": { "id": format!("m-{id}"), "model": "claude-sonnet-5-5",
+            "usage": { "input_tokens": 4_200, "output_tokens": 800, "cache_read_input_tokens": 110_000, "cache_creation_input_tokens": 1_800 },
+            "content": [{ "type": "tool_use", "id": id, "name": name, "input": input }] } })
+    };
+    let result = |id: &str, ago: u64, text: &str, error: bool| {
+        json!({ "type": "user", "uuid": format!("r-{id}"), "timestamp": iso(ago), "message": { "content": [
+            { "type": "tool_result", "tool_use_id": id, "content": text, "is_error": error }] } })
+    };
+    let lines = [
+        json!({ "type": "user", "uuid": "p1", "timestamp": iso(42 * minute), "message": { "content":
+            "Rework the checkout page so the coupon field sits under the order summary, and keep the totals in sync with the cart." } }),
+        read(
+            "t1",
+            "Read",
+            41 * minute,
+            json!({ "file_path": "/work/web/src/features/checkout/CheckoutPage.tsx" }),
+        ),
+        result(
+            "t1",
+            41 * minute - 120,
+            "import { useCoupon } from '../coupons';",
+            false,
+        ),
+        read(
+            "t2",
+            "Grep",
+            40 * minute,
+            json!({ "pattern": "useCoupon", "path": "src/" }),
+        ),
+        result(
+            "t2",
+            40 * minute - 340,
+            "src/features/checkout/CheckoutPage.tsx:3",
+            false,
+        ),
+        json!({ "type": "assistant", "uuid": "a-t3", "timestamp": iso(38 * minute), "message": { "id": "m-t3", "model": "claude-sonnet-5-5",
+            "usage": { "input_tokens": 4_200, "output_tokens": 1_600, "cache_read_input_tokens": 110_000, "cache_creation_input_tokens": 1_800 },
+            "content": [
+                { "type": "tool_use", "id": "t3", "name": "Edit", "input": { "file_path": "/work/web/src/features/checkout/CheckoutSummary.tsx",
+                    "old_string": "<Total value={subtotal} />", "new_string": "<Total value={subtotal - discount} />" } },
+                { "type": "tool_use", "id": "w1", "name": "TodoWrite", "input": { "todos": [
+                    { "content": "Move the coupon field under the summary", "activeForm": "Moving the coupon field", "status": "completed" },
+                    { "content": "Subtract the discount from the total", "activeForm": "Subtracting the discount", "status": "completed" },
+                    { "content": "Show the discount in the cart", "activeForm": "Showing the discount in the cart", "status": "in_progress" },
+                    { "content": "Update the checkout snapshots", "activeForm": "Updating the snapshots", "status": "pending" }] } }] } }),
+        result(
+            "t3",
+            38 * minute - 42,
+            "The file src/features/checkout/CheckoutSummary.tsx has been updated.",
+            false,
+        ),
+        read(
+            "t4",
+            "Bash",
+            30 * minute,
+            json!({ "command": "git commit -m 'Add a coupon field to the checkout summary'" }),
+        ),
+        result(
+            "t4",
+            30 * minute - 880,
+            "[feature/checkout 9b1c2d3] Add a coupon field to the checkout summary",
+            false,
+        ),
+        read(
+            "t5",
+            "Bash",
+            29 * minute,
+            json!({ "command": "git push origin feature/checkout-redesign" }),
+        ),
+        result(
+            "t5",
+            29 * minute - 2_400,
+            "To github.com:example/shop.git",
+            false,
+        ),
+        read(
+            "t6",
+            "Bash",
+            12 * minute,
+            json!({ "command": "pnpm test -- checkout" }),
+        ),
+        result(
+            "t6",
+            12 * minute - 18_400,
+            "FAIL src/features/checkout/CheckoutSummary.test.tsx\n  ● coupon › keeps the totals in sync\n\n    Expected: 41.2\n    Received: 45",
+            true,
+        ),
+        json!({ "type": "attachment", "uuid": "q1", "timestamp": iso(5 * minute), "attachment": { "type": "queued_command", "humanTurn": true,
+            "prompt": "Also make the coupon discount show in the cart" } }),
+        read(
+            "t7",
+            "Edit",
+            minute,
+            json!({ "file_path": "/work/web/src/routes/cart.tsx", "old_string": "<Total value={subtotal} />", "new_string": "<Total value={subtotal - discount} />" }),
+        ),
+        read(
+            "t8",
+            "Bash",
+            20_000,
+            json!({ "command": "pnpm test -- cart" }),
+        ),
+    ];
+    let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    std::fs::write(
+        root.join(format!("projects/-work-web/{SESSION}.jsonl")),
+        text.join("\n"),
+    )
+    .unwrap();
+
+    let manifest = serde_json::from_str(include_str!(
+        "../../../plugins/session-detail/wings-plugin.json"
+    ))
+    .unwrap();
+    let storage = out.join("fixture-storage-session-detail");
+    let _ = std::fs::remove_dir_all(&storage);
+    let host = PluginHost::with_access(
+        PluginConfig {
+            id: "session-detail".into(),
+            root: storage,
+            scope: "shot".into(),
+        },
+        Access {
+            plugin: wings_plugins::manifest::Plugin {
+                manifest,
+                dir: root.clone(),
+                icon_svg: None,
+            },
+            builtin: false,
+            env: std::sync::Arc::new(FixtureEnv(root.clone())),
+        },
+    );
+    let started_at = now_ms() - 60 * minute;
+    let pane = |id: &str, kind: &str, session: &str, name: &str, state: &str| PaneEntry {
+        pane_id: id.into(),
+        cwd: "/work/web".into(),
+        command: kind.into(),
+        project: "web".into(),
+        project_id: "/work/web".into(),
+        session: Some(SessionEntry {
+            session_id: session.into(),
+            kind: kind.into(),
+            name: Some(name.into()),
+            state: state.into(),
+            started_at,
+        }),
+        focused: false,
+    };
+    let claude = pane("1", "claude", SESSION, "checkout redesign", "working");
+    let opencode = pane("2", "opencode", "ses_shot1", "shipping rates", "working");
+    host.publish_panes(vec![claude, opencode.clone()]);
+    host.start_main(
+        include_str!("../../../plugins/session-detail/dist/native/main.js"),
+        |event| {
+            if let wings_native::page::runtime::Event::Error { message, .. } = event {
+                panic!("{message}");
+            }
+        },
+    )
+    .unwrap();
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.update(actions::bind);
+    let source = include_str!("../../../plugins/session-detail/dist/native/sidebar.js");
+    // What the panes are, the rows to open, and a text the page shows once it has drawn it. 360 is the sidebar's own width.
+    let views: [(&str, Vec<PaneEntry>, &[&str], &str); 4] = [
+        (
+            "claude",
+            vec![
+                pane("1", "claude", SESSION, "checkout redesign", "working"),
+                opencode.clone(),
+            ],
+            &[],
+            "Adding",
+        ),
+        (
+            "opened",
+            vec![
+                pane("1", "claude", SESSION, "checkout redesign", "working"),
+                opencode.clone(),
+            ],
+            &[
+                "Rework the checkout",
+                "CheckoutSummary.tsx",
+                "pnpm test -- checkout",
+            ],
+            "Expected: 41.2",
+        ),
+        (
+            "opencode",
+            vec![opencode],
+            &[],
+            "Cache the shipping rates so",
+        ),
+        ("none", vec![], &[], "No agent session in your panes."),
+    ];
+    for width in [1000.0, 640.0, 360.0] {
+        for (name, panes, rows, expected) in &views {
+            host.publish_panes(panes.clone());
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
+                })
+                .unwrap();
+            let window = handle.into();
+            // A page starts hidden and loads once its tab is shown.
+            handle
+                .read_with(&cx, |view, _| view.set_visible(true))
+                .unwrap();
+            let until = |cx: &mut VisualTestAppContext, text: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle
+                    .read_with(cx, |view, _| view.text().contains(text))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "page did not show {text:?}: {}",
+                        handle.read_with(cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            for row in rows.iter() {
+                until(&mut cx, row);
+                let pressed = handle
+                    .read_with(&cx, |view, _| view.press_row(row, 0))
+                    .unwrap();
+                assert!(pressed, "no row {row}");
+                wait(&mut cx, window, Duration::from_millis(300));
+            }
+            until(&mut cx, expected);
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(
+                &mut cx,
+                window,
+                out.join(format!("session-detail-{name}-{width}.png")),
+            );
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+/// Disk usage's real main and built page: the disks are this Mac's, and the map is of a folder of made-up files, which it
+/// scans for real. The folder is removed afterwards.
+fn disk(out: PathBuf) {
+    let folder = out.join("fixture-disk");
+    let _ = std::fs::remove_dir_all(&folder);
+    // Files of the sizes (in MiB) that give the map a few rings, written out so that they take space on disk.
+    for (path, mib) in [
+        ("Downloads/installer.dmg", 11),
+        ("Downloads/archive.zip", 6),
+        ("Downloads/old/backup.tar", 4),
+        ("Code/app/target/debug.bin", 9),
+        ("Code/app/node_modules/react.bin", 3),
+        ("Code/app/node_modules/vite.bin", 2),
+        ("Photos/2025/trip.raw", 5),
+        ("Photos/2025/party.raw", 3),
+        ("Movies/clip.mov", 7),
+    ] {
+        let file = folder.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mut data = std::fs::File::create(file).unwrap();
+        for _ in 0..mib {
+            std::io::Write::write_all(&mut data, &vec![7u8; 1 << 20]).unwrap();
+        }
+    }
+    std::fs::write(folder.join("notes.txt"), "made up\n").unwrap();
+    let id = folder.to_string_lossy().into_owned();
+    let storage = out.join("fixture-storage-disk");
+    let _ = std::fs::remove_dir_all(&storage);
+    let manifest: wings_plugins::manifest::Manifest =
+        serde_json::from_str(include_str!("../../../plugins/disk/wings-plugin.json")).unwrap();
+    let host = PluginHost::with_access(
+        PluginConfig {
+            id: "disk".into(),
+            root: storage,
+            scope: "shot".into(),
+        },
+        Access {
+            plugin: wings_plugins::manifest::Plugin {
+                manifest,
+                dir: folder.clone(),
+                icon_svg: None,
+            },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(folder.clone())),
+        },
+    );
+    host.publish_projects(vec![wings_native::page::plugin::Project {
+        id: id.clone(),
+        name: "Fixture".into(),
+        path: id,
+    }]);
+    host.start_main(
+        include_str!("../../../plugins/disk/dist/native/main.js"),
+        |event| {
+            if let wings_native::page::runtime::Event::Error { message, .. } = event {
+                panic!("{message}");
+            }
+        },
+    )
+    .unwrap();
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.update(actions::bind);
+    let source = include_str!("../../../plugins/disk/dist/native/map.js");
+    // The Scan buttons come in the page's order: a disk's each, then the home folder's, then the project's, which is the folder.
+    let scan = wings_disk_usage::disks().len() + 1;
+    // What to press to reach each view, one after the other with the text each shows, and what undoes it: main keeps
+    // the Collector between windows.
+    type Steps<'a> = Vec<(&'a str, usize, &'a str)>;
+    let views: [(&str, Steps, Steps); 3] = [
+        ("overview", vec![], vec![]),
+        ("map", vec![("Scan", scan, "Downloads")], vec![]),
+        (
+            "collected",
+            vec![
+                ("Scan", scan, "Downloads"),
+                ("⋯ ▾", 0, "Add to Collector"),
+                ("Add to Collector", 0, "1 item"),
+            ],
+            vec![
+                ("⋯ ▾", 0, "Remove from Collector"),
+                ("Remove from Collector", 0, "Drag folders"),
+            ],
+        ),
+    ];
+    for width in [1000.0, 640.0] {
+        for (name, steps, undo) in &views {
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
+                })
+                .unwrap();
+            let window = handle.into();
+            handle
+                .read_with(&cx, |view, _| view.set_visible(true))
+                .unwrap();
+            let until = |cx: &mut VisualTestAppContext, text: &str| {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !handle
+                    .read_with(cx, |view, _| view.text().contains(text))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "page did not show {text:?}: {}",
+                        handle.read_with(cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            until(&mut cx, "Folders");
+            // The disks come from main, which reads them with `df`.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while handle
+                .read_with(&cx, |view, _| view.text().contains("Looking for disks"))
+                .unwrap()
+            {
+                assert!(Instant::now() < deadline, "the disks never came");
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            let press = |cx: &mut VisualTestAppContext,
+                         (label, nth, shows): &(&str, usize, &str)| {
+                let pressed = handle
+                    .read_with(cx, |view, _| view.press(label, *nth))
+                    .unwrap();
+                assert!(pressed, "no button {label} number {nth}");
+                until(cx, shows);
+            };
+            for step in steps {
+                press(&mut cx, step);
+            }
+            wait(&mut cx, window, Duration::from_millis(500));
+            save(
+                &mut cx,
+                window,
+                out.join(format!("disk-{name}-{width}.png")),
+            );
+            for step in undo {
+                press(&mut cx, step);
+            }
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A page, what it opens with, what to press to reach a view of it, and a text it shows.
+type View<'a> = (
+    &'a str,
+    &'a str,
+    Option<&'a serde_json::Value>,
+    &'a [&'a str],
+    &'a str,
+);
+
+/// PR tracker's built pages over a fixture main (`plugins/pr-tracker/preview/native-host.js`): the project's list, a pull
+/// request opened from it with its description and conversation, its Checks tab, a check's run, and the settings.
+fn pr_tracker(out: PathBuf) {
+    let project = out.join("fixture-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let id = project.to_string_lossy().into_owned();
+    let manifest: wings_plugins::manifest::Manifest = serde_json::from_str(include_str!(
+        "../../../plugins/pr-tracker/wings-plugin.json"
+    ))
+    .unwrap();
+    let host = PluginHost::with_access(
+        PluginConfig {
+            id: "pr-tracker".into(),
+            root: out.join("fixture-storage-pr"),
+            scope: "shot".into(),
+        },
+        Access {
+            plugin: wings_plugins::manifest::Plugin {
+                manifest,
+                dir: project.clone(),
+                icon_svg: None,
+            },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(project.clone())),
+        },
+    );
+    host.publish_projects(vec![wings_native::page::plugin::Project {
+        id: id.clone(),
+        name: "web".into(),
+        path: id.clone(),
+    }]);
+    host.start_main(
+        &include_str!("../../../plugins/pr-tracker/preview/native-host.js")
+            .replace("__ROOT__", &id),
+        |event| {
+            if let wings_native::page::runtime::Event::Error { message, .. } = event {
+                panic!("{message}");
+            }
+        },
+    )
+    .unwrap();
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.update(actions::bind);
+    let tab = include_str!("../../../plugins/pr-tracker/dist/native/pr.js");
+    let settings = include_str!("../../../plugins/pr-tracker/dist/native/settings.js");
+    let args = json!({
+        "provider": "github", "url": "https://github.com/acme/web/pull/482", "number": 482,
+        "repo": "acme/web", "title": "Add retry with backoff to the sync client", "cwd": id,
+    });
+    // The page, what it opens with, what to press to reach each view, and a text it shows.
+    let views: [View; 5] = [
+        ("list", tab, None, &[], "Migrate the settings page"),
+        ("pull", tab, Some(&args), &[], "Conversation"),
+        ("checks", tab, Some(&args), &["Checks"], "Unit tests"),
+        (
+            "run",
+            tab,
+            Some(&args),
+            &["Checks", "Unit tests"],
+            "Install dependencies",
+        ),
+        ("settings", settings, None, &[], "Bitbucket Cloud"),
+    ];
+    for width in [1000.0, 640.0] {
+        for (name, source, args, presses, expected) in views {
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(1500.0)), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin_with_args(&host, source, args, cx))
+                })
+                .unwrap();
+            let window = handle.into();
+            handle
+                .read_with(&cx, |view, _| view.set_visible(true))
+                .unwrap();
+            let until = |cx: &mut VisualTestAppContext, text: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle
+                    .read_with(cx, |view, _| view.text().contains(text))
+                    .unwrap()
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "page did not show {text:?}: {}",
+                        handle.read_with(cx, |view, _| view.text()).unwrap()
+                    );
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            until(
+                &mut cx,
+                if name == "list" {
+                    "Migrate the settings page"
+                } else if name == "settings" {
+                    "Bitbucket Cloud"
+                } else {
+                    "Conversation"
+                },
+            );
+            for (step, label) in presses.iter().enumerate() {
+                let pressed = handle
+                    .read_with(&cx, |view, _| {
+                        if step == 0 {
+                            view.press_chip(label)
+                        } else {
+                            view.press_list_button(label)
+                        }
+                    })
+                    .unwrap();
+                assert!(pressed, "nothing to press for {label}");
+                until(&mut cx, if step == 0 { "Unit tests" } else { expected });
+            }
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(
+                &mut cx,
+                window,
+                out.join(format!("pr-tracker-{name}-{width}.png")),
             );
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }

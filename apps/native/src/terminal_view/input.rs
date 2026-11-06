@@ -170,15 +170,20 @@ impl TerminalView {
     }
 
     pub(super) fn paste(&mut self, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.paste_text(&text, cx);
+        }
+    }
+
+    /// Pastes `text` as the clipboard's would be, without pressing Enter: a plugin's message to the agent in the pane.
+    pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
         let bracketed = self
             .latest
             .lock()
             .unwrap()
             .mode
             .contains(TermMode::BRACKETED_PASTE);
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.send(Command::Input(paste_bytes(&text, bracketed)), cx);
-        }
+        self.send(Command::Input(paste_bytes(text, bracketed)), cx);
     }
 }
 

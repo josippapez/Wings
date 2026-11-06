@@ -1,7 +1,7 @@
 // The hidden space of a disk scan, opened in place of the list: what the scan didn't find, and what can be done about each part.
 
 import type { ReactNode } from "react";
-import { Button, Confirm, Dot, Heading, List, ListItem, Stack, Text, Title } from "wings-plugin-ui";
+import { Bar, Button, Confirm, Dot, Heading, List, ListItem, Row, Scroll, Stack, Text, Title } from "wings-plugin-ui";
 import { bytes } from "../lib/format";
 import type { Hidden } from "../lib/messages";
 import { snapshotLabel } from "./model";
@@ -23,24 +23,28 @@ export interface HiddenPanelProps {
 function Part({ name, note, size, action }: { name: string; note?: string; size: number | null; action?: ReactNode }) {
   return (
     <ListItem className="dk-part">
-      <Dot tone="muted" />
-      <Text truncate>{name}</Text>
-      {size !== null ? <Text numeric tone="muted" className="dk-size">{bytes(size)}</Text> : <span />}
-      {action ?? <span />}
-      {note ? <Text tone="muted" size="tiny" className="dk-part-note">{note}</Text> : null}
+      <Stack gap="xs" grow>
+        <Row gap="m">
+          <Dot tone="muted" />
+          <Text grow truncate>{name}</Text>
+          {size !== null ? <Text numeric tone="muted" className="dk-size">{bytes(size)}</Text> : null}
+          {action}
+        </Row>
+        {note ? <Text tone="muted" size="tiny" className="dk-part-note">{note}</Text> : null}
+      </Stack>
     </ListItem>
   );
 }
 
 export function HiddenPanel({ hidden, mount, confirm, onConfirm, onBack, onPurge, onDeleteSnapshot }: HiddenPanelProps) {
   return (
-    <div className="dk-list">
-      <header className="dk-list-head">
+    <Stack gap="none" grow className="dk-list">
+      <Bar as="header" edge="bottom" gap="xs" className="dk-list-head">
         <Button variant="ghost" size="xs" className="dk-list-back" onClick={onBack}>← Back</Button>
         <Title as="h1">Hidden space</Title>
         <Text tone="muted" size="small">{bytes(hidden.size)}</Text>
-      </header>
-      <div className="dk-list-body">
+      </Bar>
+      <Scroll className="dk-list-body">
         <Stack gap="m">
           {hidden.purgeable > 0 ? (
             <Stack gap="s">
@@ -125,7 +129,7 @@ export function HiddenPanel({ hidden, mount, confirm, onConfirm, onBack, onPurge
             </List>
           ) : null}
         </Stack>
-      </div>
-    </div>
+      </Scroll>
+    </Stack>
   );
 }

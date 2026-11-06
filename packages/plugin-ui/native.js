@@ -6,6 +6,8 @@ import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
 import { errorMessage } from "wings-plugin-sdk/async";
 import { ago } from "wings-plugin-sdk/format";
+import { emojify, parseBlocks, parseInline } from "./markdown.js";
+import { languageOf } from "./highlight.js";
 
 const root = { id: 0, type: "#root", props: {}, children: [] };
 let nextId = 1;
@@ -163,7 +165,7 @@ export function Toolbar({ title, actions, children }) {
 }
 /** Children one under the other. */
 export function Stack(props) {
-  return h("Stack", pick(props, ["gap", "grow"]), props.children);
+  return h("Stack", pick(props, ["gap", "grow", "width"]), props.children);
 }
 /** Children side by side, centred. */
 export function Row(props) {
@@ -171,7 +173,7 @@ export function Row(props) {
 }
 /** Text with a tone and size. */
 export function Text(props) {
-  return h("Text", pick(props, ["tone", "size", "weight", "mono", "numeric", "truncate", "clamp", "grow"]), props.children);
+  return h("Text", pick(props, ["tone", "size", "weight", "mono", "numeric", "truncate", "clamp", "grow", "onClick"]), props.children);
 }
 /** A button. `onClick` gets an event with `preventDefault` and `stopPropagation`, which do nothing here. `busy` shows a spinner and ignores clicks. */
 export function Button(props) {
@@ -240,13 +242,15 @@ export function Loading({ children }) {
 export function Card(props) {
   return h("Card", null, props.children);
 }
-/** A section heading. */
+/** A section heading, with `actions` like chips or a button on its right. */
 export function Heading(props) {
-  return h("Heading", null, props.children);
+  const heading = h("Heading", null, props.children);
+  return has(props.actions) ? h(Row, { justify: "between", wrap: true }, heading, props.actions) : heading;
 }
 /** A status dot. */
 export function Dot(props) {
-  return h("Dot", pick(props, ["tone"]));
+  const color = rgbaOf(props.color)?.[0];
+  return h("Dot", { ...pick(props, ["tone"]), ...(color !== undefined && { color }) });
 }
 /** A labelled bar with its percentage; `note` goes under it, and `levels` are where it turns warn and danger. */
 export function Gauge(props) {
@@ -353,6 +357,14 @@ export function Menu({ label, items, variant, disabled }) {
 export function Icon({ name }) {
   return h("Icon", { name });
 }
+/** Small figures side by side, label over value. */
+export function Stats({ items }) {
+  return h(
+    Row,
+    { gap: "l", wrap: true },
+    items.map((item) => h(Stack, { key: item.label, gap: "none" }, h(Text, { tone: "muted", size: "tiny" }, item.label), h(Text, { tone: item.tone, weight: "medium" }, item.value))),
+  );
+}
 /** Label and value pairs, one per line. */
 export function Properties({ items }) {
   return h(
@@ -367,6 +379,138 @@ export function Time({ iso, prefix, now }) {
   return text ? h(Fragment, null, prefix, text) : null;
 }
 
+export { ago, languageOf };
+/** The native app has no clipboard call for a page yet, so this rejects. */
+export function copyText() {
+  return Promise.reject(new Error("Copying isn't available in the native app yet"));
+}
+/** A page's or a card's title: 14px, or 15px with `size="large"`. `truncate` cuts it to one line. */
+export function Title({ size, truncate, children }) {
+  return h(Text, { size: size === "large" ? "large" : undefined, weight: "strong", truncate }, children);
+}
+/** A round avatar with the initials of `name`. */
+export function Avatar({ name, size }) {
+  return h("Avatar", { name, ...(size && { size }) });
+}
+/** A block that stands in for content that is loading. */
+export function Skeleton({ width, height }) {
+  return h("Skeleton", pick({ width, height }, ["width", "height"]));
+}
+/** Skeletons that stand in for a section, announced once as `label`. */
+export function Skeletons({ label, children }) {
+  return h(Stack, { gap: "s" }, h(Spinner, { label }), children);
+}
+/** A row of `SummaryChip`s under a page's header. */
+export function Summary({ children }) {
+  return h(Row, { gap: "m", wrap: true }, children);
+}
+/** One fact in a `Summary`: a button when it has `onClick`, a badge otherwise. */
+export function SummaryChip({ tone, onClick, children }) {
+  return onClick ? h(Button, { variant: "outline", onClick }, tone ? h(Text, { tone }, children) : children) : h(Badge, { variant: "outline", tone }, children);
+}
+/** A conversation or an activity feed. */
+export function Timeline({ children }) {
+  return h(Stack, { gap: "m" }, children);
+}
+/** Tabs that pick one of `items` over the panel they show, `children`: the chips of `Chips`. */
+export function Tabs({ label, items, value, onChange, children }) {
+  return h(Stack, { gap: "m" }, h(Chips, { label, options: items, value, onChange }), children);
+}
+/** A `list` pane and a `detail` pane side by side. */
+export function ListDetail({ list, detail, empty, listWidth = 280 }) {
+  return h(Row, { gap: "l", align: "start" }, h(Stack, { width: listWidth }, list), h(Stack, { grow: true }, has(detail) ? detail : (empty ?? h(Empty, { title: "Nothing selected" }))));
+}
+
+const openLink = (href) => () => {
+  globalThis.wings.openUrl(href).catch(() => {});
+};
+/** The spans of a line of Markdown: a nested `Text` for each look, a link that opens in the browser. */
+function mdSpans(text) {
+  return parseInline(text).map((part, i) => {
+    switch (part.kind) {
+      case "code":
+        return h(Text, { key: i, mono: true }, part.text);
+      case "strong":
+        return h(Text, { key: i, weight: "strong" }, emojify(part.text));
+      case "del":
+        return h(Text, { key: i, tone: "muted" }, emojify(part.text));
+      case "image":
+        return part.alt ? h(Fragment, { key: i }, part.alt) : null;
+      case "link":
+        return h(Text, { key: i, onClick: openLink(part.href) }, emojify(part.text));
+      case "em":
+        return h(Fragment, { key: i }, emojify(part.text));
+      default:
+        return h(Fragment, { key: i }, part.text);
+    }
+  });
+}
+function mdBlocks(blocks) {
+  return blocks.map((b, i) => {
+    switch (b.kind) {
+      case "details":
+        return h(Disclosure, { key: i, summary: mdSpans(b.summary) }, mdBlocks(b.blocks));
+      case "heading":
+        return h(Text, { key: i, weight: "strong", size: b.level <= 2 ? "large" : undefined }, mdSpans(b.text));
+      case "list":
+        return h(
+          Stack,
+          { key: i, gap: "xs" },
+          b.items.map((item, j) =>
+            h(
+              Row,
+              { key: j, gap: "s", align: "baseline" },
+              item.depth ? h(Stack, { width: item.depth * 16 }) : null,
+              h(Text, { tone: "muted" }, item.checked === null ? (b.ordered ? `${j + 1}.` : "•") : item.checked ? "☑" : "☐"),
+              h(Text, { grow: true }, mdSpans(item.text)),
+            ),
+          ),
+        );
+      case "code":
+        return h(CodeBlock, { key: i, code: b.text, lang: b.lang?.split(/\s/)[0] || undefined, title: b.lang || undefined });
+      case "quote":
+        return h(Row, { key: i, gap: "s", align: "start" }, h(Text, { tone: "muted" }, "▎"), h(Text, { tone: "muted", grow: true }, mdSpans(b.text)));
+      case "rule":
+        return h(Text, { key: i, tone: "muted" }, "────────────────");
+      case "table":
+        return h(
+          Stack,
+          { key: i, gap: "xs" },
+          h(Row, { gap: "m" }, b.head.map((cell, j) => h(Text, { key: j, weight: "strong", grow: true }, mdSpans(cell)))),
+          b.rows.map((row, r) => h(Row, { key: r, gap: "m", align: "start" }, row.map((cell, j) => h(Text, { key: j, grow: true }, mdSpans(cell))))),
+        );
+      default:
+        return h(Text, { key: i }, mdSpans(b.text));
+    }
+  });
+}
+/** Markdown as nodes, drawn from the same parser as `wings-plugin-ui`'s. No HTML is parsed; images show as their alt text. */
+export function Markdown({ source, inline }) {
+  return inline ? h(Text, null, mdSpans(source)) : h(Stack, { gap: "m" }, mdBlocks(parseBlocks(source)));
+}
+/** Code, from `code` or from `lines` of `{ text, n?, kind?, highlighted? }`, in a card. It isn't colored by language. */
+export function CodeBlock({ code, lines, title, label, busy }) {
+  const rows = lines ?? String(code ?? "").split("\n").map((text) => ({ text }));
+  return h(
+    Card,
+    null,
+    h(
+      Stack,
+      { gap: "none" },
+      title ? h(Text, { tone: "muted", size: "tiny" }, title) : null,
+      busy ? h(Spinner, { label: label ?? "Loading" }) : null,
+      rows.map((row, i) =>
+        h(
+          Row,
+          { key: i, gap: "m", align: "baseline" },
+          row.n === undefined ? null : h(Text, { mono: true, size: "tiny", tone: "muted", numeric: true }, String(row.n)),
+          h(Text, { mono: true, size: "small", grow: true, tone: row.kind === "added" ? "success" : row.kind === "removed" ? "danger" : undefined, weight: row.highlighted ? "strong" : undefined }, row.text || " "),
+        ),
+      ),
+    ),
+  );
+}
+
 /** The project the page is about, read once: `undefined` until the app says, then the project, or `null` when none is open. */
 export function useProject() {
   const [project, setProject] = useState(undefined);
@@ -375,10 +519,26 @@ export function useProject() {
   }, []);
   return project;
 }
-/** What `wings.openView` opened the tab with. The app opens a native page without arguments, so it is always `null`. */
-export function useViewArgs() {
-  return null;
+/** What `wings.openView` opened the tab with, as `check` reads it, or `null` when there were no args or `check` returns `null` or `undefined` for them. Read once. */
+export function useViewArgs(check) {
+  const [args] = useState(() => {
+    const raw = globalThis.wings.viewArgs();
+    return raw === null ? null : (check(raw) ?? null);
+  });
+  return args;
 }
+/** Shows `children(project)` once the app says which project the page is about, keyed by the project's id. */
+export function ProjectGate({ loading = "Loading…", empty, children }) {
+  const project = useProject();
+  if (project === undefined) return h(Loading, null, loading);
+  if (project === null) return h(Empty, { title: empty?.title ?? "No project", description: empty?.description });
+  return h(Fragment, { key: project.id }, children(project));
+}
+/** The state of a tab or a block: the app keeps it for as long as the page is open, not across restarts. `check` is not used. */
+export function useTabState(initial) {
+  return useState(initial);
+}
+export const useBlockState = useTabState;
 /** Runs the page's async actions and keeps what its buttons and error card show, as `useAction` of `wings-plugin-ui` does. */
 export function useAction() {
   const [running, setRunning] = useState(0);
@@ -398,4 +558,53 @@ export function useAction() {
   }, []);
   const clear = useCallback(() => setError(null), []);
   return { run, busy: running > 0, error, clear };
+}
+
+/** `[0xRRGGBB, alpha]` of a CSS `#rrggbb`, `rgb(r, g, b)` or `rgba(r, g, b, a)` colour; undefined for any other. */
+function rgbaOf(css) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(css ?? "");
+  if (hex) return [parseInt(hex[1], 16), 1];
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(css ?? "");
+  if (!rgb || [rgb[1], rgb[2], rgb[3]].some((part) => Number(part) > 255)) return undefined;
+  return [(Number(rgb[1]) << 16) | (Number(rgb[2]) << 8) | Number(rgb[3]), rgb[4] === undefined ? 1 : Math.min(1, Number(rgb[4]))];
+}
+
+/** A strip across its parent, like a page's header or footer, with a hairline on its `edge`. */
+export function Bar({ edge, gap, children }) {
+  return h("Bar", pick({ edge, gap }, ["edge", "gap"]), children);
+}
+/** A column that scrolls when its content is taller than the room it has, and takes what is left of its parent. */
+export function Scroll({ children }) {
+  return h("Scroll", null, children);
+}
+/** Two panes side by side: `start` is `defaultSize` points wide and `end` takes the rest. The app has no handle to drag yet. */
+export function Split({ start, end, defaultSize }) {
+  return h("Split", pick({ defaultSize }, ["defaultSize"]), slot("start", start), slot("end", end));
+}
+/** Wedges in rings round a centre with two lines of text in it, for a disk map. The page lays the wedges out. */
+export function Sunburst(props) {
+  const { rings, wedges, selected, title, detail, up, onPoint, onSelect } = props;
+  return h("Sunburst", {
+    rings,
+    selected,
+    title,
+    detail,
+    up,
+    wedges: wedges.map((wedge) => {
+      const [rgb, alpha] = rgbaOf(wedge.color) ?? [0, 1];
+      return [wedge.from, wedge.to, wedge.ring, rgb, alpha * (wedge.alpha ?? 1)];
+    }),
+    ...(onPoint && { onPoint: (event) => onPoint(event.index) }),
+    ...(onSelect && { onSelect: (event) => onSelect(event.index, { meta: event.meta === true }) }),
+  });
+}
+/** Calls `load` when the component mounts and each time it changes, then every `ms` while the app is focused. */
+export function usePoll(load, ms) {
+  useEffect(() => {
+    if (globalThis.wings.focused) load();
+    const timer = setInterval(() => {
+      if (globalThis.wings.focused) load();
+    }, ms);
+    return () => clearInterval(timer);
+  }, [load, ms]);
 }

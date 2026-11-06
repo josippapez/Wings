@@ -1,5 +1,7 @@
 claude.svg is the Claude spark from https://claude.ai/favicon.svg, a trademark of Anthropic, shown only to mark a
-pane that runs Claude Code, as in the desktop app. Every other icon here is from Lucide, under the license below.
+pane that runs Claude Code, as in the desktop app. opencode.svg is the opencode mark (the desktop's `opencode-icon.tsx`),
+MIT, Copyright (c) 2025 opencode, https://github.com/anomalyco/opencode/blob/dev/LICENSE. Every other icon here is from
+Lucide, under the license below.
 
 Icons from Lucide (lucide-react 1.52.0), https://lucide.dev
 

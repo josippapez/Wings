@@ -1,6 +1,7 @@
 // The disk map: the folder at the centre, and what's in it as rings of wedges around it.
 
-import { useLayoutEffect, useMemo, useRef, type DragEvent } from "react";
+import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type DragEvent } from "react";
+import { Stack } from "wings-plugin-ui";
 
 import { bytes } from "../lib/format";
 import type { Entry } from "../lib/messages";
@@ -40,7 +41,7 @@ export const MIN_ANGLE = 0.02;
 /** How long the map takes to zoom into a folder or back out. */
 const ZOOM_MS = 350;
 /** How opaque a collected wedge is. */
-const FADED = 0.3;
+export const FADED = 0.3;
 /** Half the width of the line between wedges, in pixels. */
 const GAP = 0.5;
 
@@ -252,7 +253,7 @@ export function paint(ctx: Ctx, scene: Scene) {
 
 // ---------- the map ----------
 
-interface Model {
+export interface Model {
   tree: Entry;
   focus: string;
   hidden: number | null;
@@ -285,11 +286,26 @@ const titleOf = (tree: Entry, focus: string, rootLabel: string | undefined) => (
 const itemsOf = (n: number) => `${n.toLocaleString()} ${n === 1 ? "item" : "items"}`;
 const targetKey = (t: Target) => (t.kind === "entry" ? `entry ${t.path}` : t.kind === "smaller" ? `smaller ${t.folder}` : "hidden");
 
+/** Whether a click on the centre of a map of `model` goes up. */
+export const canGoUp = (model: Pick<Model, "tree" | "focus">) => model.focus !== model.tree.name;
+
+/** What the middle says: what the pointer is on, or else the folder at the centre, `focused`. */
+export function wordsOf(model: Pick<Model, "tree" | "focus" | "rootLabel">, focused: Entry | null, hover: Segment | "center" | null): Words {
+  const details = (size: number, items: number | null) => (items === null ? [bytes(size)] : [`${bytes(size)} · ${itemsOf(items)}`, bytes(size)]);
+  if (hover && hover !== "center") {
+    if (hover.target.kind === "hidden") return { title: hover.name, details: details(hover.size, null) };
+    return { title: hover.name, details: details(hover.size, hover.target.kind === "smaller" || hover.entry?.kind === "dir" ? hover.items : null) };
+  }
+  const up = hover === "center" && canGoUp(model) ? parentPath(model.focus) : null;
+  if (up !== null) return { title: `Up to ${titleOf(model.tree, up, model.rootLabel)}`, details: ["Click to go up"] };
+  return { title: titleOf(model.tree, model.focus, model.rootLabel), details: focused ? details(focused.size, focused.items) : [] };
+}
+
 /** The wedges in the Collector, and the ones inside a folder that is. */
 const fadedCache = new WeakMap<Layout, { collected: ReadonlySet<string>; faded: ReadonlySet<Segment> }>();
 const NONE: ReadonlySet<Segment> = new Set();
 
-function fadedIn(layout: Layout, collected: ReadonlySet<string>): ReadonlySet<Segment> {
+export function fadedIn(layout: Layout, collected: ReadonlySet<string>): ReadonlySet<Segment> {
   if (collected.size === 0) return NONE;
   const known = fadedCache.get(layout);
   if (known?.collected === collected) return known.faded;
@@ -481,21 +497,11 @@ class MapView {
   }
 
   private canGoUp() {
-    return this.model !== null && this.model.focus !== this.model.tree.name;
+    return this.model !== null && canGoUp(this.model);
   }
 
-  /** What the middle says: what the pointer is on, or else the folder at the centre. */
   private words(): Words {
-    const model = this.model!;
-    const hover = this.hover;
-    const details = (size: number, items: number | null) => (items === null ? [bytes(size)] : [`${bytes(size)} · ${itemsOf(items)}`, bytes(size)]);
-    if (hover && hover !== "center") {
-      if (hover.target.kind === "hidden") return { title: hover.name, details: details(hover.size, null) };
-      return { title: hover.name, details: details(hover.size, hover.target.kind === "smaller" || hover.entry?.kind === "dir" ? hover.items : null) };
-    }
-    const up = hover === "center" && this.canGoUp() ? parentPath(model.focus) : null;
-    if (up !== null) return { title: `Up to ${titleOf(model.tree, up, model.rootLabel)}`, details: ["Click to go up"] };
-    return { title: titleOf(model.tree, model.focus, model.rootLabel), details: this.focused ? details(this.focused.size, this.focused.items) : [] };
+    return wordsOf(this.model!, this.focused, this.hover);
   }
 
   // ---------- the pointer ----------
@@ -568,14 +574,14 @@ class MapView {
   }
 }
 
-export function Sunburst(props: SunburstProps) {
+/** The map on a canvas. */
+function CanvasSunburst(props: SunburstProps) {
   const { tree, focus, hidden, collected, selected, rootLabel, onPoint, onClick, onUp } = props;
-  const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const view = useRef<MapView | null>(null);
 
   useLayoutEffect(() => {
-    const map = new MapView(canvas.current!, host.current!, { onPoint, onClick, onUp });
+    const map = new MapView(canvas.current!, canvas.current!.parentElement!, { onPoint, onClick, onUp });
     view.current = map;
     return () => {
       map.destroy();
@@ -596,7 +602,7 @@ export function Sunburst(props: SunburstProps) {
   }, [tree, focus, rootLabel]);
 
   return (
-    <div className="sunburst" ref={host}>
+    <Stack gap="none" className="sunburst">
       <canvas
         ref={canvas}
         role="img"
@@ -608,6 +614,16 @@ export function Sunburst(props: SunburstProps) {
         onDragStart={(e) => view.current?.dragStart(e)}
         onDragEnd={() => view.current?.leave()}
       />
-    </div>
+    </Stack>
   );
+}
+
+/** The map: on a canvas, or in the native app by the app's own `Sunburst`, which the web build leaves out. */
+export function Sunburst(props: SunburstProps) {
+  const [native, setNative] = useState<ComponentType<SunburstProps> | null>(null);
+  useEffect(() => {
+    if (WINGS_NATIVE) void import("./sunburst-native").then((m) => setNative(() => m.NativeSunburst));
+  }, []);
+  if (!WINGS_NATIVE) return <CanvasSunburst {...props} />;
+  return native ? createElement(native, props) : null;
 }

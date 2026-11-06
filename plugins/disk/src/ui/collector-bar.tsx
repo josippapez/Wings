@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { basename } from "wings-plugin-sdk/format";
-import { Button, Icon, List, ListItem, Row, Spinner, Text, Title } from "wings-plugin-ui";
+import { Bar, Button, Icon, List, ListItem, Row, Spinner, Stack, Text, Title } from "wings-plugin-ui";
 import { bytes } from "../lib/format";
 import type { Collected } from "../lib/messages";
 import { parentPath } from "../lib/tree";
@@ -56,7 +56,9 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
   const start = () => setPhase(countdown > 0 ? { kind: "counting", left: countdown } : { kind: "moving" });
 
   return (
-    <section
+    <Bar
+      as="section"
+      edge="top"
       className="dk-collector"
       aria-label="Collector"
       data-over={over ? "" : undefined}
@@ -82,7 +84,7 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
         if (dropped.length) onDrop(dropped);
       }}
     >
-      <div className="dk-collector-head">
+      <Row className="dk-collector-head">
         <Button variant="ghost" size="icon-xs" className="dk-fold" aria-expanded={open} aria-label="Show what is in the Collector" onClick={() => setOpen(!open)}>
           <Icon name="chevron-down" />
         </Button>
@@ -90,7 +92,7 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
         {phase.kind === "counting" ? (
           <>
             <Text className="dk-collector-text" aria-hidden>Moving {count(items.length, "item")}, {bytes(total)}, to the Trash in {phase.left} s</Text>
-            <span className="dk-sr-only" role="status">Moving {count(items.length, "item")} to the Trash in {countdown} seconds. Cancel to stop.</span>
+            {WINGS_NATIVE ? null : <Text className="dk-sr-only" role="status">Moving {count(items.length, "item")} to the Trash in {countdown} seconds. Cancel to stop.</Text>}
           </>
         ) : phase.kind === "moving" ? (
           <Row gap="s" className="dk-collector-text">
@@ -105,14 +107,14 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
         ) : (
           <Button key="trash" variant="destructive" size="sm" busy={phase.kind === "moving"} disabled={empty} onClick={start}>Move to Trash</Button>
         )}
-      </div>
+      </Row>
 
       {messages.length ? (
-        <div className="dk-collector-messages">
+        <Stack gap="s">
           {messages.map((m) => (
             <Dismissible key={m.id} tone={m.tone} onDismiss={() => onDismiss(m.id)}>{m.text}</Dismissible>
           ))}
-        </div>
+        </Stack>
       ) : null}
 
       {open ? (
@@ -122,10 +124,10 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
           <List compact className="dk-collector-list" aria-label="In the Collector">
             {items.map((item) => (
               <ListItem key={item.path} className="dk-collector-item">
-                <div className="dk-place-text">
+                <Stack gap="none" grow>
                   <Text truncate>{basename(item.path)}</Text>
                   <Text tone="muted" size="tiny" truncate title={item.path}>{parentPath(item.path)}</Text>
-                </div>
+                </Stack>
                 <Text numeric tone="muted" className="dk-size">{bytes(item.size)}</Text>
                 <Button variant="ghost" size="xs" aria-label={`Reveal ${basename(item.path)} in Finder`} onClick={() => onReveal(item.path)}>Reveal</Button>
                 <Button variant="ghost" size="icon-xs" aria-label={`Remove ${basename(item.path)} from the Collector`} title="Remove" onClick={() => onRemove(item.path)}>×</Button>
@@ -134,6 +136,6 @@ export function CollectorBar({ items, total, open: startOpen = false, countdown 
           </List>
         )
       ) : null}
-    </section>
+    </Bar>
   );
 }

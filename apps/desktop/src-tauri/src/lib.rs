@@ -1,4 +1,3 @@
-mod agent_activity;
 mod applog;
 mod ai;
 mod bench;
@@ -56,7 +55,7 @@ use tauri::{
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 // The agent modules live in the shared crate; the rest of the app still names them `crate::detect` and so on.
-use wings_agents::{detect, opencode, program_status};
+use wings_agents::{agent_activity, detect, opencode, program_status};
 
 use claude::SessionSummary;
 use detect::{Agent, AgentKind, AgentState, Detector, PaneInfo, PaneProbe};

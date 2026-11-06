@@ -109,12 +109,12 @@ const ROW_LABEL_MAX: usize = 40;
 const ROW_VALUE_MAX: usize = 200;
 
 /// JS's `string.length`.
-fn units(text: &str) -> usize {
+pub(in crate::page::plugin) fn units(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
 /// JS's `text.slice(0, max)`, without splitting a character in two.
-fn slice(text: &str, max: usize) -> String {
+pub(in crate::page::plugin) fn slice(text: &str, max: usize) -> String {
     let mut used = 0;
     text.chars()
         .take_while(|c| {

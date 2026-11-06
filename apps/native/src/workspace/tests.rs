@@ -40,6 +40,8 @@ pub(super) fn open_sized(
     config.projects = None;
     config.agents = None;
     config.plugins = None;
+    config.project_info = None;
+    config.sessions = None;
     change(&mut config);
     let build =
         move |window: &mut Window, cx: &mut Context<Workspace>| Workspace::new(config, window, cx);
@@ -506,7 +508,7 @@ fn font_size_steps_within_the_desktop_range_and_comes_back_after_a_relaunch() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-fn state(window: &TestAppWindow<Workspace>) -> (Vec<Active>, Active) {
+pub(super) fn state(window: &TestAppWindow<Workspace>) -> (Vec<Active>, Active) {
     window.read(|workspace, _| (workspace.tabs(), workspace.active()))
 }
 
@@ -810,7 +812,7 @@ fn switching_projects_keeps_each_projects_plugin_pages_open() {
         config.project = alpha.clone();
         config.plugins = Some(data.paths());
     });
-    window.update(|w, window, cx| assert!(w.open_plugin_view("demo", "fixture", window, cx)));
+    window.update(|w, window, cx| assert!(w.open_plugin_view("demo", "fixture", None, window, cx)));
     assert_eq!(state(&window).1, Plugin(1));
 
     window.update(|w, window, cx| w.switch_project(beta.clone(), window, cx));
@@ -823,6 +825,6 @@ fn switching_projects_keeps_each_projects_plugin_pages_open() {
         state(&window),
         (vec![Terminal(0), Plugin(1), Issues], Plugin(1))
     );
-    window.update(|w, window, cx| assert!(!w.open_plugin_view("demo", "plain", window, cx)));
+    window.update(|w, window, cx| assert!(!w.open_plugin_view("demo", "plain", None, window, cx)));
     std::fs::remove_dir_all(dir).unwrap();
 }

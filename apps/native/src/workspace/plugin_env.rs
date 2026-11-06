@@ -24,7 +24,8 @@ use wings_spaces::{
 use crate::{
     agents::AgentKind,
     page::plugin::{
-        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SessionEntry, ToolCall,
+        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SectionRow, SessionEntry,
+        ToolCall,
         ui::{Badge, PaneStatus},
     },
     ports,
@@ -89,6 +90,16 @@ pub(super) enum UiEvent {
         plugin: String,
         view: String,
     },
+    /// Paste a message into the prompt of the agent in a pane.
+    SendToAgent {
+        pane: String,
+        text: String,
+        reply: crate::page::runtime::Reply,
+    },
+    /// Show a plugin's settings page.
+    OpenSettings {
+        plugin: String,
+    },
     /// The project list changed, as a plugin made a worktree.
     Projects,
     Git(Vec<String>),
@@ -106,6 +117,17 @@ pub(super) enum UiEvent {
     Notice {
         title: String,
         body: String,
+    },
+    ProjectSection {
+        plugin: String,
+        project: String,
+        section: String,
+        rows: Option<Vec<SectionRow>>,
+    },
+    SectionSort {
+        plugin: String,
+        section: String,
+        sort: String,
     },
 }
 
@@ -284,6 +306,44 @@ impl Env for AppEnv {
         self.running.builtin(plugin)
     }
 
+    fn emit(&self, from: &str, name: &str, data: &serde_json::Value) {
+        self.running.emit(from, name, data);
+    }
+
+    fn secret_get(&self, plugin: &str, scope: &str, name: &str) -> Result<Option<String>, String> {
+        crate::secrets::get(plugin, scope, name)
+    }
+
+    fn secret_set(&self, plugin: &str, scope: &str, name: &str, value: &str) -> Result<(), String> {
+        crate::secrets::set(plugin, scope, name, value)
+    }
+
+    fn secret_delete(&self, plugin: &str, scope: &str, name: &str) -> Result<(), String> {
+        crate::secrets::delete(plugin, scope, name)
+    }
+
+    fn send_to_agent(&self, pane: &str, text: &str, reply: crate::page::runtime::Reply) {
+        if self
+            .events
+            .try_send(UiEvent::SendToAgent {
+                pane: pane.to_owned(),
+                text: text.to_owned(),
+                reply: reply.clone(),
+            })
+            .is_err()
+        {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
+
+    fn open_settings(&self, plugin: &str) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::OpenSettings {
+                plugin: plugin.to_owned(),
+            })
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+
     fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
         self.running.call_tool(call, reply);
     }
@@ -333,6 +393,11 @@ impl Env for AppEnv {
         })
     }
 
+    fn agent_activity(&self, session_id: &str) -> Result<serde_json::Value, String> {
+        let activity = wings_agents::agent_activity::fetch_live(session_id)?;
+        serde_json::to_value(activity).map_err(|error| error.to_string())
+    }
+
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         let shells = self.known.lock().unwrap().shells.clone();
         ports::scan(&shells)
@@ -366,6 +431,31 @@ impl Env for AppEnv {
             plugin: plugin.to_owned(),
             pane: pane.to_owned(),
             status,
+        });
+    }
+
+    fn set_project_section(
+        &self,
+        plugin: &str,
+        project: &str,
+        section: &str,
+        rows: Option<Vec<SectionRow>>,
+    ) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::ProjectSection {
+                plugin: plugin.to_owned(),
+                project: project.to_owned(),
+                section: section.to_owned(),
+                rows,
+            })
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+
+    fn set_section_sort(&self, plugin: &str, section: &str, sort: &str) {
+        self.send(UiEvent::SectionSort {
+            plugin: plugin.to_owned(),
+            section: section.to_owned(),
+            sort: sort.to_owned(),
         });
     }
 }
@@ -452,7 +542,7 @@ impl Workspace {
                     self.close_diff_view(window, cx);
                 }
             }
-            UiEvent::Projects => self.projects = self.spaces.entries(),
+            UiEvent::Projects => self.projects_changed(cx),
             UiEvent::Git(ids) => {
                 for installed in &self.plugins {
                     installed.host.publish_git(&ids);
@@ -462,9 +552,7 @@ impl Workspace {
                 self.open_plugin_pane(plan, reply, window, cx);
             }
             UiEvent::OpenView { plan, reply } => {
-                if plan.args.is_some() {
-                    reply.err("Native view arguments aren't available yet".into());
-                } else if plan.place == "sidebar" {
+                if plan.place == "sidebar" {
                     self.show_sidebar(&plan.plugin, &plan.id, cx);
                     let shown = self
                         .right
@@ -477,13 +565,13 @@ impl Workspace {
                     });
                 } else if plan.place == "tab" {
                     let opened = if plan.new_tab {
-                        self.new_plugin_tab(&plan.plugin, &plan.id, cx)
+                        self.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx)
                             .map(|id| {
                                 self.show(Active::Plugin(id), window, cx);
                             })
                             .is_some()
                     } else {
-                        self.open_plugin_view(&plan.plugin, &plan.id, window, cx)
+                        self.open_plugin_view(&plan.plugin, &plan.id, plan.args, window, cx)
                     };
                     reply.done(if opened {
                         Ok("null".into())
@@ -502,6 +590,10 @@ impl Workspace {
             UiEvent::CloseView { plugin, view } => {
                 self.close_plugin_view(&plugin, &view, window, cx)
             }
+            UiEvent::SendToAgent { pane, text, reply } => {
+                self.send_to_agent(&pane, &text, reply, cx)
+            }
+            UiEvent::OpenSettings { plugin } => self.open_plugin_settings(&plugin, cx),
             UiEvent::Badge {
                 plugin,
                 pane,
@@ -523,6 +615,24 @@ impl Workspace {
                 set(&mut self.plugin_ui.statuses, pane, plugin, status);
             }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
+            UiEvent::ProjectSection {
+                plugin,
+                project,
+                section,
+                rows,
+            } => {
+                let key = super::project_sections::section_key(&plugin, &section);
+                self.sections
+                    .set(std::path::Path::new(&project), &key, rows);
+            }
+            UiEvent::SectionSort {
+                plugin,
+                section,
+                sort,
+            } => {
+                let key = super::project_sections::section_key(&plugin, &section);
+                self.sections.set_sort(&key, &sort);
+            }
         }
         cx.notify();
     }
@@ -598,13 +708,45 @@ impl Workspace {
         reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string());
     }
 
+    /// Pastes a plugin's message into the prompt of the agent in `pane`, as the desktop's `sendToAgent` does: only an agent
+    /// gets it, since a shell would run the text, and not one waiting on an answer, which the text would be taken for.
+    /// Enter is never pressed (the desktop presses it only while "Let agents message each other" is on, a setting this
+    /// app doesn't have), so the answer is `{ submitted: false }`.
+    fn send_to_agent(
+        &mut self,
+        pane: &str,
+        text: &str,
+        reply: crate::page::runtime::Reply,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.plugin_pane(pane) else {
+            return reply.err(format!("unknown pane {pane}"));
+        };
+        let Some(agent) = self.agents.get(&id) else {
+            return reply.err(format!(
+                "Pane {pane} isn't running an agent, so Wings won't type into it: a shell would run the text."
+            ));
+        };
+        if agent.state == crate::agents::AgentState::Blocked {
+            return reply.err(format!(
+                "The agent in pane {pane} is waiting for {}. Try again once it's past that.",
+                agent.waiting_for.as_deref().unwrap_or("an answer")
+            ));
+        }
+        let Some(view) = self.terminal(id) else {
+            return reply.err(format!("unknown pane {pane}"));
+        };
+        view.update(cx, |view, cx| view.paste_text(text, cx));
+        reply.ok(serde_json::json!({ "submitted": false }).to_string());
+    }
+
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.
     fn plugin_pane(&self, pane: &str) -> Option<usize> {
         let pane = pane.parse().ok()?;
         self.panes.contains_key(&pane).then_some(pane)
     }
 
-    fn show_notice(&mut self, title: String, body: String, cx: &mut Context<Self>) {
+    pub(super) fn show_notice(&mut self, title: String, body: String, cx: &mut Context<Self>) {
         let ui = &mut self.plugin_ui;
         let id = ui.next_notice;
         ui.next_notice += 1;
@@ -825,6 +967,15 @@ impl Workspace {
             .filter(|agent| agent.kind == AgentKind::Claude)
             .filter_map(|agent| Some((agent.pane_id.clone(), agent.session_id.clone()?)))
             .collect()
+    }
+
+    /// Tells the plugins allowed to read agent activity which OpenCode sessions did something, as `wings.onAgentActivity`'s events.
+    pub(super) fn publish_agent_activity(&self, sessions: &[String]) {
+        for session in sessions {
+            for installed in &self.plugins {
+                installed.host.publish_agent_activity(session);
+            }
+        }
     }
 
     /// Gives each plugin allowed the entry's type the entries Claude wrote, as `wings.onTranscript`'s events.

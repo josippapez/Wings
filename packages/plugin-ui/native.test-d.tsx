@@ -60,7 +60,6 @@ export const sameProps: [
   Takes<typeof NativeSelect, typeof Select>,
   Takes<typeof NativeStack, typeof Stack>,
   Takes<typeof NativeSpinner, typeof Spinner>,
-  Takes<typeof NativeText, typeof Text>,
   Takes<typeof NativeToolbar, typeof Toolbar>,
   Takes<typeof NativeCombobox, typeof Combobox>,
   Takes<typeof NativeField, typeof Field>,
@@ -72,6 +71,7 @@ export const sameProps: [
   // A handler gets the native event, so only the other props are the same.
   Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick"> ? true : never,
   Props<typeof NativeChip> extends Omit<Props<typeof Chip>, "onClick"> ? true : never,
+  Props<typeof NativeText> extends Omit<Props<typeof Text>, "onClick"> ? true : never,
   Props<typeof NativeTextInput> extends Omit<Props<typeof TextInput>, "onChange"> ? true : never,
   Props<typeof NativeTextarea> extends Omit<Props<typeof Textarea>, "onChange"> ? true : never,
 ] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
@@ -118,3 +118,12 @@ export const notNative = [
   // @ts-expect-error a select's handler gets the value picked, not an event
   <NativeSelect options={[{ value: "a", label: "A" }]} onChange={(event: MouseEvent) => event.clientX} />,
 ];
+
+import { Stats as NativeStats } from "./native";
+
+export const figures = (
+  <NativeStack>
+    <NativeStats items={[{ label: "Status", value: "Working", tone: "warn" }]} />
+    <NativeHeading actions={<NativeButton>Filter</NativeButton>}>Recent activity</NativeHeading>
+  </NativeStack>
+);

@@ -284,7 +284,7 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
         };
     focused(&app, &mut window, "main", true);
     window.update(|w, window, cx| {
-        assert!(w.open_plugin_view("visibility", "one", window, cx));
+        assert!(w.open_plugin_view("visibility", "one", None, window, cx));
     });
     focused(&app, &mut window, "one", true);
     assert_eq!(
@@ -292,7 +292,7 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
         false
     );
     window.update(|w, window, cx| {
-        assert!(w.open_plugin_view("visibility", "two", window, cx));
+        assert!(w.open_plugin_view("visibility", "two", None, window, cx));
     });
     focused(&app, &mut window, "one", false);
     focused(&app, &mut window, "two", true);
@@ -1086,4 +1086,68 @@ fn dev_servers_from_the_dev_root_badges_a_pane_that_listens_and_its_button_opens
     // Stop the server, so the shell isn't left holding it.
     window.update(|w, window, cx| w.focus_pane(0, window, cx));
     window.simulate_keystroke("ctrl-c");
+}
+
+#[test]
+fn a_tab_opened_with_args_reads_them_and_takes_new_ones_by_starting_over() {
+    let data = Data::temp();
+    let page = |key: &str| format!("wings.storage.set('{key}', {{ seen: wings.viewArgs() }});");
+    let (one, many) = (page("one"), page("many"));
+    data.install_script(
+        "argsy",
+        json!({ "contributes": { "views": [
+            { "id": "one", "title": "One", "page": "dist/one.html", "opens": ["tab"], "newTab": true },
+            { "id": "many", "title": "Many", "page": "dist/many.html", "opens": ["tab"], "newTab": true, "multiple": true }
+        ] } }),
+        "",
+        &[("one", &one), ("many", &many)],
+        "args-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let seen =
+        |app: &TestApp, window: &mut TestAppWindow<Workspace>, key: &str, expected: Value| {
+            until(app, window, &format!("{key} never read {expected}"), |_| {
+                data.saved("argsy", "args-scope", key)
+                    .is_some_and(|value| value["seen"] == expected)
+            });
+        };
+    let tabs = |window: &mut TestAppWindow<Workspace>, view: &str| {
+        window.read(|w, _| w.plugin_tabs.iter().filter(|tab| tab.view == view).count())
+    };
+    let frame = |window: &mut TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            w.plugin_tabs
+                .iter()
+                .find(|tab| tab.view == "one")
+                .map(|tab| tab.page.entity_id())
+        })
+    };
+    let open = |window: &mut TestAppWindow<Workspace>, view: &str, args: Option<Value>| {
+        window.update(|w, window, cx| {
+            assert!(w.open_plugin_view("argsy", view, args, window, cx));
+        });
+    };
+
+    open(&mut window, "one", None);
+    seen(&app, &mut window, "one", Value::Null);
+    let first = frame(&mut window);
+
+    // A tab that is open with no args takes the first ones by starting over, and the same ones again change nothing.
+    open(&mut window, "one", Some(json!({ "n": 1 })));
+    seen(&app, &mut window, "one", json!({ "n": 1 }));
+    let second = frame(&mut window);
+    assert_ne!(first, second);
+    open(&mut window, "one", Some(json!({ "n": 1 })));
+    open(&mut window, "one", None);
+    assert_eq!(frame(&mut window), second);
+    open(&mut window, "one", Some(json!({ "n": 2 })));
+    seen(&app, &mut window, "one", json!({ "n": 2 }));
+    assert_ne!(frame(&mut window), second);
+    assert_eq!(tabs(&mut window, "one"), 1);
+
+    // A `multiple` page opens a tab for each args, and shows the one that has them already.
+    for (args, count) in [(1, 1), (2, 2), (1, 2)] {
+        open(&mut window, "many", Some(json!({ "n": args })));
+        assert_eq!(tabs(&mut window, "many"), count, "args {args}");
+    }
 }

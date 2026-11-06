@@ -9,6 +9,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::fmt;
 
+mod sunburst;
+pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
+
 /// The largest tree JSON the host parses.
 pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_NODES: usize = 5_000;
@@ -72,7 +75,8 @@ macro_rules! choice {
 choice!(Gap { M = "m", None = "none", Xs = "xs", S = "s", L = "l" });
 choice!(Align { Center = "center", Start = "start", Baseline = "baseline" });
 choice!(Justify { Start = "start", End = "end", Between = "between" });
-choice!(TextSize { Normal = "normal", Small = "small", Tiny = "tiny" });
+choice!(Edge { None = "none", Top = "top", Bottom = "bottom" });
+choice!(TextSize { Normal = "normal", Small = "small", Tiny = "tiny", Large = "large" });
 choice!(Weight { Normal = "normal", Medium = "medium", Strong = "strong" });
 choice!(
     /// The names `Icon` draws.
@@ -146,6 +150,12 @@ pub enum Node {
     Input(Input),
     Icon(Icon),
     Graph(Graph),
+    Avatar(Avatar),
+    Skeleton(Skeleton),
+    Scroll(Scroll),
+    Split(Split),
+    Bar(Bar),
+    Sunburst(Sunburst),
 }
 
 /// A named part of the component it's in.
@@ -176,6 +186,8 @@ pub struct Stack {
     pub id: u64,
     pub gap: Gap,
     pub grow: bool,
+    /// A fixed width in points, for a column beside others.
+    pub width: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -200,6 +212,8 @@ pub struct Text {
     pub truncate: bool,
     pub clamp: bool,
     pub grow: bool,
+    /// What to send back to the page when the text is clicked, for a link inside a line of text.
+    pub on_click: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -286,6 +300,57 @@ pub struct Dot {
     pub id: u64,
     /// Green, the plain colour, when there is none.
     pub tone: Option<Tone>,
+    /// `0xRRGGBB`, a colour from the page's data, which wins over the tone.
+    pub color: Option<u32>,
+}
+
+/// A column that scrolls and fills what is left of its parent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scroll {
+    pub id: u64,
+    pub children: Vec<Node>,
+}
+
+/// A strip across its parent, a page's header or footer: padded like a toolbar, with a hairline on one edge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bar {
+    pub id: u64,
+    pub edge: Edge,
+    pub gap: Gap,
+    pub children: Vec<Node>,
+}
+
+/// Two panes side by side: `start` is `size` points wide, `end` takes the rest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Split {
+    pub id: u64,
+    pub size: f32,
+    pub start: Vec<Node>,
+    pub end: Vec<Node>,
+}
+
+/// A round avatar with the initials of a name, on a colour that depends only on the name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Avatar {
+    pub id: u64,
+    pub name: String,
+    pub large: bool,
+}
+
+/// How wide a skeleton is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Length {
+    Points(f32),
+    Percent(f32),
+}
+
+/// A block that stands in for content that is loading.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Skeleton {
+    pub id: u64,
+    /// The whole width when there is none.
+    pub width: Option<Length>,
+    pub height: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -586,7 +651,13 @@ impl Node {
             | Node::SearchField(_)
             | Node::Input(_)
             | Node::Icon(_)
-            | Node::Graph(_) => vec![],
+            | Node::Graph(_)
+            | Node::Avatar(_)
+            | Node::Skeleton(_)
+            | Node::Sunburst(_) => vec![],
+            Node::Scroll(n) => vec![&n.children],
+            Node::Split(n) => vec![&n.start, &n.end],
+            Node::Bar(n) => vec![&n.children],
             Node::Gauge(n) => vec![&n.note],
             Node::List(n) => vec![&n.children],
             Node::ListItem(n) => vec![&n.children],
@@ -663,6 +734,12 @@ impl Walk {
                 | "Textarea"
                 | "Icon"
                 | "Graph"
+                | "Avatar"
+                | "Skeleton"
+                | "Scroll"
+                | "Split"
+                | "Bar"
+                | "Sunburst"
         ) {
             return Ok(None);
         }
@@ -696,6 +773,9 @@ impl Walk {
                 id,
                 gap: choice(&props, "gap"),
                 grow: on("grow"),
+                width: number(&props, "width")
+                    .filter(|width| *width > 0.0)
+                    .map(|width| width.min(2_000.0) as f32),
                 children: parts(children),
             }),
             "Row" => Node::Row(Row {
@@ -716,7 +796,31 @@ impl Walk {
                 truncate: on("truncate"),
                 clamp: on("clamp"),
                 grow: on("grow"),
+                on_click: str_prop(&props, "onClick")
+                    .filter(|handler| valid_handler(handler))
+                    .map(str::to_owned),
                 children: parts(children),
+            }),
+            "Avatar" => Node::Avatar(Avatar {
+                id,
+                name: cut(str_prop(&props, "name").unwrap_or_default().to_owned()),
+                large: str_prop(&props, "size") == Some("large"),
+            }),
+            "Skeleton" => Node::Skeleton(Skeleton {
+                id,
+                width: match props.get("width") {
+                    Some(Value::Number(width)) => width
+                        .as_f64()
+                        .filter(|width| *width > 0.0)
+                        .map(|width| Length::Points(width.min(2_000.0) as f32)),
+                    Some(Value::String(width)) => width
+                        .strip_suffix('%')
+                        .and_then(|percent| percent.trim().parse::<f32>().ok())
+                        .filter(|percent| *percent > 0.0)
+                        .map(|percent| Length::Percent(percent.min(100.0))),
+                    _ => None,
+                },
+                height: number(&props, "height").unwrap_or(14.0).clamp(1.0, 400.0) as f32,
             }),
             "Button" => {
                 let disabled = on("disabled");
@@ -790,7 +894,35 @@ impl Walk {
                 id,
                 children: parts(children),
             }),
-            "Dot" => Node::Dot(Dot { id, tone }),
+            "Dot" => Node::Dot(Dot {
+                id,
+                tone,
+                color: number(&props, "color")
+                    .filter(|color| (0.0..=16_777_215.0).contains(color))
+                    .map(|color| color as u32),
+            }),
+            "Scroll" => Node::Scroll(Scroll {
+                id,
+                children: parts(children),
+            }),
+            "Bar" => Node::Bar(Bar {
+                id,
+                edge: choice(&props, "edge"),
+                gap: choice(&props, "gap"),
+                children: parts(children),
+            }),
+            "Split" => {
+                let mut slots = Slots(children);
+                Node::Split(Split {
+                    id,
+                    size: number(&props, "defaultSize")
+                        .unwrap_or(280.0)
+                        .clamp(120.0, 1_000.0) as f32,
+                    start: slots.take("start"),
+                    end: slots.take("end"),
+                })
+            }
+            "Sunburst" => Node::Sunburst(sunburst::parse(id, &props)?),
             "Gauge" => {
                 let mut slots = Slots(children);
                 Node::Gauge(Gauge {
@@ -1349,5 +1481,33 @@ mod tests {
         props["rows"][0]["lines"] = serde_json::json!([0, 1, 0, 0]);
         props["rows"][0]["subject"] = serde_json::json!("x".repeat(4097));
         assert!(graph(1, &props).is_err());
+    }
+    #[test]
+    fn parses_a_split_a_scroll_a_bar_and_a_dot_with_a_colour() {
+        let parsed = tree(json!([
+            {"id":1,"type":"Split","props":{"defaultSize":320},"children":[
+                {"id":2,"type":"Slot","props":{"name":"start"},"children":[
+                    {"id":3,"type":"Bar","props":{"edge":"bottom","gap":"xs"},"children":[{"id":4,"type":"#text","text":"Head"}]},
+                    {"id":5,"type":"Scroll","props":{},"children":[{"id":6,"type":"Dot","props":{"color":1122867},"children":[]}]}]},
+                {"id":7,"type":"Slot","props":{"name":"end"},"children":[{"id":8,"type":"Dot","props":{"color":99999999},"children":[]}]}]}
+        ]))
+        .unwrap();
+        let Node::Split(split) = &parsed.children[0] else {
+            panic!("a split")
+        };
+        assert_eq!(split.size, 320.0);
+        let (Node::Bar(bar), Node::Scroll(scroll)) = (&split.start[0], &split.start[1]) else {
+            panic!("a bar over a scroll")
+        };
+        assert_eq!((bar.edge, bar.gap), (Edge::Bottom, Gap::Xs));
+        assert!(matches!(
+            &scroll.children[0],
+            Node::Dot(Dot {
+                color: Some(0x112233),
+                ..
+            })
+        ));
+        // A colour that isn't one is no colour.
+        assert!(matches!(&split.end[0], Node::Dot(Dot { color: None, .. })));
     }
 }

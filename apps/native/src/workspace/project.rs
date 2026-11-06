@@ -1,11 +1,10 @@
-//! The current project: its sidebar list, entering it the first time and switching between projects.
+//! The current project: entering it the first time, switching between projects and its bar above the panes.
 
 use std::path::PathBuf;
 
 use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb, rgba};
 
 use crate::{
-    agents,
     icons::{Icon, icon},
     plugin, saved, theme,
 };
@@ -15,8 +14,6 @@ use super::{HAIRLINE, Parked, Workspace};
 /// The desktop's `--sidebar-accent` behind the shown project, and `--sidebar-foreground`.
 pub(super) const SIDEBAR_ACCENT: u32 = 0xffffff14;
 pub(super) const SIDEBAR_FOREGROUND: u32 = 0xe4e0da;
-/// The desktop sidebar's starting width.
-pub(super) const SIDEBAR_WIDTH: f32 = 248.0;
 
 impl Workspace {
     /// The current project's saved tabs, or one new terminal, and its Issues.
@@ -56,9 +53,12 @@ impl Workspace {
             return;
         }
         self.save(cx);
+        self.side.touch(&self.config.project);
+        self.side.touch(&path);
         let current = Parked {
             terminals: std::mem::take(&mut self.terminals),
             plugin_tabs: std::mem::take(&mut self.plugin_tabs),
+            project_page: self.project_page.take(),
             active: self.active,
         };
         self.parked.insert(self.config.project.clone(), current);
@@ -67,142 +67,12 @@ impl Workspace {
             Some(parked) => {
                 self.terminals = parked.terminals;
                 self.plugin_tabs = parked.plugin_tabs;
+                self.project_page = parked.project_page;
                 self.show(parked.active, window, cx);
                 self.load_issues(cx);
             }
             None => self.enter_project(window, cx),
         }
-    }
-
-    /// The desktop's project list, left of the tabs.
-    pub(super) fn sidebar_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows: Vec<_> = (0..self.projects.len())
-            .map(|index| self.sidebar_row(index, cx))
-            .collect();
-        let projects = div()
-            .id("sidebar")
-            .role(Role::Navigation)
-            .aria_label("Projects")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .p(px(8.0))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .h(px(28.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .px(px(8.0))
-                    .text_size(px(12.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child("Projects"),
-            )
-            .children(rows);
-        // The project list scrolls, and the agents stay at the bottom, as in the desktop sidebar.
-        div()
-            .w(px(SIDEBAR_WIDTH))
-            .flex_none()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(projects)
-            .children(self.plugin_list(cx))
-            .children(self.agent_list(cx))
-            .child(div().p(px(8.0)).pt_0().child(self.settings_row(cx)))
-            .into_any_element()
-    }
-
-    fn sidebar_row(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let entry = &self.projects[index];
-        let active = entry.path == self.config.project;
-        let states = self.project_agents(&entry.path);
-        let count = states.len();
-        let glyph = match agents::roll_up(states) {
-            Some(state) => div()
-                .size(px(16.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(crate::ui::status_dot(("project-dot", index), state))
-                .into_any_element(),
-            None => project_icon(entry.child),
-        };
-        let path = entry.path.clone();
-        div()
-            .id(("project", index))
-            .role(Role::Button)
-            .aria_label(entry.name.clone())
-            .aria_selected(active)
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .py(px(3.0))
-            .pr(px(8.0))
-            .pl(px(if entry.child { 24.0 } else { 8.0 }))
-            .rounded(px(8.0))
-            .cursor_pointer()
-            .when(active, |row| row.bg(rgba(SIDEBAR_ACCENT)))
-            .when(!active, |row| {
-                row.hover(|style| style.bg(rgba(theme::HOVER)))
-            })
-            .on_click(
-                cx.listener(move |this, _, window, cx| {
-                    this.switch_project(path.clone(), window, cx)
-                }),
-            )
-            .child(glyph)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .line_height(px(18.0))
-                            .font_weight(if active {
-                                gpui::FontWeight::SEMIBOLD
-                            } else {
-                                gpui::FontWeight::MEDIUM
-                            })
-                            .text_color(rgb(SIDEBAR_FOREGROUND))
-                            .child(entry.name.clone()),
-                    )
-                    .when_some(entry.branch.clone(), |text, branch| {
-                        text.child(
-                            div()
-                                .truncate()
-                                .text_size(px(11.0))
-                                .line_height(px(16.0))
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
-                                .child(branch),
-                        )
-                    }),
-            )
-            .when(count == 0 && entry.pinned, |row| {
-                row.child(
-                    icon(Icon::Pin, 12.0, theme::MUTED_FOREGROUND)
-                        .opacity(0.7)
-                        .mx(px(4.0)),
-                )
-            })
-            .when(count > 0, |row| {
-                row.child(
-                    div()
-                        .px(px(4.0))
-                        .text_size(px(11.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                        .child(count.to_string()),
-                )
-            })
     }
 
     /// The desktop's project bar above the panes: the project's name and its branch.
@@ -273,18 +143,4 @@ impl Workspace {
             });
         }));
     }
-}
-
-/// A folder for a project, a branch for its worktrees, as in the desktop sidebar.
-fn project_icon(worktree: bool) -> AnyElement {
-    icon(
-        if worktree {
-            Icon::GitBranch
-        } else {
-            Icon::Folder
-        },
-        16.0,
-        theme::MUTED_FOREGROUND,
-    )
-    .into_any_element()
 }

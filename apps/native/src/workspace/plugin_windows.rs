@@ -72,7 +72,49 @@ impl Workspace {
         .filter(|file| file.is_file())
         .ok_or("The view has no native window page")?;
         let source = std::fs::read_to_string(file).map_err(|error| error.to_string())?;
-        let host = installed.host.clone();
+        let title = view.title.clone();
+        let (width, height) = (view.width.unwrap_or(1100), view.height.unwrap_or(760));
+        self.show_plugin_window(key, plugin, &source, title, (width, height), cx)
+    }
+
+    /// Shows the plugin's settings page, which `wings.openSettings` asks for, in a window of its own.
+    pub(super) fn open_plugin_settings(&mut self, plugin: &str, cx: &mut Context<Self>) {
+        let key = (plugin.to_owned(), "settings".to_owned());
+        if let Some(handle) = self.plugin_ui.windows.get(&key)
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            return;
+        }
+        let Some(page) = self
+            .plugins
+            .iter()
+            .find(|installed| installed.id == plugin)
+            .and_then(|installed| installed.settings.as_ref())
+        else {
+            return;
+        };
+        let (source, title) = (page.source.clone(), page.title.clone());
+        let _ = self.show_plugin_window(key, plugin, &source, title, (640, 760), cx);
+    }
+
+    fn show_plugin_window(
+        &mut self,
+        key: (String, String),
+        plugin: &str,
+        source: &str,
+        title: String,
+        (width, height): (u32, u32),
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let host = self
+            .plugins
+            .iter()
+            .find(|installed| installed.id == plugin)
+            .ok_or_else(|| format!("{plugin} is turned off or not installed"))?
+            .host
+            .clone();
         let windows: Vec<_> = self
             .plugins
             .iter()
@@ -84,15 +126,8 @@ impl Workspace {
             .position(|installed| installed.id == plugin)
             .unwrap();
         let window_id = windows[owner].id;
-        let title = view.title.clone();
-        let bounds = Bounds::centered(
-            None,
-            size(
-                px(view.width.unwrap_or(1100) as f32),
-                px(view.height.unwrap_or(760) as f32),
-            ),
-            cx,
-        );
+        let source = source.to_owned();
+        let bounds = Bounds::centered(None, size(px(width as f32), px(height as f32)), cx);
         let handle = cx
             .open_window(
                 WindowOptions {

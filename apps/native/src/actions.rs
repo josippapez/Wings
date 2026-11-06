@@ -37,6 +37,12 @@ actions!(
         DecreaseFontSize,
         ResetFontSize,
         OpenSettings,
+        TogglePalette,
+        OpenHistory,
+        PaletteNext,
+        PalettePrevious,
+        PaletteFirst,
+        PaletteLast,
     ]
 );
 
@@ -85,15 +91,23 @@ pub fn bind(cx: &mut App) {
         terminal_key("cmd-f", "ctrl-shift-f", Find),
         terminal_key("cmd-c", "ctrl-shift-c", Copy),
         terminal_key("cmd-v", "ctrl-shift-v", Paste),
-        // The desktop's "+" is the = key, with or without Shift.
-        key("cmd-=", "ctrl-shift-=", IncreaseFontSize),
+        // The desktop's "+" is the = key, with or without Shift. The first binding is the one the palette shows.
         key("cmd-+", "ctrl-shift-+", IncreaseFontSize),
+        key("cmd-=", "ctrl-shift-=", IncreaseFontSize),
         key("cmd--", "ctrl-shift--", DecreaseFontSize),
         key("cmd-0", "ctrl-shift-0", ResetFontSize),
         key("cmd-b", "ctrl-shift-b", ToggleSidebar),
         // Plain Ctrl elsewhere, as in the desktop app: no shell uses Ctrl-comma.
         key("cmd-,", "ctrl-,", OpenSettings),
         key("cmd-\\", "ctrl-shift-\\", ToggleSidebar),
+        key("cmd-k", "ctrl-shift-k", TogglePalette),
+        // The palette's list, which the arrow keys would otherwise move the search field's caret in.
+        KeyBinding::new("down", PaletteNext, Some("Palette")),
+        KeyBinding::new("ctrl-n", PaletteNext, Some("Palette")),
+        KeyBinding::new("up", PalettePrevious, Some("Palette")),
+        KeyBinding::new("ctrl-p", PalettePrevious, Some("Palette")),
+        KeyBinding::new("home", PaletteFirst, Some("Palette")),
+        KeyBinding::new("end", PaletteLast, Some("Palette")),
     ];
     bindings.extend(
         digits
@@ -170,6 +184,8 @@ pub fn menus() -> Vec<Menu> {
     let mut view = vec![
         MenuItem::action("Toggle Sidebar", ToggleSidebar),
         MenuItem::action("Find in Pane", Find),
+        MenuItem::action("Command Palette", TogglePalette),
+        MenuItem::action("Past Sessions", OpenHistory),
         MenuItem::separator(),
         MenuItem::action("Increase Font Size", IncreaseFontSize),
         MenuItem::action("Decrease Font Size", DecreaseFontSize),
@@ -199,8 +215,9 @@ mod tests {
     fn every_menu_command_with_a_desktop_shortcut_has_its_key() {
         let mut app = TestApp::new();
         app.update(bind);
-        let unbound: [&dyn Action; 7] = [
+        let unbound: [&dyn Action; 8] = [
             &CloseTab,
+            &OpenHistory,
             &MoveTabLeft,
             &MoveTabRight,
             &ZoomPane,

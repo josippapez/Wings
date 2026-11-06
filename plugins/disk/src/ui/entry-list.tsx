@@ -1,8 +1,9 @@
 // The list beside the map: the folder the pointer is on, or else the one in the middle, with what is in it. A folder can hold
-// thousands of entries, so only the rows in view are drawn: every row is `ROW` tall and sits where its place in the list says.
+// thousands of entries, so in a window only the rows in view are drawn: every row is `ROW` tall and sits where its place in the
+// list says. The native app has no scroll position to read, so it draws the biggest rows and a button for more.
 
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
-import { Dot, Icon, List, ListButton, ListItem, Menu, Row, Spinner, Text, Title } from "wings-plugin-ui";
+import { Bar, Button, Dot, Icon, List, ListButton, ListItem, Menu, Row, Scroll, Spinner, Stack, Text, Title } from "wings-plugin-ui";
 import { bytes } from "../lib/format";
 import { collectedOf, type Extras, type Row as ListRow } from "./list-model";
 import { count } from "./model";
@@ -35,6 +36,10 @@ export interface EntryListProps {
 
 /** How tall a row is, in px. */
 const ROW = 28;
+/** The room above the first row, in px. */
+const TOP = 6;
+/** How many rows the native list draws at first, and how many more each press of its button adds. The page may hold 5,000 nodes. */
+const NATIVE_ROWS = 120;
 /** Rows drawn past either edge of the view, so a scroll shows rows at once. */
 const OVERSCAN = 8;
 
@@ -94,30 +99,34 @@ function EntryRow({ row, index, total, color, selected, pointed, collected, open
         <Text grow truncate>{label}</Text>
         {collected ? <Icon name="check" label="In the Collector" className="dk-collected" /> : null}
         {row.restricted ? <Text tone="info" size="small">No access</Text> : <Text numeric tone="muted" className="dk-size">{bytes(row.size)}</Text>}
-        {loading ? <Spinner className="dk-chevron" /> : row.openable || row.kind === "hidden" || row.kind === "smaller" ? <Icon name="chevron-down" className="dk-chevron" data-open={open ? "" : undefined} /> : <span className="dk-chevron-space" />}
+        {loading ? <Spinner className="dk-chevron" /> : row.openable || row.kind === "hidden" || row.kind === "smaller" ? <Icon name="chevron-down" className="dk-chevron" data-open={open ? "" : undefined} /> : <Stack gap="none" className="dk-chevron-space" />}
       </ListButton>
       {menu.length ? (
         <Menu className="dk-row-menu" variant="ghost" size="icon-xs" align="end" label="⋯" aria-label={`More for ${row.name}`} items={menu} />
       ) : (
-        <span className="dk-row-menu" />
+        <Stack gap="none" className="dk-row-menu" />
       )}
     </ListItem>
   );
 }
 
-export function EntryList({ name, size, items, refining, rows, swatch, selected, pointed, collected, smallerOpen, extras, onRow, onFocusRow, onToggleCollect, onReveal, onPreview }: EntryListProps) {
+const hints = (rows: ListRow[]) =>
+  rows.some((r) => r.restricted) ? <Text tone="muted" size="small" className="dk-hint">Folders marked No access need Full Disk Access for Wings. Allow it in System Settings, under Privacy & Security, to see them.</Text> : null;
+
+type BodyProps = Pick<EntryListProps, "name" | "rows" | "swatch" | "selected" | "pointed" | "collected" | "smallerOpen" | "extras" | "onRow" | "onFocusRow" | "onToggleCollect" | "onReveal" | "onPreview">;
+
+/** The rows in a window: only the ones in view are drawn, each where its place in the list puts it. */
+function WindowedRows({ name, rows, swatch, selected, pointed, collected, smallerOpen, extras, onRow, onFocusRow, onToggleCollect, onReveal, onPreview }: BodyProps) {
   const total = rows.length;
-  const body = useRef<HTMLDivElement>(null);
-  const place = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLElement>(null);
   const hadFocus = useRef(false);
   const [range, setRange] = useState<[number, number]>([0, 0]);
 
   // The rows in view, from where the list is scrolled to. It follows the scroll, the size of the pane and the number of rows.
   const read = () => {
     const el = body.current;
-    const at = place.current;
-    if (!el || !at) return;
-    const top = el.scrollTop - at.offsetTop;
+    if (!el) return;
+    const top = el.scrollTop - TOP;
     const first = Math.max(0, Math.floor(top / ROW) - OVERSCAN);
     const last = Math.min(total, Math.ceil((top + el.clientHeight) / ROW) + OVERSCAN);
     setRange((r) => (r[0] === first && r[1] === last ? r : [first, last]));
@@ -141,10 +150,9 @@ export function EntryList({ name, size, items, refining, rows, swatch, selected,
   // The row that is picked comes into view, and keeps the keyboard when it was in the list: the arrow keys move the pick.
   useLayoutEffect(() => {
     const el = body.current;
-    const at = place.current;
     const i = selected === null ? -1 : rows.findIndex((r) => r.key === selected);
-    if (!el || !at || i < 0) return;
-    const top = at.offsetTop + i * ROW;
+    if (!el || i < 0) return;
+    const top = TOP + i * ROW;
     if (top < el.scrollTop) el.scrollTop = i === 0 ? 0 : top;
     else if (top + ROW > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW - el.clientHeight;
     read();
@@ -155,8 +163,93 @@ export function EntryList({ name, size, items, refining, rows, swatch, selected,
   }, [selected, range]);
 
   return (
-    <div className="dk-list" data-folder={name}>
-      <header className="dk-list-head">
+    <Scroll
+      className="dk-list-body"
+      ref={body}
+      onFocus={() => {
+        hadFocus.current = true;
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) hadFocus.current = false;
+      }}
+    >
+      {total === 0 ? (
+        <Text tone="muted" size="small" className="dk-hint">Nothing in this folder.</Text>
+      ) : (
+        <Stack gap="none" className="dk-rows" style={{ height: total * ROW, marginTop: TOP }}>
+          <List compact aria-label={`In ${name}`}>
+            {rows.slice(range[0], range[1]).map((row, i) => (
+              <EntryRow
+                key={row.key}
+                row={row}
+                index={range[0] + i}
+                total={total}
+                color={row.entryKind === "dir" ? swatch(row) : null}
+                selected={row.key === selected}
+                pointed={row.key === pointed}
+                collected={collected.has(row.path)}
+                open={row.kind === "smaller" ? smallerOpen : false}
+                loading={row.kind === "smaller" && smallerOpen && extras?.state === "loading"}
+                onRow={onRow}
+                onFocusRow={onFocusRow}
+                onToggleCollect={onToggleCollect}
+                onReveal={onReveal}
+                onPreview={onPreview}
+              />
+            ))}
+          </List>
+        </Stack>
+      )}
+      {hints(rows)}
+    </Scroll>
+  );
+}
+
+/** The first rows of the list, with a button for more: the native app can't tell which rows are in view. */
+function FirstRows({ name, rows, swatch, selected, pointed, collected, smallerOpen, extras, onRow, onFocusRow, onToggleCollect, onReveal, onPreview }: BodyProps) {
+  const [shown, setShown] = useState(NATIVE_ROWS);
+  return (
+    <Scroll>
+      {rows.length === 0 ? (
+        <Text tone="muted" size="small">Nothing in this folder.</Text>
+      ) : (
+        <List compact aria-label={`In ${name}`}>
+          {rows.slice(0, shown).map((row, i) => (
+            <EntryRow
+              key={row.key}
+              row={row}
+              index={i}
+              total={rows.length}
+              color={row.entryKind === "dir" ? swatch(row) : null}
+              selected={row.key === selected}
+              pointed={row.key === pointed}
+              collected={collected.has(row.path)}
+              open={row.kind === "smaller" ? smallerOpen : false}
+              loading={row.kind === "smaller" && smallerOpen && extras?.state === "loading"}
+              onRow={onRow}
+              onFocusRow={onFocusRow}
+              onToggleCollect={onToggleCollect}
+              onReveal={onReveal}
+              onPreview={onPreview}
+            />
+          ))}
+        </List>
+      )}
+      {rows.length > shown ? (
+        <Button variant="ghost" onClick={() => setShown(shown + NATIVE_ROWS)}>
+          Show more ({rows.length - shown})
+        </Button>
+      ) : null}
+      {hints(rows)}
+    </Scroll>
+  );
+}
+
+export function EntryList({ name, size, items, refining, rows, swatch, selected, pointed, collected, smallerOpen, extras, onRow, onFocusRow, onToggleCollect, onReveal, onPreview }: EntryListProps) {
+  const Rows = WINGS_NATIVE ? FirstRows : WindowedRows;
+  return (
+    <Stack gap="none" grow className="dk-list" data-folder={name}>
+      <Bar as="header" edge="bottom" gap="xs" className="dk-list-head">
         <Title as="h1" truncate title={name}>{name}</Title>
         <Row gap="m" className="dk-list-sub">
           <Text tone="muted" size="small">{bytes(size)}{items > 0 ? `, ${count(items, "item")}` : ""}</Text>
@@ -168,46 +261,8 @@ export function EntryList({ name, size, items, refining, rows, swatch, selected,
           ) : null}
         </Row>
         {smallerOpen && extras?.state === "error" ? <Text tone="danger" size="small">Couldn't read the folder: {extras.message}</Text> : null}
-      </header>
-      <div
-        className="dk-list-body"
-        ref={body}
-        onFocus={() => {
-          hadFocus.current = true;
-        }}
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) hadFocus.current = false;
-        }}
-      >
-        {total === 0 ? (
-          <Text tone="muted" size="small" className="dk-hint">Nothing in this folder.</Text>
-        ) : (
-          <div className="dk-rows" ref={place} style={{ height: total * ROW }}>
-            <List compact aria-label={`In ${name}`}>
-              {rows.slice(range[0], range[1]).map((row, i) => (
-                <EntryRow
-                  key={row.key}
-                  row={row}
-                  index={range[0] + i}
-                  total={total}
-                  color={row.entryKind === "dir" ? swatch(row) : null}
-                  selected={row.key === selected}
-                  pointed={row.key === pointed}
-                  collected={collected.has(row.path)}
-                  open={row.kind === "smaller" ? smallerOpen : false}
-                  loading={row.kind === "smaller" && smallerOpen && extras?.state === "loading"}
-                  onRow={onRow}
-                  onFocusRow={onFocusRow}
-                  onToggleCollect={onToggleCollect}
-                  onReveal={onReveal}
-                  onPreview={onPreview}
-                />
-              ))}
-            </List>
-          </div>
-        )}
-        {rows.some((r) => r.restricted) ? <Text tone="muted" size="small" className="dk-hint">Folders marked No access need Full Disk Access for Wings. Allow it in System Settings, under Privacy & Security, to see them.</Text> : null}
-      </div>
-    </div>
+      </Bar>
+      <Rows name={name} rows={rows} swatch={swatch} selected={selected} pointed={pointed} collected={collected} smallerOpen={smallerOpen} extras={extras} onRow={onRow} onFocusRow={onFocusRow} onToggleCollect={onToggleCollect} onReveal={onReveal} onPreview={onPreview} />
+    </Stack>
   );
 }

@@ -187,6 +187,16 @@ export function Stack({ as = "div", gap, grow, className, ...rest }) {
   return h(as, { ...rest, className: cx("w-stack", className), "data-gap": gap, "data-grow": flag(grow) });
 }
 
+/** A strip across its parent, like a page's header or footer: padded as a toolbar is, with a hairline on the `edge` that faces the page. */
+export function Bar({ edge, gap, className, ...rest }) {
+  return h(Stack, { ...rest, gap, className: cx("w-bar", className), "data-edge": edge });
+}
+
+/** A column that scrolls when what is in it is taller than the room it has, and takes what is left of its parent. */
+export function Scroll({ as = "div", className, ...rest }) {
+  return h(as, { ...rest, className: cx("w-scroll", className) });
+}
+
 /** Text with a tone and size, that can grow to fill a row or truncate with an ellipsis. */
 export function Text({ as = "span", tone, size, weight, mono, numeric, truncate, clamp, grow, className, ...rest }) {
   return h(as, {

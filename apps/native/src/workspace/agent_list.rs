@@ -155,7 +155,7 @@ impl Workspace {
     }
 
     /// Shows the agent's project and tab, and focuses its pane.
-    fn go_to_pane(
+    pub(super) fn go_to_pane(
         &mut self,
         project: PathBuf,
         pane: usize,

@@ -246,7 +246,7 @@ impl Workspace {
     pub(super) fn focused_pane(&self) -> Option<usize> {
         match self.active {
             Active::Terminal(tab) => self.panes(tab).map(|(_, focused)| focused),
-            Active::Plugin(_) | Active::Issues => None,
+            Active::Plugin(_) | Active::Project | Active::Issues => None,
         }
     }
 
@@ -290,7 +290,7 @@ impl Workspace {
 }
 
 /// `/Users/me/x` becomes `~/x`, like the desktop's `tildify`.
-fn tildify(path: &str) -> String {
+pub(super) fn tildify(path: &str) -> String {
     match std::env::home_dir().and_then(|home| Some(path.strip_prefix(home.to_str()?)?.to_owned()))
     {
         Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => {

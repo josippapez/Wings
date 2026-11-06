@@ -3,6 +3,10 @@
 
 mod agent_list;
 mod diff;
+#[cfg(all(test, feature = "test-support"))]
+mod finder_tests;
+mod history;
+mod palette;
 mod pane_card;
 mod panes;
 mod persist;
@@ -13,7 +17,11 @@ mod plugin_ui;
 mod plugin_windows;
 mod plugins;
 mod project;
+mod project_page;
+mod project_sections;
+mod rank;
 mod settings;
+mod sidebar;
 mod status;
 mod tabs;
 #[cfg(all(test, feature = "test-support"))]
@@ -32,8 +40,8 @@ use crate::{
     actions::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
         FocusRight, FocusUp, IncreaseFontSize, Minimize, MoveTabLeft, MoveTabRight, NewTab,
-        NextTab, OpenSettings, PreviousTab, ResetFontSize, SplitDown, SplitRight, ToggleFullScreen,
-        ToggleSidebar, Zoom, ZoomPane,
+        NextTab, OpenHistory, OpenSettings, PreviousTab, ResetFontSize, SplitDown, SplitRight,
+        ToggleFullScreen, TogglePalette, ToggleSidebar, Zoom, ZoomPane,
     },
     agents::{Agent, PaneInfo},
     host::Config,
@@ -80,6 +88,7 @@ struct TerminalTab {
 struct Parked {
     terminals: Vec<TerminalTab>,
     plugin_tabs: Vec<plugins::PluginTab>,
+    project_page: Option<Entity<project_page::ProjectPage>>,
     active: Active,
 }
 
@@ -96,6 +105,8 @@ pub enum Active {
     Terminal(usize),
     /// A page of an installed plugin, by tab id.
     Plugin(usize),
+    /// The project page of the shown project.
+    Project,
     Issues,
 }
 
@@ -109,6 +120,13 @@ pub struct Workspace {
     plugin_env: Arc<plugin_env::AppEnv>,
     /// The panes, badges, status strips and notices of plugins, as the window shows them.
     plugin_ui: plugin_env::PluginUi,
+    /// What plugins list under the projects in the sidebar.
+    sections: project_sections::Sections,
+    /// Where the project pages are kept, if the desktop's data folder is known.
+    project_info: Option<project_page::InfoStore>,
+    /// The shown project's page, once opened: a tab after the plugin pages that stays until it is closed.
+    project_page: Option<Entity<project_page::ProjectPage>>,
+    project_page_focus: FocusHandle,
     /// The badge whose card is open.
     badge_card: Option<plugin_ui::BadgeCard>,
     /// The running plugins that may read Claude's transcripts, for sending them each entry.
@@ -138,12 +156,18 @@ pub struct Workspace {
     /// Other projects' tabs, with their shells still running, while another project is shown.
     parked: HashMap<PathBuf, Parked>,
     sidebar: bool,
+    /// The sidebar's width, order, git counts and peek.
+    side: sidebar::State,
     /// What each pane's agent is doing, from the last detection, by pane.
     agents: HashMap<usize, Agent>,
     /// What each pane runs now, from the last detection.
     pane_info: HashMap<usize, PaneInfo>,
     window_active: bool,
     settings: Option<settings::SettingsDialog>,
+    /// The command palette and the history sheet, one at a time, and the past sessions both search.
+    palette: Option<palette::Palette>,
+    sheet: Option<history::Sheet>,
+    sessions: history::Sessions,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -182,12 +206,20 @@ impl Workspace {
             config.agents.clone().unwrap_or_default(),
             spaces.clone(),
         ));
+        let sessions = history::Sessions::new(config.sessions.clone());
         let mut this = Self {
             terminals: Vec::new(),
             plugin_tabs: Vec::new(),
             plugins: Vec::new(),
             plugin_env,
             plugin_ui: Default::default(),
+            sections: Default::default(),
+            project_info: config
+                .project_info
+                .as_deref()
+                .map(project_page::InfoStore::open),
+            project_page: None,
+            project_page_focus: cx.focus_handle().tab_stop(true),
             badge_card: None,
             transcript_plugins: Vec::new(),
             right: None,
@@ -208,10 +240,14 @@ impl Workspace {
             spaces,
             parked: HashMap::new(),
             sidebar: true,
+            side: Default::default(),
             agents: HashMap::new(),
             pane_info: HashMap::new(),
             window_active: window.is_window_active(),
             settings: None,
+            palette: None,
+            sheet: None,
+            sessions,
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -262,6 +298,7 @@ impl Workspace {
             cx.set_global(TerminalFont(size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)));
         }
         this.sidebar = settings.sidebar_open.unwrap_or(true);
+        this.start_sidebar(&settings, window, cx);
         let installed = |family: &String| cx.text_system().all_font_names().contains(family);
         cx.set_global(TerminalLook {
             family: settings
@@ -368,6 +405,10 @@ impl Render for Workspace {
                 Some(tab) => tab.page.clone().into_any_element(),
                 None => div().into_any_element(),
             },
+            Active::Project => match &self.project_page {
+                Some(page) => page.clone().into_any_element(),
+                None => div().into_any_element(),
+            },
             Active::Issues => self.issues.clone().into_any_element(),
         };
         let mut tabs: Vec<AnyElement> = self
@@ -394,6 +435,18 @@ impl Render for Workspace {
             )
             .into_any_element()
         }));
+        if self.project_page.is_some() {
+            tabs.push(
+                self.tab(
+                    Active::Project,
+                    "Project page".into(),
+                    None,
+                    &self.project_page_focus,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
         tabs.push(
             self.tab(
                 Active::Issues,
@@ -450,7 +503,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 if let Some(pane) = this.focused_pane() {
                     this.close_pane(pane, window, cx);
-                } else if matches!(this.active, Active::Plugin(_)) {
+                } else if matches!(this.active, Active::Plugin(_) | Active::Project) {
                     // A plugin page is a tab of one pane.
                     this.close_active_tab(window, cx);
                 }
@@ -480,17 +533,20 @@ impl Render for Workspace {
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar = !this.sidebar;
-                this.save(cx);
-                cx.notify();
-            }))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_docked(cx)))
+            .on_action(
+                cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenHistory, window, cx| this.open_history(window, cx)),
+            )
             .child(title_bar)
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
+                    .relative()
                     .children(sidebar)
                     .child(
                         div()
@@ -501,9 +557,13 @@ impl Render for Workspace {
                             .child(self.project_bar())
                             .child(div().flex_1().min_h_0().child(body)),
                     )
-                    .children(right),
+                    .children(right)
+                    .children(self.sidebar_peek(cx)),
             )
             .children(self.settings_dialog(cx))
+            .children(self.sheet_layer(cx))
+            .children(self.palette_layer(window, cx))
+            .children(self.remove_dialog(cx))
             .children(notices)
             .into_any_element()
     }

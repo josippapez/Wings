@@ -670,3 +670,423 @@ fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_lis
         main_errors.try_recv()
     );
 }
+
+/// A Claude folder with one session's transcript: a message you sent, an edit that finished, a to-do list, and a test
+/// run that hasn't answered yet.
+fn claude_with_activity() -> PathBuf {
+    // Its own folder each time: the tests run side by side.
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let claude = std::env::temp_dir().canonicalize().unwrap().join(format!(
+        "wings-native-session-detail-claude-{}-{}",
+        std::process::id(),
+        COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    fs::create_dir_all(claude.join("projects/-x")).unwrap();
+    let lines = [
+        json!({ "type": "user", "uuid": "u1", "timestamp": iso(50_000), "message": { "content": "Rework the checkout page" } }),
+        json!({ "type": "assistant", "uuid": "a1", "timestamp": iso(45_000), "message": { "id": "m1", "model": "claude-sonnet-5-5",
+            "usage": { "input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 0 },
+            "content": [
+                { "type": "tool_use", "id": "t1", "name": "Edit", "input": { "file_path": "/work/src/cart.tsx", "old_string": "<Total />", "new_string": "<Total discount />" } },
+                { "type": "tool_use", "id": "t2", "name": "TodoWrite", "input": { "todos": [
+                    { "content": "Add the field", "activeForm": "Adding the field", "status": "in_progress" },
+                    { "content": "Run the tests", "activeForm": "Running the tests", "status": "pending" }] } }] } }),
+        json!({ "type": "user", "uuid": "u2", "timestamp": iso(44_000), "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "t1", "content": "The file /work/src/cart.tsx has been updated." }] } }),
+        json!({ "type": "assistant", "uuid": "a2", "timestamp": iso(10_000), "message": { "id": "m2", "model": "claude-sonnet-5-5",
+            "content": [{ "type": "tool_use", "id": "t3", "name": "Bash", "input": { "command": "pnpm test -- checkout" } }] } }),
+    ];
+    let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    fs::write(
+        claude.join(format!("projects/-x/{SESSION}.jsonl")),
+        text.join("\n"),
+    )
+    .unwrap();
+    claude
+}
+
+/// A pane that runs `kind`'s session `id`, working, in `/work`.
+fn agent_pane(pane_id: &str, kind: &str, id: &str, name: &str) -> super::PaneEntry {
+    let mut agent = pane(pane_id, "/work");
+    agent.command = kind.into();
+    agent.session = Some(SessionEntry {
+        session_id: id.into(),
+        kind: kind.into(),
+        name: Some(name.into()),
+        state: "working".into(),
+        started_at: now_ms() - 60_000,
+    });
+    agent
+}
+
+/// The handlers of the rows that open (`aria-expanded`) and show `text`.
+fn rows_showing(nodes: &[Node], text: &str, found: &mut Vec<String>) {
+    for node in nodes {
+        if let Node::ListButton(row) = node
+            && row.expanded.is_some()
+            && plain_text(&row.button.children).contains(text)
+            && let Some(handler) = &row.button.on_click
+        {
+            found.push(handler.clone());
+        }
+        for part in node.parts() {
+            rows_showing(part, text, found);
+        }
+    }
+}
+
+fn select_named(nodes: &[Node], label: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Select(select) if select.label == label => select.on_change.clone(),
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| select_named(part, label)),
+    })
+}
+
+#[test]
+fn session_detail_sidebar_follows_a_claude_transcript_and_reads_an_opencode_session_from_wings() {
+    let claude = claude_with_activity();
+    let rig = Rig::with(
+        load("session-detail"),
+        false,
+        vec![
+            agent_pane("1", "claude", SESSION, "checkout"),
+            agent_pane("2", "opencode", "ses_oc1", "api"),
+        ],
+    );
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
+    rig.env.opencode_knows("ses_oc1");
+    let (on_event, main_errors) = errors();
+    rig.host
+        .start_main(&native("session-detail", "main.js"), on_event)
+        .unwrap();
+    let (page, events) = open_page(&rig.host, &native("session-detail", "sidebar.js"));
+
+    // The newest session first: Claude's, from its transcript.
+    let claude_view = tree(&events, "the Claude session", |tree| {
+        let text = tree.text();
+        text.contains("Adding the field") && text.contains("pnpm test")
+    });
+    let text = claude_view.text();
+    for shown in [
+        "Working",
+        "Sonnet 5.5",
+        "1k",
+        "Files edited (1)",
+        "cart.tsx",
+        "1 edit",
+        "To do (0/2)",
+        "Run the tests",
+        "Now",
+        "Recent activity",
+        "Rework the checkout page",
+    ] {
+        assert!(
+            text.contains(shown),
+            "the sidebar shows {text:?}, not {shown:?}"
+        );
+    }
+
+    // A row opens to what the call did, which main answers.
+    let mut edit = Vec::new();
+    rows_showing(&claude_view.children, "cart.tsx", &mut edit);
+    assert_eq!(edit.len(), 1, "{text}");
+    assert!(page.dispatch(&edit[0], None));
+    tree(&events, "the opened edit", |tree| {
+        let text = tree.text();
+        text.contains("old_string") && text.contains("has been updated.")
+    });
+
+    // The other session comes from `wings.agentActivity`, and is read again when Wings says it did something.
+    let picker = select_named(&claude_view.children, "Session").expect("a session picker");
+    assert!(page.dispatch(&picker, Some(&json!({ "value": "ses_oc1" }))));
+    let opencode = tree(&events, "the OpenCode session", |tree| {
+        tree.text().contains("fix the bug")
+    });
+    let text = opencode.text();
+    for shown in ["gpt-x", "Commit", "Fix it", "$0.25", "Tokens: "] {
+        assert!(
+            text.contains(shown),
+            "the sidebar shows {text:?}, not {shown:?}"
+        );
+    }
+    let asked = rig.env.asked().len();
+    assert!(asked >= 1);
+    rig.host.publish_agent_activity("ses_oc1");
+    let until = std::time::Instant::now() + WAIT;
+    while rig.env.asked().len() == asked {
+        assert!(
+            std::time::Instant::now() < until,
+            "OpenCode was not asked again"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        main_errors.try_recv().is_err(),
+        "main reported {:?}",
+        main_errors.try_recv()
+    );
+    drop(page);
+    let _ = fs::remove_dir_all(claude);
+}
+
+/// The handler of the button whose accessible name is `label`.
+fn button_labelled(nodes: &[Node], label: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Button(button) if button.label.as_deref() == Some(label) => button.on_click.clone(),
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| button_labelled(part, label)),
+    })
+}
+
+fn sunburst_in(nodes: &[Node]) -> Option<&crate::page::tree::Sunburst> {
+    nodes.iter().find_map(|node| match node {
+        Node::Sunburst(map) => Some(map),
+        other => other.parts().into_iter().find_map(sunburst_in),
+    })
+}
+
+#[test]
+fn disk_scans_a_folder_in_its_main_and_its_native_page_draws_the_map_and_fills_the_collector() {
+    let rig = Rig::with(load("disk"), true, vec![]);
+    // Files of at least the 1 MiB a folder scan keeps, written out so that they take space on disk.
+    let folder = rig.root.config("disk").root.join("scanned");
+    for (path, mib) in [("Downloads/installer.dmg", 3), ("Code/app.bin", 2)] {
+        let file = folder.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, vec![7u8; mib << 20]).unwrap();
+    }
+    let id: String = folder.to_string_lossy().into();
+    rig.host.publish_projects(vec![Project {
+        id: id.clone(),
+        path: id,
+        name: "Scanned".into(),
+    }]);
+    let (on_event, main_errors) = errors();
+    rig.host
+        .start_main(&native("disk", "main.js"), on_event)
+        .unwrap();
+
+    let (page, events) = open_page(&rig.host, &native("disk", "map.js"));
+    let overview = tree(&events, "the disks and folders", |tree| {
+        let text = tree.text();
+        text.contains("Disks") && text.contains("Scanned") && !text.contains("Looking for disks")
+    });
+    let scan = button_labelled(&overview.children, "Scan Scanned").expect("a Scan button");
+    assert!(page.dispatch(&scan, None));
+
+    let mapped = tree(&events, "the map of the folder", |tree| {
+        sunburst_in(&tree.children).is_some() && tree.text().contains("Downloads")
+    });
+    let map = sunburst_in(&mapped.children).unwrap();
+    // Two folders of one file each: a wedge for each folder and one for its file.
+    assert!(map.wedges.len() >= 4, "{:?}", map.wedges);
+    assert!(mapped.text().contains(" MB"), "{}", mapped.text());
+
+    // Pointing at a wedge says what it is in the middle, and a row's menu puts its folder in the Collector.
+    let on_point = map.on_point.clone().expect("a pointer handler");
+    assert!(page.dispatch(&on_point, Some(&json!({ "index": 0 }))));
+    tree(&events, "the wedge's name in the middle", |tree| {
+        sunburst_in(&tree.children).is_some_and(|map| map.title != "scanned")
+    });
+    let mut menus = Vec::new();
+    buttons_named(&mapped.children, "⋯ ▾", &mut menus);
+    assert!(page.dispatch(&menus[0], None));
+    let open = tree(&events, "the row's menu", |tree| {
+        tree.text().contains("Add to Collector")
+    });
+    let mut add = Vec::new();
+    buttons_named(&open.children, "Add to Collector", &mut add);
+    assert!(page.dispatch(&add[0], None));
+    tree(&events, "the Collector with the folder", |tree| {
+        tree.text().contains("1 item,")
+    });
+    assert!(
+        main_errors.try_recv().is_err(),
+        "main reported {:?}",
+        main_errors.try_recv()
+    );
+}
+
+// PR tracker: its real native bundles, over a fixture main that answers what the pages ask with made-up data.
+
+/// The project's folder the fixture's pull requests belong to.
+const PR_PROJECT: &str = "/work/web";
+
+fn pr_rig() -> Rig {
+    let rig = Rig::with(load("pr-tracker"), true, vec![]);
+    *rig.env.projects.lock().unwrap() = vec![PathBuf::from(PR_PROJECT)];
+    rig.host.publish_projects(vec![Project {
+        id: PR_PROJECT.into(),
+        path: PR_PROJECT.into(),
+        name: "web".into(),
+    }]);
+    let fixture = fs::read_to_string(repo_plugin("pr-tracker").join("preview/native-host.js"))
+        .unwrap()
+        .replace("__ROOT__", PR_PROJECT);
+    let (on_event, _errors) = errors();
+    rig.host.start_main(&fixture, on_event).unwrap();
+    rig
+}
+
+/// The handler of the first `ListButton` that shows `text`.
+fn list_button_showing(nodes: &[Node], text: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::ListButton(row) if plain_text(&row.button.children).contains(text) => {
+            row.button.on_click.clone()
+        }
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| list_button_showing(part, text)),
+    })
+}
+
+fn count_nodes(nodes: &[Node], is: &dyn Fn(&Node) -> bool) -> usize {
+    nodes
+        .iter()
+        .map(|node| {
+            usize::from(is(node))
+                + node
+                    .parts()
+                    .into_iter()
+                    .map(|part| count_nodes(part, is))
+                    .sum::<usize>()
+        })
+        .sum()
+}
+
+fn chips_named(nodes: &[Node], label: &str) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Chips(chips) if chips.label == label => chips.on_change.clone(),
+        other => other
+            .parts()
+            .into_iter()
+            .find_map(|part| chips_named(part, label)),
+    })
+}
+
+#[test]
+fn pr_tracker_tab_lists_the_projects_pull_requests_and_opens_one_in_the_same_tab() {
+    let rig = pr_rig();
+    let (page, events) = open_page(&rig.host, &native("pr-tracker", "pr.js"));
+    let list = tree(&events, "the project's list", |tree| {
+        tree.text().contains("Migrate the settings page")
+    });
+    let text = list.text();
+    for shown in ["web · Pull requests", "Agent working", "2 new"] {
+        assert!(text.contains(shown), "{shown:?} in {text:?}");
+    }
+    assert!(count_nodes(&list.children, &|node| matches!(node, Node::Avatar(_))) >= 2);
+    let open = list_button_showing(&list.children, "Add retry with backoff").expect("a row");
+    assert!(page.dispatch(&open, None));
+
+    let pull = tree(&events, "the pull request", |tree| {
+        tree.text().contains("Conversation") && tree.text().contains("Alan Turing")
+    });
+    let text = pull.text();
+    for shown in [
+        "All pull requests",
+        "acme/web #482",
+        "1 approved, changes requested",
+        "1 failed · 1 running · 1 passed ›",
+        "exponential backoff",
+        "const delay = Math.min(base * 2 ** attempt, 30_000);",
+        "Setting",
+        "Equal jitter keeps a floor on the delay.",
+        "ci-bot[bot]",
+    ] {
+        assert!(text.contains(shown), "{shown:?} in {text:?}");
+    }
+    // The bold word and the link are spans of their paragraph, and the link opens in the browser.
+    let spans = count_nodes(
+        &pull.children,
+        &|node| matches!(node, Node::Text(span) if span.on_click.is_some() || span.weight != crate::page::tree::Weight::Normal),
+    );
+    assert!(spans >= 2, "{spans} spans");
+    // Going back shows the list again.
+    let back = {
+        let mut found = Vec::new();
+        buttons_named(&pull.children, "← All pull requests", &mut found);
+        found.remove(0)
+    };
+    assert!(page.dispatch(&back, None));
+    tree(&events, "the list again", |tree| {
+        tree.text().contains("Migrate the settings page")
+    });
+}
+
+#[test]
+fn pr_tracker_tab_opened_with_args_shows_that_pull_request_and_its_checks() {
+    let rig = pr_rig();
+    let args = json!({
+        "provider": "github", "url": "https://github.com/acme/web/pull/482", "number": 482,
+        "repo": "acme/web", "title": "Add retry with backoff to the sync client", "cwd": PR_PROJECT,
+    });
+    let (sent, events) = mpsc::channel();
+    let page = rig
+        .host
+        .open_hidden_page_with_args(&native("pr-tracker", "pr.js"), Some(&args), move |event| {
+            let _ = sent.send(event);
+        })
+        .unwrap();
+    page.set_visible(true);
+    let pull = tree(&events, "the pull request", |tree| {
+        tree.text().contains("Conversation")
+    });
+    assert!(
+        !pull.text().contains("All pull requests"),
+        "a tab opened on a pull request has no list to go back to"
+    );
+    let tabs = chips_named(&pull.children, "Pull request").expect("the tabs");
+    assert!(page.dispatch(&tabs, Some(&json!({ "value": "checks" }))));
+    let checks = tree(&events, "the checks", |tree| {
+        tree.text().contains("Unit tests")
+    });
+    let text = checks.text();
+    for shown in [
+        "Failed",
+        "3 tests failed in src/sync/client.test.ts",
+        "Required",
+        "Running and queued",
+        "Optional and not run",
+    ] {
+        assert!(text.contains(shown), "{shown:?} in {text:?}");
+    }
+}
+
+#[test]
+fn pr_tracker_main_starts_in_the_native_host_and_its_settings_page_renders() {
+    let mut plugin = load("pr-tracker");
+    // No program runs: the CLIs a real main asks for are refused, as for a plugin that may not run them.
+    plugin.manifest.permissions.exec.clear();
+    let rig = Rig::with(plugin, true, vec![pane("1", "/work/web")]);
+    let (on_event, main_errors) = errors();
+    rig.host
+        .start_main(&native("pr-tracker", "main.js"), on_event)
+        .unwrap();
+    assert!(
+        main_errors
+            .recv_timeout(std::time::Duration::from_millis(800))
+            .is_err(),
+        "main reported an error"
+    );
+    let (_page, events) = open_page(&rig.host, &native("pr-tracker", "settings.js"));
+    let settings = tree(&events, "the settings", |tree| {
+        // The token rows fill in once `wings.secrets.has` answers, a turn after the first tree.
+        tree.text().contains("Codeberg") && tree.text().contains("No token saved.")
+    });
+    let text = settings.text();
+    for shown in [
+        "Sidebar",
+        "New pull requests",
+        "Pull request hosts",
+        "No token saved.",
+    ] {
+        assert!(text.contains(shown), "{shown:?} in {text:?}");
+    }
+}

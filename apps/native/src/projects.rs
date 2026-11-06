@@ -7,7 +7,10 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use wings_spaces::{
@@ -23,6 +26,8 @@ pub struct ProjectEntry {
     pub child: bool,
     pub pinned: bool,
     pub branch: Option<String>,
+    /// When the project was added, in ms since the epoch.
+    pub added: Option<u64>,
 }
 
 /// The native app's projects, shared by the sidebar and the plugins' host calls.
@@ -31,6 +36,8 @@ pub struct Projects {
     /// The folder the app was opened in. It is listed even when the list doesn't hold it, and joins the list the first
     /// time a plugin changes something about it.
     launch: PathBuf,
+    /// Set when the folder the app was opened in is removed from the sidebar, so it is no longer listed unasked.
+    launch_removed: AtomicBool,
     /// A new worktree's setup line, until the first pane a plugin opens there types it.
     setup: Mutex<HashMap<PathBuf, String>>,
 }
@@ -41,8 +48,39 @@ impl Projects {
         Self {
             store: Mutex::new(file.map_or_else(SpaceStore::in_memory, SpaceStore::load)),
             launch,
+            launch_removed: AtomicBool::new(false),
             setup: Mutex::default(),
         }
+    }
+
+    /// Lists the folder, or finds it listed already.
+    pub fn add(&self, folder: &str) -> Space {
+        self.store.lock().unwrap().add(folder)
+    }
+
+    /// Takes the project in folder `project` off the list; its folders and worktrees stay on disk. The folder the app was
+    /// opened in stays off the list too, while the app runs.
+    pub fn remove(&self, project: &str) {
+        let mut store = self.store.lock().unwrap();
+        let id = store
+            .spaces
+            .iter()
+            .find(|space| space.path == project)
+            .map(|space| space.id.clone());
+        if let Some(id) = id {
+            store.remove(&id);
+        }
+        if Path::new(project) == self.launch {
+            self.launch_removed.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Pins the project in folder `project` above the others, or unpins it. The folder the app was opened in joins the
+    /// list when it is pinned.
+    pub fn set_pinned(&self, project: &str, pinned: bool) {
+        let mut store = self.store.lock().unwrap();
+        let id = self.id_of(&mut store, project, true);
+        store.set_pinned(&id, pinned);
     }
 
     /// Pinned projects first, then the rest, each in the list's order, with its worktrees right under it; the folder
@@ -50,7 +88,7 @@ impl Projects {
     pub fn entries(&self) -> Vec<ProjectEntry> {
         let store = self.store.lock().unwrap();
         let mut list = list(&store.spaces);
-        if !self.listed(&store) {
+        if self.unlisted_launch(&store) {
             list.insert(
                 0,
                 entry(&spaces::new_space(&self.launch.to_string_lossy()), false),
@@ -62,11 +100,16 @@ impl Projects {
     /// The folders of the projects, which `exec` may run in.
     pub fn paths(&self) -> Vec<PathBuf> {
         let store = self.store.lock().unwrap();
-        let unlisted = (!self.listed(&store)).then(|| self.launch.clone());
+        let unlisted = self.unlisted_launch(&store).then(|| self.launch.clone());
         unlisted
             .into_iter()
             .chain(store.spaces.iter().map(|space| PathBuf::from(&space.path)))
             .collect()
+    }
+
+    /// Whether the folder the app was opened in is shown without being on the list.
+    fn unlisted_launch(&self, store: &SpaceStore) -> bool {
+        !self.listed(store) && !self.launch_removed.load(Ordering::Relaxed)
     }
 
     fn listed(&self, store: &SpaceStore) -> bool {
@@ -191,6 +234,7 @@ fn entry(space: &Space, child: bool) -> ProjectEntry {
         child,
         pinned: space.pinned,
         branch: branch(Path::new(&space.path)),
+        added: space.added_at,
     }
 }
 
@@ -232,7 +276,7 @@ pub fn with_setup(setup: Option<&str>, input: Option<String>) -> Option<String> 
 
 /// The desktop's `shellQuote`: a plain word stays as it is, anything else is single-quoted. A leading `=` is zsh's command
 /// path expansion.
-fn shell_quote(arg: &str) -> String {
+pub fn shell_quote(arg: &str) -> String {
     let plain = |(index, c): (usize, char)| {
         c.is_ascii_alphanumeric() || "_@%+:,./-".contains(c) || (index > 0 && c == '=')
     };
@@ -621,5 +665,44 @@ mod tests {
             with_setup(Some("make"), Some("claude".into())).as_deref(),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn adding_and_removing_projects_change_the_native_list_and_never_the_desktops() {
+        let dir = temp("add-remove");
+        let (desktop, native) = (dir.join("desktop.json"), dir.join("native.json"));
+        std::fs::write(&desktop, r#"[{"id":"/a","name":"a","path":"/a"}]"#).unwrap();
+        seed(&native, &desktop).unwrap();
+        let desktop_before = std::fs::read(&desktop).unwrap();
+
+        let projects = Projects::open(Some(native.clone()), "/launch".into());
+        let names = |projects: &Projects| {
+            projects
+                .entries()
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(projects.add("/b").name, "b");
+        // A folder listed twice is listed once.
+        projects.add("/b");
+        assert_eq!(names(&projects), ["launch", "a", "b"]);
+        projects.remove("/a");
+        assert_eq!(names(&projects), ["launch", "b"]);
+        // The folder the app was opened in is listed without being in the file, and removing it hides it.
+        projects.remove("/launch");
+        assert_eq!(names(&projects), ["b"]);
+        assert_eq!(projects.paths(), [PathBuf::from("/b")]);
+
+        let saved: Vec<Space> = serde_json::from_slice(&std::fs::read(&native).unwrap()).unwrap();
+        assert_eq!(
+            saved
+                .iter()
+                .map(|space| space.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/b"]
+        );
+        assert_eq!(std::fs::read(&desktop).unwrap(), desktop_before);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

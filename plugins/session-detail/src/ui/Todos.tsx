@@ -1,8 +1,10 @@
-import { Heading, List, ListItem, Text } from "wings-plugin-ui";
+import { Dot, Heading, List, ListItem, Text } from "wings-plugin-ui";
 
-import type { Todo } from "../lib/types";
+import type { Todo, TodoStatus } from "../lib/types";
 
 const boxLabels = { completed: "Done", in_progress: "In progress", pending: "To do" };
+/** A dot that fills in as a task moves from pending to done. */
+const dots: Record<TodoStatus, "muted" | "info" | undefined> = { pending: "muted", in_progress: "info", completed: undefined };
 
 export function Todos({ todos }: { todos: Todo[] }) {
   const done = todos.filter((t) => t.status === "completed").length;
@@ -12,8 +14,10 @@ export function Todos({ todos }: { todos: Todo[] }) {
       <List compact>
         {todos.map((t, i) => (
           <ListItem key={i} align="start" className={`todo ${t.status}`}>
-            <span className={`box ${t.status}`} role="img" aria-label={boxLabels[t.status]} />
-            <Text grow>{t.status === "in_progress" && t.active ? t.active : t.text}</Text>
+            <Dot tone={dots[t.status]} label={boxLabels[t.status]} />
+            <Text grow tone={t.status === "completed" ? "muted" : undefined} weight={t.status === "in_progress" ? "medium" : undefined}>
+              {t.status === "in_progress" && t.active ? t.active : t.text}
+            </Text>
           </ListItem>
         ))}
       </List>

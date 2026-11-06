@@ -3,5 +3,6 @@
 //! setup mean the same in both.
 
 pub mod claude_accounts;
+pub mod project_info;
 pub mod spaces;
 pub mod worktree;

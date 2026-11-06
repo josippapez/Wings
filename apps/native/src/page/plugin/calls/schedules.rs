@@ -1,5 +1,5 @@
 //! The calls Schedules makes that the plugins ported before it didn't: another plugin's tools, closing a view, the
-//! project a page is about, and project sections, which the native app has to refuse.
+//! project a page is about.
 
 use std::sync::Arc;
 
@@ -160,7 +160,7 @@ fn a_view_closes_only_if_the_plugin_has_it_and_the_project_is_the_one_on_screen(
 }
 
 #[test]
-fn worktree_calls_are_refused_without_the_permission_and_project_sections_are_not_shown() {
+fn worktree_calls_are_refused_without_the_permission() {
     // No `worktrees` permission: the desktop's words for each call.
     let rig = caller(json!({}), true);
     for (call, refused) in [
@@ -183,9 +183,4 @@ fn worktree_calls_are_refused_without_the_permission_and_project_sections_are_no
             "{call}"
         );
     }
-    let rig = caller(json!({ "worktrees": true }), true);
-    assert_eq!(
-        rig.refused("return await wings.setProjectSection('/work', 'schedules', null);"),
-        "The native app doesn't show project sections yet"
-    );
 }

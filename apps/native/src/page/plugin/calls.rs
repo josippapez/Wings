@@ -299,7 +299,7 @@ impl Shared {
         let this = self.clone();
         match method {
             "projects" => reply.done(to_json(&*self.projects.lock().unwrap())),
-            "disks" | "diskFind" | "diskUsageCancel" => {
+            "disks" | "diskFind" | "diskUsage" | "diskUsageCancel" => {
                 self.disk_call(method, params, reply, access)
             }
             "openPane" => reply_if_error(reply.clone(), self.open_pane(&access, &params, reply)),
@@ -325,9 +325,10 @@ impl Shared {
             "setClaudeAccount" => {
                 self.off_thread(reply, move |_| set_claude_account(&access, &params));
             }
-            "setProjectSection" => {
-                reply.err("The native app doesn't show project sections yet".into())
-            }
+            "fetch" | "secretSet" | "secretDelete" | "secretHas" | "post" | "sendToAgent"
+            | "openSettings" | "emit" => self.forge_call(method, params, reply, access),
+            "setProjectSection" => reply.done(self.set_project_section(&access, &params)),
+            "setSectionSort" => reply.done(self.set_section_sort(&access, &params)),
             "setBadge" => reply.done(self.set_badge(&access, &params)),
             "setPaneStatus" => reply.done(self.set_pane_status(&access, &params)),
             "actionDone" => {
@@ -345,6 +346,11 @@ impl Shared {
             }
             "transcript" => {
                 self.off_thread(reply, move |_| transcript(&access, &params));
+            }
+            "agentActivity" => {
+                self.off_thread(reply, move |_| {
+                    session_detail::agent_activity(&access, &params)
+                });
             }
             "ports" => self.off_thread(reply, move |_| ports(&access)),
             "openUrl" => self.off_thread(reply, move |_| open_url(&access, &params)),
@@ -653,10 +659,16 @@ fn open_url(access: &Access, params: &Value) -> Result<String, String> {
     Ok("null".into())
 }
 
+mod pr_tracker;
+mod sections;
+pub use sections::{SectionIcon, SectionRow};
+#[cfg(test)]
+mod disk_usage;
 #[cfg(test)]
 mod prerequisites;
 #[cfg(test)]
 mod schedules;
+mod session_detail;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

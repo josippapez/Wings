@@ -125,6 +125,7 @@ impl Workspace {
                 .map(|tab| SavedPluginTab {
                     plugin: tab.plugin.clone(),
                     view: tab.view.clone(),
+                    args: tab.args.clone(),
                 })
                 .collect(),
             active_plugin: self
@@ -142,6 +143,7 @@ impl Workspace {
                 .iter()
                 .find(|(shape, ..)| *shape == look.cursor)
                 .map(|(_, name, _)| name.to_string()),
+            ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {
             eprintln!("Couldn't save the workspace to {}: {error}", path.display());

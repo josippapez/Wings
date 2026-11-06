@@ -11,21 +11,31 @@ use wings_spaces::claude_accounts;
 /// The desktop's detection interval.
 pub const EVERY: Duration = Duration::from_millis(500);
 
+/// How long after an OpenCode session first does something its activity is announced, so a burst of tool calls is one
+/// event, as on the desktop.
+pub const ACTIVITY_BURST: Duration = Duration::from_millis(700);
+
 /// Runs the detector on its own thread, so reading processes never holds up drawing.
 pub struct Watcher {
     requests: Sender<(Vec<PaneProbe>, Option<String>)>,
     scans: Receiver<Scan>,
+    /// The OpenCode sessions that started, ended or ran a tool call, each time they did.
+    activity: Receiver<String>,
 }
 
 impl Watcher {
     pub fn start(claude_dir: PathBuf) -> Self {
         let (requests, requests_rx) = async_channel::bounded::<(Vec<PaneProbe>, Option<String>)>(1);
         let (scans_tx, scans) = async_channel::bounded(1);
+        let (activity_tx, activity) = async_channel::unbounded();
         thread::Builder::new()
             .name("agent-detection".into())
             .spawn(move || {
                 let mut detector = Detector::new(&claude_dir);
                 opencode::spawn(detector.opencode());
+                detector.opencode().on_activity(move |session| {
+                    let _ = activity_tx.try_send(session.to_owned());
+                });
                 while let Ok((panes, focused)) = requests_rx.recv_blocking() {
                     // An account can appear while Wings runs, and each has its own session files.
                     detector
@@ -37,7 +47,16 @@ impl Watcher {
                 }
             })
             .expect("Could not start agent detection");
-        Self { requests, scans }
+        Self {
+            requests,
+            scans,
+            activity,
+        }
+    }
+
+    /// The OpenCode sessions that did something, one message per event.
+    pub fn activity(&self) -> Receiver<String> {
+        self.activity.clone()
     }
 
     /// What `panes` run now. `focused` is the pane you're looking at, which never turns Done.

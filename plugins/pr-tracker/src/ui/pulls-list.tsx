@@ -3,7 +3,7 @@
 // request. The main script owns the lists and their cache, and keeps this one fresh while it is on screen and Wings is in front.
 
 import { useQuery } from "wings-plugin-sdk/react";
-import { Avatar, Button, Chips, Empty, Row, Skeleton, Skeletons, Stack, Text, Time, useAction, useBlockState, useTabState } from "wings-plugin-ui";
+import { Avatar, Badge, Button, Chips, Dot, Empty, List, ListButton, ListItem, Notice, Row, Skeleton, Skeletons, Stack, Text, Time, Title, useAction, useBlockState, useTabState } from "wings-plugin-ui";
 import { ch } from "../lib/messages";
 import { countPulls, filterOf, filterPulls, splitTitle, type Filter, type PullRow } from "../lib/pulls";
 import "./pulls-list.css";
@@ -27,6 +27,9 @@ const EMPTY: Record<Filter, string> = {
 };
 
 const ALL: { filter: Filter } = { filter: "all" };
+
+/** A row's status colour: the dot is green unless the tone says more. */
+const DOT_TONE = { neutral: "muted", info: "info", merged: "info", warning: "warn", danger: "danger" } as const;
 const savedFilter = (saved: unknown) => ({ filter: filterOf(saved) });
 
 /** The chosen filter, kept with the tab or the block so it is there when it opens again. Only the state of this place holds anything: the other reads nothing. */
@@ -55,15 +58,15 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
   const counts = countPulls(rows);
   const shown = filterPulls(rows, filter);
   const action = () => void sign.run(() => ch.ask("pulls-action", { path }, { timeoutMs: ACTION_TIMEOUT_MS }));
-  const failed = sign.error ? <Text tone="danger" role="alert">{sign.error}</Text> : null;
+  const failed = sign.error ? <Notice tone="danger">{sign.error}</Notice> : null;
 
   let body;
   if (error) {
     body = (
-      <div className="pl-error" role="alert" data-testid="pulls-error">
-        <Text tone="danger">{error.message}</Text>
-        <Button size="sm" variant="outline" onClick={refresh}>Try again</Button>
-      </div>
+      <Stack gap="m" className="pl-error" data-testid="pulls-error">
+        <Notice tone="danger">{error.message}</Notice>
+        <Row><Button size="sm" variant="outline" onClick={refresh}>Try again</Button></Row>
+      </Stack>
     );
   } else if (!data) body = <ListSkeleton />;
   else if (data.none) {
@@ -87,21 +90,21 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
   } else if (!shown.length) body = <Empty title={EMPTY[filter]} description={filter !== "all" && rows.length ? `${rows.length} open in all.` : undefined} />;
   else {
     body = (
-      <ul className="pl-list" aria-label="Open pull requests" data-testid="pulls-list">
+      <List className="pl-list" aria-label="Open pull requests" data-testid="pulls-list">
         {shown.map((r) => <PullItem key={r.id} row={r} showScope={filter === "all"} onOpen={onOpen} />)}
-      </ul>
+      </List>
     );
   }
 
   const ready = !error && Boolean(data?.rows);
   return (
-    <div className="pl-wrap" data-store={store} data-testid="pulls">
-      <header className="pl-head">
+    <Stack gap="m" className="pl-wrap" data-store={store} data-testid="pulls">
+      <Stack as="header" gap="m" className="pl-head">
         <Row justify="between" gap="s">
           {store === "tab" ? (
-            <h1 className="pl-heading">
-              {name ? `${name} · ` : ""}Pull requests{ready ? <span className="pl-count"> {counts.all}</span> : null}
-            </h1>
+            <Title className="pl-heading">
+              {name ? `${name} · ` : ""}Pull requests{ready ? <Text tone="muted" className="pl-count"> {counts.all}</Text> : null}
+            </Title>
           ) : (
             <Text tone="muted" size="small">{ready ? `${counts.all} open` : ""}</Text>
           )}
@@ -115,9 +118,9 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
             options={FILTERS.filter((f) => f.value !== "drafts" || counts.drafts > 0 || filter === "drafts").map((f) => ({ value: f.value, label: `${f.label} ${counts[f.value]}`, "data-testid": `pulls-filter-${f.value}` }))}
           />
         ) : null}
-      </header>
+      </Stack>
       {body}
-    </div>
+    </Stack>
   );
 }
 
@@ -139,37 +142,34 @@ function PullItem({ row, showScope, onOpen }: { row: PullRow; showScope: boolean
   const checks = failed ? `${failed} failing` : running ? `${running} running` : passed ? `${passed} passed` : null;
   const checksTone = failed ? "danger" : running ? "warn" : "success";
   return (
-    <li className="pl-item" data-scope={row.scope}>
-      <button type="button" className="pl-row" onClick={() => onOpen(row.args)} data-testid="pulls-row">
-        <span className="pl-dot" data-tone={row.badge.tone} role="img" aria-label={row.badge.text} title={row.badge.text} />
-        <span className="pl-main">
-          <span className="pl-title-line">
-            {tags.map((t, i) => <span key={i} className="pl-tag">{t}</span>)}
-            <span className="pl-title" title={row.title}>{text}</span>
-          </span>
-          <span className="pl-meta">
-            <span className="pl-number">{row.number}</span>
-            {row.author ? <span className="pl-author"><Avatar name={row.author} size="small" /><span>{row.author}</span></span> : null}
-            <span className="pl-branch" title={row.branch}>
-              <code>{source}</code>
-              {target ? <><span aria-hidden="true">→</span><code>{target}</code></> : null}
-            </span>
-          </span>
-        </span>
-        <span className="pl-side">
-          <span className="pl-flags">
-            {showScope && SCOPE_WORD[row.scope] ? <span className="pl-flag" data-kind="scope">{SCOPE_WORD[row.scope]}</span> : null}
-            {row.agent ? <span className="pl-flag" data-kind="agent">{AGENT_WORD[row.agent]}</span> : null}
-            {row.unread ? <span className="pl-flag" data-kind="unread">{row.unread} new</span> : null}
-          </span>
-          <span className="pl-facts">
-            <span>{row.badge.text}</span>
-            {row.review ? <span>{row.review}</span> : null}
-            {checks ? <span className="pl-checks" data-tone={checksTone}>{checks}</span> : null}
-            <Time iso={row.updated} />
-          </span>
-        </span>
-      </button>
-    </li>
+    <ListItem className="pl-item" data-scope={row.scope}>
+      <ListButton className="pl-row" onClick={() => onOpen(row.args)} data-testid="pulls-row">
+        <Dot className="pl-dot" data-tone={row.badge.tone} tone={row.badge.tone === "success" ? undefined : DOT_TONE[row.badge.tone as keyof typeof DOT_TONE]} label={row.badge.text} />
+        <Stack gap="xs" grow className="pl-main">
+          <Row gap="s" className="pl-title-line">
+            {tags.map((t, i) => <Badge key={i} size="sm" variant="outline" className="pl-tag">{t}</Badge>)}
+            <Text weight="medium" truncate grow className="pl-title" title={row.title}>{text}</Text>
+          </Row>
+          <Row gap="m" wrap className="pl-meta">
+            <Text size="tiny" tone="muted" className="pl-number">{row.number}</Text>
+            {row.author ? <Row gap="s" className="pl-author"><Avatar name={row.author} size="small" /><Text size="small">{row.author}</Text></Row> : null}
+            <Text mono size="tiny" tone="muted" truncate className="pl-branch" title={row.branch}>{target ? `${source} → ${target}` : source}</Text>
+          </Row>
+        </Stack>
+        <Stack gap="xs" className="pl-side">
+          <Row gap="s" wrap justify="end" className="pl-flags">
+            {showScope && SCOPE_WORD[row.scope] ? <Badge size="sm" variant="outline" className="pl-flag" data-kind="scope">{SCOPE_WORD[row.scope]}</Badge> : null}
+            {row.agent ? <Badge size="sm" variant="outline" tone="info" className="pl-flag" data-kind="agent">{AGENT_WORD[row.agent]}</Badge> : null}
+            {row.unread ? <Badge size="sm" tone="warn" className="pl-flag" data-kind="unread">{row.unread} new</Badge> : null}
+          </Row>
+          <Row gap="s" wrap justify="end" className="pl-facts">
+            <Text size="small">{row.badge.text}</Text>
+            {row.review ? <Text size="small" tone="muted">{row.review}</Text> : null}
+            {checks ? <Text size="small" tone={checksTone} className="pl-checks" data-tone={checksTone}>{checks}</Text> : null}
+            <Text size="small" tone="muted"><Time iso={row.updated} /></Text>
+          </Row>
+        </Stack>
+      </ListButton>
+    </ListItem>
   );
 }

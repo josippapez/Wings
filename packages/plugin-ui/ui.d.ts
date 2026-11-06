@@ -102,6 +102,10 @@ export type Gap = "none" | "xs" | "s" | "m" | "l";
 export function Row<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; align?: "start" | "baseline"; justify?: "end" | "between"; wrap?: boolean; grow?: boolean }>): ReactElement;
 /** Children one under the other. As a `ul` or `ol` it's a list with no bullets, of `li` children. `as` types the props like `Row`'s. */
 export function Stack<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; grow?: boolean }>): ReactElement;
+/** A strip across its parent, like a page's header or footer: padded as a toolbar is, children one under the other, with a hairline on the `edge` that faces the page. `as` types the props like `Stack`'s. */
+export function Bar<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; edge?: "top" | "bottom" }>): ReactElement;
+/** A column that scrolls when what is in it is taller than the room it has, and takes what is left of its parent: a list under a header. A `ref` reaches the element, to read where it is scrolled to. */
+export function Scroll<E extends BoxAs = "div">(props: Own<E, { as?: E; ref?: Ref<HTMLElement> }>): ReactElement;
 /** Text with a tone and size, that can `grow` to fill a row or `truncate` with an ellipsis. */
 export function Text(
   props: Props<"span"> & {

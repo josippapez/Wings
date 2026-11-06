@@ -125,7 +125,8 @@ const runProjects = singleFlight(async () => {
         // Yours, then the ones asked of you, then the rest when Settings says the sidebar lists every open PR.
         const shown = [...items.filter((i) => i.mine), ...items.filter((i) => !i.mine && i.reviewing), ...(sidebar === "all" ? items.filter((i) => !i.mine && !i.reviewing) : [])];
         const rows = shown.slice(0, MAX_ROWS).map((i) => row(i, project.path));
-        await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null);
+        // The native app has no Project page and refuses sections: that must not skip the mentions below.
+        await wings.setProjectSection(project.id, SECTION, rows.length ? rows : null).catch(console.error);
         if (isKnown(remote)) await checkMentions(project, remote, items).catch(console.error);
       } catch (error) {
         complete = false;

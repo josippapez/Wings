@@ -6,6 +6,7 @@
   "icon": "icon.svg",
   "description": "Shows what each Claude Code or OpenCode session is doing in a sidebar: its model and context size, recent tool calls, edited files with their diffs, and its to-do list.",
   "api": 1,
+  "native": true,
   "main": "dist/main.js",
   "permissions": {
     "agentActivity": true,

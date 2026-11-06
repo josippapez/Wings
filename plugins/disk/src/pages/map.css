@@ -18,12 +18,6 @@
   align-items: center;
   gap: 8px;
 }
-.dk-place-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
 .dk-star {
   font-size: 15px;
 }
@@ -76,17 +70,12 @@
   flex: 1;
   min-width: 0;
 }
-.dk-map-page .w-page-body > .dk-notice {
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--wings-hairline);
-}
 
 /* ---------- The map's toolbar ---------- */
 .dk-toolbar .w-toolbar-main {
   gap: 4px;
 }
 .dk-history {
-  display: flex;
   flex: none;
 }
 .dk-back svg {
@@ -96,17 +85,10 @@
   transform: rotate(-90deg);
 }
 .dk-crumbs {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  min-width: 0;
   overflow: hidden;
 }
 .dk-crumb-item {
-  display: inline-flex;
   flex: 0 1 auto;
-  align-items: center;
-  min-width: 0;
 }
 .dk-crumb-item > .w-text {
   min-width: 0;
@@ -129,21 +111,11 @@
   max-width: 180px;
   min-width: 0;
 }
-.dk-trunc {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dk-wide {
-  display: flex;
-  gap: 6px;
-}
 .dk-narrow {
   display: none;
 }
 @media (max-width: 760px) {
-  .dk-wide {
+  .dk-wide.w-row {
     display: none;
   }
   .dk-narrow {
@@ -153,9 +125,6 @@
 
 /* ---------- The map: the list on the left, the circle filling the rest ---------- */
 .dk-list-pane {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
   min-height: 0;
 }
 /* Whatever the map draws fills its pane. */
@@ -174,18 +143,10 @@
 }
 
 .dk-list {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
   min-height: 0;
 }
-.dk-list-head {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 2px;
+.dk-list-head.w-bar {
   padding: 10px 14px 8px;
-  border-bottom: 1px solid var(--wings-hairline);
 }
 .dk-list-sub {
   min-height: 18px;
@@ -196,10 +157,7 @@
 }
 .dk-list-body {
   position: relative;
-  flex: 1;
-  min-height: 0;
   padding: 0 8px 12px;
-  overflow-y: auto;
 }
 .dk-hint {
   display: block;
@@ -209,7 +167,6 @@
 /* The rows are as tall as their count says, and each sits where the list's script puts it: only the ones in view exist. */
 .dk-rows {
   position: relative;
-  margin-top: 6px;
 }
 /* A row: the button that picks it, and its menu, which waits until you are on the row. */
 .dk-row.w-list-item {
@@ -292,12 +249,8 @@
     opacity: 1;
   }
 }
-/* A part of the hidden space: its name, size and action on one line, and what it is across the whole width under them. */
+/* A part of the hidden space: its name, size and action on one line, and what it is under them, in line with the name. */
 .dk-part.w-list-item {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 2px 8px;
   padding: 6px;
 }
 .dk-part .w-dot {
@@ -305,18 +258,12 @@
   height: 10px;
 }
 .dk-part-note {
-  grid-column: 2 / -1;
+  padding-left: 18px;
 }
 
 /* ---------- The Collector ---------- */
 .dk-collector {
   position: relative;
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--wings-hairline);
   background: var(--wings-surface);
   transition: background-color 150ms;
 }
@@ -326,12 +273,9 @@
   outline: 2px dashed color-mix(in srgb, var(--wings-info) 60%, transparent);
   outline-offset: -4px;
 }
-.dk-collector-head {
-  display: flex;
+.dk-collector-head.w-row {
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px 10px;
-  min-width: 0;
 }
 .dk-collector-text {
   flex: 1;
@@ -343,11 +287,6 @@
 }
 .dk-fold[aria-expanded="true"] svg {
   transform: none;
-}
-.dk-collector-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 .dk-collector-list {
   max-height: 180px;

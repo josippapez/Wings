@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
-import { Page, Split, useAction } from "wings-plugin-ui";
+import { Bar, Page, Split, Stack, useAction } from "wings-plugin-ui";
 import type { Collected, Collector, Entry, TrashResult } from "../lib/messages";
 import type { Target } from "../lib/sunburst";
 import { find, parentPath } from "../lib/tree";
@@ -60,6 +60,9 @@ function folderUnder(tree: Entry, point: Target | null): string | null {
   return entry && entry.kind === "dir" && !entry.restricted ? point.path : null;
 }
 
+/** In the native app the list stays on the folder in the middle: following the pointer would draw it again for every wedge it crosses. */
+const ignore = () => {};
+
 export function MapView(props: MapViewProps) {
   const { scan, name, focus, collector, countdown } = props;
   const tree = scan.tree;
@@ -75,7 +78,7 @@ export function MapView(props: MapViewProps) {
   const ids = useRef(0);
   const action = useAction();
   // The list never starts out taking more than nine twentieths of a narrow tab: the map is what it is for.
-  const [listWidth] = useState(() => Math.min(props.split, Math.max(200, Math.round(window.innerWidth * 0.45))));
+  const [listWidth] = useState(() => (WINGS_NATIVE ? props.split : Math.min(props.split, Math.max(200, Math.round(window.innerWidth * 0.45)))));
 
   // Going into another folder starts with nothing picked.
   const [at, setAt] = useState(focus);
@@ -226,6 +229,8 @@ export function MapView(props: MapViewProps) {
   const latest = useRef(keys);
   latest.current = keys;
   useEffect(() => {
+    // The native app has no window to hear keys on.
+    if (WINGS_NATIVE) return;
     const down = (e: KeyboardEvent) => latest.current(e);
     // A row with focus would click on Space's key up.
     const released = (e: KeyboardEvent) => {
@@ -257,7 +262,11 @@ export function MapView(props: MapViewProps) {
         />
       }
     >
-      {action.error ? <Dismissible tone="danger" onDismiss={action.clear}>{action.error}</Dismissible> : null}
+      {action.error ? (
+        <Bar edge="bottom">
+          <Dismissible tone="danger" onDismiss={action.clear}>{action.error}</Dismissible>
+        </Bar>
+      ) : null}
       <Split
         className="dk-split"
         defaultSize={listWidth}
@@ -265,7 +274,7 @@ export function MapView(props: MapViewProps) {
         label="Resize the list"
         onResize={props.onSplit}
         start={
-          <div className="dk-list-pane">
+          <Stack gap="none" grow className="dk-list-pane">
             {showHidden && hidden ? (
               <HiddenPanel hidden={hidden.info} mount={hidden.mount} confirm={confirm} onConfirm={setConfirm} onBack={() => setHiddenOpen(false)} onPurge={props.onPurge} onDeleteSnapshot={props.onDeleteSnapshot} />
             ) : (
@@ -292,12 +301,12 @@ export function MapView(props: MapViewProps) {
                 onPreview={(r) => run(() => props.onPreview(r.path))}
               />
             )}
-          </div>
+          </Stack>
         }
         end={
-          <div className="dk-map">
-            <Sunburst tree={tree} focus={focus} rootLabel={name} hidden={hiddenSize} collected={collected} selected={row?.kind === "entry" ? row.path : null} onPoint={setPoint} onClick={wedge} onUp={up} />
-          </div>
+          <Stack gap="none" grow className="dk-map">
+            <Sunburst tree={tree} focus={focus} rootLabel={name} hidden={hiddenSize} collected={collected} selected={row?.kind === "entry" ? row.path : null} onPoint={WINGS_NATIVE ? ignore : setPoint} onClick={wedge} onUp={up} />
+          </Stack>
         }
       />
       <CollectorBar

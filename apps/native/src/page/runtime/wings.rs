@@ -8,9 +8,10 @@
 //!
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
-//! `notify`, `transcript`, `onTranscript`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
-//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, and `claudeAccounts` and `setClaudeAccount`. `setProjectSection` is there
-//! so a plugin gets the host's refusal.
+//! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
+//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts` and `setClaudeAccount`, `fetch`, `secrets`
+//! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`. `onReply` is accepted and never called: the
+//! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal.
 //! Each call is a promise the host answers through `Link::call`, when it likes and from any thread, which comes back as a
 //! message to this frame's loop. Nothing else
 //! is added: no files, network or process of the frame's own.
@@ -37,6 +38,10 @@ pub trait Link: Send + Sync + 'static {
     fn broadcast(&self, json: String) -> Result<(), String>;
     /// One call of `wings.storage`. The answer is JSON: the value, a list of keys or of `[key, value]`, or `null`.
     fn storage(&self, call: Store) -> Result<String, String>;
+    /// What `wings.openView` opened this page with, as JSON, for `wings.viewArgs`; none for a page opened without args.
+    fn view_args(&self) -> Option<String> {
+        None
+    }
     /// A call of `wings.<method>` with the JSON the frame's wrapper made of its arguments. The host answers once through
     /// `reply`, now or later and from any thread: a call that takes a while must not run on this one.
     fn call(&self, method: &str, params: serde_json::Value, reply: Reply);
@@ -63,7 +68,7 @@ const SETUP: &str = r#"
     let deliver;
     if (native.broadcast) {
         const none = () => {};
-        const listeners = { broadcast: [], panes: [], transcript: [], action: [], projects: [], focus: [], git: [], diffClosed: [] };
+        const listeners = { broadcast: [], panes: [], transcript: [], agentActivity: [], action: [], projects: [], focus: [], git: [], diffClosed: [], pluginEvent: [], sectionSort: [] };
         let diffRefreshHandler = null;
         let projects = null, focused = native.focused, focusKnown = false;
         const tools = new Map();
@@ -113,6 +118,17 @@ const SETUP: &str = r#"
                 reject(error);
             }
         });
+
+        // A scan or a search: a call `signal` can stop, that reports progress as JSON lines. Its token names it for `diskUsageCancel`.
+        const diskCall = (method, params, { onProgress, signal }) => {
+            if (signal?.aborted) return Promise.reject(new Error('The scan was stopped'));
+            const token = String(nextCall);
+            const stop = () => { call('diskUsageCancel', { token }).catch(none); };
+            signal?.addEventListener('abort', stop, { once: true });
+            return call(method, { ...params, token, stream: typeof onProgress === 'function' },
+                typeof onProgress === 'function' ? (line) => onProgress(JSON.parse(line)) : undefined)
+                .finally(() => signal?.removeEventListener('abort', stop));
+        };
 
         // The last pane list, for a listener that registers after it was sent.
         let panes = null;
@@ -178,6 +194,8 @@ const SETUP: &str = r#"
                 }
                 case 'git': hear(listeners.git, JSON.parse(text)); break;
                 case 'diffClosed': hear(listeners.diffClosed, JSON.parse(text)); break;
+                case 'pluginEvent': hear(listeners.pluginEvent, JSON.parse(text)); break;
+                case 'sectionSort': hear(listeners.sectionSort, JSON.parse(text)); break;
                 case 'diffRefresh': {
                     Promise.resolve().then(() => diffRefreshHandler?.(JSON.parse(text))).then(
                         () => call('actionDone', { token: id, error: null }),
@@ -192,6 +210,7 @@ const SETUP: &str = r#"
                     hear(listeners.panes, panes);
                     break;
                 case 'transcript': hear(listeners.transcript, JSON.parse(text)); break;
+                case 'agentActivity': hear(listeners.agentActivity, JSON.parse(text)); break;
                 case 'action': void runAction(id, JSON.parse(text)); break;
                 case 'resolve': {
                     const entry = pending.get(id);
@@ -245,18 +264,15 @@ const SETUP: &str = r#"
             },
             onGitChange: (listener) => subscribe(listeners.git, listener),
             disks: () => call('disks', {}),
-            diskFind: (path, { names, skip, onProgress, signal } = {}) => {
-                if (signal?.aborted) return Promise.reject(new Error('The scan was stopped'));
-                const token = String(nextCall);
-                const stop = () => { call('diskUsageCancel', { token }).catch(none); };
-                signal?.addEventListener('abort', stop, { once: true });
-                return call('diskFind', { path, names, skip, token, stream: typeof onProgress === 'function' },
-                    typeof onProgress === 'function' ? (line) => onProgress(JSON.parse(line)) : undefined)
-                    .finally(() => signal?.removeEventListener('abort', stop));
-            },
+            diskUsage: (path, { minBytes, depth, maxEntries, onProgress, signal } = {}) =>
+                diskCall('diskUsage', { path, minBytes, depth, maxEntries }, { onProgress, signal }),
+            diskFind: (path, { names, skip, onProgress, signal } = {}) =>
+                diskCall('diskFind', { path, names, skip }, { onProgress, signal }),
             project: () => call('project', {}),
             openPane: ({ command = null, args = [], cwd = null, placement = 'tab' } = {}) => call('openPane', { command, args, cwd, placement }),
             openView: (id, { as, args, newTab } = {}) => call('openView', { id, as, args, newTab: newTab === true }),
+            viewArgs: () => (native.viewArgs == null ? null : JSON.parse(native.viewArgs)),
+            openSettings: () => call('openSettings', {}),
             closeView: (id) => call('closeView', { id }),
             onTool: (name, handler) => void tools.set(name, handler),
             callTool: (name, args, options) => call('callTool', { name, arguments: args ?? {}, project: options?.project ?? null }),
@@ -266,10 +282,13 @@ const SETUP: &str = r#"
             claudeAccounts: () => call('claudeAccounts', {}),
             setClaudeAccount: (projectId, name) => call('setClaudeAccount', { projectId, name: name ?? null }),
             setProjectSection: (projectId, sectionId, rows) => call('setProjectSection', { projectId, sectionId, rows }),
+            setSectionSort: (sectionId, sort) => call('setSectionSort', { sectionId, sort }),
+            onSectionSort: (listener) => subscribe(listeners.sectionSort, listener),
             openDiff: (diff) => call('openDiff', diff ?? {}),
             updateDiff: (id, update) => call('updateDiff', { id, ...update }),
             onDiffRefresh: (handler) => void (diffRefreshHandler = handler),
             onDiffClosed: (listener) => subscribe(listeners.diffClosed, listener),
+            onReply: () => {},
             // Every terminal pane, on every change, and once more for a listener that comes after the first list.
             onPanes: (listener) => {
                 const off = subscribe(listeners.panes, listener);
@@ -292,6 +311,16 @@ const SETUP: &str = r#"
                     stream: typeof onOutput === 'function',
                 }, onOutput),
             openUrl: (url) => call('openUrl', { url: String(url) }),
+            fetch: (url, { method, headers, body, bearer, binary } = {}) => call('fetch', { url, method, headers, body, bearer, binary }),
+            secrets: Object.freeze({
+                set: (name, value) => call('secretSet', { name, value }),
+                delete: (name) => call('secretDelete', { name }),
+                has: (name) => call('secretHas', { name }),
+            }),
+            post: (program, url, fields, { host } = {}) => call('post', { program, url, fields, host }),
+            sendToAgent: (paneId, text) => call('sendToAgent', { paneId, text }),
+            emit: (name, data) => call('emit', { name, data: data ?? null }),
+            onEvent: (listener) => subscribe(listeners.pluginEvent, listener),
             ports: () => call('ports', {}),
             notify: ({ title, body = '', projectId, actions } = {}) => call('notify', { title, body, projectId, actions }),
             transcript: (sessionId, types, { last } = {}) =>
@@ -301,6 +330,8 @@ const SETUP: &str = r#"
                     last: typeof last === 'number' && last >= 1 ? Math.floor(last) : null,
                 }),
             onTranscript: (listener) => subscribe(listeners.transcript, listener),
+            agentActivity: (sessionId) => call('agentActivity', { sessionId: String(sessionId) }),
+            onAgentActivity: (listener) => subscribe(listeners.agentActivity, listener),
             statusline: () => call('statusline', {}),
         });
         Object.defineProperty(wings, 'focused', { get: () => focused, enumerable: true });
@@ -343,6 +374,9 @@ pub(super) fn install<'js>(
             native
                 .set("call", call(ctx, link, queue.clone()).map_err(message)?)
                 .map_err(message)?;
+        }
+        if let Some(args) = link.view_args() {
+            native.set("viewArgs", args).map_err(message)?;
         }
     }
     let setup: Function = ctx.eval(SETUP).catch(ctx).map_err(message)?;

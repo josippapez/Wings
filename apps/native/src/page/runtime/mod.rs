@@ -104,12 +104,18 @@ pub enum Message {
     Git,
     DiffRefresh,
     DiffClosed,
+    /// The JSON of another plugin's event, `{ from, name, data }`, for `onEvent`.
+    PluginEvent,
+    /// The JSON `{ sectionId, sort }` of a sort picked in a project section's menu, for `onSectionSort`.
+    SectionSort,
     /// JSON from another frame of the plugin, for `onBroadcast`.
     Broadcast,
     /// The JSON list of panes, for `onPanes`.
     Panes,
     /// The JSON of a transcript entry, for `onTranscript`.
     Transcript,
+    /// The JSON `{ sessionId }` of an OpenCode session that did something, for `onAgentActivity`.
+    AgentActivity,
     /// A badge action was clicked: `id` names it for `Link::call("actionDone")`, the text is the JSON of `{ paneId, actionId }`.
     Action,
     /// Another plugin calls one of this plugin's tools: `id` names the call for `Link::call("toolDone")`, the text is
@@ -131,9 +137,12 @@ impl Message {
             Message::Git => "git",
             Message::DiffRefresh => "diffRefresh",
             Message::DiffClosed => "diffClosed",
+            Message::PluginEvent => "pluginEvent",
+            Message::SectionSort => "sectionSort",
             Message::Broadcast => "broadcast",
             Message::Panes => "panes",
             Message::Transcript => "transcript",
+            Message::AgentActivity => "agentActivity",
             Message::Action => "action",
             Message::Tool => "tool",
             Message::Resolve => "resolve",

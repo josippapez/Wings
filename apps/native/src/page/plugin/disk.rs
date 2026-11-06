@@ -48,6 +48,81 @@ fn names(params: &Value, key: &str, min: usize, max: usize) -> Result<Vec<String
         .collect()
 }
 
+/// A number `diskUsage` was given, 0 or more and at most `max`, or `None` when it gave none: the desktop's `diskCount`.
+/// A size is whole bytes, so a floor of 1.5 is 2.
+fn count(params: &Value, name: &str, max: f64, whole: bool) -> Result<Option<f64>, String> {
+    let bad = || {
+        format!(
+            "diskUsage {name} must be {}, 0 or more",
+            if whole { "a whole number" } else { "a number" }
+        )
+    };
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => {
+            let value = number.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)?;
+            if whole && (value.fract() != 0.0 || value > MAX_SAFE_INTEGER) {
+                return Err(bad());
+            }
+            Ok(Some(value.ceil().min(max)))
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// `Number.MAX_SAFE_INTEGER`.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// What a scan does once it has its token.
+enum Work {
+    Usage(wings_disk_usage::Options),
+    Find {
+        names: Vec<String>,
+        skip: Vec<String>,
+    },
+}
+
+impl Work {
+    /// The call as the desktop's `diskUsageRequest` and `diskFindRequest` read it. Rust clamps the ranges.
+    fn of(method: &str, params: &Value) -> Result<Self, String> {
+        if method == "diskUsage" {
+            let defaults = wings_disk_usage::Options::default();
+            let min_bytes = count(params, "minBytes", MAX_SAFE_INTEGER, false)?;
+            let depth = count(params, "depth", u32::MAX as f64, true)?;
+            let max_entries = count(params, "maxEntries", u32::MAX as f64, true)?;
+            return Ok(Self::Usage(wings_disk_usage::Options {
+                min_bytes: min_bytes.map_or(defaults.min_bytes, |v| v as u64),
+                depth: depth.map_or(defaults.depth, |d| {
+                    (d as u32).min(wings_disk_usage::MAX_DEPTH)
+                }),
+                max_entries: max_entries.map_or(defaults.max_entries, |n| {
+                    (n as usize).clamp(1, wings_disk_usage::MAX_ENTRIES)
+                }),
+            }));
+        }
+        Ok(Self::Find {
+            names: names(params, "names", 1, 16)?,
+            skip: names(params, "skip", 0, 32)?,
+        })
+    }
+
+    fn run(
+        self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: impl Fn(&wings_disk_usage::Progress) + Sync,
+    ) -> Result<String, String> {
+        match self {
+            Self::Usage(options) => wings_disk_usage::scan(path, options, cancel, progress)
+                .and_then(|scan| serde_json::to_string(&scan).map_err(|e| e.to_string())),
+            Self::Find { names, skip } => {
+                wings_disk_usage::find(path, &names, &skip, cancel, progress)
+                    .and_then(|found| serde_json::to_string(&found).map_err(|e| e.to_string()))
+            }
+        }
+    }
+}
+
 impl Shared {
     pub(super) fn disk_call(
         self: &Arc<Self>,
@@ -86,10 +161,9 @@ impl Shared {
                 .get("path")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
-                .ok_or("diskFind needs a path")?
+                .ok_or_else(|| format!("{method} needs a path"))?
                 .to_owned();
-            let find_names = names(&params, "names", 1, 16)?;
-            let skip = names(&params, "skip", 0, 32)?;
+            let work = Work::of(method, &params)?;
             let stream = params.get("stream") == Some(&Value::Bool(true));
             let flag = Arc::new(AtomicBool::new(false));
             self.scans
@@ -103,12 +177,11 @@ impl Shared {
             self.off_thread(reply.clone(), move |reply| {
                 let _scan = scan;
                 let lines = reply.lines();
-                let found = wings_disk_usage::find(&path, &find_names, &skip, &flag, |progress| {
+                work.run(&path, &flag, |progress| {
                     if stream && let Ok(line) = serde_json::to_string(progress) {
                         lines(&line);
                     }
-                });
-                found.and_then(|found| serde_json::to_string(&found).map_err(|e| e.to_string()))
+                })
             });
             Ok(())
         })();

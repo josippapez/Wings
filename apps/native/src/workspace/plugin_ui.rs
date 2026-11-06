@@ -29,14 +29,14 @@ const CARD: u32 = 0x201d23;
 pub(super) const STRIP_HEIGHT: f32 = 22.0;
 
 /// The pill, text, ring and dot colours of a tone: the desktop's `toneClass`.
-struct Palette {
+pub(super) struct Palette {
     pill: u32,
-    text: u32,
+    pub(super) text: u32,
     ring: u32,
     dot: u32,
 }
 
-fn palette(tone: Tone) -> Palette {
+pub(super) fn palette(tone: Tone) -> Palette {
     let (pill, text, ring, dot) = match tone {
         Tone::Neutral => (0xffffff0f, theme::MUTED_FOREGROUND, 0xffffff1a, theme::IDLE),
         Tone::Info => (0x7aa7f21f, 0x9cc0ff, 0x7aa7f240, 0x7aa7f2),
@@ -486,7 +486,7 @@ impl Workspace {
         if is_sidebar {
             self.show_sidebar(plugin, page, cx);
         } else {
-            self.open_plugin_view(plugin, page, window, cx);
+            self.open_plugin_view(plugin, page, None, window, cx);
         }
     }
 

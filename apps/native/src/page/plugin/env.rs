@@ -11,7 +11,7 @@ use std::{
 };
 
 use serde::Serialize;
-use wings_plugins::manifest::Plugin;
+use wings_plugins::{manifest::Plugin, permissions::may_hear_event};
 use wings_spaces::{
     claude_accounts::Accounts,
     spaces::{Space, WorktreeSetup},
@@ -68,6 +68,7 @@ pub struct ToolCall {
 
 /// A running plugin, as another plugin's `callTool` finds it.
 struct Target {
+    plugin: Plugin,
     builtin: bool,
     /// The tools its manifest declares.
     tools: Vec<String>,
@@ -84,6 +85,7 @@ impl Running {
         self.0.lock().unwrap().insert(
             plugin.manifest.id.clone(),
             Target {
+                plugin: plugin.clone(),
                 builtin,
                 tools: plugin
                     .manifest
@@ -104,6 +106,25 @@ impl Running {
             .unwrap()
             .get(plugin)
             .map(|target| target.builtin)
+    }
+
+    /// Sends the event `name` with `data` of the plugin `from` to the main of every other running plugin that declared
+    /// `<from> <name>` in its `events`. Only Wings' own plugins send and hear events.
+    pub fn emit(&self, from: &str, name: &str, data: &serde_json::Value) {
+        let running = self.0.lock().unwrap();
+        if running.get(from).is_none_or(|sender| !sender.builtin) {
+            return;
+        }
+        let text = serde_json::json!({ "from": from, "name": name, "data": data }).to_string();
+        for (id, target) in running.iter() {
+            if id != from
+                && target.builtin
+                && may_hear_event(&target.plugin, from, name)
+                && let Some(host) = target.host.upgrade()
+            {
+                host.hear_event(&text);
+            }
+        }
     }
 
     /// Hands the call to the plugin's main, or answers `reply` with why it can't.
@@ -196,6 +217,40 @@ pub trait Env: Send + Sync + 'static {
     ) -> Result<(), String> {
         Err("Worktrees aren't available in this host".into())
     }
+    /// Tells the other plugins that listen for the event `name` of plugin `from` (`wings.emit`). The host has checked
+    /// `name` and `data`.
+    fn emit(&self, _from: &str, _name: &str, _data: &serde_json::Value) {}
+    /// The secret `name` the plugin `plugin` kept under its install scope `scope`, if it kept one. The host has checked
+    /// the plugin may.
+    fn secret_get(
+        &self,
+        _plugin: &str,
+        _scope: &str,
+        _name: &str,
+    ) -> Result<Option<String>, String> {
+        Err("Secrets aren't available in this host".into())
+    }
+    fn secret_set(
+        &self,
+        _plugin: &str,
+        _scope: &str,
+        _name: &str,
+        _value: &str,
+    ) -> Result<(), String> {
+        Err("Secrets aren't available in this host".into())
+    }
+    fn secret_delete(&self, _plugin: &str, _scope: &str, _name: &str) -> Result<(), String> {
+        Err("Secrets aren't available in this host".into())
+    }
+    /// Pastes `text` into the prompt of the agent in pane `pane` and answers `{ "submitted": bool }`, now or later.
+    /// The host has checked the plugin may, and that the text is a message.
+    fn send_to_agent(&self, _pane: &str, _text: &str, reply: crate::page::runtime::Reply) {
+        reply.err("Sending messages to agents isn't available in this host".into());
+    }
+    /// Shows the settings page of `plugin`, which the host has checked it has.
+    fn open_settings(&self, _plugin: &str) -> Result<(), String> {
+        Err("Plugin settings aren't available in this host".into())
+    }
     /// The folders of the app's projects, which `exec` may run in.
     fn projects(&self) -> Vec<PathBuf>;
     /// The folders of the Claude Code accounts, the default one's first: where the transcripts are.
@@ -209,12 +264,31 @@ pub trait Env: Send + Sync + 'static {
     fn set_claude_account(&self, _project: &str, _name: Option<&str>) -> Result<(), String> {
         Err("Claude Code accounts aren't available in this host".into())
     }
+    /// What the OpenCode session `session_id` is doing, as `wings.agentActivity` answers it, asked of OpenCode's
+    /// background service. The host has checked the plugin may. Takes a while: called on a thread of its own.
+    fn agent_activity(&self, _session_id: &str) -> Result<serde_json::Value, String> {
+        Err("Agent activity isn't available in this host".into())
+    }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;
     /// Opens `url` in the browser. The host has checked the plugin may.
     fn open_url(&self, url: &str) -> Result<(), String>;
     /// Shows a notification, with its title and body already cut to length and led by the plugin's name.
     fn notify(&self, title: &str, body: &str) -> Result<(), String>;
+    /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
+    /// has checked the plugin declares the section and the project is listed.
+    fn set_project_section(
+        &self,
+        _plugin: &str,
+        _project: &str,
+        _section: &str,
+        _rows: Option<Vec<super::SectionRow>>,
+    ) -> Result<(), String> {
+        Err("Project sections aren't available in this host".into())
+    }
+    /// The plugin said which of its section's sorts its rows are in, for every project. The host has checked the plugin
+    /// declares the sort.
+    fn set_section_sort(&self, _plugin: &str, _section: &str, _sort: &str) {}
     /// The plugin set, or with `None` took away, the badge of a pane.
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>);
     /// The plugin set, or with `None` took away, the status under a pane's terminal.

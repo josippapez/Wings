@@ -9,7 +9,7 @@ use crate::{
     ui::{ButtonSize, icon_button},
 };
 
-use super::{Workspace, project::SIDEBAR_WIDTH, shortcut_label};
+use super::{Workspace, shortcut_label};
 
 /// The desktop's `h-10`.
 pub(super) const TITLE_BAR_HEIGHT: f32 = 40.0;
@@ -45,7 +45,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(4.0))
                     .pl(px(TRAFFIC_LIGHTS))
-                    .when(sidebar, |left| left.w(px(SIDEBAR_WIDTH + 12.0)))
+                    .when(sidebar, |left| left.w(px(self.side.width + 12.0)))
                     .when(!sidebar, |left| left.pr(px(4.0)))
                     .child(
                         icon_button(

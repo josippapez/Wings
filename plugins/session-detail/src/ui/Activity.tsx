@@ -46,7 +46,7 @@ function Row({ sessionId, item, open, toggle }: { sessionId: string; item: ItemV
             </Badge>
           ))}
           {item.tags ? null : (
-            <Text as="strong" tone={item.error ? "danger" : undefined}>
+            <Text weight="strong" tone={item.error ? "danger" : undefined}>
               {item.name}
             </Text>
           )}

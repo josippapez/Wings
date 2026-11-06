@@ -23,7 +23,7 @@
 //!   (`publish_transcript`); a click on a badge's button is `send_action`, which the main frame's `onAction` listeners
 //!   answer. Projects, focus and permission-gated git events follow the workspace. Disk searches and opening panes or
 //!   views use the desktop's contracts too. A plugin's main answers the tools another of Wings' own plugins calls (`onTool`;
-//!   `callTool` hands the call over with `run_tool`). A host without access refuses calls. Fetch, secrets and diffs aren't here.
+//!   `callTool` hands the call over with `run_tool`). A host without access refuses calls.
 
 use super::runtime::{
     Delivery, Event, Inbox, Limits, Link, Message, PageRuntime, Reply, Role, Store,
@@ -37,7 +37,7 @@ use std::{
     },
 };
 use wings_plugin_storage::Storage;
-use wings_plugins::permissions::NotifyLog;
+use wings_plugins::permissions::{NotifyLog, may_read_agent_activity};
 
 mod calls;
 mod diff;
@@ -47,6 +47,7 @@ mod env;
 mod focus_tests;
 pub mod ui;
 
+pub use calls::{SectionIcon, SectionRow};
 pub use env::{
     Access, Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SessionEntry, ToolCall,
 };
@@ -259,6 +260,8 @@ struct FrameLink {
     /// The focus the frame was first told, set once it's registered. Its bundle reads this, not the live value,
     /// so `wings.focused` agrees with the first focus message it hears.
     ready: Arc<(Mutex<Option<bool>>, Condvar)>,
+    /// What the page was opened with, as JSON, for `wings.viewArgs`.
+    args: Option<String>,
 }
 
 impl Link for FrameLink {
@@ -294,6 +297,10 @@ impl Link for FrameLink {
         self.shared.broadcast(self.id, json)
     }
 
+    fn view_args(&self) -> Option<String> {
+        self.args.clone()
+    }
+
     fn storage(&self, call: Store) -> Result<String, String> {
         self.shared.store(call)
     }
@@ -302,7 +309,7 @@ impl Link for FrameLink {
         if matches!(method, "openDiff" | "updateDiff") {
             return self.shared.diff_call(self.id, method, params, reply);
         }
-        if matches!(method, "diskFind" | "diskUsageCancel") {
+        if matches!(method, "diskFind" | "diskUsage" | "diskUsageCancel") {
             let Some(token) = params
                 .get("token")
                 .and_then(serde_json::Value::as_str)
@@ -394,7 +401,7 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<()> {
-        let main = self.spawn(Role::Main, true, 0, source, on_event)?;
+        let main = self.spawn(Role::Main, true, 0, None, source, on_event)?;
         // The old main leaves the list as it drops, after the new one joined: a message in between reaches the new one.
         let old = self.main.lock().unwrap().replace(main);
         if old.is_some() {
@@ -463,6 +470,22 @@ impl PluginHost {
     /// app has checked the plugin's `permissions.transcript` names the entry's type.
     pub fn publish_transcript(&self, json: &str) {
         self.shared.tell_all(Message::Transcript, json);
+    }
+
+    /// An OpenCode session did something, for the frames' `onAgentActivity`: only a plugin whose manifest has
+    /// `permissions.agentActivity` hears it.
+    pub fn publish_agent_activity(&self, session_id: &str) {
+        if self
+            .shared
+            .access
+            .as_ref()
+            .is_some_and(|access| may_read_agent_activity(&access.plugin))
+        {
+            self.shared.tell_all(
+                Message::AgentActivity,
+                &serde_json::json!({ "sessionId": session_id }).to_string(),
+            );
+        }
     }
 
     /// A badge button was clicked: the main frame's `onAction` listeners get it, and `done` is called when they have
@@ -553,7 +576,7 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        self.spawn(Role::Page, true, 0, source, on_event)
+        self.spawn(Role::Page, true, 0, None, source, on_event)
     }
 
     /// Starts unfocused even during bundle evaluation, until its view is shown.
@@ -562,7 +585,55 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        self.spawn(Role::Page, false, 0, source, on_event)
+        self.spawn(Role::Page, false, 0, None, source, on_event)
+    }
+
+    /// Like `open_hidden_page`, for a tab `wings.openView` opened with `args`, which the page reads with `viewArgs`.
+    pub fn open_hidden_page_with_args(
+        &self,
+        source: &str,
+        args: Option<&serde_json::Value>,
+        on_event: impl FnMut(Event) + Send + 'static,
+    ) -> std::io::Result<PageRuntime> {
+        self.spawn(
+            Role::Page,
+            false,
+            0,
+            args.map(|args| args.to_string()),
+            source,
+            on_event,
+        )
+    }
+
+    /// Another plugin's event, as the JSON `{ from, name, data }`, for the `onEvent` listeners of this plugin's main.
+    pub fn hear_event(&self, json: &str) {
+        let main = self
+            .shared
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|frame| frame.role == Role::Main)
+            .map(|frame| frame.inbox.clone());
+        if let Some(main) = main {
+            main.send(Message::PluginEvent, 0, json.to_owned());
+        }
+    }
+
+    /// A sort the user picked in the plugin's project section menu, for the `onSectionSort` listeners of its main.
+    pub fn hear_section_sort(&self, section: &str, sort: &str) {
+        let main = self
+            .shared
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|frame| frame.role == Role::Main)
+            .map(|frame| frame.inbox.clone());
+        if let Some(main) = main {
+            let json = serde_json::json!({ "sectionId": section, "sort": sort });
+            main.send(Message::SectionSort, 0, json.to_string());
+        }
     }
 
     pub fn register_window(&self) -> PluginWindow {
@@ -580,7 +651,7 @@ impl PluginHost {
         window_id: u64,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        self.spawn(Role::Page, true, window_id, source, on_event)
+        self.spawn(Role::Page, true, window_id, None, source, on_event)
     }
 
     fn spawn(
@@ -588,6 +659,7 @@ impl PluginHost {
         role: Role,
         visible: bool,
         window: u64,
+        args: Option<String>,
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
@@ -601,6 +673,7 @@ impl PluginHost {
             role,
             window,
             ready: ready.clone(),
+            args,
         });
         let shared = Arc::downgrade(&self.shared);
         let mut on_event = on_event;

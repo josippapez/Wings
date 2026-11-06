@@ -2,7 +2,9 @@
 
 use std::{fmt::Arguments, sync::OnceLock};
 
+pub mod agent_activity;
 pub mod detect;
+pub mod history;
 pub mod opencode;
 pub mod program_status;
 

@@ -68,6 +68,20 @@ pub struct Config {
     pub agents: Option<PathBuf>,
     /// The desktop app's plugins, started and offered as tabs. `None` runs none, as in tests.
     pub plugins: Option<PluginPaths>,
+    /// The desktop app's data folder, whose `projects/` holds each project's page: its facts, sections and blocks.
+    /// `None` shows no project pages, as in tests.
+    pub project_info: Option<PathBuf>,
+    /// Where the history sheet and the command palette look for past sessions. `None` finds none, as in tests.
+    pub sessions: Option<SessionSource>,
+}
+
+/// Where past sessions are read from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionSource {
+    /// Claude Code's folder and the folder of every other account beside it, and OpenCode's service.
+    Accounts(PathBuf),
+    /// Only these Claude Code folders: made-up sessions in tests and screenshots.
+    Folders(Vec<PathBuf>),
 }
 
 impl Config {
@@ -134,6 +148,8 @@ impl Config {
             projects: crate::projects::default_path(),
             agents: Some(claude_accounts::claude_dir()),
             plugins: PluginPaths::desktop().map(|paths| PluginPaths { dev, ..paths }),
+            project_info: crate::projects::desktop_dir(),
+            sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
         }))
     }
 

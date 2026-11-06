@@ -1,8 +1,8 @@
 // The PR tab's page, drawn from what it's given: no loading and no talking to Wings in here, so the same component can be
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Chip, CodeBlock, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Page, Skeleton, Skeletons, Summary, SummaryChip, Tabs, Text, Time, Timeline, Toolbar, type CodeLine } from "wings-plugin-ui";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Avatar, Badge, Button, Card, Chip, CodeBlock, Confirm, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Notice, Page, Row, Skeleton, Skeletons, Stack, Summary, SummaryChip, Tabs, Text, Textarea, Time, Timeline, Title, Toolbar, type CodeLine } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
@@ -70,111 +70,117 @@ export function PrView(props: PrViewProps) {
   const open = st ? !["Merged", "Closed"].includes(st.label) : false;
   const ref = `${args.repo} ${refOf(args)}`;
 
-  const send = async () => {
-    const choice = pending!;
-    setApproving(true);
-    setVerdict(null);
-    try {
-      await choice.run();
-      setVerdict({ ok: true, text: `${choice.label}: done.` });
-    } catch (e) {
-      setVerdict({ ok: false, text: String((e as Error).message ?? e) });
-    } finally {
-      setApproving(false);
-      setPending(null);
-    }
-  };
+  const confirm = pending ? (
+    <Confirm
+      title={`${pending.label} on ${ref} as you?`}
+      cancelLabel="Cancel"
+      onCancel={() => setPending(null)}
+      actions={[
+        {
+          id: "send",
+          label: pending.label,
+          variant: "default",
+          onConfirm: async () => {
+            setApproving(true);
+            setVerdict(null);
+            try {
+              await pending.run();
+              setVerdict({ ok: true, text: `${pending.label}: done.` });
+              setPending(null);
+            } finally {
+              setApproving(false);
+            }
+          },
+        },
+      ]}
+    >
+      <Text>Everyone on it sees your vote.</Text>
+    </Confirm>
+  ) : null;
   const pick = (choice: { label: string; run: () => Promise<void> }) => setPending(choice);
-  // The card sits under the title: a vote picked while scrolled down brings it into view.
-  const confirmRef = useRef<HTMLDivElement>(null);
-  useEffect(() => confirmRef.current?.scrollIntoView({ block: "nearest" }), [pending]);
 
   const toolbar = (
-    <Toolbar
-      title={onBack ? undefined : ref}
-      actions={
-        <>
-          <Button variant="outline" size="sm" onClick={onRefresh}>Refresh</Button>
-          <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => onRun("agent")}>Send to agent</Button>
-          <Button variant="outline" size="sm" onClick={() => void wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
-          {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={pending !== null} onClick={() => pick({ label: "Approve", run: onApprove })} data-testid="pr-approve">Approve</Button> : null}
-          {onVote && open ? (
-            <Menu
-              label="Vote ▾"
-              variant="outline"
-              size="sm"
-              align="end"
-              disabled={approving}
-              data-testid="pr-vote"
-              items={(Object.keys(AZURE_VOTES) as AzureVote[]).map((v) => ({ id: v, label: AZURE_VOTES[v], onSelect: () => pick({ label: AZURE_VOTES[v], run: () => onVote(v) }) }))}
-            />
-          ) : null}
-          <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
-        </>
-      }
-    >
-      {onBack ? (
-        <nav className="pr-crumbs" aria-label="Breadcrumb">
-          <Button variant="ghost" size="sm" onClick={onBack} data-testid="pr-back">
-            <span aria-hidden="true">←</span> All pull requests
-          </Button>
-          <span aria-hidden="true" className="pr-crumb-sep">/</span>
-          <span className="pr-crumb" title={ref}>{ref}</span>
-        </nav>
-      ) : null}
-    </Toolbar>
+    <>
+      <Toolbar
+        title={onBack ? undefined : ref}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={onRefresh}>Refresh</Button>
+            <Button variant="outline" size="sm" busy={busy === "agent"} onClick={() => onRun("agent")}>Send to agent</Button>
+            <Button variant="outline" size="sm" onClick={() => void wings.openUrl(args.url)}>Open in {PROVIDERS[args.provider].name}</Button>
+            {onApprove && open ? <Button variant="outline" size="sm" busy={approving} aria-expanded={pending !== null} onClick={() => pick({ label: "Approve", run: onApprove })} data-testid="pr-approve">Approve</Button> : null}
+            {onVote && open ? (
+              <Menu
+                label="Vote ▾"
+                variant="outline"
+                size="sm"
+                align="end"
+                disabled={approving}
+                data-testid="pr-vote"
+                items={(Object.keys(AZURE_VOTES) as AzureVote[]).map((v) => ({ id: v, label: AZURE_VOTES[v], onSelect: () => pick({ label: AZURE_VOTES[v], run: () => onVote(v) }) }))}
+              />
+            ) : null}
+            <Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button>
+          </>
+        }
+      >
+        {onBack ? (
+          <Row gap="s" className="pr-crumbs">
+            <Button variant="ghost" size="sm" onClick={onBack} data-testid="pr-back">← All pull requests</Button>
+            <Text tone="muted" className="pr-crumb-sep" aria-hidden="true">/</Text>
+            <Text tone="muted" truncate className="pr-crumb" title={ref}>{ref}</Text>
+          </Row>
+        ) : null}
+      </Toolbar>
+      {confirm}
+    </>
   );
 
   return (
     <Page toolbar={toolbar} className="pr-page" data-testid="pr-page">
-      <div className="pr-wrap">
-        <header className="pr-header">
-          <h1 className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
+      <Stack gap="l" className="pr-wrap">
+        <Stack as="header" gap="m" className="pr-header">
+          <Title className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
             {st?.title ?? args.title}
-            <span className="pr-number">{refOf(args)}</span>
-          </h1>
-          <div className="pr-meta">
+            <Text tone="muted" className="pr-number"> {refOf(args)}</Text>
+          </Title>
+          <Row gap="m" wrap className="pr-meta">
             {st ? <Badge tone={BADGE_TONE[st.tone]} data-testid="pr-state">{st.label}</Badge> : null}
             {st?.branch ? <Branch branch={st.branch} /> : null}
             {overview ? (
-              <span className="pr-author">
+              <Row gap="s" className="pr-author">
                 <Avatar name={overview.author} size="small" />
-                <strong>{overview.author}</strong>
-                {overview.createdAt ? <Text tone="muted" as="span"><Time iso={overview.createdAt} prefix="opened " /></Text> : null}
-              </span>
+                <Text weight="strong">{overview.author}</Text>
+                {overview.createdAt ? <Text tone="muted"><Time iso={overview.createdAt} prefix="opened " /></Text> : null}
+              </Row>
             ) : null}
-            {st?.updated ? <Text tone="muted" size="small" as="span"><Time iso={st.updated} prefix="updated " /></Text> : null}
-          </div>
-          {notice ? <Text tone="danger" role="alert">{notice}</Text> : null}
-          {pending ? (
-            <div ref={confirmRef} className="pr-card pr-confirm" role="group" aria-label="Confirm" data-testid="pr-confirm">
-              <Text>{pending.label} on {ref} as you? Everyone on it sees your vote.</Text>
-              <div className="pr-reply-actions">
-                <Button size="sm" busy={approving} onClick={() => void send()}>{pending.label}</Button>
-                <Button size="sm" variant="ghost" onClick={() => setPending(null)}>Cancel</Button>
-              </div>
-            </div>
-          ) : null}
-          {verdict ? <Text tone={verdict.ok ? "success" : "danger"} role={verdict.ok ? "status" : "alert"} data-testid="pr-verdict">{verdict.text}</Text> : null}
-        </header>
+            {st?.updated ? <Text tone="muted" size="small"><Time iso={st.updated} prefix="updated " /></Text> : null}
+          </Row>
+          {notice ? <Notice tone="danger">{notice}</Notice> : null}
+          {verdict ? <Notice tone={verdict.ok ? "success" : "danger"} data-testid="pr-verdict">{verdict.text}</Notice> : null}
+        </Stack>
 
         {problem && !overview ? (
-          <div className="pr-card pr-error" role="alert" data-testid="pr-problem">
-            <strong>Couldn't load this pull request</strong>
-            <Text tone="muted">{problem.message}</Text>
-            <Button size="sm" busy={problemBusy} onClick={onProblem}>{problem.action}</Button>
-          </div>
+          <Card className="pr-card pr-error" data-testid="pr-problem">
+            <Stack gap="m">
+              <Text weight="strong">Couldn't load this pull request</Text>
+              <Text tone="muted">{problem.message}</Text>
+              <Row><Button size="sm" busy={problemBusy} onClick={onProblem}>{problem.action}</Button></Row>
+            </Stack>
+          </Card>
         ) : error && !overview ? (
-          <div className="pr-card pr-error" role="alert" data-testid="pr-error">
-            <strong>Couldn't load this pull request</strong>
-            <Text tone="danger" className="pr-error-text">{error}</Text>
-            <Button size="sm" variant="outline" onClick={onRefresh}>Try again</Button>
-          </div>
+          <Card className="pr-card pr-error" data-testid="pr-error">
+            <Stack gap="m">
+              <Text weight="strong">Couldn't load this pull request</Text>
+              <Text tone="danger" className="pr-error-text">{error}</Text>
+              <Row><Button size="sm" variant="outline" onClick={onRefresh}>Try again</Button></Row>
+            </Stack>
+          </Card>
         ) : !overview || !st ? (
           <PrSkeleton />
         ) : (
           <>
-            {error ? <Text tone="danger" role="alert">{error}</Text> : null}
+            {error ? <Notice tone="danger">{error}</Notice> : null}
             <Summary className="pr-summary" data-testid="pr-summary">
               <ReviewChip overview={overview} />
               {checkTotal ? <ChecksChip status={st} onOpen={() => setTab("checks")} /> : <Badge variant="outline">No checks</Badge>}
@@ -195,18 +201,20 @@ export function PrView(props: PrViewProps) {
               ]}
             >
               {tab === "overview" ? <OverviewTab {...props} overview={overview} /> : null}
-              {tab === "checks" ? <div className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} onLoadRun={onLoadRun} onLoadRunLog={onLoadRunLog} /></div> : null}
+              {tab === "checks" ? <Card className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} onLoadRun={onLoadRun} onLoadRunLog={onLoadRunLog} /></Card> : null}
               {tab === "files" ? (
-                <div className="pr-card pr-files">
-                  <strong>{st.changes ?? "Changed files"}</strong>
-                  <Text tone="muted">The changed files open in Wings' diff viewer, with the review comments on their lines.</Text>
-                  <div><Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button></div>
-                </div>
+                <Card className="pr-card pr-files">
+                  <Stack gap="m">
+                    <Text weight="strong">{st.changes ?? "Changed files"}</Text>
+                    <Text tone="muted">The changed files open in Wings' diff viewer, with the review comments on their lines.</Text>
+                    <Row><Button size="sm" busy={busy === "diff"} onClick={() => onRun("diff")}>Open diff</Button></Row>
+                  </Stack>
+                </Card>
               ) : null}
             </Tabs>
           </>
         )}
-      </div>
+      </Stack>
     </Page>
   );
 }
@@ -215,29 +223,33 @@ function Branch({ branch }: { branch: string }) {
   const [copied, setCopied] = useState(false);
   const [source, target] = branch.split(" → ");
   return (
-    <span className="pr-branch">
-      <code title={`Source branch ${source}`}>{source}</code>
+    <Row gap="s" className="pr-branch">
+      <Text mono size="small" truncate title={`Source branch ${source}`}>{source}</Text>
       {target ? (
         <>
-          <span aria-hidden="true">→</span>
-          <code title={`Target branch ${target}`}>{target}</code>
+          <Text tone="muted" aria-hidden="true">→</Text>
+          <Text mono size="small" truncate title={`Target branch ${target}`}>{target}</Text>
         </>
       ) : null}
-      <button
-        type="button"
-        className="pr-icon-button"
-        aria-label={copied ? "Copied" : `Copy branch name ${source}`}
-        title={copied ? "Copied" : "Copy branch name"}
-        onClick={() => {
-          void copyText(source).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          });
-        }}
-      >
-        {copied ? "✓" : "⧉"}
-      </button>
-    </span>
+      {/* The native app has no clipboard call for a page yet. */}
+      {WINGS_NATIVE ? null : (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="pr-icon-button"
+          aria-label={copied ? "Copied" : `Copy branch name ${source}`}
+          title={copied ? "Copied" : "Copy branch name"}
+          onClick={() => {
+            void copyText(source).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+        >
+          {copied ? "✓" : "⧉"}
+        </Button>
+      )}
+    </Row>
   );
 }
 
@@ -246,15 +258,15 @@ function ReviewChip({ overview }: { overview: Overview }) {
   const tone = reviewers.some((r) => r.vote === "changes" || r.vote === "waiting") || /changes|rejected|waiting for author/i.test(status.review) ? "danger" : /approved/i.test(status.review) ? "success" : undefined;
   return (
     <SummaryChip tone={tone} data-testid="pr-review">
-      <span>{status.review}</span>
+      {status.review}
       {reviewers.length ? (
-        <span className="pr-reviewers">
+        <Row gap="s" className="pr-reviewers">
           {reviewers.map((r) => (
-            <span key={r.name} className="pr-reviewer" data-vote={r.vote} role="img" aria-label={`${r.name} ${VOTE_WORD[r.vote]}`} title={`${r.name} ${VOTE_WORD[r.vote]}`}>
+            <Row key={r.name} className="pr-reviewer" data-vote={r.vote} role="img" aria-label={`${r.name} ${VOTE_WORD[r.vote]}`} title={`${r.name} ${VOTE_WORD[r.vote]}`}>
               <Avatar name={r.name} size="small" />
-            </span>
+            </Row>
           ))}
-        </span>
+        </Row>
       ) : null}
     </SummaryChip>
   );
@@ -265,8 +277,7 @@ function ChecksChip({ status, onOpen }: { status: Status; onOpen: () => void }) 
   const parts = [failed && `${failed} failed`, running && `${running} running`, passed && `${passed} passed`].filter(Boolean).join(" · ");
   return (
     <SummaryChip tone={failed ? "danger" : running ? "warn" : "success"} aria-label={`${parts}. Show the checks`} onClick={onOpen} data-testid="pr-checks">
-      {parts}
-      <span aria-hidden="true">›</span>
+      {`${parts} ›`}
     </SummaryChip>
   );
 }
@@ -284,20 +295,26 @@ function PrSkeleton() {
 
 // ---------- overview: description and conversation ----------
 
+/** The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps, as a forge's own page loads more of a long one. The web page shows it all. */
+const STEP = WINGS_NATIVE ? 30 : Number.POSITIVE_INFINITY;
+
 function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, onReply, onRun, onCommit, onSnippet }: PrViewProps & { overview: Overview }) {
   // Pushes and threads share one timeline, the newest first, as Azure DevOps lists them.
   const entries = useMemo(() => (comments ? timelineOf(threadsOf(comments), pushes) : null), [comments, pushes]);
   const [showResolved, setShowResolved] = useState(false);
+  const [limit, setLimit] = useState(STEP);
   const resolved = entries?.filter((e) => e.kind === "thread" && kindOf(e.thread) === "resolved").length ?? 0;
   const threads = entries?.filter((e) => e.kind === "thread").length ?? 0;
   const diff = useMemo(() => (focus?: WingsDiffFocus) => onRun("diff", focus), [onRun]);
 
   return (
-    <div className="pr-overview">
-      <article className="pr-card" aria-label="Description" data-testid="pr-description">
-        <CommentHead author={overview.author} iso={overview.createdAt} suffix="opened this" isAuthor />
-        {overview.body.trim() ? <Markdown className="pr-md" source={overview.body} /> : <Text tone="muted">No description provided.</Text>}
-      </article>
+    <Stack gap="l" className="pr-overview">
+      <Card as="article" className="pr-card" aria-label="Description" data-testid="pr-description">
+        <Stack gap="m">
+          <CommentHead author={overview.author} iso={overview.createdAt} suffix="opened this" isAuthor />
+          {overview.body.trim() ? <Markdown className="pr-md" source={overview.body} /> : <Text tone="muted">No description provided.</Text>}
+        </Stack>
+      </Card>
 
       <Heading level={3} actions={resolved ? <Chip pressed={showResolved} onClick={() => setShowResolved((s) => !s)}>{showResolved ? "Collapse" : "Expand"} {resolved} resolved</Chip> : undefined}>
         Conversation{entries ? ` · ${threads}` : ""}
@@ -309,7 +326,7 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
         <Empty title="No comments yet" description="Review threads and comments on the pull request show up here." />
       ) : (
         <Timeline label="Conversation" data-testid="pr-conversation">
-          {entries.map((e) => {
+          {entries.slice(0, limit).map((e) => {
             if (e.kind === "push") return <PushCard key={`push-${e.push.id}`} push={e.push} onCommit={onCommit} />;
             const t = e.thread;
             const kind = kindOf(t);
@@ -330,7 +347,10 @@ function OverviewTab({ overview, comments, pushes = NO_PUSHES, error, canReply, 
           })}
         </Timeline>
       )}
-    </div>
+      {entries && entries.length > limit ? (
+        <Row><Button variant="outline" onClick={() => setLimit((l) => l + STEP)}>Show {Math.min(STEP, entries.length - limit)} more of {entries.length - limit} not shown</Button></Row>
+      ) : null}
+    </Stack>
   );
 }
 
@@ -345,17 +365,17 @@ function PushCard({ push, onCommit }: { push: Push; onCommit?: (commit: { sha: s
   const shown = all ? push.commits : push.commits.slice(0, COMMITS_SHOWN);
   const count = `${push.commits.length}${push.more ? "+" : ""}`;
   return (
-    <li className="pr-push" data-testid="pr-push">
-      <span className="pr-iteration" title={`Update ${push.id}`}>{push.id}</span>
-      <div className="pr-push-body">
-        <div className="pr-push-head">
+    <Row as="li" gap="m" align="start" className="pr-push" data-testid="pr-push">
+      <Text mono size="tiny" tone="muted" className="pr-iteration" title={`Update ${push.id}`}>{push.id}</Text>
+      <Stack gap="s" grow className="pr-push-body">
+        <Row gap="s" wrap className="pr-push-head">
           <Avatar name={push.author} size="small" />
-          <span><strong>{push.author}</strong> {push.created ? "opened the pull request with" : "pushed"} {count} {push.commits.length === 1 && !push.more ? "commit" : "commits"}</span>
-          <Text tone="muted" size="small" as="span"><Time iso={push.at} /></Text>
-        </div>
-        <ul className="pr-commits" aria-label={`Commits in update ${push.id}`}>
+          <Text><Text weight="strong">{push.author}</Text>{` ${push.created ? "opened the pull request with" : "pushed"} ${count} ${push.commits.length === 1 && !push.more ? "commit" : "commits"}`}</Text>
+          <Text tone="muted" size="small"><Time iso={push.at} /></Text>
+        </Row>
+        <Stack as="ul" gap="xs" className="pr-commits" aria-label={`Commits in update ${push.id}`}>
           {shown.map((c) => (
-            <li key={c.sha}>
+            <Stack as="li" key={c.sha}>
               {onCommit ? (
                 <ListButton className="pr-commit" aria-label={`See the changes in ${c.sha.slice(0, 7)}: ${c.message || "No message"}`} onClick={() => onCommit({ sha: c.sha, message: c.message })}>
                   <CommitLine c={c} />
@@ -363,43 +383,43 @@ function PushCard({ push, onCommit }: { push: Push; onCommit?: (commit: { sha: s
               ) : (
                 <CommitLine c={c} />
               )}
-            </li>
+            </Stack>
           ))}
-        </ul>
+        </Stack>
         {push.commits.length > COMMITS_SHOWN ? (
-          <Button size="sm" variant="ghost" aria-expanded={all} onClick={() => setAll((a) => !a)}>{all ? "Show fewer commits" : `Show all ${count} commits`}</Button>
+          <Row><Button size="sm" variant="ghost" aria-expanded={all} onClick={() => setAll((a) => !a)}>{all ? "Show fewer commits" : `Show all ${count} commits`}</Button></Row>
         ) : null}
-      </div>
-    </li>
+      </Stack>
+    </Row>
   );
 }
 
 function CommitLine({ c }: { c: Push["commits"][number] }) {
   return (
     <>
-      <span className="pr-commit-msg" title={c.message}>{c.message || "No message"}</span>
-      <span className="pr-commit-meta">
-        <code>{c.sha.slice(0, 7)}</code>
-        <span>{c.author}</span>
-        <time dateTime={c.at} title={when(c.at)}>{dayTime(c.at)}</time>
-      </span>
+      <Text truncate grow className="pr-commit-msg" title={c.message}>{c.message || "No message"}</Text>
+      <Row gap="s" className="pr-commit-meta">
+        <Text mono size="tiny">{c.sha.slice(0, 7)}</Text>
+        <Text size="tiny" tone="muted">{c.author}</Text>
+        <Text size="tiny" tone="muted" title={when(c.at)}>{dayTime(c.at)}</Text>
+      </Row>
     </>
   );
 }
 
 function CommentHead({ author, iso, suffix, isAuthor, bot, children }: { author: string; iso?: string; suffix?: string; isAuthor?: boolean; bot?: boolean; children?: ReactNode }) {
   return (
-    <div className="pr-comment-head">
+    <Row gap="s" wrap className="pr-comment-head">
       <Avatar name={author} />
-      <strong className="pr-comment-author">{author}</strong>
-      {isAuthor ? <span className="pr-tag">Author</span> : null}
-      {bot ? <span className="pr-tag">Bot</span> : null}
-      <Text tone="muted" size="small" as="span">
+      <Text weight="strong" className="pr-comment-author">{author}</Text>
+      {isAuthor ? <Badge size="sm" variant="outline" className="pr-tag">Author</Badge> : null}
+      {bot ? <Badge size="sm" variant="outline" className="pr-tag">Bot</Badge> : null}
+      <Text tone="muted" size="small">
         {suffix ? `${suffix} ` : null}
         {iso ? <Time iso={iso} /> : null}
       </Text>
-      {children ? <span className="pr-comment-head-end">{children}</span> : null}
-    </div>
+      {children ? <Row gap="s" className="pr-comment-head-end">{children}</Row> : null}
+    </Row>
   );
 }
 
@@ -420,59 +440,61 @@ const ThreadCard = memo(function ThreadCard({ thread, kind, defaultOpen, prAutho
   const { root, replies } = thread;
   const [open, setOpen] = useState(defaultOpen);
   const where = root.path ? `${root.path}${root.line ? `:${root.line}` : ""}` : null;
-  const status = root.thread ? <Badge variant="outline" tone={root.thread.state === "active" ? "warn" : "success"} data-testid="pr-thread-status">{root.thread.label}</Badge> : null;
+  const status = root.thread ? <Badge size="sm" variant="outline" tone={root.thread.state === "active" ? "warn" : "success"} data-testid="pr-thread-status">{root.thread.label}</Badge> : null;
 
   if (!open) {
     return (
-      <li className="pr-thread" data-kind={kind} data-collapsed="">
-        <button type="button" className="pr-thread-summary" aria-expanded={false} onClick={() => setOpen(true)}>
+      <Stack as="li" className="pr-thread" data-kind={kind} data-collapsed="">
+        <ListButton className="pr-thread-summary" aria-expanded={false} onClick={() => setOpen(true)}>
           <Avatar name={root.author} size="small" />
-          <strong>{root.author}</strong>
-          <span className="pr-thread-line">{oneLine(root.body) || "No text"}</span>
-          {where ? <code className="pr-path">{where}</code> : null}
-          {replies.length ? <Text tone="muted" size="tiny" as="span">{replies.length} {replies.length === 1 ? "reply" : "replies"}</Text> : null}
+          <Text weight="strong">{root.author}</Text>
+          <Text truncate grow className="pr-thread-line">{oneLine(root.body) || "No text"}</Text>
+          {where ? <Text mono size="tiny" truncate className="pr-path">{where}</Text> : null}
+          {replies.length ? <Text tone="muted" size="tiny">{replies.length} {replies.length === 1 ? "reply" : "replies"}</Text> : null}
           {status}
-          <span aria-hidden="true" className="pr-chevron">▾</span>
-        </button>
-      </li>
+          {WINGS_NATIVE ? null : <Text aria-hidden="true" className="pr-chevron">▾</Text>}
+        </ListButton>
+      </Stack>
     );
   }
 
   const slash = root.path ? root.path.lastIndexOf("/") : -1;
   const file = root.path ? { name: root.path.slice(slash + 1), dir: root.path } : null;
   return (
-    <li className="pr-thread" data-kind={kind}>
-      <article className="pr-card" aria-label={`Thread by ${root.author}`}>
-        {file ? (
-          <>
-            <div className="pr-file-head">
-              <div className="pr-file-id">
-                <strong className="pr-file-name">{file.name}</strong>
-                <code className="pr-path" title={where ?? undefined}>{file.dir}{root.line ? <span className="pr-line-no">:{root.line}</span> : null}</code>
-              </div>
-              <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
-            </div>
-            <Snippet root={root} latest={latest} onSnippet={onSnippet} />
-          </>
-        ) : null}
-        <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor} bot={isAutomated(root)}>
-          {status}
-          {kind === "resolved" ? <Button size="sm" variant="ghost" aria-expanded onClick={() => setOpen(false)}>Collapse</Button> : null}
-        </CommentHead>
-        <Body source={root.body} clamp={kind === "automated"} />
-        {replies.length ? (
-          <ol className="pr-replies" aria-label="Replies">
-            {replies.map((r) => (
-              <li key={r.id} className="pr-reply">
-                <CommentHead author={r.author} iso={r.createdAt} isAuthor={r.author === prAuthor} bot={isAutomated(r)} />
-                <Body source={r.body} clamp={kind === "automated"} />
-              </li>
-            ))}
-          </ol>
-        ) : null}
-        {root.canReply && canReply ? <ReplyBox onSend={(body) => onReply(root, body)} /> : null}
-      </article>
-    </li>
+    <Stack as="li" className="pr-thread" data-kind={kind}>
+      <Card as="article" className="pr-card" aria-label={`Thread by ${root.author}`}>
+        <Stack gap="m">
+          {file ? (
+            <>
+              <Row gap="m" justify="between" className="pr-file-head">
+                <Stack gap="xs" grow className="pr-file-id">
+                  <Text weight="strong" truncate className="pr-file-name">{file.name}</Text>
+                  <Text mono size="small" tone="muted" truncate className="pr-path" title={where ?? undefined}>{file.dir}{root.line ? `:${root.line}` : ""}</Text>
+                </Stack>
+                <Button size="sm" variant="ghost" aria-label={`View ${where} in the diff`} onClick={() => onDiff(focusOf(root))}>View in diff</Button>
+              </Row>
+              <Snippet root={root} latest={latest} onSnippet={onSnippet} />
+            </>
+          ) : null}
+          <CommentHead author={root.author} iso={root.createdAt} isAuthor={root.author === prAuthor} bot={isAutomated(root)}>
+            {status}
+            {kind === "resolved" ? <Button size="sm" variant="ghost" aria-expanded onClick={() => setOpen(false)}>Collapse</Button> : null}
+          </CommentHead>
+          <Body source={root.body} clamp={kind === "automated"} />
+          {replies.length ? (
+            <Stack as="ol" gap="m" className="pr-replies" aria-label="Replies">
+              {replies.map((r) => (
+                <Stack as="li" key={r.id} gap="s" className="pr-reply">
+                  <CommentHead author={r.author} iso={r.createdAt} isAuthor={r.author === prAuthor} bot={isAutomated(r)} />
+                  <Body source={r.body} clamp={kind === "automated"} />
+                </Stack>
+              ))}
+            </Stack>
+          ) : null}
+          {root.canReply && canReply ? <ReplyBox onSend={(body) => onReply(root, body)} /> : null}
+        </Stack>
+      </Card>
+    </Stack>
   );
 });
 
@@ -513,10 +535,10 @@ function Snippet({ root, latest, onSnippet }: { root: Comment; latest?: number; 
   const loading = !lines && Boolean(onSnippet) && Boolean(root.path && root.range) && !gone;
   const shown = lines ?? (loading ? placeholderLines(root.range!.start, root.range!.end, iteration !== undefined) : null);
   const bar = older ? (
-    <div className="pr-snippet-bar" data-testid="pr-snippet-bar">
-      <Text tone="muted" size="tiny" as="span">{now ? `Latest code, push ${latest}` : `As of push ${iteration}`}</Text>
+    <Row gap="s" justify="between" className="pr-snippet-bar" data-testid="pr-snippet-bar">
+      <Text tone="muted" size="tiny">{now ? `Latest code, push ${latest}` : `As of push ${iteration}`}</Text>
       <Button size="sm" variant="ghost" aria-pressed={now} onClick={() => setNow((n) => !n)}>{now ? `Show push ${iteration}` : "Show latest"}</Button>
-    </div>
+    </Row>
   ) : null;
   if (gone) {
     return (
@@ -540,12 +562,10 @@ function Body({ source, clamp }: { source: string; clamp: boolean }) {
   const [more, setMore] = useState(false);
   const long = clamp && (source.length > 1600 || source.split("\n").length > 24);
   return (
-    <div className="pr-body-box">
-      <div className="pr-body-clip" data-clamped={long && !more ? "" : undefined}>
-        <Markdown className="pr-md" source={source} />
-      </div>
-      {long ? <Button size="sm" variant="ghost" aria-expanded={more} onClick={() => setMore((m) => !m)}>{more ? "Show less" : "Show more"}</Button> : null}
-    </div>
+    <Stack gap="s" className="pr-body-box">
+      <Markdown className="pr-md" source={long && !more ? source.split("\n").slice(0, 24).join("\n").slice(0, 1600) : source} />
+      {long ? <Row><Button size="sm" variant="ghost" aria-expanded={more} onClick={() => setMore((m) => !m)}>{more ? "Show less" : "Show more"}</Button></Row> : null}
+    </Stack>
   );
 }
 
@@ -571,15 +591,15 @@ function ReplyBox({ onSend }: { onSend: (body: string) => Promise<void> }) {
     }
   };
 
-  if (!open) return <div><Button size="sm" variant="outline" onClick={() => setOpen(true)}>Reply</Button></div>;
+  if (!open) return <Row><Button size="sm" variant="outline" onClick={() => setOpen(true)}>Reply</Button></Row>;
   return (
-    <div className="pr-reply-box">
-      <textarea aria-label="Reply" rows={3} value={text} autoFocus onChange={(e) => setText(e.target.value)} />
-      {error ? <Text tone="danger" size="small" role="alert">{error}</Text> : null}
-      <div className="pr-reply-actions">
+    <Stack gap="s" className="pr-reply-box">
+      <Textarea label="Reply" rows={3} value={text} autoFocus onChange={(e) => setText(e.target.value)} />
+      {error ? <Notice tone="danger">{error}</Notice> : null}
+      <Row gap="s" className="pr-reply-actions">
         <Button size="sm" busy={sending} onClick={send}>Reply</Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-      </div>
-    </div>
+      </Row>
+    </Stack>
   );
 }

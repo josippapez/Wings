@@ -1,8 +1,8 @@
 //! Pages of the desktop's plugins as tabs. The sidebar's Plugins list offers the pages that open as tabs and have a native
 //! build, and each one open runs a frame of its plugin until the tab closes.
 //!
-//! The desktop also lists these pages in the + menu, as title bar buttons and under a project's sections, and a page can
-//! be opened with arguments by a row of another page. Only the sidebar list is here, and a page opens without arguments.
+//! The desktop also lists these pages in the + menu, as title bar buttons and under a project's sections. Only the
+//! sidebar list is here, and a page opens from it without arguments; `wings.openView` can open one with arguments.
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, Role, SharedString, Window, div,
@@ -27,17 +27,21 @@ pub(super) struct PluginTab {
     pub(super) plugin: String,
     pub(super) view: String,
     pub(super) title: SharedString,
+    /// What `wings.openView` opened it with, which the page reads with `viewArgs`.
+    pub(super) args: Option<serde_json::Value>,
     pub(super) page: Entity<PageView>,
     pub(super) focus: FocusHandle,
 }
 
 impl Workspace {
     /// Shows the plugin's page in this project, opening it unless it is open already. A page that sets `multiple` opens
-    /// another tab each time. False when no running plugin has that page.
+    /// another tab each time, unless one has the same `args`. A tab that is open with other `args` takes the new ones and
+    /// starts over, as the desktop's `openViewTab` does. False when no running plugin has that page.
     pub fn open_plugin_view(
         &mut self,
         plugin: &str,
         view: &str,
+        args: Option<serde_json::Value>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -51,13 +55,34 @@ impl Workspace {
         let Some(multiple) = multiple else {
             return false;
         };
-        let open = self
-            .plugin_tabs
-            .iter()
-            .find(|tab| tab.plugin == plugin && tab.view == view);
-        let id = match open {
-            Some(tab) if !multiple => Some(tab.id),
-            _ => self.new_plugin_tab(plugin, view, cx),
+        let same_view = |tab: &&PluginTab| tab.plugin == plugin && tab.view == view;
+        let with_these_args = if multiple && args.is_some() {
+            self.plugin_tabs
+                .iter()
+                .find(|tab| same_view(tab) && tab.args == args)
+                .map(|tab| tab.id)
+        } else {
+            None
+        };
+        let open = if multiple {
+            None
+        } else {
+            self.plugin_tabs.iter().find(same_view)
+        };
+        let id = match (with_these_args, open) {
+            (Some(id), _) => Some(id),
+            (None, Some(tab)) if args.is_none() || tab.args == args => Some(tab.id),
+            (None, Some(tab)) => {
+                let id = tab.id;
+                self.plugin_page(plugin, view, args.as_ref(), cx)
+                    .and_then(|(page, _)| {
+                        let tab = self.plugin_tabs.iter_mut().find(|tab| tab.id == id)?;
+                        tab.page = page;
+                        tab.args = args;
+                        Some(id)
+                    })
+            }
+            (None, None) => self.new_plugin_tab(plugin, view, args, cx),
         };
         let Some(id) = id else {
             return false;
@@ -66,13 +91,14 @@ impl Workspace {
         true
     }
 
-    /// The tab's id: it starts the page's frame, so nothing but the tab and its place in the strip is left to do.
-    pub(super) fn new_plugin_tab(
-        &mut self,
+    /// The page's frame, started with `args`, and the page's title.
+    fn plugin_page(
+        &self,
         plugin: &str,
         view: &str,
+        args: Option<&serde_json::Value>,
         cx: &mut Context<Self>,
-    ) -> Option<usize> {
+    ) -> Option<(Entity<PageView>, String)> {
         let installed = self
             .plugins
             .iter()
@@ -83,7 +109,19 @@ impl Workspace {
             page.source.clone(),
             page.title.clone(),
         );
-        let page = cx.new(|cx| PageView::in_plugin(&host, &source, cx));
+        let page = cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args, cx));
+        Some((page, title))
+    }
+
+    /// The tab's id: it starts the page's frame, so nothing but the tab and its place in the strip is left to do.
+    pub(super) fn new_plugin_tab(
+        &mut self,
+        plugin: &str,
+        view: &str,
+        args: Option<serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let (page, title) = self.plugin_page(plugin, view, args.as_ref(), cx)?;
         let id = self.next_tab;
         self.next_tab += 1;
         self.plugin_tabs.push(PluginTab {
@@ -91,6 +129,7 @@ impl Workspace {
             plugin: plugin.into(),
             view: view.into(),
             title: title.into(),
+            args,
             page,
             focus: cx.focus_handle().tab_stop(true),
         });
@@ -134,7 +173,7 @@ impl Workspace {
     ) -> Vec<Option<usize>> {
         saved
             .iter()
-            .map(|tab| self.new_plugin_tab(&tab.plugin, &tab.view, cx))
+            .map(|tab| self.new_plugin_tab(&tab.plugin, &tab.view, tab.args.clone(), cx))
             .collect()
     }
 
@@ -186,7 +225,7 @@ impl Workspace {
                         row.hover(|style| style.bg(rgba(theme::HOVER)))
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_plugin_view(&plugin, &view, window, cx);
+                        this.open_plugin_view(&plugin, &view, None, window, cx);
                     }))
                     .child(icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND))
                     .child(

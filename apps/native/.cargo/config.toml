@@ -1,0 +1,4 @@
+[env]
+# Test threads get 2 MiB, but the app draws pages on the main thread, which has 8 MiB on macOS. Debug builds of
+# the page renderer recurse through large frames, so tests get the main thread's size.
+RUST_MIN_STACK = "8388608"

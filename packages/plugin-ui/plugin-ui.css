@@ -254,6 +254,22 @@ textarea::placeholder {
 .w-row[data-wrap] {
   flex-wrap: wrap;
 }
+.w-bar {
+  flex: none;
+  padding: 8px 14px;
+}
+.w-bar[data-edge="top"] {
+  border-top: 1px solid var(--wings-hairline);
+}
+.w-bar[data-edge="bottom"] {
+  border-bottom: 1px solid var(--wings-hairline);
+}
+.w-scroll {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
 :is(.w-row, .w-stack, .w-text)[data-grow] {
   flex: 1;
   min-width: 0;

@@ -117,6 +117,8 @@ function Opened({ name }: { name: string }) {
 | Component | Props | Renders |
 |---|---|---|
 | `Row`, `Stack` | `gap` (`none`, `xs`, `s`, `m`, `l`), `grow`; `Row` also `align`, `justify`, `wrap`; `as` (`form`, `ul`, `ol` too) | Children side by side or one under the other; as a `ul` or `ol`, a list with no bullets. With `as`, the props and handlers are the element's: `<Row as="form" onSubmit={(e) => e.currentTarget.requestSubmit()}>` has a `HTMLFormElement` |
+| `Bar` | `edge` (`top`, `bottom`), `gap`, `as` | A strip across its parent, like a page's header or footer: padded as a toolbar is, children one under the other, with a hairline on its `edge` |
+| `Scroll` | `as` | A column that scrolls when its content is taller than the room it has, and takes what is left of its parent, like a list under a header |
 | `Text` | `tone` (`muted`, `info`, `success`, `warn`, `danger`), `size` (`small`, `tiny`), `weight` (`medium`, `strong`), `mono`, `numeric`, `truncate`, `clamp`, `grow`, `as` | A span, or the element in `as` |
 | `Title` | `as` (`h1`, `h2`, `h3`), `size` (`large`), `truncate` | A page's or a card's title, like a sprint's name or a setup step's question |
 | `Heading` | `level` (2, 3, 4), `actions` | A small muted section label, `h2` by default, with chips or a button on its right. Level 3 is a section title: 14px, bold, in the text colour |
@@ -176,7 +178,12 @@ export function SaveButton({ saving, save }: { saving: boolean; save: () => void
 above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `Loading`, `Card`, `Heading`, `Dot`,
 `Gauge`, `List`, `ListItem`, `Disclosure` and `Select`, and for forms `Field`, `FieldGroup`, `TextInput`, `Textarea`,
 `Chip`, `Combobox` (its matches are chips under the field), `Menu` (its items show under the button), `Icon`,
-`Properties` and `Time`, with the `useAction` and `useProject` hooks. It renders with
+`Properties`, `Stats` and `Time`, and for a pull request's page `Title`, `Avatar`, `Skeleton`, `Skeletons`, `Summary`,
+`SummaryChip`, `Tabs` (drawn as `Chips`), `Timeline`, `ListDetail`, `Markdown` (the same parser as the web one: bold, code
+and links are spans of their line, and an image shows as its alt text), `CodeBlock` (no colours by language),
+`ProjectGate` and `languageOf`, with the `useAction`, `useProject`, `useViewArgs`, `useTabState` and `useBlockState` hooks
+(the last two keep the state while the page is open, not across restarts). A `Text` inside a `Text` is a span with its own tone, weight, `mono`
+and `onClick`, which makes a link. `copyText` rejects: a native page has no clipboard call yet. It renders with
 `react-reconciler` into a JSON tree that the app draws with its own controls, so hooks, state and effects work but there
 is no DOM: no `className`, `style`, `title`, `as` or `aria-*`, and a handler gets a `NativeEvent`, not a DOM event. A
 `Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page. A plugin whose
@@ -235,7 +242,7 @@ public contract. `Meter` sets `--w-value`, how full it is, and a `Dot` with a `c
 rather than styles.
 
 `w-shell` with `data-place` (`sidebar`, `popover`, `view`, `tab`, `settings`) and `data-fill`; `w-row`,
-`w-stack` with `data-gap`, `data-align`, `data-justify`, `data-wrap`, `data-grow`; `w-text` with `data-tone`,
+`w-stack` with `data-gap`, `data-align`, `data-justify`, `data-wrap`, `data-grow`; `w-bar` with `data-edge`; `w-scroll`; `w-text` with `data-tone`,
 `data-size`, `data-weight`, `data-mono`, `data-numeric`, `data-truncate`, `data-clamp`, `data-grow`;
 `w-page`, `w-page-body` with `data-flush`; `w-toolbar`, `w-toolbar-title`, `w-toolbar-main`, `w-toolbar-actions`; `w-list-detail` with `data-has-detail` and `--w-list-width`, `w-list-detail-list`, `w-list-detail-detail`, `w-list-detail-body`, `w-list-detail-back`; `w-board`, `w-board-column`, `w-board-column-header`, `w-board-column-title`, `w-board-column-count`, `w-board-column-actions`, `w-board-column-body`; `w-split` with `data-direction`, `data-dragging` and `--w-split-size`, `w-split-pane`, `w-split-handle`;
 `w-title` with `data-size`; `w-heading`, `w-heading-row`; `w-card` with `data-size`; `w-gauge`, `w-gauge-label`, `w-gauge-value`,

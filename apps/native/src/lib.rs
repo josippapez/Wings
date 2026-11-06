@@ -6,6 +6,7 @@ pub mod page;
 pub mod plugin;
 pub mod projects;
 pub mod saved;
+pub mod secrets;
 pub mod theme;
 
 #[cfg(feature = "ui")]
@@ -18,6 +19,8 @@ pub mod icons;
 pub mod installed;
 #[cfg(feature = "ui")]
 pub mod layout;
+#[cfg(feature = "ui")]
+pub mod markdown;
 #[cfg(feature = "ui")]
 pub mod plugin_view;
 #[cfg(feature = "ui")]

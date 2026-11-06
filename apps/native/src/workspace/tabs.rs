@@ -23,12 +23,13 @@ impl Workspace {
         self.active
     }
 
-    /// The tabs in strip order: each terminal tab's id, each plugin page's, then Issues.
+    /// The tabs in strip order: each terminal tab's id, each plugin page's, the project page if it is open, then Issues.
     pub fn tabs(&self) -> Vec<Active> {
         self.terminals
             .iter()
             .map(|tab| Active::Terminal(tab.id))
             .chain(self.plugin_tabs.iter().map(|tab| Active::Plugin(tab.id)))
+            .chain(self.project_page.is_some().then_some(Active::Project))
             .chain([Active::Issues])
             .collect()
     }
@@ -102,7 +103,7 @@ impl Workspace {
                         .map_or_else(|| tab.layout.panes(), |pane| vec![pane])
                 })
                 .unwrap_or_default(),
-            Active::Plugin(_) | Active::Issues => Vec::new(),
+            Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
         };
         for (id, pane) in &self.panes {
             if let Ok(view) = &pane.view {
@@ -131,8 +132,10 @@ impl Workspace {
                     tab.focus.focus(window, cx);
                 }
             }
+            Active::Project => self.project_page_focus.focus(window, cx),
             Active::Issues => self.issues.focus_handle(cx).focus(window, cx),
         }
+        self.sync_project_page(cx);
         self.save(cx);
         cx.notify();
     }
@@ -180,7 +183,7 @@ impl Workspace {
                 }
                 self.plugin_tabs.swap(index, other);
             }
-            Active::Issues => return,
+            Active::Project | Active::Issues => return,
         }
         self.save(cx);
         cx.notify();
@@ -200,6 +203,10 @@ impl Workspace {
                     cx.notify();
                 }
             }
+            Active::Project => {
+                self.close_project_page(window, cx);
+                cx.notify();
+            }
             Active::Issues => {}
         }
     }
@@ -216,6 +223,7 @@ impl Workspace {
         let id = match active {
             Active::Terminal(id) => SharedString::from(format!("terminal-tab-{id}")),
             Active::Plugin(id) => SharedString::from(format!("plugin-tab-{id}")),
+            Active::Project => "project-tab".into(),
             Active::Issues => "issues-tab".into(),
         };
         let glyph = match (state, active) {
@@ -227,6 +235,9 @@ impl Workspace {
             }
             (None, Active::Plugin(_)) => {
                 icon(Icon::Puzzle, 14.0, theme::MUTED_FOREGROUND).into_any_element()
+            }
+            (None, Active::Project) => {
+                icon(Icon::FileText, 14.0, theme::MUTED_FOREGROUND).into_any_element()
             }
             (None, Active::Issues) => div().into_any_element(),
         };
@@ -262,6 +273,20 @@ impl Workspace {
                         this.close_plugin_tab(index, window, cx);
                         cx.notify();
                     }
+                })),
+            ),
+            Active::Project => Some(
+                ui::icon_button(
+                    SharedString::from(format!("{id}-close")),
+                    Icon::X,
+                    format!("Close tab ({})", shortcut_label("W", true)),
+                    ButtonSize::Tiny,
+                )
+                .opacity(0.0)
+                .group_hover(group.clone(), |style| style.opacity(1.0))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close_project_page(window, cx);
+                    cx.notify();
                 })),
             ),
             Active::Issues => None,

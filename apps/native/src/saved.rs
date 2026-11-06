@@ -55,6 +55,9 @@ pub struct SavedTab {
 pub struct SavedPluginTab {
     pub plugin: String,
     pub view: String,
+    /// What `wings.openView` opened it with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -84,6 +87,18 @@ pub struct Settings {
     /// `block`, `bar` or `underline`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_style: Option<String>,
+    /// The sidebar's width in points, as last dragged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_width: Option<f32>,
+    /// `manual`, `added`, `worked` or `name`, as the desktop app names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_sort: Option<String>,
+    /// Whether the sidebar's "Older" group is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_open: Option<bool>,
+    /// When each project was last worked on, in ms since the epoch, by its folder.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub last_active: BTreeMap<String, u64>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -239,10 +254,12 @@ mod tests {
                 SavedPluginTab {
                     plugin: "tasks".into(),
                     view: "board".into(),
+                    args: None,
                 },
                 SavedPluginTab {
                     plugin: "notes".into(),
                     view: "all".into(),
+                    args: Some(serde_json::json!({ "filter": "mine" })),
                 },
             ],
             active_plugin: None,

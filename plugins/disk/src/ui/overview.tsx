@@ -53,7 +53,7 @@ function DiskCard({ disk, startup, onScan }: { disk: DiskRow; startup: boolean; 
         </Row>
         <Button variant={startup ? "default" : "secondary"} size="sm" aria-label={`Scan ${disk.name}`} onClick={() => onScan(disk.mount)}>Scan</Button>
       </Row>
-      <Gauge label={`${bytes(disk.used)} used`} percent={percent} tone={fullness(percent)} note={`${bytes(disk.free)} free of ${bytes(disk.total)}${purgeable}`} />
+      <Gauge label={`${bytes(disk.used)} used`} percent={percent} tone={fullness(percent)} levels={[75, 90]} note={`${bytes(disk.free)} free of ${bytes(disk.total)}${purgeable}`} />
     </Card>
   );
 }
@@ -74,10 +74,10 @@ function placesOf(projects: WingsProject[], starred: string[]): Place[] {
 function PlaceRow({ place, starred, onScan, onStar }: { place: Place; starred: boolean; onScan: (root: string) => void; onStar: (path: string, on: boolean) => void }) {
   return (
     <ListItem className="dk-place">
-      <div className="dk-place-text">
+      <Stack gap="none" grow>
         <Text weight="medium" truncate>{place.name}</Text>
         <Text tone="muted" size="small" truncate title={place.path}>{place.path}</Text>
-      </div>
+      </Stack>
       <Button
         variant="ghost"
         size="icon-sm"
@@ -117,9 +117,11 @@ function ScanFolder({ onScan }: { onScan: (root: string) => void }) {
       }}
     >
       <Field inline label="Scan a folder" error={error} className="dk-scan-field">
-        <TextInput placeholder="~/Downloads" value={path} spellCheck={false} autoCapitalize="off" autoCorrect="off" onChange={(e) => setPath(e.target.value)} />
+        <Stack grow>
+          <TextInput placeholder="~/Downloads" value={path} spellCheck={false} autoCapitalize="off" autoCorrect="off" onChange={(e) => setPath(e.target.value)} />
+        </Stack>
       </Field>
-      <Button type="submit" variant="secondary" disabled={!path.trim()}>Scan</Button>
+      <Button type="submit" variant="secondary" disabled={!path.trim()} onClick={WINGS_NATIVE ? submit : undefined}>Scan</Button>
     </Row>
   );
 }
@@ -128,10 +130,10 @@ function ScanRow({ scan, disks, onOpen, onForget }: { scan: ScanSummary; disks: 
   const name = rootName(scan.root, disks);
   return (
     <ListItem className="dk-scan-item">
-      <div className="dk-place-text">
+      <Stack gap="none" grow>
         <Text weight="medium" truncate>{name}</Text>
         <Text tone="muted" size="small" truncate title={scan.root}>{scan.root}</Text>
-      </div>
+      </Stack>
       <Text numeric tone={scan.state === "error" ? "danger" : "muted"} className="dk-scan-size">{scan.size !== null ? bytes(scan.size) : scan.state === "scanning" ? "Scanning…" : "Failed"}</Text>
       <Text tone="muted" size="small" className="dk-scan-when"><Time iso={new Date(scan.at).toISOString()} /></Text>
       <Button variant="secondary" size="sm" aria-label={`Open the scan of ${name}`} onClick={() => onOpen(scan.root)}>Open</Button>

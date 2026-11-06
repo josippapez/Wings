@@ -5,7 +5,7 @@ import { createElement as h, useEffect, useState } from "react";
 
 const trees = [];
 globalThis.wings = { render: (json) => trees.push(JSON.parse(json)) };
-const { Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Toolbar, mount, useAction } = await import("./native.js");
+const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, mount, useAction, useTabState } = await import("./native.js");
 
 const find = (node, type) => (node.type === type ? node : node.children?.map((child) => find(child, type)).find(Boolean));
 const all = (node, type) => [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap((child) => all(child, type))];
@@ -221,4 +221,101 @@ test("a combobox lists the options that match as chips, a menu opens its items, 
   assert.equal(await action.run(() => { throw new Error("nope"); }), false);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(action.error, "nope");
+});
+
+test("a dot takes a CSS colour from data, a sunburst sends compact wedges and hears the pointer and clicks, and a split names its panes", () => {
+  const heard = [];
+  let tab;
+  function Probe() {
+    tab = useTabState({ root: null });
+    return h(Split, { defaultSize: 320, start: h(Scroll, null, h(Bar, { edge: "bottom", gap: "xs" }, "Head"), h(Title, { truncate: true }, "Code"), h(Dot, { color: "rgb(17, 34, 51)" }), h(Dot, { color: "#0a0b0c" }), h(Dot, { color: "red" })), end: h(Sunburst, {
+      rings: 2, selected: 1, title: "Code", detail: "2 GB", up: true,
+      wedges: [{ from: 0, to: 3, ring: 0, color: "rgb(255, 0, 0)" }, { from: 3, to: 6, ring: 0, color: "rgba(0, 0, 255, 0.5)", alpha: 0.5 }],
+      onPoint: (index) => heard.push(["point", index]), onSelect: (index, event) => heard.push(["select", index, event.meta]) }) });
+  }
+  mount(h(Probe));
+  assert.deepEqual(find(last(), "Split").props, { defaultSize: 320 });
+  assert.deepEqual(all(last(), "Dot").map((dot) => dot.props.color), [0x112233, 0x0a0b0c, undefined]);
+  assert.equal(find(last(), "Title"), undefined);
+  assert.deepEqual(find(find(last(), "Scroll"), "Text").props, { weight: "strong", truncate: true });
+  assert.deepEqual(find(last(), "Bar").props, { edge: "bottom", gap: "xs" });
+  const map = find(last(), "Sunburst");
+  assert.deepEqual(map.props.wedges, [[0, 3, 0, 0xff0000, 1], [3, 6, 0, 0x0000ff, 0.25]]);
+  assert.deepEqual([map.props.rings, map.props.selected, map.props.title, map.props.up], [2, 1, "Code", true]);
+  globalThis.__wingsEvent(map.props.onPoint, '{"index":-2}');
+  globalThis.__wingsEvent(map.props.onSelect, '{"index":0,"meta":true}');
+  assert.deepEqual(heard, [["point", -2], ["select", 0, true]]);
+  assert.deepEqual(tab[0], { root: null });
+});
+
+test("figures sit side by side with the label over the value, and a heading puts its actions on its right", async () => {
+  const { Stats } = await import("./native.js");
+  mount(h(Stack, null,
+    h(Stats, { items: [{ label: "Status", value: "Working" }, { label: "Context", value: "116k", tone: "warn" }] }),
+    h(Heading, { actions: h(Button, null, "Filter") }, "Recent activity"),
+    h(Heading, null, "Plain")));
+  const [figures, heading] = all(last(), "Row");
+  assert.deepEqual(figures.props, { gap: "l", wrap: true });
+  assert.deepEqual(figures.children.map((figure) => figure.children.map((part) => [part.props.tone, part.props.size, text(part)])), [
+    [["muted", "tiny", "Status"], [undefined, undefined, "Working"]],
+    [["muted", "tiny", "Context"], ["warn", undefined, "116k"]],
+  ]);
+  assert.deepEqual(heading.props, { justify: "between", wrap: true });
+  assert.deepEqual(heading.children.map((child) => child.type), ["Heading", "Button"]);
+  assert.equal(all(last(), "Heading").length, 2);
+  assert.equal(all(last(), "Row").length, 2, "a heading with no actions has no row around it");
+});
+
+test("pull request pages: avatars, skeletons, summary chips, tabs and a list beside its detail", () => {
+  const picks = [];
+  mount(h(Stack, null,
+    h(Avatar, { name: "Ada Lovelace", size: "small" }),
+    h(Skeletons, { label: "Loading" }, h(Skeleton, { width: "40%", height: 14 }), h(Skeleton, { height: 90 })),
+    h(Summary, null, h(SummaryChip, { tone: "success" }, "2 approved"), h(SummaryChip, { tone: "danger", onClick: () => picks.push("checks") }, "1 failed ›")),
+    h(Tabs, { label: "Pull request", items: [{ value: "a", label: "Overview" }, { value: "b", label: "Checks" }], value: "a", onChange: (value) => picks.push(value) }, h(Text, null, "Panel")),
+    h(ListDetail, { list: h(Text, null, "Steps"), detail: h(Text, null, "Log"), listWidth: 300 })));
+  assert.deepEqual(find(last(), "Avatar").props, { name: "Ada Lovelace", size: "small" });
+  assert.deepEqual(all(last(), "Skeleton").map((skeleton) => skeleton.props), [{ width: "40%", height: 14 }, { height: 90 }]);
+  assert.equal(find(find(last(), "Row"), "Badge").props.variant, "outline");
+  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  globalThis.__wingsEvent(find(last(), "Chips").props.onChange, '{"value":"b"}');
+  assert.deepEqual(picks, ["checks", "b"]);
+  assert.equal(text(last()).includes("Panel"), true);
+  const [, pane] = all(last(), "Stack").filter((stack) => stack.props.width === 300 || stack.props.grow);
+  assert.equal(text(pane), "Log");
+  assert.equal(all(last(), "Stack").some((stack) => stack.props.width === 300), true);
+});
+
+test("Markdown draws headings, lists, code, tables and folds, with bold, code and links as spans of their line", () => {
+  const opened = [];
+  globalThis.wings.openUrl = async (url) => void opened.push(url);
+  mount(h(Markdown, { source: "# Title\n\nSome **bold** and `code` with [a link](https://example.com/x).\n\n- one\n- [x] done\n\n```ts\nconst a = 1;\n```\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n<details><summary>More</summary>\n\nhidden\n\n</details>" }));
+  const body = last().children[0];
+  assert.equal(body.type, "Stack");
+  const paragraph = all(body, "Text").find((node) => text(node).startsWith("Some"));
+  assert.deepEqual(paragraph.children.filter((child) => child.type === "Text").map((span) => [span.props.weight, span.props.mono, text(span)]), [["strong", undefined, "bold"], [undefined, true, "code"], [undefined, undefined, "a link"]]);
+  const link = paragraph.children.find((child) => child.type === "Text" && text(child) === "a link");
+  globalThis.__wingsEvent(link.props.onClick, "");
+  assert.deepEqual(opened, ["https://example.com/x"]);
+  assert.equal(text(body).includes("const a = 1;"), true);
+  assert.equal(find(body, "Disclosure") !== undefined, true);
+  assert.deepEqual(all(body, "Text").filter((node) => ["A", "B", "1", "2"].includes(text(node))).map(text), ["A", "B", "1", "2"]);
+});
+
+test("a project gate waits for the project, and a tab reads what openView opened it with", async () => {
+  globalThis.wings.project = async () => ({ id: "/w", name: "web", path: "/w" });
+  globalThis.wings.viewArgs = () => ({ url: "https://example.com/pull/1" });
+  function Args() {
+    const args = useViewArgs((raw) => (typeof raw?.url === "string" ? { url: raw.url } : null));
+    return h(Text, null, args?.url ?? "none");
+  }
+  mount(h(ProjectGate, { loading: "Loading project" }, (project) => h(Stack, null, h(Text, null, project.name), h(Args))));
+  assert.equal(text(last()), "Loading project");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(text(last()), "webhttps://example.com/pull/1");
+});
+
+test("a code block numbers its lines and marks added, removed and highlighted ones", () => {
+  mount(h(CodeBlock, { lines: [{ text: "a", n: 1 }, { text: "b", n: 2, kind: "added" }, { text: "c", n: 3, kind: "removed", highlighted: true }] }));
+  assert.deepEqual(all(last(), "Text").filter((node) => node.props.mono && !node.props.numeric).map((node) => [text(node), node.props.tone, node.props.weight]), [["a", undefined, undefined], ["b", "success", undefined], ["c", "danger", "strong"]]);
 });

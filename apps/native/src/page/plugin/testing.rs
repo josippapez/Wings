@@ -36,6 +36,12 @@ pub(super) enum Seen {
     Status(String, String, Option<PaneStatus>),
     Url(String),
     Notice(String, String),
+    SendToAgent(String, String),
+    OpenSettings(String),
+    /// A plugin's section under a project: plugin, project, section, rows.
+    ProjectSection(String, String, String, Option<Vec<super::SectionRow>>),
+    /// A plugin's confirmed sort: plugin, section, sort.
+    SectionSort(String, String, String),
 }
 
 pub(super) struct FakeEnv {
@@ -45,10 +51,15 @@ pub(super) struct FakeEnv {
     /// The folders of the Claude Code accounts, which `transcript` reads.
     pub claude: Mutex<Vec<PathBuf>>,
     pub ports: Mutex<Result<Vec<PanePort>, String>>,
+    /// The OpenCode sessions the service knows, and the ones `agentActivity` was asked about.
+    opencode: Mutex<Vec<String>>,
+    asked: Mutex<Vec<String>>,
     /// Why opening a URL or showing a notification fails, if it should.
     pub refuse: Mutex<Option<String>>,
     /// The other plugins running in the app, which `callTool` reaches.
     pub running: Running,
+    /// The secrets plugins kept, by plugin, scope and name.
+    pub secrets: Mutex<std::collections::HashMap<(String, String, String), String>>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -60,8 +71,11 @@ impl FakeEnv {
             spaces: Mutex::new(Projects::open(None, "/nowhere".into())),
             claude: Mutex::default(),
             ports: Mutex::new(Ok(Vec::new())),
+            opencode: Mutex::default(),
+            asked: Mutex::default(),
             refuse: Mutex::default(),
             running: Running::default(),
+            secrets: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -70,6 +84,14 @@ impl FakeEnv {
     fn record(&self, seen: Seen) {
         self.log.lock().unwrap().push(seen);
         self.changed.notify_all();
+    }
+
+    pub fn opencode_knows(&self, session: &str) {
+        self.opencode.lock().unwrap().push(session.into());
+    }
+
+    pub fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
     }
 
     pub fn seen(&self) -> Vec<Seen> {
@@ -165,6 +187,37 @@ impl Env for FakeEnv {
             .set_worktree_setup(project, include, setup)
     }
 
+    fn emit(&self, from: &str, name: &str, data: &Value) {
+        self.running.emit(from, name, data);
+    }
+
+    fn secret_get(&self, plugin: &str, scope: &str, name: &str) -> Result<Option<String>, String> {
+        let key = (plugin.into(), scope.into(), name.into());
+        Ok(self.secrets.lock().unwrap().get(&key).cloned())
+    }
+
+    fn secret_set(&self, plugin: &str, scope: &str, name: &str, value: &str) -> Result<(), String> {
+        let key = (plugin.into(), scope.into(), name.into());
+        self.secrets.lock().unwrap().insert(key, value.into());
+        Ok(())
+    }
+
+    fn secret_delete(&self, plugin: &str, scope: &str, name: &str) -> Result<(), String> {
+        let key = (plugin.into(), scope.into(), name.into());
+        self.secrets.lock().unwrap().remove(&key);
+        Ok(())
+    }
+
+    fn send_to_agent(&self, pane: &str, text: &str, reply: crate::page::runtime::Reply) {
+        self.record(Seen::SendToAgent(pane.into(), text.into()));
+        reply.ok(json!({ "submitted": false }).to_string());
+    }
+
+    fn open_settings(&self, plugin: &str) -> Result<(), String> {
+        self.record(Seen::OpenSettings(plugin.into()));
+        Ok(())
+    }
+
     fn projects(&self) -> Vec<PathBuf> {
         self.projects.lock().unwrap().clone()
     }
@@ -183,6 +236,31 @@ impl Env for FakeEnv {
             .lock()
             .unwrap()
             .set_claude_account(project, name, |_| Ok(()))
+    }
+
+    fn agent_activity(&self, session_id: &str) -> Result<Value, String> {
+        self.asked.lock().unwrap().push(session_id.into());
+        if !self
+            .opencode
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|id| id == session_id)
+        {
+            return Err("OpenCode doesn't know that session".into());
+        }
+        // What the desktop's `plugin_agent_activity` answers: a prompt, then a finished `git commit`.
+        Ok(json!({
+            "model": "gpt-x",
+            "context": 100,
+            "tokens": { "input": 100, "output": 20, "reasoning": 3, "cacheRead": 300, "cacheWrite": 7 },
+            "cost": 0.25,
+            "items": [
+                { "kind": "prompt", "id": "m1", "at": 1000, "text": "fix the bug" },
+                { "kind": "tool", "id": "c1", "at": 2000, "name": "shell", "input": { "command": "git commit -m 'Fix it'" },
+                  "status": "completed", "ms": 400, "result": "1 file changed", "files": [] },
+            ],
+        }))
     }
 
     fn ports(&self) -> Result<Vec<PanePort>, String> {
@@ -211,6 +289,30 @@ impl Env for FakeEnv {
 
     fn set_pane_status(&self, plugin: &str, pane: &str, status: Option<PaneStatus>) {
         self.record(Seen::Status(plugin.into(), pane.into(), status));
+    }
+
+    fn set_project_section(
+        &self,
+        plugin: &str,
+        project: &str,
+        section: &str,
+        rows: Option<Vec<super::SectionRow>>,
+    ) -> Result<(), String> {
+        self.record(Seen::ProjectSection(
+            plugin.into(),
+            project.into(),
+            section.into(),
+            rows,
+        ));
+        Ok(())
+    }
+
+    fn set_section_sort(&self, plugin: &str, section: &str, sort: &str) {
+        self.record(Seen::SectionSort(
+            plugin.into(),
+            section.into(),
+            sort.into(),
+        ));
     }
 }
 

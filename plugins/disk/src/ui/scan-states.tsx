@@ -2,7 +2,7 @@
 // middle of the page, under the same toolbar: the way back to the disks, and the scan's root.
 
 import type { ReactNode } from "react";
-import { Button, Card, Empty, Gauge, Notice, Page, Row, Spinner, Stats, Text, Title, Toolbar } from "wings-plugin-ui";
+import { Button, Card, Empty, Gauge, Notice, Page, Row, Spinner, Stack, Stats, Text, Title, Toolbar } from "wings-plugin-ui";
 import { bytes } from "../lib/format";
 import { Elapsed } from "./elapsed";
 import type { RunningScan } from "./model";
@@ -17,7 +17,7 @@ function Frame({ name, onDisks, actions, children }: { name: string; onDisks: ()
         </Toolbar>
       }
     >
-      <div className="dk-center">{children}</div>
+      <Stack grow className="dk-center">{children}</Stack>
     </Page>
   );
 }

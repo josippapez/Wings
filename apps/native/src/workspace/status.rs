@@ -22,7 +22,27 @@ impl Workspace {
     ) -> Task<()> {
         let followed = transcripts.then(|| transcripts::Watcher::start(claude_dir.clone()));
         let watcher = Watcher::start(claude_dir);
+        let activity = watcher.activity();
+        let announce = cx.spawn(async move |this, cx| {
+            while let Ok(first) = activity.recv().await {
+                cx.background_executor().timer(agents::ACTIVITY_BURST).await;
+                let mut sessions = vec![first];
+                while let Ok(next) = activity.try_recv() {
+                    sessions.push(next);
+                }
+                sessions.sort();
+                sessions.dedup();
+                if this
+                    .update(cx, |this, _| this.publish_agent_activity(&sessions))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         cx.spawn(async move |this, cx| {
+            // Stops with the detection.
+            let _announce = announce;
             loop {
                 cx.background_executor().timer(agents::EVERY).await;
                 let Ok((panes, focused)) = this.update(cx, |this, cx| this.probes(cx)) else {
@@ -105,6 +125,12 @@ impl Workspace {
             .filter_map(|(id, info)| Some((by_pane(&id)?, info)))
             .collect();
         if agents != self.agents || info != self.pane_info {
+            // An agent changing state counts as work in its project, for the sidebar's "Older" group.
+            for (pane, agent) in &agents {
+                if self.agents.get(pane).map(|old| old.state) != Some(agent.state) {
+                    self.side.touch(std::path::Path::new(&agent.space_id));
+                }
+            }
             self.agents = agents;
             self.pane_info = info;
             cx.notify();

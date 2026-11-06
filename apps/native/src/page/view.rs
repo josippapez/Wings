@@ -15,6 +15,10 @@ use gpui::{
 
 #[path = "graph_view.rs"]
 mod graph_view;
+#[path = "rich_view.rs"]
+mod rich_view;
+#[path = "sunburst_view.rs"]
+mod sunburst_view;
 
 use super::{
     plugin::PluginHost,
@@ -43,6 +47,9 @@ struct InputState {
     /// The text the page last gave it. The field takes the page's text when this changes, which is when the page set it
     /// (a form filled in once it loaded), and not on every render, which would undo a key the page hasn't heard yet.
     given: String,
+    /// The texts sent to the page that it hasn't given back yet. A page that is behind gives back each of them in turn,
+    /// and taking one of those would undo the keys typed since.
+    sent: Vec<String>,
 }
 
 pub struct PageView {
@@ -61,6 +68,7 @@ pub struct PageView {
     fields: RefCell<HashMap<u64, SearchState>>,
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
+    sunbursts: RefCell<HashMap<u64, sunburst_view::SunburstState>>,
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
@@ -82,6 +90,18 @@ impl PageView {
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
         Self::start(cx, |on_event| host.open_hidden_page(source, on_event))
+    }
+
+    /// Like `in_plugin`, for a tab `wings.openView` opened with `args`, which the page reads with `viewArgs`.
+    pub fn in_plugin_with_args(
+        host: &PluginHost,
+        source: &str,
+        args: Option<&serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::start(cx, |on_event| {
+            host.open_hidden_page_with_args(source, args, on_event)
+        })
     }
 
     pub fn in_plugin_window(
@@ -137,6 +157,9 @@ impl PageView {
                                         Node::Graph(graph) => {
                                             ids.insert(graph.id);
                                         }
+                                        Node::Sunburst(map) => {
+                                            ids.insert(map.id);
+                                        }
                                         Node::Chips(chips) => {
                                             ids.insert(chips.id);
                                         }
@@ -151,6 +174,7 @@ impl PageView {
                             view.fields.borrow_mut().retain(|id, _| ids.contains(id));
                             view.inputs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.sunbursts.borrow_mut().retain(|id, _| ids.contains(id));
                             view.chip_focus
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
@@ -178,6 +202,7 @@ impl PageView {
             fields: RefCell::new(HashMap::new()),
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
+            sunbursts: RefCell::new(HashMap::new()),
             chip_focus: RefCell::new(HashMap::new()),
             error,
             _events: events,
@@ -238,6 +263,78 @@ impl PageView {
         })
     }
 
+    /// Presses the `nth` row that opens (`aria-expanded`) and shows `text`, as a click would. False when the page has none.
+    #[cfg(feature = "test-support")]
+    pub fn press_row(&self, text: &str, nth: usize) -> bool {
+        fn find<'a>(nodes: &'a [Node], text: &str, found: &mut Vec<&'a str>) {
+            for node in nodes {
+                if let Node::ListButton(row) = node
+                    && row.expanded.is_some()
+                    && plain_text(&row.button.children).contains(text)
+                    && let Some(handler) = &row.button.on_click
+                {
+                    found.push(handler);
+                }
+                for part in node.parts() {
+                    find(part, text, found);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        if let Some(tree) = &self.tree {
+            find(&tree.children, text, &mut found);
+        }
+        found.get(nth).is_some_and(|handler| {
+            self.send(handler, None);
+            true
+        })
+    }
+
+    /// Presses the first `ListButton` that shows `text`, as a click would. False when the page has none.
+    #[cfg(feature = "test-support")]
+    pub fn press_list_button(&self, text: &str) -> bool {
+        fn find<'a>(nodes: &'a [Node], text: &str) -> Option<&'a str> {
+            nodes.iter().find_map(|node| match node {
+                Node::ListButton(row) if plain_text(&row.button.children).contains(text) => {
+                    row.button.on_click.as_deref()
+                }
+                other => other.parts().into_iter().find_map(|part| find(part, text)),
+            })
+        }
+        let handler = self
+            .tree
+            .as_ref()
+            .and_then(|tree| find(&tree.children, text));
+        handler.is_some_and(|handler| {
+            self.send(handler, None);
+            true
+        })
+    }
+
+    /// Picks the chip of `Chips` that shows `label`, as a click would. False when the page has no such chip.
+    #[cfg(feature = "test-support")]
+    pub fn press_chip(&self, label: &str) -> bool {
+        fn find(nodes: &[Node], label: &str) -> Option<(String, String)> {
+            nodes.iter().find_map(|node| match node {
+                Node::Chips(chips) => chips
+                    .options
+                    .iter()
+                    .find(|option| option.label.starts_with(label))
+                    .zip(chips.on_change.clone())
+                    .map(|(option, handler)| (handler, option.value.clone())),
+                other => other.parts().into_iter().find_map(|part| find(part, label)),
+            })
+        }
+        let found = self
+            .tree
+            .as_ref()
+            .and_then(|tree| find(&tree.children, label));
+        found.is_some_and(|(handler, value)| {
+            self.send(&handler, Some(&serde_json::json!({ "value": value })));
+            true
+        })
+    }
+
     #[cfg(feature = "test-support")]
     pub fn text(&self) -> String {
         self.tree.as_ref().map(Tree::text).unwrap_or_default()
@@ -288,6 +385,9 @@ impl PageView {
     fn inline(&self, nodes: &[Node], cx: &mut Context<Self>) -> AnyElement {
         if nodes.iter().all(|node| matches!(node, Node::Str { .. })) {
             return plain_text(nodes).into_any_element();
+        }
+        if let Some(rich) = self.rich_text(nodes, cx) {
+            return rich;
         }
         div()
             .flex()
@@ -374,6 +474,7 @@ impl PageView {
                 .flex_col()
                 .gap(px(gap(stack.gap)))
                 .when(stack.grow, |el| el.flex_1())
+                .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
                 .children(self.nodes(&stack.children, cx))
                 .into_any_element(),
             Node::Row(row) => div()
@@ -394,25 +495,36 @@ impl PageView {
                 .when(row.grow, |el| el.flex_1())
                 .children(self.nodes(&row.children, cx))
                 .into_any_element(),
-            Node::Text(text) => div()
-                .when(text.grow || text.truncate, |el| el.min_w_0())
-                .when(text.grow, |el| el.flex_1())
-                .when(text.truncate, |el| el.truncate())
-                .when(text.clamp, |el| el.line_clamp(3))
-                .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
-                .map(|el| match text.size {
-                    TextSize::Normal => el,
-                    TextSize::Small => el.text_size(px(12.0)),
-                    TextSize::Tiny => el.text_size(px(11.0)),
-                })
-                .map(|el| match text.weight {
-                    Weight::Normal => el,
-                    Weight::Medium => el.font_weight(FontWeight::MEDIUM),
-                    Weight::Strong => el.font_weight(FontWeight::SEMIBOLD),
-                })
-                .when_some(text.tone, |el, tone| el.text_color(rgb(tone_color(tone))))
-                .child(self.inline(&text.children, cx))
-                .into_any_element(),
+            Node::Text(text) => {
+                let element = div()
+                    .when(text.grow || text.truncate, |el| el.min_w_0())
+                    .when(text.grow, |el| el.flex_1())
+                    .when(text.truncate, |el| el.truncate())
+                    .when(text.clamp, |el| el.line_clamp(3))
+                    .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
+                    .map(|el| match text.size {
+                        TextSize::Normal => el,
+                        TextSize::Small => el.text_size(px(12.0)),
+                        TextSize::Tiny => el.text_size(px(11.0)),
+                        TextSize::Large => el.text_size(px(20.0)).line_height(px(26.0)),
+                    })
+                    .map(|el| match text.weight {
+                        Weight::Normal => el,
+                        Weight::Medium => el.font_weight(FontWeight::MEDIUM),
+                        Weight::Strong => el.font_weight(FontWeight::SEMIBOLD),
+                    })
+                    .when_some(text.tone, |el, tone| el.text_color(rgb(tone_color(tone))))
+                    .child(self.inline(&text.children, cx));
+                match text.on_click.clone() {
+                    Some(handler) => element
+                        .id(ElementId::NamedInteger("page-text".into(), text.id))
+                        .cursor_pointer()
+                        .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
+                        .on_click(cx.listener(move |view, _, _, _| view.send(&handler, None)))
+                        .into_any_element(),
+                    None => element.into_any_element(),
+                }
+            }
             Node::Button(button) => {
                 let element = ui::button(
                     ElementId::NamedInteger("page-button".into(), button.id),
@@ -623,7 +735,67 @@ impl PageView {
             Node::Heading(heading) => {
                 ui::heading(self.inline(&heading.children, cx)).into_any_element()
             }
-            Node::Dot(dot) => ui::dot(dot.tone.map_or(theme::DONE, tone_color)).into_any_element(),
+            Node::Dot(dot) => ui::dot(
+                dot.color
+                    .unwrap_or_else(|| dot.tone.map_or(theme::DONE, tone_color)),
+            )
+            .into_any_element(),
+            // A scroll keeps 8 points either side and 12 below, as a list under a header does.
+            Node::Scroll(scroll) => div()
+                .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .px(px(8.0))
+                .pb(px(12.0))
+                .overflow_y_scroll()
+                .children(self.nodes(&scroll.children, cx))
+                .into_any_element(),
+            Node::Bar(bar) => div()
+                .flex_none()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(gap(bar.gap)))
+                .px(px(14.0))
+                .py(px(8.0))
+                .when(bar.edge == tree::Edge::Top, |el| {
+                    el.border_t_1().border_color(rgba(ui::HAIRLINE))
+                })
+                .when(bar.edge == tree::Edge::Bottom, |el| {
+                    el.border_b_1().border_color(rgba(ui::HAIRLINE))
+                })
+                .children(self.nodes(&bar.children, cx))
+                .into_any_element(),
+            Node::Split(split) => div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .child(
+                    div()
+                        .w(px(split.size))
+                        .max_w(relative(0.5))
+                        .flex_none()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .border_r_1()
+                        .border_color(rgba(ui::HAIRLINE))
+                        .children(self.nodes(&split.start, cx)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .children(self.nodes(&split.end, cx)),
+                )
+                .into_any_element(),
             Node::Gauge(gauge) => ui::gauge(
                 ElementId::NamedInteger("page-gauge".into(), gauge.id),
                 gauge.label.clone(),
@@ -642,6 +814,8 @@ impl PageView {
                     div()
                         .min_w_0()
                         .w_full()
+                        .flex()
+                        .items_center()
                         .children(self.nodes(&item.children, cx))
                         .into_any_element()
                 } else {
@@ -877,6 +1051,9 @@ impl PageView {
             )
             .into_any_element(),
             Node::Graph(graph) => self.graph(graph, cx),
+            Node::Avatar(avatar) => rich_view::avatar(avatar),
+            Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),
+            Node::Sunburst(map) => self.sunburst(map, cx),
         }
     }
 
@@ -902,17 +1079,17 @@ impl PageView {
             });
             let id = input.id;
             cx.subscribe(&entity, move |view, entity, event, cx| {
-                if matches!(event, crate::text_field::FieldEvent::Changed)
-                    && let Some(handler) = view
-                        .inputs
-                        .borrow()
-                        .get(&id)
-                        .and_then(|state| state.handler.clone())
-                {
-                    view.send(
-                        &handler,
-                        Some(&serde_json::json!({ "value": entity.read(cx).text })),
-                    );
+                if !matches!(event, crate::text_field::FieldEvent::Changed) {
+                    return;
+                }
+                let text = entity.read(cx).text.clone();
+                let handler = view.inputs.borrow_mut().get_mut(&id).and_then(|state| {
+                    let handler = state.handler.clone()?;
+                    state.sent.push(text.clone());
+                    Some(handler)
+                });
+                if let Some(handler) = handler {
+                    view.send(&handler, Some(&serde_json::json!({ "value": text })));
                 }
             })
             .detach();
@@ -920,13 +1097,19 @@ impl PageView {
                 field: entity,
                 handler: None,
                 given: String::new(),
+                sent: Vec::new(),
             }
         });
         state.handler = input.on_change.clone();
         let (disabled, max_chars) = (input.disabled, input.max_length);
+        let echo = state.sent.iter().position(|sent| *sent == input.value);
+        if let Some(echo) = echo {
+            state.sent.drain(..=echo);
+        }
         state.field.update(cx, |field, cx| {
-            if state.given != input.value && field.text != input.value {
+            if echo.is_none() && state.given != input.value && field.text != input.value {
                 field.text = input.value.clone();
+                state.sent.clear();
                 cx.notify();
             }
             if field.disabled != disabled || field.max_chars != max_chars {

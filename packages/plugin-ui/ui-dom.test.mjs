@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useCallback, useEffect, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, CodeBlock, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
+const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, CodeBlock, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Bar, Scroll, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -890,4 +890,20 @@ test("usePoll doesn't load when Wings is back within the interval, and waits for
   t.mock.timers.tick(1);
   assert.equal(calls.length, 2, "the next one comes when the interval was due");
   await unmount();
+});
+
+test("Bar is a w-bar stack that says which edge has the line", async () => {
+  const page = await mount(h(Bar, { edge: "bottom", gap: "xs", id: "head" }, "x"));
+  const bar = page.host.querySelector("#head");
+  assert.equal(bar.className, "w-stack w-bar");
+  assert.equal(bar.dataset.edge, "bottom");
+  assert.equal(bar.dataset.gap, "xs");
+  await page.unmount();
+});
+
+test("Scroll is a w-scroll column, and as picks its element", async () => {
+  const page = await mount(h("div", null, h(Scroll, { id: "plain" }, "one"), h(Scroll, { as: "section", id: "named" }, "two")));
+  assert.equal(page.host.querySelector("#plain").className, "w-scroll");
+  assert.equal(page.host.querySelector("#named").tagName, "SECTION");
+  await page.unmount();
 });

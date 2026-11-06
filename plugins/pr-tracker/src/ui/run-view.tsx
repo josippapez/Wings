@@ -2,16 +2,21 @@
 // folded the way the CI marked it. It asks for the run when it opens and when the check's state changes, and for a
 // step's log when the step is picked.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Button, List, ListButton, ListItem, ListDetail, Loading, Text, useAction } from "wings-plugin-ui";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Button, List, ListButton, ListDetail, ListItem, Loading, Notice, Row, Stack, Text, useAction } from "wings-plugin-ui";
 import { durationText } from "../lib/checklist";
-import { parseLog, pickStep, type LogEntry, type LogLine } from "../lib/runlog";
+import { parseLog, pickStep, type LogEntry, type LogLine, type Span, type Tone } from "../lib/runlog";
 import type { CheckItem, CheckState, Run, RunStep } from "../lib/types";
 
 const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };
 const STATE_MARK: Record<CheckState, string> = { failed: "✕", running: "●", queued: "○", passed: "✓", skipped: "–" };
-/** A long log draws its end, where the error is, and the rest on request. */
-const SHOWN_LINES = 2_000;
+const STATE_TONE = { failed: "danger", running: "warn", queued: "muted", passed: "success", skipped: "muted" } as const;
+/** A long log draws its end, where the error is, and the rest on request. The native app draws a page of at most 5,000 nodes, so it shows fewer lines and has no rest. */
+const SHOWN_LINES = WINGS_NATIVE ? 500 : 2_000;
+
+/** What the native app does with the CI's markup and ANSI colours: it has no CSS to style them with. */
+const LINE_TONE: Record<NonNullable<Tone>, "danger" | "warn" | "info" | "muted"> = { error: "danger", warning: "warn", command: "info", section: "info", debug: "muted" };
+const FG_TONE: Record<number, "danger" | "success" | "warn" | "info" | "muted"> = { 0: "muted", 8: "muted", 1: "danger", 9: "danger", 2: "success", 10: "success", 3: "warn", 11: "warn", 4: "info", 12: "info", 5: "info", 13: "info", 6: "info", 14: "info" };
 
 export interface RunViewProps {
   item: CheckItem;
@@ -56,13 +61,13 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
   const url = (runUrl ?? item.url)?.startsWith("https://") ? (runUrl ?? item.url) : null;
 
   return (
-    <div className="pr-run" data-testid="pr-run-view">
-      <div className="pr-run-head">
+    <Stack gap="m" className="pr-run" data-testid="pr-run-view">
+      <Row gap="s" className="pr-run-head">
         <Button variant="ghost" size="sm" onClick={onBack}>← Checks</Button>
-        <span className="pr-check-mark" data-state={item.state} role="img" aria-label={STATE_WORD[item.state]}>{STATE_MARK[item.state]}</span>
-        <strong className="pr-run-name">{item.name}</strong>
-        {durationText(item.seconds) ? <Text tone="muted" size="small" as="span">{durationText(item.seconds)}</Text> : null}
-        <span className="pr-run-actions">
+        <Text tone={STATE_TONE[item.state]} className="pr-check-mark" data-state={item.state} role="img" aria-label={STATE_WORD[item.state]}>{STATE_MARK[item.state]}</Text>
+        <Text weight="strong" truncate className="pr-run-name">{item.name}</Text>
+        {durationText(item.seconds) ? <Text tone="muted" size="small">{durationText(item.seconds)}</Text> : null}
+        <Row gap="s" grow justify="end" className="pr-run-actions">
           <Button
             variant="ghost"
             size="sm"
@@ -75,11 +80,11 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
             Refresh
           </Button>
           {url ? <Button variant="ghost" size="sm" onClick={() => void opening.run(() => wings.openUrl(url))}>Open</Button> : null}
-        </span>
-      </div>
-      {opening.error ? <Text tone="danger" size="small" role="alert">{opening.error}</Text> : null}
+        </Row>
+      </Row>
+      {opening.error ? <Notice tone="danger">{opening.error}</Notice> : null}
       {!run || run.state === "loading" ? <Loading>Loading the run…</Loading> : null}
-      {run?.state === "error" ? <Text tone="danger" size="small" role="alert">{run.message}</Text> : null}
+      {run?.state === "error" ? <Notice tone="danger">{run.message}</Notice> : null}
       {run?.state === "done" && !run.value.jobs.length ? <Text tone="muted" size="small">{going ? "The run hasn't started any jobs yet." : "This run has no jobs."}</Text> : null}
       {run?.state === "done" && run.value.note ? <Text tone="muted" size="small">{run.value.note}</Text> : null}
       {run?.state === "done" && run.value.jobs.length ? (
@@ -95,34 +100,34 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
           empty={<Text tone="muted" size="small">Pick a step to see its log.</Text>}
         />
       ) : null}
-    </div>
+    </Stack>
   );
 }
 
 function Steps({ run, current, onPick }: { run: Run; current: string | null; onPick: (id: string) => void }) {
   let stage: string | null = null;
   return (
-    <div className="pr-run-jobs">
+    <Stack gap="m" className="pr-run-jobs">
       {run.jobs.map((j) => {
         const heading = j.stage && j.stage !== stage ? j.stage : null;
         stage = j.stage;
         return (
           <Fragment key={j.id}>
             {heading ? <Text tone="muted" size="tiny" className="pr-run-stage">{heading}</Text> : null}
-            <section className="pr-run-job" aria-label={j.name}>
-              <div className="pr-run-job-head">
-                <span className="pr-check-mark" data-state={j.state} role="img" aria-label={STATE_WORD[j.state]}>{STATE_MARK[j.state]}</span>
-                <strong>{j.name}</strong>
-                <Text tone="muted" size="tiny" as="span" className="pr-run-took">{durationText(j.seconds)}</Text>
-              </div>
+            <Stack as="section" gap="xs" className="pr-run-job" aria-label={j.name}>
+              <Row gap="s" className="pr-run-job-head">
+                <Text tone={STATE_TONE[j.state]} className="pr-check-mark" data-state={j.state} role="img" aria-label={STATE_WORD[j.state]}>{STATE_MARK[j.state]}</Text>
+                <Text weight="strong" grow>{j.name}</Text>
+                <Text tone="muted" size="tiny" className="pr-run-took">{durationText(j.seconds)}</Text>
+              </Row>
               {j.steps.length ? (
                 <List compact>
                   {j.steps.map((s) => (
                     <ListItem key={s.id}>
                       <ListButton className="pr-run-step" aria-current={s.id === current ? "true" : undefined} disabled={!s.log} onClick={() => onPick(s.id)}>
-                        <span className="pr-check-mark" data-state={s.state} role="img" aria-label={STATE_WORD[s.state]}>{STATE_MARK[s.state]}</span>
-                        <span className="pr-run-step-name">{s.name}</span>
-                        <Text tone="muted" size="tiny" as="span" className="pr-run-took">{durationText(s.seconds)}</Text>
+                        <Text tone={STATE_TONE[s.state]} className="pr-check-mark" data-state={s.state} role="img" aria-label={STATE_WORD[s.state]}>{STATE_MARK[s.state]}</Text>
+                        <Text grow truncate weight={s.id === current ? "strong" : undefined} className="pr-run-step-name">{s.name}</Text>
+                        <Text tone="muted" size="tiny" className="pr-run-took">{durationText(s.seconds)}</Text>
                       </ListButton>
                     </ListItem>
                   ))}
@@ -130,11 +135,11 @@ function Steps({ run, current, onPick }: { run: Run; current: string | null; onP
               ) : (
                 <Text tone="muted" size="tiny" className="pr-run-none">{j.state === "queued" ? "Waiting to start" : "No steps"}</Text>
               )}
-            </section>
+            </Stack>
           </Fragment>
         );
       })}
-    </div>
+    </Stack>
   );
 }
 
@@ -143,28 +148,22 @@ function StepLog({ step, log }: { step: RunStep; log: Load<string[]> | null }) {
   const entries = useMemo(() => (log?.state === "done" ? parseLog(log.value) : []), [log]);
   const total = entries.reduce((n, e) => n + ("title" in e ? e.lines.length + 1 : 1), 0);
   const shown = useMemo(() => (all ? entries : lastLines(entries, SHOWN_LINES)), [entries, all]);
-  const box = useRef<HTMLPreElement>(null);
-  // A step that failed or is still going opens at its end, where the error or the newest line is.
-  const atEnd = step.state === "failed" || step.state === "running";
-  useEffect(() => {
-    if (atEnd && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [shown, atEnd]);
 
   if (!log || log.state === "loading") return <Loading>Loading the log…</Loading>;
-  if (log.state === "error") return <Text tone="danger" size="small" role="alert">{log.message}</Text>;
+  if (log.state === "error") return <Notice tone="danger">{log.message}</Notice>;
   if (!entries.length) return <Text tone="muted" size="small">{step.state === "running" ? "No output yet." : "This step wrote nothing."}</Text>;
   return (
-    <div className="pr-run-log">
+    <Stack gap="xs" className="pr-run-log">
       {shown !== entries ? (
-        <Text tone="muted" size="tiny" as="div" className="pr-run-more">
-          Showing the last {SHOWN_LINES} of {total} lines.{" "}
-          <Button variant="link" size="xs" onClick={() => setAll(true)}>Show all</Button>
-        </Text>
+        <Row gap="s" className="pr-run-more">
+          <Text tone="muted" size="tiny">Showing the last {SHOWN_LINES} of {total} lines.</Text>
+          {WINGS_NATIVE ? null : <Button variant="link" size="xs" onClick={() => setAll(true)}>Show all</Button>}
+        </Row>
       ) : null}
-      <pre ref={box} className="pr-log pr-run-pre" tabIndex={0} aria-label={`Log of ${step.name}`}>
+      <Stack gap="none" className="pr-log pr-run-pre" tabIndex={0} role="region" aria-label={`Log of ${step.name}`}>
         {shown.map((e) => ("title" in e ? <Group key={e.title.n} entry={e} /> : <Line key={e.n} line={e} />))}
-      </pre>
-    </div>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -183,12 +182,13 @@ function Group({ entry }: { entry: { title: LogLine; lines: LogLine[] } }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className="pr-run-line pr-run-group" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className="pr-run-n">{entry.title.n}</span>
-        <span className="pr-run-text">
-          <span aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾</span> <Spans line={entry.title} />
-        </span>
-      </button>
+      <ListButton className="pr-run-line pr-run-group" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Text mono size="tiny" tone="muted" numeric className="pr-run-n">{entry.title.n}</Text>
+        <Text mono size="small" grow className="pr-run-text">
+          {WINGS_NATIVE ? null : <Text aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾ </Text>}
+          <Spans line={entry.title} />
+        </Text>
+      </ListButton>
       {open ? entry.lines.map((l) => <Line key={l.n} line={l} />) : null}
     </>
   );
@@ -196,14 +196,16 @@ function Group({ entry }: { entry: { title: LogLine; lines: LogLine[] } }) {
 
 function Line({ line }: { line: LogLine }) {
   return (
-    <span className="pr-run-line" data-tone={line.tone ?? undefined}>
-      <span className="pr-run-n" title={line.time ?? undefined}>{line.n}</span>
-      <span className="pr-run-text">
+    <Row gap="m" align="baseline" className="pr-run-line" data-tone={line.tone ?? undefined}>
+      <Text mono size="tiny" tone="muted" numeric className="pr-run-n" title={line.time ?? undefined}>{line.n}</Text>
+      <Text mono size="small" grow tone={WINGS_NATIVE && line.tone ? LINE_TONE[line.tone] : undefined} className="pr-run-text">
         <Spans line={line} />
-      </span>
-    </span>
+      </Text>
+    </Row>
   );
 }
+
+const spanTone = (s: Span) => (WINGS_NATIVE ? (s.dim ? "muted" : s.fg === undefined ? undefined : FG_TONE[s.fg]) : undefined);
 
 function Spans({ line }: { line: LogLine }) {
   return (
@@ -212,9 +214,9 @@ function Spans({ line }: { line: LogLine }) {
         s.fg === undefined && !s.bold && !s.dim && !s.italic && !s.underline ? (
           <Fragment key={i}>{s.text}</Fragment>
         ) : (
-          <span key={i} data-fg={s.fg} data-bold={s.bold ? "" : undefined} data-dim={s.dim ? "" : undefined} data-italic={s.italic ? "" : undefined} data-underline={s.underline ? "" : undefined}>
+          <Text key={i} tone={spanTone(s)} weight={WINGS_NATIVE && s.bold ? "strong" : undefined} data-fg={s.fg} data-bold={s.bold ? "" : undefined} data-dim={s.dim ? "" : undefined} data-italic={s.italic ? "" : undefined} data-underline={s.underline ? "" : undefined}>
             {s.text}
-          </span>
+          </Text>
         ),
       )}
     </>

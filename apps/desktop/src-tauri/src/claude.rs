@@ -11,13 +11,8 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
+pub use wings_agents::history::project_folder_name;
 pub use wings_spaces::claude_accounts::claude_dir;
-
-/// Claude Code names a project folder after its cwd with every non-alphanumeric character
-/// replaced by `-` (paths over 200 chars get truncated plus a hash; not handled here).
-pub fn project_folder_name(cwd: &str) -> String {
-    cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

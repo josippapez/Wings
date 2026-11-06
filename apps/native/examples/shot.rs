@@ -17,7 +17,7 @@ use gpui::{
 };
 use wings_native::{
     actions,
-    host::Config,
+    host::{Config, SessionSource},
     icons::Assets,
     installed::{
         WINGS_VERSION,
@@ -122,6 +122,14 @@ fn main() {
         std::sync::Arc::new(Assets),
     );
     cx.update(actions::bind);
+    // `-- <out-dir> sidebar` renders only the sidebar's states.
+    if std::env::args().nth(2).as_deref() == Some("sidebar") {
+        return sidebar(&mut cx, &config, &out);
+    }
+    // `-- <out-dir> finder` renders only the command palette and the history sheet.
+    if std::env::args().nth(2).as_deref() == Some("finder") {
+        return finder(&mut cx, &config, &out);
+    }
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
@@ -327,5 +335,403 @@ fn main() {
             .status();
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(&mut cx, window, Duration::from_millis(300));
+    }
+    sidebar(&mut cx, &config, &out);
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("run git")
+        .success();
+    assert!(ok, "git {args:?} in {}", dir.display());
+}
+
+fn mouse_move(
+    cx: &mut VisualTestAppContext,
+    window: AnyWindowHandle,
+    position: gpui::Point<gpui::Pixels>,
+    pressed: bool,
+) {
+    cx.simulate_event(
+        window,
+        gpui::MouseMoveEvent {
+            position,
+            pressed_button: pressed.then_some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        },
+    );
+}
+
+/// The sidebar: git counts from real temp repos (ahead, behind, changed, a worktree), a pinned project, the "Older"
+/// group, hovering a row, the sort menu, the question before a project with tabs is removed, dragging the edge to both
+/// limits, and the peek of a closed sidebar.
+fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let day = 24 * 60 * 60 * 1000u64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock")
+        .as_millis() as u64;
+    let dir = std::env::temp_dir().join("wings-native-shot-sidebar");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("make the folder");
+    // A repo cloned from its own bare origin, so it can be ahead of or behind it.
+    let clone = |name: &str, branch: &str| {
+        let origin = dir.join(format!("{name}-origin.git"));
+        std::fs::create_dir_all(&origin).unwrap();
+        git(&origin, &["init", "--bare", "-b", "main"]);
+        let repo = dir.join(name);
+        git(&dir, &["clone", origin.to_str().unwrap(), name]);
+        std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+        std::fs::write(repo.join("lib.rs"), "fn main() {}\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "first"]);
+        git(&repo, &["push", "-u", "origin", "main"]);
+        if branch != "main" {
+            git(&repo, &["checkout", "-b", branch]);
+            git(&repo, &["push", "-u", "origin", branch]);
+        }
+        (origin, repo)
+    };
+    // Ahead by one commit, four files changed.
+    let (_, web) = clone("acme-web", "main");
+    std::fs::write(web.join("lib.rs"), "fn main() { run(); }\n").unwrap();
+    git(&web, &["commit", "-am", "run it"]);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(web.join(name), "x").unwrap();
+    }
+    std::fs::write(web.join("README.md"), "changed\n").unwrap();
+    // Behind by one commit as of the last fetch, two files changed.
+    let (api_origin, api) = clone("acme-api", "release-2");
+    let other = dir.join("api-other");
+    git(
+        &dir,
+        &[
+            "clone",
+            "-b",
+            "release-2",
+            api_origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join("new.rs"), "x").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-m", "elsewhere"]);
+    git(&other, &["push"]);
+    git(&api, &["fetch"]);
+    std::fs::write(api.join("lib.rs"), "changed\n").unwrap();
+    std::fs::write(api.join("scratch.txt"), "x").unwrap();
+    // A worktree of the first, titled by its branch because its folder is not the branch's name.
+    let tree = dir.join("acme-web-login");
+    git(
+        &web,
+        &["worktree", "add", tree.to_str().unwrap(), "-b", "fix-login"],
+    );
+    std::fs::write(tree.join("login.rs"), "x").unwrap();
+    // A long name with many changes, to see them truncate, and a folder outside any repo.
+    let long = dir.join("a-project-with-a-very-long-name-indeed");
+    std::fs::create_dir_all(&long).unwrap();
+    git(&long, &["init", "-b", "main"]);
+    git(&long, &["commit", "--allow-empty", "-m", "first"]);
+    for n in 0..128 {
+        std::fs::write(long.join(format!("file-{n}.txt")), "x").unwrap();
+    }
+    let docs = dir.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    // Two projects nobody touched for five days.
+    let mut stale = Vec::new();
+    for name in ["old-notes", "legacy-site"] {
+        let repo = dir.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["commit", "--allow-empty", "-m", "first"]);
+        stale.push(repo);
+    }
+    let space = |path: &Path, extra: &str, added: u64| {
+        format!(
+            r#"{{"id":"{p}","name":"{n}","path":"{p}","addedAt":{added}{extra}}}"#,
+            p = path.display(),
+            n = path.file_name().unwrap().to_string_lossy()
+        )
+    };
+    let spaces = [
+        space(&api, "", now - 9 * day),
+        space(&web, r#","pinned":true"#, now - 8 * day),
+        space(
+            &tree,
+            &format!(r#","parent":"{}""#, web.display()),
+            now - 2 * day,
+        ),
+        space(&docs, "", now - 7 * day),
+        space(&long, "", now - 6 * day),
+        space(&stale[0], "", now - 20 * day),
+        space(&stale[1], "", now - 21 * day),
+    ];
+    std::fs::write(dir.join("spaces.json"), format!("[{}]", spaces.join(","))).unwrap();
+    let times: Vec<String> = [&api, &web, &tree, &docs, &long]
+        .iter()
+        .map(|p| format!(r#""{}":{}"#, p.display(), now - day / 2))
+        .chain(
+            stale
+                .iter()
+                .map(|p| format!(r#""{}":{}"#, p.display(), now - 5 * day)),
+        )
+        .collect();
+    std::fs::write(
+        dir.join("workspace.json"),
+        format!(
+            r#"{{"version":1,"last_active":{{{}}},"projects":{{}}}}"#,
+            times.join(",")
+        ),
+    )
+    .unwrap();
+    for width in [1000.0, 640.0] {
+        let mut config = base.clone();
+        config.project = api.clone();
+        config.agents = None;
+        config.plugins = None;
+        // Each size starts from the same files.
+        for file in ["workspace", "spaces"] {
+            std::fs::copy(
+                dir.join(format!("{file}.json")),
+                dir.join(format!("{file}-{width}.json")),
+            )
+            .unwrap();
+        }
+        config.state = Some(dir.join(format!("workspace-{width}.json")));
+        config.projects = Some(dir.join(format!("spaces-{width}.json")));
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("sidebar-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(3));
+        save(cx, window, &name("counts"));
+        // Pointing at the third row, the shown project: its buttons replace the pin.
+        let third = point(px(120.0), px(78.0 + 40.0 + 2.0 + 40.0 + 2.0 + 20.0));
+        mouse_move(cx, window, third, false);
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("hover"));
+        // Its X asks first, as it has a tab open.
+        click(cx, window, point(px(222.0), third.y));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("remove"));
+        cx.simulate_keystrokes(window, "escape");
+        mouse_move(cx, window, point(px(500.0), px(300.0)), false);
+        // The sort menu, from the header's middle button, then Name, its last item.
+        click(cx, window, point(px(204.0), px(62.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("sort"));
+        click(cx, window, point(px(220.0), px(194.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("sorted"));
+        // "Older" is closed under the list; open it.
+        click(cx, window, point(px(60.0), px(288.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("older"));
+        // The edge dragged out past the widest, and in past the narrowest.
+        for (state, to) in [("wide", 700.0), ("narrow", 100.0)] {
+            let from = if state == "wide" { 247.0 } else { 419.0 };
+            cx.simulate_event(
+                window,
+                MouseDownEvent {
+                    position: point(px(from), px(300.0)),
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+            );
+            for step in 1..=10 {
+                let x = from + (to - from) * step as f32 / 10.0;
+                mouse_move(cx, window, point(px(x), px(300.0)), true);
+                wait(cx, window, Duration::from_millis(20));
+            }
+            cx.simulate_event(
+                window,
+                gpui::MouseUpEvent {
+                    position: point(px(to), px(300.0)),
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                },
+            );
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name(state));
+        }
+        // Closed, and the pointer at the window's edge.
+        cx.simulate_keystrokes(window, "cmd-b");
+        wait(cx, window, Duration::from_millis(200));
+        mouse_move(cx, window, point(px(3.0), px(300.0)), false);
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("peek"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The command palette and the history sheet, over made-up projects and sessions in a folder of their own, never the
+/// user's: `Config::parse` points at the real Claude folders, so this sets them to the made-up one.
+fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let dir = std::env::temp_dir().join("wings-native-shot-finder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let (web, api) = (dir.join("acme-web"), dir.join("acme-api"));
+    for folder in [web.join("packages/ui"), api.clone()] {
+        std::fs::create_dir_all(folder).expect("make a project folder");
+    }
+    std::fs::write(
+        dir.join("spaces.json"),
+        format!(
+            r#"[{{"id":"w","name":"acme-web","path":"{}","pinned":true}},{{"id":"a","name":"acme-api","path":"{}"}}]"#,
+            web.display(),
+            api.display()
+        ),
+    )
+    .expect("write the made-up project list");
+    let claude = dir.join("claude");
+    // Id, folder, branch, first prompt, reply, and how many minutes ago it was last active.
+    let sessions = [
+        (
+            "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d",
+            web.clone(),
+            "main",
+            "Fix the login redirect after sign-in",
+            "I changed the redirect handler so a signed-in user lands on the dashboard.",
+            5,
+        ),
+        (
+            "1c9f8d2b-4e3a-4b6c-8d7e-8f9a0b1c2d3e",
+            web.clone(),
+            "fix-login",
+            "Add rate limiting to the login endpoint",
+            "I added a token bucket in front of the login handler, with a test for the limit.",
+            120,
+        ),
+        (
+            "2d0a9e3c-5f4b-4c7d-9e8f-9a0b1c2d3e4f",
+            api.clone(),
+            "release-2",
+            "Write the release notes for 2.0",
+            "Here are the notes, grouped by what changed for API users.",
+            24 * 60,
+        ),
+        (
+            "3e1b0f4d-6a5c-4d8e-8f9a-0b1c2d3e4f5a",
+            web.join("packages/ui"),
+            "main",
+            "Make the Button component accept an icon",
+            "The Button now takes an icon prop and keeps its label centred.",
+            3 * 24 * 60,
+        ),
+        (
+            "4f2c1a5e-7b6d-4e9f-9a0b-1c2d3e4f5a6b",
+            web.clone(),
+            "main",
+            "Why does the sidebar flicker when I resize the window?",
+            "The flicker comes from measuring the width on every frame; I memoised it.",
+            10 * 24 * 60,
+        ),
+    ];
+    let now = std::time::SystemTime::now();
+    for (id, cwd, branch, prompt, reply, minutes) in sessions {
+        let named: String = cwd
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let folder = claude.join("projects").join(named);
+        std::fs::create_dir_all(&folder).expect("make a transcript folder");
+        let user = serde_json::json!({ "type": "user", "cwd": cwd, "gitBranch": branch,
+            "timestamp": "2026-10-01T10:00:00.000Z", "message": { "role": "user", "content": prompt } });
+        let assistant = serde_json::json!({ "type": "assistant", "timestamp": "2026-10-01T10:00:05.000Z",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": reply }] } });
+        let path = folder.join(format!("{id}.jsonl"));
+        std::fs::write(&path, format!("{user}\n{assistant}\n")).expect("write a transcript");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(now - Duration::from_secs(minutes * 60)))
+            .expect("date the transcript");
+    }
+    let mut config = base.clone();
+    config.project = web.clone();
+    config.projects = Some(dir.join("spaces.json"));
+    config.agents = None;
+    config.sessions = Some(SessionSource::Folders(vec![claude]));
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(3));
+        cx.simulate_keystrokes(window, "cmd-t");
+        wait(cx, window, Duration::from_secs(1));
+        // The palette with nothing typed, with the highlight moved down, and narrowed to the logins.
+        cx.simulate_keystrokes(window, "cmd-k");
+        wait(cx, window, Duration::from_millis(600));
+        save(cx, window, &name("palette"));
+        cx.simulate_keystrokes(window, "down down down");
+        wait(cx, window, Duration::from_millis(200));
+        save(cx, window, &name("palette-moved"));
+        cx.simulate_input(window, "login");
+        wait(cx, window, Duration::from_millis(700));
+        save(cx, window, &name("palette-typed"));
+        cx.simulate_keystrokes(window, "escape");
+        // The sheet over this project's sessions, searched, with a row hovered and its menu open, over every project's, and
+        // with nothing found.
+        let _ = cx.update_window(window, |_, window, cx| {
+            window.dispatch_action(Box::new(actions::OpenHistory), cx)
+        });
+        wait(cx, window, Duration::from_millis(800));
+        save(cx, window, &name("history"));
+        cx.simulate_input(window, "login");
+        wait(cx, window, Duration::from_millis(800));
+        save(cx, window, &name("history-search"));
+        // The sheet is 480 wide at the right edge: 16 of padding, the heading, the two toggle rows, the search field and
+        // the filters take about 200 before the first row.
+        let sheet_left = width - 480.0;
+        let row = point(px(sheet_left + 200.0), px(250.0));
+        cx.simulate_event(
+            window,
+            gpui::MouseMoveEvent {
+                position: row,
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            },
+        );
+        wait(cx, window, Duration::from_millis(200));
+        save(cx, window, &name("history-row"));
+        click(cx, window, point(px(width - 32.0), px(233.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("history-menu"));
+        click(cx, window, point(px(width - 32.0), px(233.0)));
+        click(cx, window, point(px(sheet_left + 142.0), px(86.0)));
+        wait(cx, window, Duration::from_millis(800));
+        save(cx, window, &name("history-all"));
+        cx.simulate_input(window, " zzzz");
+        wait(cx, window, Duration::from_millis(800));
+        save(cx, window, &name("history-empty"));
+        cx.simulate_keystrokes(window, "escape");
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
     }
 }

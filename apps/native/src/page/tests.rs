@@ -59,6 +59,31 @@ function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1
 globalThis.__wingsEvent=(handler,json)=>{const v=JSON.parse(json).value;if(handler==='3:change')name=v;else note=v;render();return true;};render();
 "#;
 
+/// A page that renders each value it hears a while later, as a busy page does.
+const SLOW_FORM: &str = r#"
+let name = '';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+{id:3,type:'TextInput',props:{label:'Name',value:name,onChange:'3:change'}},
+{id:5,type:'Text',children:[{id:6,type:'#text',text:'Name='+name+'.'}]}]}]}]}));}
+globalThis.__wingsEvent=(_,json)=>{const v=JSON.parse(json).value;setTimeout(()=>{name=v;render();},60);return true;};render();
+"#;
+
+#[test]
+fn a_page_that_gives_typed_text_back_late_does_not_undo_the_keys_typed_since() {
+    let (app, mut window) = open(SLOW_FORM);
+    settle(&app, &mut window, shows("Name=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    for key in ["a", "b", "c", "d"] {
+        window.simulate_input(key);
+        // Let the page's late echo of the earlier text arrive while typing goes on.
+        thread::sleep(Duration::from_millis(25));
+        app.run_until_parked();
+        window.draw();
+    }
+    settle(&app, &mut window, shows("Name=abcd."));
+}
+
 #[test]
 fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea_takes_enter() {
     let (app, mut window) = open(FORM);

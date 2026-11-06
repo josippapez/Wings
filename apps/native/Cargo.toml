@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 
@@ -31,6 +31,10 @@ wings-spaces = { path = "../../crates/wings-spaces" }
 sysinfo = { version = "0.39.6", optional = true }
 async-channel = { version = "2.5", optional = true }
 unicode-segmentation = { version = "1.13", optional = true }
+# "Today" in the history sheet is since midnight where you are, which std cannot say.
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+keyring = "4.2.0"
+ureq = "3.4.2"
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

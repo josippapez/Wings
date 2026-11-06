@@ -1,5 +1,5 @@
 import { useQuery } from "wings-plugin-sdk/react";
-import { Text } from "wings-plugin-ui";
+import { Card as Panel, Text } from "wings-plugin-ui";
 
 import { ch } from "../lib/messages";
 import type { ItemView } from "../lib/types";
@@ -11,31 +11,40 @@ export function Card({ sessionId, item }: { sessionId: string; item: ItemView })
   const { data: d, error } = useQuery(ch, "detail", { sessionId, key: item.key });
   if (!d)
     return (
-      <div className="detail">
+      <Panel compact className="detail">
         <Text tone={error ? "danger" : "muted"}>{error ? error.message : "Loading…"}</Text>
-      </div>
+      </Panel>
     );
-  const pre = (part: string, text: string, cls = "") => (
-    <pre key={part} id={`pre-${item.key}-${part}`} className={cls}>
+  const out = (part: string, text: string, warn = false) => (
+    <Text as="div" key={part} id={`pre-${item.key}-${part}`} className="out" mono size="tiny" tone={warn ? "warn" : undefined}>
       {text}
-    </pre>
+    </Text>
   );
-  if (d.kind === "prompt") return <div className="detail">{pre("text", d.text!)}</div>;
+  if (d.kind === "prompt")
+    return (
+      <Panel compact className="detail">
+        {out("text", d.text!)}
+      </Panel>
+    );
   const at = new Date(d.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return (
-    <div className="detail">
+    <Panel compact className="detail">
       <Text as="p" tone="muted">
         {`Started ${at}`}
         {d.done ? (d.ms == null ? "" : ` · ${d.error ? "failed after" : "took"} ${took(d.ms)}`) : " · still running"}
       </Text>
       {d.input!.flatMap(([key, value]) => [
-        <div key={`label-${key}`} className="label">
+        <Text as="div" key={`label-${key}`} tone="muted" size="tiny">
           {key}
-        </div>,
-        pre(key, value),
+        </Text>,
+        out(key, value),
       ])}
-      {d.result != null ? <div className="label">{d.error ? "Error" : "Result"}</div> : null}
-      {d.result != null ? pre("result", d.result || "(no output)", d.error ? "warn" : "") : null}
-    </div>
+      {d.result != null ? (
+        <Text as="div" tone="muted" size="tiny">
+          {d.error ? "Error" : "Result"}
+        </Text>
+      ) : null}
+      {d.result != null ? out("result", d.result || "(no output)", d.error) : null}
+    </Panel>
   );
 }
