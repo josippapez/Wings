@@ -95,6 +95,26 @@ impl Sessions {
         };
         self.history.search(&folders, query, filter, limit)
     }
+
+    /// Runs Claude Code's `search_history` or `read_session`, or `None` for another tool. OpenCode's sessions are loaded
+    /// first, since the caller can't ask again later. Reads transcripts: call it off the main thread.
+    pub fn call_tool(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<Result<String, String>> {
+        let folders = match &self.source {
+            None => Vec::new(),
+            Some(SessionSource::Folders(folders)) => folders.clone(),
+            Some(SessionSource::Accounts(default)) => {
+                if matches!(name, "search_history" | "read_session") {
+                    self.history.sync_opencode();
+                }
+                claude_accounts::dirs_with_default(default.clone())
+            }
+        };
+        wings_agents::history::call_tool(&self.history, &folders, name, arguments)
+    }
 }
 
 /// The line that continues a session, without its Enter. `None` when `id` isn't one of the agent's: it gets typed into a

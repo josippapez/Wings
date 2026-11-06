@@ -1291,3 +1291,123 @@ fn a_plugin_focusing_a_pane_shows_the_tab_it_is_in() {
     app.run_until_parked();
     assert_eq!(window.read(|w, _| w.active()), Terminal(0));
 }
+
+/// One request on the app's socket, as the `wings` command sends it, answered while the window runs.
+fn ask_socket(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    socket: &std::path::Path,
+    request: Value,
+) -> Value {
+    use std::io::{BufRead, BufReader, Write};
+    let answer = Arc::new(Mutex::new(None));
+    let (found, socket) = (answer.clone(), socket.to_owned());
+    std::thread::spawn(move || {
+        let stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
+        writeln!(&stream, "{request}").unwrap();
+        // The app also writes empty lines and events on the connection; the reply has the request's id.
+        for line in BufReader::new(&stream).lines() {
+            let message: Value = serde_json::from_str(&line.unwrap()).unwrap_or(Value::Null);
+            if message.get("id") == Some(&json!(1)) {
+                *found.lock().unwrap() = Some(message);
+                return;
+            }
+        }
+    });
+    until(app, window, "the app never answered on the socket", |_| {
+        answer.lock().unwrap().is_some()
+    });
+    answer.lock().unwrap().take().unwrap()
+}
+
+#[test]
+fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin() {
+    let data = Data::temp();
+    data.install_script(
+        "hooker",
+        json!({ "contributes": { "hooks": ["SessionStart"], "mcpTools": [{ "name": "hi", "description": "Says hi", "inputSchema": { "type": "object" } }], "mcpInstructions": "Hooker (hooker__*): says hi." } }),
+        "wings.onHook('SessionStart', (input, c) => `hello ${input.source} in ${c.project?.name ?? 'no project'}`);
+         wings.onTool('hi', (input) => `hi ${input.name}`);",
+        &[],
+        "hooker-scope",
+    );
+    // What a crash left behind: a socket file nothing listens on, which the app replaces.
+    let socket = data.root.join("app-data/mcp.sock");
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.socket = Some(socket.clone())
+    });
+
+    let list = ask_socket(&app, &mut window, &socket, json!({ "id": 1, "op": "list" }));
+    let names: Vec<&str> = list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    for name in [
+        "search_history",
+        "list_sessions",
+        "read_pane",
+        "open_pane",
+        "hooker__hi",
+    ] {
+        assert!(names.contains(&name), "{name} in {names:?}");
+    }
+    assert_eq!(
+        list["instructions"],
+        json!(["Hooker (hooker__*): says hi."])
+    );
+
+    // The main may still be starting; Claude Code's next call finds it.
+    let started = Instant::now();
+    let call = loop {
+        let call = ask_socket(
+            &app,
+            &mut window,
+            &socket,
+            json!({ "id": 1, "op": "call", "name": "hooker__hi", "arguments": { "name": "Claude" } }),
+        );
+        let text = call["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if !text.contains("still starting") || started.elapsed() > Duration::from_secs(10) {
+            break call;
+        }
+    };
+    assert_eq!(
+        call["result"],
+        json!({ "content": [{ "type": "text", "text": "hi Claude" }], "isError": false })
+    );
+
+    let hook = ask_socket(
+        &app,
+        &mut window,
+        &socket,
+        json!({ "id": 1, "op": "hook", "input": { "hook_event_name": "SessionStart", "source": "startup" } }),
+    );
+    assert_eq!(
+        hook["result"],
+        json!({ "context": "hello startup in no project" })
+    );
+
+    let sessions = ask_socket(
+        &app,
+        &mut window,
+        &socket,
+        json!({ "id": 1, "op": "call", "name": "list_sessions", "arguments": {} }),
+    );
+    assert_eq!(sessions["result"]["isError"], false, "{sessions}");
+
+    let status = json!({ "session_id": "3c21b0c5-8113-4f55-9493-fa156c3fa369", "rate_limits": { "five_hour": { "used_percentage": 40 } } });
+    ask_socket(
+        &app,
+        &mut window,
+        &socket,
+        json!({ "id": 1, "op": "statusline", "status": status }),
+    );
+    let view = window.read(|w, _| crate::page::plugin::Env::statusline(&*w.plugin_env));
+    assert_eq!(view["rateLimits"]["fiveHour"]["usedPercentage"], 40.0);
+}

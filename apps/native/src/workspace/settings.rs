@@ -29,17 +29,19 @@ pub(super) enum Section {
     History,
     Keyboard,
     Editor,
+    Agents,
     Plugins,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    const ALL: [Section; 8] = [
         Section::General,
         Section::Text,
         Section::Cursor,
         Section::History,
         Section::Keyboard,
         Section::Editor,
+        Section::Agents,
         Section::Plugins,
     ];
 
@@ -51,6 +53,7 @@ impl Section {
             Section::History => "History and selection",
             Section::Keyboard => "Keyboard",
             Section::Editor => "Editor",
+            Section::Agents => "Agents",
             Section::Plugins => "Plugins",
         }
     }
@@ -63,6 +66,7 @@ impl Section {
             Section::History => Icon::ScrollText,
             Section::Keyboard => Icon::Keyboard,
             Section::Editor => Icon::Code,
+            Section::Agents => Icon::Bot,
             Section::Plugins => Icon::Puzzle,
         }
     }
@@ -571,8 +575,162 @@ impl Workspace {
                     div().children(control),
                 )]]
             }
+            Section::Agents => self.agents_cards(cx),
             Section::Plugins => Vec::new(),
         }
+    }
+
+    /// Claude Code's connection, as the desktop's Agents chip shows it: whether its sessions get Wings' tools, and its
+    /// status line and hooks go through Wings, with Connect, Reconnect and Disconnect for every account at once, then
+    /// each account's own state.
+    fn agents_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        use super::claude::Change;
+        let link = &self.claude;
+        let default = link
+            .accounts
+            .as_ref()
+            .and_then(|accounts| accounts.first())
+            .map(|account| account.status.clone());
+        let state = match &default {
+            None if link.busy => "Checking…",
+            None => "Not checked",
+            Some(s) if !s.claude => "Not installed",
+            Some(s) if s.connected && s.statusline => "Connected",
+            Some(s) if s.connected || s.statusline => "Partly connected",
+            Some(_) => "Not connected",
+        };
+        let installed = default.as_ref().is_some_and(|s| s.claude);
+        let off = state == "Not connected";
+        let summary = match state {
+            "Not installed" => "Install Claude Code to give it plugin tools.",
+            "Connected" => {
+                "Its sessions get Wings' and plugin tools, and plugins get its usage numbers. Your own status line \
+                 still shows."
+            }
+            _ => {
+                "Connect it so its sessions get Wings' and plugin tools and plugins get its usage numbers. Your own \
+                 status line keeps showing, and Disconnect puts your settings back as they were."
+            }
+        };
+        let busy = link.busy;
+        let mut buttons = div().flex().items_center().gap(px(8.0));
+        if installed && !off {
+            buttons = buttons.child(
+                ui::button(
+                    "claude-disconnect",
+                    "Disconnect Claude Code",
+                    ui::Variant::Ghost,
+                    busy,
+                    "Disconnect",
+                )
+                .when(!busy, |b| {
+                    b.on_click(
+                        cx.listener(|this, _, _, cx| this.change_claude(Change::Disconnect, cx)),
+                    )
+                }),
+            );
+        }
+        if installed {
+            let (label, variant) = if state == "Connected" {
+                ("Reconnect", ui::Variant::Outline)
+            } else {
+                ("Connect", ui::Variant::Secondary)
+            };
+            buttons = buttons.child(
+                ui::button(
+                    "claude-connect",
+                    format!("{label} Claude Code"),
+                    variant,
+                    busy,
+                    label,
+                )
+                .when(!busy, |b| {
+                    b.on_click(
+                        cx.listener(|this, _, _, cx| this.change_claude(Change::Connect(None), cx)),
+                    )
+                }),
+            );
+        }
+        let error = link.error.clone().map(SharedString::from);
+        // The buttons go under the text, so a narrow window doesn't squeeze it into a column of single words.
+        let mut main = vec![
+            div()
+                .flex()
+                .flex_col()
+                .child(ui::setting_row(
+                    format!("Claude Code · {state}"),
+                    format!(
+                        "{summary} Connect and Disconnect apply to every account a project uses."
+                    ),
+                    error,
+                    div(),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .px(px(16.0))
+                        .pb(px(12.0))
+                        .child(buttons),
+                )
+                .into_any_element(),
+        ];
+        if let Some(status) = default.as_ref().filter(|s| s.connected) {
+            let on = status.always_load;
+            main.push(ui::setting_row(
+                "Load Wings tools at session start",
+                "Claude sees every plugin tool from the first message, instead of only when something tells it to look. \
+                 Takes more of its context. New sessions only.",
+                None,
+                ui::switch("claude-always-load", on).when(!busy, |s| {
+                    s.on_click(cx.listener(move |this, _, _, cx| this.change_claude(Change::Connect(Some(!on)), cx)))
+                }),
+            ));
+        }
+        let accounts: Vec<AnyElement> = link
+            .accounts
+            .iter()
+            .flatten()
+            .map(|account| {
+                let s = &account.status;
+                let state = match (s.connected, s.statusline) {
+                    (true, true) => "Connected",
+                    (true, false) => "Tools only: no status line or hooks",
+                    (false, true) => "Status line and hooks only: no tools",
+                    (false, false) => "Not connected",
+                };
+                let (name, folder) = match &account.name {
+                    None => ("Default account".to_owned(), "~/.claude".to_owned()),
+                    Some(name) => (name.clone(), format!("~/.claude-{name}")),
+                };
+                ui::setting_row(
+                    name,
+                    folder,
+                    None,
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .child(state),
+                )
+            })
+            .collect();
+        let note = div()
+            .px(px(16.0))
+            .py(px(12.0))
+            .text_size(px(12.0))
+            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .child(
+                "Not here yet: this app never presses Enter for an agent, so a command Claude opens in a tab and a \
+                 message one agent sends another wait for you, and a setup command an agent proposes is refused. \
+                 OpenCode is connected from the desktop app.",
+            )
+            .into_any_element();
+        let mut cards = vec![main];
+        if !accounts.is_empty() {
+            cards.push(accounts);
+        }
+        cards.push(vec![note]);
+        cards
     }
 
     /// The desktop's plugin list, read only: what is installed and whether it is on, and whether it runs here.
@@ -709,6 +867,10 @@ impl Workspace {
                 if let Some(dialog) = &mut this.settings {
                     dialog.section = section;
                     dialog.menu = None;
+                }
+                // Claude Code's state is read each time the section opens, as the desktop's does.
+                if section == Section::Agents {
+                    this.load_claude_status(cx);
                 }
                 cx.notify();
             }))

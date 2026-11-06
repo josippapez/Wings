@@ -37,6 +37,7 @@ icons!(
     ArrowRight = "arrow-right",
     ArrowUp = "arrow-up",
     ArrowUpDown = "arrow-up-down",
+    Bot = "bot",
     Check = "check",
     Circle = "circle",
     CircleCheck = "circle-check",

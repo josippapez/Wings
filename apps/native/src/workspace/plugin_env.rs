@@ -66,9 +66,15 @@ fn dropping_plugin_ui_stops_its_git_watcher() {
         .expect("the watcher thread outlived the workspace's plugin UI");
 }
 
+/// Work for the window's thread, with the window.
+pub(super) type WindowTask =
+    Box<dyn FnOnce(&mut Workspace, &mut gpui::Window, &mut Context<Workspace>) + Send>;
+
 /// What a plugin asked of the window, for the window to do.
 pub(super) enum UiEvent {
     SaveTabState,
+    /// Something to do on the window's thread for a call from Claude Code (`claude`), which waits for it.
+    Run(WindowTask),
     FocusPane {
         pane: String,
         reply: crate::page::runtime::Reply,
@@ -207,9 +213,11 @@ pub(super) struct AppEnv {
     known: Mutex<Known>,
     /// The native app's projects, which the window shows and plugins change.
     projects: Arc<Projects>,
-    running: Running,
+    pub(super) running: Running,
     claude_dir: PathBuf,
     system: Mutex<Arc<dyn System>>,
+    /// What Claude Code last told `wings statusline`, for `wings.statusline()`.
+    pub(super) statusline: Mutex<wings_connect::statusline::Statusline>,
 }
 
 impl AppEnv {
@@ -240,6 +248,38 @@ impl AppEnv {
             running: Running::default(),
             claude_dir,
             system: Mutex::new(Arc::new(Os)),
+            statusline: Mutex::default(),
+        }
+    }
+
+    /// Runs `task` on the window's thread and waits up to `wait` for what it returns, for a call from Claude Code.
+    pub(super) fn on_window<T: Send + 'static>(
+        &self,
+        wait: Duration,
+        task: impl FnOnce(&mut Workspace, &mut gpui::Window, &mut Context<Workspace>) -> T
+        + Send
+        + 'static,
+    ) -> Result<T, String> {
+        let (done, answer) = std::sync::mpsc::channel();
+        self.events
+            .try_send(UiEvent::Run(Box::new(move |workspace, window, cx| {
+                let _ = done.send(task(workspace, window, cx));
+            })))
+            .map_err(|_| "The Wings window is closed or busy".to_string())?;
+        answer
+            .recv_timeout(wait)
+            .map_err(|_| "The Wings window didn't answer in time".to_string())
+    }
+
+    /// The native app's projects, for Claude Code's tools.
+    pub(super) fn spaces(&self) -> &Projects {
+        &self.projects
+    }
+
+    /// Shows a notification for Claude Code: the system's, else the window's own.
+    pub(super) fn show_notification(&self, title: String, body: String) {
+        if self.system().notify(&title, &body).is_err() {
+            self.send(UiEvent::Notice { title, body });
         }
     }
 
@@ -434,6 +474,10 @@ impl Env for AppEnv {
         serde_json::to_value(activity).map_err(|error| error.to_string())
     }
 
+    fn statusline(&self) -> serde_json::Value {
+        self.statusline.lock().unwrap().view()
+    }
+
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         let shells = self.known.lock().unwrap().shells.clone();
         ports::scan(&shells)
@@ -570,6 +614,7 @@ impl Workspace {
     ) {
         match event {
             UiEvent::SaveTabState => self.save(cx),
+            UiEvent::Run(task) => task(self, window, cx),
             UiEvent::FocusPane { pane, reply } => {
                 let Some(id) = self.plugin_pane(&pane) else {
                     return reply.err(format!("no pane {pane}"));
@@ -710,7 +755,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn open_plugin_pane(
+    pub(super) fn open_plugin_pane(
         &mut self,
         plan: OpenPane,
         reply: crate::page::runtime::Reply,
@@ -785,7 +830,7 @@ impl Workspace {
     /// gets it, since a shell would run the text, and not one waiting on an answer, which the text would be taken for.
     /// Enter is never pressed (the desktop presses it only while "Let agents message each other" is on, a setting this
     /// app doesn't have), so the answer is `{ submitted: false }`.
-    fn send_to_agent(
+    pub(super) fn send_to_agent(
         &mut self,
         pane: &str,
         text: &str,
@@ -814,7 +859,7 @@ impl Workspace {
     }
 
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.
-    fn plugin_pane(&self, pane: &str) -> Option<usize> {
+    pub(super) fn plugin_pane(&self, pane: &str) -> Option<usize> {
         let pane = pane.parse().ok()?;
         self.panes.contains_key(&pane).then_some(pane)
     }
@@ -905,7 +950,7 @@ impl Workspace {
     }
 
     /// Every pane of every project, shown or not, with its project's folder, by pane id.
-    fn pane_projects(&self) -> Vec<(usize, &std::path::Path)> {
+    pub(super) fn pane_projects(&self) -> Vec<(usize, &std::path::Path)> {
         let shown = self.terminals.iter().map(|tab| (&self.config.project, tab));
         let parked = self
             .parked
@@ -1012,7 +1057,7 @@ impl Workspace {
     }
 
     /// Each pane's shell, for `wings.ports`.
-    fn pane_shells(&self, cx: &gpui::App) -> Vec<(String, Option<u32>)> {
+    pub(super) fn pane_shells(&self, cx: &gpui::App) -> Vec<(String, Option<u32>)> {
         self.panes
             .iter()
             .map(|(id, pane)| {

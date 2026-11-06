@@ -24,7 +24,7 @@ use wings_native::{
         fixture::{Approval, Data},
     },
     page::PageView,
-    workspace::Workspace,
+    workspace::{AccountStatus, Workspace},
 };
 
 /// Real shells print on their own time, so this waits in real time while the test clock keeps up.
@@ -892,12 +892,34 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         save(cx, window, &name("editor-menu"));
         click(cx, window, chevron);
 
+        // Made-up Claude Code accounts for Agents: this window serves no socket, so it reads none of yours.
+        let status = |connected, statusline| wings_connect::register::Status {
+            claude: true,
+            connected,
+            statusline,
+            always_load: false,
+        };
+        let accounts = vec![
+            AccountStatus {
+                name: None,
+                status: status(true, true),
+            },
+            AccountStatus {
+                name: Some("work".into()),
+                status: status(true, false),
+            },
+        ];
+        handle
+            .update(cx, |workspace, _, cx| {
+                workspace.show_claude_accounts(accounts, cx)
+            })
+            .expect("show the made-up accounts");
         // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 150.
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(300));
         let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
         let sections = [
-            "general", "text", "cursor", "history", "keyboard", "editor", "plugins",
+            "general", "text", "cursor", "history", "keyboard", "editor", "agents", "plugins",
         ];
         for (index, section) in sections.into_iter().enumerate() {
             let row = point(px(left + 70.0), px(150.0 + 34.0 * index as f32));

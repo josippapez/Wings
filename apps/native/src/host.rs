@@ -75,6 +75,10 @@ pub struct Config {
     pub sessions: Option<SessionSource>,
     /// The editors "Open in" offers: `None` looks for the installed ones; tests and screenshots list their own.
     pub editors: Option<Vec<wings_editors::EditorView>>,
+    /// Where the app serves the socket the `wings` command talks to (`wings_connect::cli::socket`), and connects Claude
+    /// Code to it. `None` serves nothing and leaves Claude Code alone, as in tests and screenshots, which must never take
+    /// the socket of the Wings you are using; only `main` sets it.
+    pub socket: Option<PathBuf>,
 }
 
 /// Where past sessions are read from.
@@ -153,6 +157,7 @@ impl Config {
             project_info: crate::projects::desktop_dir(),
             sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
             editors: None,
+            socket: None,
         }))
     }
 

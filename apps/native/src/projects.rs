@@ -107,6 +107,19 @@ impl Projects {
             .collect()
     }
 
+    /// The projects as the list holds them, the folder the app was opened in first when the list doesn't hold it: what
+    /// Claude Code's tools and the accounts to connect go by.
+    pub fn spaces(&self) -> Vec<Space> {
+        let store = self.store.lock().unwrap();
+        let unlisted = self
+            .unlisted_launch(&store)
+            .then(|| spaces::new_space(&self.launch.to_string_lossy()));
+        unlisted
+            .into_iter()
+            .chain(store.spaces.iter().cloned())
+            .collect()
+    }
+
     /// Whether the folder the app was opened in is shown without being on the list.
     fn unlisted_launch(&self, store: &SpaceStore) -> bool {
         !self.listed(store) && !self.launch_removed.load(Ordering::Relaxed)
@@ -171,9 +184,19 @@ impl Projects {
             .map(|lines| spaces::include_text(&lines))
             .transpose()?;
         let setup = setup.map(|line| spaces::setup_text(&line)).transpose()?;
+        self.update_worktree_settings(project, include.as_deref(), setup.as_deref())
+    }
+
+    /// Saves the include text and the setup line already checked (`spaces::include_text`, `spaces::setup_text`).
+    pub fn update_worktree_settings(
+        &self,
+        project: &str,
+        include: Option<&str>,
+        setup: Option<&str>,
+    ) -> Result<(), String> {
         let mut store = self.store.lock().unwrap();
         let id = self.id_of(&mut store, project, true);
-        store.update_worktree_settings(&id, include.as_deref(), setup.as_deref())
+        store.update_worktree_settings(&id, include, setup)
     }
 
     /// The setup line waiting for the first pane in the worktree `project`, which now has it.

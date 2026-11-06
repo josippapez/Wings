@@ -2,6 +2,8 @@
 //! Issues tab, with the desktop app's shortcuts.
 
 mod agent_list;
+mod claude;
+pub use claude::AccountStatus;
 mod context_menu;
 #[cfg(all(test, feature = "test-support"))]
 mod desktop_parity_tests;
@@ -198,6 +200,8 @@ pub struct Workspace {
     sessions: history::Sessions,
     /// What agents and plugins said, for the sidebar's Inbox.
     inbox: inbox::Inbox,
+    /// Claude Code's connection, as Settings, Agents shows it.
+    claude: claude::Connection,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     _detection: Option<Task<()>>,
@@ -291,6 +295,7 @@ impl Workspace {
             sessions,
             inbox: Default::default(),
             menu: None,
+            claude: Default::default(),
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -320,6 +325,17 @@ impl Workspace {
             .map(|paths| installed::start(installed::discover(paths), paths, &env))
             .unwrap_or_default();
         this.plugin_env.set_plugins(&this.plugins);
+        // Claude Code reaches this app through the socket, as it reaches the desktop's.
+        if let Some(socket) = this.config.socket.clone() {
+            let info = this.project_info.as_ref().map(|info| info.store.clone());
+            let (sessions, plugins) = (this.sessions.clone(), this.config.plugins.clone());
+            if let Err(error) =
+                claude::start(&socket, this.plugin_env.clone(), sessions, info, plugins)
+            {
+                eprintln!("Couldn't listen on {}: {error}", socket.display());
+            }
+            claude::connect_on_start(socket, this.config.state.clone(), this.spaces.spaces());
+        }
         this.transcript_plugins = this
             .plugins
             .iter()
