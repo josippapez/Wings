@@ -255,13 +255,14 @@ impl PageView {
                     Some('t') => Some(theme::WORKING),
                     _ => None,
                 };
-                ui::badge(
-                    ui::Variant::Outline,
-                    color,
-                    true,
-                    value.get(2..).unwrap_or(value).to_owned(),
-                )
-                .into_any_element()
+                let name = value.get(2..).unwrap_or(value);
+                // The changes plugin's `describeRef`: a tag's name after a diamond.
+                let label = if value.starts_with('t') {
+                    format!("◆ {name}")
+                } else {
+                    name.to_owned()
+                };
+                ui::badge(ui::Variant::Outline, color, true, label).into_any_element()
             })
             .collect::<Vec<_>>();
         let handler = graph.on_select.clone();
