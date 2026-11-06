@@ -8,7 +8,7 @@
 //!
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
-//! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
+//! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `onHook`, `closeView`, `project`, and
 //! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts` and `setClaudeAccount`, `fetch`, `secrets`
 //! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`. `onReply` is accepted and never called: the
 //! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal. `copyText` is
@@ -75,6 +75,7 @@ const SETUP: &str = r#"
         let diffRefreshHandler = null;
         let projects = null, focused = native.focused, focusKnown = false;
         const tools = new Map();
+        const hooks = new Map();
         // QuickJS has no browser abort globals. Only the signal contract needed by diskFind is supplied.
         class AbortSignal {
             constructor() { this.aborted = false; this.listeners = []; }
@@ -170,13 +171,28 @@ const SETUP: &str = r#"
             call('actionDone', { token, error }).catch(none);
         };
 
-        // Another plugin called one of this plugin's tools. A thrown error goes back to the caller as a failed call.
-        const runTool = async (token, { name, arguments: input, project }) => {
+        // Claude or another plugin called one of this plugin's tools. A thrown error goes back to the caller as a failed
+        // call. A Claude Code hook (`hook`) answers `{ context?, deny? }` as JSON, and anything that goes wrong says nothing.
+        const runTool = async (token, { name, hook, arguments: input, paneId, project, session }) => {
             let text, isError = false;
+            const context = { paneId: paneId ?? null, project: project ?? null, session: session ?? null };
+            if (hook) {
+                let answer = null;
+                try {
+                    answer = await hooks.get(name)?.(input ?? {}, context);
+                } catch (e) {
+                    defined.console.error(e);
+                }
+                const say = typeof answer === 'string' ? { context: answer } : answer && typeof answer === 'object' ? answer : {};
+                const out = {};
+                if (typeof say.context === 'string' && say.context) out.context = say.context;
+                if (typeof say.deny === 'string' && say.deny) out.deny = say.deny;
+                return void call('toolDone', { token, text: JSON.stringify(out), isError: false }).catch(none);
+            }
             try {
                 const handler = tools.get(name);
                 if (!handler) throw new Error(`The plugin has no handler for ${name}`);
-                const result = await handler(input ?? {}, { paneId: null, project: project ?? null, session: null });
+                const result = await handler(input ?? {}, context);
                 text = typeof result === 'string' ? result : result === undefined ? 'Done' : JSON.stringify(result, null, 2);
             } catch (e) {
                 text = String(e?.message ?? e);
@@ -283,6 +299,7 @@ const SETUP: &str = r#"
             openSettings: () => call('openSettings', {}),
             closeView: (id) => call('closeView', { id }),
             onTool: (name, handler) => void tools.set(name, handler),
+            onHook: (event, handler) => void hooks.set(event, handler),
             callTool: (name, args, options) => call('callTool', { name, arguments: args ?? {}, project: options?.project ?? null }),
             createWorktree: (options) => call('createWorktree', options),
             worktreeSetup: (projectId) => call('worktreeSetup', { projectId: projectId ?? null }),

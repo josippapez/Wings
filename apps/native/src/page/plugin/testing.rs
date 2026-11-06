@@ -62,6 +62,8 @@ pub(super) struct FakeEnv {
     pub running: Running,
     /// The secrets plugins kept, by plugin, scope and name.
     pub secrets: Mutex<std::collections::HashMap<(String, String, String), String>>,
+    /// What Claude Code told `wings statusline`.
+    pub statusline: Mutex<wings_connect::statusline::Statusline>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -78,6 +80,7 @@ impl FakeEnv {
             refuse: Mutex::default(),
             running: Running::default(),
             secrets: Mutex::default(),
+            statusline: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -269,6 +272,9 @@ impl Env for FakeEnv {
         }))
     }
 
+    fn statusline(&self) -> Value {
+        self.statusline.lock().unwrap().view()
+    }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         self.ports.lock().unwrap().clone()
     }

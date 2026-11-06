@@ -353,7 +353,7 @@ impl Shared {
                 self.settle_action(token, error);
                 reply.ok("null".into());
             }
-            "statusline" => reply.done(statusline(&access.plugin)),
+            "statusline" => reply.done(statusline(&access)),
             "exec" => {
                 self.off_thread(reply, move |reply| this.exec(&access, &params, reply));
             }
@@ -726,16 +726,15 @@ fn reply_if_error(reply: Reply, result: Result<(), String>) {
     }
 }
 
-/// What the desktop's `wings statusline` holds before Claude Code has told it anything. The native app doesn't receive
-/// status lines yet, so this is all there is: no limits, and no session's context.
-fn statusline(plugin: &Plugin) -> Result<String, String> {
-    if !may_read_statusline(plugin) {
+/// What Claude Code last told `wings statusline`, which the app keeps.
+fn statusline(access: &Access) -> Result<String, String> {
+    if !may_read_statusline(&access.plugin) {
         return Err(format!(
             "{} may not read the status line",
-            plugin.manifest.id
+            access.plugin.manifest.id
         ));
     }
-    Ok(json!({ "rateLimits": null, "sessions": {} }).to_string())
+    Ok(access.env.statusline().to_string())
 }
 
 fn transcript(access: &Access, params: &Value) -> Result<String, String> {
@@ -771,6 +770,8 @@ fn open_url(access: &Access, params: &Value) -> Result<String, String> {
     Ok("null".into())
 }
 
+#[cfg(test)]
+mod claude;
 mod pr_tracker;
 mod sections;
 pub use sections::{SectionIcon, SectionRow};

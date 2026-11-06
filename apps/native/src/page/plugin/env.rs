@@ -70,6 +70,15 @@ pub struct ToolCall {
     pub project: Option<Project>,
 }
 
+/// Who a call from Claude Code comes from, as a plugin's handler is told: the pane, its project and the agent session
+/// in it, each null when there is none (the desktop's `caller`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClaudeCaller {
+    pub pane_id: Option<String>,
+    pub project: serde_json::Value,
+    pub session: serde_json::Value,
+}
+
 /// A running plugin, as another plugin's `callTool` finds it.
 struct Target {
     plugin: Plugin,
@@ -128,6 +137,103 @@ impl Running {
             {
                 host.hear_event(&text);
             }
+        }
+    }
+
+    /// Every running plugin's MCP tools, as Claude Code lists them: `<plugin>__<tool>`.
+    pub fn mcp_tools(&self) -> Vec<serde_json::Value> {
+        let running = self.0.lock().unwrap();
+        let mut ids: Vec<&String> = running.keys().collect();
+        ids.sort();
+        ids.into_iter()
+            .flat_map(|id| {
+                running[id]
+                    .plugin
+                    .manifest
+                    .contributes
+                    .mcp_tools
+                    .iter()
+                    .map(move |tool| {
+                        serde_json::json!({
+                            "name": format!("{id}__{}", tool.name),
+                            "description": tool.description,
+                            "inputSchema": tool.input_schema,
+                        })
+                    })
+            })
+            .collect()
+    }
+
+    /// The `mcpInstructions` line of every running plugin that has one.
+    pub fn mcp_instructions(&self) -> Vec<String> {
+        let running = self.0.lock().unwrap();
+        let mut ids: Vec<&String> = running.keys().collect();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| {
+                running[id]
+                    .plugin
+                    .manifest
+                    .contributes
+                    .mcp_instructions
+                    .clone()
+            })
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    /// The running plugins that answer the Claude Code hook `event`.
+    pub fn hooked(&self, event: &str) -> Vec<String> {
+        let running = self.0.lock().unwrap();
+        let mut ids: Vec<String> = running
+            .iter()
+            .filter(|(_, target)| {
+                target
+                    .plugin
+                    .manifest
+                    .contributes
+                    .hooks
+                    .iter()
+                    .any(|h| h == event)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Hands Claude Code's call of the plugin's tool `tool`, or with `hook` its hook `tool`, to the plugin's main, or
+    /// answers `reply` with why it can't, in the desktop's words.
+    pub fn call_for_claude(
+        &self,
+        plugin: &str,
+        tool: &str,
+        input: serde_json::Value,
+        caller: &ClaudeCaller,
+        hook: bool,
+        reply: crate::page::runtime::Reply,
+    ) {
+        let target = {
+            let running = self.0.lock().unwrap();
+            running.get(plugin).map(|target| {
+                let declared = if hook {
+                    target
+                        .plugin
+                        .manifest
+                        .contributes
+                        .hooks
+                        .iter()
+                        .any(|h| h == tool)
+                } else {
+                    target.tools.iter().any(|t| t == tool)
+                };
+                (declared, target.host.upgrade())
+            })
+        };
+        match target {
+            Some((true, Some(host))) => host.run_for_claude(tool, input, caller, hook, reply),
+            Some((false, Some(_))) => reply.err(format!("{plugin} has no tool {tool}")),
+            _ => reply.err(format!("{plugin} is turned off in Wings")),
         }
     }
 
@@ -319,6 +425,11 @@ pub trait Env: Send + Sync + 'static {
     /// background service. The host has checked the plugin may. Takes a while: called on a thread of its own.
     fn agent_activity(&self, _session_id: &str) -> Result<serde_json::Value, String> {
         Err("Agent activity isn't available in this host".into())
+    }
+    /// What Claude Code last told `wings statusline`, as `wings.statusline()` resolves it: `{ rateLimits, sessions }`.
+    /// The host has checked the plugin may.
+    fn statusline(&self) -> serde_json::Value {
+        serde_json::json!({ "rateLimits": null, "sessions": {} })
     }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;

@@ -52,8 +52,8 @@ pub mod ui;
 
 pub use calls::{SectionIcon, SectionRow};
 pub use env::{
-    Access, Env, Notification, NotifyButton, OpenPane, OpenView, PaneEntry, PanePort, Project,
-    Running, SessionEntry, ToolCall,
+    Access, ClaudeCaller, Env, Notification, NotifyButton, OpenPane, OpenView, PaneEntry, PanePort,
+    Project, Running, SessionEntry, ToolCall,
 };
 
 /// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.
@@ -589,6 +589,29 @@ impl PluginHost {
         project: Option<&Project>,
         reply: Reply,
     ) {
+        let call = serde_json::json!({ "name": name, "arguments": input, "project": project });
+        self.send_tool(call, reply);
+    }
+
+    /// Claude Code calls this plugin's tool `name` (`hook` false), or one of its hooks answered with `onHook` (`hook`
+    /// true), from the pane `caller` names, as the desktop's `mcp-call` does. `reply` gets `{ text, isError }`; a hook's
+    /// text is the JSON `{ context?, deny? }`.
+    pub fn run_for_claude(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        caller: &ClaudeCaller,
+        hook: bool,
+        reply: Reply,
+    ) {
+        let call = serde_json::json!({
+            "name": name, "arguments": input, "hook": hook,
+            "paneId": caller.pane_id, "project": caller.project, "session": caller.session,
+        });
+        self.send_tool(call, reply);
+    }
+
+    fn send_tool(&self, call: serde_json::Value, reply: Reply) {
         let main = self
             .shared
             .frames
@@ -610,9 +633,7 @@ impl PluginHost {
             tools.waiting.insert(token, reply);
             token
         };
-        let text =
-            serde_json::json!({ "name": name, "arguments": input, "project": project }).to_string();
-        if main.send(Message::Tool, token, text) != Delivery::Queued {
+        if main.send(Message::Tool, token, call.to_string()) != Delivery::Queued {
             let waiting = self.shared.tools.lock().unwrap().waiting.remove(&token);
             if let Some(reply) = waiting {
                 reply.err("The plugin didn't respond".into());

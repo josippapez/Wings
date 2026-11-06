@@ -160,7 +160,39 @@ pub struct Reply {
     queue: mpsc::SyncSender<Command>,
 }
 
+/// The answer to a `Reply::channel`'s reply.
+pub struct Answer(mpsc::Receiver<Command>);
+
+impl Answer {
+    /// Waits up to `timeout` for the answer: the JSON result, or the error. `None` when none came in time.
+    pub fn wait(&self, timeout: std::time::Duration) -> Option<Result<String, String>> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let left = deadline.checked_duration_since(std::time::Instant::now())?;
+            match self.0.recv_timeout(left).ok()? {
+                Command::Deliver {
+                    message: Message::Resolve,
+                    text,
+                    ..
+                } => return Some(Ok(text)),
+                Command::Deliver {
+                    message: Message::Reject,
+                    text,
+                    ..
+                } => return Some(Err(text)),
+                _ => {}
+            }
+        }
+    }
+}
+
 impl Reply {
+    /// A reply no frame waits for: whoever calls waits with the `Answer`, as a call from Claude Code over the socket does.
+    pub fn channel() -> (Reply, Answer) {
+        let (queue, answers) = mpsc::sync_channel(8);
+        (Reply { call: 0, queue }, Answer(answers))
+    }
+
     /// The call succeeded with the JSON `result`.
     pub fn ok(self, result: String) {
         self.send(Message::Resolve, result);

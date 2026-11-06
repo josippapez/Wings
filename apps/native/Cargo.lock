@@ -7407,6 +7407,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wings-connect"
+version = "0.1.0"
+dependencies = [
+ "dirs 7.0.0",
+ "serde",
+ "serde_json",
+ "sysinfo 0.39.6",
+ "vte",
+ "wings-agents",
+ "wings-plugins",
+ "wings-spaces",
+]
+
+[[package]]
 name = "wings-disk-usage"
 version = "0.1.0"
 dependencies = [
@@ -7450,6 +7464,7 @@ dependencies = [
  "unicode-segmentation",
  "ureq",
  "wings-agents",
+ "wings-connect",
  "wings-disk-usage",
  "wings-editors",
  "wings-gitwatch",

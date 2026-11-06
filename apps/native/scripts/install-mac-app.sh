@@ -9,8 +9,9 @@ APP=target/release/Wings-native.app
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-# The plugin worker is found next to the app's own binary.
-cp target/release/wings-native target/release/wings-plugin-worker "$APP/Contents/MacOS/"
+# The plugin worker is found next to the app's own binary, and Claude Code's settings point at the `wings` command
+# beside it.
+cp target/release/wings-native target/release/wings-plugin-worker target/release/wings "$APP/Contents/MacOS/"
 cp ../desktop/src-tauri/icons/icon.icns "$APP/Contents/Resources/icon.icns"
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

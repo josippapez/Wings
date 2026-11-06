@@ -854,12 +854,24 @@ fn a_transcript_entry_the_app_publishes_reaches_every_frame_and_a_listener_that_
 }
 
 #[test]
-fn statusline_has_what_the_desktop_has_before_claude_has_reported_and_needs_its_permission() {
+fn statusline_has_what_claude_code_last_reported_and_needs_its_permission() {
     let rig = Rig::new(json!({ "permissions": { "statusline": true } }), panes());
     assert_eq!(
         rig.allowed("return await wings.statusline();"),
         json!({ "rateLimits": null, "sessions": {} })
     );
+    // What `wings statusline` handed the app.
+    let id = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+    rig.env.statusline.lock().unwrap().record(
+        &json!({ "session_id": id, "rate_limits": { "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600 } }, "context_window": { "used_percentage": 8 } }),
+        1000,
+    );
+    let status = rig.allowed("return await wings.statusline();");
+    assert_eq!(
+        status["rateLimits"],
+        json!({ "fiveHour": { "usedPercentage": 23.5, "resetsAt": 1738425600 }, "sevenDay": null, "at": 1000 })
+    );
+    assert_eq!(status["sessions"][id]["usedPercentage"], 8.0);
     let none = Rig::new(
         json!({ "permissions": { "transcript": ["assistant"] } }),
         panes(),
