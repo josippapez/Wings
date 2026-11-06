@@ -489,9 +489,11 @@ impl Render for Workspace {
                                 cx,
                             ),
                         };
+                        // The desktop's `p-2 pt-0`: the cards sit right under the project bar.
                         div()
                             .size_full()
                             .p(px(8.0))
+                            .pt_0()
                             .child(div().relative().size_full().child(layout).child(measure))
                             .into_any_element()
                     }

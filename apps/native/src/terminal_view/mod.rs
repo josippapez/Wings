@@ -56,8 +56,9 @@ pub const CURSOR_STYLES: [(CursorShape, &str, &str); 3] = [
     (CursorShape::Underline, "underline", "Underline"),
 ];
 
-/// The desktop's default terminal font on macOS.
-pub const DEFAULT_FONT_FAMILY: &str = "Menlo";
+/// The desktop's default terminal font on macOS: its stack starts with `ui-monospace`, which is the system's SF Mono.
+/// macOS names it only by this hidden family; "SF Mono" isn't installed as a family of its own.
+pub const DEFAULT_FONT_FAMILY: &str = ".AppleSystemUIFontMonospaced";
 
 /// The desktop's line heights, as multiples of the font size.
 pub const LINE_HEIGHTS: [f32; 7] = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6];

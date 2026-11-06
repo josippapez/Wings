@@ -132,7 +132,7 @@ impl Workspace {
             let mut field = TextField::new(
                 Role::TextInput,
                 "Font family",
-                DEFAULT_FONT_FAMILY,
+                "JetBrains Mono",
                 px(176.0),
                 cx,
             );
@@ -403,7 +403,7 @@ impl Workspace {
                 vec![vec![
                     ui::setting_row(
                         "Font family",
-                        format!("Leave empty for the default, {DEFAULT_FONT_FAMILY}. Enter applies it."),
+                        "Tried before the default monospace fonts. Leave empty for the default. Enter applies it.",
                         error,
                         ui::input(field),
                     ),

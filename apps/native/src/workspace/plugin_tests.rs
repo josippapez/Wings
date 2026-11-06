@@ -476,17 +476,17 @@ fn a_plugins_badge_and_status_show_on_the_pane_and_a_click_on_a_button_reaches_t
         assert!(w.badge_card.is_none());
     });
 
-    // The pill is the last thing before the pane's buttons, on the right of a 30px header 84px down.
+    // The pill is the last thing before the pane's four 28px buttons, on the right of a 30px header 76px down.
     window.draw();
 
-    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    window.simulate_click(point(px(854.0), px(91.0)), MouseButton::Left);
     window.draw();
     assert_eq!(
         window.read(|w, _| w.badge_card.as_ref().map(|c| (c.pane, c.plugin.clone()))),
         Some((0, "badger".into()))
     );
     // The card's first button is the primary one: a click asks the plugin's main, which saves what it heard.
-    window.simulate_click(point(px(588.0), px(180.0)), MouseButton::Left);
+    window.simulate_click(point(px(572.0), px(172.0)), MouseButton::Left);
     until(
         &app,
         &mut window,
@@ -505,9 +505,9 @@ fn a_plugins_badge_and_status_show_on_the_pane_and_a_click_on_a_button_reaches_t
     assert!(window.read(|w, _| w.badge_card.as_ref().unwrap().error.is_none()));
 
     // A click on the pill again closes the card; one outside it does too.
-    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    window.simulate_click(point(px(854.0), px(91.0)), MouseButton::Left);
     assert!(window.read(|w, _| w.badge_card.is_none()));
-    window.simulate_click(point(px(870.0), px(99.0)), MouseButton::Left);
+    window.simulate_click(point(px(854.0), px(91.0)), MouseButton::Left);
     assert!(window.read(|w, _| w.badge_card.is_some()));
     window.simulate_click(point(px(500.0), px(400.0)), MouseButton::Left);
     assert!(window.read(|w, _| w.badge_card.is_none()));

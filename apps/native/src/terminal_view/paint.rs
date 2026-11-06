@@ -242,7 +242,10 @@ impl Render for TerminalView {
                         None,
                     )
                     .width();
-                let cell_width = px(measured.as_f32().ceil());
+                // Whole device pixels, rounded down, as the desktop's xterm.js WebGL renderer does: rounding SF Mono's
+                // 8.04pt at 13px up to whole points made 9pt cells and spaced the text out.
+                let scale = window.scale_factor();
+                let cell_width = px((measured.as_f32() * scale).floor() / scale);
                 prepaint_view.update(cx, |view, cx| {
                     view.layout(bounds, cell_width, row_height, cx)
                 });
@@ -505,7 +508,10 @@ impl Render for TerminalView {
             .min_w_0()
             .min_h_0()
             .relative()
-            .p(px(8.0))
+            // The desktop's `pl-3.5 pr-1 pb-0.5`: the text starts under the pane title, with no gap under the header.
+            .pl(px(14.0))
+            .pr(px(4.0))
+            .pb(px(2.0))
             .bg(rgb(BACKGROUND))
             .overflow_hidden()
             .track_focus(&self.focus)
