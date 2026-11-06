@@ -4,9 +4,12 @@
 //!
 //! The server never runs from the app bundle: an update deletes the old bundle, and macOS can't attribute a program
 //! whose file is gone, so its panes would lose the privacy grants (Screen Recording, hard links into Desktop). The app
-//! copies the server out to `terminal-server/bin/` under its version, and a release app has launchd run that copy from
-//! a plain LaunchAgent in `~/Library/LaunchAgents`, so it isn't the app's child and lives on when the app quits.
-//! A debug build runs it as its own child instead, which ends with the app.
+//! copies the server out to `terminal-server/bin/` under its version. A release app on macOS starts that copy as a
+//! one-shot launchd job that forks the server off and ends (`wings_ptyd::launchd`), so the server is in no coalition of
+//! the app's and lives on when the app quits; no job stays loaded. The server owns its privacy responsibility, and the
+//! shells it runs inherit it (`wings_ptyd::responsibility`). When launchd fails, the app starts the server directly in
+//! a session of its own, which may end with the app, and says so in the server's log. A debug build runs it as its own
+//! child instead, which ends with the app and keeps the app's privacy responsibility.
 //!
 //! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket per version. One older than
 //! the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have ended, while
@@ -16,8 +19,12 @@
 //! ids, so the server's panes are still found by the next app that reaches it.
 
 use std::{
-    fs, io,
-    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+    fs,
+    io::{self, Write},
+    os::unix::{
+        fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
@@ -33,8 +40,7 @@ pub const ENV: &str = "WINGS_TERMINAL_SERVER";
 /// The server binary's name, beside the app's own in its bundle and in the build folder.
 pub const BINARY: &str = "wings-terminal-server";
 
-/// A server nobody uses for this long exits. launchd doesn't start it again for that (`SuccessfulExit`), and the next
-/// app to want one starts it.
+/// A server nobody uses for this long exits, and the next app to want one starts it.
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// How long the app waits for a server it started to answer.
@@ -58,12 +64,6 @@ pub fn socket(dir: &Path, version: u32) -> PathBuf {
     dir.join(format!("v{version}.sock"))
 }
 
-/// launchd's name for the server of `version`.
-pub fn label(version: u32) -> String {
-    let dev = if cfg!(debug_assertions) { ".dev" } else { "" };
-    format!("dev.wings.native.terminal-server{dev}.v{version}")
-}
-
 /// Makes `dir` a folder only this user can open, so nobody else reaches the sockets in it.
 fn private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
@@ -81,9 +81,9 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 
 /// How a server starts when none answers.
 pub enum Start {
-    /// A release app: copy `bundled` out of the bundle and have launchd run the copy, from a LaunchAgent in `agents`
-    /// (`~/Library/LaunchAgents`).
-    Launchd { bundled: PathBuf, agents: PathBuf },
+    /// A release app: copy `bundled` out of the bundle and start the copy with a one-shot launchd job, or directly
+    /// in a session of its own when launchd fails.
+    Launchd { bundled: PathBuf },
     /// A plain child of this process, which ends with it: debug builds and tests.
     Child(PathBuf),
 }
@@ -98,8 +98,7 @@ impl Start {
         if cfg!(debug_assertions) {
             return Some(Start::Child(bundled));
         }
-        let agents = std::env::home_dir()?.join("Library/LaunchAgents");
-        Some(Start::Launchd { bundled, agents })
+        Some(Start::Launchd { bundled })
     }
 
     fn run(&self, dir: &Path, version: u32) -> io::Result<()> {
@@ -119,36 +118,54 @@ impl Start {
                 thread::spawn(move || child.wait());
                 Ok(())
             }
-            Start::Launchd { bundled, agents } => {
-                let program = install(bundled, dir)?;
-                let label = label(version);
-                let plist = agents.join(format!("{label}.plist"));
-                let args = [
-                    program.as_os_str(),
-                    "serve".as_ref(),
-                    "--socket".as_ref(),
-                    socket.as_os_str(),
-                    "--idle-secs".as_ref(),
-                    IDLE.as_secs().to_string().as_ref(),
-                    "--plist".as_ref(),
-                    plist.as_os_str(),
-                ]
-                .map(|arg| arg.to_string_lossy().into_owned());
-                let contents = plist_xml(&label, &args, &log);
-                fs::create_dir_all(agents)?;
-                if fs::read_to_string(&plist).ok().as_deref() != Some(&contents) {
-                    fs::write(&plist, &contents)?;
-                }
-                let domain = format!("gui/{}", unsafe { libc::getuid() });
-                // Loaded since the last login: start it again. Else load it, which starts it.
-                if launchctl(&["print", &format!("{domain}/{label}")]).is_ok() {
-                    launchctl(&["kickstart", &format!("{domain}/{label}")])
-                } else {
-                    launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])
-                }
+            Start::Launchd { bundled } => {
+                let mut cmd = Command::new(install(bundled, dir)?);
+                cmd.arg("serve")
+                    .arg("--socket")
+                    .arg(&socket)
+                    .arg("--idle-secs")
+                    .arg(IDLE.as_secs().to_string());
+                #[cfg(target_os = "macos")]
+                let launch = wings_ptyd::launchd::spawn;
+                #[cfg(not(target_os = "macos"))]
+                let launch = |_: &Command, _: &Path| Err(io::ErrorKind::Unsupported.into());
+                start_detached(cmd, &log, launch)
             }
         }
     }
+}
+
+/// Starts the server `cmd` with `launch`, else directly in a session of its own, which may end with the app: the
+/// reason goes to stderr and the server's `log`. Either way it owns its privacy responsibility.
+pub fn start_detached(
+    mut cmd: Command,
+    log: &Path,
+    launch: impl FnOnce(&Command, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let Err(error) = launch(&cmd, log) else {
+        return Ok(());
+    };
+    let reason = format!(
+        "Couldn't start the terminal server with launchd, so it starts directly and may end with the app: {error}"
+    );
+    eprintln!("{reason}");
+    let stderr = fs::OpenOptions::new().create(true).append(true).open(log)?;
+    writeln!(&stderr, "{reason}")?;
+    #[cfg(target_os = "macos")]
+    cmd.arg(wings_ptyd::responsibility::FLAG);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr);
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
+    // Reaped if it exits while the app runs, so it doesn't linger as a zombie of the app.
+    thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Copies the bundle's server to `dir/bin/` under its version, once: a server that still runs from an earlier copy
@@ -168,53 +185,6 @@ pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
     fs::set_permissions(&partial, fs::Permissions::from_mode(0o700))?;
     fs::rename(&partial, &program)?;
     Ok(program)
-}
-
-fn launchctl(args: &[&str]) -> io::Result<()> {
-    let out = Command::new("/bin/launchctl")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()?;
-    if out.status.success() {
-        return Ok(());
-    }
-    Err(io::Error::other(format!(
-        "launchctl {}: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&out.stderr).trim()
-    )))
-}
-
-fn xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// The LaunchAgent: launchd starts it again only when it fails (`SuccessfulExit` false), so an idle or drained server
-/// that exits stays stopped. `Interactive`, since launchd throttles the CPU and disk of other jobs, and the builds in
-/// its panes with them.
-pub fn plist_xml(label: &str, args: &[String], log: &Path) -> String {
-    let args: String = args
-        .iter()
-        .map(|arg| format!("<string>{}</string>", xml(arg)))
-        .collect();
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-         <plist version=\"1.0\"><dict>\
-         <key>Label</key><string>{label}</string>\
-         <key>ProgramArguments</key><array>{args}</array>\
-         <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\
-         <key>ProcessType</key><string>Interactive</string>\
-         <key>StandardInPath</key><string>/dev/null</string>\
-         <key>StandardOutPath</key><string>/dev/null</string>\
-         <key>StandardErrorPath</key><string>{log}</string>\
-         <key>AssociatedBundleIdentifiers</key><string>dev.wings.native</string>\
-         </dict></plist>\n",
-        label = xml(label),
-        log = xml(&log.to_string_lossy()),
-    )
 }
 
 /// The servers this app uses: the one new panes start in, and the panes all of them ran when the app started, until

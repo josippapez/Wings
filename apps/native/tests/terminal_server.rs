@@ -1,4 +1,5 @@
-//! The terminal server as the app runs it: the real binary, started as a plain child in a temp folder.
+//! The terminal server as the app runs it: the real binary, started as a plain child in a temp folder, or detached as
+//! a launchd job would start it.
 
 #![cfg(unix)]
 
@@ -217,7 +218,7 @@ fn orphans_are_running_panes_of_the_project_no_saved_pane_names() {
 }
 
 #[test]
-fn the_server_is_copied_out_of_the_bundle_once_and_its_agent_is_a_valid_plist() {
+fn the_server_is_copied_out_of_the_bundle_once() {
     let folder = Folder::new("install");
     std::fs::create_dir_all(&folder.0).unwrap();
     let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
@@ -239,40 +240,132 @@ fn the_server_is_copied_out_of_the_bundle_once_and_its_agent_is_a_valid_plist() 
         first,
         "a running server keeps its file"
     );
+}
 
-    let args = [
-        program.to_string_lossy().into_owned(),
-        "serve".into(),
-        "--socket".into(),
-        "/a & <b>.sock".into(),
-    ];
-    let plist = folder.0.join("agent.plist");
-    let label = terminal_server::label(SERVER_VERSION);
-    std::fs::write(
-        &plist,
-        terminal_server::plist_xml(&label, &args, &folder.0.join("v.log")),
-    )
-    .unwrap();
-    let lint = Command::new("/usr/bin/plutil")
-        .arg("-lint")
-        .arg(&plist)
+/// `ps`'s `field` for `pid`.
+fn ps(pid: u32, field: &str) -> u32 {
+    let out = Command::new("/bin/ps")
+        .args(["-o", &format!("{field}="), "-p", &pid.to_string()])
         .output()
         .unwrap();
-    assert!(
-        lint.status.success(),
-        "{}",
-        String::from_utf8_lossy(&lint.stdout)
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+/// The process macOS holds responsible for `pid`'s privacy access (`launchctl procinfo` says the same, as root).
+#[cfg(target_os = "macos")]
+fn responsible(pid: u32) -> u32 {
+    type Responsible = unsafe extern "C" fn(libc::pid_t) -> libc::pid_t;
+    let symbol = unsafe {
+        libc::dlsym(
+            libc::RTLD_DEFAULT,
+            c"responsibility_get_pid_responsible_for_pid".as_ptr(),
+        )
+    };
+    assert!(!symbol.is_null());
+    let get = unsafe { std::mem::transmute::<*mut libc::c_void, Responsible>(symbol) };
+    unsafe { get(pid as libc::pid_t) as u32 }
+}
+
+/// Waits for a server to answer at `socket`, and gives its pid.
+fn answers(socket: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Control::connect(socket).is_err() {
+        assert!(Instant::now() < deadline, "no server at {socket:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    server_pid(socket)
+}
+
+/// The server's own command, as the release app starts it, from outside the protected `~/Desktop`.
+fn serve(program: &Path, socket: &Path) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.arg("serve")
+        .arg("--socket")
+        .arg(socket)
+        .current_dir("/");
+    cmd
+}
+
+/// A release app's server: the copy outside the bundle, started directly as when launchd fails. Disclaimed, the
+/// server needs its own grant to read a binary under `~/Desktop`, so it runs the copy in the temp folder as the app does.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_release_server_owns_its_privacy_responsibility_and_its_shells_inherit_it() {
+    let folder = Folder::new("resp");
+    std::fs::create_dir_all(&folder.0).unwrap();
+    let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
+    let cmd = serve(
+        &terminal_server::install(Path::new(BIN), &folder.0).unwrap(),
+        &socket,
     );
-    let json = Command::new("/usr/bin/plutil")
-        .args(["-convert", "json", "-o", "-"])
-        .arg(&plist)
-        .output()
-        .unwrap();
-    let agent: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(agent["Label"], label.as_str());
-    assert_eq!(agent["ProgramArguments"][3], "/a & <b>.sock");
-    assert_eq!(agent["KeepAlive"]["SuccessfulExit"], false);
-    assert_eq!(agent["ProcessType"], "Interactive");
+    terminal_server::start_detached(cmd, &folder.0.join("v.log"), |_, _| {
+        Err(std::io::Error::other("no launchd in tests"))
+    })
+    .unwrap();
+    let pid = answers(&socket);
+    assert_eq!(responsible(pid), pid, "not the test's responsible process");
+    assert_ne!(responsible(std::process::id()), pid);
+    let (pane, mut events) = Pane::spawn(&socket, spawn_request("h-resp"), b"").unwrap();
+    pane.write(b"echo u''p\r").unwrap();
+    wait_for(&pane, &mut events, "up");
+    assert_eq!(responsible(pane.shell_pid().unwrap()), pid);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_debug_apps_child_server_keeps_the_apps_responsibility() {
+    let folder = Folder::new("child");
+    let servers = Servers::connect(&folder.0, Some(&Start::Child(BIN.into())));
+    let pid = server_pid(servers.current().unwrap());
+    assert_eq!(responsible(pid), responsible(std::process::id()));
+}
+
+/// The launchd job's program run as a plain child instead of a job: it forks, the forked server detaches into a
+/// session of its own under pid 1, takes the app's environment over the `ready` socket and serves.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_launchd_job_detaches_the_server_from_the_app() {
+    let folder = Folder::new("launchd");
+    std::fs::create_dir_all(&folder.0).unwrap();
+    let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
+    let log = folder.0.join("v.log");
+    // `/tmp`, as in a release app: the job's folder under `folder` would be too long for the `ready` socket.
+    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    terminal_server::start_detached(serve(&program, &socket), &log, |cmd, log| {
+        wings_ptyd::launchd::spawn_without_launchd(cmd, log, Path::new("/tmp"))
+    })
+    .unwrap();
+    let pid = answers(&socket);
+    assert_eq!(
+        ps(pid, "ppid"),
+        1,
+        "the job's process exited and left it to launchd"
+    );
+    assert_eq!(ps(pid, "pgid"), pid, "a session of its own");
+    assert_eq!(responsible(pid), pid);
+    let log = std::fs::read_to_string(&log).unwrap();
+    assert!(!log.contains("starts directly"), "{log}");
+}
+
+#[test]
+fn when_launchd_fails_the_server_starts_directly_in_its_own_session() {
+    let folder = Folder::new("direct");
+    std::fs::create_dir_all(&folder.0).unwrap();
+    let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
+    let log = folder.0.join("v.log");
+    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    terminal_server::start_detached(serve(&program, &socket), &log, |_, _| {
+        Err(std::io::Error::other("bootstrap refused"))
+    })
+    .unwrap();
+    let pid = answers(&socket);
+    assert_eq!(ps(pid, "ppid"), std::process::id());
+    assert_eq!(ps(pid, "pgid"), pid);
+    let log = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        log.contains("starts directly and may end with the app: bootstrap refused"),
+        "{log}"
+    );
 }
 
 /// Keystroke echo and output throughput, a shell in this process against one in the server: run with
