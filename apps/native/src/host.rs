@@ -101,7 +101,16 @@ impl Config {
                     .ok_or_else(|| format!("{} needs a value", flag.to_string_lossy()))?,
             );
         }
-        let project = project.map_or_else(|| Ok(cwd.to_owned()), |path| absolute(path, cwd))?;
+        let project = match project {
+            Some(path) => absolute(path, cwd)?,
+            // Opened from Finder or the Dock, the app starts in `/`, which is no project: open the one
+            // the desktop app showed last, else the home folder.
+            None if cwd == Path::new("/") => crate::projects::desktop_dir()
+                .and_then(|dir| last_project(&dir.join("workspace.json")))
+                .or_else(std::env::home_dir)
+                .unwrap_or_else(|| cwd.to_owned()),
+            None => cwd.to_owned(),
+        };
         if project.to_str().is_none() {
             return Err("The project path must be valid UTF-8".into());
         }
@@ -164,6 +173,13 @@ fn absolute(value: OsString, cwd: &Path) -> Result<PathBuf, String> {
     } else {
         std::path::absolute(cwd.join(path)).map_err(|error| error.to_string())
     }
+}
+
+/// The project the desktop app showed last, from its workspace file, if that folder still exists.
+fn last_project(workspace: &Path) -> Option<PathBuf> {
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(workspace).ok()?).ok()?;
+    let path = PathBuf::from(file.get("activeSpaceId")?.as_str()?);
+    path.is_dir().then_some(path)
 }
 
 /// Claude Code's folder, found as the desktop app finds it.
@@ -238,6 +254,23 @@ mod tests {
         }
         assert!(parse(&["--plugins-dev-root"]).is_err());
         assert!(parse(&["--plugins-dev-root", "/a", "--plugins-dev-root", "/b"]).is_err());
+    }
+
+    #[test]
+    fn a_finder_launch_opens_the_desktops_last_project_if_it_still_exists() {
+        let dir = std::env::temp_dir().join(format!("wings-native-last-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("project")).unwrap();
+        let file = dir.join("workspace.json");
+        let point_at = |path: &Path| {
+            fs::write(&file, json!({ "activeSpaceId": path }).to_string()).unwrap();
+            last_project(&file)
+        };
+        assert_eq!(point_at(&dir.join("project")), Some(dir.join("project")));
+        assert_eq!(point_at(&dir.join("gone")), None);
+        fs::write(&file, b"{ not json").unwrap();
+        assert_eq!(last_project(&file), None);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
