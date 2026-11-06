@@ -16,8 +16,8 @@ use crate::{
         ClosePane, CloseTab, DecreaseFontSize, Find, FocusDown, FocusLeft, FocusRight, FocusUp,
         IncreaseFontSize, MoveTabLeft, MoveTabRight, NewTab, NextTab, OpenHistory,
         OpenProjectInEditor, OpenSettings, PaletteFirst, PaletteLast, PaletteNext, PalettePrevious,
-        PreviousTab, ResetFontSize, SplitDown, SplitRight, ToggleQuickTerminal, ToggleSidebar,
-        ZoomPane,
+        PreviousTab, ResetFontSize, ShowNotifications, SplitDown, SplitRight, ToggleQuickTerminal,
+        ToggleSidebar, ZoomPane,
     },
     agents::{self, AgentState},
     icons::{Icon, icon},
@@ -330,6 +330,12 @@ impl Workspace {
                 true,
             ),
             ("Reset Font Size", "View", Rc::new(ResetFontSize), true),
+            (
+                "Show Notifications",
+                "View",
+                Rc::new(ShowNotifications),
+                true,
+            ),
             ("Settings", "App", Rc::new(OpenSettings), true),
         ];
         // Only with an editor installed, as on the desktop.

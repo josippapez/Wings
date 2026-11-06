@@ -60,6 +60,7 @@ icons!(
     GitPullRequest = "git-pull-request",
     GitPullRequestClosed = "git-pull-request-closed",
     GitPullRequestDraft = "git-pull-request-draft",
+    Inbox = "inbox",
     Keyboard = "keyboard",
     Maximize = "maximize-2",
     Minimize = "minimize-2",

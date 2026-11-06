@@ -51,7 +51,8 @@ pub mod ui;
 
 pub use calls::{SectionIcon, SectionRow};
 pub use env::{
-    Access, Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SessionEntry, ToolCall,
+    Access, Env, Notification, NotifyButton, OpenPane, OpenView, PaneEntry, PanePort, Project,
+    Running, SessionEntry, ToolCall,
 };
 
 /// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.

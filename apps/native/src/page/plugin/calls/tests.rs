@@ -600,6 +600,64 @@ fn a_notification_needs_a_title_and_a_real_project_and_the_app_can_refuse_it() {
 }
 
 #[test]
+fn a_notifications_buttons_keep_three_with_short_labels_and_open_only_tab_views_or_https_links() {
+    use crate::page::plugin::NotifyButton;
+    let plugin = crate::page::plugin::testing::plugin(json!({ "contributes": { "views": [
+        { "id": "run", "title": "Run", "page": "run.html", "opens": ["tab"] },
+        { "id": "pop", "title": "Pop", "page": "pop.html", "opens": ["modal"] },
+    ] } }));
+    let clean = |actions: serde_json::Value| super::notify_buttons(&plugin, Some(&actions));
+    assert_eq!(
+        clean(json!([
+            { "label": format!("  {}  ", "l".repeat(40)), "url": "https://ci.example/1" },
+            { "label": "Open", "open": { "view": "run", "args": { "id": 7 } } },
+            { "label": "Plain", "open": { "view": "run" } },
+            { "label": "Fourth", "url": "nothing checks this one" },
+        ])),
+        Ok(vec![
+            NotifyButton::Url {
+                label: "l".repeat(32),
+                url: "https://ci.example/1".into()
+            },
+            NotifyButton::Open {
+                label: "Open".into(),
+                view: "run".into(),
+                args: Some(json!({ "id": 7 }))
+            },
+            NotifyButton::Open {
+                label: "Plain".into(),
+                view: "run".into(),
+                args: None
+            },
+        ])
+    );
+    assert_eq!(super::notify_buttons(&plugin, None), Ok(Vec::new()));
+    assert_eq!(
+        clean(json!({})),
+        Err("notify actions must be a list".into())
+    );
+    assert_eq!(
+        clean(json!([{ "url": "https://ci.example/" }])),
+        Err("notify action 0 needs a label".into())
+    );
+    assert_eq!(
+        clean(json!([{ "label": "Go", "url": "http://ci.example/" }])),
+        Err("notify action Go needs an https link of up to 2048 characters".into())
+    );
+    assert_eq!(
+        clean(json!([{ "label": "Go", "open": { "view": "pop" } }])),
+        Err(
+            "notify action Go opens pop, which isn't one of the plugin's views that open as a tab"
+                .into()
+        )
+    );
+    assert_eq!(
+        clean(json!([{ "label": "Go", "open": { "view": "run", "args": "x".repeat(17 * 1024) } }])),
+        Err("notify action args is limited to 16 KB".into())
+    );
+}
+
+#[test]
 fn notifications_are_rate_limited_per_plugin() {
     let rig = notifier();
     let result = rig.allowed(

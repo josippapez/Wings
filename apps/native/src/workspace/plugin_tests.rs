@@ -692,6 +692,63 @@ fn a_notification_goes_to_the_system_with_the_plugins_name_and_a_url_opens_in_th
     assert_eq!(system.opened.lock().unwrap().len(), 1);
 }
 
+const NOTIFIER: &str = r#"
+wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }] }); });
+wings.onAction(async ({ actionId }) => {
+  if (actionId === 'notify') await wings.notify({ title: 'Build passed', body: 'main is green', actions: [{ label: 'Open run', url: 'https://ci.example/run/1' }, { label: 'Elsewhere', url: 'https://evil.example/' }] });
+});
+"#;
+
+fn install_notifier(data: &Data) {
+    data.install_script(
+        "reactor",
+        json!({ "contributes": { "ui": ["badges"] }, "permissions": { "notify": true, "openUrl": ["https://ci.example/"] } }),
+        NOTIFIER,
+        &[],
+        "reactor-scope",
+    );
+}
+
+#[test]
+fn a_plugins_notification_waits_unread_in_the_inbox_and_its_button_opens_a_link_the_plugin_may_open()
+ {
+    let data = Data::temp();
+    install_notifier(&data);
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_plugins(&data, &system, |_| {});
+    assert_eq!(click_action(&app, &mut window, "notify"), None);
+    until(&app, &mut window, "the inbox never heard of it", |w| {
+        !w.inbox.events.is_empty()
+    });
+    window.read(|w, _| {
+        let event = &w.inbox.events[0];
+        assert_eq!(
+            (event.title.as_ref(), event.detail.as_str(), event.read),
+            ("Build passed", "main is green", false)
+        );
+        assert_eq!(w.inbox.unread(), 1);
+    });
+    // Opening the list reads everything, and keeps what was new marked while it stays open.
+    window.update(|w, _, cx| w.open_inbox(cx));
+    window.read(|w, _| {
+        assert_eq!(w.inbox.unread(), 0);
+        assert_eq!(w.inbox.open.as_ref().map(|fresh| fresh.len()), Some(1));
+    });
+    let notification = window.read(|w, _| w.inbox.events[0].plugin.clone().unwrap());
+    for button in &notification.buttons {
+        window.update(|w, window, cx| w.inbox_button(&notification, button, window, cx));
+    }
+    // The second link isn't one the manifest names, so it never reaches the browser.
+    assert_eq!(*system.opened.lock().unwrap(), ["https://ci.example/run/1"]);
+    window.read(|w, _| {
+        assert!(w.inbox.open.is_none(), "a button closes the list");
+        assert_eq!(
+            w.plugin_ui.notices.last().map(|n| n.body.to_string()),
+            Some("reactor may not open https://evil.example/".into())
+        );
+    });
+}
+
 #[test]
 fn a_notification_the_system_cannot_show_is_shown_in_the_window_and_goes_away() {
     let data = Data::temp();

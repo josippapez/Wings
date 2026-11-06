@@ -185,7 +185,7 @@ impl Env for FixtureEnv {
     fn open_url(&self, _: &str) -> Result<(), String> {
         Ok(())
     }
-    fn notify(&self, _: &str, _: &str) -> Result<(), String> {
+    fn notify(&self, _: wings_native::page::plugin::Notification) -> Result<(), String> {
         Ok(())
     }
     fn set_badge(&self, _: &str, _: &str, _: Option<Badge>) {}

@@ -49,6 +49,7 @@ impl Workspace {
             .h_full()
             .flex()
             .flex_col()
+            .child(div().p(px(8.0)).pb_0().child(self.inbox_row(cx)))
             .child(self.project_list(cx))
             .children(self.plugin_list(cx))
             .children(self.agent_list(cx))

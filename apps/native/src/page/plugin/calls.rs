@@ -465,19 +465,26 @@ impl Shared {
         let plugin = &access.plugin;
         let id = &plugin.manifest.id;
         let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
-        // `projectId` is the notification's project, which the desktop's inbox opens; here it must still be a real one.
-        if let Some(project) = params.get("projectId").filter(|value| !value.is_null()) {
-            let project = js_string(Some(project));
+        let buttons = notify_buttons(plugin, params.get("actions"))?;
+        // `projectId` is the project the inbox opens the notification's tabs in; it must still be a real one.
+        let project = params.get("projectId").filter(|value| !value.is_null());
+        let project = project.map(|project| js_string(Some(project)));
+        if let Some(project) = &project {
             let known = access
                 .env
                 .projects()
                 .iter()
-                .any(|path| path.to_string_lossy() == project);
+                .any(|path| path.to_string_lossy() == *project);
             if !known {
                 return Err(format!("no project {project}"));
             }
         }
         let (title, body) = notification(plugin, text("title"), text("body"))?;
+        let name = &plugin.manifest.name;
+        let title = title
+            .strip_prefix(&format!("{name}: "))
+            .unwrap_or(&title)
+            .to_owned();
         self.notified
             .lock()
             .unwrap()
@@ -488,9 +495,92 @@ impl Shared {
                     wait.as_secs() + 1
                 )
             })?;
-        access.env.notify(&title, &body)?;
+        access.env.notify(super::Notification {
+            plugin: id.clone(),
+            name: name.clone(),
+            title,
+            body,
+            project,
+            buttons,
+        })?;
         Ok("null".into())
     }
+}
+
+/// The desktop's `cleanButtons`: plugin data is untrusted, so it keeps up to 3 buttons with a label of up to 32
+/// characters, each opening one of the plugin's views that open as a tab (with args of up to 16 KB) or an https link.
+fn notify_buttons(
+    plugin: &Plugin,
+    buttons: Option<&Value>,
+) -> Result<Vec<super::NotifyButton>, String> {
+    let buttons = match buttons {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(buttons)) => buttons,
+        Some(_) => return Err("notify actions must be a list".into()),
+    };
+    let tab_views: Vec<&str> = plugin
+        .manifest
+        .contributes
+        .views
+        .iter()
+        .filter(|view| view.opens.iter().any(|place| place == "tab"))
+        .map(|view| view.id.as_str())
+        .collect();
+    buttons
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(index, button)| {
+            let label: String = button
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(32)
+                .collect();
+            if label.is_empty() {
+                return Err(format!("notify action {index} needs a label"));
+            }
+            if let Some(url) = button.get("url").and_then(Value::as_str) {
+                if !url.starts_with("https://") || url.len() > 2048 {
+                    return Err(format!(
+                        "notify action {label} needs an https link of up to 2048 characters"
+                    ));
+                }
+                return Ok(super::NotifyButton::Url {
+                    label,
+                    url: url.to_owned(),
+                });
+            }
+            let open = button.get("open");
+            let view = open.and_then(|open| open.get("view"));
+            let Some(view) = view
+                .and_then(Value::as_str)
+                .filter(|view| tab_views.contains(view))
+            else {
+                return Err(format!(
+                    "notify action {label} opens {}, which isn't one of the plugin's views that open as a tab",
+                    js_string(view)
+                ));
+            };
+            let args = open
+                .and_then(|open| open.get("args"))
+                .filter(|args| !args.is_null())
+                .cloned();
+            if args
+                .as_ref()
+                .is_some_and(|args| args.to_string().encode_utf16().count() > 16 * 1024)
+            {
+                return Err("notify action args is limited to 16 KB".into());
+            }
+            Ok(super::NotifyButton::Open {
+                label,
+                view: view.to_owned(),
+                args,
+            })
+        })
+        .collect()
 }
 
 /// The project a worktree call is about: its `projectId`, else the one on screen.

@@ -131,7 +131,8 @@ impl Workspace {
                     self.side.touch(std::path::Path::new(&agent.space_id));
                 }
             }
-            self.agents = agents;
+            let before = std::mem::replace(&mut self.agents, agents);
+            self.inbox_agents(&before);
             self.pane_info = info;
             cx.notify();
         }

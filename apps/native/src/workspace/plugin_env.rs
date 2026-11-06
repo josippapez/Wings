@@ -24,8 +24,8 @@ use wings_spaces::{
 use crate::{
     agents::AgentKind,
     page::plugin::{
-        Env, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SectionRow, SessionEntry,
-        ToolCall,
+        Env, Notification, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SectionRow,
+        SessionEntry, ToolCall,
         ui::{Badge, PaneStatus},
     },
     ports,
@@ -123,6 +123,8 @@ pub(super) enum UiEvent {
         title: String,
         body: String,
     },
+    /// A plugin's notification, for the inbox.
+    Notified(Notification),
     ProjectSection {
         plugin: String,
         project: String,
@@ -439,14 +441,16 @@ impl Env for AppEnv {
         self.system().open_url(url)
     }
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+    fn notify(&self, notification: Notification) -> Result<(), String> {
+        let title = notification.system_title();
         // Where the system has no way to show it, the window does, so a notification is never lost.
-        if self.system().notify(title, body).is_err() {
+        if self.system().notify(&title, &notification.body).is_err() {
             self.send(UiEvent::Notice {
-                title: title.to_owned(),
-                body: body.to_owned(),
+                title,
+                body: notification.body.clone(),
             });
         }
+        self.send(UiEvent::Notified(notification));
         Ok(())
     }
 
@@ -674,6 +678,7 @@ impl Workspace {
                 set(&mut self.plugin_ui.statuses, pane, plugin, status);
             }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
+            UiEvent::Notified(notification) => self.inbox_plugin(notification),
             UiEvent::ProjectSection {
                 plugin,
                 project,

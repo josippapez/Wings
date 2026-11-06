@@ -164,6 +164,50 @@ pub struct PanePort {
     pub started_at: u64,
 }
 
+/// A button on a plugin's notification, as the desktop's `cleanButtons` keeps it: `Open` shows one of the plugin's views
+/// that open as a tab, `Url` opens a web page, which the app checks against the plugin's `openUrl` grant on the click.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotifyButton {
+    Open {
+        label: String,
+        view: String,
+        args: Option<serde_json::Value>,
+    },
+    Url {
+        label: String,
+        url: String,
+    },
+}
+
+impl NotifyButton {
+    pub fn label(&self) -> &str {
+        match self {
+            NotifyButton::Open { label, .. } | NotifyButton::Url { label, .. } => label,
+        }
+    }
+}
+
+/// A plugin's notification, checked and cut to length by the host.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notification {
+    pub plugin: String,
+    /// The plugin's name, which leads the system notification's title and names it in the inbox.
+    pub name: String,
+    /// The title without the plugin's name.
+    pub title: String,
+    pub body: String,
+    /// The folder of the project its tabs open in; else they open in the one on screen.
+    pub project: Option<String>,
+    pub buttons: Vec<NotifyButton>,
+}
+
+impl Notification {
+    /// The system notification's title: the plugin's name leads it, so a plugin can't pass for Wings or Claude.
+    pub fn system_title(&self) -> String {
+        format!("{}: {}", self.name, self.title)
+    }
+}
+
 /// The app a host runs in.
 pub trait Env: Send + Sync + 'static {
     fn open_diff(&self, _view: crate::diff::View) -> Result<(), String> {
@@ -280,8 +324,8 @@ pub trait Env: Send + Sync + 'static {
     fn ports(&self) -> Result<Vec<PanePort>, String>;
     /// Opens `url` in the browser. The host has checked the plugin may.
     fn open_url(&self, url: &str) -> Result<(), String>;
-    /// Shows a notification, with its title and body already cut to length and led by the plugin's name.
-    fn notify(&self, title: &str, body: &str) -> Result<(), String>;
+    /// Shows a notification and keeps it in the inbox.
+    fn notify(&self, notification: Notification) -> Result<(), String>;
     /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
     /// has checked the plugin declares the section and the project is listed.
     fn set_project_section(

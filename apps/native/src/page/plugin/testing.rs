@@ -280,11 +280,11 @@ impl Env for FakeEnv {
         Ok(())
     }
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+    fn notify(&self, notification: super::Notification) -> Result<(), String> {
         if let Some(why) = self.refuse.lock().unwrap().clone() {
             return Err(why);
         }
-        self.record(Seen::Notice(title.into(), body.into()));
+        self.record(Seen::Notice(notification.system_title(), notification.body));
         Ok(())
     }
 

@@ -41,6 +41,7 @@ actions!(
         OpenHistory,
         OpenProjectInEditor,
         ToggleQuickTerminal,
+        ShowNotifications,
         PaletteNext,
         PalettePrevious,
         PaletteFirst,

@@ -93,9 +93,14 @@ fn switching_projects_keeps_each_projects_tabs_and_shells() {
     press(&mut window, "d");
     let shell = window.read(|w, cx| w.terminal(0).unwrap().read(cx).process_id().unwrap());
 
-    // The pinned project is the first row: below the 40px title bar, 8px of padding and the 28px
+    // The pinned project is the first row: below the 40px title bar, the 36px Inbox row, 8px of padding and the 28px
     // Projects heading, 24px rows, 2px apart.
-    let row = |index: f32| point(px(60.0), px(40.0 + 8.0 + 28.0 + 2.0 + 12.0 + index * 26.0));
+    let row = |index: f32| {
+        point(
+            px(60.0),
+            px(40.0 + 36.0 + 8.0 + 28.0 + 2.0 + 12.0 + index * 26.0),
+        )
+    };
     window.draw();
     window.simulate_click(row(0.0), MouseButton::Left);
     assert_eq!(window.read(|w, _| w.project().to_path_buf()), beta);
@@ -964,4 +969,63 @@ fn moving_a_pane_to_another_tab_puts_it_beside_that_tabs_focused_pane() {
         state(&window),
         (vec![Terminal(1), Terminal(2), Issues], Terminal(2))
     );
+}
+
+#[test]
+fn an_agent_that_comes_to_need_you_or_finishes_goes_to_the_inbox_read_if_you_are_looking_at_it() {
+    use crate::agents::{AgentKind, AgentState};
+    let (_app, mut window) = open();
+    press(&mut window, "d");
+    let agent = |pane: usize, state: AgentState| crate::agents::Agent {
+        pane_id: pane.to_string(),
+        space_id: String::new(),
+        pid: 1,
+        kind: AgentKind::Claude,
+        session_id: None,
+        name: None,
+        state,
+        waiting_for: None,
+        args: Vec::new(),
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: None,
+        weak_name: false,
+    };
+    window.update(|w, _, _| {
+        w.window_active = true;
+        let before = HashMap::from([
+            (0, agent(0, AgentState::Working)),
+            (1, agent(1, AgentState::Working)),
+        ]);
+        w.agents = HashMap::from([
+            (0, agent(0, AgentState::Blocked)),
+            (1, agent(1, AgentState::Done)),
+        ]);
+        w.inbox_agents(&before);
+        // Nothing changed this time.
+        let before = w.agents.clone();
+        w.inbox_agents(&before);
+    });
+    window.read(|w, _| {
+        let events: Vec<_> = w
+            .inbox
+            .events
+            .iter()
+            .map(|e| (e.title.to_string(), e.detail.clone(), e.pane, e.read))
+            .collect();
+        // Newest first; pane 1, which has focus, counts as seen.
+        assert_eq!(
+            events,
+            [
+                ("Claude finished".to_string(), String::new(), Some(1), true),
+                (
+                    "Claude needs you".to_string(),
+                    "waiting for input".to_string(),
+                    Some(0),
+                    false
+                ),
+            ]
+        );
+    });
 }

@@ -134,6 +134,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
     }
+    // `-- <out-dir> chrome` renders only the Inbox, the right-click menus and the tooltips.
+    if std::env::args().nth(2).as_deref() == Some("chrome") {
+        return chrome(&mut cx, &config, &out);
+    }
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
@@ -594,6 +598,120 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// The command palette and the history sheet, over made-up projects and sessions in a folder of their own, never the
 /// user's: `Config::parse` points at the real Claude folders, so this sets them to the made-up one.
+fn mouse(
+    cx: &mut VisualTestAppContext,
+    window: AnyWindowHandle,
+    position: gpui::Point<gpui::Pixels>,
+    button: Option<MouseButton>,
+) {
+    cx.simulate_event(
+        window,
+        gpui::MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        },
+    );
+    if let Some(button) = button {
+        cx.simulate_event(
+            window,
+            MouseDownEvent {
+                position,
+                button,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+        );
+        cx.simulate_event(
+            window,
+            gpui::MouseUpEvent {
+                position,
+                button,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            },
+        );
+    }
+}
+
+/// The Inbox (empty, with made-up notifications, then its row with the count), each right-click menu, and the tooltips
+/// of a title bar button, a tab and a pane's button.
+fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let mut config = base.clone();
+    config.agents = None;
+    config.plugins = None;
+    // The 248 wide sidebar, then the tabs, which start 12 further; the panes start 8 in, under the 76 of bars.
+    let tab = point(px(248.0 + 12.0 + 60.0), px(20.0));
+    let title = point(px(248.0 + 8.0 + 40.0), px(76.0 + 8.0 + 15.0));
+    let project = point(px(60.0), px(40.0 + 36.0 + 8.0 + 28.0 + 2.0 + 12.0));
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(2));
+        cx.simulate_keystrokes(window, "cmd-t cmd-d");
+        wait(cx, window, Duration::from_secs(2));
+        let inbox = point(px(60.0), px(40.0 + 8.0 + 14.0));
+        mouse(cx, window, inbox, Some(MouseButton::Left));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("inbox-empty"));
+        mouse(cx, window, inbox, Some(MouseButton::Left));
+        let _ = handle.update(cx, |workspace, _, cx| workspace.sample_inbox(cx));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("inbox-count"));
+        let _ = handle.update(cx, |workspace, _, cx| workspace.show_inbox(cx));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("inbox"));
+        cx.simulate_keystrokes(window, "escape");
+        for (state, at) in [
+            ("menu-tab", tab),
+            ("menu-pane", title),
+            ("menu-project", project),
+        ] {
+            mouse(cx, window, at, Some(MouseButton::Right));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name(state));
+            cx.simulate_keystrokes(window, "escape");
+        }
+        // The pane menu's "Move to tab" list: its third row, under 4 of padding and two 28px items and a hairline.
+        mouse(cx, window, title, Some(MouseButton::Right));
+        wait(cx, window, Duration::from_millis(200));
+        mouse(
+            cx,
+            window,
+            point(title.x + px(40.0), title.y + px(4.0 + 28.0 + 9.0 + 14.0)),
+            None,
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("menu-move"));
+        cx.simulate_keystrokes(window, "escape");
+        // A pane's close button sits at the header's right end, 4 in from the card's 8px gutter.
+        let close = point(px(width - 8.0 - 5.0 - 12.0), title.y);
+        for (state, at) in [
+            ("tooltip-sidebar", point(px(98.0), px(20.0))),
+            ("tooltip-tab", tab),
+            ("tooltip-pane", close),
+        ] {
+            mouse(cx, window, point(px(500.0), px(400.0)), None);
+            wait(cx, window, Duration::from_millis(100));
+            // The first move only finds what's under the pointer, on the next frame; the second starts the tooltip's wait.
+            mouse(cx, window, at, None);
+            wait(cx, window, Duration::from_millis(100));
+            mouse(cx, window, point(at.x + px(1.0), at.y), None);
+            wait(cx, window, Duration::from_millis(800));
+            save(cx, window, &name(state));
+        }
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
 fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let dir = std::env::temp_dir().join("wings-native-shot-finder");
     let _ = std::fs::remove_dir_all(&dir);

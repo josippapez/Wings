@@ -10,6 +10,7 @@ mod editor;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
 mod history;
+mod inbox;
 mod palette;
 mod pane_card;
 mod panes;
@@ -47,8 +48,8 @@ use crate::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
         FocusRight, FocusUp, IncreaseFontSize, Minimize, MoveTabLeft, MoveTabRight, NewTab,
         NextTab, OpenHistory, OpenProjectInEditor, OpenSettings, PreviousTab, ResetFontSize,
-        SplitDown, SplitRight, ToggleFullScreen, TogglePalette, ToggleQuickTerminal, ToggleSidebar,
-        Zoom, ZoomPane,
+        ShowNotifications, SplitDown, SplitRight, ToggleFullScreen, TogglePalette,
+        ToggleQuickTerminal, ToggleSidebar, Zoom, ZoomPane,
     },
     agents::{Agent, PaneInfo},
     host::Config,
@@ -195,6 +196,8 @@ pub struct Workspace {
     palette: Option<palette::Palette>,
     sheet: Option<history::Sheet>,
     sessions: history::Sessions,
+    /// What agents and plugins said, for the sidebar's Inbox.
+    inbox: inbox::Inbox,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     _detection: Option<Task<()>>,
@@ -286,6 +289,7 @@ impl Workspace {
             palette: None,
             sheet: None,
             sessions,
+            inbox: Default::default(),
             menu: None,
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
@@ -652,11 +656,13 @@ impl Render for Workspace {
                     this.open_in_editor(&editor, cx);
                 }
             }))
-            // Escape closes a menu before the terminal under it gets the key.
-            .when(self.menu.is_some(), |root| {
+            .on_action(cx.listener(|this, _: &ShowNotifications, _, cx| this.open_inbox(cx)))
+            // Escape closes a menu or the Inbox before the terminal under it gets the key.
+            .when(self.menu.is_some() || self.inbox.open.is_some(), |root| {
                 root.capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                     if event.keystroke.key == "escape" {
                         this.close_menu(cx);
+                        this.close_inbox(cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -692,6 +698,7 @@ impl Render for Workspace {
             .children(self.sheet_layer(cx))
             .children(self.palette_layer(window, cx))
             .children(self.remove_dialog(cx))
+            .children(self.inbox_layer(cx))
             .children(notices)
             .children(self.menu_layer(cx))
             .into_any_element()
