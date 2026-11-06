@@ -458,7 +458,13 @@ impl Workspace {
     }
 
     /// Types `text` into a pane's shell, as the keys would.
-    fn type_into(&mut self, pane: usize, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn type_into(
+        &mut self,
+        pane: usize,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use gpui::EntityInputHandler;
         if let Some(view) = self.terminal(pane) {
             view.update(cx, |view, cx| {

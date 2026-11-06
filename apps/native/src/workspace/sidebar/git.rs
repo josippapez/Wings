@@ -92,7 +92,7 @@ impl Workspace {
 
     /// Looks up `only` those projects, or all of them, off the UI thread. `manual` is the Refresh button, which shows
     /// that it is checking until the queue is empty.
-    pub(super) fn refresh_git(
+    pub(in crate::workspace) fn refresh_git(
         &mut self,
         only: Option<Vec<PathBuf>>,
         manual: bool,

@@ -2,11 +2,13 @@
 //! GPUI elements, so every screen shares one look. Each returns an element to add handlers to.
 
 mod button;
+mod menu;
 mod parts;
 mod status_dot;
 mod tooltip;
 
 pub use button::{Variant, badge, button};
+pub use menu::{context_menu, menu, menu_item, menu_separator};
 pub use parts::{disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use status_dot::{spinner as working_spinner, status_dot};
 pub use tooltip::tooltip;

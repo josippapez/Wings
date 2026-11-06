@@ -67,6 +67,11 @@ impl Default for State {
 }
 
 impl State {
+    /// A refresh of the git counts that you asked for is running.
+    pub(in crate::workspace) fn checking_git(&self) -> bool {
+        self.git.checking
+    }
+
     /// What the workspace file kept. A width outside the limits starts again from the initial one, as the desktop does.
     fn load(settings: &saved::Settings, projects: &[ProjectEntry]) -> Self {
         let width = settings.sidebar_width.unwrap_or(INITIAL_WIDTH);
@@ -212,7 +217,12 @@ impl Workspace {
         cx.notify();
     }
 
-    fn pin_project(&mut self, project: &Path, pinned: bool, cx: &mut Context<Self>) {
+    pub(in crate::workspace) fn pin_project(
+        &mut self,
+        project: &Path,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(folder) = project.to_str() {
             self.spaces.set_pinned(folder, pinned);
         }
@@ -270,7 +280,12 @@ impl Workspace {
     }
 
     /// Removing closes the project's tabs, running agents included, so a project with tabs open asks first.
-    fn request_remove(&mut self, project: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::workspace) fn request_remove(
+        &mut self,
+        project: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.open_tabs(&project) == 0 {
             return self.remove_project(project, window, cx);
         }

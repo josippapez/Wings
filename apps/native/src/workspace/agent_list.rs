@@ -6,7 +6,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{AnyElement, Context, FontWeight, Role, Window, div, prelude::*, px, rgb, rgba};
+use gpui::{
+    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Role, Window, div, prelude::*,
+    px, rgb, rgba,
+};
 
 use crate::{
     agents::{self, Agent, AgentKind, AgentState},
@@ -14,7 +17,7 @@ use crate::{
     theme,
 };
 
-use super::{Active, HAIRLINE, Workspace, project::SIDEBAR_ACCENT};
+use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT};
 
 /// The desktop's `bg-blocked/10` behind an agent that needs you, and `/15` on hover.
 const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
@@ -112,6 +115,12 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.go_to_pane(path.clone(), pane, window, cx)
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(MenuTarget::Agent(pane), event.position, cx)
+                }),
+            )
             .child(
                 div()
                     .size(px(16.0))

@@ -1,8 +1,8 @@
 //! The tab strip: opening, closing, moving and switching tabs, and showing the active one.
 
 use gpui::{
-    App, BoxShadow, Context, FocusHandle, Focusable, FontWeight, MouseButton, Role, SharedString,
-    Window, div, hsla, point, prelude::*, px, rgb, rgba,
+    App, BoxShadow, Context, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, Role,
+    SharedString, Window, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{Active, TerminalTab, Workspace, quick, shortcut_label};
+use super::{Active, TerminalTab, Workspace, context_menu::MenuTarget, quick, shortcut_label};
 
 /// The desktop's shown tab, `bg-white/[0.07]`.
 const SELECTED_TAB: u32 = 0xffffff12;
@@ -194,6 +194,26 @@ impl Workspace {
     /// Swaps the active tab with its neighbour of the same kind: terminals among terminals, plugin pages among plugin
     /// pages. Issues stays at the end.
     pub(super) fn move_active_tab(&mut self, right: bool, cx: &mut Context<Self>) {
+        self.move_tab(self.active, right, cx);
+    }
+
+    /// Where `tab` sits among its own kind, and whether it can move left and right.
+    pub(super) fn tab_moves(&self, tab: Active) -> (bool, bool) {
+        let (index, len) = match tab {
+            Active::Terminal(id) => (
+                self.terminals.iter().position(|t| t.id == id),
+                self.terminals.len(),
+            ),
+            Active::Plugin(id) => (
+                self.plugin_tabs.iter().position(|t| t.id == id),
+                self.plugin_tabs.len(),
+            ),
+            Active::Project | Active::Issues => (None, 0),
+        };
+        index.map_or((false, false), |index| (index > 0, index + 1 < len))
+    }
+
+    pub(super) fn move_tab(&mut self, tab: Active, right: bool, cx: &mut Context<Self>) {
         let step = |index: usize| {
             if right {
                 index + 1
@@ -201,7 +221,7 @@ impl Workspace {
                 index.wrapping_sub(1)
             }
         };
-        match self.active {
+        match tab {
             Active::Terminal(id) => {
                 let Some(index) = self.terminals.iter().position(|tab| tab.id == id) else {
                     return;
@@ -229,7 +249,16 @@ impl Workspace {
     }
 
     pub(super) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.active {
+        self.close_tab_of(self.active, window, cx);
+    }
+
+    pub(super) fn close_tab_of(
+        &mut self,
+        tab: Active,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match tab {
             Active::Terminal(id) => {
                 if let Some(index) = self.terminals.iter().position(|tab| tab.id == id) {
                     self.close_tab(index, window, cx);
@@ -366,6 +395,12 @@ impl Workspace {
             .role(Role::Tab)
             .aria_label(label.clone())
             .tooltip(ui::tooltip(label.clone(), key))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(MenuTarget::Tab(active), event.position, cx)
+                }),
+            )
             .aria_selected(selected)
             .track_focus(focus)
             .flex_1()

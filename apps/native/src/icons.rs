@@ -33,6 +33,8 @@ macro_rules! icons {
 
 icons!(
     ArrowDown = "arrow-down",
+    ArrowLeft = "arrow-left",
+    ArrowRight = "arrow-right",
     ArrowUp = "arrow-up",
     ArrowUpDown = "arrow-up-down",
     Check = "check",
@@ -51,6 +53,7 @@ icons!(
     FileText = "file-text",
     Folder = "folder",
     FolderPlus = "folder-plus",
+    FolderOpen = "folder-open",
     GitBranch = "git-branch",
     GitFork = "git-fork",
     GitMerge = "git-merge",
@@ -76,6 +79,7 @@ icons!(
     Settings = "settings",
     SlidersHorizontal = "sliders-horizontal",
     Sparkles = "sparkles",
+    SquarePlus = "square-plus",
     SquareTerminal = "square-terminal",
     StickyNote = "sticky-note",
     Terminal = "terminal",

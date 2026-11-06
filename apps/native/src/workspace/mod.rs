@@ -2,6 +2,7 @@
 //! Issues tab, with the desktop app's shortcuts.
 
 mod agent_list;
+mod context_menu;
 #[cfg(all(test, feature = "test-support"))]
 mod desktop_parity_tests;
 mod diff;
@@ -194,6 +195,8 @@ pub struct Workspace {
     palette: Option<palette::Palette>,
     sheet: Option<history::Sheet>,
     sessions: history::Sessions,
+    /// The right-click menu that is open.
+    menu: Option<context_menu::Menu>,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -283,6 +286,7 @@ impl Workspace {
             palette: None,
             sheet: None,
             sessions,
+            menu: None,
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -648,6 +652,15 @@ impl Render for Workspace {
                     this.open_in_editor(&editor, cx);
                 }
             }))
+            // Escape closes a menu before the terminal under it gets the key.
+            .when(self.menu.is_some(), |root| {
+                root.capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_menu(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+            })
             .child(title_bar)
             .child(
                 div()
@@ -680,6 +693,7 @@ impl Render for Workspace {
             .children(self.palette_layer(window, cx))
             .children(self.remove_dialog(cx))
             .children(notices)
+            .children(self.menu_layer(cx))
             .into_any_element()
     }
 }

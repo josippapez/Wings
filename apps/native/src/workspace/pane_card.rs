@@ -12,7 +12,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{HAIRLINE, Workspace, shortcut_label};
+use super::{HAIRLINE, Workspace, context_menu::MenuTarget, shortcut_label};
 
 /// A divider's line while the pointer is on it (`bg-white/25`).
 const DIVIDER_HOVER: u32 = 0xffffff40;
@@ -155,6 +155,12 @@ impl Workspace {
                     } else {
                         this.focus_pane(pane, window, cx);
                     }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(MenuTarget::Pane(pane), event.position, cx)
                 }),
             )
             .child(match state {

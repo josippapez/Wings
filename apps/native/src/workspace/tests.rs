@@ -917,3 +917,51 @@ fn switching_projects_keeps_each_projects_plugin_pages_open() {
     window.update(|w, window, cx| assert!(!w.open_plugin_view("demo", "later", None, window, cx)));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn right_clicking_a_pane_title_opens_its_menu_and_escape_closes_it() {
+    let (_app, mut window) = open();
+    window.draw();
+    let area = window.read(|workspace, _| workspace.area.unwrap());
+    window.simulate_event(MouseDownEvent {
+        position: point(area.left() + px(40.0), area.top() + px(15.0)),
+        button: MouseButton::Right,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.draw();
+    assert_eq!(
+        window.read(|w, _| w.menu.as_ref().map(|menu| menu.target.clone())),
+        Some(context_menu::MenuTarget::Pane(0))
+    );
+    window.simulate_keystroke("escape");
+    assert!(window.read(|w, _| w.menu.is_none()));
+}
+
+#[test]
+fn moving_a_pane_to_another_tab_puts_it_beside_that_tabs_focused_pane() {
+    use Active::{Issues, Terminal};
+    let (_app, mut window) = open();
+    press(&mut window, "d");
+    press(&mut window, "t");
+    // Pane 1 leaves the first tab for the second, where it sits beside pane 2 and is shown.
+    window.update(|w, window, cx| w.move_pane_to(1, Some(1), window, cx));
+    assert_eq!(
+        state(&window),
+        (vec![Terminal(0), Terminal(1), Issues], Terminal(1))
+    );
+    window.read(|w, _| {
+        assert_eq!(w.terminals[0].layout.panes(), [0]);
+        assert_eq!(
+            (w.terminals[1].layout.panes(), w.terminals[1].focused),
+            (vec![2, 1], 1)
+        );
+    });
+    // The last pane of a tab takes the tab with it.
+    window.update(|w, window, cx| w.move_pane_to(0, None, window, cx));
+    assert_eq!(
+        state(&window),
+        (vec![Terminal(1), Terminal(2), Issues], Terminal(2))
+    );
+}

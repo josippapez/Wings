@@ -19,6 +19,7 @@ use crate::{
 
 use crate::workspace::{
     Workspace,
+    context_menu::MenuTarget,
     project::{SIDEBAR_ACCENT, SIDEBAR_FOREGROUND},
 };
 
@@ -253,6 +254,7 @@ impl Workspace {
         let (shown, pinned) = (entry.path.clone(), entry.pinned);
         let (pin_it, remove_it) = (entry.path.clone(), entry.path.clone());
         let page_of = entry.path.clone();
+        let menu_of = entry.path.clone();
         div()
             .id(("project", index))
             .role(Role::Button)
@@ -279,6 +281,12 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.switch_project(shown.clone(), window, cx)
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(MenuTarget::Project(menu_of.clone()), event.position, cx)
+                }),
+            )
             .child(
                 div()
                     .flex()
