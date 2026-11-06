@@ -59,43 +59,7 @@ impl PtyProcess {
     /// The folder the shell is in now, which follows its `cd`. `None` once it has exited, and on
     /// platforms other than macOS and Linux.
     pub fn cwd(&self) -> Option<PathBuf> {
-        let pid = self.pid?;
-        #[cfg(target_os = "macos")]
-        {
-            use std::os::unix::ffi::OsStringExt;
-            let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
-            let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-            let read = unsafe {
-                libc::proc_pidinfo(
-                    pid as libc::c_int,
-                    libc::PROC_PIDVNODEPATHINFO,
-                    0,
-                    (&mut info as *mut libc::proc_vnodepathinfo).cast(),
-                    size,
-                )
-            };
-            if read != size {
-                return None;
-            }
-            let path: Vec<u8> = info
-                .pvi_cdir
-                .vip_path
-                .iter()
-                .flatten()
-                .take_while(|c| **c != 0)
-                .map(|c| *c as u8)
-                .collect();
-            (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(path)))
-        }
-        #[cfg(target_os = "linux")]
-        {
-            std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            let _ = pid;
-            None
-        }
+        cwd_of(self.pid?)
     }
 
     pub fn reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
@@ -198,6 +162,46 @@ impl PtyProcess {
             Some(Err(error)) => Err(std::io::Error::new(error.kind(), error.to_string())),
             None => Ok(None),
         }
+    }
+}
+
+/// The folder process `pid` is in now. `None` once it has exited, and on platforms other than macOS and Linux.
+pub fn cwd_of(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+                size,
+            )
+        };
+        if read != size {
+            return None;
+        }
+        let path: Vec<u8> = info
+            .pvi_cdir
+            .vip_path
+            .iter()
+            .flatten()
+            .take_while(|c| **c != 0)
+            .map(|c| *c as u8)
+            .collect();
+        (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(path)))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
     }
 }
 
