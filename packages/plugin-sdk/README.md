@@ -124,13 +124,28 @@ content of every output with the file on disk (a file's age doesn't count), and 
 differs or is missing. The `mcpTools` in the manifest count as an output too. Nothing runs it for you: add it to your CI or a git hook, so a source change can't ship
 with an old `dist/`.
 
+### Native build
+
+The native Wings app runs a plugin in a JS engine with no DOM, so it can't load `dist/main.js` and the HTML pages
+as they are. A plugin that says `"native": true` in `wings-plugin.json` gets each entry built again for it, into
+`dist/native/`: `dist/native/main.js` from `src/main.ts`, and `dist/native/<page>.js` from each page. A page is one script that
+mounts its default export with `mount` from `wings-plugin-ui/native`, which draws the page for the app. In it
+`wings-plugin-ui` is `wings-plugin-ui/native`, which has fewer components, and the CSS a page imports is dropped.
+The browser build's output doesn't change, and a plugin without the field gets no `dist/native/`, so a plugin that
+isn't ported builds as before. `--check` and `pack` cover the native files too.
+
+A page that imports a component `wings-plugin-ui/native` doesn't have fails the build with a line for each, naming the
+component and the file, like `src/pages/sidebar.tsx:7: Card isn't in wings-plugin-ui/native`. A native page has to be
+a React page (`.tsx`): one that mounts itself with `wings-plugin-sdk/shell` fails too. Props `wings-plugin-ui/native` doesn't take are
+left out when the page draws, and the build can't tell.
+
 ### Manifest checks
 
 The build compares `wings-plugin.json` with the code it built, and fails with a line for each place they disagree.
 A typo shows up when you build, not when Wings loads the plugin. It catches:
 
-- a `main` that isn't `dist/main.js`, a page that isn't a file the build writes or the folder has, and an `icon`
-  that isn't a file in the folder;
+- a `main` that isn't `dist/main.js`, a page that isn't a file the build writes or the folder has, an `icon`
+  that isn't a file in the folder, and a `native` that isn't `true`;
 - a `wings.onTool("name")` with no `mcpTools` entry, or the reverse;
 - a `wings.onHook("event")` with no `hooks` entry, or the reverse;
 - a call of `wings.setBadge`, `setPaneStatus`, `setPaneRail`, `openDiff` or `updateDiff` without `badges`, `status`, `rail` or `diff` in

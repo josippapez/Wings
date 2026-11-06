@@ -170,6 +170,16 @@ export function SaveButton({ saving, save }: { saving: boolean; save: () => void
 }
 ```
 
+## Native pages (pilot)
+
+`wings-plugin-ui/native` has the components a page of the native Wings app can use, with the names and props of the ones
+above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `Loading`, `Card`, `Heading`, `Dot`,
+`Gauge`, `List`, `ListItem`, `Disclosure` and `Select`. It renders with
+`react-reconciler` into a JSON tree that the app draws with its own controls, so hooks, state and effects work but there
+is no DOM: no `className`, `style`, `title`, `as` or `aria-*`, and a handler gets a `NativeEvent`, not a DOM event. A
+`Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page. A plugin whose
+`wings-plugin.json` says `"native": true` has its pages built this way: see Native build in the wings-plugin-sdk README.
+
 ## Ours or your own
 
 The components are there for a page that looks like the rest of Wings without effort, not a rule. Write your

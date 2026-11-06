@@ -10,14 +10,20 @@
       "types": "./ui.d.ts",
       "default": "./ui.js"
     },
+    "./native": {
+      "types": "./native.d.ts",
+      "default": "./native.js"
+    },
     "./plugin-ui.css": "./plugin-ui.css"
   },
   "files": [
     "ui.js",
+    "native.js",
     "highlight.js",
     "markdown.js",
     "emoji.js",
     "ui.d.ts",
+    "native.d.ts",
     "plugin-ui.css",
     "README.md",
     "LICENSE"
@@ -31,7 +37,8 @@
     "test": "tsc -p tsconfig.json && node --test"
   },
   "dependencies": {
-    "@base-ui/react": "^1.8.0"
+    "@base-ui/react": "^1.8.0",
+    "react-reconciler": "0.34.0"
   },
   "peerDependencies": {
     "react": ">=19",

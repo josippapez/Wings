@@ -337,6 +337,8 @@ The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists eve
 
 `minWingsVersion`, optional, is the oldest Wings that can run the plugin, like `"0.1.13"`. Set it when the plugin uses something an older Wings doesn't have. An older Wings refuses to install it and doesn't offer it as an update.
 
+`native`, optional, is `true` for a plugin that also runs in the native Wings app, which has no browser: the build then writes `dist/native/main.js` and a `dist/native/<page>.js` for each page next to the browser files, with `wings-plugin-ui` swapped for its smaller native set of components (see Native build in the wings-plugin-sdk README). Wings in the browser ignores it. Plugins that leave it out build as before.
+
 `contributes` lists what the plugin adds, which the manager shows next to it:
 
 | Field | Means |

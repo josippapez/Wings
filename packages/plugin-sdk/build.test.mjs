@@ -213,3 +213,79 @@ test("a bundle leaves out the SDK helpers it doesn't import", async (t) => {
   // repoRoot and defaultBranch live in the same module as gitOk.
   assert.ok(!main.includes("--show-toplevel") && !main.includes("origin/HEAD"));
 });
+
+/** A wings-plugin-ui for `dir` with `ui` names in its main entry and `native` names in wings-plugin-ui/native, next to the React this package was installed with. */
+function fakeUi(dir, { ui, native }) {
+  const root = join(dir, "node_modules", "wings-plugin-ui");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "wings-plugin-ui", type: "module", exports: { ".": "./index.js", "./native": "./native.js" } }));
+  const names = (list) => list.map((name) => `export const ${name} = () => null;`).join("\n");
+  writeFileSync(join(root, "index.js"), `${names(ui)}\n${names(["showBlock", "showPopover", "showSettings", "showSidebar", "showTab", "showView"])}`);
+  writeFileSync(join(root, "native.js"), `${names(native)}\nexport const mount = (element) => { globalThis.mounted = element; };`);
+  if (!existsSync(join(dir, "node_modules", "react"))) symlinkSync(join(import.meta.dirname, "node_modules", "react"), join(dir, "node_modules", "react"));
+}
+
+const nativePage = 'import { Page } from "wings-plugin-ui";\nimport "./sidebar.css";\nexport const page = { place: "sidebar" };\nexport default function Sidebar() { return <Page>hi</Page>; }';
+
+test("a plugin with native: true also gets dist/native/, its browser output stays what it was, and one without it gets none", async (t) => {
+  const files = { "src/pages/sidebar.ts": null, "src/pages/sidebar.tsx": nativePage };
+  const dir = plugin(files, { native: true });
+  const plain = plugin(files);
+  t.after(() => [dir, plain].forEach((d) => rmSync(d, { recursive: true })));
+  for (const d of [dir, plain]) fakeUi(d, { ui: ["Page"], native: ["Page"] });
+  await buildPlugin(dir);
+  await buildPlugin(plain);
+
+  assert.deepEqual(readdirSync(join(dir, "dist", "native")).sort(), ["main.js", "sidebar.js"]);
+  assert.equal(existsSync(join(plain, "dist", "native")), false);
+  for (const file of ["main.js", "sidebar.js", "sidebar.css", "sidebar.html"]) assert.equal(readFileSync(join(dir, "dist", file), "utf8"), readFileSync(join(plain, "dist", file), "utf8"), file);
+
+  // The page mounts its default export with the native package's mount, and its CSS import is dropped.
+  const context = {};
+  runInNewContext(readFileSync(join(dir, "dist", "native", "sidebar.js"), "utf8"), context);
+  assert.equal(context.mounted.type().props.children, "hi");
+  assert.match(readFileSync(join(dir, "dist", "native", "main.js"), "utf8"), /wings\.onPanes/);
+
+  // check sees a native file that's out of date, and pack ships them.
+  assert.deepEqual((await buildPlugin(dir, { check: true })).stale, []);
+  writeFileSync(join(dir, "dist", "native", "sidebar.js"), "old");
+  assert.deepEqual((await buildPlugin(dir, { check: true })).stale, [join(dir, "dist", "native", "sidebar.js")]);
+  const zip = unzipSync(new Uint8Array(readFileSync(await pack(dir))));
+  assert.deepEqual(Object.keys(zip).filter((name) => name.startsWith("dist/native/")).sort(), ["dist/native/main.js", "dist/native/sidebar.js"]);
+});
+
+test("a native plugin without src/main.ts gets an empty dist/native/main.js", async (t) => {
+  const dir = plugin({ "src/main.ts": null, "src/pages/sidebar.ts": null, "src/pages/sidebar.css": null }, { native: true, contributes: { sidebars: [] } });
+  t.after(() => rmSync(dir, { recursive: true }));
+  await buildPlugin(dir);
+  assert.match(readFileSync(join(dir, "dist", "native", "main.js"), "utf8"), /^\/\/ Built from src\/[^\n]*\n$/);
+});
+
+test("a native build names each component the native renderer lacks and the file that imports it, and the browser build doesn't care", async (t) => {
+  const page = 'import { Card, Gauge, Page, Select } from "wings-plugin-ui";\nexport const page = { place: "sidebar" };\nexport default function Sidebar() { return <Page><Card /><Gauge /><Select /></Page>; }';
+  const files = { "src/pages/sidebar.ts": null, "src/pages/sidebar.css": null, "src/pages/sidebar.tsx": page };
+  const dir = plugin(files, { native: true });
+  const plain = plugin(files);
+  t.after(() => [dir, plain].forEach((d) => rmSync(d, { recursive: true })));
+  for (const d of [dir, plain]) fakeUi(d, { ui: ["Card", "Gauge", "Page", "Select"], native: ["Page"] });
+  await assert.rejects(buildPlugin(dir), (error) => {
+    const lines = error.message.split("\n");
+    assert.equal(lines.length, 3);
+    for (const [line, name] of lines.map((line, i) => [line, ["Card", "Gauge", "Select"][i]])) assert.match(line, new RegExp(`/src/pages/sidebar\\.tsx:1: ${name} isn't in wings-plugin-ui/native`));
+    return true;
+  });
+  await buildPlugin(plain);
+  assert.equal(existsSync(join(plain, "dist", "sidebar.js")), true);
+});
+
+test("a native page that isn't a React page, and a native that isn't true or false, fail the build", async (t) => {
+  const cases = [
+    [{ native: true }, { "src/pages/sidebar.ts": "export default 1;" }, /src\/pages\/sidebar\.ts: a native page is a React page that default-exports its component/],
+    [{ native: "yes" }, {}, /wings-plugin\.json: native is "yes", but it is true \(also build for the native app\) or left out/],
+  ];
+  for (const [patch, files, message] of cases) {
+    const dir = plugin(files, patch);
+    t.after(() => rmSync(dir, { recursive: true }));
+    await assert.rejects(buildPlugin(dir), message);
+  }
+});

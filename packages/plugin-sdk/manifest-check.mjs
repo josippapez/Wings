@@ -59,6 +59,7 @@ export function manifestProblems(manifest, { root, built, main }) {
   }
   // The build doesn't write icons, so the file has to be in the folder.
   if (manifest.icon != null && !hasFile(root, inFolder(manifest.icon))) problems.push(`icon is "${manifest.icon}", which the plugin folder doesn't have.`);
+  if (manifest.native !== undefined && typeof manifest.native !== "boolean") problems.push(`native is ${JSON.stringify(manifest.native)}, but it is true (also build for the native app) or left out.`);
 
   const declared = (contributes.mcpTools ?? []).map((t) => t.name);
   const mainText = built.find((b) => b.file === main).text;
