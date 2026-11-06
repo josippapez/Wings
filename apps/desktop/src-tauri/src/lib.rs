@@ -1602,7 +1602,7 @@ fn terminal_backend(app: &AppHandle, app_data: &std::path::Path) -> Box<dyn PtyB
 /// `wings ptyd`: the terminal host.
 #[cfg(target_os = "macos")]
 pub fn ptyd(args: &[String]) -> i32 {
-    ptyd::host::main(args)
+    ptyd::main(args)
 }
 
 /// Prints the benchmark report (and writes it to `WINGS_BENCH_OUT` if set), then quits.

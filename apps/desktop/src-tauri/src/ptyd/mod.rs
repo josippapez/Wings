@@ -3,15 +3,14 @@
 //! `wings ptyd` (`host.rs`, run as `launch.rs` says), that the app talks to over a socket (`proto.rs`).
 
 #[cfg(target_os = "macos")]
-pub mod host;
-#[cfg(target_os = "macos")]
 pub mod launch;
 pub mod local;
-pub mod output;
-pub mod proto;
 #[cfg(target_os = "macos")]
 pub mod remote;
 mod shell;
+#[cfg(target_os = "macos")]
+pub use wings_ptyd::host;
+pub use wings_ptyd::{output, proto};
 
 use std::{
     path::{Path, PathBuf},
@@ -22,9 +21,6 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 
 pub use local::LocalBackend;
 
-/// The terminal host's own version, apart from Wings', in its `welcome`. Bump it when `host.rs` changes, so an app
-/// can tell an older host that still runs from before an update.
-pub const HOST_VERSION: u32 = 2;
 
 /// The terminal host's socket, in a folder only this user can open, next to the MCP socket. A dev build has its own,
 /// so it never talks to the installed Wings' host.
@@ -33,6 +29,25 @@ pub fn socket_path(app_data: &Path) -> PathBuf {
 }
 
 pub use wings_agents::NO_PROJECT;
+
+/// `wings ptyd [--socket <path>]`, on this user's terminal host socket unless told another.
+#[cfg(target_os = "macos")]
+pub fn main(args: &[String]) -> i32 {
+    let path = match args.windows(2).find(|w| w[0] == "--socket") {
+        Some(w) => PathBuf::from(&w[1]),
+        None => match dirs::data_dir() {
+            Some(data) => socket_path(&data.join(crate::cli::IDENTIFIER)),
+            None => return 2,
+        },
+    };
+    match host::main(&path, None) {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("wings ptyd: {}: {e}", path.display());
+            1
+        }
+    }
+}
 
 /// A pane's id, from the number its backend gave it. The terminal host numbers its panes, so the ids Wings saved
 /// still name the same panes after it restarts.

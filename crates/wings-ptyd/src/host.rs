@@ -28,12 +28,13 @@ use std::{
 use portable_pty::{native_pty_system, Child, MasterPty, PtySize};
 use serde_json::{json, Value};
 
-use super::{
+use wings_terminal::shell::pane_command;
+
+use crate::{
     output::{Kept, REPLAY_BYTES},
-    proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, PROTO},
     pane_id,
-    shell::pane_command,
-    HOST_VERSION,
+    proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, PROTO},
+    SERVER_VERSION,
 };
 
 pub struct Config {
@@ -44,12 +45,25 @@ pub struct Config {
     /// The executable the host runs from. Once a new one is put at this path, as an update does, the host exits as
     /// soon as it has no pane, and launchd starts the new one.
     pub exe: Option<PathBuf>,
+    /// With no pane and no client for this long, the server exits. `None` runs it until it is replaced or drained.
+    pub idle: Option<Duration>,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None }
+        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None, idle: None }
     }
+}
+
+/// Why `serve` returned.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Stopped {
+    /// Its executable was replaced and it had no pane.
+    Replaced,
+    /// It was told to drain and its last pane ended.
+    Drained,
+    /// Nothing used it for `Config::idle`.
+    Idle,
 }
 
 /// How often the foreground process of each pane is checked while a client is connected. Twice per tick of the
@@ -62,25 +76,10 @@ const TICK: Duration = Duration::from_secs(1);
 /// Saved output a client may send ahead of a spawn: a ring's worth, and its end.
 const MAX_STAGED: usize = 2 * REPLAY_BYTES;
 
-/// `wings ptyd [--socket <path>]`, on this user's terminal host socket unless told another.
-pub fn main(args: &[String]) -> i32 {
-    let path = match args.windows(2).find(|w| w[0] == "--socket") {
-        Some(w) => PathBuf::from(&w[1]),
-        None => match dirs::data_dir() {
-            Some(data) => super::socket_path(&data.join(crate::cli::IDENTIFIER)),
-            None => return 2,
-        },
-    };
-    match bind(&path) {
-        Ok(listener) => {
-            serve(listener, &path, Config { exe: std::env::current_exe().ok(), ..Config::default() });
-            0
-        }
-        Err(e) => {
-            eprintln!("wings ptyd: {}: {e}", path.display());
-            1
-        }
-    }
+/// Serves on `path` until `serve` returns, with the executable it runs from watched for an update.
+pub fn main(path: &Path, idle: Option<Duration>) -> Result<Stopped, io::Error> {
+    let listener = bind(path)?;
+    Ok(serve(listener, path, Config { exe: std::env::current_exe().ok(), idle, ..Config::default() }))
 }
 
 /// Listens at `path`, in a folder only this user can open. Refuses if another host already answers there.
@@ -101,27 +100,49 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Serves clients until its executable was replaced and it has no pane, then removes the socket.
-pub fn serve(listener: UnixListener, path: &Path, config: Config) {
+/// Serves clients until its executable was replaced and it has no pane, it drained, or it sat idle, then removes the
+/// socket.
+pub fn serve(listener: UnixListener, path: &Path, config: Config) -> Stopped {
     // The file it started from: an update swaps the whole bundle, so the path then names another file.
     let started = config.exe.as_ref().and_then(|exe| fs::metadata(exe).ok()).map(|m| (m.dev(), m.ino()));
     let replaced = |exe: &Path| started.is_some_and(|ino| fs::metadata(exe).is_ok_and(|m| (m.dev(), m.ino()) != ino));
     let host = Arc::new(Host::new(config));
     let poller = host.clone();
     thread::Builder::new().name("ptyd-fg".into()).spawn(move || poller.poll_foreground()).expect("thread");
-    loop {
+    let mut used = std::time::Instant::now();
+    let stopped = loop {
         if readable(&listener, TICK) {
             if let Ok((stream, _)) = listener.accept() {
                 host.accept(stream);
             }
         }
-        if host.panes.lock().unwrap().is_empty() && host.config.exe.as_deref().is_some_and(replaced) {
-            break;
+        // Drained once nothing runs in it and no app is left to read the panes that exited.
+        if host.draining.load(Ordering::Relaxed)
+            && host.clients.lock().unwrap().is_empty()
+            && host.all_panes().iter().all(|pane| pane.out.lock().unwrap().exited)
+        {
+            break Stopped::Drained;
         }
-    }
+        if !host.panes.lock().unwrap().is_empty() {
+            used = std::time::Instant::now();
+            continue;
+        }
+        // A connected app keeps an idle server, but not one that was replaced or drained.
+        if !host.clients.lock().unwrap().is_empty() {
+            used = std::time::Instant::now();
+        }
+        if host.config.exe.as_deref().is_some_and(replaced) {
+            break Stopped::Replaced;
+        }
+
+        if host.config.idle.is_some_and(|idle| used.elapsed() >= idle) {
+            break Stopped::Idle;
+        }
+    };
     let _ = fs::remove_file(path);
     host.stopped.store(true, Ordering::Relaxed);
     host.clients_changed.notify_all();
+    stopped
 }
 
 /// Waits up to `timeout` for a connection, so the accept loop also checks its executable while nobody connects.
@@ -148,6 +169,8 @@ struct Host {
     clients_changed: Condvar,
     next_client: AtomicU64,
     stopped: AtomicBool,
+    /// Told to drain: it starts no pane, and exits once its last one ends.
+    draining: AtomicBool,
 }
 
 struct HostPane {
@@ -158,6 +181,8 @@ struct HostPane {
     history_id: Option<String>,
     shell_pid: Option<u32>,
     title: Mutex<String>,
+    /// Columns and rows, as last resized.
+    size: Mutex<(u16, u16)>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -172,7 +197,7 @@ struct PaneOut {
     attached: Vec<Arc<Client>>,
     /// The title and foreground process clients were last told.
     sent_title: String,
-    sent_codex_status: Option<crate::program_status::CodexReport>,
+    sent_codex_status: Option<wings_agents::program_status::CodexReport>,
     fg: Option<u32>,
     exited: bool,
     /// Killed: forget it as soon as its output ends.
@@ -189,6 +214,7 @@ impl Host {
             clients_changed: Condvar::new(),
             next_client: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
+            draining: AtomicBool::new(false),
         }
     }
 
@@ -243,7 +269,7 @@ impl Host {
         let both = proto::negotiate(proto, min_proto);
         let welcome = HostMsg::Welcome {
             proto: both.unwrap_or(PROTO),
-            host_version: HOST_VERSION,
+            host_version: SERVER_VERSION,
             features: Vec::new(),
             error: both.is_none().then(|| format!("this host speaks protocols {}..={PROTO}, not {min_proto}..={proto}", proto::MIN_PROTO)),
         };
@@ -305,6 +331,7 @@ impl Host {
         let unknown = |pane: u32| Err(format!("unknown pane {pane}"));
         match req {
             Request::Hello { .. } => reply(client, id, Err("hello twice".into())),
+            Request::Spawn(_) if self.draining.load(Ordering::Relaxed) => reply(client, id, Err("this server is draining".into())),
             Request::Spawn(spawn) => {
                 if let Err(e) = self.spawn(client, id, spawn, blob) {
                     reply(client, id, Err(format!("{e:#}")));
@@ -336,6 +363,10 @@ impl Host {
                 }
                 None => reply(client, id, unknown(pane)),
             },
+            Request::Drain => {
+                self.draining.store(true, Ordering::Relaxed);
+                reply(client, id, Ok(Value::Null));
+            }
         }
     }
 
@@ -353,6 +384,7 @@ impl Host {
             history_id: spawn.history_id,
             shell_pid: child.process_id(),
             title: Mutex::default(),
+            size: Mutex::new((spawn.cols, spawn.rows)),
             writer: Mutex::new(pair.master.take_writer()?),
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
@@ -375,7 +407,7 @@ impl Host {
                 out.seq = history.len() as u64;
                 // The old program's title isn't the new shell's.
                 pane.title.lock().unwrap().clear();
-            out.kept.codex_status = None;
+                out.kept.codex_status = None;
             }
             // Queued before the read loop starts, so the client knows the pane before its first output.
             let spawned = Spawned { pane: pane.id, shell_pid: pane.shell_pid, seq: out.seq };
@@ -468,6 +500,7 @@ impl Host {
                 if !out.exited {
                     out.fg = fg;
                 }
+                let (cols, rows) = *pane.size.lock().unwrap();
                 Some(PaneInfo {
                     pane: pane.id,
                     space_id: pane.space_id.clone(),
@@ -479,6 +512,8 @@ impl Host {
                     codex_status: out.kept.codex_status,
                     seq: out.seq,
                     exited: out.exited,
+                    cols,
+                    rows,
                 })
             })
             .collect();
@@ -530,7 +565,7 @@ fn ctrl_frame(msg: &HostMsg) -> Option<Arc<Vec<u8>>> {
     match proto::ctrl(msg) {
         Ok(frame) => Some(Arc::new(frame)),
         Err(e) => {
-            crate::applog::log_line!("[ptyd] dropped a message: {e}");
+            eprintln!("[ptyd] dropped a message: {e}");
             None
         }
     }
@@ -544,7 +579,9 @@ impl HostPane {
     }
 
     fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        self.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        *self.size.lock().unwrap() = (cols, rows);
+        Ok(())
     }
 
     /// Replies, then sends what the client is missing and streams the rest, all under the output lock, so it gets
@@ -556,9 +593,14 @@ impl HostPane {
         let delta = from_seq.filter(|&from| from <= out.seq).and_then(|from| out.kept.ring.tail((out.seq - from) as usize));
         let reset = delta.is_none();
         let bytes = delta.unwrap_or_else(|| out.kept.replay());
-        reply(client, id, Ok(serde_json::to_value(Attached { pane: self.id, reset, seq: out.seq }).expect("serializes")));
+        let (cols, rows) = *self.size.lock().unwrap();
+        reply(client, id, Ok(serde_json::to_value(Attached { pane: self.id, reset, seq: out.seq, cols, rows }).expect("serializes")));
         // A reset replay starts with the modes in force and loses part of its first line, but it always ends where
         // the ring does, so each piece's `seq_end` counts back from there.
+        // An empty replay is still one frame, so the client can tell where the replay ends.
+        if bytes.is_empty() {
+            client.send(Some(self.id), Arc::new(proto::out(self.id, out.seq, &[])));
+        }
         let mut end = 0;
         for chunk in bytes.chunks(CHUNK) {
             end += chunk.len();
@@ -671,13 +713,14 @@ fn drop_pane(queue: &mut Queue, pane: u32) {
 
 /// A host serving on its own thread, for tests here and in `remote.rs`. Its socket's folder goes when this does,
 /// since the host itself only removes the socket when it exits idle.
-#[cfg(test)]
-pub(super) struct TestHost {
+#[doc(hidden)]
+pub struct TestHost {
     dir: PathBuf,
     pub serving: thread::JoinHandle<()>,
+    /// Why it stopped, once it has.
+    pub stopped: Arc<Mutex<Option<Stopped>>>,
 }
 
-#[cfg(test)]
 impl Drop for TestHost {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
@@ -685,22 +728,24 @@ impl Drop for TestHost {
 }
 
 /// A host on a socket in a fresh folder, and the folder's path.
-#[cfg(test)]
-pub(super) fn test_host(config: Config) -> (PathBuf, TestHost) {
+#[doc(hidden)]
+pub fn test_host(config: Config) -> (PathBuf, TestHost) {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     // Short: a socket path can't be longer than 104 bytes.
     let dir = std::env::temp_dir().join(format!("wptyd-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let path = dir.join("s.sock");
     let listener = bind(&path).unwrap();
     let serving = path.clone();
-    (path, TestHost { dir, serving: thread::spawn(move || serve(listener, &serving, config)) })
+    let stopped = Arc::new(Mutex::new(None));
+    let result = stopped.clone();
+    (path, TestHost { dir, serving: thread::spawn(move || *result.lock().unwrap() = Some(serve(listener, &serving, config))), stopped })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ptyd::shell::pane_env;
     use std::time::Instant;
+    use wings_terminal::shell::pane_env;
 
     fn config() -> Config {
         Config::default()
@@ -928,10 +973,10 @@ mod tests {
         let pane = client.spawn("p1");
         client.type_in(pane, "printf '\\033]0;'; head -c 1100000 /dev/zero | tr '\\0' x; printf '\\007'; echo af''ter\r");
         client.wait_for(pane, "after");
-        client.until("the title", |c| c.events.iter().any(|e| matches!(e, HostMsg::Title { title, .. } if title.len() == crate::ptyd::output::MAX_TITLE)));
+        client.until("the title", |c| c.events.iter().any(|e| matches!(e, HostMsg::Title { title, .. } if title.len() == crate::output::MAX_TITLE)));
         client.type_in(pane, "echo st''ill here\r");
         client.wait_for(pane, "still here");
-        assert_eq!(client.list()[0].title, "x".repeat(crate::ptyd::output::MAX_TITLE));
+        assert_eq!(client.list()[0].title, "x".repeat(crate::output::MAX_TITLE));
         client.call(Request::Kill { pane });
     }
 
@@ -958,7 +1003,7 @@ mod tests {
         let (path, _host) = test_host(config());
         let (mut client, welcome) = TestClient::hello(&path, PROTO + 1, PROTO + 1);
         let Some(HostMsg::Welcome { proto, error: Some(_), host_version, .. }) = welcome else { panic!("{welcome:?}") };
-        assert_eq!((proto, host_version), (PROTO, HOST_VERSION));
+        assert_eq!((proto, host_version), (PROTO, SERVER_VERSION));
         assert!(!client.read_one(), "closed");
         let (_, welcome) = TestClient::hello(&path, PROTO + 1, proto::MIN_PROTO);
         assert!(matches!(welcome, Some(HostMsg::Welcome { proto: PROTO, error: None, .. })), "a newer app that still speaks ours");
@@ -1039,13 +1084,71 @@ mod tests {
         let _ = fs::remove_file(exe);
     }
     #[test]
+    fn a_draining_server_starts_no_pane_and_exits_after_its_last_one() {
+        let (path, host) = test_host(config());
+        let mut client = TestClient::connect(&path);
+        let pane = client.spawn("p1");
+        client.call(Request::Drain);
+        let id = client.send(Request::Spawn(spawn_request("p2")), &[]);
+        client.until("the refusal", |c| c.replies.contains_key(&id));
+        assert_eq!(client.replies[&id].1.as_deref(), Some("this server is draining"));
+        thread::sleep(TICK + Duration::from_millis(300));
+        assert!(!host.serving.is_finished(), "exited while its pane still ran");
+        client.type_in(pane, "echo st''ill; exit\r");
+        wait_listed(&mut client, pane, "the exit", |p| p.exited);
+        thread::sleep(TICK + Duration::from_millis(300));
+        assert!(!host.serving.is_finished(), "exited while an app could still read the pane");
+        drop(client);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !host.serving.is_finished() {
+            assert!(Instant::now() < deadline, "still running, drained and with no pane");
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(*host.stopped.lock().unwrap(), Some(Stopped::Drained));
+        assert!(!path.exists(), "left its socket behind");
+    }
+
+    #[test]
+    fn exits_idle_only_with_no_pane_and_no_client() {
+        let (path, host) = test_host(Config { idle: Some(Duration::from_millis(100)), ..config() });
+        let client = TestClient::connect(&path);
+        thread::sleep(TICK * 2 + Duration::from_millis(300));
+        assert!(!host.serving.is_finished(), "exited idle with a client connected");
+        drop(client);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !host.serving.is_finished() {
+            assert!(Instant::now() < deadline, "still running idle");
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(*host.stopped.lock().unwrap(), Some(Stopped::Idle));
+    }
+
+    #[test]
+    fn attach_and_list_tell_the_size_the_pane_was_drawn_at() {
+        let (path, _host) = test_host(config());
+        let mut client = TestClient::connect(&path);
+        let pane = client.spawn("p1");
+        client.call(Request::Resize { pane, cols: 132, rows: 40 });
+        let info = &client.list()[0];
+        assert_eq!((info.cols, info.rows), (132, 40));
+        let mut other = TestClient::connect(&path);
+        let attached: Attached = serde_json::from_value(other.call(Request::Attach { pane, from_seq: None })).unwrap();
+        assert_eq!((attached.cols, attached.rows), (132, 40));
+        client.call(Request::Kill { pane });
+    }
+
+    #[test]
     fn codex_status_is_broadcast_without_a_title_change_and_retained_for_a_new_client() {
-        use crate::program_status::CodexStatus;
+        use wings_agents::program_status::CodexStatus;
         let (path, _host) = test_host(config());
         let mut client = TestClient::connect(&path);
         let pane = client.spawn("codex-state");
         client.type_in(pane, "printf '\\033]7501;state=work''ing:app=codex\\007'\r");
-        client.until("Codex status", |c| c.events.iter().any(|e| matches!(e, HostMsg::Title { pane: p, codex_status: Some(report), .. } if *p == pane && report.state == CodexStatus::Working)));
+        client.until("Codex status", |c| {
+            c.events
+                .iter()
+                .any(|e| matches!(e, HostMsg::Title { pane: p, codex_status: Some(report), .. } if *p == pane && report.state == CodexStatus::Working))
+        });
         assert_eq!(client.list()[0].codex_status.map(|s| s.state), Some(CodexStatus::Working));
         let mut again = TestClient::connect(&path);
         assert_eq!(again.list()[0].codex_status.map(|s| s.state), Some(CodexStatus::Working));
@@ -1053,5 +1156,4 @@ mod tests {
         wait_listed(&mut client, pane, "cleared Codex status", |p| p.codex_status.is_none());
         client.call(Request::Kill { pane });
     }
-
 }

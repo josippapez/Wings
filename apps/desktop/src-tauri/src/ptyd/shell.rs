@@ -1,1 +1,1 @@
-pub use wings_terminal::shell::{pane_command, pane_env};
+pub use wings_terminal::shell::pane_env;

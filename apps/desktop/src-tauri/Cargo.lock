@@ -6049,6 +6049,7 @@ dependencies = [
  "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",
+ "wings-ptyd",
  "wings-spaces",
  "wings-terminal",
 ]
@@ -6128,6 +6129,20 @@ dependencies = [
  "ureq",
  "url",
  "zip 8.6.0",
+]
+
+[[package]]
+name = "wings-ptyd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "vte",
+ "wings-agents",
+ "wings-terminal",
 ]
 
 [[package]]

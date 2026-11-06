@@ -2,7 +2,7 @@
 //! the same way, so a terminal that attaches later catches up the same way wherever the pane runs.
 
 use std::sync::Mutex;
-use crate::program_status::{codex_report, CodexReport};
+use wings_agents::program_status::{codex_report, CodexReport};
 
 /// Output kept per pane for a UI that loads again (a webview reload). xterm keeps 10,000 lines of scrollback, about
 /// 1 MB of plain shell output; output heavy in escape codes, like Claude Code's, fills it faster, but the repaint
@@ -186,7 +186,7 @@ impl vte::Perform for Tap<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program_status::CodexStatus;
+    use wings_agents::program_status::CodexStatus;
 
     fn title_after(bytes: &[u8]) -> String {
         let title = Mutex::new(String::new());
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn a_title_longer_than_a_frame_is_cut_on_a_character() {
-        let long = |text: &str| [&b"\x1b]0;"[..], text.repeat(crate::ptyd::proto::MAX_FRAME).as_bytes(), b"\x07"].concat();
+        let long = |text: &str| [&b"\x1b]0;"[..], text.repeat(crate::proto::MAX_FRAME).as_bytes(), b"\x07"].concat();
         assert_eq!(title_after(&long("x")), "x".repeat(MAX_TITLE));
         // Three bytes each: 4096 isn't a multiple of 3.
         assert_eq!(title_after(&long("✳")), "✳".repeat(MAX_TITLE / 3));
@@ -285,7 +285,11 @@ mod tests {
         let mut child = Command::new(&fake).arg("30").spawn().unwrap();
         struct Cleanup<'a>(&'a mut std::process::Child, PathBuf);
         impl Drop for Cleanup<'_> {
-            fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); let _ = fs::remove_dir_all(&self.1); }
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+                let _ = fs::remove_dir_all(&self.1);
+            }
         }
         let pid = child.id();
         let _cleanup = Cleanup(&mut child, tmp.clone());
@@ -295,7 +299,14 @@ mod tests {
         let title = std::sync::Mutex::new(String::new());
         let mut scan = |report: &[u8], focused| {
             kept.push(&mut parser, &title, report);
-            let probe = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: title.lock().unwrap().clone(), codex_status: kept.codex_status };
+            let probe = PaneProbe {
+                pane_id: "p".into(),
+                space_id: "s".into(),
+                shell_pid: Some(pid),
+                foreground_pid: Some(pid),
+                title: title.lock().unwrap().clone(),
+                codex_status: kept.codex_status,
+            };
             detector.scan(&[probe], focused).agents.remove(0)
         };
         assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x1b\\", None).state, AgentState::Working);
@@ -307,7 +318,11 @@ mod tests {
         assert_eq!(scan(b"\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done);
         assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
         assert_eq!(scan(b"", None).state, AgentState::Idle, "looking away does not re-arm the done report");
-        assert_eq!(scan(b"\x1b]7501;state=working:app=codex\x07\x1b]7501;state=done:app=codex\x07", None).state, AgentState::Done, "a fast complete turn between scans still needs acknowledgement");
+        assert_eq!(
+            scan(b"\x1b]7501;state=working:app=codex\x07\x1b]7501;state=done:app=codex\x07", None).state,
+            AgentState::Done,
+            "a fast complete turn between scans still needs acknowledgement"
+        );
         assert_eq!(scan(b"", Some("p")).state, AgentState::Idle);
         assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle);
         assert_eq!(scan(b"\x1b]7501;state=error:app=codex\x07", None).waiting_for.as_deref(), Some("Codex reported an error"));
@@ -316,8 +331,18 @@ mod tests {
         assert_eq!(scan(b"\x1b]2;[ . ] Action Required | Fix labels\x07", None).state, AgentState::Blocked);
         assert_eq!(scan(b"\x1b]7501;state=idle:app=codex\x07", None).state, AgentState::Idle, "explicit status wins over a stale title");
         drop(scan);
-        let stale = PaneProbe { pane_id: "p".into(), space_id: "s".into(), shell_pid: Some(pid), foreground_pid: Some(pid), title: String::new(), codex_status: Some(crate::program_status::CodexReport { state: crate::program_status::CodexStatus::Working, generation: 100, pid: Some(pid + 1) }) };
+        let stale = PaneProbe {
+            pane_id: "p".into(),
+            space_id: "s".into(),
+            shell_pid: Some(pid),
+            foreground_pid: Some(pid),
+            title: String::new(),
+            codex_status: Some(wings_agents::program_status::CodexReport {
+                state: wings_agents::program_status::CodexStatus::Working,
+                generation: 100,
+                pid: Some(pid + 1),
+            }),
+        };
         assert_eq!(detector.scan(&[stale], None).agents[0].state, AgentState::Idle, "a new agent cannot inherit another process's status");
     }
-
 }

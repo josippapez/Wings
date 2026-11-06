@@ -141,21 +141,38 @@ pub struct Call {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Request {
     /// The protocols the client speaks, from `min_proto` to `proto`.
-    Hello { proto: u32, min_proto: u32 },
+    Hello {
+        proto: u32,
+        min_proto: u32,
+    },
     /// Starts a pane and streams it to this client. The pane's saved output, if any, comes before it as `Blob`
     /// frames with the same `id`. Replies `Spawned`.
     Spawn(Spawn),
     /// Streams a pane to this client: the bytes after `from_seq` if the host still has them, else everything it
     /// kept (`reset`). Replies `Attached`, then the output follows as `Out` frames.
-    Attach { pane: u32, from_seq: Option<u64> },
-    Resize { pane: u32, cols: u16, rows: u16 },
+    Attach {
+        pane: u32,
+        from_seq: Option<u64>,
+    },
+    Resize {
+        pane: u32,
+        cols: u16,
+        rows: u16,
+    },
     /// Ends the pane's process, and forgets the pane once its output has ended. A pane that already exited is
     /// forgotten at once.
-    Kill { pane: u32 },
+    Kill {
+        pane: u32,
+    },
     /// Replies `[PaneInfo]`.
     List,
     /// The output a pane kept, as `Blob` frames before the reply.
-    Read { pane: u32 },
+    Read {
+        pane: u32,
+    },
+    /// For a server older than the app's: start no more panes, and exit once the last one has ended. The panes it
+    /// runs go on as before.
+    Drain,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -194,7 +211,7 @@ pub enum HostMsg {
         title: String,
         // Optional so an older host can still serve a newer app, using title fallback detection.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        codex_status: Option<crate::program_status::CodexReport>,
+        codex_status: Option<wings_agents::program_status::CodexReport>,
     },
     /// The foreground process changed: the shell itself at a prompt, else the command it runs.
     Fg { pane: u32, pid: Option<u32> },
@@ -220,6 +237,11 @@ pub struct Attached {
     pub reset: bool,
     /// Where the output that follows ends.
     pub seq: u64,
+    /// The pane's size, which the replay was drawn at. 0 from a server that doesn't say.
+    #[serde(default)]
+    pub cols: u16,
+    #[serde(default)]
+    pub rows: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -232,9 +254,13 @@ pub struct PaneInfo {
     pub fg: Option<u32>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codex_status: Option<crate::program_status::CodexReport>,
+    pub codex_status: Option<wings_agents::program_status::CodexReport>,
     pub seq: u64,
     pub exited: bool,
+    #[serde(default)]
+    pub cols: u16,
+    #[serde(default)]
+    pub rows: u16,
 }
 
 /// The protocol both sides speak, the newest one, or `None` when they share none.
@@ -331,8 +357,15 @@ mod tests {
     fn old_host_titles_have_no_codex_report_and_new_reports_round_trip() {
         let old: HostMsg = serde_json::from_str(r#"{"t":"title","pane":1,"title":"Working"}"#).unwrap();
         assert_eq!(old, HostMsg::Title { pane: 1, title: "Working".into(), codex_status: None });
-        let new = HostMsg::Title { pane: 1, title: String::new(), codex_status: Some(crate::program_status::CodexReport { state: crate::program_status::CodexStatus::Permission, generation: 1, pid: Some(10) }) };
+        let new = HostMsg::Title {
+            pane: 1,
+            title: String::new(),
+            codex_status: Some(wings_agents::program_status::CodexReport {
+                state: wings_agents::program_status::CodexStatus::Permission,
+                generation: 1,
+                pid: Some(10),
+            }),
+        };
         assert_eq!(serde_json::from_slice::<HostMsg>(&serde_json::to_vec(&new).unwrap()).unwrap(), new);
     }
-
 }
