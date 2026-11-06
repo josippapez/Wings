@@ -30,6 +30,7 @@ wings-disk-usage = { path = "../../../crates/wings-disk-usage" }
 wings-gitwatch = { path = "../../../crates/wings-gitwatch" }
 wings-plugin-storage = { path = "../../../crates/wings-plugin-storage" }
 wings-plugins = { path = "../../../crates/wings-plugins" }
+wings-spaces = { path = "../../../crates/wings-spaces" }
 wings-terminal = { path = "../../../crates/wings-terminal" }
 tauri-plugin-dialog = "2.8.1"
 portable-pty = "0.9.0"

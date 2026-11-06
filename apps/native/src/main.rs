@@ -6,6 +6,7 @@ use wings_native::{
     actions,
     host::{Config, USAGE},
     icons::Assets,
+    projects,
     workspace::Workspace,
 };
 
@@ -15,6 +16,12 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     };
+    // The first run starts the native project list as a copy of the desktop's.
+    if let (Some(native), Some(desktop)) = (&config.projects, projects::desktop_path())
+        && let Err(error) = projects::seed(native, &desktop)
+    {
+        eprintln!("Couldn't copy the desktop app's projects: {error}");
+    }
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx: &mut App| {

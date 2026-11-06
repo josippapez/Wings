@@ -12,6 +12,7 @@ use std::{
 
 use serde::Serialize;
 use wings_plugins::manifest::Plugin;
+use wings_spaces::spaces::{Space, WorktreeSetup};
 
 use super::{
     PluginHost,
@@ -23,6 +24,17 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
+}
+
+/// A project of the list, as plugins know it: its folder is its id.
+impl From<Space> for Project {
+    fn from(space: Space) -> Self {
+        Self {
+            id: space.path.clone(),
+            name: space.name,
+            path: space.path,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -156,6 +168,30 @@ pub trait Env: Send + Sync + 'static {
     /// Runs the tool of another running plugin, and answers `reply` with `{ text, isError }`, now or later.
     fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
         reply.err(format!("{} is turned off or not installed", call.target));
+    }
+    /// Makes a git worktree of the project in folder `project`, on a new `branch` from `base` or the repo's default
+    /// branch, and lists it under that project. The host has checked the plugin may.
+    fn create_worktree(
+        &self,
+        _project: &str,
+        _branch: &str,
+        _base: Option<&str>,
+    ) -> Result<Project, String> {
+        Err("Worktrees aren't available in this host".into())
+    }
+    /// What the new worktrees of the project in folder `project` get.
+    fn worktree_setup(&self, _project: &str) -> Result<WorktreeSetup, String> {
+        Err("Worktrees aren't available in this host".into())
+    }
+    /// Changes the worktree setup of the project in folder `project`, only what is given: include pattern lines (none
+    /// resets to the default list) and the setup line (blank clears it).
+    fn set_worktree_setup(
+        &self,
+        _project: &str,
+        _include: Option<Vec<String>>,
+        _setup: Option<String>,
+    ) -> Result<(), String> {
+        Err("Worktrees aren't available in this host".into())
     }
     /// The folders of the app's projects, which `exec` may run in.
     fn projects(&self) -> Vec<PathBuf>;

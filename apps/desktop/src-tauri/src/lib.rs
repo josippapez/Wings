@@ -124,21 +124,9 @@ struct WorktreeMade {
 
 /// Makes the worktree of `space_id`, copies its gitignored local setup in, and adds it as a project under it.
 fn make_worktree(state: &AppState, space_id: &str, branch: &str, base: Option<&str>) -> Res<WorktreeMade> {
-    let (path, include, setup) = {
-        let store = state.spaces.lock().unwrap();
-        let path = store.get(space_id).ok_or("No such project in Wings")?.path.clone();
-        let owner = store.settings_owner(space_id);
-        (path, owner.and_then(|s| s.worktree_include.clone()), owner.and_then(|s| s.worktree_setup.clone()))
-    };
-    let dir = std::path::Path::new(&path);
-    let base = match base {
-        Some(base) => base.to_string(),
-        None => worktree::info(dir)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
-    };
-    let made = worktree::create(dir, branch, &base, include.as_deref())?;
-    let space = spaces::view(&state.spaces.lock().unwrap().add_worktree(&made.path.to_string_lossy(), space_id));
+    let made = spaces::make_worktree(&state.spaces, space_id, branch, base)?;
     gitwatch::resync();
-    Ok(WorktreeMade { space, local: made.local, setup })
+    Ok(WorktreeMade { space: spaces::view(&made.space), local: made.local, setup: made.setup })
 }
 
 /// Makes a git worktree for a new branch and adds it to the sidebar under its project.

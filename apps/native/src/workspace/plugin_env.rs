@@ -16,6 +16,7 @@ use std::{
 use async_channel::Sender;
 use gpui::{Context, SharedString, Task};
 use wings_plugins::transcript::{Line, transcript_event};
+use wings_spaces::spaces::WorktreeSetup;
 
 use crate::{
     agents::AgentKind,
@@ -24,6 +25,7 @@ use crate::{
         ui::{Badge, PaneStatus},
     },
     ports,
+    projects::{Projects, with_setup},
 };
 
 use super::{Active, Workspace};
@@ -84,6 +86,8 @@ pub(super) enum UiEvent {
         plugin: String,
         view: String,
     },
+    /// The project list changed, as a plugin made a worktree.
+    Projects,
     Git(Vec<String>),
     Badge {
         plugin: String,
@@ -156,10 +160,9 @@ impl System for Os {
     }
 }
 
-/// What the window tells the plugins' hosts it knows: the projects, and where each pane's shell is.
+/// What the window tells the plugins' hosts it knows: the project on screen, and where each pane's shell is.
 #[derive(Default)]
 struct Known {
-    projects: Vec<PathBuf>,
     current: Option<PathBuf>,
     shells: Vec<(String, Option<u32>)>,
 }
@@ -168,16 +171,23 @@ struct Known {
 pub(super) struct AppEnv {
     events: Sender<UiEvent>,
     known: Mutex<Known>,
+    /// The native app's projects, which the window shows and plugins change.
+    projects: Arc<Projects>,
     running: Running,
     claude_dir: PathBuf,
     system: Mutex<Arc<dyn System>>,
 }
 
 impl AppEnv {
-    pub(super) fn new(events: Sender<UiEvent>, claude_dir: PathBuf) -> Self {
+    pub(super) fn new(
+        events: Sender<UiEvent>,
+        claude_dir: PathBuf,
+        projects: Arc<Projects>,
+    ) -> Self {
         Self {
             events,
             known: Mutex::default(),
+            projects,
             running: Running::default(),
             claude_dir,
             system: Mutex::new(Arc::new(Os)),
@@ -230,7 +240,12 @@ impl Env for AppEnv {
         self.known.lock().unwrap().current.clone()
     }
 
-    fn open_pane(&self, plan: OpenPane, reply: crate::page::runtime::Reply) {
+    fn open_pane(&self, mut plan: OpenPane, reply: crate::page::runtime::Reply) {
+        // The first pane a plugin opens in a worktree just made runs the project's setup line before the command.
+        plan.input = with_setup(
+            self.projects.take_setup(&plan.project).as_deref(),
+            plan.input,
+        );
         if self
             .events
             .try_send(UiEvent::OpenPane {
@@ -270,8 +285,33 @@ impl Env for AppEnv {
         self.running.call_tool(call, reply);
     }
 
+    fn create_worktree(
+        &self,
+        project: &str,
+        branch: &str,
+        base: Option<&str>,
+    ) -> Result<Project, String> {
+        let made = self.projects.create_worktree(project, branch, base)?;
+        // Before the answer, so the window lists it by the time the plugin opens a pane there.
+        self.send(UiEvent::Projects);
+        Ok(made.into())
+    }
+
+    fn worktree_setup(&self, project: &str) -> Result<WorktreeSetup, String> {
+        self.projects.worktree_setup(project)
+    }
+
+    fn set_worktree_setup(
+        &self,
+        project: &str,
+        include: Option<Vec<String>>,
+        setup: Option<String>,
+    ) -> Result<(), String> {
+        self.projects.set_worktree_setup(project, include, setup)
+    }
+
     fn projects(&self) -> Vec<PathBuf> {
-        self.known.lock().unwrap().projects.clone()
+        self.projects.paths()
     }
 
     fn claude_dir(&self) -> PathBuf {
@@ -397,6 +437,7 @@ impl Workspace {
                     self.close_diff_view(window, cx);
                 }
             }
+            UiEvent::Projects => self.projects = self.spaces.entries(),
             UiEvent::Git(ids) => {
                 for installed in &self.plugins {
                     installed.host.publish_git(&ids);
@@ -586,11 +627,6 @@ impl Workspace {
             (signature, self.plugin_panes_of(&panes))
         };
         self.plugin_ui.signature = signature;
-        let projects: Vec<PathBuf> = self
-            .projects
-            .iter()
-            .map(|project| project.path.clone())
-            .collect();
         let live: HashSet<usize> = self.panes.keys().copied().collect();
         self.plugin_ui.badges.retain(|pane, _| live.contains(pane));
         self.plugin_ui
@@ -605,7 +641,6 @@ impl Workspace {
         }
         {
             let mut known = self.plugin_env.known.lock().unwrap();
-            known.projects = projects;
             known.current = Some(self.config.project.clone());
             known.shells = self.pane_shells(cx);
         }

@@ -27,6 +27,7 @@ wings-agents = { path = "../../crates/wings-agents", optional = true }
 wings-plugins = { path = "../../crates/wings-plugins" }
 wings-disk-usage = { path = "../../crates/wings-disk-usage" }
 wings-gitwatch = { path = "../../crates/wings-gitwatch" }
+wings-spaces = { path = "../../crates/wings-spaces" }
 sysinfo = { version = "0.39.6", optional = true }
 async-channel = { version = "2.5", optional = true }
 unicode-segmentation = { version = "1.13", optional = true }

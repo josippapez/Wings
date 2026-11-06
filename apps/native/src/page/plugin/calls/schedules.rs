@@ -1,5 +1,5 @@
 //! The calls Schedules makes that the plugins ported before it didn't: another plugin's tools, closing a view, the
-//! project a page is about, and the ones the native app has to refuse (worktrees as projects, project sections).
+//! project a page is about, and project sections, which the native app has to refuse.
 
 use std::sync::Arc;
 
@@ -160,7 +160,7 @@ fn a_view_closes_only_if_the_plugin_has_it_and_the_project_is_the_one_on_screen(
 }
 
 #[test]
-fn worktrees_and_project_sections_are_refused_by_permission_first_and_then_by_the_native_app() {
+fn worktree_calls_are_refused_without_the_permission_and_project_sections_are_not_shown() {
     // No `worktrees` permission: the desktop's words for each call.
     let rig = caller(json!({}), true);
     for (call, refused) in [
@@ -183,27 +183,9 @@ fn worktrees_and_project_sections_are_refused_by_permission_first_and_then_by_th
             "{call}"
         );
     }
-    // With it, the native app has no project list of its own to change.
     let rig = caller(json!({ "worktrees": true }), true);
-    for call in [
-        "createWorktree({ branch: 'x' })",
-        "worktreeSetup('/work')",
-        "setWorktreeSetup('/work', { setup: 'pnpm install' })",
-    ] {
-        let refused = rig.refused(&format!("return await wings.{call};"));
-        assert!(
-            refused.starts_with("The native app can't change your projects yet"),
-            "{call}: {refused}"
-        );
-    }
     assert_eq!(
         rig.refused("return await wings.setProjectSection('/work', 'schedules', null);"),
         "The native app doesn't show project sections yet"
-    );
-    // A setup command runs in every new worktree, so only Wings' own plugins may set one.
-    let rig = caller(json!({ "worktrees": true }), false);
-    assert_eq!(
-        rig.refused("return await wings.setWorktreeSetup('/work', { setup: 'pnpm install' });"),
-        "Only Wings' own plugins can change a project's setup command"
     );
 }

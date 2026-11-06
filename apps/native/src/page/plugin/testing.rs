@@ -9,13 +9,17 @@ use std::{
 
 use serde_json::{Value, json};
 use wings_plugins::manifest::Plugin;
+use wings_spaces::spaces::WorktreeSetup;
 
 use super::{
-    Access, Env, PaneEntry, PanePort, PluginHost, Running, ToolCall,
+    Access, Env, PaneEntry, PanePort, PluginHost, Project, Running, ToolCall,
     tests::Root,
     ui::{Badge, PaneStatus},
 };
-use crate::page::runtime::{Event, PageRuntime};
+use crate::{
+    page::runtime::{Event, PageRuntime},
+    projects::Projects,
+};
 
 pub(super) const WAIT: Duration = Duration::from_secs(10);
 
@@ -36,6 +40,8 @@ pub(super) enum Seen {
 
 pub(super) struct FakeEnv {
     pub projects: Mutex<Vec<PathBuf>>,
+    /// The list `createWorktree` and `worktreeSetup` work on, which tests replace with one of their own.
+    pub spaces: Mutex<Projects>,
     pub claude: Mutex<PathBuf>,
     pub ports: Mutex<Result<Vec<PanePort>, String>>,
     /// Why opening a URL or showing a notification fails, if it should.
@@ -50,6 +56,7 @@ impl FakeEnv {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             projects: Mutex::default(),
+            spaces: Mutex::new(Projects::open(None, "/nowhere".into())),
             claude: Mutex::default(),
             ports: Mutex::new(Ok(Vec::new())),
             refuse: Mutex::default(),
@@ -125,6 +132,36 @@ impl Env for FakeEnv {
 
     fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
         self.running.call_tool(call, reply);
+    }
+
+    fn create_worktree(
+        &self,
+        project: &str,
+        branch: &str,
+        base: Option<&str>,
+    ) -> Result<Project, String> {
+        let made = self
+            .spaces
+            .lock()
+            .unwrap()
+            .create_worktree(project, branch, base)?;
+        Ok(made.into())
+    }
+
+    fn worktree_setup(&self, project: &str) -> Result<WorktreeSetup, String> {
+        self.spaces.lock().unwrap().worktree_setup(project)
+    }
+
+    fn set_worktree_setup(
+        &self,
+        project: &str,
+        include: Option<Vec<String>>,
+        setup: Option<String>,
+    ) -> Result<(), String> {
+        self.spaces
+            .lock()
+            .unwrap()
+            .set_worktree_setup(project, include, setup)
     }
 
     fn projects(&self) -> Vec<PathBuf> {

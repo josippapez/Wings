@@ -110,10 +110,6 @@ fn timeout_ms(value: Option<f64>) -> Result<Option<u64>, String> {
     }
 }
 
-/// Why a plugin can't make worktrees or change their setup: they belong to a project, and the native app only reads
-/// the project list the desktop app keeps, so it has nowhere to add a worktree to or to keep a project's setup.
-const NO_PROJECT_STORE: &str = "The native app can't change your projects yet: it reads the list the desktop app keeps and doesn't write it";
-
 impl Shared {
     fn open_pane(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
         let placement = match params.get("placement") {
@@ -317,13 +313,11 @@ impl Shared {
                 self.settle_tool(token, text, is_error);
                 reply.ok("null".into());
             }
-            "createWorktree" => reply.done(worktrees(&access, "create worktrees", false)),
-            "worktreeSetup" => reply.done(worktrees(&access, "read worktree setup", false)),
-            "setWorktreeSetup" => reply.done(worktrees(
-                &access,
-                "change worktree setup",
-                params.get("setup").is_some(),
-            )),
+            "createWorktree" => {
+                self.off_thread(reply, move |_| create_worktree(&access, &params));
+            }
+            "worktreeSetup" => reply.done(worktree_setup(&access, &params)),
+            "setWorktreeSetup" => reply.done(set_worktree_setup(&access, &params)),
             "setProjectSection" => {
                 reply.err("The native app doesn't show project sections yet".into())
             }
@@ -476,18 +470,87 @@ impl Shared {
     }
 }
 
-/// The permission checks of the desktop's worktree commands, then the native app's refusal. `sets_command` is a call
-/// that changes a project's setup command, which only Wings' own plugins may do.
-fn worktrees(access: &Access, what: &str, sets_command: bool) -> Result<String, String> {
-    let id = &access.plugin.manifest.id;
-    if !may_create_worktrees(&access.plugin) {
-        return Err(format!("{id} may not {what}"));
+/// The project a worktree call is about: its `projectId`, else the one on screen.
+fn worktree_project(access: &Access, params: &Value) -> Result<String, String> {
+    let id = match params.get("projectId").filter(|id| !id.is_null()) {
+        Some(id) => js_string(Some(id)),
+        None => access
+            .env
+            .current_project()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    if id.is_empty() {
+        Err("No project is open in Wings".into())
+    } else {
+        Ok(id)
     }
-    if sets_command && !access.builtin {
+}
+
+/// The desktop's `plugin_*` worktree commands all start with this.
+fn may_make_worktrees(access: &Access, what: &str) -> Result<(), String> {
+    if may_create_worktrees(&access.plugin) {
+        Ok(())
+    } else {
+        Err(format!("{} may not {what}", access.plugin.manifest.id))
+    }
+}
+
+/// `createWorktree`: a worktree of a project on a new branch, listed under that project. Answers `{ projectId, path }`.
+fn create_worktree(access: &Access, params: &Value) -> Result<String, String> {
+    let branch = params.get("branch").and_then(Value::as_str).unwrap_or("");
+    let base = match params.get("base") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(base)) => Some(base.as_str()),
+        _ => return Err("createWorktree base must be a branch name".into()),
+    };
+    let project = worktree_project(access, params)?;
+    may_make_worktrees(access, "create worktrees")?;
+    let made = access.env.create_worktree(&project, branch, base)?;
+    to_json(&json!({ "projectId": made.id, "path": made.path }))
+}
+
+/// `worktreeSetup`: what a project's new worktrees get.
+fn worktree_setup(access: &Access, params: &Value) -> Result<String, String> {
+    let project = worktree_project(access, params)?;
+    may_make_worktrees(access, "read worktree setup")?;
+    to_json(&access.env.worktree_setup(&project)?)
+}
+
+/// `setWorktreeSetup`: absent leaves a setting as it is; `null` resets the include list or clears the setup line. The
+/// setup line runs in every new worktree, which is more than making them, so only Wings' own plugins set it.
+fn set_worktree_setup(access: &Access, params: &Value) -> Result<String, String> {
+    let project = worktree_project(access, params)?;
+    let include = match params.get("include") {
+        None => None,
+        Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Array(lines)) => Some(
+            lines
+                .iter()
+                .map(|line| line.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(INCLUDE_LINES)?,
+        ),
+        Some(_) => return Err(INCLUDE_LINES.into()),
+    };
+    let setup = match params.get("setup") {
+        None => None,
+        Some(Value::Null) => Some(String::new()),
+        Some(Value::String(line)) => Some(line.clone()),
+        Some(_) => {
+            return Err("setWorktreeSetup setup is a shell line, or null to clear it".into());
+        }
+    };
+    may_make_worktrees(access, "change worktree setup")?;
+    if setup.is_some() && !access.builtin {
         return Err("Only Wings' own plugins can change a project's setup command".into());
     }
-    Err(NO_PROJECT_STORE.into())
+    access.env.set_worktree_setup(&project, include, setup)?;
+    Ok("null".into())
 }
+
+const INCLUDE_LINES: &str =
+    "setWorktreeSetup include is an array of strings, or null for the default list";
 
 fn reply_if_error(reply: Reply, result: Result<(), String>) {
     if let Err(error) = result {
@@ -546,3 +609,5 @@ mod prerequisites;
 mod schedules;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod worktrees;

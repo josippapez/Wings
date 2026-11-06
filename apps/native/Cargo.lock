@@ -7211,6 +7211,7 @@ dependencies = [
  "wings-gitwatch",
  "wings-plugin-storage",
  "wings-plugins",
+ "wings-spaces",
  "wings-terminal",
 ]
 
@@ -7230,6 +7231,15 @@ dependencies = [
  "ureq",
  "url",
  "zip",
+]
+
+[[package]]
+name = "wings-spaces"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wings-plugins",
 ]
 
 [[package]]

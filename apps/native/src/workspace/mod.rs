@@ -42,7 +42,7 @@ use crate::{
     page::{PageView, plugin::Env},
     plugin,
     plugin_view::{IssuesEvent, IssuesView},
-    projects::{self, ProjectEntry},
+    projects::{ProjectEntry, Projects},
     saved,
     terminal_view::{
         CURSOR_STYLES, CursorShape, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, MAX_FONT_SIZE,
@@ -131,7 +131,9 @@ pub struct Workspace {
     /// Where the active tab's panes go, measured every frame.
     area: Option<Bounds<Pixels>>,
     drag: Option<Drag>,
-    /// The desktop app's projects, shown in the sidebar.
+    /// The native app's own projects, which plugins change.
+    spaces: Arc<Projects>,
+    /// The projects as the sidebar shows them, from `spaces`.
     projects: Vec<ProjectEntry>,
     /// Other projects' tabs, with their shells still running, while another project is shown.
     parked: HashMap<PathBuf, Parked>,
@@ -171,9 +173,14 @@ impl Workspace {
         })
         .detach();
         let (plugin_events, requested) = async_channel::unbounded();
+        let spaces = Arc::new(Projects::open(
+            config.projects.clone(),
+            config.project.clone(),
+        ));
         let plugin_env = Arc::new(plugin_env::AppEnv::new(
             plugin_events,
             config.agents.clone().unwrap_or_default(),
+            spaces.clone(),
         ));
         let mut this = Self {
             terminals: Vec::new(),
@@ -197,7 +204,8 @@ impl Workspace {
             load_task: None,
             area: None,
             drag: None,
-            projects: Vec::new(),
+            projects: spaces.entries(),
+            spaces,
             parked: HashMap::new(),
             sidebar: true,
             agents: HashMap::new(),
@@ -244,29 +252,6 @@ impl Workspace {
             .agents
             .clone()
             .map(|dir| Self::detect(dir, !this.transcript_plugins.is_empty(), cx));
-        this.projects = this
-            .config
-            .projects
-            .as_deref()
-            .map(projects::load)
-            .unwrap_or_default();
-        if !this.projects.iter().any(|p| p.path == this.config.project) {
-            let path = this.config.project.clone();
-            this.projects.insert(
-                0,
-                ProjectEntry {
-                    name: path
-                        .file_name()
-                        .unwrap_or(path.as_os_str())
-                        .to_string_lossy()
-                        .into_owned(),
-                    branch: projects::branch(&path),
-                    path,
-                    child: false,
-                    pinned: false,
-                },
-            );
-        }
         let settings = this
             .config
             .state

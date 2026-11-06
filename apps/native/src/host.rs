@@ -59,7 +59,8 @@ pub struct Config {
     pub issues: Option<IssuesSource>,
     /// Where tabs and splits are saved and restored from. `None` keeps nothing, as in tests.
     pub state: Option<PathBuf>,
-    /// The desktop app's project list, read for the sidebar. `None` lists only `project`.
+    /// The native app's own project list, shown in the sidebar and changed by plugins. `None` keeps it in memory, with
+    /// only `project` in it.
     pub projects: Option<PathBuf>,
     /// Claude Code's folder, where agent detection reads each session's state. `None` turns
     /// detection off, as in tests.

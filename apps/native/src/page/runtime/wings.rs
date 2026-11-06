@@ -8,9 +8,10 @@
 //!
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
-//! `notify`, `transcript`, `onTranscript`, `statusline`, `onTool` and `callTool`, `closeView` and `project`. The calls
-//! that make a project of a worktree, and `setProjectSection`, are there so a plugin gets the host's refusal. Each call is a promise the host answers through
-//! `Link::call`, when it likes and from any thread, which comes back as a message to this frame's loop. Nothing else
+//! `notify`, `transcript`, `onTranscript`, `statusline`, `onTool` and `callTool`, `closeView`, `project`, and
+//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`. `setProjectSection` is there so a plugin gets the host's refusal.
+//! Each call is a promise the host answers through `Link::call`, when it likes and from any thread, which comes back as a
+//! message to this frame's loop. Nothing else
 //! is added: no files, network or process of the frame's own.
 //!
 //! The Rust functions are handed to one setup script, which builds the frozen objects from them, so a frame can't reach

@@ -379,6 +379,13 @@ fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
     assert_eq!(data.saved("opener", "opener-scope", "failed"), None);
     let result = data.saved("opener", "opener-scope", "opened").unwrap();
     let pane: usize = result["pane"]["paneId"].as_str().unwrap().parse().unwrap();
+    // setBadge resolves before the window has applied the badge.
+    until(&app, &mut window, "the badge never showed", |w| {
+        w.plugin_ui
+            .badges
+            .get(&pane)
+            .is_some_and(|badges| badges.contains_key("opener"))
+    });
     window.read(|w, cx| {
         assert_eq!(w.panes.len(), 2);
         assert_eq!(w.terminals[0].focused, pane);
@@ -389,6 +396,62 @@ fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
         data.saved("opener", "opener-scope", "projects").unwrap()[0]["path"],
         json!(project)
     );
+}
+
+#[test]
+fn a_worktree_a_plugin_makes_is_listed_under_its_project_and_is_a_project_the_next_pane_can_open_in()
+ {
+    let data = Data::temp();
+    let dir = crate::projects::test_dir("window-worktree");
+    let repo = crate::projects::test_repo(&dir);
+    let list = dir.join("spaces.json");
+    let spaces = json!([{ "id": repo, "name": "app", "path": repo, "worktreeSetup": "true" }]);
+    fs::write(&list, spaces.to_string()).unwrap();
+    data.install_script(
+        "maker",
+        json!({ "permissions": { "panes": [], "worktrees": true } }),
+        r#"
+        let started = false;
+        wings.onPanes(async list => {
+            if (!list.length || started) return;
+            started = true;
+            try {
+                const made = await wings.createWorktree({ branch: 'wings/one' });
+                const pane = await wings.openPane({ cwd: made.path });
+                await wings.storage.set('made', { made, pane });
+            } catch (error) { await wings.storage.set('failed', error.message); }
+        });
+        "#,
+        &[],
+        "maker-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.project = repo.clone();
+        config.projects = Some(list.clone());
+    });
+    until(&app, &mut window, "the worktree was never made", |_| {
+        data.saved("maker", "maker-scope", "made").is_some()
+            || data.saved("maker", "maker-scope", "failed").is_some()
+    });
+    assert_eq!(data.saved("maker", "maker-scope", "failed"), None);
+    let made = data.saved("maker", "maker-scope", "made").unwrap();
+    let tree = dir.join("app-worktrees/wings-one");
+    assert_eq!(made["made"], json!({ "projectId": tree, "path": tree }));
+    window.read(|w, _| {
+        let rows: Vec<_> = w
+            .projects
+            .iter()
+            .map(|p| (p.name.as_str(), p.child))
+            .collect();
+        assert_eq!(rows, [("app", false), ("wings-one", true)]);
+        // The pane opened in the worktree, which is now the project on screen, and took its setup line.
+        assert_eq!(w.project(), tree);
+        assert_eq!(w.spaces.take_setup(&tree), None);
+    });
+    // Saved in the native list; the plugin's pane is the one the worktree's project shows.
+    let saved: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&list).unwrap()).unwrap();
+    assert_eq!(saved[1]["parent"], json!(repo));
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
