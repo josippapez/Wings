@@ -31,8 +31,13 @@ pub const HAIRLINE: u32 = 0xffffff12;
 const INPUT_BORDER: u32 = 0xffffff1a;
 /// The desktop dialog's `--popover`.
 const DIALOG: u32 = 0x201d23;
-/// The desktop's `bg-black/50` behind a dialog.
-const BACKDROP: u32 = 0x00000080;
+/// The desktop's `bg-black/10` behind a dialog. Its `backdrop-blur-xs` has no GPUI counterpart.
+const BACKDROP: u32 = 0x0000001a;
+/// `--input` at 30%, the fill of a field or a select, and at 50% when pointed at.
+const INPUT_FILL: u32 = 0xffffff08;
+const INPUT_FILL_HOVER: u32 = 0xffffff0d;
+/// The dialog's `ring-1 ring-foreground/10`.
+const DIALOG_RING: u32 = theme::FOREGROUND << 8 | 0x1a;
 
 /// shadcn's square button sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,43 +147,46 @@ pub fn shortcut_icon_button(
     )
 }
 
-/// shadcn's `Switch`: a light track with a dark knob on the right when on.
+/// shadcn's `Switch`: a 32 by 18.4 track inside a transparent 1px border, with a 16px knob, on the right and dark when on.
 pub fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Switch)
         .aria_toggled(if on { Toggled::True } else { Toggled::False })
         .w(px(32.0))
-        .h(px(18.0))
+        .h(px(18.4))
         .flex_none()
         .flex()
         .items_center()
-        .p(px(2.0))
         .rounded_full()
+        .border_1()
+        .border_color(rgba(0))
         .cursor_pointer()
+        // Off, `dark:bg-input/80`.
         .bg(rgba(if on {
             theme::FOREGROUND << 8 | 0xff
         } else {
-            0xffffff29
+            0xffffff14
         }))
         .when(on, |track| track.justify_end())
-        .child(div().size(px(14.0)).rounded_full().bg(rgb(if on {
+        .child(div().size(px(16.0)).rounded_full().bg(rgb(if on {
             0x17151a
         } else {
             theme::FOREGROUND
         })))
 }
 
-/// shadcn's `Input` frame around a text field.
+/// shadcn's `Input` frame around a text field: `rounded-lg`, `dark:bg-input/30` and 14px text.
 pub fn input(field: Entity<TextField>) -> Div {
     div()
         .h(px(32.0))
         .flex()
         .items_center()
-        .rounded(px(8.0))
+        .rounded(px(theme::RADIUS))
         .border_1()
         .border_color(rgba(INPUT_BORDER))
-        .bg(rgba(theme::HOVER))
+        .bg(rgba(INPUT_FILL))
+        .text_size(px(14.0))
         .child(field)
 }
 
@@ -187,10 +195,10 @@ pub fn card(rows: impl IntoIterator<Item = AnyElement>) -> Div {
     div()
         .flex()
         .flex_col()
-        .rounded(px(12.0))
+        .rounded(px(14.0))
         .border_1()
         .border_color(rgba(HAIRLINE))
-        .bg(rgba(0xffffff05))
+        .bg(rgba(0xffffff08))
         .children(rows.into_iter().enumerate().map(|(index, row)| {
             div()
                 .when(index > 0, |row| {
@@ -210,7 +218,7 @@ pub fn setting_row(
     div()
         .flex()
         .items_center()
-        .gap(px(16.0))
+        .gap(px(24.0))
         .px(px(16.0))
         .py(px(12.0))
         .child(
@@ -220,15 +228,18 @@ pub fn setting_row(
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
+                // The desktop's `Label` is `leading-none`, and the hint under it `leading-snug`.
                 .child(
                     div()
                         .text_size(px(13.0))
+                        .line_height(px(13.0))
                         .font_weight(FontWeight::MEDIUM)
                         .child(label.into()),
                 )
                 .child(
                     div()
                         .text_size(px(12.0))
+                        .line_height(px(16.5))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child(description.into()),
                 )
@@ -279,18 +290,11 @@ pub fn dialog(
         .max_h(relative(0.9))
         .flex()
         .overflow_hidden()
-        .rounded(px(16.0))
+        .rounded(px(14.0))
         .border_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
+        .border_color(rgba(DIALOG_RING))
         .bg(rgb(DIALOG))
-        .text_color(rgb(theme::FOREGROUND))
-        .shadow(vec![BoxShadow {
-            color: hsla(0.0, 0.0, 0.0, 0.5),
-            offset: point(px(0.0), px(24.0)),
-            blur_radius: px(64.0),
-            spread_radius: px(0.0),
-            inset: false,
-        }]);
+        .text_color(rgb(theme::FOREGROUND));
     (backdrop, panel)
 }
 
@@ -311,14 +315,15 @@ pub fn select_trigger(
         .items_center()
         .justify_between()
         .gap(px(8.0))
-        .px(px(10.0))
-        .rounded(px(8.0))
+        .pl(px(10.0))
+        .pr(px(8.0))
+        .rounded(px(theme::RADIUS))
         .border_1()
         .border_color(rgba(INPUT_BORDER))
-        .bg(rgba(theme::HOVER))
+        .bg(rgba(INPUT_FILL))
         .cursor_pointer()
-        .text_size(px(13.0))
-        .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
+        .text_size(px(14.0))
+        .hover(|style| style.bg(rgba(INPUT_FILL_HOVER)))
         .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
         .child(div().truncate().child(value.into()))
         .child(icon(Icon::ChevronDown, 16.0, theme::MUTED_FOREGROUND))

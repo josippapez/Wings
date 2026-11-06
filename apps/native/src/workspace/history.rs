@@ -11,10 +11,10 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
+    Anchor, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
-    Subscription, Task, Toggled, Window, anchored, deferred, div, prelude::*, px, relative, rgb,
-    rgba,
+    Subscription, Task, Toggled, Window, anchored, deferred, div, hsla, point, prelude::*, px,
+    relative, rgb, rgba,
 };
 use wings_agents::history::{
     Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms,
@@ -1003,6 +1003,14 @@ impl Workspace {
                         .rounded(px(0.0))
                         .border_0()
                         .border_l_1()
+                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .shadow(vec![BoxShadow {
+                            color: hsla(0.0, 0.0, 0.0, 0.5),
+                            offset: point(px(0.0), px(24.0)),
+                            blur_radius: px(64.0),
+                            spread_radius: px(0.0),
+                            inset: false,
+                        }])
                         .flex_col()
                         .bg(rgba(theme::POPOVER))
                         // Escape from a button the sheet's field doesn't have the keys for.

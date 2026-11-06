@@ -19,7 +19,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{HAIRLINE, Workspace, project::SIDEBAR_ACCENT, shortcut_label};
+use super::{HAIRLINE, Workspace, shortcut_label};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Section {
@@ -916,35 +916,40 @@ impl Workspace {
                     content.children(self.section_cards(section, cx).into_iter().map(ui::card))
                 }
             });
+        // The desktop's `nav w-52 gap-3 p-3 pt-4 bg-black/15`: the title, the sections, then the version at the foot.
         let sidebar = div()
             .w(px(208.0))
             .flex_none()
             .flex()
             .flex_col()
-            .gap(px(2.0))
-            .p(px(16.0))
-            .bg(rgba(0x0000001f))
+            .gap(px(12.0))
+            .p(px(12.0))
+            .pt(px(16.0))
+            .bg(rgba(0x00000026))
             .border_r_1()
             .border_color(rgba(HAIRLINE))
             .child(
                 div()
-                    .px(px(4.0))
-                    .text_size(px(16.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Settings"),
-            )
-            .child(
-                div()
-                    .px(px(4.0))
-                    .pb(px(16.0))
-                    .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child("These apply to every terminal right away."),
-            )
-            .children(nav)
-            .when(!plugin_nav.is_empty(), |sidebar| {
-                sidebar
+                    .px(px(8.0))
                     .child(
+                        div()
+                            .text_size(px(16.0))
+                            .line_height(px(16.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Settings"),
+                    )
+                    .child(
+                        div()
+                            .mt(px(4.0))
+                            .text_size(px(12.0))
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child("These apply to every terminal right away."),
+                    ),
+            )
+            .child(div().flex().flex_col().gap(px(2.0)).children(nav).when(
+                !plugin_nav.is_empty(),
+                |list| {
+                    list.child(
                         div()
                             .px(px(8.0))
                             .pt(px(12.0))
@@ -955,7 +960,8 @@ impl Workspace {
                             .child("Plugin settings"),
                     )
                     .children(plugin_nav)
-            })
+                },
+            ))
             .child(
                 div()
                     .mt_auto()
@@ -967,12 +973,16 @@ impl Workspace {
         let (backdrop, panel) = ui::dialog("settings", "Settings", &dialog.focus, 820.0, 600.0);
         Some(
             backdrop
+                // `w-[min(820px,calc(100%-4rem))]` and the same for its height: 32px clear of each edge.
+                .p(px(32.0))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
                 )
                 .child(
                     panel
+                        .max_w_full()
+                        .max_h_full()
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                             if event.keystroke.key == "escape" {
                                 this.close_settings(window, cx);
@@ -981,7 +991,7 @@ impl Workspace {
                         .child(sidebar)
                         .child(content)
                         .child(
-                            div().absolute().top(px(12.0)).right(px(12.0)).child(
+                            div().absolute().top(px(8.0)).right(px(8.0)).child(
                                 ui::icon_button(
                                     "close-settings",
                                     Icon::X,
@@ -1052,14 +1062,21 @@ fn nav_item(
         .flex_none()
         .flex()
         .items_center()
-        .gap(px(10.0))
+        .gap(px(8.0))
         .px(px(8.0))
         .rounded(px(8.0))
+        .border_1()
+        .border_color(rgba(0))
         .cursor_pointer()
         .text_size(px(13.0))
-        .when(selected, |item| item.bg(rgba(SIDEBAR_ACCENT)))
+        .font_weight(FontWeight::MEDIUM)
+        // The desktop's section trigger: muted, and bright on `bg-white/[0.07]` when chosen.
+        .when(selected, |item| {
+            item.bg(rgba(0xffffff12)).text_color(rgb(theme::FOREGROUND))
+        })
         .when(!selected, |item| {
-            item.hover(|style| style.bg(rgba(theme::HOVER)))
+            item.text_color(rgb(theme::MUTED_FOREGROUND))
+                .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
         })
         .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
         .child(div().min_w_0().truncate().child(label))
