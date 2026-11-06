@@ -1,6 +1,6 @@
 //! Renders the native window offscreen at 1000 and 640 points wide and saves each state as a PNG:
-//! tabs, splits, renaming a pane, a zoomed pane, find, Issues, a plugin page, agents and Settings, and the pages of
-//! `pages/` on their own: the pilot and the components page.
+//! tabs, a terminal's colors and a selection, splits, renaming a pane, a zoomed pane, find, Issues, a plugin page,
+//! agents and Settings, and the pages of `pages/` on their own: the pilot and the components page.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir>
@@ -219,6 +219,36 @@ fn main() {
         cx.simulate_keystrokes(window, "cmd-t cmd-t");
         wait(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs"));
+        // Text styles, the palette, 256 and true colors, wide and combining characters, and a selection dragged from
+        // the second row into the third.
+        cx.simulate_input(
+            window,
+            "clear; printf '\\033[1mbold\\033[0m \\033[3mitalic\\033[0m \\033[4munder\\033[0m \\033[9mstrike\\033[0m \\033[7minverse\\033[0m \\033[2mdim\\033[0m \\033[31mred\\033[0m \\033[92mgreen\\033[0m\\n'; for i in $(seq 0 15); do printf \"\\033[48;5;${i}m  \"; done; printf '\\033[0m\\n\\033[38;2;255;120;0mtrue color\\033[0m \\033[38;5;75m256 color\\033[0m 漢字 e\\314\\201 ─┼─\\n'",
+        );
+        cx.simulate_keystrokes(window, "enter");
+        wait(&mut cx, window, Duration::from_secs(1));
+        cx.simulate_event(
+            window,
+            MouseDownEvent {
+                position: point(px(300.0), px(125.0)),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+        );
+        mouse_move(&mut cx, window, point(px(420.0), px(143.0)), true);
+        cx.simulate_event(
+            window,
+            gpui::MouseUpEvent {
+                position: point(px(420.0), px(143.0)),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            },
+        );
+        wait(&mut cx, window, Duration::from_millis(300));
+        save(&mut cx, window, &name("terminal"));
         cx.simulate_keystrokes(window, "cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t");
         wait(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs-overflow"));
