@@ -1051,3 +1051,63 @@ fn an_agent_that_comes_to_need_you_or_finishes_goes_to_the_inbox_read_if_you_are
         );
     });
 }
+
+#[test]
+fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst() {
+    use super::sound::{PLAYED, SoundId};
+    use crate::agents::{AgentKind, AgentState};
+    let played = || PLAYED.with(|played| std::mem::take(&mut *played.borrow_mut()));
+    let (_app, mut window) = open();
+    press(&mut window, "d");
+    let agent = |pane: usize, state: AgentState| crate::agents::Agent {
+        pane_id: pane.to_string(),
+        space_id: String::new(),
+        pid: 1,
+        kind: AgentKind::Claude,
+        session_id: None,
+        name: None,
+        state,
+        waiting_for: None,
+        args: Vec::new(),
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: None,
+        weak_name: false,
+    };
+    // Pane 1 has focus; pane 0 isn't the one you're looking at.
+    let change = |w: &mut Workspace, pane: usize, from: AgentState, to: AgentState| {
+        let before = HashMap::from([(pane, agent(pane, from))]);
+        w.agents = HashMap::from([(pane, agent(pane, to))]);
+        w.inbox_agents(&before);
+    };
+    window.update(|w, _, _| {
+        w.window_active = true;
+        played();
+        w.prefs.notify_sound.sound = SoundId::Drop;
+
+        w.prefs.notify_sound.enabled = false;
+        change(w, 0, AgentState::Working, AgentState::Blocked);
+        assert_eq!(played(), [], "sound off");
+
+        w.prefs.notify_sound.enabled = true;
+        w.prefs.notify_sound.watching = false;
+        change(w, 1, AgentState::Working, AgentState::Done);
+        assert_eq!(played(), [], "the pane on screen, with that turned off");
+
+        change(w, 0, AgentState::Blocked, AgentState::Done);
+        assert_eq!(played(), [SoundId::Drop]);
+
+        // Within a second of the last one, a plugin's notification shares that sound.
+        w.inbox_plugin(crate::page::plugin::Notification {
+            plugin: "ci".into(),
+            name: "Build bot".into(),
+            title: "Build passed".into(),
+            body: String::new(),
+            project: None,
+            buttons: Vec::new(),
+        });
+        assert_eq!(played(), []);
+        assert_eq!(w.inbox.events.len(), 4);
+    });
+}

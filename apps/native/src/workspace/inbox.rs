@@ -17,7 +17,7 @@ use crate::{
     ui::{self, HAIRLINE},
 };
 
-use super::{Workspace, title_bar::TITLE_BAR_HEIGHT};
+use super::{Workspace, sound, title_bar::TITLE_BAR_HEIGHT};
 
 /// The most the list keeps, as the desktop's `MAX_NOTIFICATIONS`.
 const MAX: usize = 100;
@@ -54,6 +54,8 @@ pub(super) struct Inbox {
     /// While the list is open: what was unread when it opened, so those rows stay marked while you look at them.
     pub(super) open: Option<HashSet<usize>>,
     next: usize,
+    /// Notifications close together share one sound.
+    sound: sound::Burst,
 }
 
 impl Inbox {
@@ -92,8 +94,21 @@ impl Inbox {
 }
 
 impl Workspace {
+    /// Plays the chosen sound for something new, unless it's off or one just played, as the desktop's
+    /// `notificationSound`. `watching`: it's about the pane on screen.
+    fn notification_sound(&mut self, watching: bool) {
+        let settings = self.prefs.notify_sound;
+        if watching && !settings.watching {
+            return;
+        }
+        if settings.enabled && self.inbox.sound.due(now_ms()) {
+            sound::play(settings.sound);
+        }
+    }
+
     /// A plugin's notification, unread.
     pub(super) fn inbox_plugin(&mut self, notification: Notification) {
+        self.notification_sound(false);
         let title = if notification.title.is_empty() {
             notification.name.clone()
         } else {
@@ -147,6 +162,7 @@ impl Workspace {
             self.inbox
                 .add(kind, title, project, detail, Some(pane), None);
             self.inbox.events[0].read = seen == Some(pane);
+            self.notification_sound(seen == Some(pane));
         }
     }
 

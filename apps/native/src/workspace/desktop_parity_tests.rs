@@ -1,6 +1,7 @@
 //! Headless window tests for Settings' sections, Open in editor, the quick terminal and the new tab choices.
 
 use super::{
+    sound::{SoundId, SoundSettings},
     tests::{open_config, open_with, press, state},
     *,
 };
@@ -49,6 +50,11 @@ fn the_new_settings_are_saved_and_come_back() {
                     prefs.new_project_page = true;
                     prefs.agents_run_commands = true;
                     prefs.agents_message = true;
+                    prefs.notify_sound = SoundSettings {
+                        enabled: false,
+                        sound: SoundId::Ping,
+                        watching: false,
+                    };
                 },
                 cx,
             );
@@ -76,6 +82,11 @@ fn the_new_settings_are_saved_and_come_back() {
                 new_project_page: true,
                 agents_run_commands: true,
                 agents_message: true,
+                notify_sound: SoundSettings {
+                    enabled: false,
+                    sound: SoundId::Ping,
+                    watching: false,
+                },
             }
         );
     });

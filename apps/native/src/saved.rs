@@ -78,6 +78,20 @@ pub struct SavedProject {
     pub issues_closed: bool,
 }
 
+/// The sound for new notifications, as the desktop's `notifySound`. Cleaned when read, so an unknown sound or a
+/// missing value takes the default.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NotifySound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// `chime`, `pop`, `ping` or `drop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    /// Also for an agent in the pane on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watching: Option<bool>,
+}
+
 /// What the whole app keeps, the same for every project, as in the desktop app.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -138,6 +152,8 @@ pub struct Settings {
     /// When each project was last worked on, in ms since the epoch, by its folder.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub last_active: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_sound: Option<NotifySound>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

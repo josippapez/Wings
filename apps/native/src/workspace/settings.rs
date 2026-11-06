@@ -2,7 +2,7 @@
 //! with what it does and its control. It lists only the settings the native app honours.
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Role,
+    AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Role,
     SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 
@@ -18,7 +18,10 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{HAIRLINE, Workspace, shortcut_label};
+use super::{
+    HAIRLINE, Workspace, shortcut_label,
+    sound::{self, SoundId, SoundSettings},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Section {
@@ -29,11 +32,12 @@ pub(super) enum Section {
     Keyboard,
     Editor,
     Agents,
+    Notifications,
     Plugins,
 }
 
 impl Section {
-    const ALL: [Section; 8] = [
+    const ALL: [Section; 9] = [
         Section::General,
         Section::Text,
         Section::Cursor,
@@ -41,6 +45,7 @@ impl Section {
         Section::Keyboard,
         Section::Editor,
         Section::Agents,
+        Section::Notifications,
         Section::Plugins,
     ];
 
@@ -53,6 +58,7 @@ impl Section {
             Section::Keyboard => "Keyboard",
             Section::Editor => "Editor",
             Section::Agents => "Agents",
+            Section::Notifications => "Notifications",
             Section::Plugins => "Plugins",
         }
     }
@@ -66,6 +72,7 @@ impl Section {
             Section::Keyboard => Icon::Keyboard,
             Section::Editor => Icon::Code,
             Section::Agents => Icon::Bot,
+            Section::Notifications => Icon::Bell,
             Section::Plugins => Icon::Puzzle,
         }
     }
@@ -86,6 +93,8 @@ pub(super) struct Prefs {
     pub(super) agents_run_commands: bool,
     /// "Let agents message each other": a message for an agent is submitted with Enter.
     pub(super) agents_message: bool,
+    /// The sound for new notifications.
+    pub(super) notify_sound: SoundSettings,
 }
 
 impl Default for Prefs {
@@ -97,6 +106,7 @@ impl Default for Prefs {
             new_project_page: false,
             agents_run_commands: false,
             agents_message: false,
+            notify_sound: SoundSettings::default(),
         }
     }
 }
@@ -236,6 +246,17 @@ impl Workspace {
         choices: Vec<Choice>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.select_of_width(id, label, choices, px(176.0), cx)
+    }
+
+    fn select_of_width(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        choices: Vec<Choice>,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let open = self.settings.as_ref().is_some_and(|d| d.menu == Some(id));
         let value = choices
             .iter()
@@ -259,14 +280,16 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .child(ui::select_trigger(id, label, value).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    if let Some(dialog) = &mut this.settings {
-                        dialog.menu = (dialog.menu != Some(id)).then_some(id);
-                    }
-                    cx.notify();
-                },
-            )))
+            .child(
+                ui::select_trigger(id, label, value)
+                    .w(width)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(dialog) = &mut this.settings {
+                            dialog.menu = (dialog.menu != Some(id)).then_some(id);
+                        }
+                        cx.notify();
+                    })),
+            )
             .when(open, |column| {
                 column.child(ui::popover(ui::select_menu(items).on_mouse_down_out(
                     cx.listener(|this, _, _, cx| {
@@ -561,6 +584,7 @@ impl Workspace {
                 )]]
             }
             Section::Agents => self.agents_cards(cx),
+            Section::Notifications => self.notification_cards(cx),
             Section::Plugins => Vec::new(),
         }
     }
@@ -568,6 +592,72 @@ impl Workspace {
     /// Claude Code's connection, as the desktop's Agents chip shows it: whether its sessions get Wings' tools, and its
     /// status line and hooks go through Wings, with Connect, Reconnect and Disconnect for every account at once, then
     /// each account's own state.
+    /// The desktop's Notifications section: whether a sound plays, which one, and whether it also plays for the pane
+    /// on screen.
+    fn notification_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = self.prefs.notify_sound;
+        let choices = SoundId::ALL
+            .into_iter()
+            .map(|id| {
+                let choose: Choose = Box::new(move |this, cx| {
+                    this.set_prefs(|prefs| prefs.notify_sound.sound = id, cx)
+                });
+                (id.label().into(), id == current.sound, choose)
+            })
+            .collect();
+        let preview = ui::button(
+            "notify-sound-preview",
+            "Preview the sound",
+            ui::Variant::Outline,
+            false,
+            "Preview",
+        )
+        .px(px(10.0))
+        .on_click(move |_, _, _| sound::play(current.sound));
+        let watching = ui::switch("notify-sound-watching", current.watching).map(|switch| {
+            if current.enabled {
+                switch.on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_prefs(|prefs| prefs.notify_sound.watching = !current.watching, cx)
+                }))
+            } else {
+                switch
+                    .opacity(0.5)
+                    .cursor_default()
+                    .a11y_synthetic_children(|builder| {
+                        builder.parent_node().set_disabled();
+                    })
+            }
+        });
+        vec![vec![
+            self.switch_row(
+                "notify-sound",
+                "Play a sound",
+                "When an agent needs you or finishes, or a plugin notifies. Several at once play one sound.",
+                current.enabled,
+                |this, on, cx| this.set_prefs(|prefs| prefs.notify_sound.enabled = on, cx),
+                cx,
+            ),
+            ui::setting_row(
+                "Sound",
+                "",
+                None,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(preview)
+                    // The names are short, and a full-width select would leave the label no room at 640px.
+                    .child(self.select_of_width("notify-sound-pick", "Sound", choices, px(112.0), cx)),
+            ),
+            ui::setting_row(
+                "Also for the pane on screen",
+                "Play it when the agent you're looking at needs you or finishes.",
+                None,
+                watching,
+            ),
+        ]]
+    }
+
     fn agents_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
         use super::claude::Change;
         let link = &self.claude;

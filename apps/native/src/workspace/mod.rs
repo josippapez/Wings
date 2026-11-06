@@ -36,6 +36,7 @@ mod rank;
 mod settings;
 mod setup_approval;
 mod sidebar;
+mod sound;
 mod status;
 mod tabs;
 #[cfg(all(test, feature = "test-support"))]
@@ -447,6 +448,7 @@ impl Workspace {
             // Off unless turned on, as the desktop's `saved.agentsRunCommands === true`.
             agents_run_commands: settings.agents_run_commands == Some(true),
             agents_message: settings.agents_message == Some(true),
+            notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
         };
         this.find_editors(cx);
         this.enter_project(window, cx);

@@ -215,6 +215,7 @@ pub fn setting_row(
     error: Option<SharedString>,
     control: impl IntoElement,
 ) -> AnyElement {
+    let description: SharedString = description.into();
     div()
         .flex()
         .items_center()
@@ -236,13 +237,16 @@ pub fn setting_row(
                         .font_weight(FontWeight::MEDIUM)
                         .child(label.into()),
                 )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .line_height(px(16.5))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                        .child(description.into()),
-                )
+                // A row without a hint, like the desktop's, keeps its label in the middle.
+                .when(!description.is_empty(), |text| {
+                    text.child(
+                        div()
+                            .text_size(px(12.0))
+                            .line_height(px(16.5))
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(description),
+                    )
+                })
                 .when_some(error, |text, error| {
                     text.child(
                         div()

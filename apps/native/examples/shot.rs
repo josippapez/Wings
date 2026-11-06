@@ -1051,7 +1051,15 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_millis(300));
         let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
         let sections = [
-            "general", "text", "cursor", "history", "keyboard", "editor", "agents", "plugins",
+            "general",
+            "text",
+            "cursor",
+            "history",
+            "keyboard",
+            "editor",
+            "agents",
+            "notifications",
+            "plugins",
         ];
         for (index, section) in sections.into_iter().enumerate() {
             let row = point(px(left + 70.0), px(133.0 + 34.0 * index as f32));

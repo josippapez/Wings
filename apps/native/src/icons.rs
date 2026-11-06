@@ -38,6 +38,7 @@ icons!(
     ArrowRight = "arrow-right",
     ArrowUp = "arrow-up",
     ArrowUpDown = "arrow-up-down",
+    Bell = "bell",
     Bot = "bot",
     Calendar = "calendar",
     CaseSensitive = "case-sensitive",
