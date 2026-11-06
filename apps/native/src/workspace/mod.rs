@@ -16,6 +16,8 @@ mod inbox;
 #[cfg(all(test, feature = "test-support"))]
 mod manage_tests;
 mod nav;
+#[cfg(all(test, feature = "test-support"))]
+mod nav_tests;
 mod palette;
 mod pane_card;
 mod panes;
@@ -201,8 +203,11 @@ pub struct Workspace {
     new_tab_menu: bool,
     /// Back and forward between the places shown.
     nav: nav::Nav,
-    /// The terminal Ctrl-` shows and hides, once started.
-    quick: Option<quick::QuickTerminal>,
+    /// The sidebar's terminals, which belong to no project, in the order they were opened.
+    loose: Vec<quick::QuickTerminal>,
+    /// The one Ctrl-` shows and hides, the desktop's `loose.last`.
+    loose_last: Option<usize>,
+    next_loose: usize,
     /// The last project was removed: the window shows what to do first, with no tabs.
     welcome: bool,
     /// The project being entered was just added, so its first tab is what Settings, General says.
@@ -332,7 +337,9 @@ impl Workspace {
             editor_menu: false,
             new_tab_menu: false,
             nav: Default::default(),
-            quick: None,
+            loose: Vec::new(),
+            loose_last: None,
+            next_loose: 0,
             welcome: false,
             just_added: false,
             palette: None,
@@ -689,7 +696,11 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
-                if let Some(pane) = this.focused_pane() {
+                // The terminal on screen in place of the tab, or a floating one being typed in, closes before the tab
+                // does, as the desktop's `closeFocused`.
+                if let Some(key) = this.loose_page().or_else(|| this.focused_loose(window, cx)) {
+                    this.close_quick(key, window, cx);
+                } else if let Some(pane) = this.focused_pane() {
                     this.close_pane(pane, window, cx);
                 } else {
                     // A page tab (a plugin's, the project page, Issues) is a tab of one pane.

@@ -207,10 +207,11 @@ fn pinning_a_project_moves_it_to_the_top_and_keeps_it_there_after_a_relaunch() {
     };
     assert_eq!(names(&window), ["alpha", "beta"]);
     window.draw();
-    // Below the 40px title bar, the 36px Inbox row, 8px of padding and the 28px header: alpha's row, then beta's, 24px and 2px apart.
+    // Below the 40px title bar, the nav's four 28px rows 1px apart, 8px of padding and the 28px header: alpha's row, then
+    // beta's, 24px and 2px apart.
     let beta = point(
         px(100.0),
-        px(40.0 + 36.0 + 8.0 + 28.0 + 2.0 + 24.0 + 2.0 + 12.0),
+        px(40.0 + 4.0 * 28.0 + 3.0 + 8.0 + 28.0 + 2.0 + 24.0 + 2.0 + 12.0),
     );
     window.simulate_mouse_move(beta);
     // One frame notices the pointer, the next draws the buttons.

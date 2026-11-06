@@ -13,7 +13,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{Active, TerminalTab, Workspace, context_menu::MenuTarget, quick, shortcut_label};
+use super::{Active, TerminalTab, Workspace, context_menu::MenuTarget, shortcut_label};
 
 /// The desktop's shown tab, `bg-white/[0.07]`.
 const SELECTED_TAB: u32 = 0xffffff12;
@@ -120,15 +120,8 @@ impl Workspace {
         let moved = self.active != active;
         self.active = active;
         self.issues_open |= active == Active::Issues;
-        // Going to a tab puts a quick terminal that fills the window away, as going to another tab would.
-        if let Some(quick) = &mut self.quick
-            && moved
-            && quick.place == quick::Place::Full
-        {
-            quick.place = quick::Place::Hidden;
-            quick
-                .view()
-                .update(cx, |view, cx| view.set_visible(false, cx));
+        if moved {
+            self.leave_loose(cx);
         }
         if let Some(index) = self.tabs().iter().position(|tab| *tab == active) {
             self.tab_scroll.scroll_to_item(index);
@@ -175,6 +168,10 @@ impl Workspace {
             }
             Active::Project => self.project_page_focus.focus(window, cx),
             Active::Issues => self.issues.focus_handle(cx).focus(window, cx),
+        }
+        // A sidebar terminal filling the pane area is what's on screen, so the keys go back to it.
+        if let Some(page) = self.loose_page().and_then(|key| self.loose_terminal(key)) {
+            page.view().focus_handle(cx).focus(window, cx);
         }
         self.sync_project_page(cx);
         self.save(cx);
@@ -298,7 +295,8 @@ impl Workspace {
         focus: &FocusHandle,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let selected = self.active == active;
+        // While a sidebar terminal fills the pane area, no tab is the one shown, as in the desktop app.
+        let selected = self.active == active && self.loose_page().is_none();
         let id = match active {
             Active::Terminal(id) => SharedString::from(format!("terminal-tab-{id}")),
             Active::Plugin(id) => SharedString::from(format!("plugin-tab-{id}")),
@@ -481,7 +479,10 @@ impl Workspace {
             .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
             // Not a window drag.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, window, cx| this.show(active, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.leave_loose(cx);
+                this.show(active, window, cx)
+            }))
             .child(glyph)
             .child(div().min_w_0().truncate().child(label))
             .children(splits)

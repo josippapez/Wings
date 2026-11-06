@@ -2,6 +2,8 @@
 //! adding, removing and pinning projects, and the peek of a closed sidebar. The window draws it from `view`.
 
 mod git;
+mod nav_rows;
+pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, row_hint};
 mod order;
 mod peek;
 #[cfg(all(test, feature = "test-support"))]

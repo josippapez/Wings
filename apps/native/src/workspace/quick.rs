@@ -1,6 +1,8 @@
-//! The quick terminal, as the desktop's `quick-terminal.tsx`: Ctrl-` shows a terminal in your home folder floating
-//! over whatever is on screen, and hides it again with its shell still running. Drag its header to move it, its
-//! top-left corner to resize it, fill the window with it like a tab, or minimise it to a bar.
+//! The sidebar's terminals and the quick terminal, as the desktop's `quick-terminal.tsx` and its `looseReducer`: shells
+//! in your home folder that belong to no project. The sidebar's Terminal row opens one filling the pane area as a page
+//! of its own; Ctrl-` shows the last one floating over whatever is on screen, and hides it again with its shell still
+//! running. Drag a floating one's header to move it, its top-left corner to resize it, fill the window with it like a
+//! tab, or minimise it to a bar. Like the desktop's, they're in no tab, so nothing saves them.
 
 use std::path::PathBuf;
 
@@ -59,6 +61,7 @@ struct Gesture {
 }
 
 pub(super) struct QuickTerminal {
+    pub(super) key: usize,
     view: Entity<TerminalView>,
     pub(super) place: Place,
     pub(super) minimised: bool,
@@ -72,56 +75,102 @@ impl QuickTerminal {
     pub(super) fn view(&self) -> &Entity<TerminalView> {
         &self.view
     }
+
+    /// Where its shell is now, as the desktop's `looseTitle`.
+    pub(super) fn title(&self, cx: &gpui::App) -> String {
+        self.view
+            .read(cx)
+            .cwd()
+            .map_or_else(|| "~".to_owned(), |cwd| tildify(&cwd.to_string_lossy()))
+    }
 }
 
 impl Workspace {
-    /// Ctrl-`: shows the quick terminal floating, or hides it when it's on screen. The first press starts it.
-    pub(super) fn toggle_quick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let place = match &self.quick {
-            None => {
-                let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                let view = match TerminalView::open(home, Vec::new(), None, cx) {
-                    Ok(view) => view,
-                    Err(error) => {
-                        return self.show_notice("Couldn't start a terminal".into(), error, cx);
-                    }
-                };
-                self.quick = Some(QuickTerminal {
-                    view,
-                    place: Place::Hidden,
-                    minimised: false,
-                    rect: Rect {
-                        right: EDGE * 2.0,
-                        bottom: EDGE * 2.0,
-                        w: 640.0,
-                        h: 380.0,
-                    },
-                    gesture: None,
-                    area: None,
-                });
-                Place::Floating
-            }
-            Some(quick) if quick.place == Place::Hidden => Place::Floating,
-            Some(_) => Place::Hidden,
-        };
-        self.place_quick(place, false, window, cx);
+    pub(super) fn loose_terminal(&self, key: usize) -> Option<&QuickTerminal> {
+        self.loose.iter().find(|t| t.key == key)
     }
 
-    /// Puts the quick terminal there. On screen it takes the keys; going out of sight gives them back to the tab.
+    /// The one filling the pane area in place of the tab, the desktop's `loose.page`.
+    pub(super) fn loose_page(&self) -> Option<usize> {
+        self.loose
+            .iter()
+            .find(|t| t.place == Place::Full)
+            .map(|t| t.key)
+    }
+
+    /// Ctrl-`: shows the last one floating, or hides it when it's on screen. With none, it opens one.
+    pub(super) fn toggle_quick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self
+            .loose_last
+            .and_then(|key| self.loose_terminal(key))
+            .map(|t| (t.key, t.place));
+        match target {
+            None => self.open_loose(Place::Floating, window, cx),
+            Some((key, Place::Hidden)) => self.place_quick(key, Place::Floating, false, window, cx),
+            Some((key, _)) => self.place_quick(key, Place::Hidden, false, window, cx),
+        }
+    }
+
+    /// Starts a shell in the home folder, there: the sidebar's Terminal row fills the pane area with it.
+    pub(super) fn open_loose(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let view = match TerminalView::open(home, Vec::new(), None, cx) {
+            Ok(view) => view,
+            Err(error) => return self.show_notice("Couldn't start a terminal".into(), error, cx),
+        };
+        let key = self.next_loose;
+        self.next_loose += 1;
+        self.loose.push(QuickTerminal {
+            key,
+            view,
+            place: Place::Hidden,
+            minimised: false,
+            rect: Rect {
+                right: EDGE * 2.0,
+                bottom: EDGE * 2.0,
+                w: 640.0,
+                h: 380.0,
+            },
+            gesture: None,
+            area: None,
+        });
+        self.place_quick(key, place, false, window, cx);
+    }
+
+    /// Puts one there. Filling the pane area, it takes the place of any other that did. On screen it takes the keys;
+    /// going out of sight gives them back to the tab.
     pub(super) fn place_quick(
         &mut self,
+        key: usize,
         place: Place,
         minimised: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(quick) = &mut self.quick else {
+        if self.loose_terminal(key).is_none() {
+            return;
+        }
+        if place == Place::Full {
+            for other in &mut self.loose {
+                if other.key != key && other.place == Place::Full {
+                    other.place = Place::Hidden;
+                    other
+                        .view
+                        .update(cx, |view, cx| view.set_visible(false, cx));
+                }
+            }
+        }
+        let Some(quick) = self.loose.iter_mut().find(|t| t.key == key) else {
             return;
         };
         quick.place = place;
         quick.minimised = minimised && place == Place::Floating;
         let shown = place != Place::Hidden && !quick.minimised;
         let view = quick.view.clone();
+        // Showing or floating one makes it the one Ctrl-` acts on, as the desktop's `last`.
+        if shown {
+            self.loose_last = Some(key);
+        }
         view.update(cx, |view, cx| view.set_visible(shown, cx));
         if shown {
             view.focus_handle(cx).focus(window, cx);
@@ -131,15 +180,43 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Ends the quick terminal's shell.
-    pub(super) fn close_quick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.quick.take().is_some() {
-            self.show(self.active, window, cx);
+    /// Going to a tab or a project puts the one filling the pane area away, as going to another tab would.
+    pub(super) fn leave_loose(&mut self, cx: &mut Context<Self>) {
+        for quick in &mut self.loose {
+            if quick.place == Place::Full {
+                quick.place = Place::Hidden;
+                quick
+                    .view
+                    .update(cx, |view, cx| view.set_visible(false, cx));
+                cx.notify();
+            }
         }
     }
 
+    /// The floating one being typed in.
+    pub(super) fn focused_loose(&self, window: &Window, cx: &gpui::App) -> Option<usize> {
+        self.loose
+            .iter()
+            .find(|t| {
+                t.place == Place::Floating && t.view.focus_handle(cx).contains_focused(window, cx)
+            })
+            .map(|t| t.key)
+    }
+
+    /// Ends its shell and takes its row out of the sidebar.
+    pub(super) fn close_quick(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.loose.iter().position(|t| t.key == key) else {
+            return;
+        };
+        self.loose.remove(at);
+        if self.loose_last == Some(key) {
+            self.loose_last = self.loose.last().map(|t| t.key);
+        }
+        self.show(self.active, window, cx);
+    }
+
     fn quick_gesture(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(quick) = &mut self.quick else {
+        let Some(quick) = self.loose.iter_mut().find(|t| t.gesture.is_some()) else {
             return;
         };
         let (Some(gesture), Some(area)) = (quick.gesture, quick.area) else {
@@ -167,21 +244,79 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The panel over the pane area, while it's shown.
+    /// The panels over the pane area: the one filling it, and the floating ones over that.
     pub(super) fn quick_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let quick = self.quick.as_ref()?;
-        if quick.place == Place::Hidden {
+        let shown: Vec<&QuickTerminal> = self
+            .loose
+            .iter()
+            .filter(|t| t.place != Place::Hidden)
+            .collect();
+        if shown.is_empty() {
             return None;
         }
+        let full = shown.iter().any(|t| t.place == Place::Full);
+        // The one filling the area first, so the floating ones paint over it.
+        let panels: Vec<AnyElement> = shown
+            .iter()
+            .filter(|t| t.place == Place::Full)
+            .chain(shown.iter().filter(|t| t.place != Place::Full))
+            .map(|quick| self.quick_panel(quick, cx))
+            .collect();
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                entity.update(cx, |this, _| {
+                    for quick in &mut this.loose {
+                        quick.area = Some(bounds);
+                    }
+                })
+            },
+            {
+                let entity = cx.entity();
+                move |_, _, window, _| {
+                    let moved = entity.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Bubble && event.dragging() {
+                            moved.update(cx, |this, cx| this.quick_gesture(event.position, cx));
+                        }
+                    });
+                    let released = entity.clone();
+                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Bubble {
+                            released.update(cx, |this, _| {
+                                for quick in &mut this.loose {
+                                    quick.gesture = None;
+                                }
+                            });
+                        }
+                    });
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(measure)
+                .when(full, |layer| layer.flex().p(px(8.0)).pt_0())
+                .children(panels)
+                .into_any_element(),
+        )
+    }
+
+    fn quick_panel(&self, quick: &QuickTerminal, cx: &mut Context<Self>) -> AnyElement {
+        let key = quick.key;
         let full = quick.place == Place::Full;
         let collapsed = quick.minimised && !full;
-        let title = quick
-            .view
-            .read(cx)
-            .cwd()
-            .map_or_else(|| "~".to_owned(), |cwd| tildify(&cwd.to_string_lossy()));
+        let title = quick.title(cx);
         let header = div()
-            .id("quick-terminal-header")
+            .id(("quick-terminal-header", key))
             .flex_none()
             .flex()
             .items_center()
@@ -193,8 +328,8 @@ impl Workspace {
             .when(!full, |header| {
                 header.cursor_grab().on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        if let Some(quick) = &mut this.quick {
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
                             quick.gesture = Some(Gesture {
                                 resize: false,
                                 from: event.position,
@@ -206,8 +341,8 @@ impl Workspace {
                 )
             })
             .when(collapsed, |header| {
-                header.on_click(cx.listener(|this, _, window, cx| {
-                    this.place_quick(Place::Floating, false, window, cx)
+                header.on_click(cx.listener(move |this, _, window, cx| {
+                    this.place_quick(key, Place::Floating, false, window, cx)
                 }))
             })
             .child(icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND))
@@ -218,20 +353,23 @@ impl Workspace {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(title),
             )
-            .when(!full && self.prefs.quick_terminal, |header| {
-                header.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                        .child(SHORTCUT),
-                )
-            })
+            .when(
+                !full && self.prefs.quick_terminal && self.loose_last == Some(key),
+                |header| {
+                    header.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(SHORTCUT),
+                    )
+                },
+            )
             .child(div().flex_1())
             .when(!collapsed, |header| {
                 header.child(
                     ui::icon_button(
-                        "quick-fill",
+                        ("quick-fill", key),
                         if full { Icon::Minimize } else { Icon::Maximize },
                         if full {
                             "Detach to a floating panel"
@@ -242,26 +380,26 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let to = if full { Place::Floating } else { Place::Full };
-                        this.place_quick(to, false, window, cx)
+                        this.place_quick(key, to, false, window, cx)
                     })),
                 )
             })
             .when(!collapsed && !full, |header| {
                 header.child(
                     ui::icon_button(
-                        "quick-minimise",
+                        ("quick-minimise", key),
                         Icon::Minus,
                         "Minimise to a bar",
                         ButtonSize::Xs,
                     )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.place_quick(Place::Floating, true, window, cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.place_quick(key, Place::Floating, true, window, cx)
                     })),
                 )
             })
             .child(
                 ui::icon_button(
-                    "quick-close",
+                    ("quick-close", key),
                     Icon::X,
                     "Close and end the shell",
                     if collapsed {
@@ -270,10 +408,12 @@ impl Workspace {
                         ButtonSize::Xs
                     },
                 )
-                .on_click(cx.listener(|this, _, window, cx| this.close_quick(window, cx))),
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.close_quick(key, window, cx)),
+                ),
             );
         let panel = div()
-            .id("quick-terminal")
+            .id(("quick-terminal", key))
             .role(Role::Group)
             .aria_label("Terminal")
             .flex()
@@ -327,7 +467,7 @@ impl Workspace {
             .when(!collapsed && !full, |panel| {
                 panel.child(
                     div()
-                        .id("quick-resize")
+                        .id(("quick-resize", key))
                         .absolute()
                         .top_0()
                         .left_0()
@@ -335,8 +475,8 @@ impl Workspace {
                         .cursor_nwse_resize()
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                if let Some(quick) = &mut this.quick {
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
                                     quick.gesture = Some(Gesture {
                                         resize: true,
                                         from: event.position,
@@ -348,51 +488,6 @@ impl Workspace {
                         ),
                 )
             });
-        let entity = cx.entity();
-        let measure = canvas(
-            move |bounds, _, cx| {
-                entity.update(cx, |this, _| {
-                    if let Some(quick) = &mut this.quick {
-                        quick.area = Some(bounds);
-                    }
-                })
-            },
-            {
-                let entity = cx.entity();
-                move |_, _, window, _| {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble && event.dragging() {
-                            moved.update(cx, |this, cx| this.quick_gesture(event.position, cx));
-                        }
-                    });
-                    let released = entity.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            released.update(cx, |this, _| {
-                                if let Some(quick) = &mut this.quick {
-                                    quick.gesture = None;
-                                }
-                            });
-                        }
-                    });
-                }
-            },
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full();
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .child(measure)
-                .when(full, |layer| layer.flex().p(px(8.0)).pt_0())
-                .child(panel)
-                .into_any_element(),
-        )
+        panel.into_any_element()
     }
 }

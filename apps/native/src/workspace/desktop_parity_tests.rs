@@ -181,11 +181,11 @@ fn ctrl_backquote_shows_and_hides_the_quick_terminal_with_its_shell_still_runnin
     use quick::Place;
     let (_app, mut window) = open();
     let place =
-        |window: &TestAppWindow<Workspace>| window.read(|w, _| w.quick.as_ref().map(|q| q.place));
+        |window: &TestAppWindow<Workspace>| window.read(|w, _| w.loose.first().map(|q| q.place));
     let shell = |window: &TestAppWindow<Workspace>| {
         window.read(|w, cx| {
-            w.quick
-                .as_ref()
+            w.loose
+                .first()
                 .unwrap()
                 .view()
                 .read(cx)
@@ -199,8 +199,8 @@ fn ctrl_backquote_shows_and_hides_the_quick_terminal_with_its_shell_still_runnin
     let pid = shell(&window);
     let focused = |window: &mut TestAppWindow<Workspace>| {
         window.update(|w, window, cx| {
-            w.quick
-                .as_ref()
+            w.loose
+                .first()
                 .unwrap()
                 .view()
                 .focus_handle(cx)
@@ -219,7 +219,7 @@ fn ctrl_backquote_shows_and_hides_the_quick_terminal_with_its_shell_still_runnin
     assert_eq!(shell(&window), pid, "hiding keeps the same shell");
 
     // Filling the window, it goes away with the next tab, as another tab would.
-    window.update(|w, window, cx| w.place_quick(Place::Full, false, window, cx));
+    window.update(|w, window, cx| w.place_quick(0, Place::Full, false, window, cx));
     press(&mut window, "t");
     assert_eq!(place(&window), Some(Place::Hidden));
 
@@ -229,7 +229,7 @@ fn ctrl_backquote_shows_and_hides_the_quick_terminal_with_its_shell_still_runnin
     window.simulate_keystroke("ctrl-`");
     assert_eq!(place(&window), Some(Place::Hidden));
 
-    window.update(|w, window, cx| w.close_quick(window, cx));
+    window.update(|w, window, cx| w.close_quick(0, window, cx));
     assert_eq!(place(&window), None);
 }
 

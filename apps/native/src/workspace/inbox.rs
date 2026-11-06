@@ -17,7 +17,12 @@ use crate::{
     ui::{self, HAIRLINE},
 };
 
-use super::{Workspace, sound, title_bar::TITLE_BAR_HEIGHT};
+use super::{
+    Workspace,
+    sidebar::{NAV_GAP, NAV_ROW},
+    sound,
+    title_bar::TITLE_BAR_HEIGHT,
+};
 
 /// The most the list keeps, as the desktop's `MAX_NOTIFICATIONS`.
 const MAX: usize = 100;
@@ -249,42 +254,20 @@ impl Workspace {
             .iter()
             .any(|event| !event.read && event.kind == Kind::Plugin);
         let open = self.inbox.open.is_some();
-        div()
-            .id("inbox")
-            .role(Role::Button)
+        super::sidebar::nav_row("inbox", Icon::Inbox, "Inbox", super::sidebar::Look::Plain)
             .aria_label(if unread > 0 {
                 format!("Inbox, {unread} unread")
             } else {
                 "Inbox".into()
             })
             .aria_expanded(open)
-            .h(px(28.0))
-            .w_full()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .px(px(8.0))
-            .rounded(px(theme::RADIUS))
-            .cursor_pointer()
-            .text_size(px(13.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(if open {
-                theme::FOREGROUND
-            } else {
-                theme::MUTED_FOREGROUND
-            }))
-            .when(open, |row| row.bg(rgba(theme::HOVER)))
-            .hover(|style| {
-                style
-                    .bg(rgba(theme::HOVER))
+            .when(open, |row| {
+                row.bg(rgba(theme::HOVER))
                     .text_color(rgb(theme::FOREGROUND))
             })
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // While the list is open, a click here lands on the layer that closes it.
             .on_click(cx.listener(|this, _, _, cx| this.open_inbox(cx)))
-            .child(icon(Icon::Inbox, 16.0, theme::MUTED_FOREGROUND))
-            .child(div().flex_1().min_w_0().truncate().child("Inbox"))
             .when(unread > 0, |row| {
                 row.child(
                     div()
@@ -402,7 +385,8 @@ impl Workspace {
                         .role(Role::Dialog)
                         .aria_label("Notifications")
                         .absolute()
-                        .top(px(TITLE_BAR_HEIGHT + 8.0))
+                        // Beside the Inbox row, the third in the sidebar's nav.
+                        .top(px(TITLE_BAR_HEIGHT + 8.0 + 2.0 * (NAV_ROW + NAV_GAP)))
                         .left(px(left))
                         .w(px(384.0))
                         .flex()

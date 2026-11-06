@@ -245,6 +245,25 @@ fn main() {
         cx.simulate_keystrokes(window, "cmd-t cmd-t");
         wait(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs"));
+        // The sidebar's Terminal row, twice: the second fills the pane area, both listed under the nav, the first with
+        // the pointer on it. Their close buttons then end both, and the keys go back to the tab.
+        let terminal_row = |index: f32| {
+            point(
+                px(60.0),
+                px(40.0 + 4.0 * 29.0 - 1.0 + 8.0 + 14.0 + index * 29.0),
+            )
+        };
+        click(&mut cx, window, point(px(60.0), px(40.0 + 29.0 + 14.0)));
+        wait(&mut cx, window, Duration::from_millis(500));
+        click(&mut cx, window, point(px(60.0), px(40.0 + 29.0 + 14.0)));
+        wait(&mut cx, window, Duration::from_secs(1));
+        mouse_move(&mut cx, window, terminal_row(0.0), false);
+        wait(&mut cx, window, Duration::from_millis(200));
+        save(&mut cx, window, &name("sidebar-terminals"));
+        for _ in 0..2 {
+            click(&mut cx, window, point(px(226.0), terminal_row(0.0).y));
+            wait(&mut cx, window, Duration::from_millis(200));
+        }
         // Text styles, the palette, 256 and true colors, wide and combining characters, and a selection dragged from
         // the second row into the third.
         cx.simulate_input(
@@ -592,8 +611,12 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let name = |state: &str| out.join(format!("sidebar-{state}-{width}.png"));
         wait(cx, window, Duration::from_secs(3));
         save(cx, window, &name("counts"));
-        // Pointing at the third row, the shown project: its buttons replace the pin.
-        let third = point(px(120.0), px(78.0 + 40.0 + 2.0 + 40.0 + 2.0 + 20.0));
+        // Pointing at the third row, the shown project: its buttons replace the pin. The nav above has three more 28px
+        // rows, 1px apart, than the Inbox row alone did.
+        let third = point(
+            px(120.0),
+            px(78.0 + 3.0 * 29.0 + 40.0 + 2.0 + 40.0 + 2.0 + 20.0),
+        );
         mouse_move(cx, window, third, false);
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("hover"));
@@ -704,8 +727,9 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     // The 248 wide sidebar, then the tabs, which start 12 further; the panes start 8 in, right under the 76 of bars.
     let tab = point(px(248.0 + 12.0 + 60.0), px(20.0));
     let title = point(px(248.0 + 8.0 + 40.0), px(76.0 + 15.0));
-    // The first project: under the 28px Inbox row and its 8px of padding, the 32px heading, and half a 26px row.
-    let project = point(px(60.0), px(40.0 + 28.0 + 8.0 + 32.0 + 13.0));
+    // The first project: under the nav's four 28px rows 1px apart and its 8px of padding, the 32px heading, and half a
+    // 26px row.
+    let project = point(px(60.0), px(40.0 + 4.0 * 28.0 + 3.0 + 8.0 + 32.0 + 13.0));
     for width in [1000.0, 640.0] {
         let config = config.clone();
         let handle = cx
@@ -718,7 +742,8 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-t cmd-d");
         wait(cx, window, Duration::from_secs(2));
-        let inbox = point(px(60.0), px(40.0 + 14.0));
+        // The nav's third row.
+        let inbox = point(px(60.0), px(40.0 + 2.0 * 29.0 + 14.0));
         mouse(cx, window, inbox, Some(MouseButton::Left));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("inbox-empty"));
@@ -1135,10 +1160,13 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         save(cx, window, &name("quick-full"));
         timed(cx, "hide");
 
-        // The only project's remove button, at the right of its row while the pointer is over it, then Remove.
-        mouse_move(cx, window, point(px(60.0), px(90.0)), false);
+        // The only project's remove button, at the right of its row while the pointer is over it, then Remove. The row is
+        // under the nav's four rows and the quick terminal's row in the Terminals list, each 28px with 8px below, and
+        // the 32px Projects heading.
+        let project = 40.0 + 4.0 * 29.0 - 1.0 + 8.0 + 28.0 + 8.0 + 32.0 + 20.0;
+        mouse_move(cx, window, point(px(60.0), px(project)), false);
         wait(cx, window, Duration::from_millis(200));
-        click(cx, window, point(px(248.0 - 8.0 - 6.0 - 12.0), px(90.0)));
+        click(cx, window, point(px(248.0 - 8.0 - 6.0 - 12.0), px(project)));
         wait(cx, window, Duration::from_millis(200));
         save(cx, window, &name("welcome-remove"));
         // The dialog's Remove button: 400 x 176 in the middle, buttons at the bottom right inside 20px of padding.

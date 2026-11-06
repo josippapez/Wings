@@ -49,9 +49,9 @@ impl Workspace {
             .h_full()
             .flex()
             .flex_col()
-            // The desktop's `nav px-2 pb-2`, the Projects heading, the list, the sections under it, then Settings in
-            // `mx-2 mt-1` above the sidebar's `pb-2`.
-            .child(div().px(px(8.0)).pb(px(8.0)).child(self.inbox_row(cx)))
+            // The desktop's `nav px-2 pb-2` and its Terminals, the Projects heading, the list, the sections under it,
+            // then Settings in `mx-2 mt-1` above the sidebar's `pb-2`.
+            .children(self.sidebar_nav(cx))
             .child(self.projects_header(cx))
             .child(self.project_list(cx))
             .children(self.plugin_list(cx))
@@ -291,6 +291,7 @@ impl Workspace {
                 }
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.leave_loose(cx);
                 this.switch_project(shown.clone(), window, cx)
             }))
             .on_mouse_down(

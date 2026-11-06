@@ -91,6 +91,7 @@ icons!(
     RefreshCw = "refresh-cw",
     Regex = "regex",
     Rows = "rows-2",
+    RotateCcwClock = "rotate-ccw-clock",
     Rows3 = "rows-3",
     ScrollText = "scroll-text",
     Search = "search",

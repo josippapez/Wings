@@ -93,9 +93,10 @@ fn switching_projects_keeps_each_projects_tabs_and_shells() {
     press(&mut window, "d");
     let shell = window.read(|w, cx| w.terminal(0).unwrap().read(cx).process_id().unwrap());
 
-    // The pinned project is the first row: below the 40px title bar, the 28px Inbox row and its 8px of padding and the
-    // 32px Projects heading, rows of 24px and their 1px border, 1px apart.
-    let row = |index: f32| point(px(60.0), px(40.0 + 28.0 + 8.0 + 32.0 + 13.0 + index * 27.0));
+    // The pinned project is the first row: below the 40px title bar, the nav's four 28px rows 1px apart and its 8px of
+    // padding and the 32px Projects heading, rows of 24px and their 1px border, 1px apart.
+    let nav = 4.0 * 28.0 + 3.0;
+    let row = |index: f32| point(px(60.0), px(40.0 + nav + 8.0 + 32.0 + 13.0 + index * 27.0));
     window.draw();
     window.simulate_click(row(0.0), MouseButton::Left);
     assert_eq!(window.read(|w, _| w.project().to_path_buf()), beta);
