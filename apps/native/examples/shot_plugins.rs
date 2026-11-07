@@ -179,7 +179,8 @@ impl Env for FixtureEnv {
         let messages = [
             json!({ "id": "m3", "type": "assistant", "model": { "id": "gpt-5.1-codex" },
                 "tokens": { "input": 2_000, "output": 300, "cache": { "read": 60_000, "write": 0 } }, "content": [
-                tool("c3", "shell", 20_000, None, json!({ "status": "running", "input": { "command": "cargo test" }, "metadata": {} })),
+                // Older than the Claude session's last call, so the sidebar opens on that session.
+                tool("c3", "shell", 60_000, None, json!({ "status": "running", "input": { "command": "cargo test" }, "metadata": {} })),
                 tool("c2", "shell", 90_000, Some(1_200), json!({ "status": "completed", "input": { "command": "git commit -m 'Cache the shipping rates'" },
                     "content": [{ "type": "text", "text": "[main 4f2a9c1] Cache the shipping rates\n 2 files changed" }], "metadata": {} })),
                 tool("c1", "patch", 300_000, Some(80), json!({ "status": "completed", "input": { "patchText": "*** Update File: src/rates.rs" },
@@ -204,11 +205,15 @@ impl Env for FixtureEnv {
     fn set_pane_status(&self, _: &str, _: &str, _: Option<PaneStatus>) {}
 }
 
+/// The made-up data's "now": when the run started, so data made up later in the run lines up with data made earlier.
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    static START: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    });
+    *START
 }
 
 /// An ISO time for a transcript entry, `ago_ms` before now.
@@ -726,7 +731,7 @@ fn session_detail(out: PathBuf) {
                 opencode.clone(),
             ],
             &[],
-            "Adding",
+            "Showing the discount in the cart",
         ),
         (
             "opened",
