@@ -8,6 +8,7 @@
 pub mod bridge;
 #[cfg(unix)]
 pub mod cli;
+pub mod harnesses;
 pub mod journal_sink;
 pub mod opencode;
 pub mod panes;

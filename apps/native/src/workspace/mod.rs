@@ -13,6 +13,7 @@ mod exits;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
 mod global_hotkey;
+mod harnesses;
 mod history;
 #[cfg(all(test, feature = "test-support"))]
 mod hotkey_tests;
@@ -233,6 +234,8 @@ pub struct Workspace {
     claude: claude::Connection,
     hotkey: global_hotkey::HotkeyState,
     opencode: opencode::Link,
+    /// The agent CLIs Settings, Agents lists.
+    harnesses: harnesses::Checks,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     /// What the Plugins section is doing: installs, reviews waiting, updates found.
@@ -364,6 +367,7 @@ impl Workspace {
             claude: Default::default(),
             hotkey: Default::default(),
             opencode: Default::default(),
+            harnesses: Default::default(),
             manage: Default::default(),
             review_focus: cx.focus_handle(),
             setup_asks: Default::default(),

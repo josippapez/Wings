@@ -1238,6 +1238,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                     },
                     cx,
                 );
+                workspace.show_harnesses(made_up_harnesses(), cx);
             })
             .expect("show the made-up accounts");
         // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117 as in the desktop.
@@ -1326,4 +1327,66 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }
+}
+
+/// Made-up agent CLIs for Settings, Agents: one of each state the rows show.
+fn made_up_harnesses() -> Vec<wings_connect::harnesses::HarnessStatus> {
+    use wings_connect::harnesses::{Auth, HarnessStatus};
+    let row = |id: &str,
+               name: &str,
+               installed,
+               version: Option<&str>,
+               auth,
+               account: Option<&str>,
+               note: Option<&str>| HarnessStatus {
+        id: id.into(),
+        name: name.into(),
+        installed,
+        version: version.map(Into::into),
+        auth,
+        account: account.map(Into::into),
+        note: note.map(Into::into),
+        login: format!("{id} login"),
+        install: format!("curl -fsSL https://example.com/{id}.sh | bash"),
+        docs: "https://example.com".into(),
+    };
+    vec![
+        row(
+            "claude",
+            "Claude Code",
+            true,
+            Some("2.1.312"),
+            Auth::SignedIn,
+            Some("me@example.com"),
+            None,
+        ),
+        row(
+            "codex",
+            "Codex",
+            true,
+            Some("0.48.0"),
+            Auth::SignedOut,
+            None,
+            None,
+        ),
+        row(
+            "cursor",
+            "Cursor CLI",
+            true,
+            Some("2025.10.1"),
+            Auth::Unknown,
+            None,
+            Some("Installed. Wings can't check its sign-in yet"),
+        ),
+        row("grok", "Grok Build", false, None, Auth::Unknown, None, None),
+        row(
+            "opencode",
+            "OpenCode",
+            true,
+            Some("1.0.4"),
+            Auth::Unknown,
+            None,
+            Some("opencode didn't answer in 8s"),
+        ),
+    ]
 }

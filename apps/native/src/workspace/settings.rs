@@ -957,7 +957,8 @@ impl Workspace {
                 cx,
             ),
         ];
-        let mut cards = vec![main];
+        // The CLIs first, as the desktop's Agents section starts with them.
+        let mut cards = vec![self.harnesses_card(cx), main];
         if !accounts.is_empty() {
             cards.push(accounts);
         }
@@ -1064,6 +1065,7 @@ impl Workspace {
                 if section == Section::Agents {
                     this.load_claude_status(cx);
                     this.load_opencode_status(cx);
+                    this.load_harnesses(cx);
                 }
                 cx.notify();
             }))
