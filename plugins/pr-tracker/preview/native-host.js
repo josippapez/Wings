@@ -52,3 +52,6 @@ wings.onBroadcast((m) => {
   if (m.kind === "ask") void respond({ kind: "answer", id: m.id, response: asked[m.name]?.() ?? null });
   if (m.kind === "sub") for (const [name, key] of m.subs) void respond({ kind: "state", name, key, data: data[name], at: Date.now() });
 });
+// A page that subscribed before this listener existed lost its sub. "up" asks every page to subscribe again, as the
+// SDK's main does once it serves.
+void respond({ kind: "up", boot: "fixture" });
