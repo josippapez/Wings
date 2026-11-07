@@ -19,7 +19,7 @@ use wings_native::{host::Config, installed::fixture::Data, page::PageView, works
 use super::{app, save, wait};
 
 /// Made-up Cyclops answers in place of `wings.fetch`, and a token that is there in place of `wings.secrets.has`: a timer
-/// running for an hour and five minutes, and a week of entries.
+/// running for an hour and five minutes, and a week of entries, two with a task as long as real ones run.
 const CYCLOPS: &str = r#"
 globalThis.__shot = (() => {
   const now = Date.now(), minute = 60e3, hour = 60 * minute;
@@ -39,6 +39,8 @@ globalThis.__shot = (() => {
     entry('e3', 'p1', 'Sidebar labels', 1, 13, 30, 150),
     entry('e4', 'p2', 'Standup', 2, 9, 30, 15),
     entry('e5', 'p1', 'Password fields', 2, 10, 0, 240),
+    entry('e6', 'p2', 'Report table keeps the "Unassigned" group last when sorted ascending', 0, 7, 30, 60),
+    entry('e7', 'p2', 'FE: keep the search results cache in memory only (web and mobile)', 1, 7, 0, 120),
   ];
   const answer = (body) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   return {

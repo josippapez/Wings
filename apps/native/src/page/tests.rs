@@ -645,3 +645,87 @@ fn a_gauge_bar_is_blue_until_its_level_and_then_warn_and_danger() {
     assert_eq!(color("96"), theme::DANGER);
     assert_eq!(level_color(Level::Normal), theme::INFO);
 }
+
+/// A page in a frame `width` points wide.
+fn open_narrow(source: &'static str, width: f32) -> (TestApp, View) {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(400.0)));
+    let window = app.open_window_with_options(
+        gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        move |_, cx| PageView::new(source, cx),
+    );
+    (app, window)
+}
+
+/// Clicks at `at`, waits, and says whether the page heard it.
+fn pressed_at(app: &TestApp, window: &mut View, at: (f32, f32), heard: &'static str) -> bool {
+    click(window, at);
+    nothing_happens(app);
+    window.draw();
+    window.read(|view, _| view.text().contains(heard))
+}
+
+/// A chip whose label is longer than its line, as a Cyclops task suggested under its field.
+const LONG_CHIP: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'s',wrap:true},children:[
+{id:2,type:'Button',props:{chip:true,onClick:'2:click'},children:[{id:3,type:'#text',text:'Report table keeps the Unassigned group last when sorted ascending, on the web and on mobile'}]}]},
+{id:4,type:'Text',children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_chip_longer_than_its_line_ends_at_the_pages_padding() {
+    let (app, mut window) = open_narrow(LONG_CHIP, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The page's 14pt padding on the right is past the chip's end: the chip used to run on through it and off the frame.
+    assert!(!pressed_at(&app, &mut window, (293.0, 28.0), "Pressed 1."));
+    assert!(pressed_at(&app, &mut window, (280.0, 28.0), "Pressed 1."));
+}
+
+/// A row of Properties as wings-plugin-ui/native draws it: a label, and a value that starts with a dot, like Sprint
+/// board's "State ● New". The value's text can be pressed.
+const DOT_VALUE: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
+{id:2,type:'Text',props:{tone:'muted',size:'small'},children:[{id:3,type:'#text',text:'State'}]},
+{id:4,type:'Text',props:{size:'small',grow:true},children:[{id:5,type:'Row',props:{gap:'s'},children:[
+{id:6,type:'Dot',props:{}},
+{id:7,type:'Text',props:{onClick:'7:click'},children:[{id:8,type:'#text',text:'New, the state it is in'}]}]}]}]},
+{id:9,type:'Text',children:[{id:10,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_value_that_starts_with_a_dot_sits_level_with_its_label() {
+    let (app, mut window) = open_narrow(DOT_VALUE, 400.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // 2pt under the row's top, beside the label, is the value's text: the dot's bottom used to be lined up with the
+    // label's, which pushed the value down by half a line.
+    assert!(pressed_at(&app, &mut window, (150.0, 16.0), "Pressed 1."));
+}
+
+/// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.
+const LONG_SUMMARY: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Disclosure',children:[{id:2,type:'Slot',props:{name:'summary'},children:[{id:3,type:'#text',text:'What was detected in the repos, the remotes and the Azure DevOps organizations this Mac is signed in to (12 calls, 3.4 s)'}]}]},
+{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Next'}]},
+{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_disclosure_summary_longer_than_its_line_wraps() {
+    let (app, mut window) = open_narrow(LONG_SUMMARY, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The summary takes three lines, so the button under it is this far down; on one line it ran off the frame and the
+    // button sat 50pt higher.
+    assert!(pressed_at(&app, &mut window, (40.0, 110.0), "Pressed 1."));
+}

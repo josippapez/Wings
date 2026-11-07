@@ -584,6 +584,12 @@ impl PageView {
                 .map(|el| match row.align {
                     Align::Center => el.items_center(),
                     Align::Start => el.items_start(),
+                    // GPUI's text tells the layout no baseline, so a baseline row lines up the bottoms of its items'
+                    // first boxes: a value that starts with a dot, like Properties' "● New", sat under its label, and a
+                    // value that wraps put its label on its last line. Texts of one size have their first lines' baselines
+                    // level when their tops are. Texts of two sizes, like a code line's number and its text, keep the
+                    // bottoms, which are nearer level than the tops.
+                    Align::Baseline if one_size(&row.children) => el.items_start(),
                     Align::Baseline => el.items_baseline(),
                 })
                 .map(|el| match row.justify {
@@ -1097,9 +1103,18 @@ impl PageView {
                     .border_1()
                     .border_color(rgba(0))
                     .when(item.vertical, |el| el.flex_col().items_stretch())
+                    // The twisty is a 12pt chevron centred on the row, as the desktop's and a disclosure's are: the
+                    // "⌄" glyph it was sits at the bottom of its line, below the row's text.
                     .when_some(item.expanded, |el, expanded| {
-                        el.aria_expanded(expanded)
-                            .child(if expanded { "⌄" } else { "›" })
+                        el.aria_expanded(expanded).child(crate::icons::icon(
+                            if expanded {
+                                crate::icons::Icon::ChevronDown
+                            } else {
+                                crate::icons::Icon::ChevronRight
+                            },
+                            12.0,
+                            theme::MUTED_FOREGROUND,
+                        ))
                     })
                     .children(self.nodes(&button.children, cx));
                 if !button.disabled {
@@ -1305,7 +1320,8 @@ impl PageView {
             ElementId::NamedInteger("page-disclosure".into(), id),
             plain_text(&disclosure.summary),
             open,
-            self.inline(&disclosure.summary, cx),
+            // A summary longer than the line wraps under itself, as in the desktop, instead of running past the card.
+            div().min_w_0().child(self.inline(&disclosure.summary, cx)),
         )
         .on_click(cx.listener(move |view, _, _, cx| {
             cx.stop_propagation();
@@ -1535,6 +1551,16 @@ fn gap(gap: Gap) -> f32 {
         Gap::M => 8.0,
         Gap::L => 12.0,
     }
+}
+
+/// Whether `nodes` are all texts of the same size.
+fn one_size(nodes: &[Node]) -> bool {
+    let mut sizes = nodes.iter().map(|node| match node {
+        Node::Text(text) => Some(text.size),
+        _ => None,
+    });
+    let first = sizes.next().flatten();
+    first.is_some() && sizes.all(|size| size == first)
 }
 
 fn tone_color(tone: Tone) -> u32 {

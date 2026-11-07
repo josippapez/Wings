@@ -111,6 +111,9 @@ pub fn chip(
         // At least 28 high: a chip whose content is two lines, like a day and its hours, grows to hold them.
         .min_h(px(28.0))
         .min_w(px(28.0))
+        // No wider than its row: a long label, like a Cyclops task suggested under its field, ends in an ellipsis, as
+        // the desktop's list of suggestions cuts it, instead of running past the page's edge.
+        .max_w_full()
         .flex_none()
         .flex()
         .items_center()
@@ -138,7 +141,7 @@ pub fn chip(
                 .cursor_pointer()
                 .hover(|style| style.bg(rgba(theme::HOVER)))
         })
-        .child(content)
+        .child(div().min_w_0().truncate().child(content))
 }
 
 /// shadcn's `Badge`: a small pill. `tone` is a colour that says something (plugin pages' `tone`), as an RGB; it
