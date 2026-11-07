@@ -11,6 +11,9 @@ export function Layout({ tag, className = "", children }: { tag: string; classNa
   const is = (names: string[]) => names.some((c) => classes.includes(c));
   if (classes.includes("tk-row-time")) return null;
   if (classes.includes("tk-card-foot")) return <Row gap="s" justify="between">{children}</Row>;
+  // The description with its Edit button at the top right, as tasks.css lays it out; in a column the button took the
+  // whole width and its word sat in the middle of the page.
+  if (classes.includes("tk-description")) return <Row gap="s" align="start" justify="between">{children}</Row>;
   if (classes.includes("tk-props")) return <Row gap="l" align="start" wrap>{children}</Row>;
   if (is(ROWS)) return <Row gap="s">{children}</Row>;
   if (is(MUTED)) return <Text tone="muted" size="small">{children}</Text>;

@@ -191,7 +191,9 @@ export function IssueCard({ issue, id, compact, progress, hideParent, onOpen, on
       )}
       {progress?.total ? <ChildProgress {...progress} /> : null}
       <Box className="tk-card-foot">
-        <Time iso={iso(issue.updatedAt)} prefix={issue.status === "done" ? "Done " : "Updated "} />
+        <Text as="span" tone="muted" size="tiny">
+          <Time iso={iso(issue.updatedAt)} prefix={issue.status === "done" ? "Done " : "Updated "} />
+        </Text>
         {movable || onDelete ? (
           <Inline className="tk-moves">
             {onDelete ? <Button size="icon-xs" variant="ghost" className="tk-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={onDelete}><Icon name="trash" /></Button> : null}
