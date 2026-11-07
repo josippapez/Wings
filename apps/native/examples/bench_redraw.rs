@@ -86,7 +86,21 @@ fn main() {
         })
         .unwrap();
     settle(&mut cx, Duration::from_secs(2));
-    cx.simulate_input(window, &format!("exec '{}' 3600", fake_claude.display()));
+    // A screen like a working Claude Code's: coloured words, dim lines, and diff lines with a background across the
+    // pane. `BENCH_SCREEN=<file>` prints that file instead, such as a recording of a real session.
+    let screen = fake.join("screen.txt");
+    match std::env::var_os("BENCH_SCREEN") {
+        Some(file) => std::fs::copy(file, &screen).map(|_| ()).unwrap(),
+        None => std::fs::write(&screen, claude_like_screen()).unwrap(),
+    }
+    cx.simulate_input(
+        window,
+        &format!(
+            "cat '{}'; exec '{}' 3600",
+            screen.display(),
+            fake_claude.display()
+        ),
+    );
     cx.simulate_keystrokes(window, "enter");
     settle(&mut cx, Duration::from_secs(1));
     let pids = std::process::Command::new("pgrep")
@@ -147,4 +161,41 @@ fn main() {
     let _ = std::process::Command::new("pkill")
         .args(["-f", &fake_claude.display().to_string()])
         .status();
+}
+
+fn claude_like_screen() -> String {
+    let words = [
+        "Read",
+        "src/workspace/mod.rs",
+        "Edit",
+        "the",
+        "terminal",
+        "frame",
+        "paints",
+        "every",
+        "cell",
+        "again",
+    ];
+    let mut out = String::new();
+    for line in 0..60 {
+        match line % 6 {
+            // A diff line: one background across the whole width.
+            0 => out.push_str(&format!(
+                "\x1b[48;5;22m\x1b[38;5;114m+ {:<200}\x1b[0m\n",
+                words.join(" ")
+            )),
+            1 => out.push_str(&format!(
+                "\x1b[48;5;52m\x1b[38;5;210m- {:<200}\x1b[0m\n",
+                words[..6].join(" ")
+            )),
+            2 => out.push_str(&format!("\x1b[2m  {}\x1b[0m\n", words.join(" ").repeat(2))),
+            _ => {
+                for (i, word) in words.iter().cycle().take(18).enumerate() {
+                    out.push_str(&format!("\x1b[38;5;{}m{word} ", 30 + (line * 7 + i) % 200));
+                }
+                out.push_str("\x1b[0m\n");
+            }
+        }
+    }
+    out
 }

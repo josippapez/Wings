@@ -124,33 +124,42 @@ fn cell_run(
     run
 }
 
-/// One shaped line per run of same-style text instead of one per cell. Like the desktop's frame
-/// encoder, a run holds only characters that fill exactly one cell in any monospace font (printable
-/// ASCII, box drawing and blocks), so fixed-width shaping keeps every glyph on its cell. Anything else
-/// gets a line of its own. Blank cells inside a run become spaces.
+/// One shaped line per stretch of a row instead of one per cell, with a text run for each style in it. Each line takes
+/// a place of its own in the window's draw order, which costs more than its glyphs, so styles share a line. Like the
+/// desktop's frame encoder, a line holds only characters that fill exactly one cell in any monospace font (printable
+/// ASCII, box drawing and blocks), so fixed-width shaping keeps every glyph on its cell. Anything else gets a line of
+/// its own. Blank cells inside a line become spaces.
 fn glyph_runs(
     snapshot: &Snapshot,
     focused: bool,
     min_contrast: f32,
     base: &TextRun,
-) -> Vec<(usize, usize, String, TextRun)> {
+) -> Vec<(usize, usize, String, Vec<TextRun>)> {
     struct Open {
         row: usize,
         col: usize,
         /// Cells covered so far; box drawing takes three bytes for one cell.
         cells: usize,
         text: String,
-        style: TextRun,
+        /// The styles in order; each one's `len` is the bytes of `text` it covers.
+        styles: Vec<TextRun>,
     }
     fn shares_cells(text: &str) -> bool {
         let mut chars = text.chars();
         matches!((chars.next(), chars.next()), (Some(c), None) if matches!(c, ' '..='~' | '\u{2500}'..='\u{259f}'))
     }
-    fn finish(runs: &mut Vec<(usize, usize, String, TextRun)>, mut open: Open) {
-        open.text.truncate(open.text.trim_end_matches(' ').len());
+    fn finish(runs: &mut Vec<(usize, usize, String, Vec<TextRun>)>, mut open: Open) {
+        // Trailing blanks only pad the last style, so cutting them never empties a style but the last.
+        let trailing = open.text.len() - open.text.trim_end_matches(' ').len();
+        open.text.truncate(open.text.len() - trailing);
+        if let Some(last) = open.styles.last_mut() {
+            last.len -= trailing;
+            if last.len == 0 {
+                open.styles.pop();
+            }
+        }
         if !open.text.is_empty() {
-            open.style.len = open.text.len();
-            runs.push((open.row, open.col, open.text, open.style));
+            runs.push((open.row, open.col, open.text, open.styles));
         }
     }
     let mut runs = Vec::new();
@@ -163,17 +172,31 @@ fn glyph_runs(
             {
                 run.text.push(' ');
                 run.cells += 1;
+                if let Some(last) = run.styles.last_mut() {
+                    last.len += 1;
+                }
             }
             continue;
         }
-        let style = cell_run(cell, snapshot, focused, min_contrast, base);
+        let mut style = cell_run(cell, snapshot, focused, min_contrast, base);
+        style.len = cell.text.len();
         if shares_cells(&cell.text)
             && let Some(run) = &mut open
             && next(run)
-            && run.style == style
         {
             run.text.push_str(&cell.text);
             run.cells += 1;
+            match run.styles.last_mut() {
+                Some(last)
+                    if TextRun {
+                        len: style.len,
+                        ..last.clone()
+                    } == style =>
+                {
+                    last.len += style.len
+                }
+                _ => run.styles.push(style),
+            }
             continue;
         }
         if let Some(done) = open.take() {
@@ -185,18 +208,41 @@ fn glyph_runs(
                 col: cell.col,
                 cells: 1,
                 text: cell.text.clone(),
-                style,
+                styles: vec![style],
             });
         } else {
-            let mut style = style;
-            style.len = cell.text.len();
-            runs.push((cell.row, cell.col, cell.text.clone(), style));
+            runs.push((cell.row, cell.col, cell.text.clone(), vec![style]));
         }
     }
     if let Some(done) = open {
         finish(&mut runs, done);
     }
     runs
+}
+
+/// The stretches of side-by-side cells on a row that `color` gives the same colour, as (row, first column, cells) and
+/// the colour: one quad each instead of one per cell.
+fn spans(
+    cells: &[PaintCell],
+    color: impl Fn(&PaintCell) -> Option<u32>,
+) -> Vec<((usize, usize, usize), u32)> {
+    let mut spans: Vec<((usize, usize, usize), u32)> = Vec::new();
+    for cell in cells {
+        let Some(color) = color(cell) else {
+            continue;
+        };
+        if let Some(((row, col, len), last)) = spans.last_mut()
+            && *row == cell.row
+            && *last == color
+            && cell.col <= *col + *len
+        {
+            // A wide character's second column comes after it as a cell of its own.
+            *len = (*len).max(cell.col + cell.width - *col);
+            continue;
+        }
+        spans.push(((cell.row, cell.col, cell.width), color));
+    }
+    spans
 }
 
 /// Textures of closed panes' images, freed by the next frame a terminal draws.
@@ -302,13 +348,13 @@ impl Render for TerminalView {
                 let focused = view.focus.is_focused(window);
                 let lit = view.cursor_lit;
                 let mut glyphs = Vec::new();
-                for (row, col, text, run) in
+                for (row, col, text, runs) in
                     glyph_runs(&snapshot, focused && lit, look.min_contrast, &base_run)
                 {
                     let line = window.text_system().shape_line(
                         text.into(),
                         px(font_px),
-                        &[run],
+                        &runs,
                         Some(cell_width),
                     );
                     glyphs.push((
@@ -382,38 +428,31 @@ impl Render for TerminalView {
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     window.paint_quad(fill(bounds, rgb(data.snapshot.background)));
                     paint_images(window, bounds, &data, ImageLayer::BelowBackground);
-                    for cell in &data.snapshot.cells {
-                        if cell.bg != data.snapshot.background {
-                            let origin = point(
-                                bounds.left() + data.cell_width * cell.col,
-                                bounds.top() + data.line_height * cell.row,
-                            );
-                            window.paint_quad(fill(
-                                Bounds::new(
-                                    origin,
-                                    size(data.cell_width * cell.width, data.line_height),
-                                ),
-                                rgb(cell.bg),
-                            ));
-                        }
-                    }
-                    for cell in &data.snapshot.cells {
-                        let color = match cell.found {
-                            Found::No => continue,
-                            Found::Match => FIND_MATCH,
-                            Found::Active => FIND_ACTIVE,
-                        };
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(
-                                    bounds.left() + data.cell_width * cell.col,
-                                    bounds.top() + data.line_height * cell.row,
-                                ),
-                                size(data.cell_width * cell.width, data.line_height),
+                    let span = |(row, col, cells): (usize, usize, usize)| {
+                        Bounds::new(
+                            point(
+                                bounds.left() + data.cell_width * col,
+                                bounds.top() + data.line_height * row,
                             ),
-                            rgb(color),
-                        ));
-                    }
+                            size(data.cell_width * cells, data.line_height),
+                        )
+                    };
+                    // In one layer, so the quads share one place in the window's draw order instead of each taking one.
+                    window.paint_layer(bounds, |window| {
+                        let background = data.snapshot.background;
+                        for (at, color) in spans(&data.snapshot.cells, |cell| {
+                            (cell.bg != background).then_some(cell.bg)
+                        }) {
+                            window.paint_quad(fill(span(at), rgb(color)));
+                        }
+                        for (at, color) in spans(&data.snapshot.cells, |cell| match cell.found {
+                            Found::No => None,
+                            Found::Match => Some(FIND_MATCH),
+                            Found::Active => Some(FIND_ACTIVE),
+                        }) {
+                            window.paint_quad(fill(span(at), rgb(color)));
+                        }
+                    });
                     paint_images(window, bounds, &data, ImageLayer::BelowText);
                     if data.focused
                         && data.lit
@@ -439,18 +478,13 @@ impl Render for TerminalView {
                         }
                     }
                     paint_images(window, bounds, &data, ImageLayer::AboveText);
-                    for cell in data.snapshot.cells.iter().filter(|cell| cell.selected) {
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(
-                                    bounds.left() + data.cell_width * cell.col,
-                                    bounds.top() + data.line_height * cell.row,
-                                ),
-                                size(data.cell_width * cell.width, data.line_height),
-                            ),
-                            rgba(SELECTION),
-                        ));
-                    }
+                    window.paint_layer(bounds, |window| {
+                        for (at, color) in spans(&data.snapshot.cells, |cell| {
+                            cell.selected.then_some(SELECTION)
+                        }) {
+                            window.paint_quad(fill(span(at), rgba(color)));
+                        }
+                    });
                     let snapshot = &data.snapshot;
                     for &(row, col) in &data.link {
                         let Some(cell) = snapshot.cells.get(row * snapshot.cols + col) else {
@@ -646,29 +680,51 @@ mod tests {
     }
 
     #[test]
-    fn text_is_shaped_per_style_run_and_odd_widths_on_their_own() {
+    fn a_row_is_shaped_as_one_line_per_stretch_with_a_run_per_style_and_odd_widths_on_their_own() {
         let mut pane = GridPane::new(20, 3);
-        pane.feed("ab cd\x1b[31mef\x1b[0m界x  ─┼\r\ne\u{301}g".as_bytes());
+        pane.feed("ab cd\x1b[31mef  \x1b[0mg界x  ─┼\r\ne\u{301}g".as_bytes());
         let frame = snapshot(&mut pane, None, false, None);
         let base = TextRun {
             font: font("Menlo"),
             ..Default::default()
         };
-        let runs: Vec<_> = glyph_runs(&frame, false, 1.0, &base)
+        let lines: Vec<_> = glyph_runs(&frame, false, 1.0, &base)
             .into_iter()
-            .map(|(row, col, text, run)| (row, col, text, run.len))
+            .map(|(row, col, text, runs)| {
+                let lens: Vec<_> = runs.iter().map(|run| run.len).collect();
+                (row, col, text, lens)
+            })
             .collect();
-        let run = |row, col, text: &str| (row, col, text.to_string(), text.len());
+        let line =
+            |row, col, text: &str, lens: &[usize]| (row, col, text.to_string(), lens.to_vec());
         assert_eq!(
-            runs,
+            lines,
             vec![
-                run(0, 0, "ab cd"),
-                run(0, 5, "ef"),
-                run(0, 7, "界"),
-                run(0, 9, "x  ─┼"),
-                run(1, 0, "e\u{301}"),
-                run(1, 1, "g"),
+                // The red "ef" and the blanks after it are one run; the line ends where the wide character starts.
+                line(0, 0, "ab cdef  g", &[5, 4, 1]),
+                line(0, 10, "界", &[3]),
+                line(0, 12, "x  ─┼", &[9]),
+                line(1, 0, "e\u{301}", &[3]),
+                line(1, 1, "g", &[1]),
             ]
+        );
+    }
+
+    #[test]
+    fn backgrounds_are_one_quad_per_same_colour_stretch_of_a_row() {
+        let mut pane = GridPane::new(10, 2);
+        pane.feed("\x1b[41mab\x1b[42m界c\x1b[0m d\r\n\x1b[41mx".as_bytes());
+        let frame = snapshot(&mut pane, None, false, None);
+        let background = frame.background;
+        let quads = spans(&frame.cells, |cell| {
+            (cell.bg != background).then_some(cell.bg)
+        });
+        let red = frame.cells[0].bg;
+        let green = frame.cells[2].bg;
+        // The wide character's second column doesn't start a quad of its own.
+        assert_eq!(
+            quads,
+            vec![((0, 0, 2), red), ((0, 2, 3), green), ((1, 0, 1), red)]
         );
     }
 }
