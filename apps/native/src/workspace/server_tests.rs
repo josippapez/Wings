@@ -205,3 +205,55 @@ fn a_pane_that_ended_while_the_app_was_away_shows_its_output_above_a_new_shell()
     drop((window, app));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_new_pane_after_the_server_stopped_runs_in_the_app_and_says_so() {
+    let dir = PathBuf::from("/tmp").join(format!("wsg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let servers = dir.join("srv");
+    std::fs::create_dir_all(&servers).unwrap();
+    let state = dir.join("workspace.json");
+    let socket = server(&servers);
+    let (app, mut window) = launch(&state, Some(&servers));
+    let served = shell(&window);
+    // The server stops once its pane is closed: an app that starts no server (as here) has none to replace it with.
+    window.update(|w, window, cx| w.close_pane(0, window, cx));
+    wings_ptyd::client::Control::connect(&socket)
+        .unwrap()
+        .drain()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while socket.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server never stopped"
+        );
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    let pane = window.read(|w, _| *w.panes.keys().max().unwrap());
+    let local = window.read(|w, cx| w.terminal(pane).unwrap().read(cx).process_id().unwrap());
+    assert_ne!(local, served);
+    let parent = std::process::Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-p", &local.to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&parent.stdout).trim(),
+        std::process::id().to_string(),
+        "the shell runs in the app"
+    );
+    window.read(|w, _| {
+        assert!(
+            w.plugin_ui
+                .notices
+                .iter()
+                .any(|notice| notice.title.as_ref() == "The terminal server isn't running"),
+            "a notice says so"
+        )
+    });
+    drop((window, app));
+    let _ = std::fs::remove_dir_all(&dir);
+}

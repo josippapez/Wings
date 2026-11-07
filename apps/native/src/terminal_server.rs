@@ -80,6 +80,7 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// How a server starts when none answers.
+#[derive(Clone)]
 pub enum Start {
     /// A release app: copy `bundled` out of the bundle and start the copy with a one-shot launchd job, or directly
     /// in a session of its own when launchd fails.
@@ -191,8 +192,12 @@ pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
 /// a saved pane claims each.
 pub struct Servers {
     /// Where new panes go. `None` runs them in the app.
-    current: Option<PathBuf>,
+    current: Mutex<Option<PathBuf>>,
     found: Mutex<Vec<(PathBuf, PaneInfo)>>,
+    /// The folder, the app's server version and how a server starts, to start another when the current one is gone.
+    dir: PathBuf,
+    version: u32,
+    start: Option<Start>,
 }
 
 impl Servers {
@@ -213,8 +218,11 @@ impl Servers {
                 dir.display()
             );
             return Servers {
-                current: None,
+                current: Mutex::new(None),
                 found: Mutex::new(found),
+                dir: dir.to_owned(),
+                version,
+                start: start.cloned(),
             };
         }
         for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -247,29 +255,51 @@ impl Servers {
                 ),
             }
         }
-        let current = match current {
-            Some((_, path)) => Some(path),
-            None => start.and_then(|start| {
-                match start.run(dir, ours).and_then(|()| wait(&socket(dir, ours))) {
-                    Ok(()) => Some(socket(dir, ours)),
-                    Err(error) => {
-                        eprintln!(
-                            "Couldn't start the terminal server, so panes run in the app: {error}"
-                        );
-                        None
-                    }
-                }
-            }),
-        };
-        Servers {
-            current,
+        let servers = Servers {
+            current: Mutex::new(current.map(|(_, path)| path)),
             found: Mutex::new(found),
+            dir: dir.to_owned(),
+            version: ours,
+            start: start.cloned(),
+        };
+        if servers.current().is_none() {
+            *servers.current.lock().unwrap() = servers.start_one();
+        }
+        servers
+    }
+
+    /// Starts the app's own version, if this app starts servers. `None` when it doesn't, or the server didn't come up.
+    fn start_one(&self) -> Option<PathBuf> {
+        let start = self.start.as_ref()?;
+        let socket = socket(&self.dir, self.version);
+        match start
+            .run(&self.dir, self.version)
+            .and_then(|()| wait(&socket))
+        {
+            Ok(()) => Some(socket),
+            Err(error) => {
+                eprintln!("Couldn't start the terminal server, so panes run in the app: {error}");
+                None
+            }
         }
     }
 
     /// The server new panes start in, if any.
-    pub fn current(&self) -> Option<&Path> {
-        self.current.as_deref()
+    pub fn current(&self) -> Option<PathBuf> {
+        self.current.lock().unwrap().clone()
+    }
+
+    /// The server at `gone` didn't answer: a new one starts, as when the app found none, and new panes go there. Panes
+    /// that ran in the old server are gone with it. `None` when this app starts no server or the new one didn't come
+    /// up; panes then run in the app.
+    pub fn replace(&self, gone: &Path) -> Option<PathBuf> {
+        let mut current = self.current.lock().unwrap();
+        // Another pane found it gone first and started the next one.
+        if current.as_deref().is_some_and(|now| now != gone) {
+            return current.clone();
+        }
+        *current = self.start_one();
+        current.clone()
     }
 
     /// Takes the pane a server runs for the saved pane `history_id`, once.

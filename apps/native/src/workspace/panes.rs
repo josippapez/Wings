@@ -208,12 +208,12 @@ impl Workspace {
         })
     }
 
-    /// The pane in the terminal server: the one it kept running for `history`, else a new one there. `None` runs the
-    /// pane in the app: no server, or it couldn't start one. A pane that ended while the app was away leaves what it
-    /// printed in `output`, above the new shell.
+    /// The pane in the terminal server: the one it kept running for `history`, else a new one there. A server that
+    /// stopped is replaced by a new one. `None` runs the pane in the app: no server, or none could start, which a notice
+    /// says. A pane that ended while the app was away leaves what it printed in `output`, above the new shell.
     #[cfg(unix)]
     fn open_in_server(
-        &self,
+        &mut self,
         folder: &std::path::Path,
         history: &str,
         output: &mut Vec<u8>,
@@ -238,16 +238,33 @@ impl Workspace {
             }
         }
         let socket = servers.current()?;
-        let opened = TerminalView::open_in_server(
-            socket,
-            self.project_key(),
-            history.to_owned(),
-            folder.to_owned(),
-            output.clone(),
-            account.clone(),
-            cx,
-        );
-        opened.map_err(|error| eprintln!("{error}")).ok()
+        let open = |socket: &std::path::Path, cx: &mut Context<Self>| {
+            TerminalView::open_in_server(
+                socket,
+                self.project_key(),
+                history.to_owned(),
+                folder.to_owned(),
+                output.clone(),
+                account.clone(),
+                cx,
+            )
+            .map_err(|error| eprintln!("{error}"))
+            .ok()
+        };
+        if let Some(view) = open(&socket, cx) {
+            return Some(view);
+        }
+        let view = servers
+            .replace(&socket)
+            .and_then(|socket| open(&socket, cx));
+        if view.is_none() {
+            self.show_notice(
+                "The terminal server isn't running".into(),
+                "This terminal runs in Wings and ends when Wings quits.".into(),
+                cx,
+            );
+        }
+        view
     }
 
     /// Opens a shell beside the focused pane: to the right for a row, below for a column.

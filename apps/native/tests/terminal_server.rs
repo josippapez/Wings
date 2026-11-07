@@ -105,7 +105,7 @@ fn the_app_starts_a_server_and_the_next_app_finds_its_panes() {
 
     // The next app: the same server answers, so it starts none, and finds the pane by its history id.
     let again = Servers::connect(&folder.0, Some(&start));
-    assert_eq!(again.current(), Some(socket.as_path()));
+    assert_eq!(again.current(), Some(socket.clone()));
     assert!(again.claim("h-other").is_none());
     let (at, info) = again.claim("h-start").expect("the pane the server kept");
     assert_eq!(
@@ -182,8 +182,41 @@ fn a_killed_server_ends_its_panes_events_and_the_next_app_starts_another() {
     }
     // Its socket file is left behind, and answers nothing: the next app starts a server there.
     let next = Servers::connect(&folder.0, Some(&start));
-    assert_eq!(next.current(), Some(socket.as_path()));
+    assert_eq!(next.current(), Some(socket.clone()));
     assert!(next.claim("h-killed").is_none(), "its panes went with it");
+}
+
+#[test]
+fn a_server_killed_while_the_app_runs_is_replaced_by_a_new_one_for_new_panes() {
+    let folder = Folder::new("replaced");
+    let servers = Servers::connect(&folder.0, Some(&Start::Child(BIN.into())));
+    let socket = servers.current().unwrap();
+    let old = server_pid(&socket);
+    assert_eq!(unsafe { libc::kill(old as i32, libc::SIGKILL) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Control::connect(&socket).is_ok() {
+        assert!(Instant::now() < deadline, "the killed server still answers");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        Pane::spawn(&socket, spawn_request("h-new"), b"").is_err(),
+        "nothing answers at the old socket"
+    );
+
+    let replaced = servers.replace(&socket).expect("a new server");
+    assert_eq!(servers.current(), Some(replaced.clone()));
+    let new = server_pid(&replaced);
+    assert_ne!(new, old);
+    let (pane, mut events) = Pane::spawn(&replaced, spawn_request("h-new"), b"").unwrap();
+    pane.write(b"echo n''ew\r").unwrap();
+    wait_for(&pane, &mut events, "new");
+    assert_eq!(
+        ps(pane.shell_pid().unwrap(), "ppid"),
+        new,
+        "the shell runs in the new server"
+    );
+    // A pane that also found the old server gone takes the new one, not a third.
+    assert_eq!(servers.replace(&socket), Some(replaced));
 }
 
 #[test]
@@ -192,7 +225,12 @@ fn with_no_server_to_start_new_panes_run_in_the_app() {
     let servers = Servers::connect(&folder.0, None);
     assert_eq!(servers.current(), None);
     let broken = Start::Child(folder.0.join("missing-binary"));
-    assert_eq!(Servers::connect(&folder.0, Some(&broken)).current(), None);
+    let servers = Servers::connect(&folder.0, Some(&broken));
+    assert_eq!(servers.current(), None);
+    assert_eq!(
+        servers.replace(&terminal_server::socket(&folder.0, SERVER_VERSION)),
+        None
+    );
 }
 
 #[test]
@@ -316,7 +354,7 @@ fn a_release_server_owns_its_privacy_responsibility_and_its_shells_inherit_it() 
 fn a_debug_apps_child_server_keeps_the_apps_responsibility() {
     let folder = Folder::new("child");
     let servers = Servers::connect(&folder.0, Some(&Start::Child(BIN.into())));
-    let pid = server_pid(servers.current().unwrap());
+    let pid = server_pid(&servers.current().unwrap());
     assert_eq!(responsible(pid), responsible(std::process::id()));
 }
 
