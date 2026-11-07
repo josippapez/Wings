@@ -208,6 +208,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
     }
+    // `-- <out-dir> images` renders only a pane with a SIXEL and an iTerm2 inline image a program printed.
+    if std::env::args().nth(2).as_deref() == Some("images") {
+        return images(&mut cx, &config, &fake, &out);
+    }
     // `-- <out-dir> chrome` renders only the Inbox, the right-click menus and the tooltips.
     if std::env::args().nth(2).as_deref() == Some("chrome") {
         return chrome(&mut cx, &config, &out);
@@ -1389,4 +1393,53 @@ fn made_up_harnesses() -> Vec<wings_connect::harnesses::HarnessStatus> {
             Some("opencode didn't answer in 8s"),
         ),
     ]
+}
+
+/// A shell prints a red-and-blue SIXEL, a line of text, then a green iTerm2 PNG eight cells wide.
+fn images(cx: &mut VisualTestAppContext, config: &Config, fake: &Path, out: &Path) {
+    use base64::Engine;
+    let band = |color: u8| format!("#{color}!80~");
+    let sixel = format!(
+        "\x1bP0;1q\"1;1;160;96#1;2;90;20;20#2;2;20;40;90{}\x1b\\",
+        (0..16)
+            .map(|_| format!("{}{}-", band(1), band(2)))
+            .collect::<String>()
+    );
+    let png = image::RgbaImage::from_fn(64, 32, |x, y| {
+        image::Rgba([40, 160 + (x % 64) as u8, 80 + y as u8 * 4, 255])
+    });
+    let mut file = std::io::Cursor::new(Vec::new());
+    png.write_to(&mut file, image::ImageFormat::Png)
+        .expect("encode a PNG");
+    let file = file.into_inner();
+    let iterm = format!(
+        "\x1b]1337;File=size={};width=8;inline=1:{}\x07",
+        file.len(),
+        base64::engine::general_purpose::STANDARD.encode(&file)
+    );
+    let fixture = fake.join("images.txt");
+    std::fs::write(
+        &fixture,
+        format!("sixel:\r\n{sixel}\r\nafter the sixel\r\niterm2: {iterm}\r\nafter the png\r\n"),
+    )
+    .expect("write the image fixture");
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(3));
+        cx.simulate_input(window, &format!("clear; cat {}", fixture.display()));
+        cx.simulate_keystrokes(window, "enter");
+        wait(cx, window, Duration::from_secs(2));
+        save(
+            cx,
+            window,
+            &out.join(format!("terminal-images-{width}.png")),
+        );
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
 }
