@@ -127,7 +127,9 @@ fn access_list(manifest: &Manifest) -> AnyElement {
                 .when(!items.is_empty(), |group| {
                     group.child(div().flex().flex_wrap().gap(px(6.0)).children(
                         items.into_iter().map(|item| {
+                            // The desktop's `max-w-full break-all`: a long command wraps inside the page.
                             div()
+                                .max_w_full()
                                 .px(px(6.0))
                                 .py(px(2.0))
                                 .rounded(px(6.0))
