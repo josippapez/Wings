@@ -677,6 +677,28 @@ impl Workspace {
                     )
                     .child(access_list(&view.manifest)),
             )
+            .when_some(self.plugin_readme(&view), |page, blocks| {
+                page.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .pt(px(16.0))
+                        .border_t_1()
+                        .border_color(rgba(theme::BORDER))
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("README"),
+                        )
+                        .child(crate::markdown::render(
+                            &format!("plugin-readme-{index}"),
+                            &blocks,
+                        ))
+                        .children(ui::spot(|| "plugin-readme".into())),
+                )
+            })
             .into_any_element()
     }
 

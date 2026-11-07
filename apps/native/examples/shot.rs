@@ -200,6 +200,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("plugins-install") {
         return plugins_install(&mut cx, &config, &out);
     }
+    // `-- <out-dir> plugins-drop` renders only dropping a .wings-plugin file on the window and a plugin's README.
+    if std::env::args().nth(2).as_deref() == Some("plugins-drop") {
+        return plugins_drop(&mut cx, &config, &out);
+    }
     // `-- <out-dir> finder` renders only the command palette and the history sheet.
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
@@ -1090,6 +1094,87 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         click(cx, window, point(px(left + 70.0), px(150.0 + 34.0 * 6.0)));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("settings-agents"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// A `.wings-plugin` file dragged over the window, the review it opens once dropped, and an installed plugin's page with
+/// its README. Temp folders only.
+fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    use std::io::Write;
+    let data = Data::temp();
+    data.install_script(
+        "tracker",
+        serde_json::json!({ "name": "Pull requests", "version": "1.2.0", "description": "Shows each pane's pull request and its checks.",
+            "permissions": { "exec": ["gh pr view", "gh pr checks"], "notify": true },
+            "contributes": { "ui": ["badges"] } }),
+        "",
+        &[],
+        "tracker-scope",
+    );
+    std::fs::write(
+        data.paths().dir.join("tracker/README.md"),
+        "# Pull requests\n\nShows the pull request of each pane's branch on its badge, with its checks. Needs the \
+         [GitHub CLI](https://cli.github.com) signed in.\n\n## Setup\n\n1. Install `gh`.\n2. Run `gh auth login`.\n\n\
+         > Checks refresh every minute while a pane is open.\n\n```sh\ngh pr view --json number,state\n```\n",
+    )
+    .unwrap();
+    let package = data.path().join("notes.wings-plugin");
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in [
+        ("wings-plugin.json", serde_json::json!({ "id": "notes", "name": "Notes", "version": "0.3.0", "api": 1, "main": "dist/main.js",
+            "description": "Keeps notes beside each project.", "permissions": { "panes": [], "sendToAgents": true } }).to_string()),
+        ("dist/main.js", String::new()),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(body.as_bytes()).unwrap();
+    }
+    std::fs::write(&package, zip.finish().unwrap().into_inner()).unwrap();
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        let position = point(px(width / 2.0), px(320.0));
+        cx.simulate_event(
+            window,
+            gpui::FileDropEvent::Entered {
+                position,
+                paths: gpui::ExternalPaths([package.clone()].into_iter().collect()),
+            },
+        );
+        cx.simulate_event(window, gpui::FileDropEvent::Pending { position });
+        save(cx, window, &name("plugins-drop-over"));
+        cx.simulate_event(window, gpui::FileDropEvent::Submit { position });
+        cx.simulate_event(window, gpui::FileDropEvent::Ended);
+        wait(cx, window, Duration::from_millis(2000));
+        save(cx, window, &name("plugins-drop-review"));
+        handle
+            .update(cx, |w, window, cx| {
+                w.close_dialogs(cx);
+                w.show_plugins("tracker", &[], window, cx)
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_millis(300));
+        // Down to the README, under what the plugin can access.
+        cx.simulate_event(
+            window,
+            gpui::ScrollEvent {
+                position: point(px(width / 2.0), px(400.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-400.0))),
+                ..Default::default()
+            },
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("plugins-readme"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }

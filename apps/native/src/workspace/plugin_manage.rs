@@ -5,8 +5,10 @@
 //! it is approved again. A change starts or stops the plugin's main and pages right away.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -16,7 +18,7 @@ use wings_plugins::store::{
     self, Available, Grant, Linked, PluginView, SecretScope, Source, Store,
 };
 
-use crate::installed;
+use crate::{installed, markdown};
 
 use super::{Active, Workspace, settings::Section};
 
@@ -53,6 +55,43 @@ pub(super) struct Manage {
     /// The review shown has been up long enough for Turn on to count, as the setup approval's Allow.
     pub(super) review_armed: bool,
     review_arm: Option<Task<()>>,
+    /// The README the selected plugin's page shows, read once per installed version.
+    readme: RefCell<Option<Readme>>,
+}
+
+struct Readme {
+    id: String,
+    version: String,
+    blocks: Option<Rc<Vec<markdown::Block>>>,
+}
+
+/// The desktop's `README_MAX_BYTES`: a bigger README isn't shown.
+const README_MAX_BYTES: u64 = 256 * 1024;
+
+/// `README.md` (any case) from a plugin folder, if it's there, inside the folder and not over 256 KB, as the desktop's
+/// `read_readme`.
+fn read_readme(dir: &Path) -> Option<String> {
+    use std::io::Read;
+    let name = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("readme.md"))
+        })?
+        .file_name();
+    // A symlink out of the folder is refused.
+    let path = wings_plugins::loading::resolve(dir, name.to_str()?)?;
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > README_MAX_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(README_MAX_BYTES).read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A dropped path the desktop installs: a `.wings-plugin` file, by its name.
@@ -481,6 +520,33 @@ impl Workspace {
             self.install_file(file, window, cx);
         }
         cx.notify();
+    }
+
+    /// The README of the plugin, parsed, read again when its version changes, as the desktop's `plugin_readme`.
+    pub(super) fn plugin_readme(&self, view: &PluginView) -> Option<Rc<Vec<markdown::Block>>> {
+        let mut cached = self.manage.readme.borrow_mut();
+        if let Some(readme) = cached.as_ref().filter(|readme| {
+            readme.id == view.manifest.id && readme.version == view.manifest.version
+        }) {
+            return readme.blocks.clone();
+        }
+        // Only ids of installed plugins get a folder, so the id can't point anywhere else.
+        let dir = self
+            .plugin_env
+            .store
+            .as_ref()?
+            .lock()
+            .unwrap()
+            .dir(&view.manifest.id);
+        let blocks = dir
+            .and_then(|dir| read_readme(&dir))
+            .map(|text| Rc::new(markdown::parse(&text)));
+        *cached = Some(Readme {
+            id: view.manifest.id.clone(),
+            version: view.manifest.version.clone(),
+            blocks: blocks.clone(),
+        });
+        blocks
     }
 
     /// Waits for the package, installs it, shows it, and opens its review when it isn't on yet.

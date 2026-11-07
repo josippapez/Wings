@@ -1101,3 +1101,41 @@ fn dropping_files_that_arent_plugins_or_a_folder_does_nothing() {
         && w.plugin_views().is_empty()));
     assert!(installed_folders(&data).is_empty());
 }
+
+#[test]
+fn a_plugins_page_shows_its_readme_as_markdown_but_not_one_too_big_or_linked_out() {
+    let data = Data::temp();
+    let readme =
+        "# Demo\n\nSee the [docs](https://example.com/docs) and `wings plugin`.\n\n- one\n- two\n";
+    let bytes = zip_of(
+        &[
+            ("wings-plugin.json", &manifest("readme")),
+            ("dist/main.js", ""),
+            ("ReadMe.MD", readme),
+        ],
+        &[],
+    );
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let view = install(&mut window, bytes, Source::File, None).unwrap();
+    window.update(|w, window, cx| w.show_plugins("readme", &[], window, cx));
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-readme").is_some());
+    let blocks = window.read(|w, _| w.plugin_readme(&view)).unwrap();
+    assert_eq!(*blocks, crate::markdown::parse(readme));
+    assert!(matches!(&blocks[0], crate::markdown::Block::Heading(1, text) if text.text == "Demo"));
+    let folder = data.paths().dir.join("readme");
+
+    // Read once per version: a new version reads it again.
+    std::fs::remove_file(folder.join("ReadMe.MD")).unwrap();
+    std::fs::write(folder.join("README.md"), vec![b'a'; 256 * 1024 + 1]).unwrap();
+    let mut newer = view.clone();
+    newer.manifest.version = "1.0.1".into();
+    assert!(window.read(|w, _| w.plugin_readme(&newer)).is_none());
+
+    let outside = data.path().join("outside.md");
+    std::fs::write(&outside, "# Outside").unwrap();
+    std::fs::remove_file(folder.join("README.md")).unwrap();
+    std::os::unix::fs::symlink(&outside, folder.join("README.md")).unwrap();
+    newer.manifest.version = "1.0.2".into();
+    assert!(window.read(|w, _| w.plugin_readme(&newer)).is_none());
+}
