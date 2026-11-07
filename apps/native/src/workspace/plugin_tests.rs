@@ -507,6 +507,37 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
     }
 }
 
+/// Plugins the desktop installed from a release built before native pages existed (Changes 0.7.0 and Cyclops 0.8.3 from
+/// GitHub): on and approved, with no `dist/native`. The sidebar lists them as needing an update instead of hiding them.
+#[test]
+fn a_plugin_on_without_a_native_build_is_listed_in_the_sidebar_as_needing_an_update() {
+    let data = Data::temp();
+    data.install_script(
+        "desktop-only",
+        json!({ "contributes": { "sidebars": [{ "id": "s", "title": "S", "page": "dist/s.html" }] } }),
+        "",
+        &[("s", "")],
+        "desktop-only-scope",
+    );
+    fs::remove_dir_all(data.paths().dir.join("desktop-only/dist/native")).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    app.run_until_parked();
+    window.update(|w, _, cx| {
+        assert!(w.plugins.is_empty(), "nothing to run here");
+        let waiting: Vec<_> = w
+            .plugins_without_native_build()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(waiting, ["desktop-only"]);
+        assert!(
+            w.plugin_list(cx).is_some(),
+            "the Plugins section shows for it"
+        );
+    });
+    window.draw();
+}
+
 #[test]
 fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
     let data = Data::temp();

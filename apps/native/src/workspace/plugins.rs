@@ -1,5 +1,6 @@
 //! Pages of the desktop's plugins as tabs. The sidebar's Plugins list offers the pages that open as tabs and have a native
-//! build, and each one open runs a frame of its plugin until the tab closes.
+//! build, and each one open runs a frame of its plugin until the tab closes. A plugin that is on but has no native build
+//! is listed too, as needing an update for the native app.
 //!
 //! The desktop also lists these pages in the + menu, as title bar buttons and under a project's sections. Only the
 //! sidebar list is here, and a page opens from it without arguments; `wings.openView` can open one with arguments.
@@ -233,7 +234,38 @@ impl Workspace {
         );
     }
 
-    /// The sidebar's Plugins section, or nothing while no plugin offers a page.
+    /// The plugins that are on and approved but don't run here, which the desktop runs: they have no native build. As
+    /// `(id, name)`. Kept until `plugins.json` or the running plugins change, since listing the store takes about half a
+    /// millisecond for a dozen plugins and the sidebar draws every frame.
+    pub(super) fn plugins_without_native_build(&self) -> Vec<(String, String)> {
+        let written = self
+            .config
+            .plugins
+            .as_ref()
+            .and_then(|paths| paths.state.metadata().ok())
+            .and_then(|meta| meta.modified().ok());
+        let running: Vec<String> = self
+            .plugins
+            .iter()
+            .map(|installed| installed.id.clone())
+            .collect();
+        let key = (written, running);
+        let mut cached = self.plugin_ui.needs_update.borrow_mut();
+        if cached.0.as_ref() != Some(&key) {
+            let list = self
+                .plugin_views()
+                .into_iter()
+                .filter(|view| {
+                    view.enabled && view.approved && !self.plugin_runs(&view.manifest.id)
+                })
+                .map(|view| (view.manifest.id, view.manifest.name))
+                .collect();
+            *cached = (Some(key), list);
+        }
+        cached.1.clone()
+    }
+
+    /// The sidebar's Plugins section, or nothing while no plugin offers a page or waits for a native build.
     pub(super) fn plugin_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let shown = match self.active {
             Active::Plugin(id) => self.plugin_tabs.iter().find(|tab| tab.id == id),
@@ -291,7 +323,68 @@ impl Workspace {
                     )
             })
             .collect();
-        if rows.is_empty() {
+        // On and approved, but with no native build: the desktop runs it, and here it is listed with what it needs,
+        // rather than missing, and opens its entry in Settings → Plugins. More than two take one row, so a dozen
+        // desktop-only plugins don't push the projects off the sidebar.
+        let mut waiting = self.plugins_without_native_build();
+        let mut needs = "Needs an update for the native app";
+        if waiting.len() > 2 {
+            let first = waiting[0].0.clone();
+            waiting = vec![(first, format!("{} plugins", waiting.len()))];
+            needs = "Need an update for the native app";
+        }
+        let waiting: Vec<_> = waiting
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, name))| {
+                div()
+                    .id(("plugin-needs-update", index))
+                    .role(Role::Button)
+                    .aria_label(format!("{name}, {}", needs.to_lowercase()))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .py(px(3.0))
+                    .px(px(8.0))
+                    .rounded(px(theme::RADIUS))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_settings(window, cx);
+                        if let Some(dialog) = &mut this.settings {
+                            dialog.section = super::settings::Section::Plugins;
+                        }
+                        this.manage.selected = Some(id.clone());
+                        cx.notify();
+                    }))
+                    .child(icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.0))
+                                    .line_height(px(18.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.0))
+                                    .line_height(px(15.0))
+                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .child(needs),
+                            ),
+                    )
+            })
+            .collect();
+        if rows.is_empty() && waiting.is_empty() {
             return None;
         }
         Some(
@@ -322,6 +415,7 @@ impl Workspace {
                         .child("Plugins"),
                 )
                 .children(rows)
+                .children(waiting)
                 .into_any_element(),
         )
     }

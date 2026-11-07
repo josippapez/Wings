@@ -68,6 +68,12 @@ fn dropping_plugin_ui_stops_its_git_watcher() {
         .expect("the watcher thread outlived the workspace's plugin UI");
 }
 
+/// The plugins that need a native build, as `(id, name)`, for `plugins.json` as written then and the plugins running.
+pub(super) type NeedsUpdate = (
+    Option<(Option<std::time::SystemTime>, Vec<String>)>,
+    Vec<(String, String)>,
+);
+
 /// Work for the window's thread, with the window.
 pub(super) type WindowTask =
     Box<dyn FnOnce(&mut Workspace, &mut gpui::Window, &mut Context<Workspace>) + Send>;
@@ -666,6 +672,8 @@ pub(super) struct PluginUi {
     /// The label by each sidebar's or view's title bar button, by plugin id and page id.
     pub(super) labels: HashMap<(String, String), SidebarLabel>,
     pub(super) popover: super::plugin_ui::HoverPopover,
+    /// What `Workspace::plugins_without_native_build` last found, and when for.
+    pub(super) needs_update: std::cell::RefCell<NeedsUpdate>,
     /// The notifications the system couldn't show, newest last.
     pub(super) notices: Vec<Notice>,
     next_notice: usize,
