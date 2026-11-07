@@ -455,10 +455,8 @@ impl Workspace {
         let id = event.id;
         let glyph = match event.kind {
             Kind::Plugin => icon(Icon::Puzzle, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
-            Kind::Blocked => {
-                ui::status_dot(("inbox-dot", id), AgentState::Blocked).into_any_element()
-            }
-            Kind::Done => ui::status_dot(("inbox-dot", id), AgentState::Done).into_any_element(),
+            Kind::Blocked => ui::status_dot(AgentState::Blocked).into_any_element(),
+            Kind::Done => ui::status_dot(AgentState::Done).into_any_element(),
         };
         let detail = [event.project.as_str(), event.detail.as_str()]
             .into_iter()

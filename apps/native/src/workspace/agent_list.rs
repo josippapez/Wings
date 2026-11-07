@@ -161,7 +161,7 @@ impl Workspace {
                             .line_height(px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(div().flex_none().child(format!("{project},")))
-                            .child(crate::ui::status_dot(("agent-dot", pane), agent.state))
+                            .child(crate::ui::status_dot(agent.state))
                             .child(div().min_w_0().truncate().child(status(agent))),
                     ),
             )

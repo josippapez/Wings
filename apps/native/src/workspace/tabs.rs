@@ -310,9 +310,7 @@ impl Workspace {
             Active::Issues => "issues-tab".into(),
         };
         let glyph = match (state, active) {
-            (Some(state), _) => {
-                crate::ui::status_dot(format!("{id}-dot"), state).into_any_element()
-            }
+            (Some(state), _) => crate::ui::status_dot(state).into_any_element(),
             (None, Active::Terminal(_)) => {
                 icon(Icon::Terminal, 14.0, theme::MUTED_FOREGROUND).into_any_element()
             }

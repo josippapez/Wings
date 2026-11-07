@@ -563,9 +563,10 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.palette_choose(at, window, cx)
                             }))
-                            .children(item.state.map(|state| {
-                                ui::status_dot(("palette-dot", at), state).into_any_element()
-                            }))
+                            .children(
+                                item.state
+                                    .map(|state| ui::status_dot(state).into_any_element()),
+                            )
                             .child(
                                 div()
                                     .flex_none()

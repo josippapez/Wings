@@ -662,7 +662,7 @@ impl Workspace {
                     .justify_center()
                     .when(
                         (sheet.searching || loading) && sheet.results.is_some(),
-                        |slot| slot.child(ui::status_dot("history-searching", AgentState::Working)),
+                        |slot| slot.child(ui::status_dot(AgentState::Working)),
                     ),
             );
         let since = segmented(Since::ALL.map(|since| {

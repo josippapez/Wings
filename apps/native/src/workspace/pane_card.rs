@@ -164,7 +164,7 @@ impl Workspace {
                 }),
             )
             .child(match state {
-                Some(state) => crate::ui::status_dot(("pane-dot", pane), state).into_any_element(),
+                Some(state) => crate::ui::status_dot(state).into_any_element(),
                 None => icon(Icon::Terminal, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
             })
             .map(|header| match renaming {
