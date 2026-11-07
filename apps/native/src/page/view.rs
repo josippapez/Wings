@@ -285,13 +285,15 @@ impl PageView {
         cx.notify();
     }
 
-    /// Presses the `nth` button labelled `label`, as a click would. False when the page has no such button.
+    /// Presses the `nth` button labelled `label`, by its text or an icon button's name, as a click would. False when
+    /// the page has no such button.
     #[cfg(feature = "test-support")]
     pub fn press(&self, label: &str, nth: usize) -> bool {
         fn find<'a>(nodes: &'a [Node], label: &str, found: &mut Vec<&'a str>) {
             for node in nodes {
                 if let Node::Button(button) = node
-                    && plain_text(&button.children).trim() == label
+                    && (plain_text(&button.children).trim() == label
+                        || button.label.as_deref() == Some(label))
                     && let Some(handler) = &button.on_click
                 {
                     found.push(handler);
@@ -381,6 +383,14 @@ impl PageView {
             self.act(&handler, Some(&serde_json::json!({ "value": value })));
             true
         })
+    }
+
+    /// The keyboard focus of the page's first text input, for the screenshots to type into.
+    #[cfg(feature = "test-support")]
+    pub fn first_input_focus(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
+        let inputs = self.inputs.borrow();
+        let first = inputs.keys().min()?;
+        Some(inputs[first].field.read(cx).focus_handle(cx))
     }
 
     #[cfg(feature = "test-support")]

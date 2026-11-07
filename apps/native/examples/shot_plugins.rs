@@ -2,7 +2,9 @@
 //! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
 //! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
 //! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
-//! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data.
+//! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data. With
+//! `--external <folder>` it renders the separately shipped Sprint board, Cyclops and Claude accounts plugins from their
+//! repos in that folder, popovers too (`shot_plugins/external.rs`).
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -29,6 +31,9 @@ use wings_native::{
     },
     workspace::Workspace,
 };
+
+#[path = "shot_plugins/external.rs"]
+mod external;
 
 const WORKTREES_MAIN: &str = "wings.openView('worktrees', { as: 'sidebar' });";
 const WORKTREES_PAGE: &str = include_str!("../../../plugins/worktrees/dist/native/sidebar.js");
@@ -77,6 +82,13 @@ fn main() {
     }
     if std::env::args().any(|arg| arg == "--work-item") {
         work_item(out);
+        return;
+    }
+    if let Some(at) = std::env::args().position(|arg| arg == "--external") {
+        let root = std::env::args()
+            .nth(at + 1)
+            .expect("--external <folder of the plugin repos>");
+        external::external(out, root.into());
         return;
     }
     if std::env::args().any(|arg| arg == "--tasks") {

@@ -1212,3 +1212,32 @@ impl Render for RowsTip {
         )
     }
 }
+
+/// For the screenshots: a plugin's sidebar and popover shown, and their pages.
+#[cfg(feature = "test-support")]
+impl Workspace {
+    pub fn shot_sidebar(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
+        self.show_sidebar(plugin, sidebar, cx);
+    }
+
+    pub fn shot_popover(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
+        self.right = None;
+        self.sync_plugin_visibility(cx);
+        self.show_popover((plugin.to_owned(), sidebar.to_owned()), cx);
+    }
+
+    pub fn sidebar_page(&self, plugin: &str, sidebar: &str) -> Option<Entity<PageView>> {
+        self.sidebar_pages
+            .get(&(plugin.to_owned(), sidebar.to_owned()))
+            .cloned()
+    }
+
+    pub fn popover_page(&self, plugin: &str, sidebar: &str) -> Option<Entity<PageView>> {
+        let key = (plugin.to_owned(), sidebar.to_owned());
+        self.plugin_ui
+            .popover
+            .pages
+            .get(&key)
+            .map(|(page, _)| page.clone())
+    }
+}
