@@ -164,6 +164,7 @@ impl Workspace {
             Some(pick) => wings_spaces::claude_accounts::pick_dir(pick).unwrap_or_default(),
             None => self.spaces.claude_config_dir(&self.config.project),
         };
+        super::claude::sync_account_settings(self.config.agents.clone(), account.clone(), cx);
         #[cfg(unix)]
         let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
         #[cfg(not(unix))]

@@ -742,6 +742,60 @@ pub(super) fn connect_account(socket: &Path, state: Option<&Path>, name: &str) {
     }
 }
 
+/// Brings the `settings.json` copy of the account a terminal opens in, the folder `account`, up to date with the default
+/// account's in `default`, as the desktop's `pane_create` does: what you change there reaches a named account the next
+/// time a terminal opens for it. When the default's had changed, writing the copy took 5 ms (median) and once 0.5 s on a
+/// full disk, so not on the window's thread; it is written whole, so Claude Code reads the old copy or the new one.
+pub(super) fn sync_account_settings(
+    default: Option<PathBuf>,
+    account: Option<PathBuf>,
+    cx: &gpui::App,
+) {
+    let (Some(default), Some(account)) = (default, account) else {
+        return;
+    };
+    cx.background_executor()
+        .spawn(async move {
+            if let Err(error) = claude_accounts::sync_shared_settings_with(&default, &account) {
+                eprintln!(
+                    "Couldn't copy the default account's settings to {}: {error}",
+                    account.display()
+                );
+            }
+        })
+        .detach();
+}
+
+#[cfg(all(test, feature = "test-support"))]
+#[test]
+fn a_terminal_opening_in_an_account_brings_its_settings_copy_up_to_date() {
+    let dir = std::env::temp_dir().join(format!("wings-account-settings-{}", std::process::id()));
+    let (default, account) = (dir.join("default"), dir.join("account"));
+    std::fs::create_dir_all(&default).unwrap();
+    std::fs::create_dir_all(&account).unwrap();
+    let app = gpui::TestApp::new();
+    let open = |theme: &str| {
+        std::fs::write(
+            default.join("settings.json"),
+            json!({ "theme": theme }).to_string(),
+        )
+        .unwrap();
+        app.read(|cx| sync_account_settings(Some(default.clone()), Some(account.clone()), cx));
+        app.run_until_parked();
+        let copy: Value =
+            serde_json::from_str(&std::fs::read_to_string(account.join("settings.json")).unwrap())
+                .unwrap();
+        copy["theme"].clone()
+    };
+    assert_eq!(open("dark"), "dark");
+    assert_eq!(
+        open("light"),
+        "light",
+        "what changed in the default reaches the account"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The `claude` program and the `wings` program to write into Claude Code's config without being asked: only a release
 /// build of the installed app, as a dev build would point Claude Code at itself, and not once you disconnected it.
 fn to_connect(state: Option<&Path>) -> Option<(PathBuf, PathBuf)> {

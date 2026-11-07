@@ -598,7 +598,12 @@ fn sync_settings_in(default_dir: &Path, account: &Path) -> Result<(), String> {
 /// and `pick_dir` give it): what you changed in the default account's `settings.json` reaches the account the next time a
 /// terminal opens for it. Cheap, since it reads two small files and writes only when they differ.
 pub fn sync_shared_settings(account: &Path) -> Result<(), String> {
-    sync_settings_in(&dir(None), account)
+    sync_shared_settings_with(&dir(None), account)
+}
+
+/// `sync_shared_settings` for an app that is told the default account's folder, `default_dir`, instead of finding it.
+pub fn sync_shared_settings_with(default_dir: &Path, account: &Path) -> Result<(), String> {
+    sync_settings_in(default_dir, account)
 }
 
 #[cfg(test)]
