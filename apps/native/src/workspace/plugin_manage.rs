@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use gpui::{Context, PathPromptOptions, Task, Window};
+use gpui::{Context, ExternalPaths, PathPromptOptions, Task, Window};
 use wings_plugins::store::{
     self, Available, Grant, Linked, PluginView, SecretScope, Source, Store,
 };
@@ -53,6 +53,17 @@ pub(super) struct Manage {
     /// The review shown has been up long enough for Turn on to count, as the setup approval's Allow.
     pub(super) review_armed: bool,
     review_arm: Option<Task<()>>,
+}
+
+/// A dropped path the desktop installs: a `.wings-plugin` file, by its name.
+fn is_package(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|path| path.ends_with(".wings-plugin"))
+}
+
+/// Whether a drag over the window carries a plugin package, for the drop highlight.
+pub(super) fn carries_package(paths: &ExternalPaths) -> bool {
+    paths.paths().iter().any(|path| is_package(path))
 }
 
 pub(super) trait UpdateSource: Send + Sync {
@@ -449,6 +460,27 @@ impl Workspace {
             .background_executor()
             .spawn(async move { store::read_package(&path).map(|bytes| (bytes, Source::File)) });
         self.run_install("file", read, window, cx);
+    }
+
+    /// A file dropped on the window: a `.wings-plugin` opens Settings, Plugins and installs, as dropping one on the
+    /// desktop's window does. Anything else dropped does nothing.
+    pub(super) fn drop_package(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(file) = paths.paths().iter().find(|path| is_package(path)).cloned() else {
+            return;
+        };
+        self.open_settings(window, cx);
+        if let Some(dialog) = &mut self.settings {
+            dialog.section = Section::Plugins;
+        }
+        if self.manage.installing.is_none() {
+            self.install_file(file, window, cx);
+        }
+        cx.notify();
     }
 
     /// Waits for the package, installs it, shows it, and opens its review when it isn't on yet.

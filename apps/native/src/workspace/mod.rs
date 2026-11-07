@@ -855,6 +855,7 @@ impl Render for Workspace {
             .children(under)
             .children(notices)
             .children(over)
+            .child(self.plugin_drop_layer(cx))
             .child(deferred(crate::ui::tooltip_exit()).with_priority(10))
             .into_any_element()
     }

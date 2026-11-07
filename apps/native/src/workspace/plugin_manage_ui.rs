@@ -3,8 +3,8 @@
 //! row. The desktop shows the list and the page side by side; Settings here is too narrow for two columns.
 
 use gpui::{
-    AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, Role, SharedString, div,
-    prelude::*, px, rgb, rgba,
+    AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role, SharedString,
+    deferred, div, prelude::*, px, rgb, rgba,
 };
 use wings_plugins::{
     manifest::Manifest,
@@ -265,6 +265,9 @@ impl Workspace {
                 .child(muted(
                     "A GitHub repo or plugin folder link, or a .wings-plugin file.",
                 ))
+                .child(muted(
+                    "You can also drop a .wings-plugin file on the window.",
+                ))
                 .when_some(manage.error.clone(), |column, error| {
                     column.child(
                         div()
@@ -358,7 +361,7 @@ impl Workspace {
             .child(ui::card([install.into_any_element()]))
             .child(header)
             .child(if rows.is_empty() {
-                ui::card([muted("No plugins yet. Paste a GitHub link or choose a .wings-plugin file to add one.")
+                ui::card([muted("No plugins yet. Paste a GitHub link or drop a .wings-plugin file to add one.")
                     .px(px(16.0))
                     .py(px(16.0))
                     .into_any_element()])
@@ -675,6 +678,57 @@ impl Workspace {
                     .child(access_list(&view.manifest)),
             )
             .into_any_element()
+    }
+
+    /// Over everything, where a `.wings-plugin` file can be dropped anywhere on the window, as on the desktop's. It
+    /// shows only while one is dragged over the window, and lets every click and hover through.
+    pub(super) fn plugin_drop_layer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let shown = |paths: &ExternalPaths| super::plugin_manage::carries_package(paths);
+        deferred(
+            div()
+                .id("plugin-drop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(theme::RADIUS))
+                .border_2()
+                .border_color(gpui::transparent_black())
+                .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                    if shown(paths) {
+                        style.bg(rgba(0x0f0e1299)).border_color(rgba(0xe9b65fb3))
+                    } else {
+                        style
+                    }
+                })
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    this.drop_package(paths, window, cx)
+                }))
+                .child(
+                    div()
+                        .id("plugin-drop-label")
+                        .px(px(14.0))
+                        .py(px(8.0))
+                        .rounded(px(10.0))
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .bg(rgba(theme::POPOVER))
+                        .text_color(rgb(theme::FOREGROUND))
+                        // A drag over only refines what paints, not the text's color, so the label fades in whole.
+                        .opacity(0.0)
+                        .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                            if shown(paths) {
+                                style.opacity(1.0)
+                            } else {
+                                style
+                            }
+                        })
+                        .child("Drop to install the plugin"),
+                ),
+        )
+        .with_priority(5)
+        .into_any_element()
     }
 
     /// "Turn on <plugin>?": what the first plugin waiting for review will be able to do, over everything else.

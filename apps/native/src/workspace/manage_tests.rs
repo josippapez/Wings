@@ -865,3 +865,239 @@ fn a_setup_command_an_agent_proposes_is_saved_only_once_you_allow_it() {
     assert_eq!(reply["result"]["isError"], false, "{reply}");
     assert_eq!(setup(&window).as_deref(), Some("pnpm install"));
 }
+
+/// A zip of `files`, as a hand-made or hostile `.wings-plugin` would be, with `links` as symlink entries.
+fn zip_of(files: &[(&str, &str)], links: &[(&str, &str)]) -> Vec<u8> {
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in files {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(body.as_bytes()).unwrap();
+    }
+    for (name, target) in links {
+        zip.add_symlink(*name, *target, zip::write::SimpleFileOptions::default())
+            .unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+fn manifest(id: &str) -> String {
+    json!({ "id": id, "name": format!("Plugin {id}"), "version": "1.0.0", "api": 1, "main": "dist/main.js" })
+        .to_string()
+}
+
+/// Drops `paths` from Finder on the middle of the window, as the platform reports it.
+fn drop_on(window: &mut TestAppWindow<Workspace>, paths: &[std::path::PathBuf]) {
+    let position = gpui::point(gpui::px(500.0), gpui::px(320.0));
+    window.draw();
+    window.simulate_event(gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths(paths.iter().cloned().collect()),
+    });
+    window.draw();
+    window.simulate_event(gpui::FileDropEvent::Submit { position });
+    window.simulate_event(gpui::FileDropEvent::Ended);
+}
+
+fn settings_on_plugins(window: &TestAppWindow<Workspace>) -> bool {
+    window.read(|w, _| {
+        w.settings
+            .as_ref()
+            .is_some_and(|dialog| dialog.section == super::settings::Section::Plugins)
+    })
+}
+
+/// What the plugins folder holds, by name, for checking a refused package wrote nothing.
+fn installed_folders(data: &Data) -> Vec<String> {
+    std::fs::read_dir(&data.paths().dir)
+        .map(|dir| {
+            dir.flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_dropped_package_opens_plugins_installs_off_and_runs_once_its_review_is_approved() {
+    let data = Data::temp();
+    let file = data.path().join("dropped.wings-plugin");
+    std::fs::write(&file, package("dropped", "1.0.0", &["git status"])).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    // Finder hands over every file dragged; the package is picked out of them.
+    let other = data.path().join("notes.txt");
+    std::fs::write(&other, "hi").unwrap();
+    drop_on(&mut window, &[other, file]);
+    assert!(settings_on_plugins(&window));
+    until(&app, &mut window, "the review never opened", |w| {
+        w.manage
+            .reviews
+            .first()
+            .is_some_and(|v| v.manifest.id == "dropped")
+    });
+    // As on the desktop: installed off and unapproved, and nothing of it runs until the review is approved.
+    assert!(!runs(&window, "dropped"));
+    assert_eq!(state(&data)["dropped"]["enabled"], false);
+    assert_eq!(state(&data)["dropped"]["approved"], Value::Null);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    window.update(|w, window, cx| w.approve_review(window, cx));
+    assert!(runs(&window, "dropped"));
+    assert_eq!(state(&data)["dropped"]["enabled"], true);
+}
+
+#[test]
+fn cancelling_a_dropped_packages_review_leaves_it_off_and_unapproved() {
+    let data = Data::temp();
+    let file = data.path().join("dropped.wings-plugin");
+    std::fs::write(&file, package("dropped", "1.0.0", &["git status"])).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    drop_on(&mut window, &[file]);
+    until(&app, &mut window, "the review never opened", |w| {
+        !w.manage.reviews.is_empty()
+    });
+    window.update(|w, _, cx| w.skip_review(cx));
+    app.run_until_parked();
+    assert!(window.read(|w, _| w.manage.reviews.is_empty()));
+    assert!(!runs(&window, "dropped"));
+    assert_eq!(state(&data)["dropped"]["enabled"], false);
+    assert_eq!(state(&data)["dropped"]["approved"], Value::Null);
+}
+
+#[test]
+fn a_dropped_package_that_escapes_its_folder_or_has_a_bad_manifest_is_refused_and_writes_nothing() {
+    let data = Data::temp();
+    let outside = data.path().join("escaped.js");
+    let hostile = [
+        (
+            "parent",
+            zip_of(
+                &[
+                    ("wings-plugin.json", &manifest("parent")),
+                    ("dist/main.js", ""),
+                    ("../escaped.js", "pwned"),
+                ],
+                &[],
+            ),
+            "Unsafe path",
+        ),
+        (
+            "nested-parent",
+            zip_of(
+                &[
+                    ("wings-plugin.json", &manifest("nested")),
+                    ("dist/main.js", ""),
+                    ("dist/../../escaped.js", "pwned"),
+                ],
+                &[],
+            ),
+            "Unsafe path",
+        ),
+        (
+            "bad-id",
+            zip_of(
+                &[
+                    ("wings-plugin.json", &manifest("../escaped")),
+                    ("dist/main.js", ""),
+                ],
+                &[],
+            ),
+            "invalid id",
+        ),
+        (
+            "not-json",
+            zip_of(
+                &[("wings-plugin.json", "{ nope"), ("dist/main.js", "")],
+                &[],
+            ),
+            "",
+        ),
+        (
+            "not-a-zip",
+            b"just text".to_vec(),
+            "Not a .wings-plugin file",
+        ),
+    ];
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    for (name, bytes, expected) in hostile {
+        let file = data.path().join(format!("{name}.wings-plugin"));
+        std::fs::write(&file, bytes).unwrap();
+        window.update(|w, _, cx| {
+            w.manage.error = None;
+            cx.notify();
+        });
+        drop_on(&mut window, &[file]);
+        until(&app, &mut window, "the install never ended", |w| {
+            w.manage.installing.is_none() && w.manage.error.is_some()
+        });
+        let error = window.read(|w, _| w.manage.error.clone().unwrap());
+        assert!(error.contains(expected), "{name}: {error}");
+        assert!(window.read(|w, _| w.manage.reviews.is_empty()), "{name}");
+        assert!(
+            installed_folders(&data).is_empty(),
+            "{name}: {:?}",
+            installed_folders(&data)
+        );
+        assert!(!outside.exists(), "{name} wrote outside the plugins folder");
+        assert!(window.read(|w, _| w.plugin_views().is_empty()), "{name}");
+    }
+}
+
+#[test]
+fn absolute_paths_and_symlinks_in_a_dropped_package_stay_inside_its_folder() {
+    let data = Data::temp();
+    let target = data.path().join("secret.txt");
+    std::fs::write(&target, "secret").unwrap();
+    let absolute = data.path().join("absolute.js");
+    let bytes = zip_of(
+        &[
+            ("wings-plugin.json", &manifest("contained")),
+            ("dist/main.js", ""),
+            (absolute.to_str().unwrap(), "inside"),
+        ],
+        &[("dist/link", target.to_str().unwrap())],
+    );
+    let file = data.path().join("contained.wings-plugin");
+    std::fs::write(&file, bytes).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    drop_on(&mut window, &[file]);
+    until(&app, &mut window, "the review never opened", |w| {
+        !w.manage.reviews.is_empty()
+    });
+    let folder = data.paths().dir.join("contained");
+    // An absolute entry lands under the plugin's own folder, never where it points.
+    assert!(!absolute.exists());
+    let relative = absolute.strip_prefix("/").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(folder.join(relative)).unwrap(),
+        "inside"
+    );
+    // A symlink entry is written as a plain file holding its target, so nothing links out of the folder.
+    let link = std::fs::symlink_metadata(folder.join("dist/link")).unwrap();
+    assert!(link.is_file() && !link.file_type().is_symlink());
+    assert_ne!(
+        std::fs::read_to_string(folder.join("dist/link")).unwrap(),
+        "secret"
+    );
+}
+
+#[test]
+fn dropping_files_that_arent_plugins_or_a_folder_does_nothing() {
+    let data = Data::temp();
+    let text = data.path().join("notes.txt");
+    std::fs::write(&text, "hi").unwrap();
+    let folder = data.path().join("folder-plugin");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("wings-plugin.json"), manifest("folder")).unwrap();
+    std::fs::write(folder.join("main.js"), "").unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    drop_on(&mut window, &[text, folder]);
+    app.run_until_parked();
+    window.draw();
+    assert!(window.read(|w, _| w.settings.is_none()
+        && w.manage.installing.is_none()
+        && w.manage.error.is_none()
+        && w.manage.reviews.is_empty()
+        && w.plugin_views().is_empty()));
+    assert!(installed_folders(&data).is_empty());
+}
