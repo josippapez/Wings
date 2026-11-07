@@ -313,6 +313,8 @@ pub struct Card {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Heading {
     pub id: u64,
+    /// Level 3 names a section of a page, as `h3.w-heading` does.
+    pub section: bool,
     pub children: Vec<Node>,
 }
 
@@ -985,6 +987,7 @@ impl Walk {
             }),
             "Heading" => Node::Heading(Heading {
                 id,
+                section: number(&props, "level") == Some(3.0),
                 children: parts(children),
             }),
             "Dot" => Node::Dot(Dot {
@@ -1490,6 +1493,20 @@ mod tests {
             panic!("a heading and a list")
         };
         assert!(matches!(list.children.as_slice(), [Node::ListItem(_)]));
+    }
+
+    #[test]
+    fn a_heading_of_level_3_names_a_section() {
+        let section = |props: Value| match parse_one(
+            json!({"id":1,"type":"Heading","props":props,"children":[text(2, "Entries")]}),
+        ) {
+            Node::Heading(heading) => heading.section,
+            other => panic!("a heading, not {other:?}"),
+        };
+        // It was drawn as every other heading, small and muted, where the desktop draws a section's 14px title.
+        assert!(section(json!({"level":3})));
+        assert!(!section(json!({"level":2})));
+        assert!(!section(json!({})));
     }
 
     #[test]

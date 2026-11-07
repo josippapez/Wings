@@ -246,9 +246,9 @@ export function Loading({ children }) {
 export function Card(props) {
   return h("Card", null, props.children);
 }
-/** A section heading, with `actions` like chips or a button on its right. */
+/** A section heading, with `actions` like chips or a button on its right. Level 3 names a section of a page. */
 export function Heading(props) {
-  const heading = h("Heading", null, props.children);
+  const heading = h("Heading", pick(props, ["level"]), props.children);
   return has(props.actions) ? h(Row, { justify: "between", wrap: true }, heading, props.actions) : heading;
 }
 /** A status dot. */
@@ -412,13 +412,14 @@ export function Combobox({ label, value, onInput, options, onPick, filter = matc
   );
 }
 
-/** A button that shows its `items` under it when pressed: the app has no popup menu yet. */
-export function Menu({ label, items, variant, disabled }) {
+/** A button that shows its `items` under it when pressed: the app has no popup menu yet. The button is the desktop's
+ * trigger, at its `size` and with its `aria-label`, and no caret: "⋯ ▾" ran a caret into a button the size of an icon. */
+export function Menu({ label, items, variant, size, disabled, ...rest }) {
   const [open, setOpen] = useState(false);
   return h(
     Stack,
     { gap: "xs" },
-    h(Button, { variant, disabled, onClick: () => setOpen(!open) }, label, " ▾"),
+    h(Button, { variant, size, disabled, "aria-label": rest["aria-label"], onClick: () => setOpen(!open) }, label),
     open ? items.map((item) => h(Button, { key: item.id, variant: item.variant === "destructive" ? "destructive" : "ghost", onClick: () => (setOpen(false), item.onSelect()) }, item.label)) : null,
   );
 }

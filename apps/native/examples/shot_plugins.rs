@@ -874,11 +874,11 @@ fn disk(out: PathBuf) {
             "collected",
             vec![
                 ("Scan", scan, "Downloads"),
-                ("⋯ ▾", 0, "Add to Collector"),
+                ("⋯", 0, "Add to Collector"),
                 ("Add to Collector", 0, "1 item"),
             ],
             vec![
-                ("⋯ ▾", 0, "Remove from Collector"),
+                ("⋯", 0, "Remove from Collector"),
                 ("Remove from Collector", 0, "Drag folders"),
             ],
         ),

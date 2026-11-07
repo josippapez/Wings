@@ -3,7 +3,7 @@
 // `className`, `style` or `aria-*` props, and a handler gets `NativeEvent`, not a DOM event.
 import type { ReactElement, ReactNode } from "react";
 
-import type { ActionState, BadgeVariant, CodeLine, ButtonVariant, Check, ComboboxOption, Gap, IconName, MenuItem, Option, Stat, Tone } from "./ui";
+import type { ActionState, BadgeVariant, ButtonSize, CodeLine, ButtonVariant, Check, ComboboxOption, Gap, IconName, MenuItem, Option, Stat, Tone } from "./ui";
 
 /** What a handler is given: the app's event, not a DOM one. The two methods do nothing, so code written for `ui` can call them. */
 export interface NativeEvent {
@@ -81,7 +81,7 @@ export function Empty(props: { title: ReactNode; description?: ReactNode; childr
 /** A box around related content. */
 export function Card(props: { children?: ReactNode }): ReactElement;
 /** A section heading, with `actions` like chips or a button on its right. */
-export function Heading(props: { actions?: ReactNode; children?: ReactNode }): ReactElement;
+export function Heading(props: { level?: 2 | 3 | 4; actions?: ReactNode; children?: ReactNode }): ReactElement;
 /** A status dot, green unless `tone` says otherwise. `color` is a CSS `#rrggbb` or `rgb()` colour from your data, which wins over `tone`. */
 export function Dot(props: { tone?: Exclude<Tone, "success">; color?: string }): ReactElement;
 /** A labelled bar with its percentage and a `note` under it. `levels` are where it turns warn and danger, like `[75, 90]`. */
@@ -159,7 +159,7 @@ export function Combobox(props: {
   empty?: ReactNode;
 }): ReactElement;
 /** A button that shows its `items` under it when pressed; the app has no popup menu yet. */
-export function Menu(props: { label: ReactNode; items: MenuItem[]; variant?: ButtonVariant; disabled?: boolean }): ReactElement;
+export function Menu(props: { label: ReactNode; items: MenuItem[]; variant?: ButtonVariant; size?: ButtonSize; disabled?: boolean; "aria-label"?: string }): ReactElement;
 /** One of Lucide's icons, in the colour of the text. */
 export function Icon(props: { name: IconName; label?: string }): ReactElement;
 /** Small figures side by side, label over value. A `title` isn't shown. */

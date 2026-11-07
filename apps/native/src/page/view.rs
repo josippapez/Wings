@@ -973,9 +973,13 @@ impl PageView {
                 })
                 .into_any_element(),
             Node::Card(card) => ui::plain_card(self.nodes(&card.children, cx)).into_any_element(),
-            Node::Heading(heading) => {
-                ui::heading(self.inline(&heading.children, cx)).into_any_element()
-            }
+            Node::Heading(heading) => ui::heading(self.inline(&heading.children, cx))
+                .when(heading.section, |el| {
+                    el.text_size(px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::FOREGROUND))
+                })
+                .into_any_element(),
             Node::Dot(dot) => ui::dot(
                 dot.color
                     .unwrap_or_else(|| dot.tone.map_or(theme::DONE, tone_color)),

@@ -899,7 +899,7 @@ fn disk_scans_a_folder_in_its_main_and_its_native_page_draws_the_map_and_fills_t
         sunburst_in(&tree.children).is_some_and(|map| map.title != "scanned")
     });
     let mut menus = Vec::new();
-    buttons_named(&mapped.children, "⋯ ▾", &mut menus);
+    buttons_named(&mapped.children, "⋯", &mut menus);
     assert!(page.dispatch(&menus[0], None));
     let open = tree(&events, "the row's menu", |tree| {
         tree.text().contains("Add to Collector")

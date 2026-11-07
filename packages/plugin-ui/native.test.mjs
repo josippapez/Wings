@@ -228,7 +228,8 @@ test("a combobox lists the options that match as chips, a menu opens its items, 
     action = useAction();
     return h(Stack, null,
       h(Combobox, { label: "Base", freeText: true, value: "dev", onInput: () => {}, onPick: (o) => picked.push(o.value), options: [{ value: "develop", label: "develop" }, { value: "main", label: "main" }] }),
-      h(Menu, { label: "Start", items: [{ id: "a", label: "In A", onSelect: () => picked.push("a") }] }));
+      h(Menu, { label: "Start", items: [{ id: "a", label: "In A", onSelect: () => picked.push("a") }] }),
+      h(Menu, { label: "⋯", size: "icon-xs", variant: "ghost", "aria-label": "More for notes.txt", items: [] }));
   }
   mount(h(Probe));
   const chips = all(last(), "Button").filter((button) => text(button) === "develop");
@@ -237,7 +238,12 @@ test("a combobox lists the options that match as chips, a menu opens its items, 
   globalThis.__wingsEvent(chips[0].props.onClick, "");
   assert.deepEqual(picked, ["develop"]);
   assert.equal(all(last(), "Button").some((button) => text(button) === "In A"), false);
-  globalThis.__wingsEvent(all(last(), "Button").find((button) => text(button).startsWith("Start")).props.onClick, "");
+  // The trigger is the desktop's, at its size and with its name, and no caret after its label.
+  const more = all(last(), "Button").find((button) => button.props.label === "More for notes.txt");
+  assert.equal(text(more), "⋯");
+  assert.equal(more.props.size, "icon-xs");
+  assert.equal(all(last(), "Button").some((button) => text(button) === "Start"), true);
+  globalThis.__wingsEvent(all(last(), "Button").find((button) => text(button) === "Start").props.onClick, "");
   const item = all(last(), "Button").find((button) => text(button) === "In A");
   globalThis.__wingsEvent(item.props.onClick, "");
   assert.deepEqual(picked, ["develop", "a"]);
@@ -301,7 +307,8 @@ test("figures sit side by side with the label over the value, and a heading puts
   mount(h(Stack, null,
     h(Stats, { items: [{ label: "Status", value: "Working" }, { label: "Context", value: "116k", tone: "warn" }] }),
     h(Heading, { actions: h(Button, null, "Filter") }, "Recent activity"),
-    h(Heading, null, "Plain")));
+    h(Heading, null, "Plain"),
+    h(Heading, { level: 3 }, "Section")));
   const [figures, heading] = all(last(), "Row");
   assert.deepEqual(figures.props, { gap: "l", wrap: true });
   assert.deepEqual(figures.children.map((figure) => figure.children.map((part) => [part.props.tone, part.props.size, text(part)])), [
@@ -310,7 +317,9 @@ test("figures sit side by side with the label over the value, and a heading puts
   ]);
   assert.deepEqual(heading.props, { justify: "between", wrap: true });
   assert.deepEqual(heading.children.map((child) => child.type), ["Heading", "Button"]);
-  assert.equal(all(last(), "Heading").length, 2);
+  assert.equal(all(last(), "Heading").length, 3);
+  // Level 3 names a section of a page, and the app draws it as one.
+  assert.equal(all(last(), "Heading")[2].props.level, 3);
   assert.equal(all(last(), "Row").length, 2, "a heading with no actions has no row around it");
 });
 
