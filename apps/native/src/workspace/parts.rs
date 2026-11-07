@@ -54,6 +54,8 @@ impl Render for Part {
 /// never draw again.
 pub(super) struct Parts {
     pub(super) sidebar: Entity<Part>,
+    pub(super) title_bar: Entity<Part>,
+    pub(super) main: Entity<Part>,
 }
 
 impl Parts {
@@ -65,6 +67,8 @@ impl Parts {
                 |workspace, _, cx| workspace.sidebar_column(cx).w_full().into_any_element(),
                 cx,
             ),
+            title_bar: Part::new(workspace, "title-bar", Workspace::title_bar_part, cx),
+            main: Part::new(workspace, "main", Workspace::main_part, cx),
         }
     }
 }

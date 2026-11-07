@@ -541,34 +541,66 @@ impl Workspace {
     }
 }
 
-impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_plugins(cx);
-        self.exits.popovers.render();
-        // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
-        let place = self.place();
-        self.nav.visit(place);
-        if let Some((viewer, _)) = &self.plugin_ui.diff {
-            return div().size_full().child(viewer.clone()).into_any_element();
+impl Workspace {
+    /// The title bar with the tabs, drawn as a piece of its own (`parts`).
+    fn title_bar_part(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let mut tabs: Vec<AnyElement> = self
+            .terminals
+            .iter()
+            .map(|tab| {
+                self.tab(
+                    Active::Terminal(tab.id),
+                    self.label(tab.id, cx),
+                    self.tab_state(tab.id),
+                    &tab.focus,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+        tabs.extend(self.plugin_tabs.iter().map(|tab| {
+            self.tab(
+                Active::Plugin(tab.id),
+                tab.title.clone(),
+                None,
+                &tab.focus,
+                cx,
+            )
+            .into_any_element()
+        }));
+        if self.project_page.is_some() {
+            tabs.push(
+                self.tab(
+                    Active::Project,
+                    "Project page".into(),
+                    None,
+                    &self.project_page_focus,
+                    cx,
+                )
+                .into_any_element(),
+            );
         }
-        // A click in a terminal focuses it directly, so the tab learns which pane has focus here.
-        if let Active::Terminal(id) = self.active
-            && let Some(index) = self.terminals.iter().position(|tab| tab.id == id)
-        {
-            let clicked = self.terminals[index]
-                .layout
-                .panes()
-                .into_iter()
-                .find(|pane| {
-                    self.panes.get(pane).is_some_and(|p| match &p.view {
-                        Ok(view) => view.focus_handle(cx).contains_focused(window, cx),
-                        Err(_) => p.focus.is_focused(window),
-                    })
-                });
-            if let Some(pane) = clicked {
-                self.terminals[index].focused = pane;
-            }
+        // With the Issues plugin's own board, that is the Issues tab, among the plugin pages.
+        if self.issues_open && !self.has_tasks_board() {
+            tabs.push(
+                self.tab(
+                    Active::Issues,
+                    "Issues".into(),
+                    None,
+                    &self.issues_focus,
+                    cx,
+                )
+                .into_any_element(),
+            );
         }
+        if self.welcome {
+            tabs.clear();
+        }
+        self.title_bar(tabs, cx)
+    }
+
+    /// The project bar and the active tab's content under it, drawn as a piece of its own (`parts`).
+    fn main_part(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let body: AnyElement = if self.welcome {
             self.welcome(cx)
         } else {
@@ -646,54 +678,57 @@ impl Render for Workspace {
                 Active::Issues => page_card(self.issues.clone()),
             }
         };
-        let mut tabs: Vec<AnyElement> = self
-            .terminals
-            .iter()
-            .map(|tab| {
-                self.tab(
-                    Active::Terminal(tab.id),
-                    self.label(tab.id, cx),
-                    self.tab_state(tab.id),
-                    &tab.focus,
-                    cx,
-                )
-                .into_any_element()
-            })
-            .collect();
-        tabs.extend(self.plugin_tabs.iter().map(|tab| {
-            self.tab(
-                Active::Plugin(tab.id),
-                tab.title.clone(),
-                None,
-                &tab.focus,
-                cx,
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .when(!self.welcome, |column| column.child(self.project_bar(cx)))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    // The terminal filling the area stands in for the tab, so the tab is out of sight, not just under
+                    // it: laid out at its size, but not painted or clickable.
+                    .child(
+                        div()
+                            .size_full()
+                            .when(self.loose_page().is_some(), |tab| tab.invisible())
+                            .child(body),
+                    )
+                    .children(self.quick_layer(cx)),
             )
             .into_any_element()
-        }));
-        if self.project_page.is_some() {
-            tabs.push(
-                self.tab(
-                    Active::Project,
-                    "Project page".into(),
-                    None,
-                    &self.project_page_focus,
-                    cx,
-                )
-                .into_any_element(),
-            );
+    }
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_plugins(cx);
+        self.exits.popovers.render();
+        // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
+        let place = self.place();
+        self.nav.visit(place);
+        if let Some((viewer, _)) = &self.plugin_ui.diff {
+            return div().size_full().child(viewer.clone()).into_any_element();
         }
-        // With the Issues plugin's own board, that is the Issues tab, among the plugin pages.
-        if self.issues_open && !self.has_tasks_board() {
-            tabs.push(
-                self.tab(
-                    Active::Issues,
-                    "Issues".into(),
-                    None,
-                    &self.issues_focus,
-                    cx,
-                )
-                .into_any_element(),
-            );
+        // A click in a terminal focuses it directly, so the tab learns which pane has focus here.
+        if let Active::Terminal(id) = self.active
+            && let Some(index) = self.terminals.iter().position(|tab| tab.id == id)
+        {
+            let clicked = self.terminals[index]
+                .layout
+                .panes()
+                .into_iter()
+                .find(|pane| {
+                    self.panes.get(pane).is_some_and(|p| match &p.view {
+                        Ok(view) => view.focus_handle(cx).contains_focused(window, cx),
+                        Err(_) => p.focus.is_focused(window),
+                    })
+                });
+            if let Some(pane) = clicked {
+                self.terminals[index].focused = pane;
+            }
         }
         let tab_layout = (
             window.viewport_size().width,
@@ -711,10 +746,37 @@ impl Render for Workspace {
             }
             self.tab_layout = Some(tab_layout);
         }
-        if self.welcome {
-            tabs.clear();
-        }
-        let title_bar = self.title_bar(tabs, cx);
+        // Each kept as last drawn until it, or the workspace, changes: a terminal's output redraws the main column, and a
+        // spinner step only the layer that turns the spinners, not the whole window. Drawn in place until the pieces
+        // exist, right after the first draw.
+        let (title_bar, main) = match &self.parts {
+            Some(parts) => (
+                parts
+                    .title_bar
+                    .clone()
+                    .cached(
+                        StyleRefinement::default()
+                            .w_full()
+                            .h(px(title_bar::TITLE_BAR_HEIGHT))
+                            .flex_none(),
+                    )
+                    .into_any_element(),
+                parts
+                    .main
+                    .clone()
+                    .cached(StyleRefinement::default().flex_1().min_w_0().h_full())
+                    .into_any_element(),
+            ),
+            None => (
+                self.title_bar_part(window, cx),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.main_part(window, cx))
+                    .into_any_element(),
+            ),
+        };
         let sidebar = self.sidebar_panel(cx);
         let right = self.right_panel(window.viewport_size().width, cx);
         let notices = self.notices_layer(cx);
@@ -860,31 +922,7 @@ impl Render for Workspace {
                     .flex()
                     .relative()
                     .children(sidebar)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .when(!self.welcome, |column| column.child(self.project_bar(cx)))
-                            .child(
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_h_0()
-                                    // The terminal filling the area stands in for the tab, so the tab is out of
-                                    // sight, not just under it: laid out at its size, but not painted or clickable.
-                                    .child(
-                                        div()
-                                            .size_full()
-                                            .when(self.loose_page().is_some(), |tab| {
-                                                tab.invisible()
-                                            })
-                                            .child(body),
-                                    )
-                                    .children(self.quick_layer(cx)),
-                            ),
-                    )
+                    .child(main)
                     .children(right)
                     .children(self.sidebar_peek(cx)),
             )
