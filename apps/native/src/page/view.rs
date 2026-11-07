@@ -504,6 +504,9 @@ impl PageView {
                 .gap(px(gap(stack.gap)))
                 .when(stack.grow, |el| el.flex_1())
                 .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
+                .when_some(stack.max_width, |el, width| {
+                    el.w_full().max_w(px(width)).mx_auto()
+                })
                 .children(self.nodes(&stack.children, cx))
                 .into_any_element(),
             Node::Row(row) => div()

@@ -45,6 +45,11 @@ test("Card, Stack and Row can be a form", () => {
   assert.equal(html(h(Row, { as: "form", wrap: true })), '<form class="w-row" data-wrap=""></form>');
 });
 
+test("a Stack with maxWidth is a centred column of that width, sized by plugin-ui.css", () => {
+  assert.equal(html(h(Stack, { maxWidth: 720, gap: "l" })), '<div class="w-stack" style="--w-max-width:720px" data-gap="l" data-max-width=""></div>');
+  assert.equal(html(h(Stack, { gap: "l" })), '<div class="w-stack" data-gap="l"></div>');
+});
+
 /** The `data-*` attribute `name` of the first element `out` renders, or null. */
 const attr = (out, name) => out.match(new RegExp(` data-${name}="([^"]*)"`))?.[1] ?? null;
 

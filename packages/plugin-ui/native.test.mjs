@@ -25,6 +25,11 @@ test("Changes controls deliver search, chip and row actions without DOM objects"
   assert.equal(input, "shipping"); assert.equal(chip, "history"); assert.equal(clicked, true);
 });
 
+test("a Stack tells the native app its maxWidth", () => {
+  mount(h(Stack, { maxWidth: 720, gap: "l" }, h(Text, null, "Form")));
+  assert.deepEqual(find(last(), "Stack").props, { gap: "l", maxWidth: 720 });
+});
+
 test("a 10,000 commit graph transports one node and only its visible row window", () => {
   let range, selected;
   const rows = Array.from({ length: 64 }, (_, i) => ({ hash: String(i), subject: "Commit", author: "Ada", date: "2026-11-06", refs: [], lane: 0, color: 0, merge: false, lines: [0, 0, 2, 0] }));

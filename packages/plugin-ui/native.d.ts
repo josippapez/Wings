@@ -34,8 +34,8 @@ export function mount(element: ReactElement, options?: { fill?: boolean }): void
 export function Page(props: { toolbar?: ReactNode; flush?: boolean; children?: ReactNode }): ReactElement;
 /** A page's top row: a `title` (cut to one line) on the left, `children` like filters after it, and `actions` on the right. */
 export function Toolbar(props: { title?: ReactNode; actions?: ReactNode; children?: ReactNode }): ReactElement;
-/** Children one under the other. */
-export function Stack(props: { gap?: Gap; grow?: boolean; children?: ReactNode }): ReactElement;
+/** Children one under the other. With `maxWidth`, a column at most that many px wide, centred in the room it has. */
+export function Stack(props: { gap?: Gap; grow?: boolean; maxWidth?: number; children?: ReactNode }): ReactElement;
 /** Children side by side, centred. */
 export function Row(props: { gap?: Gap; align?: "start" | "baseline"; justify?: "end" | "between"; wrap?: boolean; grow?: boolean; children?: ReactNode }): ReactElement;
 /** Text with a tone and size, that can `grow` to fill a row or `truncate` with an ellipsis. */

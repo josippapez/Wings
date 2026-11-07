@@ -89,20 +89,22 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
           </Toolbar>
         }
       >
-        <ScheduleForm
-          key={editing || "new"}
-          schedule={schedule}
-          watch={watch}
-          projects={projects}
-          here={here}
-          loadBranches={loadBranches}
-          loadWorktreeSetup={loadWorktreeSetup}
-          busy={action.busy}
-          error={action.error}
-          onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
-          onSaveWatch={(draft, worktree) => void action.run(() => onSaveWatch(watch?.id ?? null, draft, worktree)).then((ok) => ok && setEditing(false))}
-          onCancel={() => (action.clear(), setEditing(false))}
-        />
+        <Stack maxWidth={720}>
+          <ScheduleForm
+            key={editing || "new"}
+            schedule={schedule}
+            watch={watch}
+            projects={projects}
+            here={here}
+            loadBranches={loadBranches}
+            loadWorktreeSetup={loadWorktreeSetup}
+            busy={action.busy}
+            error={action.error}
+            onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
+            onSaveWatch={(draft, worktree) => void action.run(() => onSaveWatch(watch?.id ?? null, draft, worktree)).then((ok) => ok && setEditing(false))}
+            onCancel={() => (action.clear(), setEditing(false))}
+          />
+        </Stack>
       </Page>
     );
   }

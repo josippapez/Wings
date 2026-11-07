@@ -145,7 +145,7 @@ function ScanRow({ scan, disks, onOpen, onForget }: { scan: ScanSummary; disks: 
 export function Overview({ disks, disksError, projects, starred, scans, error, onDismissError, onScan, onStar, onOpen, onForget }: OverviewProps) {
   return (
     <Page toolbar={<Toolbar title="Disk usage" />}>
-      <Stack gap="l" className="dk-wrap">
+      <Stack gap="l" maxWidth={860} className="dk-wrap">
         {error ? <Dismissible tone="danger" onDismiss={onDismissError}>{error}</Dismissible> : null}
 
         <Section title="Disks">

@@ -239,6 +239,60 @@ fn a_page_that_does_not_fill_keeps_the_desktops_14pt_padding() {
     settle(&app, &mut window, shows("Pressed 1 1."));
 }
 
+/// Two buttons at either end of a 720pt column, the desktop's Schedules form, on a page that fills its frame.
+const COLUMN: &str = r#"
+let left = 0, right = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Stack',props:{maxWidth:720},children:[
+{id:2,type:'Row',props:{justify:'between'},children:[
+{id:3,type:'Button',props:{onClick:'3:click'},children:[{id:4,type:'#text',text:'Left'}]},
+{id:5,type:'Button',props:{onClick:'5:click'},children:[{id:6,type:'#text',text:'Right'}]}]},
+{id:7,type:'Text',children:[{id:8,type:'#text',text:'Pressed '+left+' '+right+'.'}]}]}]}));}
+globalThis.__wingsEvent=(handler)=>{if(handler==='3:click')left++;else right++;render();return true;};render();
+"#;
+
+/// Clicks 6pt from the top at each of `xs`.
+fn click_along(app: &TestApp, window: &mut View, xs: [f32; 2]) {
+    for x in xs {
+        window.simulate_click(point(px(x), px(6.0)), MouseButton::Left);
+    }
+    thread::sleep(Duration::from_millis(100));
+    app.run_until_parked();
+    window.draw();
+}
+
+#[test]
+fn a_stack_with_a_max_width_is_a_centred_column_that_narrow_frames_fill() {
+    let (app, mut window) = open(COLUMN);
+    settle(&app, &mut window, shows("Pressed 0 0."));
+    let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
+    assert!(width > 800.0, "the window is narrower than the column");
+    // The column is 720pt wide in the middle of the window: outside it is nothing, and its ends are the buttons.
+    let (left, right) = ((width - 720.0) / 2.0, (width + 720.0) / 2.0);
+    click_along(&app, &mut window, [left - 6.0, right + 6.0]);
+    assert!(window.read(|view, _| view.text().contains("Pressed 0 0.")));
+    click_along(&app, &mut window, [left + 6.0, right - 6.0]);
+    settle(&app, &mut window, shows("Pressed 1 1."));
+
+    // In a window narrower than the column, it takes the whole width.
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(640.0), px(400.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |_, cx| PageView::new(COLUMN, cx),
+    );
+    settle(&app, &mut window, shows("Pressed 0 0."));
+    assert_eq!(
+        window.update(|_, window, _| window.viewport_size().width),
+        px(640.0)
+    );
+    click_along(&app, &mut window, [4.0, 636.0]);
+    settle(&app, &mut window, shows("Pressed 1 1."));
+}
+
 fn open(source: &'static str) -> (TestApp, View) {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();

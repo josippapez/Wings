@@ -98,7 +98,7 @@ export function ProjectPulls({ path, name, store, onOpen }: ListProps) {
 
   const ready = !error && Boolean(data?.rows);
   return (
-    <Stack gap="m" className="pl-wrap" data-store={store} data-testid="pulls">
+    <Stack gap="m" maxWidth={store === "block" ? undefined : 860} className="pl-wrap" data-store={store} data-testid="pulls">
       <Stack as="header" gap="m" className="pl-head">
         <Row justify="between" gap="s">
           {store === "tab" ? (

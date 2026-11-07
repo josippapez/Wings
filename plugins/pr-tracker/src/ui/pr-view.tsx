@@ -138,7 +138,7 @@ export function PrView(props: PrViewProps) {
 
   return (
     <Page toolbar={toolbar} className="pr-page" data-testid="pr-page">
-      <Stack gap="l" className="pr-wrap">
+      <Stack gap="l" maxWidth={860} className="pr-wrap">
         <Stack as="header" gap="m" className="pr-header">
           <Title className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
             {st?.title ?? args.title}

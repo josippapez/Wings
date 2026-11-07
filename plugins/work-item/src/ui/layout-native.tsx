@@ -18,7 +18,8 @@ export function Layout({ tag, className = "", children }: HTMLAttributes<HTMLEle
   if (classes.includes("wi-number")) return <Text tone="muted"> {children}</Text>;
   if (tag === "span") return MUTED.some((c) => classes.includes(c)) ? <Text tone="muted">{children}</Text> : <Text grow={classes.includes("wi-link-title")}>{children}</Text>;
   if (tag === "h1") return <Title size="large">{children}</Title>;
-  return <Stack gap={classes.includes("wi-wrap") || classes.includes("wi-overview") ? "l" : "s"} grow={classes.includes("wi-rev-body")}>{children}</Stack>;
+  // item.css's centred column.
+  return <Stack gap={classes.includes("wi-wrap") || classes.includes("wi-overview") ? "l" : "s"} grow={classes.includes("wi-rev-body")} maxWidth={classes.includes("wi-wrap") ? 860 : undefined}>{children}</Stack>;
 }
 
 export function LinkButton({ onClick, disabled, children, ...props }: LinkButtonProps) {

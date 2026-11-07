@@ -182,9 +182,17 @@ export function Row({ as = "div", gap, align, justify, wrap, grow, className, ..
   return h(as, { ...rest, className: cx("w-row", className), "data-gap": gap, "data-align": align, "data-justify": justify, "data-wrap": flag(wrap), "data-grow": flag(grow) });
 }
 
-/** Children one under the other. */
-export function Stack({ as = "div", gap, grow, className, ...rest }) {
-  return h(as, { ...rest, className: cx("w-stack", className), "data-gap": gap, "data-grow": flag(grow) });
+/** Children one under the other. With `maxWidth`, a column at most that many px wide, centred in the room it has. */
+export function Stack({ as = "div", gap, grow, maxWidth, className, style, ...rest }) {
+  return h(as, {
+    ...rest,
+    className: cx("w-stack", className),
+    // The width is data, not a style: plugin-ui.css sizes the column from it.
+    style: maxWidth === undefined ? style : { ...style, "--w-max-width": `${maxWidth}px` },
+    "data-gap": gap,
+    "data-grow": flag(grow),
+    "data-max-width": flag(maxWidth !== undefined),
+  });
 }
 
 /** A strip across its parent, like a page's header or footer: padded as a toolbar is, with a hairline on the `edge` that faces the page. */

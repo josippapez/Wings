@@ -116,7 +116,7 @@ function Opened({ name }: { name: string }) {
 
 | Component | Props | Renders |
 |---|---|---|
-| `Row`, `Stack` | `gap` (`none`, `xs`, `s`, `m`, `l`), `grow`; `Row` also `align`, `justify`, `wrap`; `as` (`form`, `ul`, `ol` too) | Children side by side or one under the other; as a `ul` or `ol`, a list with no bullets. With `as`, the props and handlers are the element's: `<Row as="form" onSubmit={(e) => e.currentTarget.requestSubmit()}>` has a `HTMLFormElement` |
+| `Row`, `Stack` | `gap` (`none`, `xs`, `s`, `m`, `l`), `grow`; `Row` also `align`, `justify`, `wrap`; `Stack` also `maxWidth` (px); `as` (`form`, `ul`, `ol` too) | Children side by side or one under the other; as a `ul` or `ol`, a list with no bullets. A `Stack` with `maxWidth` is a column at most that wide, centred in the room it has, like a form or an item's page, in the app and in the native app alike. With `as`, the props and handlers are the element's: `<Row as="form" onSubmit={(e) => e.currentTarget.requestSubmit()}>` has a `HTMLFormElement` |
 | `Bar` | `edge` (`top`, `bottom`), `gap`, `as` | A strip across its parent, like a page's header or footer: padded as a toolbar is, children one under the other, with a hairline on its `edge` |
 | `Scroll` | `as` | A column that scrolls when its content is taller than the room it has, and takes what is left of its parent, like a list under a header |
 | `Text` | `tone` (`muted`, `info`, `success`, `warn`, `danger`), `size` (`small`, `tiny`), `weight` (`medium`, `strong`), `mono`, `numeric`, `truncate`, `clamp`, `grow`, `as` | A span, or the element in `as` |

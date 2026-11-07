@@ -220,6 +220,12 @@ textarea::placeholder {
   gap: 8px;
   min-width: 0;
 }
+/* `maxWidth`: a column of at most that width, centred in the room it has. */
+.w-stack[data-max-width] {
+  width: 100%;
+  max-width: var(--w-max-width);
+  margin-inline: auto;
+}
 :is(ul, ol):is(.w-row, .w-stack, .w-card) {
   margin: 0;
   list-style: none;

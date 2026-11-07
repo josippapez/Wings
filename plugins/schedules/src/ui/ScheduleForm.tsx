@@ -90,7 +90,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
   const stateNames = watch ? stateOptions({ states, tickets: watch.tickets }) : [];
 
   return (
-    <Card as="form" className="sc-form" onSubmit={submit} aria-label={schedule || watch ? "Edit entry" : "New entry"}>
+    <Card as="form" onSubmit={submit} aria-label={schedule || watch ? "Edit entry" : "New entry"}>
       <Stack gap="l">
         {schedule || watch ? null : (
           <FieldGroup label="Start an agent">

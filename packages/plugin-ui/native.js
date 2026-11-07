@@ -167,9 +167,9 @@ export function Page({ toolbar, flush, children }) {
 export function Toolbar({ title, actions, children }) {
   return h("Toolbar", null, slot("title", title), slot("children", children), slot("actions", actions));
 }
-/** Children one under the other. */
+/** Children one under the other. With `maxWidth`, a column at most that many px wide, centred in the room it has. */
 export function Stack(props) {
-  return h("Stack", pick(props, ["gap", "grow", "width"]), props.children);
+  return h("Stack", pick(props, ["gap", "grow", "width", "maxWidth"]), props.children);
 }
 /** Children side by side, centred. */
 export function Row(props) {

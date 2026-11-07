@@ -16,5 +16,7 @@ export function Layout({ tag, className = "", children }: { tag: string; classNa
   if (is(MUTED)) return <Text tone="muted" size="small">{children}</Text>;
   if (tag === "span") return <Text grow={classes.includes("tk-link-title")} truncate={classes.includes("tk-link-title")}>{children}</Text>;
   if (tag === "p") return <Text>{children}</Text>;
-  return <Stack gap={classes.includes("tk-wrap") || classes.includes("tk-main") || classes.includes("tk-grid") ? "l" : "s"}>{children}</Stack>;
+  // tasks.css's centred columns: the issue page's and the list's.
+  const maxWidth = classes.includes("tk-wrap") ? 1040 : classes.includes("tk-list") ? 1100 : undefined;
+  return <Stack gap={classes.includes("tk-wrap") || classes.includes("tk-main") || classes.includes("tk-grid") ? "l" : "s"} maxWidth={maxWidth}>{children}</Stack>;
 }

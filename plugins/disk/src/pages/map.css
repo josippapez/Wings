@@ -2,9 +2,6 @@
 
 /* ---------- Disks (the overview) ---------- */
 .dk-wrap {
-  width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
   padding: 6px 0 24px;
   gap: 20px;
 }

@@ -201,6 +201,8 @@ pub struct Stack {
     pub grow: bool,
     /// A fixed width in points, for a column beside others.
     pub width: Option<f32>,
+    /// At most this wide, centred: a reading column, as plugin-ui.css's `.w-stack[data-max-width]`.
+    pub max_width: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -842,6 +844,9 @@ impl Walk {
                 width: number(&props, "width")
                     .filter(|width| *width > 0.0)
                     .map(|width| width.min(2_000.0) as f32),
+                max_width: number(&props, "maxWidth")
+                    .filter(|width| *width > 0.0)
+                    .map(|width| width as f32),
                 children: parts(children),
             }),
             "Row" => Node::Row(Row {

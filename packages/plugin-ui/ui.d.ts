@@ -100,8 +100,8 @@ export type Gap = "none" | "xs" | "s" | "m" | "l";
  * element's, so `<Row as="form" onSubmit={(e) => e.currentTarget.requestSubmit()}>` has a `HTMLFormElement`.
  */
 export function Row<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; align?: "start" | "baseline"; justify?: "end" | "between"; wrap?: boolean; grow?: boolean }>): ReactElement;
-/** Children one under the other. As a `ul` or `ol` it's a list with no bullets, of `li` children. `as` types the props like `Row`'s. */
-export function Stack<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; grow?: boolean }>): ReactElement;
+/** Children one under the other. As a `ul` or `ol` it's a list with no bullets, of `li` children. `as` types the props like `Row`'s. `maxWidth` makes it a column at most that many px wide, centred in the room it has. */
+export function Stack<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; grow?: boolean; /** At most this many px wide, centred: a reading column, like a form or an item's page. */ maxWidth?: number }>): ReactElement;
 /** A strip across its parent, like a page's header or footer: padded as a toolbar is, children one under the other, with a hairline on the `edge` that faces the page. `as` types the props like `Stack`'s. */
 export function Bar<E extends BoxAs = "div">(props: Own<E, { as?: E; gap?: Gap; edge?: "top" | "bottom" }>): ReactElement;
 /** A column that scrolls when what is in it is taller than the room it has, and takes what is left of its parent: a list under a header. A `ref` reaches the element, to read where it is scrolled to. */
