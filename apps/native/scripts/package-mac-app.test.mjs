@@ -8,7 +8,9 @@ import { test } from "node:test";
 
 const scripts = dirname(new URL(import.meta.url).pathname);
 
-function fixture({ arch = "arm64", os = "Darwin", version = "0.1.0" } = {}) {
+const LOCAL_ONLY = "#!/bin/sh\nprintf '%s\\n' '1) ABC \"Wings Local Signing\"'\n";
+
+function fixture({ arch = "arm64", os = "Darwin", version = "0.1.0", security = LOCAL_ONLY } = {}) {
   const root = mkdtempSync(join(tmpdir(), "wings-native-package-"));
   const native = join(root, "native");
   const bin = join(root, "bin");
@@ -28,7 +30,7 @@ for binary in wings-native wings-plugin-worker wings wings-terminal-server; do
   chmod +x "target/release/$binary"
 done
 `);
-  writeFileSync(join(bin, "security"), "#!/bin/sh\nprintf '%s\\n' '1) ABC \"Wings Local Signing\"'\n");
+  writeFileSync(join(bin, "security"), security);
   writeFileSync(join(bin, "codesign"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n');
   writeFileSync(join(bin, "uname"), `#!/bin/sh
 if [ "$1" = "-s" ]; then printf '%s\\n' '${os}'; else printf '%s\\n' '${arch}'; fi
@@ -109,6 +111,22 @@ test("packages a signed native bundle and matching local metadata", (t) => {
   }
   assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign Wings Local Signing target/release/Wings-native.app\n");
   assert.equal(existsSync(join(setup.root, "Applications")), false);
+});
+
+test("signs with a valid Apple Development certificate before the local one, so keychain approvals carry over to new builds", (t) => {
+  // `-v` lists only the valid identities, as security(1) does: the local certificate isn't trusted, so it's left out.
+  const setup = fixture({
+    security: `#!/bin/sh
+case "$*" in
+  *-v*) printf '%s\\n' '  1) DEF "Apple Development: Someone (TEAM123)"' '     1 valid identities found' ;;
+  *) printf '%s\\n' '  1) ABC "Wings Local Signing" (CSSMERR_TP_NOT_TRUSTED)' '  2) DEF "Apple Development: Someone (TEAM123)"' ;;
+esac
+`,
+  });
+  t.after(() => rmSync(setup.root, { recursive: true, force: true }));
+  const result = run(setup);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign DEF target/release/Wings-native.app\n");
 });
 
 test("maps Intel macOS output and rejects unsupported architectures", (t) => {

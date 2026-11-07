@@ -45,8 +45,15 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
+# macOS files the keychain items an app saves under its Apple team, and lets every build signed for that team read
+# them. A self-signed certificate has no team, so its items are filed under the build's own hash and each new build
+# asks for keychain access again. So a valid Apple Development certificate wins, picked by hash because Xcode can
+# leave several with the same name.
 IDENTITY=-
-if security find-identity -p codesigning | grep -q '"Wings Local Signing"'; then
+APPLE=$(security find-identity -v -p codesigning | awk '/"Apple Development: / { print $2; exit }')
+if [ -n "$APPLE" ]; then
+  IDENTITY=$APPLE
+elif security find-identity -p codesigning | grep -q '"Wings Local Signing"'; then
   IDENTITY="Wings Local Signing"
 fi
 codesign --force --deep --sign "$IDENTITY" "$APP"

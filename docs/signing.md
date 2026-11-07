@@ -2,6 +2,8 @@
 
 macOS ties privacy and keychain approvals to an app's signature. Tauri signs ad hoc by default, and an ad-hoc signature changes with every build, so each new build asks for keychain access again and loses approvals such as Full Disk Access. Signing with one fixed certificate keeps them.
 
+The fixed certificate keeps privacy approvals, but not keychain access. macOS files a saved token under the Apple team of the app that saved it, and a self-signed certificate has no team, so the token is filed under that one build and the next build asks again. A valid Apple Development certificate keeps keychain access too. To make one, open Xcode, go to Settings, then Accounts, add your Apple ID, then Manage Certificates, then + and Apple Development. A free Apple ID works and the certificate lasts a year. The native app's build (`apps/native/scripts/build-mac-app.sh`) signs with it when there is one, and with the local certificate otherwise.
+
 ## Make the certificate once
 
 ```sh
