@@ -8,6 +8,7 @@
 pub mod bridge;
 #[cfg(unix)]
 pub mod cli;
+pub mod opencode;
 pub mod panes;
 pub mod project_info;
 pub mod register;

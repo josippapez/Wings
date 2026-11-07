@@ -22,6 +22,7 @@ mod manage_tests;
 mod nav;
 #[cfg(all(test, feature = "test-support"))]
 mod nav_tests;
+mod opencode;
 mod palette;
 mod pane_card;
 mod panes;
@@ -229,6 +230,7 @@ pub struct Workspace {
     /// Claude Code's connection, as Settings, Agents shows it.
     claude: claude::Connection,
     hotkey: global_hotkey::HotkeyState,
+    opencode: opencode::Link,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     /// What the Plugins section is doing: installs, reviews waiting, updates found.
@@ -359,6 +361,7 @@ impl Workspace {
             menu: None,
             claude: Default::default(),
             hotkey: Default::default(),
+            opencode: Default::default(),
             manage: Default::default(),
             review_focus: cx.focus_handle(),
             setup_asks: Default::default(),
@@ -401,7 +404,12 @@ impl Workspace {
             if let Err(error) = claude::start(&socket, this.plugin_env.clone(), sessions, info) {
                 eprintln!("Couldn't listen on {}: {error}", socket.display());
             }
-            claude::connect_on_start(socket, this.config.state.clone(), this.spaces.spaces());
+            claude::connect_on_start(
+                socket.clone(),
+                this.config.state.clone(),
+                this.spaces.spaces(),
+            );
+            opencode::connect_on_start(socket, this.config.state.clone());
         }
         this.transcript_plugins = this
             .plugins

@@ -1119,7 +1119,14 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ];
         handle
             .update(cx, |workspace, _, cx| {
-                workspace.show_claude_accounts(accounts, cx)
+                workspace.show_claude_accounts(accounts, cx);
+                workspace.show_opencode_status(
+                    wings_connect::opencode::Status {
+                        opencode: true,
+                        connected: true,
+                    },
+                    cx,
+                );
             })
             .expect("show the made-up accounts");
         // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117 as in the desktop.

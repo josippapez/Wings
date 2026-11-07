@@ -933,13 +933,6 @@ impl Workspace {
                 )
             })
             .collect();
-        let note = div()
-            .px(px(16.0))
-            .py(px(12.0))
-            .text_size(px(12.0))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
-            .child("Not here yet: OpenCode is connected from the desktop app.")
-            .into_any_element();
         let enter = vec![
             self.switch_row(
                 "agents-run-commands",
@@ -965,10 +958,87 @@ impl Workspace {
         if !accounts.is_empty() {
             cards.push(accounts);
         }
+        cards.push(vec![self.opencode_card(cx)]);
         cards.push(enter);
-        cards.push(vec![note]);
         cards
     }
+
+    /// OpenCode's connection, as the desktop's OpenCode chip: whether its global config has Wings' MCP server.
+    fn opencode_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        let link = &self.opencode;
+        let state = match &link.status {
+            None if link.busy => "Checking…",
+            None => "Not checked",
+            Some(s) if !s.opencode => "Not installed",
+            Some(s) if s.connected => "Connected",
+            Some(_) => "Not connected",
+        };
+        let summary = match state {
+            "Not installed" => "Install OpenCode to give it plugin tools.",
+            "Connected" => "Its sessions get Wings' and plugin tools.",
+            _ => {
+                "Connect it so its sessions get Wings' and plugin tools. Wings adds itself to OpenCode's global \
+                 config and keeps the rest of it as it was."
+            }
+        };
+        let installed = link.status.as_ref().is_some_and(|s| s.opencode);
+        let busy = link.busy;
+        let mut buttons = div().flex().items_center().gap(px(8.0));
+        if installed && state == "Connected" {
+            buttons = buttons.child(
+                ui::button(
+                    "opencode-disconnect",
+                    "Disconnect OpenCode",
+                    ui::Variant::Ghost,
+                    busy,
+                    "Disconnect",
+                )
+                .when(!busy, |b| {
+                    b.on_click(cx.listener(|this, _, _, cx| this.change_opencode(false, cx)))
+                }),
+            );
+        }
+        if installed {
+            let (label, variant) = if state == "Connected" {
+                ("Reconnect", ui::Variant::Outline)
+            } else {
+                ("Connect", ui::Variant::Secondary)
+            };
+            buttons = buttons.child(
+                ui::button(
+                    "opencode-connect",
+                    format!("{label} OpenCode"),
+                    variant,
+                    busy,
+                    label,
+                )
+                .when(!busy, |b| {
+                    b.on_click(cx.listener(|this, _, _, cx| this.change_opencode(true, cx)))
+                }),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .child(ui::setting_row(
+                format!("OpenCode · {state}"),
+                summary,
+                link.error.clone().map(SharedString::from),
+                div(),
+            ))
+            .when(installed, |card| {
+                card.child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .px(px(16.0))
+                        .pb(px(12.0))
+                        .child(buttons),
+                )
+            })
+            .into_any_element()
+    }
+
 
     pub(super) fn settings_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.settings.as_ref()?;
@@ -990,6 +1060,7 @@ impl Workspace {
                 // Claude Code's state is read each time the section opens, as the desktop's does.
                 if section == Section::Agents {
                     this.load_claude_status(cx);
+                    this.load_opencode_status(cx);
                 }
                 cx.notify();
             }))
