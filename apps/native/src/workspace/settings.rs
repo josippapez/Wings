@@ -1054,7 +1054,6 @@ impl Workspace {
             .into_any_element()
     }
 
-
     pub(super) fn settings_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.settings.as_ref()?;
         let section = dialog.section;
