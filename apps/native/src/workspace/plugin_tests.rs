@@ -452,6 +452,94 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
     window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
 }
 
+/// Cyclops' task field, which lists recent tasks over the page as you type. In the popover under the title bar button,
+/// itself a card drawn over the window, the list is drawn over the card and a click on it picks a task. On the right,
+/// where a page is drawn again only when it changes, Escape takes the list away and Down and Enter pick.
+#[test]
+fn a_combobox_lists_its_options_over_the_popover_and_the_sidebar_page() {
+    let data = Data::temp();
+    // What wings-plugin-ui/native's `Combobox` renders: the field, and the tasks that match it as chips.
+    let page = r#"
+let text = '';
+function render(){
+  const tasks = ['Code review', 'Checkout redesign'].filter(t => t.toLowerCase().includes(text.toLowerCase()));
+  wings.render(JSON.stringify({id:0,type:'#root',children:[
+    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,onChange:'3:onChange'}},
+      {id:4,type:'Row',props:{gap:'s',wrap:true},children:tasks.map(t=>({id:t.length,type:'Button',props:{chip:true,pressed:false,onClick:t.length+':onClick'},children:[{id:100+t.length,type:'#text',text:t}]}))}]},
+    {id:7,type:'Text',children:[{id:8,type:'#text',text:'Task='+text+'.'}]}]}));
+}
+globalThis.__wingsEvent=(h,json)=>{ text = h==='3:onChange' ? JSON.parse(json).value : (h.startsWith('11:') ? 'Code review' : 'Checkout redesign'); render(); return true; };
+render();"#;
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
+            "popover": { "page": "dist/popover.html", "width": 360, "height": 300 } }] } }),
+        "",
+        &[("sidebar", page), ("popover", page)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let shows = |app: &TestApp,
+                 window: &mut TestAppWindow<Workspace>,
+                 page: &gpui::Entity<crate::page::PageView>,
+                 text: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !window.read(|_, cx| page.read(cx).text().contains(text)) {
+            assert!(Instant::now() < deadline, "the page never showed {text}");
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let type_in = |app: &TestApp,
+                   window: &mut TestAppWindow<Workspace>,
+                   page: &gpui::Entity<crate::page::PageView>| {
+        let focus = window
+            .read(|_, cx| page.read(cx).first_input_focus(cx))
+            .expect("a field");
+        window.update(|_, window, cx| focus.focus(window, cx));
+        window.draw();
+        window.simulate_input("re");
+        shows(app, window, page, "Task=re.");
+        window.draw();
+    };
+
+    window.update(|w, _, cx| w.shot_popover("timer", "tracker", cx));
+    until(&app, &mut window, "the popover never opened", |w| {
+        w.popover_page("timer", "tracker").is_some()
+    });
+    let popover = window.read(|w, _| w.popover_page("timer", "tracker").unwrap());
+    shows(&app, &mut window, &popover, "Task=.");
+    type_in(&app, &mut window, &popover);
+    let row = crate::ui::spot_at("combobox-option:Checkout redesign").expect("the list was drawn");
+    window.simulate_click(row.center(), MouseButton::Left);
+    shows(&app, &mut window, &popover, "Task=Checkout redesign.");
+    window.read(|w, _| assert!(w.plugin_ui.popover.open.is_some()));
+
+    window.update(|w, _, cx| w.shot_sidebar("timer", "tracker", cx));
+    until(&app, &mut window, "the sidebar never opened", |w| {
+        w.sidebar_page("timer", "tracker").is_some()
+    });
+    let sidebar = window.read(|w, _| w.sidebar_page("timer", "tracker").unwrap());
+    shows(&app, &mut window, &sidebar, "Task=.");
+    type_in(&app, &mut window, &sidebar);
+    let row = crate::ui::spot_at("combobox-option:Code review").expect("the list was drawn");
+    window.simulate_keystroke("escape");
+    window.draw();
+    // The list is gone: a press where its first task was picks nothing.
+    window.simulate_click(row.center(), MouseButton::Left);
+    std::thread::sleep(Duration::from_millis(100));
+    app.run_until_parked();
+    window.draw();
+    window.read(|_, cx| assert!(sidebar.read(cx).text().contains("Task=re.")));
+    // Typing brings it back, and the keyboard picks.
+    window.simulate_input("v");
+    shows(&app, &mut window, &sidebar, "Task=rev.");
+    window.simulate_keystroke("down");
+    window.simulate_keystroke("enter");
+    shows(&app, &mut window, &sidebar, "Task=Code review.");
+}
+
 /// As on the desktop, Wings goes into a named account's Claude Code when a plugin picks the account for a project, opens
 /// a pane in it, or turns its shared setup on or off. Whether Wings may (you didn't disconnect it) is the system's.
 #[test]

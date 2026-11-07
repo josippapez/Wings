@@ -9,8 +9,8 @@ use std::{
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, Focusable, FontWeight, IntoElement,
-    KeyDownEvent, Pixels, Render, Role, SharedString, Task, Toggled, Window, canvas, div,
-    prelude::*, px, relative, rgb, rgba,
+    KeyDownEvent, Pixels, Render, Role, SharedString, Task, Toggled, Window, anchored, canvas,
+    deferred, div, prelude::*, px, relative, rgb, rgba,
 };
 
 #[path = "board_view.rs"]
@@ -71,9 +71,17 @@ pub struct PageView {
     /// A press on that select's trigger found its menu open, so the click that follows closes it. The menu closes
     /// itself on any press outside it, the trigger's too, which would otherwise have the click open it again.
     pressed_open: bool,
-    /// Where each select was drawn, by node id, and how tall the window was: its menu is as wide, and as tall as the
-    /// room on one side of it.
+    /// Where each select and combobox was drawn, by node id, and how tall the window was: its menu is as wide, and as
+    /// tall as the room on one side of it.
     select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
+    /// The text input that has the keyboard, by node id, as of the last render: a combobox's shows its options under
+    /// it.
+    focused: Option<u64>,
+    /// The focused combobox's options were put away, by Escape, a pick or a press outside, until its field changes, is
+    /// pressed or takes the keyboard again.
+    suggestions_closed: bool,
+    /// The option of the focused combobox the arrow keys are on.
+    highlight: Option<usize>,
     fields: RefCell<HashMap<u64, SearchState>>,
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
@@ -244,6 +252,9 @@ impl PageView {
             menu: None,
             pressed_open: false,
             select_bounds: HashMap::new(),
+            focused: None,
+            suggestions_closed: false,
+            highlight: None,
             fields: RefCell::new(HashMap::new()),
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
@@ -289,6 +300,15 @@ impl PageView {
         if let Some(handler) = on_change {
             self.act(handler, Some(&serde_json::json!({ "value": value })));
         }
+        cx.notify();
+    }
+
+    /// The person picked a combobox's option, whose chip's click is `handler`: the page hears that click, and the list
+    /// goes away until the field changes again.
+    fn pick_suggestion(&mut self, handler: &str, cx: &mut Context<Self>) {
+        self.suggestions_closed = true;
+        self.highlight = None;
+        self.act(handler, None);
         cx.notify();
     }
 
@@ -1011,6 +1031,7 @@ impl PageView {
             }
             Node::Disclosure(disclosure) => self.disclosure(disclosure, cx),
             Node::Select(select) => self.select(select, cx),
+            Node::Combobox(combobox) => self.combobox(combobox, cx),
             Node::Chips(select) => {
                 let focus = select
                     .options
@@ -1285,6 +1306,10 @@ impl PageView {
                 if !matches!(event, crate::text_field::FieldEvent::Changed) {
                     return;
                 }
+                // Typing brings a combobox's options back, with none of them picked out.
+                view.suggestions_closed = false;
+                view.highlight = None;
+                cx.notify();
                 let text = entity.read(cx).text.clone();
                 let handler = view.inputs.borrow_mut().get_mut(&id).and_then(|state| {
                     let handler = state.handler.clone()?;
@@ -1319,7 +1344,7 @@ impl PageView {
         }
         state.field.update(cx, |field, cx| {
             if echo.is_none() && state.given != input.value && field.text != input.value {
-                field.text = input.value.clone();
+                field.set_text(input.value.clone());
                 state.sent.clear();
                 cx.notify();
             }
@@ -1442,10 +1467,180 @@ impl PageView {
             .children(menu)
             .into_any_element()
     }
+
+    /// A combobox's field, and while it has the keyboard the options that match it in a list under it, over the page,
+    /// as the desktop's: arrows move through them, Enter or a click picks one, and Escape, a pick or a press outside
+    /// put the list away.
+    fn combobox(&self, combobox: &tree::Combobox, cx: &mut Context<Self>) -> AnyElement {
+        let id = combobox.id;
+        let field = combobox.field.iter().find_map(|node| match node {
+            Node::Input(input) => Some((input.id, input.disabled)),
+            _ => None,
+        });
+        let options = combobox
+            .options
+            .iter()
+            .filter_map(|node| match node {
+                Node::Button(button) => {
+                    Some((plain_text(&button.children), button.on_click.clone()?))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let listed = !options.is_empty() || !combobox.empty.is_empty();
+        let shows = move |view: &Self| {
+            field.is_some_and(|(input, disabled)| {
+                view.focused == Some(input) && !view.suggestions_closed && !disabled && listed
+            })
+        };
+        let highlight = self.highlight.filter(|at| *at < options.len());
+        let handlers = options
+            .iter()
+            .map(|(_, handler)| handler.clone())
+            .collect::<Vec<_>>();
+        let entity = cx.entity();
+        let measure = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, cx| {
+                let height = window.viewport_size().height;
+                entity.update(cx, |view, _| {
+                    view.select_bounds.insert(id, (bounds, height));
+                });
+            },
+        )
+        .absolute()
+        .size_full();
+        let list = shows(self).then(|| {
+            let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
+            // As the select's menu: no taller than the room under the field, or over it when there is more there.
+            let room = (window_height - bounds.top()).max(bounds.top()) - px(36.0 + 8.0);
+            let rows = options
+                .into_iter()
+                .enumerate()
+                .map(|(at, (label, handler))| {
+                    ui::select_item(
+                        ElementId::NamedInteger(
+                            format!("page-combobox-{id}-option").into(),
+                            at as u64,
+                        ),
+                        label.clone(),
+                        false,
+                    )
+                    .children(ui::spot(|| format!("combobox-option:{label}")))
+                    .when(highlight == Some(at), |row| {
+                        row.bg(rgba(theme::HOVER_STRONG))
+                    })
+                    .on_click(cx.listener(move |view, _, _, cx| view.pick_suggestion(&handler, cx)))
+                    .into_any_element()
+                })
+                .collect::<Vec<_>>();
+            // plugin-ui.css's `.w-option-empty`.
+            let empty = (!combobox.empty.is_empty()).then(|| {
+                div()
+                    .px(px(6.0))
+                    .py(px(8.0))
+                    .text_center()
+                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .child(self.inline(&combobox.empty, cx))
+                    .into_any_element()
+            });
+            // Over the page as `ui::popover` draws a select's menu, without its motion: the desktop's
+            // `.w-combobox-popup` has `transition: none`, as a list that changes with each key has nothing to animate.
+            deferred(
+                anchored().child(
+                    div().child(
+                        ui::select_menu(rows.into_iter().chain(empty))
+                            // As wide as the field, as the desktop's `.w-combobox-popup`.
+                            .w(bounds.size.width)
+                            .max_h(room)
+                            .id(ElementId::NamedInteger("page-combobox-list".into(), id))
+                            .overflow_y_scroll()
+                            // A press on the list is the list's: the button under it doesn't hear it, and a
+                            // focusable frame around the page doesn't take the keyboard from the field.
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_mouse_down_out(cx.listener(
+                                move |view, event: &gpui::MouseDownEvent, _, cx| {
+                                    let in_field =
+                                        view.select_bounds.get(&id).is_some_and(|(bounds, _)| {
+                                            bounds.contains(&event.position)
+                                        });
+                                    if !in_field {
+                                        view.suggestions_closed = true;
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                    ),
+                ),
+            )
+        });
+        div()
+            .relative()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            // Before the field's own keys, which move its caret on up and down and send Enter and Escape to the page.
+            .capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                if !shows(view) || event.keystroke.modifiers.modified() {
+                    return;
+                }
+                let count = handlers.len();
+                match event.keystroke.key.as_str() {
+                    "down" if count > 0 => {
+                        view.highlight = Some(view.highlight.map_or(0, |at| (at + 1) % count));
+                    }
+                    "up" if count > 0 => {
+                        view.highlight = Some(
+                            view.highlight
+                                .map_or(count - 1, |at| (at + count - 1) % count),
+                        );
+                    }
+                    "enter" => match view.highlight.and_then(|at| handlers.get(at)) {
+                        Some(handler) => view.pick_suggestion(handler, cx),
+                        None => return,
+                    },
+                    "escape" => {
+                        view.suggestions_closed = true;
+                        view.highlight = None;
+                    }
+                    _ => return,
+                }
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            // A press in the field brings the options back, as focusing it does: one outside put them away, and left
+            // the field the keyboard.
+            .capture_any_mouse_down(cx.listener(|view, _, _, cx| {
+                if view.suggestions_closed {
+                    view.suggestions_closed = false;
+                    cx.notify();
+                }
+            }))
+            .child(measure)
+            .children(self.nodes(&combobox.field, cx))
+            .children(list)
+            .into_any_element()
+    }
 }
 
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A change of focus redraws every view, cached ones too. A combobox field that has just taken the keyboard
+        // shows its options afresh.
+        let focused = self
+            .inputs
+            .borrow()
+            .iter()
+            .find(|(_, state)| state.field.read(cx).focus_handle(cx).is_focused(window))
+            .map(|(id, _)| *id);
+        if focused != self.focused {
+            self.focused = focused;
+            self.suggestions_closed = false;
+            self.highlight = None;
+        }
         let body = self
             .tree
             .as_ref()

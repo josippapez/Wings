@@ -240,6 +240,11 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
                 ..sidebar("projects", &[], "Native plugin popovers")
             },
             popover("popover", "Native plugin popovers"),
+            // The recent tasks that match, over the popover.
+            State {
+                typed: Some("re"),
+                ..popover("popover-suggest", "Native plugin popovers")
+            },
             State {
                 select: Some("Wings · Prototyp"),
                 ..popover("popover-projects", "Native plugin popovers")

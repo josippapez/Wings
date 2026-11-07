@@ -158,6 +158,7 @@ pub enum Node {
     Disclosure(Disclosure),
     Select(Select),
     Chips(Select),
+    Combobox(Combobox),
     ListButton(ListButton),
     SearchField(SearchField),
     Input(Input),
@@ -469,6 +470,20 @@ pub struct Select {
     pub on_change: Option<String>,
 }
 
+/// wings-plugin-ui/native's `Combobox`, which has no node of its own: the page sends a stack of its field and, under
+/// it, the options that match the field as chips, or a muted line saying none do. The app draws them as a list over
+/// the page, as the desktop does, instead of in the page's flow, where they pushed everything under the field down.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Combobox {
+    pub id: u64,
+    /// The field, one `Node::Input`.
+    pub field: Vec<Node>,
+    /// The chips (`Node::Button`): a click on one picks its option.
+    pub options: Vec<Node>,
+    /// What the line saying nothing matches holds, when nothing does.
+    pub empty: Vec<Node>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListButton {
     pub button: Button,
@@ -723,6 +738,7 @@ impl Node {
             Node::List(n) => vec![&n.children],
             Node::ListItem(n) => vec![&n.children],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
+            Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
         }
     }
 }
@@ -839,7 +855,7 @@ impl Walk {
                     actions: slots.take("actions"),
                 })
             }
-            "Stack" => Node::Stack(Stack {
+            "Stack" => combobox(Stack {
                 id,
                 gap: choice(&props, "gap"),
                 grow: on("grow"),
@@ -1211,6 +1227,69 @@ fn valid_handler(handler: &str) -> bool {
         && handler
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b':' || b == b'_')
+}
+
+/// `stack` as a `Combobox` when it is exactly what wings-plugin-ui/native's `Combobox` renders: a field with no key or
+/// blur handler of its own, then its options as plain chips in a wrapping row, or a small muted line when none match.
+/// When the field holds an option, or is empty with none to suggest, the stack is the field alone and stays a stack.
+fn combobox(stack: Stack) -> Node {
+    let plain =
+        stack.gap == Gap::S && !stack.grow && stack.width.is_none() && stack.max_width.is_none();
+    let field = |node: &Node| {
+        matches!(node, Node::Input(input) if input.rows.is_none()
+            && !input.password
+            && input.on_key_down.is_none()
+            && input.on_blur.is_none()
+            && !input.select_on_focus)
+    };
+    let chip = |node: &Node| {
+        matches!(node, Node::Button(button) if button.chip
+            && !button.pressed
+            && button.variant == Variant::Default
+            && button.size == ButtonSize::Default
+            && button.label.is_none()
+            && button.on_click.is_some()
+            && button.on_key_down.is_none()
+            && button.children.iter().all(|child| matches!(child, Node::Str { .. })))
+    };
+    let chips = |node: &Node| {
+        matches!(node, Node::Row(row) if row.gap == Gap::S
+            && row.wrap
+            && !row.grow
+            && row.align == Align::Center
+            && row.justify == Justify::Start
+            && !row.children.is_empty()
+            && row.children.iter().all(chip))
+    };
+    let none_match = |node: &Node| {
+        matches!(node, Node::Text(text) if text.size == TextSize::Small
+            && text.tone == Some(Tone::Muted)
+            && text.weight == Weight::Normal
+            && !text.mono
+            && !text.truncate
+            && !text.clamp
+            && !text.grow
+            && text.on_click.is_none())
+    };
+    if !(plain
+        && stack.children.len() == 2
+        && field(&stack.children[0])
+        && (chips(&stack.children[1]) || none_match(&stack.children[1])))
+    {
+        return Node::Stack(stack);
+    }
+    let mut children = stack.children;
+    let (options, empty) = match children.pop() {
+        Some(Node::Row(row)) => (row.children, Vec::new()),
+        Some(Node::Text(text)) => (Vec::new(), text.children),
+        _ => unreachable!("matched above"),
+    };
+    Node::Combobox(Combobox {
+        id: stack.id,
+        field: children,
+        options,
+        empty,
+    })
 }
 
 /// A component's named parts, taken out by name.

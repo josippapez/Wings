@@ -752,3 +752,108 @@ fn a_select_menu_longer_than_the_window_scrolls_to_its_last_option() {
     click(&mut window, (100.0, 370.0));
     settle(&app, &mut window, shows("Picked o59."));
 }
+
+/// A task field with recent tasks to pick from and a Start button under it, as Cyclops' timer form: the tree is what
+/// wings-plugin-ui/native's `Combobox` renders, the field and the tasks that match it as chips, or a muted line when
+/// none do, and only the field once it holds a task.
+const TASK_FIELD: &str = r#"
+const tasks = ['Code review', 'Checkout redesign', 'Sidebar labels', 'Password fields', 'Standup'];
+let text = '', started = 0;
+function render(){
+  const found = tasks.filter(t => t.toLowerCase().includes(text.toLowerCase())).slice(0, 8);
+  const done = found.length === 1 && found[0] === text;
+  const under = done ? [] : found.length
+    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(t=>{const i=tasks.indexOf(t);return {id:100+2*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+2*i)+':onClick'},children:[{id:101+2*i,type:'#text',text:t}]};})}]
+    : text ? [{id:5,type:'Text',props:{size:'small',tone:'muted'},children:[{id:6,type:'#text',text:'No matching tasks.'}]}] : [];
+  wings.render(JSON.stringify({id:0,type:'#root',children:[
+    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,maxLength:2000,onChange:'3:onChange'}},...under]},
+    {id:7,type:'Button',props:{onClick:'7:onClick'},children:[{id:8,type:'#text',text:'Start'}]},
+    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Task='+text+', started '+started+'.'}]}]}));
+}
+globalThis.__wingsEvent=(handler,json)=>{
+  if(handler==='3:onChange') text=JSON.parse(json).value;
+  else if(handler==='7:onClick') started++;
+  else text=tasks[(parseInt(handler)-100)/2];
+  render(); return true;
+};
+render();
+"#;
+
+/// The task field, 14pt in from the page's corner and 32pt tall.
+const TASK: (f32, f32) = (100.0, 30.0);
+/// Start, 10pt under the field: it stays there whatever the field suggests.
+const START: (f32, f32) = (40.0, 72.0);
+/// The first suggestion: the list starts 4pt under the field, over Start.
+const FIRST_TASK: (f32, f32) = (60.0, 71.0);
+
+#[test]
+fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_one() {
+    let (app, mut window) = open(TASK_FIELD);
+    settle(&app, &mut window, shows("Task=, started 0."));
+    // The five tasks don't take a place in the page: Start is right under the field. They pushed it down, and a press
+    // there picked the first of them.
+    click(&mut window, START);
+    settle(&app, &mut window, shows("Task=, started 1."));
+
+    // Typed into, the field lists what matches; Down, Down and Enter pick the second.
+    click(&mut window, TASK);
+    window.simulate_input("re");
+    settle(&app, &mut window, shows("Task=re,"));
+    for name in ["down", "down", "enter"] {
+        key(&mut window, name);
+    }
+    settle(
+        &app,
+        &mut window,
+        shows("Task=Checkout redesign, started 1."),
+    );
+
+    // Escape puts the list away, and Start under it can be pressed again.
+    key(&mut window, "backspace");
+    settle(&app, &mut window, shows("Task=Checkout redesig,"));
+    key(&mut window, "escape");
+    nothing_happens(&app);
+    click(&mut window, START);
+    settle(
+        &app,
+        &mut window,
+        shows("Task=Checkout redesig, started 2."),
+    );
+
+    // Taking the keyboard again lists the task, and a click picks it without pressing Start under it. The field keeps
+    // the keyboard.
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.draw();
+    click(&mut window, FIRST_TASK);
+    settle(
+        &app,
+        &mut window,
+        shows("Task=Checkout redesign, started 2."),
+    );
+    window.simulate_input("!");
+    settle(
+        &app,
+        &mut window,
+        shows("Task=Checkout redesign!, started 2."),
+    );
+
+    // Nothing matches now, which the list says over Start. A press outside puts it away and leaves the field the
+    // keyboard; a press in the field brings it back.
+    click(&mut window, (300.0, 300.0));
+    nothing_happens(&app);
+    window.draw();
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.draw();
+    assert!(!pressed_at(&app, &mut window, START, "started 3."));
+    click(&mut window, (300.0, 300.0));
+    nothing_happens(&app);
+    window.draw();
+    click(&mut window, START);
+    settle(
+        &app,
+        &mut window,
+        shows("Task=Checkout redesign!, started 3."),
+    );
+}

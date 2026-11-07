@@ -106,6 +106,13 @@ impl TextField {
         }
     }
 
+    /// Takes `text` from outside with the caret after it, as a browser's input does when a page sets its value: a
+    /// suggestion picked after typing two letters left the caret after its second, where the next key went.
+    pub fn set_text(&mut self, text: String) {
+        self.text = text;
+        (self.anchor, self.head) = (usize::MAX, usize::MAX);
+    }
+
     /// Where the field's text was last drawn, in the window.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
