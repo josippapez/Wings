@@ -46,6 +46,9 @@ fn shell(window: &TestAppWindow<Workspace>) -> u32 {
     window.read(|w, cx| w.terminal(0).unwrap().read(cx).process_id().unwrap())
 }
 
+/// Types `line` and presses Enter, then waits for `shows`, which must be what the command prints, never the line itself:
+/// the line is typed a key at a time, and its echo shows while later keys, Enter among them, still wait to be sent, so a
+/// quit then would drop them.
 fn type_line(app: &TestApp, window: &mut TestAppWindow<Workspace>, line: &str, shows: &str) {
     window.simulate_input(line);
     window.simulate_keystroke("enter");
@@ -89,8 +92,8 @@ fn a_restored_pane_reattaches_to_its_shell_even_after_a_launch_without_the_serve
     type_line(
         &app,
         &mut window,
-        "sleep 0.5; echo mean''while",
-        "mean''while",
+        "echo wai''ting; sleep 0.5; echo mean''while",
+        "waiting",
     );
     quit(&mut app);
     drop((window, app));
@@ -158,8 +161,8 @@ fn a_pane_that_ended_while_the_app_was_away_shows_its_output_above_a_new_shell()
     type_line(
         &app,
         &mut window,
-        "sleep 0.3; echo fini''shed; exit",
-        "fini''shed",
+        "echo star''ted; sleep 0.3; echo fini''shed; exit",
+        "started",
     );
     let ended = shell(&window);
     quit(&mut app);
