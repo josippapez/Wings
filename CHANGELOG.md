@@ -2,6 +2,23 @@
 
 What changed in each Wings release, newest first.
 
+## 0.1.124 · 2026-11-06
+
+- **Usage limits per Claude Code account.** With more than one account, the HUD keeps each account's limits apart, so it no longer alerts again every time a session of the other account replies. Each terminal's strip shows its own account's limits, and the sidebar lists every account.
+
+## 0.1.123 · 2026-11-06
+
+- **Claude accounts show whether they're signed in.** Plugins get each account's real sign-in from Claude Code, so a logged-out account no longer looks signed in.
+
+## 0.1.122 · 2026-11-06
+
+- **Each Claude Code account keeps its own model.** An account that shares your default setup gets a copy of your settings with its own model kept, so a work seat no longer starts on your personal default model.
+
+## 0.1.121 · 2026-11-06
+
+- **Every Claude Code account gets your setup.** A second account links your default account's settings, plugins, skills and rules, and gets its MCP servers. Turn it off per account in the Claude accounts plugin and the account's own files come back.
+- **Start Claude as any account.** Plugins can open a terminal as a chosen account without changing the project's account.
+
 ## 0.1.120 · 2026-11-06
 
 - **A Claude Code account per project.** Plugins can set which Claude Code account (a `~/.claude-<name>` folder) a project's new terminals use, so two accounts work side by side. Wings connects to every account in use, and history and session tracking cover all of them. The Claude accounts plugin uses it.

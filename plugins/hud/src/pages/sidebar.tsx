@@ -1,7 +1,7 @@
 // The HUD sidebar page: usage limits and memory, then one session's context, MCP servers and skills. The plugin's
 // main script keeps the state and shares it here.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { tokens } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
 import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text } from "wings-plugin-ui";
@@ -58,8 +58,15 @@ export default function Hud() {
     <>
       <Heading>Usage</Heading>
       <Card>
-        {o.fiveHour && <Gauge label="5-hour limit" percent={o.fiveHour.percent} note={o.fiveHour.resets && `Resets in ${o.fiveHour.resets}`} levels={limitLevels} />}
-        {o.sevenDay && <Gauge label="Weekly limit" percent={o.sevenDay.percent} note={o.sevenDay.resets && `Resets in ${o.sevenDay.resets}`} levels={limitLevels} />}
+        {o.limits.map((a) => {
+          const of = o.limits.length > 1 ? ` · ${a.account ?? "default"}` : "";
+          return (
+            <Fragment key={a.account ?? ""}>
+              {a.fiveHour && <Gauge label={`5-hour limit${of}`} percent={a.fiveHour.percent} note={a.fiveHour.resets && `Resets in ${a.fiveHour.resets}`} levels={limitLevels} />}
+              {a.sevenDay && <Gauge label={`Weekly limit${of}`} percent={a.sevenDay.percent} note={a.sevenDay.resets && `Resets in ${a.sevenDay.resets}`} levels={limitLevels} />}
+            </Fragment>
+          );
+        })}
         {!o.statusline && (
           <Text as="p" tone="muted">
             Your 5-hour and weekly limits show after Claude Code's next reply, on Pro and Max plans. If they don't, connect Claude Code in Plugins.

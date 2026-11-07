@@ -75,6 +75,8 @@ export type PaneInfo = { command: string; cwd: string | null; busy: boolean };
 
 /** A pane still running, in this Wings or in the terminal host from before a restart, which the UI can attach to again. */
 export type LivePane = { id: string; spaceId: string; cwd: string };
+/** The Claude Code account a pane runs under when it isn't its project's: a named one, or `{ name: null }` for the default account. */
+export type ClaudeAccountPick = { name: string | null };
 
 export type PluginPermissions = {
   exec: string[];
@@ -100,7 +102,7 @@ export type PluginPermissions = {
   sendToAgents: boolean;
   /** Makes git worktrees of your projects. */
   worktrees: boolean;
-  /** Lists your Claude Code accounts and chooses the one each project's terminals use. */
+  /** Lists your Claude Code accounts, chooses the one each project's terminals use, and whether an account uses your default setup. */
   claudeAccounts: boolean;
   /** Other plugins' tools it calls: a plugin id, or `<plugin> <tool>`. Only between Wings' own plugins. */
   callTools: string[];
@@ -387,7 +389,9 @@ export const api = {
     cwd: string | null = null,
     /** Names the pane's output saved across a restart: it starts with what that pane showed before. */
     historyId: string | null = null,
-  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd, historyId }),
+    /** A Claude Code account for this pane, apart from its project's: `{ name }` for a named one, `{ name: null }` for the default. */
+    claudeAccount: ClaudeAccountPick | null = null,
+  ) => invoke<string>("pane_create", { spaceId, cols, rows, initialInput, onOutput, cwd, historyId, claudeAccount }),
   /** Keys you type (the terminal's input). Remembered per pane, so Wings can tell a draft is waiting in one. */
   paneWrite: (id: string, data: string) => {
     paneInput.note(id, data);

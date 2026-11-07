@@ -1638,10 +1638,11 @@ fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin(
         &app,
         &mut window,
         &socket,
-        json!({ "id": 1, "op": "statusline", "status": status }),
+        json!({ "id": 1, "op": "statusline", "status": status, "account": "work" }),
     );
     let view = window.read(|w, _| crate::page::plugin::Env::statusline(&*w.plugin_env));
-    assert_eq!(view["rateLimits"]["fiveHour"]["usedPercentage"], 40.0);
+    assert_eq!(view["rateLimits"][0]["fiveHour"]["usedPercentage"], 40.0);
+    assert_eq!(view["rateLimits"][0]["account"], "work");
 }
 
 /// A page with a button in its bottom right corner that counts its presses. `PROPS` is what `mount` puts on the root.

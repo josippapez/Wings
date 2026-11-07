@@ -446,7 +446,7 @@ pub trait Env: Send + Sync + 'static {
     /// What Claude Code last told `wings statusline`, as `wings.statusline()` resolves it: `{ rateLimits, sessions }`.
     /// The host has checked the plugin may.
     fn statusline(&self) -> serde_json::Value {
-        serde_json::json!({ "rateLimits": null, "sessions": {} })
+        serde_json::json!({ "rateLimits": [], "sessions": {} })
     }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;

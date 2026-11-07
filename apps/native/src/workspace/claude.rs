@@ -419,11 +419,11 @@ impl Handler for Server {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as u64);
-                self.env
-                    .statusline
-                    .lock()
-                    .unwrap()
-                    .record(request.get("status").unwrap_or(&Value::Null), now);
+                self.env.statusline.lock().unwrap().record(
+                    request.get("status").unwrap_or(&Value::Null),
+                    request.get("account").unwrap_or(&Value::Null),
+                    now,
+                );
                 Ok(Value::Null)
             }
             "pane_busy" => self.pane_busy(
