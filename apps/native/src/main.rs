@@ -10,6 +10,19 @@ use wings_native::{
     workspace::Workspace,
 };
 
+/// Whether the side-by-side app (`dev.wings.native`) is open. Both builds' executables are `wings-native`, so it's found
+/// by its bundle id.
+#[cfg(target_os = "macos")]
+fn side_by_side_running() -> bool {
+    use objc2_app_kit::NSRunningApplication;
+    use objc2_foundation::NSString;
+    NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
+        "dev.wings.native",
+    ))
+    .count()
+        > 0
+}
+
 fn run() -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let (args, restart_ack) = wings_native::updater::startup_args();
@@ -30,6 +43,11 @@ fn run() -> Result<(), String> {
             }
             Ok(_) => {}
             Err(error) => eprintln!("Couldn't bring over the side-by-side app's data: {error}"),
+        }
+        // Its terminals stay behind in its folder, where this app never looks, unless that app is still open.
+        #[cfg(target_os = "macos")]
+        if !side_by_side_running() {
+            wings_native::terminal_server::end_all(&wings_native::terminal_server::dir(&from));
         }
     }
     // The desktop app's socket: the `wings` command finds Wings there, whichever app serves it.

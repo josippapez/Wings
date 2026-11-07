@@ -481,6 +481,32 @@ fn wait(socket: &Path) -> io::Result<()> {
     }
 }
 
+/// Ends the servers in `dir` and every pane they run: for a folder no app reads any more, like the side-by-side app's
+/// once the replacement took over its data. Their panes can't come back, so they'd otherwise run until a reboot.
+pub fn end_all(dir: &Path) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with('v') && name.ends_with(".sock")) {
+            continue;
+        }
+        let Ok(mut control) = Control::connect(&entry.path()) else {
+            continue;
+        };
+        // Drained first, so it starts no pane while this ends the others, and exits once it has none.
+        let ended = control
+            .drain()
+            .and_then(|()| control.list())
+            .and_then(|panes| panes.iter().try_for_each(|pane| control.kill(pane.pane)));
+        if let Err(error) = ended {
+            eprintln!(
+                "Couldn't end the terminal server at {}: {error}",
+                entry.path().display()
+            );
+        }
+    }
+}
+
 /// Ends a pane's program in its server. The pane is already gone from the app.
 pub fn kill(socket: &Path, pane: u32) {
     if let Err(error) = Control::connect(socket).and_then(|mut control| control.kill(pane)) {

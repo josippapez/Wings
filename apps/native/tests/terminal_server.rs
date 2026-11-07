@@ -198,6 +198,31 @@ fn a_newer_app_drains_an_older_server_and_keeps_its_panes() {
 }
 
 #[test]
+fn ending_a_folder_no_app_reads_ends_its_server_and_shells() {
+    let folder = Folder::new("end-all");
+    let start = Start::Child(BIN.into());
+    let socket = Servers::connect(&folder.0, Some(&start))
+        .current()
+        .unwrap()
+        .to_owned();
+    let (pane, mut events) = Pane::spawn(&socket, spawn_request("h-left"), b"").unwrap();
+    pane.write(b"echo le''ft\r").unwrap();
+    wait_for(&pane, &mut events, "left");
+    let (server, shell) = (server_pid(&socket), pane.shell_pid().unwrap());
+    pane.detach();
+
+    terminal_server::end_all(&folder.0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for (pid, what) in [(shell, "shell"), (server, "server")] {
+        while unsafe { libc::kill(pid as i32, 0) } == 0 {
+            assert!(Instant::now() < deadline, "the {what} is still running");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    assert!(!socket.exists());
+}
+
+#[test]
 fn a_killed_server_ends_its_panes_events_and_the_next_app_starts_another() {
     let folder = Folder::new("killed");
     let start = Start::Child(BIN.into());

@@ -75,7 +75,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-fe
 # only AppKit's NSSound bindings to the build.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray"], optional = true }
 # The global shortcut, the version the desktop's tauri-plugin-global-shortcut uses: Carbon's RegisterEventHotKey.
 global-hotkey = { version = "=0.8.0", optional = true }
