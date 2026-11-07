@@ -5,18 +5,18 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, BoxShadow, Context, ElementId, MouseDownEvent, Role, Task,
-    div, ease_out_quint, hsla, point, prelude::*, px, rgb, rgba,
+    div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
-use crate::theme;
+use crate::{theme, ui::motion};
 
 use crate::workspace::Workspace;
 
 /// The pointer is on the edge this long before the sidebar slides out, and off the sidebar this long before it goes.
 const SHOW_AFTER: Duration = Duration::from_millis(60);
 const HIDE_AFTER: Duration = Duration::from_millis(200);
-/// The slide, in and out.
-const SLIDE: Duration = Duration::from_millis(250);
+/// The slide, in and out: the desktop's 250ms spring with no bounce.
+const SLIDE: Duration = motion::PEEK;
 /// The width of the strip at the window's edge that brings the sidebar out.
 const STRIP: f32 = 8.0;
 
@@ -57,7 +57,7 @@ impl Workspace {
         ];
         if peek.open || peek.leaving {
             let (open, width) = (peek.open, self.side.width);
-            let slide = Animation::new(SLIDE).with_easing(ease_out_quint());
+            let slide = Animation::new(SLIDE).with_easing(motion::spring());
             parts.push(
                 self.sidebar_column(cx)
                     .id("peek")
