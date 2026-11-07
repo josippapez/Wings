@@ -1191,8 +1191,12 @@ impl PageView {
                 state.sent.clear();
                 cx.notify();
             }
-            if field.disabled != disabled || field.max_chars != max_chars {
+            if field.disabled != disabled
+                || field.max_chars != max_chars
+                || field.secret != input.password
+            {
                 (field.disabled, field.max_chars) = (disabled, max_chars);
+                field.secret = input.password;
                 cx.notify();
             }
         });

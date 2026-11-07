@@ -50,6 +50,9 @@ pub struct TextField {
     pub disabled: bool,
     /// The most characters it holds: what is typed or pasted past that is dropped.
     pub max_chars: Option<usize>,
+    /// A password: each character shows as a dot, and copy and cut take nothing, as in a browser's
+    /// `<input type="password">`.
+    pub secret: bool,
     /// Byte offsets into `text`, read through `anchor()` and `head()`. The caret is the head, and the selection runs
     /// from the anchor to it. Both start past the end, so a field with a text set from outside has its caret after it.
     anchor: usize,
@@ -92,6 +95,7 @@ impl TextField {
             fill: false,
             disabled: false,
             max_chars: None,
+            secret: false,
             anchor: usize::MAX,
             head: usize::MAX,
             marked: String::new(),
@@ -211,7 +215,7 @@ impl TextField {
 
     fn copy(&self, cx: &mut Context<Self>) {
         let selection = self.selection();
-        if !selection.is_empty() {
+        if !selection.is_empty() && !self.secret {
             cx.write_to_clipboard(ClipboardItem::new_string(self.text[selection].to_string()));
         }
     }
@@ -261,10 +265,11 @@ impl TextField {
             _ if !self.marked.is_empty() => return,
             "a" if secondary => self.select(0, self.text.len(), window, cx),
             "c" if secondary => self.copy(cx),
-            "x" if secondary => {
+            "x" if secondary && !self.secret => {
                 self.copy(cx);
                 self.replace(self.selection(), "", window, cx);
             }
+            "x" if secondary => {}
             "v" if secondary => self.paste(window, cx),
             "left" | "right" | "up" | "down" | "home" | "end" => {
                 self.travel(key.key.as_str(), mods, window, cx)
@@ -408,7 +413,11 @@ impl Render for TextField {
             .role(self.role)
             .aria_label(self.label.clone())
             .aria_placeholder(self.placeholder.clone())
-            .aria_value(self.text.clone())
+            .aria_value(if self.secret {
+                MASK.repeat(self.text.chars().count())
+            } else {
+                self.text.clone()
+            })
             .track_focus(&self.focus)
             .key_context("FindField")
             .on_key_down(cx.listener(Self::key_down))
@@ -469,8 +478,11 @@ impl TextField {
         );
         let doc: SharedString = self.shown().into_owned().into();
         let placeholder = doc.is_empty();
+        let secret = self.secret && !placeholder;
         let text = if placeholder {
             self.placeholder.clone()
+        } else if secret {
+            MASK.repeat(doc.chars().count()).into()
         } else {
             doc.clone()
         };
@@ -485,6 +497,11 @@ impl TextField {
             (self.selection(), true)
         } else {
             (0..0, false)
+        };
+        let range = if secret {
+            masked(&doc, range.start)..masked(&doc, range.end)
+        } else {
+            range
         };
         let plain = |len| TextRun {
             color: color.into(),
@@ -507,8 +524,25 @@ impl TextField {
             .text_system()
             .shape_text(text, font_size, &runs, wrap, None)
             .unwrap_or_default();
-        Layout::new(doc, lines.into_vec(), font_size, line_height)
+        let mut layout = Layout::new(doc, lines.into_vec(), font_size, line_height);
+        layout.secret = secret;
+        layout
     }
+}
+
+/// What a password shows for each character.
+const MASK: &str = "•";
+
+/// Where offset `at` of `doc` falls in its masked text, one `MASK` a character.
+fn masked(doc: &str, at: usize) -> usize {
+    doc[..at.min(doc.len())].chars().count() * MASK.len()
+}
+
+/// The offset of `doc` that offset `at` of its masked text falls at.
+fn unmasked(doc: &str, at: usize) -> usize {
+    doc.char_indices()
+        .nth(at / MASK.len())
+        .map_or(doc.len(), |(at, _)| at)
 }
 
 struct Layout {
@@ -523,6 +557,8 @@ struct Layout {
     line_height: Pixels,
     /// The window's place of the text's top left corner, scrolled.
     origin: Point<Pixels>,
+    /// The lines are of the text masked (`TextField::secret`), and an offset into `doc` is mapped to them and back.
+    secret: bool,
 }
 
 impl Layout {
@@ -549,6 +585,7 @@ impl Layout {
             font_size,
             line_height,
             origin: Point::default(),
+            secret: false,
         }
     }
 
@@ -567,6 +604,11 @@ impl Layout {
 
     /// Where `index` is, from the text's top left corner.
     fn point(&self, index: usize) -> Point<Pixels> {
+        let index = if self.secret {
+            masked(&self.doc, index)
+        } else {
+            index
+        };
         let i = self.line_of(index);
         let Some(line) = self.lines.get(i) else {
             return Point::default();
@@ -579,6 +621,16 @@ impl Layout {
 
     /// The place between two characters nearest to `at`, from the text's top left corner.
     fn index_at(&self, at: Point<Pixels>) -> usize {
+        let index = self.line_index_at(at);
+        if self.secret {
+            unmasked(&self.doc, index)
+        } else {
+            index
+        }
+    }
+
+    /// `index_at`, as an offset into the lines.
+    fn line_index_at(&self, at: Point<Pixels>) -> usize {
         let i = self
             .tops
             .partition_point(|&top| top <= at.y)
@@ -1104,5 +1156,37 @@ mod tests {
         // With nothing selected, Backspace takes one character.
         press(&mut window, "backspace");
         assert_eq!(text(&window, &field), "one three");
+    }
+
+    /// Cyclops' API token: a browser's `<input type="password">` shows a dot a character, and copy and cut take nothing.
+    #[test]
+    fn a_password_shows_dots_edits_by_character_and_is_never_copied() {
+        let (_app, mut window, field) = open("cyc_é1");
+        window.update(|_, _, cx| field.update(cx, |field, _| field.secret = true));
+        window.draw();
+        window.read(|_, cx| {
+            let layout = field.read(cx).layout.as_ref().unwrap();
+            let shown: String = layout
+                .lines
+                .iter()
+                .map(|line| line.text.to_string())
+                .collect();
+            assert_eq!(shown, "••••••");
+        });
+        // A click between the third and fourth dots is between the third and fourth characters.
+        window.simulate_click(gap(&window, &field, 3), MouseButton::Left);
+        assert_eq!(selected(&window, &field), 3..3);
+        window.simulate_input("x");
+        window.draw();
+        assert_eq!(text(&window, &field), "cycx_é1");
+        // Past the two-byte é, the caret moves a character at a time.
+        press(&mut window, "end left");
+        assert_eq!(selected(&window, &field), 7..7);
+        window.update(|_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string("before".into())));
+        press(&mut window, "cmd-a cmd-c cmd-x");
+        assert_eq!(text(&window, &field), "cycx_é1", "cut leaves the text");
+        let clipboard =
+            window.update(|_, _, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(clipboard.as_deref(), Some("before"));
     }
 }

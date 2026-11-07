@@ -137,7 +137,7 @@ export interface NativeInputEvent {
   currentTarget: { value: string };
 }
 /** A one-line text input. The page holds the text: give it `value` and set it in `onChange`. Outside a `Field`, give it a `label`. */
-export function TextInput(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
+export function TextInput(props: { label?: string; /** `"password"` shows dots and can't be copied; any other type is plain text natively. */ type?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
 /** A multi-line text input, `rows` high at first. Outside a `Field`, give it a `label`. */
 export function Textarea(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; rows?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
 /** Edits `value` in place: Enter or leaving the field saves it once with `onSave`, Escape cancels, and a failed save keeps the draft and shows why. `onDone` closes it. */

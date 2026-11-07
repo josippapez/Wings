@@ -502,6 +502,8 @@ pub struct Input {
     pub on_blur: Option<String>,
     pub auto_focus: bool,
     pub select_on_focus: bool,
+    /// `type="password"`: the text shows as dots and can't be copied. Any other type is plain text here.
+    pub password: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1102,6 +1104,7 @@ impl Walk {
                     on_blur: handler("onBlur"),
                     auto_focus: on("autoFocus"),
                     select_on_focus: on("selectOnFocus"),
+                    password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
                 })
             }
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
@@ -1408,6 +1411,20 @@ mod tests {
             panic!("a heading and a list")
         };
         assert!(matches!(list.children.as_slice(), [Node::ListItem(_)]));
+    }
+
+    #[test]
+    fn only_a_text_input_of_type_password_is_a_password() {
+        let password = |kind: &str, kind_prop: &str| match parse_one(
+            json!({"id":1,"type":kind,"props":{"label":"Token","type":kind_prop},"children":[]}),
+        ) {
+            Node::Input(input) => input.password,
+            other => panic!("{other:?}"),
+        };
+        assert!(password("TextInput", "password"));
+        assert!(!password("TextInput", "time"));
+        assert!(!password("TextInput", "text"));
+        assert!(!password("Textarea", "password"));
     }
 
     #[test]

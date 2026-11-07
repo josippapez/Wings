@@ -187,6 +187,13 @@ test("a form's inputs take the field's label, hold the page's text and give its 
   assert.match(text(last()), /Needed\./);
 });
 
+test("a password input says so, and other input types are plain text", () => {
+  mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" })));
+  const [token, start] = all(last(), "TextInput");
+  assert.equal(token.props.type, "password");
+  assert.equal("type" in start.props, false);
+});
+
 test("a busy button ignores clicks and shows a spinner, an icon button is named by its aria-label, and the small parts render as text", () => {
   mount(h(Page, null,
     h(Button, { busy: true, onClick: () => {} }, "Start"),
