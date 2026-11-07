@@ -46,11 +46,11 @@ printf 'test-signature' > "$last.sig"
   return { root, native, bin, log: join(root, "calls.log") };
 }
 
-function run(fixture) {
+function run(fixture, env = {}) {
   return spawnSync("sh", ["scripts/package-mac-app.sh"], {
     cwd: fixture.native,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}`, CALL_LOG: fixture.log, WINGS_UPDATER_KEY: join(fixture.root, "test-updater.key") },
+    env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}`, CALL_LOG: fixture.log, WINGS_UPDATER_KEY: join(fixture.root, "test-updater.key"), ...env },
   });
 }
 
@@ -167,4 +167,35 @@ test("a signing failure leaves no feed or partial signature", (t) => {
   for (const suffix of ["", ".sig", ".pending", ".pending.sig"]) {
     assert.equal(existsSync(join(output, `native-latest-darwin-aarch64.json${suffix}`)), false);
   }
+});
+
+test("WINGS_SWITCH=1 packages Wings.app under the desktop's id and version, with a latest.json for the desktop's updater", (t) => {
+  const setup = fixture({ version: "0.1.0" });
+  t.after(() => rmSync(setup.root, { recursive: true, force: true }));
+  writeFileSync(join(setup.root, "desktop", "src-tauri", "Cargo.toml"), `[package]\nname = "wings"\nversion = "0.2.0"\n`);
+  const result = run(setup, { WINGS_SWITCH: "1" });
+  assert.equal(result.status, 0, result.stderr);
+
+  const output = join(setup.native, "target/release/bundle/macos/darwin-aarch64");
+  const archive = "Wings-0.2.0-darwin-aarch64.app.tar.gz";
+  const entries = execFileSync("tar", ["-tzf", join(output, archive)], { encoding: "utf8" }).trim().split("\n");
+  assert.ok(entries.every((entry) => entry.startsWith("Wings.app/")), entries.join(", "));
+  assert.ok(entries.includes("Wings.app/Contents/MacOS/wings"), "Claude Code's config points at the wings command");
+  const feed = JSON.parse(readFileSync(join(output, "wings-latest-darwin-aarch64.json"), "utf8"));
+  assert.equal(feed.bundle_identifier, "dev.wings.app");
+  assert.equal(feed.version, "0.2.0");
+  assert.equal(feed.artifact, archive);
+  const latest = JSON.parse(readFileSync(join(output, "latest.json"), "utf8"));
+  assert.equal(latest.version, "0.2.0");
+  assert.deepEqual(latest.platforms, {
+    "darwin-aarch64": { signature: "test-signature", url: `https://github.com/josippapez/Wings/releases/download/v0.2.0/${archive}` },
+  });
+  const plist = readFileSync(join(setup.native, "target/release/Wings.app/Contents/Info.plist"), "utf8");
+  for (const [key, value] of Object.entries({ CFBundleIdentifier: "dev.wings.app", CFBundleName: "Wings", CFBundleExecutable: "wings-native", CFBundleShortVersionString: "0.2.0" })) {
+    assert.match(plist, new RegExp(`<key>${key}</key><string>${value}</string>`));
+  }
+  assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign Wings Local Signing target/release/Wings.app\n");
+  // The side-by-side bundle and its feed are left alone.
+  assert.equal(existsSync(join(setup.native, "target/release/Wings-native.app")), false);
+  assert.equal(existsSync(join(output, "native-latest-darwin-aarch64.json")), false);
 });

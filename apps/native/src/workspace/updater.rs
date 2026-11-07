@@ -292,10 +292,10 @@ impl Workspace {
         let (title, message, action) = match &self.updates.state {
             State::Idle => ("Wings updates".to_owned(), "Check for a newer native release.".to_owned(), Some("Check again")),
             State::Checking => ("Checking for updates".into(), "Contacting the native release feed…".into(), None),
-            State::Current => ("Wings is up to date".into(), format!("You're running Wings Native {}.", updater::VERSION), Some("Check again")),
-            State::Available(update) => (format!("Wings Native {} is available", update.release.version), if update.release.notes.is_empty() { "A newer native release is ready to download.".into() } else { update.release.notes.clone() }, Some("Download update")),
+            State::Current => ("Wings is up to date".into(), format!("You're running {} {}.", crate::data_dir::APP_NAME, updater::VERSION), Some("Check again")),
+            State::Available(update) => (format!("{} {} is available", crate::data_dir::APP_NAME, update.release.version), if update.release.notes.is_empty() { "A newer native release is ready to download.".into() } else { update.release.notes.clone() }, Some("Download update")),
             State::Downloading => ("Downloading and verifying".into(), "Checking the signed archive and native app bundle. You can keep working.".into(), None),
-            State::Ready(prepared) => (format!("Wings Native {} is ready", prepared.version), "The update is authenticated. Install it when you're ready to restart Wings.".into(), Some("Install and restart")),
+            State::Ready(prepared) => (format!("{} {} is ready", crate::data_dir::APP_NAME, prepared.version), "The update is authenticated. Install it when you're ready to restart Wings.".into(), Some("Install and restart")),
             State::Installing => ("Preparing to restart".into(), "Starting the installer. Wings will save your workspace before it quits.".into(), None),
             State::Error(error) => ("Couldn't update Wings".into(), error.clone(), Some("Retry")),
             #[cfg(feature = "test-support")]

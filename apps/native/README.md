@@ -24,7 +24,7 @@ sh scripts/package-mac-app.sh
 node --test scripts/package-mac-app.test.mjs
 ```
 
-`package-mac-app.sh "Release notes"` builds the archive, `native-latest-darwin-<architecture>.json` and its detached `.sig` in `target/release/bundle/macos/darwin-<architecture>/`. It requires `WINGS_UPDATER_KEY` (default `~/.tauri/wings-updater.key`) and uses the desktop's Tauri signing CLI and embedded public key. Run `sh scripts/build-mac-app.sh` when you only need a local bundle. The native app uses its own `[package]` version from `apps/native/Cargo.toml`, not the desktop version used for plugin compatibility.
+`package-mac-app.sh "Release notes"` builds the archive, `native-latest-darwin-<architecture>.json` and its detached `.sig` in `target/release/bundle/macos/darwin-<architecture>/`. It requires `WINGS_UPDATER_KEY` (default `~/.tauri/wings-updater.key`) and uses the desktop's Tauri signing CLI and embedded public key. Run `sh scripts/build-mac-app.sh` when you only need a local bundle. The native app uses its own `[package]` version from `apps/native/Cargo.toml`, not the desktop version used for plugin compatibility. `WINGS_SWITCH=1` before either script builds the replacement instead: `Wings.app` with the desktop's bundle id and version, on the desktop's data folder, with its first start bringing over what this app kept in `Wings Native/` (`src/data_dir.rs`, [docs/switch-to-native.md](../../docs/switch-to-native.md)).
 
 The bundle carries `wings-native`, `wings-plugin-worker`, `wings` and `wings-terminal-server`. Updates require all four executables to support the running Mac's architecture.
 

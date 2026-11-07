@@ -16,9 +16,46 @@ pub type Result<T> = std::result::Result<T, String>;
 #[cfg(test)]
 #[path = "updater_tests.rs"]
 mod tests;
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The side-by-side app has its own version. The replacement carries the desktop's (`build.rs`), so the desktop's
+/// updater offers it and its own updater goes on from there.
+pub const VERSION: &str = if crate::data_dir::REPLACEMENT {
+    env!("WINGS_DESKTOP_VERSION")
+} else {
+    env!("CARGO_PKG_VERSION")
+};
 const RESTART_ACK: &str = "--update-restarted";
-const ROOT: &str = "Wings-native.app";
+
+/// Which app a release is for, as its signed feed, archive and bundle name it.
+struct Identity {
+    bundle_identifier: &'static str,
+    /// The bundle's folder name, the archive's only top-level entry.
+    root: &'static str,
+    /// The archive is `<archive>-<version>-<platform>.app.tar.gz`.
+    archive: &'static str,
+    /// The feed is `<feed>-<platform>.json` in the latest release.
+    feed: &'static str,
+    /// The release holding the archive is tagged `<tag><version>`.
+    tag: &'static str,
+}
+
+const APP: Identity = if crate::data_dir::REPLACEMENT {
+    Identity {
+        bundle_identifier: "dev.wings.app",
+        root: "Wings.app",
+        archive: "Wings",
+        feed: "wings-latest",
+        tag: "v",
+    }
+} else {
+    Identity {
+        bundle_identifier: "dev.wings.native",
+        root: "Wings-native.app",
+        archive: "Wings-native",
+        feed: "native-latest",
+        tag: "native-v",
+    }
+};
+const ROOT: &str = APP.root;
 const EXECUTABLES: [&str; 4] = [
     "wings-native",
     "wings-plugin-worker",
@@ -80,7 +117,7 @@ pub struct Release {
 
 impl Release {
     fn validate(&self, current: &str, arch: &str) -> Result<bool> {
-        if self.bundle_identifier != "dev.wings.native" || self.platform != arch {
+        if self.bundle_identifier != APP.bundle_identifier || self.platform != arch {
             return Err("The update is not for this native app and architecture".into());
         }
         let version = semver::Version::parse(&self.version).map_err(err)?;
@@ -90,7 +127,7 @@ impl Release {
         {
             return Err("The update version must be a stable semantic version".into());
         }
-        if self.artifact != format!("Wings-native-{}-{}.app.tar.gz", self.version, arch)
+        if self.artifact != format!("{}-{}-{}.app.tar.gz", APP.archive, self.version, arch)
             || self.size == 0
             || self.size > MAX_ARCHIVE
             || self.sha256.len() != 64
@@ -105,7 +142,10 @@ impl Release {
     }
 
     fn url(&self) -> String {
-        format!("{REPO}/download/native-v{}/{}", self.version, self.artifact)
+        format!(
+            "{REPO}/download/{}{}/{}",
+            APP.tag, self.version, self.artifact
+        )
     }
 }
 
@@ -189,7 +229,7 @@ fn check_with(
     current: &str,
     arch: &str,
 ) -> Result<Option<Available>> {
-    let url = format!("{REPO}/latest/download/native-latest-{arch}.json");
+    let url = format!("{REPO}/latest/download/{}-{arch}.json", APP.feed);
     let mut manifest = Vec::new();
     let mut signature = Vec::new();
     transport.get(&url, MAX_META, &mut manifest)?;
@@ -250,7 +290,7 @@ fn validate_bundle(bundle: &Path, version: &str) -> Result<()> {
     let info = plist::Value::from_file(bundle.join("Contents/Info.plist")).map_err(err)?;
     let info = info.as_dictionary().ok_or("Invalid native bundle plist")?;
     for (key, expected) in [
-        ("CFBundleIdentifier", "dev.wings.native"),
+        ("CFBundleIdentifier", APP.bundle_identifier),
         ("CFBundleExecutable", "wings-native"),
         ("CFBundleShortVersionString", version),
         ("CFBundleVersion", version),
