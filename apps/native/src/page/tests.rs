@@ -3,7 +3,7 @@
 use super::{
     plugin::{PluginHost, tests::Root},
     tree::{Level, Node, Tree},
-    view::{PageView, level_color},
+    view::{PageView, level_color, three_lines},
 };
 use crate::theme;
 use gpui::{Keystroke, MouseButton, TestApp, TestAppWindow, point, px};
@@ -688,6 +688,39 @@ fn a_chip_longer_than_its_line_ends_at_the_pages_padding() {
     assert!(pressed_at(&app, &mut window, (280.0, 28.0), "Pressed 1."));
 }
 
+#[test]
+fn a_clamped_text_ends_its_third_line_in_an_ellipsis() {
+    use gpui::{Styled, TextOverflow, div};
+    let mut clamped = three_lines(div());
+    let style = clamped.text_style();
+    assert_eq!(style.line_clamp, Some(3));
+    // Without it the third line of a long message ran on to the box's edge and was cut there, mid-word.
+    assert!(
+        matches!(style.text_overflow, Some(TextOverflow::Truncate(ref end)) if end.as_ref() == "…")
+    );
+}
+
+/// A chip that holds a dot and a word, as Work item's state menu and Issues' parent chip: the word can be pressed.
+const DOT_CHIP: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'s'},children:[
+{id:2,type:'Button',props:{chip:true},children:[{id:3,type:'Dot',props:{tone:'info'}},
+{id:4,type:'Text',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Active'}]}]}]},
+{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_dot_in_a_chip_keeps_the_chips_gap_from_the_word_after_it() {
+    let (app, mut window) = open_narrow(DOT_CHIP, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The chip's content starts 11pt in, at 25: the 6pt dot, then 4pt of gap, and the word at 35. The word used to start
+    // right after the dot, at 31, so 33 was on it.
+    assert!(!pressed_at(&app, &mut window, (33.0, 28.0), "Pressed 1."));
+    assert!(pressed_at(&app, &mut window, (40.0, 28.0), "Pressed 1."));
+}
+
 /// A row of Properties as wings-plugin-ui/native draws it: a label, and a value that starts with a dot, like Sprint
 /// board's "State ● New". The value's text can be pressed.
 const DOT_VALUE: &str = r#"
@@ -709,6 +742,26 @@ fn a_value_that_starts_with_a_dot_sits_level_with_its_label() {
     // 2pt under the row's top, beside the label, is the value's text: the dot's bottom used to be lined up with the
     // label's, which pushed the value down by half a line.
     assert!(pressed_at(&app, &mut window, (150.0, 16.0), "Pressed 1."));
+}
+
+/// A line of a check run's log as PR tracker draws it: its number, small, and its text, which wraps in a narrow frame.
+/// The number can be pressed.
+const LOG_LINE: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
+{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted',onClick:'2:click'},children:[{id:3,type:'#text',text:'3'}]},
+{id:4,type:'Text',props:{mono:true,size:'small',grow:true},children:[{id:5,type:'#text',text:'src/sync/module-1.test.ts (8 tests) 120ms, then the next file and the one after it'}]}]},
+{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_log_lines_number_sits_by_its_first_line_when_the_line_wraps() {
+    let (app, mut window) = open_narrow(LOG_LINE, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The text takes three lines from the top of the row, 14pt down; the number used to sit by the last of them.
+    assert!(pressed_at(&app, &mut window, (17.0, 22.0), "Pressed 1."));
 }
 
 /// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.

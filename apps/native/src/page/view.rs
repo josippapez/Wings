@@ -537,6 +537,38 @@ impl PageView {
             .into_any_element()
     }
 
+    /// What a button, chip or badge holds, laid out as the desktop's `inline-flex` box lays out its children: each
+    /// component in it is an item of its own, centred, `gap` points from the next, and a run of plain strings is one
+    /// item. Only strings are one line of text. A dot drawn as a word of a line sat at the line's foot against the word
+    /// after it ("•Active"), and an id and a title ran together ("WEB-10Checkout redesign").
+    fn contents(&self, nodes: &[Node], gap: f32, cx: &mut Context<Self>) -> AnyElement {
+        if nodes.iter().all(|node| matches!(node, Node::Str { .. })) {
+            return self.inline(nodes, cx);
+        }
+        let mut items = Vec::new();
+        let mut run: Vec<Node> = Vec::new();
+        for node in nodes {
+            if matches!(node, Node::Str { .. }) {
+                run.push(node.clone());
+                continue;
+            }
+            if !run.is_empty() {
+                items.push(plain_text(&std::mem::take(&mut run)).into_any_element());
+            }
+            items.push(self.node(node, cx));
+        }
+        if !run.is_empty() {
+            items.push(plain_text(&run).into_any_element());
+        }
+        div()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(gap))
+            .children(items)
+            .into_any_element()
+    }
+
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Str { text, .. } => div().child(text.clone()).into_any_element(),
@@ -630,11 +662,14 @@ impl PageView {
                     Align::Start => el.items_start(),
                     // GPUI's text tells the layout no baseline, so a baseline row lines up the bottoms of its items'
                     // first boxes: a value that starts with a dot, like Properties' "● New", sat under its label, and a
-                    // value that wraps put its label on its last line. Texts of one size have their first lines' baselines
-                    // level when their tops are. Texts of two sizes, like a code line's number and its text, keep the
-                    // bottoms, which are nearer level than the tops.
-                    Align::Baseline if one_size(&row.children) => el.items_start(),
-                    Align::Baseline => el.items_baseline(),
+                    // value that wraps put its label on its last line, as a log line's number sat by its last line.
+                    // Texts with lines of one height have their first lines' baselines level when their tops are, so
+                    // the row's texts take the tallest of their lines, which puts texts of two sizes, like a code
+                    // line's number and its text, within half a point of level.
+                    Align::Baseline => match line_height(&row.children) {
+                        Some(height) => el.items_start().line_height(px(height)),
+                        None => el.items_baseline(),
+                    },
                 })
                 .map(|el| match row.justify {
                     Justify::Start => el,
@@ -669,7 +704,7 @@ impl PageView {
                     .when_some(least, |el, least| el.min_w(px(least)))
                     .when(text.grow, |el| el.flex_1())
                     .when(text.truncate, |el| el.truncate())
-                    .when(text.clamp, |el| el.line_clamp(3))
+                    .when(text.clamp, three_lines)
                     .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
                     .map(|el| match text.size {
                         TextSize::Normal => el,
@@ -701,7 +736,15 @@ impl PageView {
                     .label
                     .clone()
                     .unwrap_or_else(|| plain_text(&button.children));
-                let content = self.inline(&button.children, cx);
+                // plugin-ui.css's gap between a button's parts: 6px, and 4px for a chip and a small button.
+                let between = if button.chip
+                    || matches!(button.size, tree::ButtonSize::Xs | tree::ButtonSize::Sm)
+                {
+                    4.0
+                } else {
+                    6.0
+                };
+                let content = self.contents(&button.children, between, cx);
                 let element = if button.chip {
                     ui::chip(id, label, button.pressed, button.disabled, content)
                 } else {
@@ -869,7 +912,7 @@ impl PageView {
                 variant(badge.variant),
                 badge.tone.map(tone_color),
                 badge.small,
-                self.inline(&badge.children, cx),
+                self.contents(&badge.children, 4.0, cx),
             )
             .into_any_element(),
             Node::Empty(empty) => div()
@@ -1781,14 +1824,26 @@ fn gap(gap: Gap) -> f32 {
     }
 }
 
-/// Whether `nodes` are all texts of the same size.
-fn one_size(nodes: &[Node]) -> bool {
-    let mut sizes = nodes.iter().map(|node| match node {
-        Node::Text(text) => Some(text.size),
-        _ => None,
-    });
-    let first = sizes.next().flatten();
-    first.is_some() && sizes.all(|size| size == first)
+/// A `clamp`ed text: three lines, the last ending in an ellipsis where the text goes on, as `-webkit-line-clamp` ends
+/// it. Without the ellipsis the third line ran on to the box's edge and was cut there, mid-word ("keep the tota").
+pub(super) fn three_lines<E: Styled>(el: E) -> E {
+    el.line_clamp(3).text_ellipsis()
+}
+
+/// The height of the tallest line of `nodes`, when they are all texts: a text's lines are 1.45 of its size, the page's
+/// line height, but for the sizes that set their own.
+fn line_height(nodes: &[Node]) -> Option<f32> {
+    nodes.iter().try_fold(None::<f32>, |tallest, node| {
+        let Node::Text(text) = node else { return None };
+        let height = match text.size {
+            TextSize::Normal => 13.0 * 1.45,
+            TextSize::Small => 12.0 * 1.45,
+            TextSize::Tiny => 11.0 * 1.45,
+            TextSize::Large => 26.0,
+            TextSize::Field => 14.0 * 1.5,
+        };
+        Some(Some(tallest.map_or(height, |tallest| tallest.max(height))))
+    })?
 }
 
 fn tone_color(tone: Tone) -> u32 {
