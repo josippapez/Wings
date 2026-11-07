@@ -2,7 +2,7 @@
 //! list beside it of what agents and plugins said, newest first. An agent that comes to need you or finishes is kept,
 //! as is every notification a plugin shows. Opening the list marks everything read.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{cell::Cell, collections::HashSet, path::PathBuf};
 
 use gpui::{
     AnyElement, BoxShadow, Context, Div, ElementId, FontWeight, Role, SharedString, Stateful,
@@ -61,6 +61,10 @@ pub(super) struct Inbox {
     next: usize,
     /// Notifications close together share one sound.
     sound: sound::Burst,
+    /// The unread count last drawn, and how many times it has gone up since the window opened: each rise beats the
+    /// count, as the desktop's `pulse`.
+    drawn_unread: Cell<Option<usize>>,
+    pulse: Cell<u64>,
 }
 
 impl Inbox {
@@ -254,6 +258,17 @@ impl Workspace {
             .iter()
             .any(|event| !event.read && event.kind == Kind::Plugin);
         let open = self.inbox.open.is_some();
+        // The first count drawn doesn't beat, as the desktop's starts from the count it mounts with.
+        if self
+            .inbox
+            .drawn_unread
+            .get()
+            .is_some_and(|drawn| unread > drawn)
+        {
+            self.inbox.pulse.set(self.inbox.pulse.get() + 1);
+        }
+        self.inbox.drawn_unread.set(Some(unread));
+        let pulse = self.inbox.pulse.get();
         super::sidebar::nav_row("inbox", Icon::Inbox, "Inbox", super::sidebar::Look::Plain)
             .aria_label(if unread > 0 {
                 format!("Inbox, {unread} unread")
@@ -269,28 +284,45 @@ impl Workspace {
             // While the list is open, a click here lands on the layer that closes it.
             .on_click(cx.listener(|this, _, _, cx| this.open_inbox(cx)))
             .when(unread > 0, |row| {
-                row.child(
+                let count = div()
+                    .h(px(16.0))
+                    .min_w(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(4.0))
+                    .rounded_full()
+                    .bg(rgba(if accent {
+                        ACCENT << 8 | 0xff
+                    } else {
+                        0xffffff1a
+                    }))
+                    .text_color(rgb(if accent { 0x17151a } else { theme::FOREGROUND }))
+                    .child(if unread > 99 {
+                        "99+".to_string()
+                    } else {
+                        unread.to_string()
+                    });
+                if pulse == 0 {
+                    return row.child(count.text_size(px(10.0)));
+                }
+                // Three beats from the count's middle, its pill and its number, as the desktop's `scale` transform;
+                // Reduce motion keeps it still, as the desktop's `animation: none`.
+                row.child(ui::motion::tween_zoom(
                     div()
-                        .h(px(16.0))
-                        .min_w(px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .px(px(4.0))
-                        .rounded_full()
-                        .bg(rgba(if accent {
-                            ACCENT << 8 | 0xff
+                        .flex_none()
+                        .child(ui::motion::surface(count, (0.5, 0.5))),
+                    ElementId::NamedInteger("inbox-pulse".into(), pulse),
+                    ui::motion::PULSE * ui::motion::PULSE_BEATS,
+                    |count, t, reduced| {
+                        let scale = if reduced {
+                            1.0
                         } else {
-                            0xffffff1a
-                        }))
-                        .text_size(px(10.0))
-                        .text_color(rgb(if accent { 0x17151a } else { theme::FOREGROUND }))
-                        .child(if unread > 99 {
-                            "99+".to_string()
-                        } else {
-                            unread.to_string()
-                        }),
-                )
+                            ui::motion::pulse_scale(t)
+                        };
+                        (count.text_size(px(10.0 * scale)), scale)
+                    },
+                ))
             })
             .into_any_element()
     }

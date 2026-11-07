@@ -2,10 +2,12 @@
 //! in a panel on the right, and the notifications the system couldn't show. These follow the desktop's
 //! `pane-badge.tsx`, `pane-status.tsx` and `right-sidebar.tsx`.
 
+use std::{rc::Rc, time::Duration};
+
 use gpui::{
-    Anchor, AnyElement, Bounds, BoxShadow, Context, Entity, FontWeight, IntoElement, MouseButton,
-    MouseDownEvent, Pixels, Render, Role, SharedString, Task, Window, anchored, canvas, deferred,
-    div, hsla, point, prelude::*, px, relative, rgb, rgba, svg,
+    Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement,
+    MouseButton, MouseDownEvent, Pixels, Render, Role, SharedString, Task, Window, anchored,
+    canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba, svg,
 };
 
 use crate::{
@@ -15,7 +17,7 @@ use crate::{
         plugin::ui::{Badge, CountIcon, PaneStatus, Row, StatusItem, Tone},
     },
     theme,
-    ui::{self, ButtonSize, HAIRLINE, Variant},
+    ui::{self, ButtonSize, HAIRLINE, Variant, motion},
 };
 
 use super::{Workspace, plugin_env::ACTION_TIMEOUT};
@@ -567,9 +569,57 @@ impl Workspace {
             .collect()
     }
 
-    /// The panel on the right, with the open sidebar's page, or nothing while none is open.
-    pub(super) fn right_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (plugin, sidebar) = self.right.as_ref()?;
+    /// The panel on the right, with the open sidebar's page, or nothing while none is open. Opening or closing it
+    /// slides it, as the desktop's right panel does, its page narrowing with it down to its 250px and clipped below;
+    /// moving from one sidebar to another doesn't.
+    pub(super) fn right_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let now = cx.background_executor().now();
+        let open = self.right.is_some();
+        let reduced = motion::reduced(cx);
+        let slide = &mut self.plugin_ui.right_slide;
+        if self.right.is_some() {
+            slide.shown = self.right.clone();
+        }
+        match slide.open {
+            // The first placement, as the window opens, doesn't slide.
+            None => slide.open = Some(open),
+            Some(was) if was != open => {
+                slide.open = Some(open);
+                let duration = if reduced {
+                    Duration::ZERO
+                } else {
+                    motion::SLIDE
+                };
+                let from = slide
+                    .share
+                    .unwrap_or(motion::Transition::at(if was { 1.0 } else { 0.0 }, now));
+                let share = from.retarget(
+                    if open { 1.0 } else { 0.0 },
+                    duration,
+                    motion::EASE_SLIDE,
+                    now,
+                );
+                slide.share = Some(share);
+                slide.count += 1;
+                let count = slide.count;
+                slide.timer = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(share.duration()).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.plugin_ui.right_slide.count == count {
+                            this.plugin_ui.right_slide.share = None;
+                            cx.notify();
+                        }
+                    });
+                }));
+            }
+            Some(_) => {}
+        }
+        let share = slide.share;
+        if !open && share.is_none() {
+            slide.shown = None;
+        }
+        let count = slide.count;
+        let (plugin, sidebar) = slide.shown.as_ref()?;
         let page: Entity<PageView> = self
             .sidebar_pages
             .get(&(plugin.clone(), sidebar.clone()))?
@@ -583,69 +633,88 @@ impl Workspace {
             .iter()
             .find(|page| page.id == *sidebar)
             .map(|page| page.title.clone())?;
-        Some(
-            div()
-                .id("right-sidebar")
-                .role(Role::Complementary)
-                .aria_label(title.clone())
-                // 360 as the desktop starts it, but never more than 40% of the window, so a narrow one keeps room for the panes.
-                .w(px(RIGHT_WIDTH))
-                .min_w(px(250.0))
-                .max_w(relative(0.4))
-                .h_full()
-                .flex_none()
-                .flex()
-                .flex_col()
-                .pb(px(8.0))
-                .pl(px(4.0))
-                .pr(px(8.0))
-                .child(
-                    div()
-                        .h(px(32.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .pl(px(4.0))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .pl(px(8.0))
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
-                                .child(title),
+        let panel = div()
+            .id("right-sidebar")
+            .role(Role::Complementary)
+            .aria_label(title.clone())
+            .min_w(px(250.0))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .pb(px(8.0))
+            .pl(px(4.0))
+            .pr(px(8.0))
+            .child(
+                div()
+                    .h(px(32.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .pl(px(4.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .pl(px(8.0))
+                            .text_size(px(12.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(title),
+                    )
+                    .child(
+                        ui::icon_button(
+                            "close-right-sidebar",
+                            Icon::X,
+                            "Close sidebar",
+                            ButtonSize::Xs,
                         )
-                        .child(
-                            ui::icon_button(
-                                "close-right-sidebar",
-                                Icon::X,
-                                "Close sidebar",
-                                ButtonSize::Xs,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.right = None;
-                                this.sync_plugin_visibility(cx);
-                                cx.notify();
-                            })),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .rounded(px(14.0))
-                        .border_1()
-                        .border_color(rgba(HAIRLINE))
-                        .bg(rgb(theme::SURFACE))
-                        // A sidebar page sits in the desktop's `.w-shell`, 14px in from the card's edge.
-                        .p(px(14.0))
-                        .child(page),
-                )
-                .into_any_element(),
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.right = None;
+                            this.sync_plugin_visibility(cx);
+                            cx.notify();
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .rounded(px(14.0))
+                    .border_1()
+                    .border_color(rgba(HAIRLINE))
+                    .bg(rgb(theme::SURFACE))
+                    // A sidebar page sits in the desktop's `.w-shell`, 14px in from the card's edge.
+                    .p(px(14.0))
+                    .child(page),
+            );
+        let Some(share) = share else {
+            // 360 as the desktop starts it, but never more than 40% of the window, so a narrow one keeps room for the
+            // panes.
+            return Some(
+                panel
+                    .w(px(RIGHT_WIDTH))
+                    .max_w(relative(0.4))
+                    .into_any_element(),
+            );
+        };
+        let clip = div().flex_none().h_full().overflow_hidden();
+        Some(
+            motion::tween(
+                clip,
+                ElementId::NamedInteger("right-slide".into(), count),
+                share.duration(),
+                move |clip, t, _| {
+                    let share = share.value_after(share.duration().mul_f32(t));
+                    clip.w(px(RIGHT_WIDTH * share))
+                        .max_w(relative(0.4 * share))
+                        .child(panel.w_full())
+                },
+            )
+            .into_any_element(),
         )
     }
 
@@ -783,20 +852,41 @@ fn rows_grid(rows: &[Row], tinted: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The panel on the right sliding open or shut.
+#[derive(Default)]
+pub(super) struct RightSlide {
+    /// Whether it was open in the last render, from the first one on.
+    open: Option<bool>,
+    /// The sidebar it shows, kept while it slides shut.
+    shown: Option<(String, String)>,
+    /// The share of its width it takes, while it slides.
+    share: Option<motion::Transition>,
+    /// Tells one slide from the next, so each starts over.
+    count: u64,
+    timer: Option<Task<()>>,
+}
+
 /// The card a status strip shows when you point at it.
 struct RowsTip(Vec<Row>);
 
 impl Render for RowsTip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(px(288.0))
-            .p(px(12.0))
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(rgba(HAIRLINE))
-            .bg(rgb(CARD))
-            .text_size(px(12.0))
-            .text_color(rgb(theme::FOREGROUND))
-            .child(rows_grid(&self.0, false))
+        let rows = self.0.clone();
+        // The desktop's `HoverCard`: in and out over `duration-100`, as tooltips move.
+        ui::tip(
+            motion::POPUP_IN,
+            Rc::new(move || {
+                div()
+                    .w(px(288.0))
+                    .p(px(12.0))
+                    .rounded(px(12.0))
+                    .border_1()
+                    .border_color(rgba(HAIRLINE))
+                    .bg(rgb(CARD))
+                    .text_size(px(12.0))
+                    .text_color(rgb(theme::FOREGROUND))
+                    .child(rows_grid(&rows, false))
+            }),
+        )
     }
 }

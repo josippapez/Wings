@@ -269,6 +269,25 @@ impl SidebarSlide {
     }
 }
 
+/// The Inbox count's beat: `inbox-pulse 700ms var(--ease-out-soft) 3` in apps/desktop/src/index.css.
+pub const PULSE: Duration = Duration::from_millis(700);
+pub const PULSE_BEATS: u32 = 3;
+
+/// The Inbox count's scale `t` of the way through its three beats: `inbox-pulse`'s keyframes, 1 at 0% and 100% and
+/// 1.35 at 40%, each stretch eased with `--ease-out-soft`, as a CSS animation eases between keyframes.
+pub fn pulse_scale(t: f32) -> f32 {
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let beat = (t * PULSE_BEATS as f32).fract();
+    let ease = cubic_bezier(EASE_OUT_SOFT);
+    if beat < 0.4 {
+        1.0 + 0.35 * ease(beat / 0.4)
+    } else {
+        1.35 - 0.35 * ease((beat - 0.4) / 0.6)
+    }
+}
+
 /// Whether to keep to fades, as macOS's Reduce motion asks: GPUI's own flag, which `follow_reduce_motion` sets. The
 /// app's transitions draw with `tween`, which doesn't snap on it, so each picks what to keep.
 pub fn reduced(cx: &App) -> bool {
@@ -990,6 +1009,22 @@ mod tests {
         assert_eq!(opening.after(Duration::ZERO).0, 1.0);
         assert_eq!(opening.after(Duration::ZERO).1, 0.0);
         assert_eq!(opening.duration(), SIDEBAR_FADE);
+    }
+
+    /// The Inbox count beats three times, up to 1.35 at 40% of each 700ms beat and back, and ends still.
+    #[test]
+    fn the_inbox_count_beats_three_times_and_ends_at_its_size() {
+        let beats = PULSE_BEATS as f32;
+        for beat in 0..PULSE_BEATS {
+            let start = beat as f32 / beats;
+            assert!((pulse_scale(start) - 1.0).abs() < 1e-4);
+            assert!((pulse_scale(start + 0.4 / beats) - 1.35).abs() < 1e-3);
+        }
+        assert_eq!(pulse_scale(1.0), 1.0);
+        assert!(
+            pulse_scale(0.1 / beats) > 1.2,
+            "ease-out-soft gets most of the way early"
+        );
     }
 
     /// Popups come in faded, 8px off and at 95%, and go out fading and shrinking in place; Reduce motion keeps the

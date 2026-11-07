@@ -852,6 +852,19 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
     assert_eq!(window.read(|w, _| w.plugins[0].sidebars.len()), 1);
     assert!(window.read(|w, _| w.right.is_none() && w.sidebar_pages.is_empty()));
 
+    let right_edge = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            w.terminal(0)
+                .unwrap()
+                .read(cx)
+                .drawn_at()
+                .unwrap()
+                .right()
+                .as_f32()
+        })
+    };
+    window.draw();
+    let before = right_edge(&window);
     // The button is the last thing in the project bar under the 40px title bar, 8px from the right edge.
     window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
     assert_eq!(
@@ -876,6 +889,24 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
         window.draw();
         std::thread::sleep(Duration::from_millis(10));
     }
+
+    // It slides open over the desktop's 320ms, as the desktop's right panel does: halfway, the panes have given up
+    // part of its width, and all of it at the end.
+    app.advance_clock(crate::ui::motion::SLIDE / 2);
+    app.run_until_parked();
+    window.draw();
+    let halfway = right_edge(&window);
+    app.advance_clock(crate::ui::motion::SLIDE);
+    app.run_until_parked();
+    window.draw();
+    let open = right_edge(&window);
+    // At half time, along the slide's curve: the share of its width the panel has taken.
+    let share = (before - halfway) / (before - open);
+    let expected = crate::ui::motion::cubic_bezier(crate::ui::motion::EASE_SLIDE)(0.5);
+    assert!(
+        halfway > open && (share - expected).abs() < 0.02,
+        "partway at half time: {open} < {halfway} < {before}, {share} vs {expected}"
+    );
 
     // Closed, the panel goes and the page's frame stays. Opened again, it is the same page. The open panel narrows
     // the project bar, so the button sits its width further left.
