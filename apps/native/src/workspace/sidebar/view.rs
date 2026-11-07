@@ -4,9 +4,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
-    AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString, canvas, div,
-    prelude::*, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role,
+    SharedString, canvas, div, prelude::*, px, rgb, rgba,
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
@@ -14,7 +14,7 @@ use crate::{
     agents,
     icons::{Icon, icon},
     theme,
-    ui::{self, ButtonSize, Variant},
+    ui::{self, ButtonSize, Variant, motion},
 };
 
 use crate::workspace::{
@@ -32,11 +32,51 @@ use super::{
 const EDGE: f32 = 8.0;
 
 impl Workspace {
-    /// The docked sidebar, as wide as it was dragged.
-    pub(in crate::workspace) fn sidebar_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        self.sidebar_column(cx)
-            .w(px(self.side.width))
-            .child(self.resize_edge(cx))
+    /// The docked sidebar, as wide as it was dragged, while it is docked or still sliding shut. Toggling it slides the
+    /// panes over, as the desktop does, while its contents keep their width and fade; the terminals refit once the
+    /// panes hold still.
+    pub(in crate::workspace) fn sidebar_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.sidebar && !self.side.slide.running {
+            return None;
+        }
+        let width = self.side.width;
+        let panel = self
+            .sidebar_column(cx)
+            .w(px(width))
+            .child(self.resize_edge(cx));
+        if !self.side.slide.running {
+            return Some(panel.into_any_element());
+        }
+        let clip = div().flex_none().h_full().overflow_hidden().child(panel);
+        Some(
+            self.follow_slide("sidebar-slide", clip, move |clip, share, opacity| {
+                clip.w(px(width * share)).opacity(opacity)
+            }),
+        )
+    }
+
+    /// `element` moving with the docked sidebar while it slides: `animate` gets the share of its width the sidebar
+    /// takes and the opacity of its contents, each frame. Just `element` when it isn't sliding.
+    pub(in crate::workspace) fn follow_slide<E: IntoElement + 'static>(
+        &self,
+        name: &'static str,
+        element: E,
+        animate: impl Fn(E, f32, f32) -> E + 'static,
+    ) -> AnyElement {
+        let slide = &self.side.slide;
+        if !slide.running {
+            return element.into_any_element();
+        }
+        let opening = self.sidebar;
+        element
+            .with_animation(
+                ElementId::NamedInteger(name.into(), slide.count as u64),
+                Animation::new(motion::SLIDE),
+                move |element, t| {
+                    let (share, opacity) = motion::sidebar_frame(t, opening);
+                    animate(element, share, opacity)
+                },
+            )
             .into_any_element()
     }
 

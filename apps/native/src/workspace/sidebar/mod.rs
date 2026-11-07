@@ -16,9 +16,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, Window};
+use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, Task, Window};
 
-use crate::{projects::ProjectEntry, saved};
+use crate::{projects::ProjectEntry, saved, ui::motion};
 
 use super::Workspace;
 use order::{Sort, TOUCH_EVERY_MS};
@@ -49,6 +49,18 @@ pub(super) struct State {
     removing: Option<(PathBuf, FocusHandle)>,
     git: git::Git,
     peek: peek::Peek,
+    slide: Slide,
+}
+
+/// The docked sidebar sliding open or shut, as the desktop's panel does when you toggle it.
+#[derive(Default)]
+struct Slide {
+    /// Still sliding, so a closing sidebar is drawn until it is gone.
+    running: bool,
+    /// Tells one slide from the next, so each starts over.
+    count: usize,
+    /// Ends the slide when its time is up.
+    timer: Option<Task<()>>,
 }
 
 impl Default for State {
@@ -64,6 +76,7 @@ impl Default for State {
             removing: None,
             git: git::Git::default(),
             peek: peek::Peek::default(),
+            slide: Slide::default(),
         }
     }
 }
@@ -158,6 +171,16 @@ impl Workspace {
     pub(super) fn toggle_docked(&mut self, cx: &mut Context<Self>) {
         self.sidebar = !self.sidebar;
         self.side.peek = peek::Peek::default();
+        let slide = &mut self.side.slide;
+        slide.running = true;
+        slide.count += 1;
+        slide.timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::SLIDE).await;
+            let _ = this.update(cx, |this, cx| {
+                this.side.slide.running = false;
+                cx.notify();
+            });
+        }));
         self.save(cx);
         cx.notify();
     }

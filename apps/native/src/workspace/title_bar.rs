@@ -31,7 +31,7 @@ struct NewPage {
 
 impl Workspace {
     pub(super) fn title_bar(&self, tabs: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
-        let sidebar = self.sidebar;
+        let (sidebar, width) = (self.sidebar, self.side.width);
         let (back, forward) = (self.can_navigate(true), self.can_navigate(false));
         div()
             .id("title-bar")
@@ -48,41 +48,45 @@ impl Workspace {
                 }
             })
             .child(
-                // Open, it is as wide as the sidebar plus the project bar's padding, so the tabs
-                // start where the project name does.
-                div()
-                    .h_full()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .pl(px(TRAFFIC_LIGHTS))
-                    .when(sidebar, |left| left.w(px(self.side.width + 12.0)))
-                    .when(!sidebar, |left| left.pr(px(4.0)))
-                    .child(
-                        shortcut_icon_button(
-                            "toggle-sidebar",
-                            Icon::PanelLeft,
-                            if sidebar {
-                                "Hide sidebar"
-                            } else {
-                                "Show sidebar"
-                            },
-                            Some(shortcut_label("B", false).into()),
-                            ButtonSize::Sm,
+                self.follow_slide(
+                    "title-bar-slide",
+                    // Open, it is as wide as the sidebar plus the project bar's padding, so the tabs
+                    // start where the project name does; sliding, the tabs move with the sidebar's edge.
+                    div()
+                        .h_full()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .pl(px(TRAFFIC_LIGHTS))
+                        .when(sidebar, |left| left.w(px(width + 12.0)))
+                        .when(!sidebar, |left| left.pr(px(4.0)))
+                        .child(
+                            shortcut_icon_button(
+                                "toggle-sidebar",
+                                Icon::PanelLeft,
+                                if sidebar {
+                                    "Hide sidebar"
+                                } else {
+                                    "Show sidebar"
+                                },
+                                Some(shortcut_label("B", false).into()),
+                                ButtonSize::Sm,
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleSidebar), cx)
+                            }),
                         )
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ToggleSidebar), cx)
-                        }),
-                    )
-                    .child(nav_button("go-back", Icon::ArrowLeft, "Back", "[", back))
-                    .child(nav_button(
-                        "go-forward",
-                        Icon::ArrowRight,
-                        "Forward",
-                        "]",
-                        forward,
-                    )),
+                        .child(nav_button("go-back", Icon::ArrowLeft, "Back", "[", back))
+                        .child(nav_button(
+                            "go-forward",
+                            Icon::ArrowRight,
+                            "Forward",
+                            "]",
+                            forward,
+                        )),
+                    move |left, share, _| left.w_auto().min_w(px((width + 12.0) * share)),
+                ),
             )
             .child(
                 div()

@@ -385,3 +385,109 @@ fn a_worktree_is_titled_by_its_branch_when_its_folder_only_repeats_it() {
     assert_eq!(other, ("login".into(), Some("wings/fix-login".into())));
     assert_eq!(worktree_title("login", None), ("login".into(), None));
 }
+
+/// Docking the sidebar shut and open again changes the size of the pane area on every frame of the slide, but the
+/// shell is given its new size once, when the panes hold still, as the desktop refits after its slide.
+#[test]
+fn sliding_the_sidebar_resizes_the_terminal_once_when_it_settles() {
+    let dir = test_dir("sidebar-slide");
+    let (app, mut window, _) = open(&dir, &["alpha"]);
+    let grid = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid())
+    };
+    // Real time for the shell's thread to take each size, fake time for the app's timers.
+    let settle = |window: &mut TestAppWindow<Workspace>| {
+        for _ in 0..15 {
+            app.advance_clock(Duration::from_millis(100));
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    window.draw();
+    settle(&mut window);
+    for closing in [true, false] {
+        let before = grid(&window);
+        press(&mut window, "b");
+        let (mut grids, mut frames, mut drawn, mut slowest) =
+            (vec![before], 0, Duration::ZERO, Duration::ZERO);
+        // 16ms frames through the slide and past the terminal's wait for the size to hold.
+        for _ in 0..30 {
+            app.advance_clock(Duration::from_millis(16));
+            app.run_until_parked();
+            let start = Instant::now();
+            window.draw();
+            let took = start.elapsed();
+            frames += 1;
+            drawn += took;
+            slowest = slowest.max(took);
+            grids.push(grid(&window));
+        }
+        settle(&mut window);
+        grids.push(grid(&window));
+        grids.dedup();
+        eprintln!(
+            "[measure] sidebar {}: {frames} frames, {:.2} ms a frame on average, {:.2} ms at most, grids {grids:?}",
+            if closing { "closing" } else { "opening" },
+            drawn.as_secs_f64() * 1000.0 / frames as f64,
+            slowest.as_secs_f64() * 1000.0,
+        );
+        assert_eq!(
+            grids.len(),
+            2,
+            "one resize of the shell, not one a frame: {grids:?}"
+        );
+        assert_eq!(window.read(|w, _| w.sidebar), !closing);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Docking it shut, the sidebar slides away over the desktop's 320ms, its contents fading out, and the panes take the
+/// room; docking it again slides it back to its full width.
+#[test]
+fn the_docked_sidebar_slides_shut_and_open_over_320ms() {
+    let dir = test_dir("sidebar-slide-width");
+    let (app, mut window, _) = open(&dir, &["alpha"]);
+    let left = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            w.terminal(0)
+                .unwrap()
+                .read(cx)
+                .drawn_at()
+                .unwrap()
+                .left()
+                .as_f32()
+        })
+    };
+    let sliding = |window: &TestAppWindow<Workspace>| window.read(|w, _| w.side.slide.running);
+    let at = |window: &mut TestAppWindow<Workspace>, ms: u64| {
+        app.advance_clock(Duration::from_millis(ms));
+        app.run_until_parked();
+        window.draw();
+    };
+    window.draw();
+    let docked = left(&window);
+    press(&mut window, "b");
+    window.draw();
+    assert!(sliding(&window));
+    assert!(left(&window) > docked - 30.0, "it starts where it was");
+    at(&mut window, 160);
+    let halfway = left(&window);
+    assert!(
+        halfway < docked - 30.0 && halfway > 30.0,
+        "halfway, the panes are partly over: {halfway}"
+    );
+    at(&mut window, 170);
+    assert!(!sliding(&window));
+    let shut = left(&window);
+    assert!(shut < 30.0, "{shut}");
+    press(&mut window, "b");
+    window.draw();
+    at(&mut window, 160);
+    let opening = left(&window);
+    assert!(opening > shut + 30.0 && opening < docked, "{opening}");
+    at(&mut window, 170);
+    assert!(!sliding(&window));
+    assert_eq!(left(&window), docked);
+    std::fs::remove_dir_all(dir).unwrap();
+}

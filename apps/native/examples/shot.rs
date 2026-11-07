@@ -667,9 +667,11 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             wait(cx, window, Duration::from_millis(300));
             save(cx, window, &name(state));
         }
-        // Closed, and the pointer at the window's edge.
+        // Closing, halfway through its slide, then closed, and the pointer at the window's edge.
         cx.simulate_keystrokes(window, "cmd-b");
-        wait(cx, window, Duration::from_millis(200));
+        wait(cx, window, Duration::from_millis(100));
+        save(cx, window, &name("sliding"));
+        wait(cx, window, Duration::from_millis(400));
         mouse_move(cx, window, point(px(3.0), px(300.0)), false);
         wait(cx, window, Duration::from_millis(500));
         save(cx, window, &name("peek"));

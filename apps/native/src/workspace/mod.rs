@@ -650,7 +650,7 @@ impl Render for Workspace {
             tabs.clear();
         }
         let title_bar = self.title_bar(tabs, cx);
-        let sidebar = self.sidebar.then(|| self.sidebar_panel(cx));
+        let sidebar = self.sidebar_panel(cx);
         let right = self.right_panel(cx);
         let notices = self.notices_layer(cx);
         div()

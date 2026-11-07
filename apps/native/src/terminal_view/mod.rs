@@ -396,6 +396,18 @@ impl TerminalView {
         self.runtime.process.process_id()
     }
 
+    /// The grid the shell was last given, as columns and rows, for tests that count its resizes.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> (usize, usize) {
+        (self.snapshot.cols, self.snapshot.rows)
+    }
+
+    /// Where it was last drawn, for tests of what moves it.
+    #[cfg(test)]
+    pub(crate) fn drawn_at(&self) -> Option<Bounds<Pixels>> {
+        self.bounds
+    }
+
     /// The program in front, which agent detection reads first.
     pub fn foreground_pid(&self) -> Option<u32> {
         self.runtime.process.foreground_pid()
@@ -465,6 +477,7 @@ impl TerminalView {
         line_height: f32,
         cx: &mut Context<Self>,
     ) {
+        let moved = self.bounds.is_some_and(|old| old.size != bounds.size);
         self.bounds = Some(bounds);
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -476,13 +489,17 @@ impl TerminalView {
         ) else {
             return;
         };
-        if self.geometry == Some(geometry) {
+        // While the size keeps changing, as through a sidebar's slide, the shell waits for it to hold still, even
+        // across frames that fit the same grid, so it is resized once, as the desktop refits once.
+        let waiting = moved && self.resize_task.is_some();
+        if self.geometry == Some(geometry) && !waiting {
             return;
         }
         self.geometry = Some(geometry);
         let commands = self.runtime.commands.clone();
         self.resize_task = Some(cx.spawn(async move |view, cx| {
             cx.background_executor().timer(RESIZE_DELAY).await;
+            let _ = view.update(cx, |view, _| view.resize_task.take().map(Task::detach));
             if commands.send(Command::Resize(geometry)).await.is_err() {
                 let _ = view.update(cx, |view, cx| {
                     view.error = Some("The terminal has closed.".into());
