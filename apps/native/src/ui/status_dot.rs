@@ -61,6 +61,8 @@ pub fn spinning() -> Spin {
 pub struct Spin;
 
 thread_local! {
+    /// When each view last drew its spinners, on their clock.
+    static DRAWN: RefCell<HashMap<EntityId, Duration>> = RefCell::default();
     /// The views that already asked to be drawn again at a step, by step.
     static WAKING: RefCell<HashSet<(EntityId, u128)>> = RefCell::default();
 }
@@ -245,8 +247,13 @@ pub fn spinner_layer(window: &Window) -> impl IntoElement {
 /// Draws the view being drawn again at the spinners' next step, `elapsed` into their clock, unless a spinner in it
 /// already asked for that step.
 fn wake_at_next_step(elapsed: Duration, window: &mut Window, cx: &mut App) {
-    let step = elapsed.as_nanos() / SPIN_STEP.as_nanos();
     let view = window.current_view();
+    DRAWN.with_borrow_mut(|drawn| drawn.insert(view, elapsed));
+    wake_after(view, elapsed, window, cx);
+}
+
+fn wake_after(view: EntityId, elapsed: Duration, window: &mut Window, cx: &mut App) {
+    let step = elapsed.as_nanos() / SPIN_STEP.as_nanos();
     if !WAKING.with_borrow_mut(|waking| waking.insert((view, step))) {
         return;
     }
@@ -256,7 +263,22 @@ fn wake_at_next_step(elapsed: Duration, window: &mut Window, cx: &mut App) {
         .spawn(cx, async move |cx| {
             cx.background_executor().timer(delay).await;
             WAKING.with_borrow_mut(|waking| waking.remove(&(view, step)));
-            cx.update(|_, cx| cx.notify(view)).ok();
+            // A view that drew its spinners again since this was asked, within the last step, for a terminal's output say,
+            // turned them
+            // then: it waits for the step after, so a busy terminal and a spinner make one stream of frames, not two.
+            let recent = DRAWN.with_borrow(|drawn| {
+                drawn
+                    .get(&view)
+                    .is_some_and(|&at| at > elapsed && at + SPIN_STEP >= next)
+            });
+            cx.update(|window, cx| {
+                if recent {
+                    wake_after(view, next, window, cx);
+                } else {
+                    cx.notify(view);
+                }
+            })
+            .ok();
         })
         .detach();
 }
@@ -370,6 +392,32 @@ mod tests {
         assert!(
             (29..=31).contains(&steps),
             "the layer turned {steps} times in 30 steps"
+        );
+    }
+
+    #[test]
+    fn a_view_redrawn_by_its_terminal_turns_its_spinners_in_those_frames() {
+        let mut app = TestApp::new();
+        let drawn = Rc::new(Cell::new(0));
+        let counter = drawn.clone();
+        let mut window = app.open_window(move |_, _| Dots {
+            shown: 1,
+            drawn: counter,
+        });
+        window.draw();
+        let before = drawn.get();
+        // A second of a terminal's output redrawing the view 20 times, every 50 ms, in 10 ms ticks.
+        for tick in 1..=100 {
+            app.advance_clock(Duration::from_millis(10));
+            if tick % 5 == 0 {
+                window.update(|_, _, cx| cx.notify());
+            }
+            app.run_until_parked();
+        }
+        let frames = drawn.get() - before;
+        assert!(
+            frames <= 35,
+            "{frames} frames, where the output's 20 and the spinners' 30 used to make 50"
         );
     }
 
