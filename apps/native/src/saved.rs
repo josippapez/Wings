@@ -187,6 +187,9 @@ pub struct Settings {
     pub last_active: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_sound: Option<NotifySound>,
+    /// Official plugin ids already announced as new, so reopening the app does not announce them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen_plugins: Vec<String>,
     /// The global shortcut, under the desktop's own name.
     #[serde(
         default,

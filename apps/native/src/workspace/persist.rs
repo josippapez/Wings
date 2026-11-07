@@ -179,6 +179,7 @@ impl Workspace {
             agents_run_commands: Some(self.prefs.agents_run_commands),
             agents_message: Some(self.prefs.agents_message),
             notify_sound: Some(self.prefs.notify_sound.to_saved()),
+            seen_plugins: self.prefs.seen_plugins.clone(),
             diff_wrap: Some(self.prefs.diff_wrap),
             diff_tree: Some(self.prefs.diff_tree),
             global_hotkey: Some(self.prefs.global_hotkey.clone()),

@@ -8,10 +8,13 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use gpui::{Context, PathPromptOptions, Task, Window};
-use wings_plugins::store::{self, Grant, Linked, PluginView, SecretScope, Source, Store};
+use wings_plugins::store::{
+    self, Available, Grant, Linked, PluginView, SecretScope, Source, Store,
+};
 
 use crate::installed;
 
@@ -32,16 +35,76 @@ pub(super) struct Manage {
     pub(super) removing: Option<String>,
     /// The plugin whose page is open in the list.
     pub(super) selected: Option<String>,
+    pub(super) browsing_available: bool,
     /// Newer versions the last check found, by plugin id.
     pub(super) updates: HashMap<String, String>,
+    /// The official catalogue from the most recent successful check.
+    pub(super) available: Vec<Available>,
     pub(super) checking: bool,
+    /// A periodic check elapsed while the window was inactive.
+    pub(super) check_due: bool,
+    /// Version announcements are once per plugin/version for this workspace.
+    pub(super) announced: HashSet<String>,
+    /// One persistent notice each for installed updates and newly available plugins.
+    pub(super) announcements: Vec<Announcement>,
+    plugin_timer: Option<Task<()>>,
+    plugin_check: Option<Task<()>>,
+    pub(super) update_source: Option<Arc<dyn UpdateSource>>,
     /// The review shown has been up long enough for Turn on to count, as the setup approval's Allow.
     pub(super) review_armed: bool,
     review_arm: Option<Task<()>>,
 }
 
+pub(super) trait UpdateSource: Send + Sync {
+    fn latest(&self, repo: &str, folder: Option<&str>) -> Result<Option<String>, String>;
+    fn available(&self) -> Result<Vec<Available>, String>;
+}
+
+struct GithubUpdates;
+
+impl UpdateSource for GithubUpdates {
+    fn latest(&self, repo: &str, folder: Option<&str>) -> Result<Option<String>, String> {
+        store::latest_version(repo, folder)
+    }
+
+    fn available(&self) -> Result<Vec<Available>, String> {
+        store::available()
+    }
+}
+
+pub(super) struct Announcement {
+    pub(super) title: String,
+    pub(super) body: String,
+    pub(super) review: Review,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Review {
+    Installed(String),
+    Available,
+}
+
+impl Review {
+    pub(super) fn slot(&self) -> usize {
+        match self {
+            Self::Installed(_) => 0,
+            Self::Available => 1,
+        }
+    }
+}
+
+impl Manage {
+    fn announce(&mut self, notice: Announcement) {
+        self.announcements
+            .retain(|old| old.review.slot() != notice.review.slot());
+        self.announcements.push(notice);
+    }
+}
+
 /// How long a review shows before Turn on answers, so a click meant for one can't land on the next.
 const REVIEW_ARM_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+const FIRST_CHECK_AFTER: Duration = Duration::from_secs(20);
+const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 impl Workspace {
     /// Queues plugins for review, each once, as the desktop's `enqueue`. A review that comes on screen arms after its
@@ -336,6 +399,22 @@ impl Workspace {
         self.run_install("link", download, window, cx);
     }
 
+    /// Installs an official catalogue entry through the same GitHub download and permission-review path as a pasted link.
+    pub(super) fn install_available(
+        &mut self,
+        link: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.manage.installing.is_some() {
+            return;
+        }
+        let download = cx
+            .background_executor()
+            .spawn(async move { store::fetch_github(&link) });
+        self.run_install("available", download, window, cx);
+    }
+
     /// Asks for a `.wings-plugin` file and installs it.
     pub(super) fn install_from_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.manage.installing.is_some() {
@@ -547,8 +626,47 @@ impl Workspace {
         task.detach();
     }
 
-    /// Asks GitHub for the newest version of each plugin installed from there, as the desktop's Check for updates does.
-    pub(super) fn check_plugin_updates(&mut self, cx: &mut Context<Self>) {
+    /// Starts the desktop-matched cadence. A check due while unfocused waits for activation instead of doing network work.
+    pub(super) fn start_plugin_update_checks(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.manage.plugin_timer = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(FIRST_CHECK_AFTER).await;
+            let mut first = true;
+            loop {
+                if this
+                    .update_in(cx, |this, _, cx| {
+                        if this.window_active {
+                            this.check_plugin_updates(false, cx);
+                        } else {
+                            this.manage.check_due = true;
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(if first {
+                        CHECK_EVERY - FIRST_CHECK_AFTER
+                    } else {
+                        CHECK_EVERY
+                    })
+                    .await;
+                first = false;
+            }
+        }));
+    }
+
+    /// Asks GitHub for installed releases and the official catalogue. The manual and automatic paths share this work.
+    pub(super) fn check_plugin_updates(&mut self, manual: bool, cx: &mut Context<Self>) {
+        // Headless tests supply a source explicitly, never contact the real catalogue on their fake clock.
+        #[cfg(test)]
+        if self.manage.update_source.is_none() {
+            return;
+        }
         if self.manage.checking {
             return;
         }
@@ -565,39 +683,141 @@ impl Workspace {
             .collect();
         self.manage.checking = true;
         cx.notify();
+        let source = self
+            .manage
+            .update_source
+            .clone()
+            .unwrap_or_else(|| Arc::new(GithubUpdates));
         let found = cx.background_executor().spawn(async move {
-            asked
+            let versions = asked
                 .into_iter()
                 .map(|(id, version, repo, folder)| {
-                    let latest = store::latest_version(&repo, folder.as_deref());
+                    let latest = source.latest(&repo, folder.as_deref());
                     (
                         id,
                         latest.map(|latest| store::newer_version(&version, latest.as_deref())),
                     )
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (versions, source.available())
         });
-        let task = cx.spawn(async move |this, cx| {
-            let found = found.await;
+        self.manage.plugin_check = Some(cx.spawn(async move |this, cx| {
+            let (found, offered) = found.await;
             let _ = this.update(cx, |this, cx| {
                 this.manage.checking = false;
+                let installed: HashSet<_> = this
+                    .plugin_views()
+                    .into_iter()
+                    .map(|view| view.manifest.id)
+                    .collect();
+                let mut fresh = Vec::new();
+                let mut found_updates = Vec::new();
+                let mut failures = 0;
+                let mut asked_count = 0;
                 for (id, latest) in found {
+                    if !installed.contains(&id) {
+                        continue;
+                    }
+                    asked_count += 1;
                     match latest {
                         Ok(Some(version)) => {
+                            found_updates.push((id.clone(), version.clone()));
+                            if !manual && this.manage.announced.insert(format!("{id}@{version}")) {
+                                fresh.push((id.clone(), version.clone()));
+                            }
                             this.manage.updates.insert(id, version);
                         }
                         Ok(None) => {
                             this.manage.updates.remove(&id);
                         }
                         Err(error) => {
+                            failures += 1;
                             this.manage.row_error.insert(id, error);
                         }
                     }
                 }
+                if let Ok(available) = offered {
+                    let unseen: Vec<_> = available
+                        .iter()
+                        .filter(|plugin| !installed.contains(&plugin.id))
+                        .filter(|plugin| !this.prefs.seen_plugins.contains(&plugin.id))
+                        .cloned()
+                        .collect();
+                    let mut changed_seen = false;
+                    for plugin in &available {
+                        if !this.prefs.seen_plugins.contains(&plugin.id) {
+                            this.prefs.seen_plugins.push(plugin.id.clone());
+                            changed_seen = true;
+                        }
+                    }
+                    this.manage.available = available;
+                    if !unseen.is_empty() {
+                        this.manage.announce(Announcement {
+                            title: if unseen.len() == 1 {
+                                format!("New plugin: {}", unseen[0].name)
+                            } else {
+                                format!("{} new plugins", unseen.len())
+                            },
+                            body: if unseen.len() == 1 {
+                                unseen[0].description.clone()
+                            } else {
+                                unseen
+                                    .iter()
+                                    .map(|plugin| plugin.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            },
+                            review: Review::Available,
+                        });
+                    }
+                    if changed_seen {
+                        this.save(cx);
+                    }
+                }
+                if !manual && !fresh.is_empty() {
+                    this.notification_sound(false);
+                    this.manage.announce(Announcement {
+                        title: if fresh.len() == 1 {
+                            let name = this
+                                .plugin_views()
+                                .into_iter()
+                                .find(|view| view.manifest.id == fresh[0].0)
+                                .map_or_else(|| fresh[0].0.clone(), |view| view.manifest.name);
+                            format!("{} {} is available", name, fresh[0].1)
+                        } else {
+                            "Plugin updates available".into()
+                        },
+                        body: if fresh.len() == 1 {
+                            String::new()
+                        } else {
+                            fresh
+                                .iter()
+                                .filter_map(|(id, version)| {
+                                    this.plugin_views()
+                                        .into_iter()
+                                        .find(|view| view.manifest.id == *id)
+                                        .map(|view| format!("{} {version}", view.manifest.name))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
+                        review: Review::Installed(fresh[0].0.clone()),
+                    });
+                }
+                if manual {
+                    if asked_count > 0 && failures == asked_count {
+                        this.show_notice(
+                            "Couldn't check for plugin updates".into(),
+                            String::new(),
+                            cx,
+                        );
+                    } else if found_updates.is_empty() {
+                        this.show_notice("All plugins are up to date".into(), String::new(), cx);
+                    }
+                }
                 cx.notify();
             });
-        });
-        task.detach();
+        }));
     }
 }
 

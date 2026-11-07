@@ -33,6 +33,7 @@ mod plugin_manage_ui;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 mod plugin_ui;
+mod plugin_updates;
 mod plugin_windows;
 mod plugins;
 mod project;
@@ -385,6 +386,10 @@ impl Workspace {
                 for installed in &this.plugins {
                     installed.host.publish_focus(this.window_active);
                 }
+                if this.window_active && this.manage.check_due {
+                    this.manage.check_due = false;
+                    this.check_plugin_updates(false, cx);
+                }
             }),
             _quit: quit,
         };
@@ -484,6 +489,7 @@ impl Workspace {
             agents_run_commands: settings.agents_run_commands == Some(true),
             agents_message: settings.agents_message == Some(true),
             notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
+            seen_plugins: settings.seen_plugins,
             diff_wrap: settings.diff_wrap == Some(true),
             diff_tree: settings.diff_tree == Some(true),
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
@@ -492,6 +498,7 @@ impl Workspace {
         this.start_global_hotkey(window, cx);
         this.enter_project(window, cx);
         this.start_update_checks(window, cx);
+        this.start_plugin_update_checks(window, cx);
         this
     }
 

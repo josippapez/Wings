@@ -105,7 +105,7 @@ impl Inbox {
 impl Workspace {
     /// Plays the chosen sound for something new, unless it's off or one just played, as the desktop's
     /// `notificationSound`. `watching`: it's about the pane on screen.
-    fn notification_sound(&mut self, watching: bool) {
+    pub(super) fn notification_sound(&mut self, watching: bool) {
         let settings = self.prefs.notify_sound;
         if watching && !settings.watching {
             return;

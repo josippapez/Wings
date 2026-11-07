@@ -720,7 +720,7 @@ impl Workspace {
 
     /// Notifications the system couldn't show, at the bottom right. A click puts one away.
     pub(super) fn notices_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.plugin_ui.notices.is_empty() {
+        if self.plugin_ui.notices.is_empty() && self.manage.announcements.is_empty() {
             return None;
         }
         Some(
@@ -728,10 +728,14 @@ impl Workspace {
                 .absolute()
                 .right(px(16.0))
                 .bottom(px(16.0))
-                .w(px(300.0))
+                .w(px(320.0))
+                .max_h(gpui::relative(0.9))
+                .id("notification-stack")
+                .overflow_y_scroll()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
+                .children(self.plugin_update_notices(cx))
                 .children(self.plugin_ui.notices.iter().map(|notice| {
                     let id = notice.id;
                     div()

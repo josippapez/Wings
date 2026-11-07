@@ -42,6 +42,334 @@ fn github() -> Source {
     }
 }
 
+#[derive(Default)]
+struct Updates {
+    latest: Mutex<String>,
+    catalog: Mutex<Vec<wings_plugins::store::Available>>,
+    failed: std::sync::atomic::AtomicBool,
+    calls: std::sync::atomic::AtomicUsize,
+    queried: Mutex<Vec<String>>,
+}
+
+impl super::plugin_manage::UpdateSource for Updates {
+    fn latest(&self, repo: &str, _: Option<&str>) -> Result<Option<String>, String> {
+        self.queried.lock().unwrap().push(repo.into());
+        if self.failed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("offline".into());
+        }
+        Ok(Some(self.latest.lock().unwrap().clone()))
+    }
+
+    fn available(&self) -> Result<Vec<wings_plugins::store::Available>, String> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.failed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("offline".into());
+        }
+        Ok(self.catalog.lock().unwrap().clone())
+    }
+}
+
+#[test]
+fn plugin_update_announcements_replace_the_previous_version() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    let source = Arc::new(Updates::default());
+    window.update(|w, _, _| w.manage.update_source = Some(source.clone()));
+    for version in ["1.1.0", "1.2.0"] {
+        *source.latest.lock().unwrap() = version.into();
+        window.update(|w, _, cx| w.check_plugin_updates(false, cx));
+        until(&app, &mut window, "check never completed", |w| {
+            !w.manage.checking
+        });
+    }
+    assert_eq!(window.read(|w, _| w.manage.announcements.len()), 1);
+    assert!(window.read(|w, _| w.manage.announcements[0].title.contains("1.2.0")));
+}
+
+fn offered(id: &str) -> wings_plugins::store::Available {
+    wings_plugins::store::Available {
+        id: id.into(),
+        name: format!("Plugin {id}"),
+        description: "Official plugin".into(),
+        version: "1.0.0".into(),
+        link: format!("https://github.com/owner/{id}"),
+    }
+}
+
+#[test]
+fn plugin_updates_manual_results_catalog_persistence_and_no_automatic_install() {
+    let data = Data::temp();
+    let saved = data.path().join("window.json");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |c| c.state = Some(saved.clone()));
+    install(&mut window, package("demo", "v1.0.0", &[]), github(), None).unwrap();
+    install(
+        &mut window,
+        package("local", "1.0.0", &[]),
+        Source::File,
+        None,
+    )
+    .unwrap();
+    let source = Arc::new(Updates::default());
+    *source.latest.lock().unwrap() = "1.0.0".into();
+    *source.catalog.lock().unwrap() = vec![offered("demo")];
+    window.update(|w, _, _| w.manage.update_source = Some(source.clone()));
+    window.update(|w, _, cx| {
+        w.check_plugin_updates(true, cx);
+        w.check_plugin_updates(false, cx);
+    });
+    until(&app, &mut window, "check never completed", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(window.read(|w, _| w.manage.updates.is_empty() && w.manage.announcements.is_empty()));
+    let disk: Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+    assert!(disk.to_string().contains("demo"));
+    assert_eq!(disk["seen_plugins"], json!(["demo"]));
+    assert_eq!(*source.queried.lock().unwrap(), vec!["owner/demo"]);
+    *source.latest.lock().unwrap() = "1.1.0".into();
+    *source.catalog.lock().unwrap() = vec![offered("demo"), offered("new")];
+    window.update(|w, _, cx| {
+        w.plugin_ui.notices.clear();
+        w.check_plugin_updates(true, cx);
+    });
+    until(&app, &mut window, "manual check never completed", |w| {
+        !w.manage.checking
+    });
+    assert!(window.read(|w, _| w.plugin_ui.notices.is_empty()));
+    assert_eq!(window.read(|w, _| w.manage.announcements.len()), 1);
+    assert_eq!(window.read(|w, _| w.plugin_views().len()), 2);
+    assert!(!runs(&window, "demo"));
+    assert!(window.read(|w, _| w.manage.reviews.is_empty()));
+    window.update(|w, _, cx| w.check_plugin_updates(false, cx));
+    until(&app, &mut window, "auto check never completed", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(window.read(|w, _| w.manage.announcements.len()), 2);
+    window.update(|w, _, cx| w.check_plugin_updates(false, cx));
+    until(&app, &mut window, "repeat check never completed", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(window.read(|w, _| w.manage.announcements.len()), 2);
+    source
+        .failed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    window.update(|w, _, cx| w.check_plugin_updates(true, cx));
+    until(&app, &mut window, "failed check never completed", |w| {
+        !w.manage.checking
+    });
+    assert!(window.read(|w, _| {
+        w.plugin_ui
+            .notices
+            .iter()
+            .any(|n| n.title == "Couldn't check for plugin updates")
+    }));
+    assert_eq!(window.read(|w, _| w.manage.available.len()), 2);
+    assert_eq!(window.read(|w, _| w.prefs.seen_plugins.len()), 2);
+    let (_app2, mut reopened) = open_plugins(&data, &Arc::default(), |c| c.state = Some(saved));
+    source
+        .failed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    reopened.update(|w, _, _| w.manage.update_source = Some(source.clone()));
+    reopened.update(|w, _, cx| w.check_plugin_updates(true, cx));
+    until(
+        &_app2,
+        &mut reopened,
+        "reopened check never completed",
+        |w| !w.manage.checking,
+    );
+    assert!(reopened.read(|w, _| w.manage.announcements.is_empty()));
+}
+
+#[test]
+fn plugin_updates_timer_is_launch_anchored_defers_until_focus_and_stops_on_drop() {
+    let data = Data::temp();
+    let (mut app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let source = Arc::new(Updates::default());
+    window.update(|w, window, cx| {
+        w.manage.update_source = Some(source.clone());
+        w.set_look(|look| look.cursor_blink = false, cx);
+        window.activate_window();
+    });
+    app.run_until_parked();
+    app.advance_clock(Duration::from_secs(19));
+    app.run_until_parked();
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    until(&app, &mut window, "first check missing", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.advance_clock(Duration::from_secs(6 * 60 * 60 - 21));
+    app.run_until_parked();
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    until(&app, &mut window, "six hour check missing", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    struct Elsewhere;
+    impl gpui::Render for Elsewhere {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    let mut elsewhere = app.open_window(|_, _| Elsewhere);
+    elsewhere.update(|_, window, _| window.activate_window());
+    app.run_until_parked();
+    app.advance_clock(Duration::from_secs(6 * 60 * 60));
+    app.run_until_parked();
+    assert!(window.read(|w, _| w.manage.check_due));
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    window.update(|_, window, _| window.activate_window());
+    app.run_until_parked();
+    until(&app, &mut window, "focus check missing", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    window.update(|_, window, _| window.remove_window());
+    drop(window);
+    app.run_until_parked();
+    app.advance_clock(Duration::from_secs(6 * 60 * 60));
+    app.run_until_parked();
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[test]
+fn plugin_updates_review_opens_the_plugin_or_available_without_approving() {
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    window.update(|w, window, cx| w.sample_plugin_updates("stack", window, cx));
+    window.draw();
+    window.simulate_click(
+        crate::ui::spot_at("plugin-update-review-0")
+            .unwrap()
+            .center(),
+        gpui::MouseButton::Left,
+    );
+    assert!(window.read(|w, _| w.settings.as_ref().unwrap().section
+        == super::settings::Section::Plugins
+        && w.manage.selected.as_deref() == Some("demo")));
+    window.update(|w, window, cx| w.sample_plugin_updates("stack", window, cx));
+    window.draw();
+    window.simulate_click(
+        crate::ui::spot_at("plugin-update-review-1")
+            .unwrap()
+            .center(),
+        gpui::MouseButton::Left,
+    );
+    assert!(window.read(|w, _| w.manage.browsing_available
+        && w.manage.selected.is_none()
+        && w.manage.reviews.is_empty()));
+    assert!(!runs(&window, "demo"));
+    window.update(|w, window, cx| w.sample_plugin_updates("stack", window, cx));
+    window.draw();
+    window.simulate_click(
+        crate::ui::spot_at("plugin-update-dismiss-0")
+            .unwrap()
+            .center(),
+        gpui::MouseButton::Left,
+    );
+    window.draw();
+    window.simulate_click(
+        crate::ui::spot_at("plugin-update-dismiss-1")
+            .unwrap()
+            .center(),
+        gpui::MouseButton::Left,
+    );
+    assert!(window.read(|w, _| w.manage.announcements.is_empty()));
+}
+
+#[test]
+fn plugin_updates_skip_file_linked_and_development_plugins() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    for id in ["remote", "development"] {
+        install(&mut window, package(id, "1.0.0", &[]), github(), None).unwrap();
+    }
+    install(
+        &mut window,
+        package("local", "1.0.0", &[]),
+        Source::File,
+        None,
+    )
+    .unwrap();
+    let linked = data.path().join("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::fs::write(linked.join("main.js"), "").unwrap();
+    std::fs::write(
+        linked.join("wings-plugin.json"),
+        json!({"id":"folder", "name":"Folder", "version":"1.0.0", "api":1, "main":"main.js"})
+            .to_string(),
+    )
+    .unwrap();
+    window.update(|w, window, cx| {
+        w.link_plugin(&linked, window, cx).unwrap();
+    });
+    let dev = data.path().join("dev/development");
+    std::fs::create_dir_all(&dev).unwrap();
+    std::fs::write(dev.join("main.js"), "").unwrap();
+    std::fs::write(
+        dev.join("wings-plugin.json"),
+        json!({"id":"development", "name":"Dev", "version":"1.0.0", "api":1, "main":"main.js"})
+            .to_string(),
+    )
+    .unwrap();
+    window.update(|_, window, _| window.remove_window());
+    drop(window);
+    drop(app);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |c| {
+        c.plugins.as_mut().unwrap().dev = Some(data.path().join("dev"))
+    });
+    let source = Arc::new(Updates::default());
+    *source.latest.lock().unwrap() = "1.1.0".into();
+    window.update(|w, _, cx| {
+        w.manage.update_source = Some(source.clone());
+        w.check_plugin_updates(false, cx);
+    });
+    until(&app, &mut window, "filter check never completed", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.queried.lock().unwrap().len(), 1);
+    assert!(
+        window.read(|w, _| !w.manage.updates.contains_key("development")
+            && !w.manage.updates.contains_key("local")
+            && !w.manage.updates.contains_key("folder"))
+    );
+}
+
+#[test]
+fn plugin_updates_manual_catalog_check_works_without_github_plugins() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let source = Arc::new(Updates::default());
+    *source.catalog.lock().unwrap() = vec![offered("new")];
+    window.update(|w, window, cx| {
+        w.manage.update_source = Some(source.clone());
+        w.show_plugins("", &[], window, cx);
+    });
+    window.draw();
+    window.simulate_click(
+        crate::ui::spot_at("plugin-check-updates").unwrap().center(),
+        gpui::MouseButton::Left,
+    );
+    app.run_until_parked();
+    until(&app, &mut window, "catalog check never completed", |w| {
+        !w.manage.checking
+    });
+    assert_eq!(source.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(source.queried.lock().unwrap().is_empty());
+    assert_eq!(window.read(|w, _| w.manage.available.len()), 1);
+    assert!(window.read(|w, _| w.manage.reviews.is_empty() && w.plugin_views().is_empty()));
+}
+
 fn runs(window: &TestAppWindow<Workspace>, id: &str) -> bool {
     window.read(|w, _| w.plugin_runs(id) && w.plugin_env.running.builtin(id).is_some())
 }

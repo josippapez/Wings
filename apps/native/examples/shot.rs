@@ -136,6 +136,32 @@ fn main() {
         std::sync::Arc::new(Assets),
     );
     cx.update(actions::bind);
+    if std::env::args().nth(2).as_deref() == Some("plugin-updates") {
+        for width in [1000.0, 640.0] {
+            let config = config.clone();
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                    cx.new(|cx| Workspace::new(config, window, cx))
+                })
+                .expect("open plugin update fixture");
+            let window: AnyWindowHandle = handle.into();
+            for state in ["single", "stack", "available"] {
+                handle
+                    .update(&mut cx, |workspace, window, cx| {
+                        workspace.sample_plugin_updates(state, window, cx)
+                    })
+                    .unwrap();
+                wait(&mut cx, window, Duration::from_millis(300));
+                save(
+                    &mut cx,
+                    window,
+                    &out.join(format!("plugin-updates-{state}-{width}.png")),
+                );
+            }
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+        return;
+    }
     if std::env::args().nth(2).as_deref() == Some("updater") {
         for width in [1000.0, 640.0] {
             let config = config.clone();

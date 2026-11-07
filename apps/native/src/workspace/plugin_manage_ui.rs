@@ -275,9 +275,6 @@ impl Workspace {
                 });
 
         let views = self.plugin_views();
-        let has_github = views
-            .iter()
-            .any(|view| matches!(view.source, Some(Source::Github { .. })));
         let updatable: Vec<String> = views
             .iter()
             .filter(|view| manage.updates.contains_key(&view.manifest.id))
@@ -300,16 +297,17 @@ impl Workspace {
                             "plugin-check-updates",
                             "Check for updates",
                             Variant::Ghost,
-                            manage.checking || !has_github,
+                            manage.checking,
                             if manage.checking {
                                 "Checking…"
                             } else {
                                 "Check for updates"
                             },
                         )
-                        .when(!manage.checking && has_github, |button| {
+                        .children(ui::spot(|| "plugin-check-updates".into()))
+                        .when(!manage.checking, |button| {
                             button.on_click(
-                                cx.listener(|this, _, _, cx| this.check_plugin_updates(cx)),
+                                cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)),
                             )
                         }),
                     )
@@ -332,10 +330,18 @@ impl Workspace {
                     }),
             );
 
-        let selected = manage
-            .selected
-            .clone()
-            .or_else(|| views.first().map(|view| view.manifest.id.clone()));
+        let available: Vec<_> = manage
+            .available
+            .iter()
+            .filter(|plugin| !views.iter().any(|view| view.manifest.id == plugin.id))
+            .cloned()
+            .collect();
+        let selected = manage.selected.clone().or_else(|| {
+            views
+                .first()
+                .filter(|_| !manage.browsing_available)
+                .map(|view| view.manifest.id.clone())
+        });
         let rows: Vec<AnyElement> = views
             .into_iter()
             .enumerate()
@@ -358,6 +364,50 @@ impl Workspace {
                     .into_any_element()])
             } else {
                 ui::card(rows)
+            })
+            .when(!available.is_empty(), |column| {
+                column.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(muted("Available").font_weight(FontWeight::MEDIUM))
+                        .child(ui::card(available.into_iter().enumerate().map(|(index, plugin)| {
+                            let label = format!("Install {}", plugin.name);
+                            let link = plugin.link.clone();
+                            div()
+                                .id(("plugin-available", index))
+                                .flex()
+                                .items_center()
+                                .gap(px(12.0))
+                                .px(px(16.0))
+                                .py(px(10.0))
+                                .child(plugin_icon(false, 32.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            div().flex().items_baseline().gap(px(8.0))
+                                                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(plugin.name))
+                                                .child(muted(plugin.version).text_size(px(11.0)).flex_none()),
+                                        )
+                                        .child(muted(plugin.description).text_size(px(12.0))),
+                                )
+                                .child(
+                                    ui::button(("plugin-available-install", index), label, Variant::Secondary, manage.installing.is_some(), "Install")
+                                        .when(manage.installing.is_none(), |button| {
+                                            button.on_click(cx.listener(move |this, _, window, cx| {
+                                                this.install_available(link.clone(), window, cx)
+                                            }))
+                                        }),
+                                )
+                                .into_any_element()
+                        })))
+                )
             })
             .into_any_element()
     }
@@ -392,6 +442,7 @@ impl Workspace {
             .hover(|style| style.bg(rgba(theme::HOVER)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.manage.selected = Some(select.clone());
+                this.manage.browsing_available = false;
                 this.manage.removing = None;
                 cx.notify();
             }))

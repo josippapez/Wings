@@ -94,6 +94,7 @@ fn the_new_settings_are_saved_and_come_back() {
                     sound: SoundId::Ping,
                     watching: false,
                 },
+                seen_plugins: Vec::new(),
                 diff_wrap: true,
                 diff_tree: true,
                 global_hotkey: Default::default(),

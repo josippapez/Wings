@@ -95,6 +95,8 @@ pub(super) struct Prefs {
     pub(super) agents_message: bool,
     /// The sound for new notifications.
     pub(super) notify_sound: SoundSettings,
+    /// Official plugins already announced as new.
+    pub(super) seen_plugins: Vec<String>,
     /// The diff viewer wraps long lines.
     pub(super) diff_wrap: bool,
     /// The diff viewer lists files as a folder tree.
@@ -113,6 +115,7 @@ impl Default for Prefs {
             agents_run_commands: false,
             agents_message: false,
             notify_sound: SoundSettings::default(),
+            seen_plugins: Vec::new(),
             diff_wrap: false,
             diff_tree: false,
             global_hotkey: Default::default(),
