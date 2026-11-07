@@ -911,8 +911,7 @@ impl Workspace {
                     .border_1()
                     .border_color(rgba(HAIRLINE))
                     .bg(rgb(theme::SURFACE))
-                    // A sidebar page sits in the desktop's `.w-shell`, 14px in from the card's edge.
-                    .p(px(14.0))
+                    // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge.
                     .child(page),
             );
         let Some(share) = share else {

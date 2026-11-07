@@ -558,8 +558,27 @@ impl PageView {
                 .children(self.nodes(&row.children, cx))
                 .into_any_element(),
             Node::Text(text) => {
+                // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
+                // word when it has to. A text that grows in a row, squeezed by the buttons beside it, would come apart a
+                // letter or two a line, so it is never narrower than its longest word, as in the desktop.
+                let least = (text.grow && !text.truncate).then(|| {
+                    let size = match text.size {
+                        TextSize::Small => 12.0,
+                        TextSize::Tiny => 11.0,
+                        TextSize::Large => 20.0,
+                        TextSize::Field => 14.0,
+                        TextSize::Normal => 13.0,
+                    };
+                    let weight = match text.weight {
+                        Weight::Normal => FontWeight::NORMAL,
+                        Weight::Medium => FontWeight::MEDIUM,
+                        Weight::Strong => FontWeight::SEMIBOLD,
+                    };
+                    longest_word(&plain_text(&text.children), size, weight, text.mono, cx)
+                });
                 let element = div()
-                    .when(text.grow || text.truncate, |el| el.min_w_0())
+                    .when(text.truncate, |el| el.min_w_0())
+                    .when_some(least, |el, least| el.min_w(px(least)))
                     .when(text.grow, |el| el.flex_1())
                     .when(text.truncate, |el| el.truncate())
                     .when(text.clamp, |el| el.line_clamp(3))
@@ -1484,6 +1503,32 @@ fn variant(variant: tree::Variant) -> ui::Variant {
         tree::Variant::Destructive => ui::Variant::Destructive,
         tree::Variant::Link => ui::Variant::Link,
     }
+}
+
+/// The width of the widest word of `text` at `size`, in the page's font or the terminal's with `mono`.
+fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
+    let family = if mono {
+        DEFAULT_FONT_FAMILY
+    } else {
+        ".SystemUIFont"
+    };
+    let system = cx.text_system();
+    let font = system.resolve_font(&gpui::Font {
+        weight,
+        ..gpui::font(family)
+    });
+    let width = |word: &str| {
+        word.chars()
+            .filter_map(|c| system.advance(font, px(size), c).ok())
+            .map(|advance| advance.width.as_f32())
+            .sum::<f32>()
+    };
+    // A point over, so rounding in the line's own layout never leaves the word a hair too wide to fit.
+    text.split_whitespace()
+        .map(width)
+        .fold(0.0, f32::max)
+        .ceil()
+        + 1.0
 }
 
 /// A button at its `size`, as plugin-ui.css's `.w-button[data-size]`: `xs` and `sm` are smaller with smaller text, the

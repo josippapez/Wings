@@ -108,7 +108,8 @@ pub fn chip(
         } else {
             gpui::Toggled::False
         })
-        .h(px(28.0))
+        // At least 28 high: a chip whose content is two lines, like a day and its hours, grows to hold them.
+        .min_h(px(28.0))
         .min_w(px(28.0))
         .flex_none()
         .flex()

@@ -144,6 +144,9 @@ impl Workspace {
             .aria_label("Project")
             .h(px(36.0))
             .flex_none()
+            // Kept inside its column, as the desktop's panel keeps it: a narrow one never draws it over the sidebar.
+            .min_w_0()
+            .overflow_hidden()
             .flex()
             .items_center()
             .gap(px(6.0))
