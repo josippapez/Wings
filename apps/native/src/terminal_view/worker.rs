@@ -583,10 +583,14 @@ fn run_model(
                     Ok(())
                 }
                 Command::Eof(error) => {
+                    // Only a shell that ended closes its pane. A stopped server or a failed read leaves the pane
+                    // open with its output and the reason, so nothing is lost without a word.
+                    if error.is_none() {
+                        exited.store(true, Ordering::Release);
+                    }
                     status = Some(error.unwrap_or_else(|| "Shell output closed.".into()));
                     process.reap();
                     closed = true;
-                    exited.store(true, Ordering::Release);
                     Ok(())
                 }
             };

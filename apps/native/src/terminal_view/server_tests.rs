@@ -166,6 +166,10 @@ fn a_pane_whose_server_stopped_says_so_and_closes() {
         visible_text(&frame).contains("ready"),
         "the screen stays as it was"
     );
+    assert!(
+        !runtime.exited.load(std::sync::atomic::Ordering::Acquire),
+        "a stopped server isn't the shell ending, so the pane stays open to say so"
+    );
     let mut control = Control::connect(&path).unwrap();
     for pane in control.list().unwrap() {
         control.kill(pane.pane).unwrap();
