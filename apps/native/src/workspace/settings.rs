@@ -636,15 +636,26 @@ impl Workspace {
                         cx,
                     ),
                 ],
-                vec![self.switch_row(
-                    "clipboard-write",
-                    "Let programs copy to the clipboard",
-                    "Lets a program in a pane, such as tmux or a remote shell, put text on your clipboard (OSC 52). \
-                     Programs can never read it.",
-                    current.clipboard_write,
-                    |this, on, cx| this.set_look(|look| look.clipboard_write = on, cx),
-                    cx,
-                )],
+                vec![
+                    self.switch_row(
+                        "terminal-images",
+                        "Show images in the terminal",
+                        "Draws images that programs print, such as SIXEL, iTerm2 and Kitty images. Each pane keeps \
+                         up to 24 MB of them.",
+                        current.images,
+                        |this, on, cx| this.set_look(|look| look.images = on, cx),
+                        cx,
+                    ),
+                    self.switch_row(
+                        "clipboard-write",
+                        "Let programs copy to the clipboard",
+                        "Lets a program in a pane, such as tmux or a remote shell, put text on your clipboard (OSC \
+                         52). Programs can never read it.",
+                        current.clipboard_write,
+                        |this, on, cx| this.set_look(|look| look.clipboard_write = on, cx),
+                        cx,
+                    ),
+                ],
             ],
             Section::Keyboard => vec![vec![
                 ui::setting_row(
