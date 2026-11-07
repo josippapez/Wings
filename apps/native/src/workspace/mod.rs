@@ -484,6 +484,7 @@ impl Workspace {
                 .unwrap_or(defaults.scrollback),
             copy_on_select: settings.copy_on_select.unwrap_or(defaults.copy_on_select),
             clipboard_write: settings.clipboard_write.unwrap_or(defaults.clipboard_write),
+            images: settings.images.unwrap_or(defaults.images),
         });
         let prefs = settings::Prefs::default();
         this.prefs = settings::Prefs {

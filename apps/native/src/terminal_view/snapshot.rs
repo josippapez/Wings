@@ -1,9 +1,15 @@
 //! The immutable snapshot the model thread publishes and the view paints.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, hash_map::Entry},
+    sync::{Arc, Mutex},
+};
 
+use gpui::RenderImage;
 use wings_terminal::grid::{
-    BACKGROUND, CURSOR, CursorShape, Flags, GridPane, Point, TermMode, Viewport,
+    BACKGROUND, CURSOR, CursorShape, Flags, GridPane, ImageLayer, ImagePlacement, Point, TermMode,
+    Viewport,
 };
 
 use super::find::{Find, FindResults, visible_matches};
@@ -30,8 +36,73 @@ pub(super) enum Found {
     Active,
 }
 
+/// An image a program printed, where the view draws it.
+#[derive(Clone)]
+pub(super) struct PaintImage {
+    pub(super) image: Arc<RenderImage>,
+    pub(super) placement: ImagePlacement,
+    /// The image's own size, in its pixels.
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+impl PaintImage {
+    pub(super) fn layer(&self) -> ImageLayer {
+        self.placement.layer
+    }
+}
+
+thread_local! {
+    /// Each model thread's images as textures, by id and generation, made once off the UI thread and kept while
+    /// they're on screen.
+    static TEXTURES: RefCell<HashMap<(u32, u64), PaintImage>> = RefCell::default();
+}
+
+/// An image's pixels as a texture GPUI can upload, which takes BGRA.
+fn texture(pane: &GridPane, placement: ImagePlacement) -> Option<PaintImage> {
+    let pixels = pane.image_pixels(placement.id)?;
+    let (width, height) = (pixels.width, pixels.height);
+    let mut bgra = pixels.pixels;
+    for pixel in bgra.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let frame = image::Frame::new(image::RgbaImage::from_raw(width, height, bgra)?);
+    Some(PaintImage {
+        image: Arc::new(RenderImage::new([frame])),
+        placement,
+        width,
+        height,
+    })
+}
+
+/// The images on screen, in the order to draw them. Call after `viewport`, which reads them.
+fn images(pane: &mut GridPane) -> Vec<PaintImage> {
+    let placements = pane.images();
+    TEXTURES.with_borrow_mut(|textures| {
+        let mut shown = Vec::with_capacity(placements.len());
+        for placement in placements {
+            let image = match textures.entry((placement.id, placement.generation)) {
+                Entry::Occupied(entry) => entry.get().clone(),
+                Entry::Vacant(entry) => match texture(pane, placement) {
+                    Some(made) => entry.insert(made).clone(),
+                    None => continue,
+                },
+            };
+            shown.push(PaintImage { placement, ..image });
+        }
+        textures.retain(|key, _| {
+            shown
+                .iter()
+                .any(|image| (image.placement.id, image.placement.generation) == *key)
+        });
+        shown
+    })
+}
+
 pub(super) struct Snapshot {
     pub(super) cells: Vec<PaintCell>,
+    /// Images programs printed, in the order to draw them.
+    pub(super) images: Vec<PaintImage>,
     pub(super) cursor: Option<(usize, usize, usize, CursorShape)>,
     pub(super) cursor_color: u32,
     pub(super) background: u32,
@@ -51,6 +122,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             cells: Vec::new(),
+            images: Vec::new(),
             cursor: None,
             cursor_color: CURSOR,
             background: BACKGROUND,
@@ -91,6 +163,7 @@ pub(super) fn snapshot(
         cursor,
     } = pane.viewport();
     let top = pane.viewport_top();
+    let images = images(pane);
     let mut cells = Vec::with_capacity(grid.len());
     for (i, cell) in grid.into_iter().enumerate() {
         let (row, col) = (i / cols.max(1), i % cols.max(1));
@@ -155,6 +228,7 @@ pub(super) fn snapshot(
     let (_, background, cursor_color) = pane.theme_colors();
     Snapshot {
         cells,
+        images,
         cursor,
         cursor_color,
         background,
@@ -190,5 +264,29 @@ mod tests {
         );
         pane.feed(b"\x1b[?25l");
         assert!(snapshot(&mut pane, None, false, None).cursor.is_none());
+    }
+
+    #[test]
+    fn images_programs_print_come_as_textures_where_they_go_and_not_with_images_off() {
+        let mut pane = GridPane::new(20, 4);
+        pane.set_cell_size(10, 20);
+        // A red 20 x 20 SIXEL two cells in.
+        pane.feed(b"ab\x1bP0;1q\"1;1;20;20#1;2;100;0;0#1!20~-!20~-!20~-!20~\x1b\\");
+        let frame = snapshot(&mut pane, None, false, None);
+        let [image] = frame.images.as_slice() else {
+            panic!("one image");
+        };
+        assert_eq!((image.placement.col, image.placement.row), (2, 0));
+        assert_eq!(image.placement.size, (20, 20));
+        assert_eq!((image.width, image.height), (20, 20));
+        // BGRA, as GPUI uploads it.
+        assert_eq!(&image.image.as_bytes(0).unwrap()[..4], [0, 0, 255, 255]);
+        // The texture is made once and kept while the image is on screen.
+        let again = snapshot(&mut pane, None, false, None);
+        assert_eq!(again.images[0].image.id, image.image.id);
+        pane.set_images(false);
+        assert!(snapshot(&mut pane, None, false, None).images.is_empty());
+        pane.feed(b"\x1bP0;1q\"1;1;20;20#1~\x1b\\");
+        assert!(snapshot(&mut pane, None, false, None).images.is_empty());
     }
 }

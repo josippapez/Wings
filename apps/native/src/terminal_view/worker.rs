@@ -87,12 +87,13 @@ pub(super) enum Command {
 }
 
 /// What the Settings change in the model: the cursor programs get until they set their own, the lines of history
-/// kept, and whether programs may write the clipboard.
+/// kept, whether programs may write the clipboard and whether their images are drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Options {
     pub(super) cursor: CursorShape,
     pub(super) scrollback: usize,
     pub(super) clipboard_write: bool,
+    pub(super) images: bool,
 }
 
 impl Default for Options {
@@ -107,6 +108,7 @@ impl Options {
             cursor: look.cursor,
             scrollback: look.scrollback,
             clipboard_write: look.clipboard_write,
+            images: look.images,
         }
     }
 }
@@ -442,6 +444,7 @@ fn run_model(
     // The settings apply before the first output is read, so a program can't copy before clipboard writes are off.
     if options != Options::default() {
         pane.set_options(options.cursor, options.scrollback);
+        pane.set_images(options.images);
     }
     let mut status = None;
     let mut find: Option<Find> = None;
@@ -551,6 +554,7 @@ fn run_model(
                 Command::Refresh => Ok(()),
                 Command::Options(next) => {
                     pane.set_options(next.cursor, next.scrollback);
+                    pane.set_images(next.images);
                     options = next;
                     Ok(())
                 }
@@ -569,6 +573,7 @@ fn run_model(
                     pane = GridPane::new(geometry.cols as usize, geometry.rows as usize);
                     pane.set_cell_size(geometry.cell_width, geometry.cell_height);
                     pane.set_options(options.cursor, options.scrollback);
+                    pane.set_images(options.images);
                     pane.feed(&bytes);
                     // Replies and clipboard writes answered a terminal long gone. Only the title still holds.
                     for event in pane.take_events() {

@@ -40,6 +40,7 @@ fn the_new_settings_are_saved_and_come_back() {
                     look.scrollback = 50_000;
                     look.copy_on_select = true;
                     look.clipboard_write = false;
+                    look.images = false;
                 },
                 cx,
             );
@@ -75,7 +76,7 @@ fn the_new_settings_are_saved_and_come_back() {
             ),
             (1.5, 4.5, InactiveCursor::Hidden, 50_000)
         );
-        assert!(look.copy_on_select && !look.clipboard_write && !look.cursor_blink);
+        assert!(look.copy_on_select && !look.clipboard_write && !look.cursor_blink && !look.images);
         assert_eq!(
             look.option_as_meta,
             crate::terminal_view::OptionAsMeta::Both

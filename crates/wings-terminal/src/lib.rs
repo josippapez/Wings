@@ -10,5 +10,7 @@ pub use process::{cwd_of, PtyProcess};
 pub mod grid;
 #[cfg(feature = "grid")]
 pub mod history;
+#[cfg(feature = "images")]
+pub mod images;
 #[cfg(feature = "grid")]
 pub mod search;

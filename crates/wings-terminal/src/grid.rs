@@ -222,6 +222,8 @@ pub struct Viewport {
 struct Shared {
     events: Vec<Event>,
     size: GhosttySizeReportSize,
+    /// Device attributes report SIXEL while images are on, as the desktop's image addon does.
+    sixel: bool,
 }
 
 struct Selecting {
@@ -244,6 +246,40 @@ pub struct GridPane {
     /// A new default cursor waits for the parser to be between sequences.
     cursor_pending: bool,
     selecting: Option<Selecting>,
+    /// Takes SIXEL and iTerm2 images out of the output while images are on.
+    #[cfg(feature = "images")]
+    scanner: Option<crate::images::Scanner>,
+    #[cfg(feature = "images")]
+    image_iter: GhosttyRenderStateImageIterator,
+}
+
+/// Where an image is drawn among the cells: under their backgrounds, between the backgrounds and the text, or over it.
+#[cfg(feature = "images")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ImageLayer {
+    BelowBackground,
+    BelowText,
+    AboveText,
+}
+
+/// An image on screen, from its top-left cell. Pixels are the terminal's, of the cell size it was given.
+#[cfg(feature = "images")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImagePlacement {
+    pub id: u32,
+    /// Changes whenever the image's pixels do; never reused.
+    pub generation: u64,
+    pub layer: ImageLayer,
+    pub z: i32,
+    /// The top-left cell, from the view's top left. Negative when the image starts above or left of it.
+    pub col: i32,
+    pub row: i32,
+    /// From the top-left cell's corner to the image's.
+    pub offset: (u32, u32),
+    /// The size to draw it at.
+    pub size: (u32, u32),
+    /// The part of the image to draw, in its own pixels: x, y, width, height.
+    pub source: [u32; 4],
 }
 
 fn indexed(i: u8) -> u32 {
@@ -350,13 +386,18 @@ unsafe extern "C" fn on_size(
     true
 }
 
-/// The same primary device attributes as Alacritty: a VT102.
+/// The same primary device attributes as Alacritty: a VT102. With images on, also SIXEL graphics.
 unsafe extern "C" fn on_device_attributes(
     _: GhosttyTerminal,
-    _: *mut c_void,
+    userdata: *mut c_void,
     out: *mut GhosttyDeviceAttributes,
 ) -> bool {
-    unsafe { (*out).primary.conformance_level = 6 };
+    let primary = unsafe { &mut (*out).primary };
+    primary.conformance_level = 6;
+    if shared(userdata).sixel {
+        primary.features[0] = GHOSTTY_DA_FEATURE_SIXEL as u16;
+        primary.num_features = 1;
+    }
     true
 }
 
@@ -536,7 +577,8 @@ impl GridPane {
                 "row_cells_new",
             );
         }
-        Self {
+        #[allow(unused_mut)]
+        let mut pane = Self {
             term,
             render,
             rows_it,
@@ -548,7 +590,48 @@ impl GridPane {
             cursor: CursorShape::Block,
             cursor_pending: false,
             selecting: None,
+            #[cfg(feature = "images")]
+            scanner: None,
+            #[cfg(feature = "images")]
+            image_iter: unsafe {
+                let mut images = ptr::null_mut();
+                check(
+                    ghostty_render_state_image_iterator_new(ptr::null(), &mut images),
+                    "image_iterator_new",
+                );
+                images
+            },
+        };
+        #[cfg(feature = "images")]
+        {
+            crate::images::install_png_decoder();
+            pane.set_images(true);
         }
+        pane
+    }
+
+    /// Whether programs' images are drawn, as the desktop's Show images in the terminal. Turning them off drops the
+    /// images the pane has.
+    #[cfg(feature = "images")]
+    pub fn set_images(&mut self, on: bool) {
+        if on == self.scanner.is_some() {
+            return;
+        }
+        self.scanner = on.then(crate::images::Scanner::new);
+        self.shared.sixel = on;
+        let limit: u64 = if on { crate::images::STORAGE_LIMIT } else { 0 };
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                &limit as *const _ as *const c_void,
+            );
+        }
+    }
+
+    #[cfg(feature = "images")]
+    pub fn images_on(&self) -> bool {
+        self.scanner.is_some()
     }
 
     /// The cursor programs get until they set their own and the lines of history kept, like the desktop's cursor
@@ -605,8 +688,58 @@ impl GridPane {
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
-        unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
+        #[cfg(feature = "images")]
+        if let Some(mut scanner) = self.scanner.take() {
+            let mut pieces = Vec::new();
+            scanner.scan(bytes, &mut pieces);
+            for piece in pieces {
+                self.feed_piece(piece);
+            }
+            self.scanner = Some(scanner);
+            self.apply_default_cursor();
+            return;
+        }
+        self.write(bytes);
         self.apply_default_cursor();
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
+    }
+
+    #[cfg(feature = "images")]
+    fn feed_piece(&mut self, piece: crate::images::Piece<'_>) {
+        use crate::images::{decode_iterm, decode_sixel, Piece};
+        let image = match piece {
+            Piece::Bytes(bytes) => return self.write(bytes),
+            Piece::Owned(bytes) => return self.write(&bytes),
+            Piece::Sixel(params, data) => {
+                let background = self.theme_colors().1;
+                let [b, g, r, _] = background.to_le_bytes();
+                decode_sixel(&params, &data, u32::from_le_bytes([r, g, b, 255]))
+            }
+            Piece::Iterm(body) => {
+                let size = self.shared.size;
+                decode_iterm(
+                    &body,
+                    (size.cell_width, size.cell_height),
+                    (
+                        size.cell_width * size.columns as u32,
+                        size.cell_height * size.rows as u32,
+                    ),
+                )
+            }
+        };
+        let Some(image) = image else {
+            return;
+        };
+        self.write(&crate::images::kitty_place(&image));
+        // Like the addon, the cursor ends on the image's last row, in the column it started in. Past the screen and
+        // the scrollback the image is gone, so a very tall one moves no further.
+        let rows = crate::images::rows_for(image.height, self.shared.size.cell_height)
+            .saturating_sub(1)
+            .min((self.history_limit + self.rows) as u32);
+        self.write(&b"\x1bD".repeat(rows as usize));
     }
 
     /// What the terminal asked of its host since the last call.
@@ -615,9 +748,23 @@ impl GridPane {
     }
 
     /// Size reports (CSI 14 t) give the screen in pixels from these.
+    /// Ghostty sizes images by them too, so a new size goes to it at once.
     pub fn set_cell_size(&mut self, width: u16, height: u16) {
-        self.shared.size.cell_width = width as u32;
-        self.shared.size.cell_height = height as u32;
+        let size = &mut self.shared.size;
+        if (size.cell_width, size.cell_height) == (width as u32, height as u32) {
+            return;
+        }
+        size.cell_width = width as u32;
+        size.cell_height = height as u32;
+        unsafe {
+            ghostty_terminal_resize(
+                self.term,
+                self.cols as u16,
+                self.rows as u16,
+                size.cell_width,
+                size.cell_height,
+            );
+        }
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
@@ -822,6 +969,174 @@ impl GridPane {
             },
         });
         Viewport { cells, cursor }
+    }
+
+    /// The images on screen as of the last `viewport`, in the order to draw them.
+    #[cfg(feature = "images")]
+    pub fn images(&mut self) -> Vec<ImagePlacement> {
+        let mut placements = Vec::new();
+        unsafe {
+            let mut iter = self.image_iter;
+            if ghostty_render_state_get(
+                self.render,
+                GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR,
+                &mut iter as *mut _ as *mut c_void,
+            ) != GHOSTTY_SUCCESS
+            {
+                return placements;
+            }
+            while ghostty_render_state_image_iterator_next(iter) {
+                let mut protocol: GhosttyImageProtocol = GHOSTTY_IMAGE_PROTOCOL_MAX_VALUE;
+                let (mut id, mut generation, mut layer, mut z, mut col, mut row) =
+                    (0u32, 0u64, 0 as GhosttyImageLayer, 0i32, 0i32, 0i32);
+                let (mut offset_x, mut offset_y, mut width, mut height) = (0u32, 0u32, 0u32, 0u32);
+                let mut source = [0u32; 4];
+                let keys = [
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_ID,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_Z,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_COL,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_ROW,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_X,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_Y,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_WIDTH,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_HEIGHT,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_X,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_Y,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_WIDTH,
+                    GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_HEIGHT,
+                ];
+                let [sx, sy, sw, sh] = &mut source;
+                let mut values: [*mut c_void; 15] = [
+                    &mut protocol as *mut _ as *mut c_void,
+                    &mut id as *mut _ as *mut c_void,
+                    &mut generation as *mut _ as *mut c_void,
+                    &mut layer as *mut _ as *mut c_void,
+                    &mut z as *mut _ as *mut c_void,
+                    &mut col as *mut _ as *mut c_void,
+                    &mut row as *mut _ as *mut c_void,
+                    &mut offset_x as *mut _ as *mut c_void,
+                    &mut offset_y as *mut _ as *mut c_void,
+                    &mut width as *mut _ as *mut c_void,
+                    &mut height as *mut _ as *mut c_void,
+                    sx as *mut _ as *mut c_void,
+                    sy as *mut _ as *mut c_void,
+                    sw as *mut _ as *mut c_void,
+                    sh as *mut _ as *mut c_void,
+                ];
+                let read = ghostty_render_state_image_get_multi(
+                    iter,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_mut_ptr(),
+                    ptr::null_mut(),
+                );
+                if read != GHOSTTY_SUCCESS || protocol != GHOSTTY_IMAGE_PROTOCOL_KITTY {
+                    continue;
+                }
+                placements.push(ImagePlacement {
+                    id,
+                    generation,
+                    layer: match layer {
+                        GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND => ImageLayer::BelowBackground,
+                        GHOSTTY_IMAGE_LAYER_BELOW_TEXT => ImageLayer::BelowText,
+                        _ => ImageLayer::AboveText,
+                    },
+                    z,
+                    col,
+                    row,
+                    offset: (offset_x, offset_y),
+                    size: (width, height),
+                    source,
+                });
+            }
+        }
+        placements.sort_by_key(|placement| (placement.layer, placement.z));
+        placements
+    }
+
+    /// Bytes of images the pane keeps, on both screens.
+    #[cfg(all(test, feature = "images"))]
+    pub(crate) fn image_bytes(&self) -> u64 {
+        let mut usage: GhosttyTerminalMemoryUsage = sized();
+        unsafe {
+            ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_MEMORY_USAGE,
+                &mut usage as *mut _ as *mut c_void,
+            );
+        }
+        usage.primary_image_bytes + usage.alternate_image_bytes
+    }
+
+    /// An image's pixels as RGBA, by its id in a placement.
+    #[cfg(feature = "images")]
+    pub fn image_pixels(&self, id: u32) -> Option<crate::images::Rgba> {
+        let mut graphics: GhosttyKittyGraphics = ptr::null_mut();
+        unsafe {
+            if ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
+                &mut graphics as *mut _ as *mut c_void,
+            ) != GHOSTTY_SUCCESS
+                || graphics.is_null()
+            {
+                return None;
+            }
+            let image = ghostty_kitty_graphics_image(graphics, id);
+            if image.is_null() {
+                return None;
+            }
+            let (mut width, mut height) = (0u32, 0u32);
+            let mut format: GhosttyKittyImageFormat = GHOSTTY_KITTY_IMAGE_FORMAT_MAX_VALUE;
+            let mut pixels = GhosttyString::default();
+            let keys = [
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
+            ];
+            let mut values: [*mut c_void; 4] = [
+                &mut width as *mut _ as *mut c_void,
+                &mut height as *mut _ as *mut c_void,
+                &mut format as *mut _ as *mut c_void,
+                &mut pixels as *mut _ as *mut c_void,
+            ];
+            if ghostty_kitty_graphics_image_get_multi(
+                image,
+                keys.len(),
+                keys.as_ptr(),
+                values.as_mut_ptr(),
+                ptr::null_mut(),
+            ) != GHOSTTY_SUCCESS
+            {
+                return None;
+            }
+            let data = string(pixels);
+            let count = width as usize * height as usize;
+            let rgba: Vec<u8> = match format {
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGBA if data.len() == count * 4 => data.to_vec(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGB if data.len() == count * 3 => data
+                    .chunks_exact(3)
+                    .flat_map(|p| [p[0], p[1], p[2], 255])
+                    .collect(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA if data.len() == count * 2 => data
+                    .chunks_exact(2)
+                    .flat_map(|p| [p[0], p[0], p[0], p[1]])
+                    .collect(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY if data.len() == count => {
+                    data.iter().flat_map(|&v| [v, v, v, 255]).collect()
+                }
+                _ => return None,
+            };
+            Some(crate::images::Rgba {
+                width,
+                height,
+                pixels: rgba,
+            })
+        }
     }
 
     /// Calls `f` with each row a render state holds, as its position from the top of the view and its cells.
@@ -1259,6 +1574,8 @@ impl GridPane {
         let mut next = GridPane::new(self.cols, self.rows);
         next.shared.size = self.shared.size;
         next.set_options(self.cursor, self.history_limit);
+        #[cfg(feature = "images")]
+        next.set_images(self.images_on());
         unsafe {
             // The new terminal reports to this pane's callbacks.
             ghostty_terminal_set(
@@ -1380,6 +1697,8 @@ impl Drop for GridPane {
         unsafe {
             ghostty_render_state_row_cells_free(self.cells);
             ghostty_render_state_row_iterator_free(self.rows_it);
+            #[cfg(feature = "images")]
+            ghostty_render_state_image_iterator_free(self.image_iter);
             ghostty_render_state_free(self.render);
             ghostty_terminal_free(self.term);
         }

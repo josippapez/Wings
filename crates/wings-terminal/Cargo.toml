@@ -7,12 +7,16 @@ publish = false
 
 [features]
 grid = ["dep:ghostty-sys", "dep:regex"]
+# SIXEL and iTerm2 inline images, and the PNG files of Kitty graphics, as the desktop's image addon draws them.
+images = ["grid", "dep:image", "dep:base64"]
 
 [dependencies]
 anyhow = "1"
 portable-pty = "0.9.0"
 ghostty-sys = { path = "../ghostty-sys", optional = true }
 regex = { version = "1", optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif"], optional = true }
+base64 = { version = "0.22.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

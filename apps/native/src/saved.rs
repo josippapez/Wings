@@ -155,6 +155,9 @@ pub struct Settings {
     pub copy_on_select: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clipboard_write: Option<bool>,
+    /// Images programs print are drawn, as the desktop's `images`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<bool>,
     /// Ctrl-` shows and hides the quick terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_terminal: Option<bool>,

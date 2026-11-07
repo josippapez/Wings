@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 
@@ -34,7 +34,7 @@ path = "src/bin/wings.rs"
 [dependencies]
 diffy = { version = "=0.5.2", default-features = false }
 wings-plugin-storage = { path = "../../crates/wings-plugin-storage" }
-wings-terminal = { path = "../../crates/wings-terminal", features = ["grid"], optional = true }
+wings-terminal = { path = "../../crates/wings-terminal", features = ["grid", "images"], optional = true }
 wings-agents = { path = "../../crates/wings-agents", optional = true }
 wings-plugins = { path = "../../crates/wings-plugins" }
 wings-disk-usage = { path = "../../crates/wings-disk-usage" }
@@ -63,6 +63,8 @@ plist = "1.10.1"
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The frames of the images terminals draw, the version GPUI's own `RenderImage` is made of.
+image = { version = "0.25.10", default-features = false, optional = true }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, optional = true }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders", "wayland", "x11"], optional = true }
 

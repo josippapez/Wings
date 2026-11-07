@@ -165,6 +165,7 @@ impl Workspace {
             scrollback: Some(look.scrollback),
             copy_on_select: Some(look.copy_on_select),
             clipboard_write: Some(look.clipboard_write),
+            images: Some(look.images),
             quick_terminal: Some(self.prefs.quick_terminal),
             editor: self.prefs.editor.clone(),
             new_tab: Some(self.prefs.new_tab.clone()),

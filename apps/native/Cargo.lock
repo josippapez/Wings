@@ -7564,6 +7564,7 @@ dependencies = [
  "global-hotkey",
  "gpui-pre",
  "gpui-pre-platform",
+ "image",
  "keyring",
  "libc",
  "minisign-verify",
@@ -7641,7 +7642,9 @@ name = "wings-terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "ghostty-sys",
+ "image",
  "libc",
  "portable-pty",
  "regex",

@@ -3,12 +3,12 @@
 use std::sync::Arc;
 
 use gpui::{
-    BorderStyle, Bounds, ContentMask, Context, DispatchPhase, ElementInputHandler, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Role, ShapedLine, StrikethroughStyle, TextAlign, TextRun,
-    UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*, px, rgb, rgba,
-    size,
+    BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, ElementInputHandler, Global,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, Role, ShapedLine, StrikethroughStyle,
+    TextAlign, TextRun, UnderlineStyle, Window, canvas, div, fill, font, outline, point,
+    prelude::*, px, rgb, rgba, size,
 };
-use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags};
+use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags, ImageLayer};
 
 use crate::actions::{self, Copy, Paste};
 
@@ -199,6 +199,54 @@ fn glyph_runs(
     runs
 }
 
+/// Textures of closed panes' images, freed by the next frame a terminal draws.
+#[derive(Default)]
+pub(super) struct RetiredImages(pub(super) Vec<Arc<RenderImage>>);
+
+impl Global for RetiredImages {}
+
+/// Draws the images of `layer`: each from its top-left cell, at its size, the part of it the terminal says to.
+fn paint_images(window: &mut Window, bounds: Bounds<Pixels>, data: &PaintData, layer: ImageLayer) {
+    for image in data
+        .snapshot
+        .images
+        .iter()
+        .filter(|image| image.layer() == layer)
+    {
+        let placement = &image.placement;
+        let [src_x, src_y, src_w, src_h] = placement.source.map(|v| v as f32);
+        let (width, height) = (placement.size.0 as f32, placement.size.1 as f32);
+        if src_w <= 0.0 || src_h <= 0.0 || width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        let origin = point(
+            bounds.left() + data.cell_width * placement.col as f32 + px(placement.offset.0 as f32),
+            bounds.top() + data.line_height * placement.row as f32 + px(placement.offset.1 as f32),
+        );
+        let shown = Bounds::new(origin, size(px(width), px(height)));
+        // The whole image, scaled so its source part lands on `shown`; GPUI draws only where the two meet.
+        let (scale_x, scale_y) = (width / src_w, height / src_h);
+        let whole = Bounds::new(
+            point(
+                origin.x - px(src_x * scale_x),
+                origin.y - px(src_y * scale_y),
+            ),
+            size(
+                px(image.width as f32 * scale_x),
+                px(image.height as f32 * scale_y),
+            ),
+        );
+        let _ = window.paint_image(
+            shown.intersect(&bounds),
+            whole,
+            Corners::default(),
+            image.image.clone(),
+            0,
+            false,
+        );
+    }
+}
+
 struct PaintData {
     snapshot: Arc<Snapshot>,
     glyphs: Vec<(Point<Pixels>, ShapedLine)>,
@@ -333,6 +381,7 @@ impl Render for TerminalView {
                 let mut paint_error = None;
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     window.paint_quad(fill(bounds, rgb(data.snapshot.background)));
+                    paint_images(window, bounds, &data, ImageLayer::BelowBackground);
                     for cell in &data.snapshot.cells {
                         if cell.bg != data.snapshot.background {
                             let origin = point(
@@ -365,6 +414,7 @@ impl Render for TerminalView {
                             rgb(color),
                         ));
                     }
+                    paint_images(window, bounds, &data, ImageLayer::BelowText);
                     if data.focused
                         && data.lit
                         && let Some((row, col, width, CursorShape::Block)) = data.snapshot.cursor
@@ -380,14 +430,15 @@ impl Render for TerminalView {
                             rgb(data.snapshot.cursor_color),
                         ));
                     }
-                    for (origin, line) in data.glyphs {
+                    for (origin, line) in &data.glyphs {
                         if let Err(error) =
-                            line.paint(origin, data.line_height, TextAlign::Left, None, window, cx)
+                            line.paint(*origin, data.line_height, TextAlign::Left, None, window, cx)
                         {
                             paint_error = Some(format!("Terminal drawing failed: {error}"));
                             break;
                         }
                     }
+                    paint_images(window, bounds, &data, ImageLayer::AboveText);
                     for cell in data.snapshot.cells.iter().filter(|cell| cell.selected) {
                         window.paint_quad(fill(
                             Bounds::new(
@@ -489,6 +540,26 @@ impl Render for TerminalView {
                         }
                     }
                 });
+                // Textures of images no longer on screen leave the window's atlas.
+                let shown: Vec<_> = data
+                    .snapshot
+                    .images
+                    .iter()
+                    .map(|image| image.image.clone())
+                    .collect();
+                let mut gone = paint_view.update(cx, |view, _| {
+                    let mut gone = std::mem::replace(&mut view.painted_images, shown);
+                    gone.retain(|old| !view.painted_images.iter().any(|new| new.id == old.id));
+                    gone
+                });
+                if let Some(retired) = cx.try_global::<RetiredImages>()
+                    && !retired.0.is_empty()
+                {
+                    gone.extend(std::mem::take(&mut cx.global_mut::<RetiredImages>().0));
+                }
+                for image in gone {
+                    let _ = window.drop_image(image);
+                }
                 if let Some(error) = paint_error {
                     paint_view.update(cx, |view, cx| {
                         if view.error.as_ref() != Some(&error) {

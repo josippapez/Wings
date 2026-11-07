@@ -114,6 +114,8 @@ pub struct TerminalLook {
     pub copy_on_select: bool,
     /// Programs may put text on the clipboard (OSC 52).
     pub clipboard_write: bool,
+    /// Images programs print are drawn: SIXEL, iTerm2 and Kitty graphics, as the desktop's `images`.
+    pub images: bool,
 }
 
 impl Default for TerminalLook {
@@ -130,6 +132,7 @@ impl Default for TerminalLook {
             scrollback: wings_terminal::grid::HISTORY_LINES,
             copy_on_select: false,
             clipboard_write: true,
+            images: true,
         }
     }
 }
@@ -191,6 +194,9 @@ pub struct TerminalView {
     blink: Option<Task<()>>,
     /// False in the off half of a blink.
     cursor_lit: bool,
+    /// The images the last frame drew, whose textures go when they're no longer on screen.
+    painted_images: Vec<Arc<gpui::RenderImage>>,
+    _release: Subscription,
 }
 
 /// What a terminal tells its owner.
@@ -338,6 +344,13 @@ impl TerminalView {
                 .commands
                 .send_blocking(Command::Options(Options::of(&look(cx))));
         });
+        // A closed pane's textures go on the next frame any terminal draws, which has the window to free them in.
+        let release = cx.on_release(|view, cx| {
+            let painted = std::mem::take(&mut view.painted_images);
+            cx.default_global::<paint::RetiredImages>()
+                .0
+                .extend(painted);
+        });
         Self {
             focus: cx.focus_handle(),
             runtime,
@@ -366,6 +379,8 @@ impl TerminalView {
             find: None,
             blink: None,
             cursor_lit: true,
+            painted_images: Vec::new(),
+            _release: release,
         }
     }
 
