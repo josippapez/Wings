@@ -208,9 +208,9 @@ impl Workspace {
         })
     }
 
-    /// The pane in the terminal server: the one it kept running for `history`, else a new one there. A server that
-    /// stopped is replaced by a new one. `None` runs the pane in the app: no server, or none could start, which a notice
-    /// says. A pane that ended while the app was away leaves what it printed in `output`, above the new shell.
+    /// The pane in the terminal server: the one it kept running for `history`, else a new one there
+    /// (`open_new_in_server`). `None` runs the pane in the app. A pane that ended while the app was away leaves what it
+    /// printed in `output`, above the new shell.
     #[cfg(unix)]
     fn open_in_server(
         &mut self,
@@ -237,14 +237,31 @@ impl Workspace {
                 terminal_server::kill(&socket, pane.pane);
             }
         }
+        let space = self.project_key();
+        self.open_new_in_server(&space, history, folder, output, account, cx)
+    }
+
+    /// A new shell in the terminal server under `space_id` and `history`. A server that stopped is replaced by a new
+    /// one. `None` runs it in the app: no server, or none could start, which a notice says.
+    #[cfg(unix)]
+    pub(super) fn open_new_in_server(
+        &mut self,
+        space_id: &str,
+        history: &str,
+        folder: &std::path::Path,
+        output: &[u8],
+        account: &Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Entity<TerminalView>> {
+        let servers = self.config.terminal_server.as_ref()?.0.clone();
         let socket = servers.current()?;
         let open = |socket: &std::path::Path, cx: &mut Context<Self>| {
             TerminalView::open_in_server(
                 socket,
-                self.project_key(),
+                space_id.to_owned(),
                 history.to_owned(),
                 folder.to_owned(),
-                output.clone(),
+                output.to_owned(),
                 account.clone(),
                 cx,
             )

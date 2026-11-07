@@ -418,6 +418,11 @@ impl TerminalView {
         }));
     }
 
+    /// Ends the shell, also one in the terminal server, which would otherwise run on after the app quits.
+    pub fn end(&self) {
+        self.runtime.shutdown();
+    }
+
     /// The shell's process id, so its owner can check it ended.
     pub fn process_id(&self) -> Option<u32> {
         self.runtime.process.process_id()

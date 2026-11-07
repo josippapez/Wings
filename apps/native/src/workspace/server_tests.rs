@@ -257,3 +257,106 @@ fn a_new_pane_after_the_server_stopped_runs_in_the_app_and_says_so() {
     drop((window, app));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The loose terminals the server runs: their shell pids, exited or not.
+fn loose_in(socket: &std::path::Path) -> Vec<(Option<u32>, bool)> {
+    wings_ptyd::client::Control::connect(socket)
+        .unwrap()
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter(|pane| pane.space_id == terminal_server::LOOSE)
+        .map(|pane| (pane.shell_pid, pane.exited))
+        .collect()
+}
+
+fn wait_until(app: &TestApp, what: &str, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        // The redraw that carries a shell's exit waits on the clock.
+        app.advance_clock(Duration::from_millis(20));
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn a_sidebar_terminal_runs_in_the_server_ends_with_the_app_and_is_not_shown_again() {
+    use crate::workspace::quick::Place;
+    let dir = PathBuf::from("/tmp").join(format!("wsl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let servers = dir.join("srv");
+    std::fs::create_dir_all(&servers).unwrap();
+    let state = dir.join("workspace.json");
+    let socket = server(&servers);
+    // One an earlier app left running when it crashed: nothing would show it again.
+    let (left, _events) = wings_ptyd::client::Pane::spawn(
+        &socket,
+        wings_ptyd::proto::Spawn {
+            space_id: terminal_server::LOOSE.into(),
+            cwd: std::env::temp_dir(),
+            cols: 80,
+            rows: 24,
+            history_id: Some("left-loose".into()),
+            env: std::env::vars().collect(),
+        },
+        b"",
+    )
+    .unwrap();
+    left.detach();
+
+    let (mut app, mut window) = launch(&state, Some(&servers));
+    wait_until(&app, "the earlier app's terminal still runs", || {
+        loose_in(&socket).is_empty()
+    });
+    let loose_shell = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            w.loose
+                .last()
+                .unwrap()
+                .view()
+                .read(cx)
+                .process_id()
+                .unwrap()
+        })
+    };
+    window.update(|w, window, cx| w.open_loose(Place::Full, window, cx));
+    let first = loose_shell(&window);
+    assert_eq!(
+        loose_in(&socket),
+        [(Some(first), false)],
+        "it runs in the server"
+    );
+    // Its shell exiting takes its row out, and the server forgets it.
+    window.update(|w, _, cx| {
+        w.loose[0]
+            .view()
+            .update(cx, |view, cx| view.write_input("exit\r", cx))
+    });
+    wait_until(&app, "the exited terminal's row stayed", || {
+        window.read(|w, _| w.loose.is_empty())
+    });
+    wait_until(&app, "the server kept the exited terminal", || {
+        loose_in(&socket).is_empty()
+    });
+
+    window.update(|w, window, cx| w.open_loose(Place::Full, window, cx));
+    let second = loose_shell(&window);
+    assert_eq!(loose_in(&socket), [(Some(second), false)]);
+    quit(&mut app);
+    drop((window, app));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !loose_in(&socket).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "its shell runs on after the app quit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let (app, window) = launch(&state, Some(&servers));
+    assert!(window.read(|w, _| w.loose.is_empty()), "nothing saved it");
+    drop((window, app));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -40,6 +40,10 @@ pub const ENV: &str = "WINGS_TERMINAL_SERVER";
 /// The server binary's name, beside the app's own in its bundle and in the build folder.
 pub const BINARY: &str = "wings-terminal-server";
 
+/// The `space_id` of the sidebar's terminals and the quick terminal. Like the desktop's they're in no tab, so nothing
+/// saves them: they end when the app quits, and one an earlier app left running (it crashed) ends when the next starts.
+pub const LOOSE: &str = "wings:loose";
+
 /// A server nobody uses for this long exits, and the next app to want one starts it.
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
@@ -248,7 +252,17 @@ impl Servers {
                 current = Some((version, path.clone()));
             }
             match control.list() {
-                Ok(panes) => found.extend(panes.into_iter().map(|pane| (path.clone(), pane))),
+                Ok(panes) => {
+                    for pane in panes {
+                        if pane.space_id != LOOSE {
+                            found.push((path.clone(), pane));
+                        } else if let Err(error) = control.kill(pane.pane) {
+                            eprintln!(
+                                "Couldn't end a terminal an earlier app left running: {error}"
+                            );
+                        }
+                    }
+                }
                 Err(error) => eprintln!(
                     "Couldn't list the terminal server's panes at {}: {error}",
                     path.display()

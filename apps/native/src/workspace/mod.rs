@@ -287,6 +287,10 @@ impl Workspace {
         let quit = cx.on_app_quit(|this, cx| {
             this.save(cx);
             this.save_histories(cx);
+            // Nothing saves the sidebar's terminals, so their shells end rather than run on in the terminal server.
+            for quick in &this.loose {
+                quick.view().read(cx).end();
+            }
             async {}
         });
         let issues = cx.new(IssuesView::new);

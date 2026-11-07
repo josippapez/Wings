@@ -12,6 +12,8 @@ use gpui::{
     Window, canvas, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
+#[cfg(unix)]
+use crate::terminal_server::LOOSE;
 use crate::{
     icons::{Icon, icon},
     terminal_view::TerminalView,
@@ -124,11 +126,26 @@ impl Workspace {
     /// Starts a shell in the home folder, there: the sidebar's Terminal row fills the pane area with it.
     pub(super) fn open_loose(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        let view = match TerminalView::open(home, Vec::new(), None, cx) {
+        let key = self.next_loose;
+        #[cfg(unix)]
+        let served = {
+            // Unique among the server's panes, though nothing looks it up: no saved pane names a loose terminal.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let history = format!("{nanos:x}-loose-{key}");
+            self.open_new_in_server(LOOSE, &history, &home, &[], &None, cx)
+        };
+        #[cfg(not(unix))]
+        let served = None;
+        let view = match served
+            .map(Ok)
+            .unwrap_or_else(|| TerminalView::open(home, Vec::new(), None, cx))
+        {
             Ok(view) => view,
             Err(error) => return self.show_notice("Couldn't start a terminal".into(), error, cx),
         };
-        let key = self.next_loose;
         self.next_loose += 1;
         let exit = self.close_on_exit(&view, Ended::Loose(key), cx);
         let row = cx.focus_handle();
