@@ -1302,6 +1302,7 @@ impl Render for PageView {
             .as_ref()
             .map(|tree| self.nodes(&tree.children, cx))
             .unwrap_or_default();
+        let fill = self.tree.as_ref().is_some_and(|tree| tree.fill);
         for (id, state) in self.inputs.borrow_mut().iter_mut() {
             if !state.initialized {
                 state.initialized = true;
@@ -1342,7 +1343,19 @@ impl Render for PageView {
             .text_size(px(13.0))
             // plugin-ui.css's body line height, so rows come out as tall as the desktop's.
             .line_height(relative(1.45))
-            .children(body)
+            .child(
+                // plugin-ui.css's `.w-shell`: a page is padded and spaced, unless it fills the frame and lays itself
+                // out edge to edge (`.w-shell[data-fill]`).
+                div()
+                    .id("page-shell")
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .when(!fill, |shell| shell.gap(px(10.0)).p(px(14.0)))
+                    .children(body),
+            )
             .when_some(self.error.clone(), |page, error| {
                 page.child(
                     div()

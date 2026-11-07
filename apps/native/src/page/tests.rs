@@ -33,7 +33,7 @@ render();
 
 const SEARCH: &str = r#"
 let query = '';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
 {id:3,type:'SearchField',props:{label:'Search commits',placeholder:'Search commits',onInput:'3:input'}},
 {id:4,type:'Text',children:[{id:5,type:'#text',text:'Query='+query}]}]}]}]}));}
 globalThis.__wingsEvent=(_,json)=>{query=JSON.parse(json).value;render();return true;};render();
@@ -130,13 +130,14 @@ fn built_changes_sidebar_supports_keyboard_chips_and_live_history_search_in_quic
         )
     });
     settle(&app, &mut window, shows("Coupon.tsx"));
-    window.simulate_click(point(px(45.0), px(78.0)), MouseButton::Left);
+    // A sidebar doesn't fill, so it sits inside the desktop's 14pt of padding.
+    window.simulate_click(point(px(59.0), px(92.0)), MouseButton::Left);
     // Arrow through Branch to History. Focus must follow the selected chip.
     key(&mut window, "right");
     settle(&app, &mut window, shows("against main"));
     key(&mut window, "right");
     settle(&app, &mut window, shows("Add coupon validation"));
-    window.simulate_click(point(px(70.0), px(116.0)), MouseButton::Left);
+    window.simulate_click(point(px(84.0), px(130.0)), MouseButton::Left);
     window.simulate_input("not-a-commit");
     settle(&app, &mut window, shows("No commits match."));
     assert!(window.read(|view, _| view.error().is_none()));
@@ -189,6 +190,54 @@ fn graph_virtualizes_ten_thousand_commits_and_keyboard_scrolls_before_opening() 
 }
 
 type View = TestAppWindow<PageView>;
+
+/// Two buttons, one in the top left corner of the page and one in the top right, and the presses each has heard.
+/// `PROPS` is what `mount` puts on the root.
+macro_rules! corners {
+    ($props:literal) => {
+        concat!(
+            "let left = 0, right = 0;\n",
+            "function render(){wings.render(JSON.stringify({id:0,type:'#root',props:",
+            $props,
+            ",children:[{id:1,type:'Row',props:{justify:'between'},children:[",
+            "{id:2,type:'Button',props:{onClick:'2:click'},children:[{id:3,type:'#text',text:'Left'}]},",
+            "{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Right'}]}]},",
+            "{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+left+' '+right+'.'}]}]}));}\n",
+            "globalThis.__wingsEvent=(handler)=>{if(handler==='2:click')left++;else right++;render();return true;};render();",
+        )
+    };
+}
+
+/// Clicks `inset` points in from the top left and the top right corners of the window.
+fn click_corners(app: &TestApp, window: &mut View, inset: f32) {
+    let width = window.update(|_, window, _| window.viewport_size().width);
+    for x in [px(inset), width - px(inset)] {
+        window.simulate_click(point(x, px(inset)), MouseButton::Left);
+    }
+    thread::sleep(Duration::from_millis(100));
+    app.run_until_parked();
+    window.draw();
+}
+
+#[test]
+fn a_fill_page_has_no_padding_and_fills_the_frame_edge_to_edge() {
+    let (app, mut window) = open(corners!("{fill:true}"));
+    settle(&app, &mut window, shows("Pressed 0 0."));
+    // 2pt in from either top corner is already on a button: nothing pads the page, and it spans the window's width.
+    click_corners(&app, &mut window, 2.0);
+    settle(&app, &mut window, shows("Pressed 1 1."));
+}
+
+#[test]
+fn a_page_that_does_not_fill_keeps_the_desktops_14pt_padding() {
+    let (app, mut window) = open(corners!("{}"));
+    settle(&app, &mut window, shows("Pressed 0 0."));
+    // plugin-ui.css's `.w-shell { padding: 14px }`: the corners themselves are padding, and just inside it are the buttons.
+    click_corners(&app, &mut window, 2.0);
+    assert!(window.read(|view, _| view.text().contains("Pressed 0 0.")));
+    click_corners(&app, &mut window, 16.0);
+    settle(&app, &mut window, shows("Pressed 1 1."));
+}
 
 fn open(source: &'static str) -> (TestApp, View) {
     let mut app = TestApp::new();
@@ -262,7 +311,7 @@ fn the_keyboard_presses_the_focused_button() {
 
 const THROWS: &str = r#"
 globalThis.__wingsEvent = () => { throw new Error('nope'); };
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
+wings.render(JSON.stringify({ id: 0, type: '#root', props: { fill: true }, children: [
   { id: 1, type: 'Page', props: {}, children: [
     { id: 2, type: 'Slot', props: { name: 'body' }, children: [
       { id: 3, type: 'Button', props: { onClick: '3:onClick' }, children: [{ id: 4, type: '#text', text: 'Boom' }] },

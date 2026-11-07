@@ -120,6 +120,8 @@ impl Choice for Tone {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tree {
     pub children: Vec<Node>,
+    /// The page lays itself out edge to edge with no padding, as a `{ fill: true }` page does on the desktop.
+    pub fill: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -646,6 +648,7 @@ impl Tree {
         let mut walk = Walk { nodes: 0 };
         Ok(Tree {
             children: walk.children(root.children, 0)?,
+            fill: root.props.get("fill").and_then(Value::as_bool) == Some(true),
         })
     }
 

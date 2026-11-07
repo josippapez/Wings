@@ -1439,3 +1439,89 @@ fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin(
     let view = window.read(|w, _| crate::page::plugin::Env::statusline(&*w.plugin_env));
     assert_eq!(view["rateLimits"]["fiveHour"]["usedPercentage"], 40.0);
 }
+
+/// A page with a button in its bottom right corner that counts its presses. `PROPS` is what `mount` puts on the root.
+macro_rules! corner_page {
+    ($props:literal) => {
+        concat!(
+            "let n = 0;\n",
+            "function render(){wings.render(JSON.stringify({id:0,type:'#root',props:",
+            $props,
+            ",children:[{id:1,type:'Stack',props:{grow:true},children:[{id:2,type:'#text',text:'Pressed '+n+'.'}]},",
+            "{id:3,type:'Row',props:{justify:'end'},children:[",
+            "{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Corner'}]}]}]}));}\n",
+            "globalThis.__wingsEvent=()=>{n++;render();return true;};render();",
+        )
+    };
+}
+
+#[test]
+fn a_fill_tab_page_reaches_its_cards_edges_and_one_that_does_not_fill_keeps_its_padding() {
+    let data = Data::temp();
+    data.install_script(
+        "framed",
+        json!({ "contributes": { "views": [
+            { "id": "filled", "title": "Filled", "page": "dist/filled.html", "opens": ["tab"], "newTab": true },
+            { "id": "padded", "title": "Padded", "page": "dist/padded.html", "opens": ["tab"], "newTab": true }
+        ] } }),
+        "",
+        &[
+            ("filled", corner_page!("{fill:true}")),
+            ("padded", corner_page!("{}")),
+        ],
+        "framed-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let shows = |app: &TestApp, window: &mut TestAppWindow<Workspace>, view: &str, text: &str| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            app.run_until_parked();
+            window.draw();
+            let page = window.read(|w, cx| {
+                w.plugin_tabs
+                    .iter()
+                    .find(|tab| tab.view == view)
+                    .map(|tab| tab.page.read(cx).text())
+                    .unwrap_or_default()
+            });
+            if page.contains(text) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{view} shows {page:?}, not {text:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let viewport = window.update(|_, window, _| window.viewport_size());
+    // `inset` points in from the bottom right corner of the tab's card, which sits 8pt in from the window's right and
+    // bottom edges (the desktop's `p-2 pt-0`) inside a 1pt border.
+    let click = |app: &TestApp, window: &mut TestAppWindow<Workspace>, inset: f32| {
+        let at = point(
+            viewport.width - px(9.0 + inset),
+            viewport.height - px(9.0 + inset),
+        );
+        window.simulate_click(at, MouseButton::Left);
+        std::thread::sleep(Duration::from_millis(100));
+        app.run_until_parked();
+        window.draw();
+    };
+
+    // A fill page's button is right in the card's corner.
+    window
+        .update(|w, window, cx| assert!(w.open_plugin_view("framed", "filled", None, window, cx)));
+    shows(&app, &mut window, "filled", "Pressed 0.");
+    click(&app, &mut window, 2.0);
+    shows(&app, &mut window, "filled", "Pressed 1.");
+
+    // Any other page sits inside plugin-ui.css's 14px of `.w-shell` padding: the corner is empty, and the button is
+    // just inside the padding.
+    window
+        .update(|w, window, cx| assert!(w.open_plugin_view("framed", "padded", None, window, cx)));
+    shows(&app, &mut window, "padded", "Pressed 0.");
+    click(&app, &mut window, 2.0);
+    shows(&app, &mut window, "padded", "Pressed 0.");
+    click(&app, &mut window, 16.0);
+    shows(&app, &mut window, "padded", "Pressed 1.");
+}
