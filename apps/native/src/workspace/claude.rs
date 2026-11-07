@@ -547,7 +547,13 @@ impl Host for NativeHost<'_> {
             .env
             .on_window(WINDOW_WAIT, move |workspace, _, cx| {
                 let id = workspace.plugin_pane(&pane)?;
-                Some(workspace.terminal(id)?.read(cx).recent_output())
+                let terminal = workspace.terminal(id)?.read(cx);
+                // A full-screen program's output is cursor moves, so the screen it leaves is what reads.
+                Some(
+                    terminal
+                        .screen_text()
+                        .map_or_else(|| terminal.recent_output(), String::into_bytes),
+                )
             })
             .ok()
             .flatten()

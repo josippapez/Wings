@@ -451,6 +451,11 @@ impl TerminalView {
         self.runtime.process.foreground_pid()
     }
 
+    /// What a full-screen program in it shows now, or `None` on the normal screen (see `snapshot::screen_text`).
+    pub fn screen_text(&self) -> Option<String> {
+        snapshot::screen_text(&self.latest.lock().unwrap())
+    }
+
     /// The pane's latest output, up to 1 MiB, to save for the next launch.
     pub fn recent_output(&self) -> Vec<u8> {
         self.runtime

@@ -141,6 +141,35 @@ impl Default for Snapshot {
 
 pub(super) type Latest = Arc<Mutex<Arc<Snapshot>>>;
 
+/// What a full-screen program (OpenCode, vim) shows, a line per row without its trailing spaces. `None` on the normal
+/// screen. Such a program draws by moving the cursor, so its output has no lines to read, only the screen it leaves.
+pub(super) fn screen_text(snapshot: &Snapshot) -> Option<String> {
+    if !snapshot.mode.contains(TermMode::ALT_SCREEN) {
+        return None;
+    }
+    let mut cells: Vec<&PaintCell> = snapshot.cells.iter().collect();
+    cells.sort_by_key(|cell| (cell.row, cell.col));
+    let mut rows = vec![(String::new(), 0); snapshot.rows];
+    for cell in cells {
+        // An empty cell is a blank or the second half of a wide character, which its first half already covers.
+        let Some((line, filled)) = rows.get_mut(cell.row).filter(|_| !cell.text.is_empty()) else {
+            continue;
+        };
+        if cell.col > *filled {
+            line.extend(std::iter::repeat_n(' ', cell.col - *filled));
+            *filled = cell.col;
+        }
+        line.push_str(&cell.text);
+        *filled += cell.width.max(1);
+    }
+    Some(
+        rows.iter()
+            .map(|(line, _)| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 pub(super) fn snapshot(
     pane: &mut GridPane,
     status: Option<String>,
@@ -264,6 +293,19 @@ mod tests {
         );
         pane.feed(b"\x1b[?25l");
         assert!(snapshot(&mut pane, None, false, None).cursor.is_none());
+    }
+
+    #[test]
+    fn a_full_screen_program_reads_as_the_screen_it_leaves() {
+        let mut pane = GridPane::new(20, 4);
+        pane.feed(b"before");
+        assert_eq!(screen_text(&snapshot(&mut pane, None, false, None)), None);
+        // Drawn by moving the cursor: a word in the middle of row 2, then a wide character and text on row 4.
+        pane.feed("\x1b[?1049h\x1b[2;3Hhello\x1b[4;1H界 ok".as_bytes());
+        assert_eq!(
+            screen_text(&snapshot(&mut pane, None, false, None)).as_deref(),
+            Some("\n  hello\n\n界 ok")
+        );
     }
 
     #[test]
