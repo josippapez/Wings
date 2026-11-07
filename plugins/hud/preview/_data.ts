@@ -3,8 +3,13 @@ import type { Overview, SessionView, Snapshot } from "../src/lib/types";
 
 const GB = 2 ** 30;
 export const overview = (o: Partial<Overview> = {}): Overview => ({
-  fiveHour: { percent: 42, resets: "2h 54m", left: "3h", resetsAt: null },
-  sevenDay: { percent: 61, resets: "2d 11h", left: "2d", resetsAt: null },
+  limits: [
+    {
+      account: null,
+      fiveHour: { percent: 42, resets: "2h 54m", left: "3h", resetsAt: null },
+      sevenDay: { percent: 61, resets: "2d 11h", left: "2d", resetsAt: null },
+    },
+  ],
   statusline: true,
   memory: { used: 9.4 * GB, total: 16 * GB, percent: 59 },
   ...o,

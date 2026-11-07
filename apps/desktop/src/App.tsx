@@ -40,7 +40,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Toaster } from "@/components/ui/sonner";
 import { cleanSound, DEFAULT_SOUND, notificationSound, setSoundSettings, type SoundSettings } from "@/lib/sound";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, pagesOf, type Agent, type AgentState, type GitStatus, type PaneInfo, type PluginView, type Space, type WorktreeMade, type WorktreeState } from "@/lib/api";
+import { api, pagesOf, type Agent, type AgentState, type ClaudeAccountPick, type GitStatus, type PaneInfo, type PluginView, type Space, type WorktreeMade, type WorktreeState } from "@/lib/api";
 import { stillRunning } from "@/lib/still-running";
 import { PluginHost, type Badge, type DiffView, type PaneRail, type PaneStatus, type SidebarLabel } from "@/lib/plugins";
 import { withBadge, withLabel } from "@/lib/badges";
@@ -86,7 +86,7 @@ const tabOfPane = (tabs: Tab[], key: string) => tabs.find((t): t is PaneTab => i
  * `savedCwd` is the folder it was in when Wings last saved, until its shell reports one. `historyId` names the output
  * Wings keeps for it across a restart.
  */
-type PaneMeta = PaneSession & { spaceId: string; savedCwd?: string | null; historyId: string };
+type PaneMeta = PaneSession & { spaceId: string; savedCwd?: string | null; historyId: string; /** The Claude Code account its shell runs under when it isn't the project's. */ claudeAccount?: ClaudeAccountPick };
 
 type SavedWorkspace = {
   version: 1;
@@ -153,6 +153,14 @@ type SavedWorkspace = {
   agentRuns?: Record<string, AgentRun>;
   /** The plugin that opened each pane's agent, by the same keys. Absent in older files. */
   openedBy?: Record<string, string>;
+  /** The Claude Code account of each pane that runs under one other than its project's, by the same keys. Absent in older files. */
+  claudeAccounts?: Record<string, ClaudeAccountPick>;
+};
+
+/** A pane's saved account, if it has the shape of one: a name, or null for the default account. */
+const savedClaudeAccount = (value: unknown): ClaudeAccountPick | undefined => {
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" || name === null ? { name } : undefined;
 };
 
 function parseSaved(json: string | null): SavedWorkspace | null {
@@ -499,6 +507,7 @@ const leftPanel = usePanelRef();
       historyId: string | null = null,
       openedBy?: string,
       agentRun?: AgentRun,
+      claudeAccount?: ClaudeAccountPick,
     ) => {
       const key = crypto.randomUUID();
       historyId ??= key;
@@ -524,10 +533,11 @@ const leftPanel = usePanelRef();
           attachTo,
           savedCwd,
           historyId,
+          claudeAccount ?? null,
         ),
       );
       // A pane still running from before a UI reload is known by its Rust id now, before its tab is first shown.
-      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId, openedBy, agentRun } }));
+      setPanes((p) => ({ ...p, [key]: { spaceId, paneId: attachTo, sessionId, kind, name: null, live: false, args, ...noResume, savedCwd, historyId, openedBy, agentRun, claudeAccount } }));
       setInitialInputs((m) => ({ ...m, [key]: initialInput }));
       return key;
     },
@@ -535,8 +545,8 @@ const leftPanel = usePanelRef();
   );
 
   const openTab = useCallback(
-    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null, kind: SessionKind = "claude", show = true) => {
-      const key = createPane(spaceId, initialInput, sessionId, cwd, [], null, kind);
+    (spaceId: string, initialInput: string | null = null, sessionId: string | null = null, cwd: string | null = null, kind: SessionKind = "claude", show = true, claudeAccount?: ClaudeAccountPick) => {
+      const key = createPane(spaceId, initialInput, sessionId, cwd, [], null, kind, null, null, undefined, undefined, claudeAccount);
       const id = crypto.randomUUID();
       setTabs((ts) => [...ts, { id, spaceId, layout: pane(key), focusedPane: key, zoomedPane: null }]);
       if (show) {
@@ -711,10 +721,10 @@ const leftPanel = usePanelRef();
   }, [openTab, closePane, createPane, updateTab]);
 
   const splitPane = useCallback(
-    (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null) => {
+    (key: string, dir: "row" | "column", initialInput: string | null = null, cwd: string | null = null, claudeAccount?: ClaudeAccountPick) => {
       const tab = tabOfPane(tabsRef.current, key);
       if (!tab) return;
-      const next = createPane(tab.spaceId, initialInput, null, cwd);
+      const next = createPane(tab.spaceId, initialInput, null, cwd, [], null, "claude", null, null, undefined, undefined, claudeAccount);
       updateTab(tab.id, (t) => ({ layout: split(t.layout, key, dir, next), focusedPane: next, zoomedPane: null }));
       return next;
     },
@@ -843,7 +853,7 @@ const leftPanel = usePanelRef();
             const resume = session && isSessionIdOf(kind, session) ? session : null;
             const args = resume ? (saved.sessionArgs?.[old] ?? []) : [];
             // The resume command runs only if the pane can't attach: the agent still runs in an attached one.
-            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null, saved.openedBy?.[old], saved.agentRuns?.[old]);
+            keys[old] = createPane(t.spaceId, resume && resumeLine(kind, resume, args), resume, null, args, running.get(old) ?? null, kind, saved.cwds?.[old] ?? null, saved.histories?.[old] ?? null, saved.openedBy?.[old], saved.agentRuns?.[old], savedClaudeAccount(saved.claudeAccounts?.[old]));
             // Still asleep until opened, as Wings left it.
             if (resume && saved.asleep?.includes(old) && !running.has(old)) asleepKeys.push(keys[old]);
             return keys[old];
@@ -978,6 +988,7 @@ const leftPanel = usePanelRef();
       histories: Object.fromEntries(Object.entries(panes).map(([key, meta]) => [key, meta.historyId])),
       agentRuns: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.agentRun ? [[key, meta.agentRun]] : []))),
       openedBy: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.openedBy ? [[key, meta.openedBy]] : []))),
+      claudeAccounts: Object.fromEntries(Object.entries(panes).flatMap(([key, meta]) => (meta.claudeAccount ? [[key, meta.claudeAccount]] : []))),
     };
     const json = JSON.stringify(saved);
     unsaved.current = json;
@@ -1311,15 +1322,15 @@ const leftPanel = usePanelRef();
         tabsRef.current = set(tabsRef.current);
         setTabs(set);
       },
-      openPane: async ({ spaceId, cwd, input, placement, background, pluginId }) => {
+      openPane: async ({ spaceId, cwd, input, placement, background, pluginId, claudeAccount }) => {
         let key: string | undefined;
-        if (placement === "tab") key = openTab(spaceId, input, null, cwd, undefined, !background);
+        if (placement === "tab") key = openTab(spaceId, input, null, cwd, undefined, !background, claudeAccount ?? undefined);
         else {
           const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
           if (!tab || !isPaneTab(tab)) throw new Error('There is no pane to split. Use placement "tab".');
           // A tab holds one project's panes.
           if (tab.spaceId !== spaceId) throw new Error("A split opens beside the focused pane, so its cwd must be in the project on screen");
-          key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd);
+          key = splitPane(tab.focusedPane, placement === "right" ? "row" : "column", input, cwd, claudeAccount ?? undefined);
         }
         if (key && pluginId) setPanes((p) => (p[key] ? { ...p, [key]: { ...p[key], openedBy: pluginId } } : p));
         const paneId = key && (await terminals.get(key)?.whenStarted);

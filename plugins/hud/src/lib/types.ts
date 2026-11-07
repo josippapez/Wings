@@ -18,9 +18,16 @@ export interface Limit {
   resetsAt: number | null;
 }
 
-export interface Overview {
+/** One Claude Code account's limits. `account` is null for the default account. */
+export interface AccountLimits {
+  account: string | null;
   fiveHour: Limit | null;
   sevenDay: Limit | null;
+}
+
+export interface Overview {
+  /** Newest first. */
+  limits: AccountLimits[];
   statusline: boolean;
   memory: { used: number; total: number; percent: number } | null;
 }

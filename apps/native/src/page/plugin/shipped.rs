@@ -603,7 +603,7 @@ fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
     );
     assert_eq!(
         result["status"],
-        json!({ "rateLimits": null, "sessions": {} })
+        json!({ "rateLimits": [], "sessions": {} })
     );
     let _ = fs::remove_dir_all(claude);
 }
