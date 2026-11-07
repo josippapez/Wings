@@ -221,6 +221,11 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
         ],
         &[
             sidebar("running", &[], "Native plugin popovers"),
+            // The recent tasks that match what is typed in the task field, under it.
+            State {
+                typed: Some("re"),
+                ..sidebar("suggest", &[], "Native plugin popovers")
+            },
             sidebar("edit", &["Edit Code review"], "Save"),
             popover("popover", "Native plugin popovers"),
         ],
