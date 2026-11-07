@@ -26,8 +26,6 @@ use crate::{
 
 use super::{Workspace, plugin_env::ACTION_TIMEOUT};
 
-/// The right-hand sidebar's width: the desktop's starting width. It isn't resizable here yet.
-pub(super) const RIGHT_WIDTH: f32 = 360.0;
 /// The desktop's `--popover`, the card's colour.
 const CARD: u32 = 0x201d23;
 /// A pane's status strip: fixed, so an update never changes the terminal's rows. Only the strip appearing or going away
@@ -796,7 +794,11 @@ impl Workspace {
     /// The panel on the right, with the open sidebar's page, or nothing while none is open. Opening or closing it
     /// slides it, as the desktop's right panel does, its page narrowing with it down to its 250px and clipped below;
     /// moving from one sidebar to another doesn't.
-    pub(super) fn right_panel(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn right_panel(
+        &mut self,
+        viewport: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let now = cx.background_executor().now();
         let open = self.right.is_some();
         let reduced = motion::reduced(cx);
@@ -857,11 +859,13 @@ impl Workspace {
             .iter()
             .find(|page| page.id == *sidebar)
             .map(|page| page.title.clone())?;
+        let width = self.right_width(viewport);
         let panel = div()
             .id("right-sidebar")
             .role(Role::Complementary)
             .aria_label(title.clone())
-            .min_w(px(250.0))
+            .relative()
+            .min_w(px(super::right_edge::MIN_WIDTH))
             .h_full()
             .flex_none()
             .flex()
@@ -914,15 +918,9 @@ impl Workspace {
                     // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge.
                     .child(page),
             );
+        let panel = panel.child(self.right_resize_edge(cx));
         let Some(share) = share else {
-            // 360 as the desktop starts it, but never more than 40% of the window, so a narrow one keeps room for the
-            // panes.
-            return Some(
-                panel
-                    .w(px(RIGHT_WIDTH))
-                    .max_w(relative(0.4))
-                    .into_any_element(),
-            );
+            return Some(panel.w(px(width)).into_any_element());
         };
         let clip = div().flex_none().h_full().overflow_hidden();
         Some(
@@ -932,9 +930,7 @@ impl Workspace {
                 share.duration(),
                 move |clip, t, _| {
                     let share = share.value_after(share.duration().mul_f32(t));
-                    clip.w(px(RIGHT_WIDTH * share))
-                        .max_w(relative(0.4 * share))
-                        .child(panel.w_full())
+                    clip.w(px(width * share)).child(panel.w_full())
                 },
             )
             .into_any_element(),

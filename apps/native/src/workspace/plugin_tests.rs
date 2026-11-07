@@ -1180,7 +1180,7 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
     // Closed, the panel goes and the page's frame stays. Opened again, it is the same page. The open panel narrows
     // the project bar, so the button sits its width further left.
     window.simulate_click(
-        point(px(978.0 - super::plugin_ui::RIGHT_WIDTH), px(58.0)),
+        point(px(978.0 - super::right_edge::INITIAL_WIDTH), px(58.0)),
         MouseButton::Left,
     );
     assert!(window.read(|w, _| w.right.is_none()));
@@ -1215,6 +1215,166 @@ fn a_click_on_a_status_strip_that_names_a_sidebar_opens_it() {
         MouseButton::Left,
     );
     assert!(window.read(|w, _| w.right.is_none()));
+}
+
+/// The right-hand panel's edge drags within the desktop's `SIDES.right`, leaving the panes their 320, and the width is
+/// written once the pointer is released and comes back on the next launch, as the project sidebar's does.
+#[test]
+fn dragging_the_right_sidebars_edge_resizes_it_within_its_limits_and_saves_when_it_is_released() {
+    use super::right_edge::{INITIAL_WIDTH, MAX_WIDTH, MIN_WIDTH};
+    let data = Data::temp();
+    install_sider(&data);
+    let dir = crate::projects::test_dir("right-resize");
+    let file = dir.join("workspace.json");
+    let open = |wide: f32| {
+        let (app, mut window) = open_sized(Some(size(px(wide), px(640.0))), |config| {
+            config.plugins = Some(data.paths());
+            config.state = Some(file.clone());
+        });
+        window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
+        window.draw();
+        app.advance_clock(crate::ui::motion::SLIDE * 2);
+        app.run_until_parked();
+        window.draw();
+        (app, window)
+    };
+    let width =
+        |window: &TestAppWindow<Workspace>| window.read(|w, _| w.plugin_ui.right_size.width);
+    let saved = || crate::saved::load_settings(&file).right_width;
+    let right_edge = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let drawn = w.terminal(0).unwrap().read(cx).drawn_at().unwrap();
+            drawn.right().as_f32()
+        })
+    };
+    // From the edge of the panel drawn `drawn` wide in a window `wide` across, to `to`.
+    let drag = |window: &mut TestAppWindow<Workspace>, wide: f32, drawn: f32, to: f32| {
+        window.simulate_mouse_down(point(px(wide - drawn + 4.0), px(300.0)), MouseButton::Left);
+        window.draw();
+        window.simulate_event(gpui::MouseMoveEvent {
+            position: point(px(to), px(300.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+    };
+    let release = |window: &mut TestAppWindow<Workspace>, at: f32| {
+        window.simulate_mouse_up(point(px(at), px(300.0)), MouseButton::Left);
+        window.draw();
+    };
+
+    let (_app, mut window) = open(1600.0);
+    assert_eq!(width(&window), INITIAL_WIDTH);
+    let before = saved();
+    // It follows the pointer by how far it moved, and nothing is written until the pointer is released.
+    let from = 1600.0 - INITIAL_WIDTH + 4.0;
+    drag(&mut window, 1600.0, INITIAL_WIDTH, from - 100.0);
+    assert_eq!((width(&window), saved()), (INITIAL_WIDTH + 100.0, before));
+    release(&mut window, from - 100.0);
+    assert_eq!(saved(), Some(INITIAL_WIDTH + 100.0));
+
+    drag(&mut window, 1600.0, INITIAL_WIDTH + 100.0, 0.0);
+    release(&mut window, 0.0);
+    assert_eq!((width(&window), saved()), (MAX_WIDTH, Some(MAX_WIDTH)));
+    drag(&mut window, 1600.0, MAX_WIDTH, 1600.0);
+    release(&mut window, 1600.0);
+    assert_eq!((width(&window), saved()), (MIN_WIDTH, Some(MIN_WIDTH)));
+
+    // In a 1000 window, the widest it draws is what leaves the panes 320 beside the 248 sidebar, and a drag starts from
+    // there.
+    drag(&mut window, 1600.0, MIN_WIDTH, 0.0);
+    release(&mut window, 0.0);
+    let gap = 1600.0 - MAX_WIDTH - right_edge(&window);
+    // The test window takes the new size without telling the window, which reads it again here.
+    window.simulate_resize(size(px(1000.0), px(640.0)));
+    window.update(|_, window, cx| window.bounds_changed(cx));
+    window.draw();
+    let room = 1000.0 - 248.0 - 320.0;
+    assert_eq!(right_edge(&window), 1000.0 - room - gap);
+    drag(&mut window, 1000.0, room, 1000.0 - room + 4.0 + 10.0);
+    release(&mut window, 1000.0 - room + 4.0 + 10.0);
+    assert_eq!((width(&window), saved()), (room - 10.0, Some(room - 10.0)));
+
+    // The next launch starts at the saved width, and a width outside the limits starts over.
+    drop((window, _app));
+    {
+        let (_app, window) = open(1600.0);
+        assert_eq!(width(&window), room - 10.0);
+    }
+    std::fs::write(&file, r#"{"version":1,"right_width":9999.0,"projects":{}}"#).unwrap();
+    let (_app, window) = open(1600.0);
+    assert_eq!(width(&window), INITIAL_WIDTH);
+    drop((window, _app));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Dragging the right-hand panel's edge changes the size of the pane area on every frame of the drag, but the shell is
+/// given its new size once, when the panes hold still, as with the project sidebar's edge.
+#[test]
+fn dragging_the_right_sidebars_edge_resizes_the_terminal_once_when_it_settles() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
+    let grid = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid())
+    };
+    let right_edge = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let drawn = w.terminal(0).unwrap().read(cx).drawn_at().unwrap();
+            drawn.right().as_f32()
+        })
+    };
+    // Real time for the shell's thread to take each size, fake time for the app's timers.
+    let settle = |window: &mut TestAppWindow<Workspace>| {
+        for _ in 0..15 {
+            app.advance_clock(Duration::from_millis(100));
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    window.draw();
+    settle(&mut window);
+    let (before, start) = (grid(&window), right_edge(&window));
+    // The panel starts 360 wide in the 1000 window; its edge is the first points of it.
+    let mut x = 1000.0 - 360.0 + 4.0;
+    window.simulate_mouse_down(point(px(x), px(300.0)), MouseButton::Left);
+    let (mut grids, mut frames, mut drawn, mut slowest) =
+        (vec![before], 0, Duration::ZERO, Duration::ZERO);
+    // 30 frames of 16ms, the pointer 2 points further left each.
+    for _ in 0..30 {
+        x -= 2.0;
+        window.simulate_event(gpui::MouseMoveEvent {
+            position: point(px(x), px(300.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+        app.advance_clock(Duration::from_millis(16));
+        app.run_until_parked();
+        let begun = Instant::now();
+        window.draw();
+        let took = begun.elapsed();
+        frames += 1;
+        drawn += took;
+        slowest = slowest.max(took);
+        grids.push(grid(&window));
+    }
+    window.simulate_mouse_up(point(px(x), px(300.0)), MouseButton::Left);
+    settle(&mut window);
+    grids.push(grid(&window));
+    grids.dedup();
+    let moved = start - right_edge(&window);
+    eprintln!(
+        "[measure] right sidebar drag: {frames} frames, {:.2} ms a frame on average, {:.2} ms at most, the panes gave up {moved} points, grids {grids:?}",
+        drawn.as_secs_f64() * 1000.0 / frames as f64,
+        slowest.as_secs_f64() * 1000.0,
+    );
+    assert_eq!(moved, 60.0, "the panes follow the pointer");
+    assert_eq!(
+        grids.len(),
+        2,
+        "one resize of the shell, not one a frame: {grids:?}"
+    );
 }
 
 // Transcripts.

@@ -707,6 +707,7 @@ pub(super) struct PluginUi {
     next_notice: usize,
     notice_timers: Vec<Task<()>>,
     pub(super) right_slide: super::plugin_ui::RightSlide,
+    pub(super) right_size: super::right_edge::Size,
 }
 
 impl AppEnv {

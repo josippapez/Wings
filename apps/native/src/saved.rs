@@ -183,6 +183,9 @@ pub struct Settings {
     /// The sidebar's width in points, as last dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<f32>,
+    /// The right-hand sidebar's width in points, as last dragged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_width: Option<f32>,
     /// `manual`, `added`, `worked` or `name`, as the desktop app names them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_sort: Option<String>,

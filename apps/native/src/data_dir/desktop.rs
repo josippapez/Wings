@@ -102,6 +102,7 @@ pub struct QuickTerminalKey {
 #[derive(Debug, Deserialize)]
 pub struct Widths {
     pub left: f32,
+    pub right: f32,
 }
 
 /// `SavedWorkspace` in `App.tsx`, `version` 1. Every field the desktop marks optional, or that older files lack, has a
@@ -183,6 +184,7 @@ impl Workspace {
             font_size: self.font_size,
             sidebar_open: self.sidebar_open,
             sidebar_width: self.widths.as_ref().map(|widths| widths.left),
+            right_width: self.widths.as_ref().map(|widths| widths.right),
             // An empty family is the desktop's default font, as `None` is here.
             font_family: look
                 .and_then(|look| look.font_family.clone())

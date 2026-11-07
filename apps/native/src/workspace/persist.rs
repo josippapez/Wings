@@ -192,6 +192,7 @@ impl Workspace {
             diff_tree: Some(self.prefs.diff_tree),
             global_hotkey: Some(self.prefs.global_hotkey.clone()),
             terminal_server: self.prefs.terminal_server,
+            right_width: Some(self.plugin_ui.right_size.width),
             ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {

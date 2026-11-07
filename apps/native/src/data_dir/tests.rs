@@ -209,6 +209,7 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
     assert_eq!(settings.font_size, Some(15.0));
     assert_eq!(settings.sidebar_open, Some(false));
     assert_eq!(settings.sidebar_width, Some(319.0));
+    assert_eq!(settings.right_width, Some(410.0));
     assert_eq!(
         settings.font_family, None,
         "an empty family is the default font"

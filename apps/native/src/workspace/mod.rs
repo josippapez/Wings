@@ -43,6 +43,7 @@ mod project_page;
 mod project_sections;
 mod quick;
 mod rank;
+mod right_edge;
 mod settings;
 mod setup_approval;
 mod sidebar;
@@ -452,6 +453,7 @@ impl Workspace {
         }
         this.sidebar = settings.sidebar_open.unwrap_or(true);
         this.start_sidebar(&settings, window, cx);
+        this.plugin_ui.right_size = right_edge::Size::load(&settings);
         let installed = |family: &String| cx.text_system().all_font_names().contains(family);
         let defaults = TerminalLook::default();
         // Only the desktop's choices, so a hand-edited file can't ask for a million lines.
@@ -696,7 +698,7 @@ impl Render for Workspace {
         }
         let title_bar = self.title_bar(tabs, cx);
         let sidebar = self.sidebar_panel(cx);
-        let right = self.right_panel(cx);
+        let right = self.right_panel(window.viewport_size().width, cx);
         let notices = self.notices_layer(cx);
         let (under, over) = self.layers(window, cx);
         div()
