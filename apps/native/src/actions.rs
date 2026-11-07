@@ -146,17 +146,17 @@ pub fn bind(cx: &mut App) {
 pub fn menus() -> Vec<Menu> {
     let mut menus = Vec::new();
     if MAC {
-        menus.push(Menu::new("Wings Native").items([
+        menus.push(Menu::new(crate::data_dir::APP_NAME).items([
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Wings Native", Hide),
+            MenuItem::action(format!("Hide {}", crate::data_dir::APP_NAME), Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Wings Native", Quit),
+            MenuItem::action(format!("Quit {}", crate::data_dir::APP_NAME), Quit),
         ]));
     }
     let mut file = vec![MenuItem::action("Close Pane", ClosePane)];

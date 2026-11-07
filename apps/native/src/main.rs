@@ -3,7 +3,7 @@ use gpui::{
     prelude::*, px, size,
 };
 use wings_native::{
-    actions,
+    actions, data_dir,
     host::{Config, USAGE},
     icons::Assets,
     projects, saved,
@@ -17,6 +17,21 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     };
+    // The replacement's first start brings over what the side-by-side app kept apart.
+    if data_dir::REPLACEMENT
+        && let (Some(from), Some(to)) = (data_dir::side_by_side_dir(), data_dir::desktop_dir())
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
+        match data_dir::migrate::migrate(&from, &to, now) {
+            Ok(report) if !report.already => {
+                eprintln!("Brought over the side-by-side app's data: {report:?}")
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("Couldn't bring over the side-by-side app's data: {error}"),
+        }
+    }
     // The desktop app's socket: the `wings` command finds Wings there, whichever app serves it.
     #[cfg(unix)]
     {
@@ -73,7 +88,7 @@ fn run() -> Result<(), String> {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     // The tabs sit in the title bar beside the traffic lights, as in the desktop app.
                     titlebar: Some(TitlebarOptions {
-                        title: Some("Wings Native".into()),
+                        title: Some(data_dir::APP_NAME.into()),
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(18.0), px(13.0))),
                     }),

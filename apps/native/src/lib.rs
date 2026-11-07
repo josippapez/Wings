@@ -1,5 +1,6 @@
 //! Shared native Wings modules, independent of the UI runtime.
 
+pub mod data_dir;
 pub mod diff;
 pub mod host;
 pub mod page;

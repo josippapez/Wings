@@ -9,6 +9,9 @@ default = ["ui"]
 ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
+# The build that replaces the desktop app: `Wings.app` on the desktop's data folder (`src/data_dir.rs`), made by
+# `WINGS_SWITCH=1 sh scripts/build-mac-app.sh`.
+switch = []
 
 [[bin]]
 name = "wings-native"

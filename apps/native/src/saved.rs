@@ -1,5 +1,5 @@
 //! The native app's own workspace file: each project's terminal tabs and splits, restored on launch.
-//! The desktop app's `workspace.json` is a different file, and the native app never writes it.
+//! The desktop app's `workspace.json` is a different file, and the native app never writes it (`data_dir`).
 
 use std::{
     collections::BTreeMap,
@@ -221,6 +221,30 @@ fn read(path: &Path) -> Option<File> {
     (file.version == VERSION).then_some(file)
 }
 
+/// Every project's entry and the settings, for moving them to another file (`data_dir::migrate`).
+pub fn read_all(path: &Path) -> Option<(Settings, BTreeMap<String, SavedProject>)> {
+    read(path).map(|file| (file.settings, file.projects))
+}
+
+/// Writes a whole file, then renames it into place.
+pub fn write_all(
+    path: &Path,
+    settings: Settings,
+    projects: BTreeMap<String, SavedProject>,
+) -> io::Result<()> {
+    let file = File {
+        version: VERSION,
+        settings,
+        projects,
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&file)?)?;
+    std::fs::rename(tmp, path)
+}
+
 /// A missing, unreadable or older file restores nothing, so the app opens one terminal.
 pub fn load(path: &Path, project: &str) -> Option<SavedProject> {
     read(path)?.projects.remove(project)
@@ -331,9 +355,14 @@ pub fn history_ids(state: &Path) -> Vec<String> {
     keep
 }
 
-/// Deletes saved output no pane in any project refers to any more, like the desktop's `histories_keep`.
+/// Deletes saved output no pane in any project refers to any more, like the desktop's `histories_keep`. On the desktop's
+/// folder that also keeps what the desktop's own `workspace.json` refers to, so going back to it finds its panes' output.
 pub fn prune_histories(state: &Path) {
-    let keep = history_ids(state);
+    let mut keep = history_ids(state);
+    let desktop = state.with_file_name("workspace.json");
+    if desktop != state {
+        keep.extend(crate::data_dir::desktop::history_ids(&desktop));
+    }
     let dir = state.with_file_name("scrollback");
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if !keep.iter().any(|id| entry.file_name() == id.as_str()) {
@@ -342,24 +371,9 @@ pub fn prune_histories(state: &Path) {
     }
 }
 
-/// Beside the platform's other app data: `~/Library/Application Support` on macOS, `%APPDATA%` on
-/// Windows, and `$XDG_DATA_HOME` or `~/.local/share` elsewhere.
+/// This build's workspace file (`data_dir::state_file`).
 pub fn default_path() -> Option<PathBuf> {
-    let env = |key| {
-        std::env::var_os(key)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    let dir = if cfg!(target_os = "macos") {
-        env("HOME")?.join("Library/Application Support/Wings Native")
-    } else if cfg!(windows) {
-        env("APPDATA")?.join("Wings Native")
-    } else {
-        env("XDG_DATA_HOME")
-            .or_else(|| Some(env("HOME")?.join(".local/share")))?
-            .join("wings-native")
-    };
-    Some(dir.join("workspace.json"))
+    crate::data_dir::state_file()
 }
 
 #[cfg(test)]
