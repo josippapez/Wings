@@ -102,6 +102,8 @@ impl Workspace {
         let _ = ask.answer.send(allow);
         if !self.setup_asks.queue.is_empty() {
             self.arm_setup_prompt(cx);
+        } else {
+            self.leave("setup", ask, crate::ui::motion::POPUP_IN, cx);
         }
         cx.notify();
     }
@@ -136,7 +138,7 @@ impl Workspace {
         );
         Some(
             backdrop
-                .child(
+                .child(ui::dialog_panel(
                     panel.h_auto()
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                             if event.keystroke.key == "escape" {
@@ -206,8 +208,7 @@ impl Workspace {
                                                 }),
                                         ),
                                 ),
-                        ),
-                )
+                        ),))
                 .into_any_element(),
         )
     }

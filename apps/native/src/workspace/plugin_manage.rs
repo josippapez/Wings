@@ -85,11 +85,11 @@ impl Workspace {
 
     /// The review shown is done: the next one, if any, arms after its moment.
     fn next_review(&mut self, cx: &mut Context<Self>) {
-        if !self.manage.reviews.is_empty() {
-            self.manage.reviews.remove(0);
-        }
+        let done = (!self.manage.reviews.is_empty()).then(|| self.manage.reviews.remove(0));
         if !self.manage.reviews.is_empty() {
             self.arm_review(cx);
+        } else if let Some(done) = done {
+            self.leave("review", done, crate::ui::motion::POPUP_IN, cx);
         }
         cx.notify();
     }

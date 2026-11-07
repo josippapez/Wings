@@ -187,7 +187,8 @@ impl Workspace {
 
     /// Closes the palette and gives the keys back to what had them: the pane you were in.
     pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.take().is_some() {
+        if let Some(palette) = self.palette.take() {
+            self.leave("palette", palette, crate::ui::motion::POPUP_IN, cx);
             self.show(self.active, window, cx);
         }
     }
@@ -655,7 +656,7 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_palette(window, cx)),
                 )
-                .child(
+                .child(ui::dialog_panel(
                     panel
                         .key_context("Palette")
                         .h_auto()
@@ -675,7 +676,7 @@ impl Workspace {
                         .child(search)
                         .child(list)
                         .child(hints),
-                )
+                ))
                 .into_any_element(),
         )
     }

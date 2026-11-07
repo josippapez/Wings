@@ -7,7 +7,7 @@ use wings_editors::EditorView;
 use crate::{
     icons::{Icon, icon},
     theme,
-    ui::{self, Variant},
+    ui::{self, Variant, motion},
 };
 
 use super::Workspace;
@@ -128,16 +128,19 @@ impl Workspace {
                             )
                         }),
                 )
-                .when(more && self.editor_menu, |column| {
-                    column.child(ui::popover(
-                        ui::select_menu(items)
-                            .mt(px(32.0))
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.editor_menu = false;
-                                cx.notify();
-                            })),
-                    ))
-                })
+                .children(
+                    self.popover_phase("editor-menu", more && self.editor_menu, cx)
+                        .map(|phase| {
+                            motion::with_phase(phase, || {
+                                ui::popover(ui::select_menu(items).mt(px(32.0)).on_mouse_down_out(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.editor_menu = false;
+                                        cx.notify();
+                                    }),
+                                ))
+                            })
+                        }),
+                )
                 .into_any_element(),
         )
     }

@@ -181,13 +181,13 @@ impl Workspace {
     }
 
     pub(super) fn close_inbox(&mut self, cx: &mut Context<Self>) {
-        if self.inbox.open.take().is_some() {
-            cx.notify();
+        if let Some(open) = self.inbox.open.take() {
+            self.leave("inbox", open, crate::ui::motion::POPUP_IN, cx);
         }
     }
 
     fn inbox_go_to_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.inbox.open = None;
+        self.close_inbox(cx);
         let project = self
             .agents
             .get(&pane)
@@ -207,7 +207,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.inbox.open = None;
+        self.close_inbox(cx);
         match button {
             NotifyButton::Url { url, .. } => {
                 let installed = self
@@ -379,7 +379,7 @@ impl Workspace {
             .on_any_mouse_down(cx.listener(|this, _, _, cx| this.close_inbox(cx)));
         Some(
             outside
-                .child(
+                .child(ui::motion::surface(
                     div()
                         .id("inbox-popover")
                         .role(Role::Dialog)
@@ -406,7 +406,9 @@ impl Workspace {
                         .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                         .child(header)
                         .child(body),
-                )
+                    // Base UI's `--transform-origin`: the corner by the Inbox row it opens from.
+                    (0.0, 0.0),
+                ))
                 .into_any_element(),
         )
     }

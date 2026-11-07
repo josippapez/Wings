@@ -37,6 +37,8 @@ use crate::{
     theme, ui,
 };
 
+use super::exits::Popovers;
+
 use self::{
     facts::FactState,
     items::SectionEdit,
@@ -101,6 +103,8 @@ pub struct ProjectPage {
     removing: Option<String>,
     /// Where the "+ Add" menu is open.
     menu: Option<Place>,
+    /// The "+ Add" menus, which go out as they close.
+    popovers: Popovers,
     block_views: HashMap<String, Entity<PageView>>,
     error: Option<SharedString>,
     ticks: u32,
@@ -207,6 +211,7 @@ impl ProjectPage {
             fresh: None,
             removing: None,
             menu: None,
+            popovers: Popovers::default(),
             block_views: HashMap::new(),
             error: None,
             ticks: 0,
@@ -624,17 +629,28 @@ impl ProjectPage {
                 )
             })
             .child(pill)
-            .when(open, |row| {
-                row.child(ui::popover(
-                    ui::select_menu(items)
-                        .w(px(190.0))
-                        .mt(px(2.0))
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.menu = None;
-                            cx.notify();
-                        })),
-                ))
-            })
+            .children(
+                self.popovers
+                    .phase(
+                        format!("add-menu-{index}"),
+                        open,
+                        |this: &mut Self| &mut this.popovers,
+                        cx,
+                    )
+                    .map(|phase| {
+                        ui::motion::with_phase(phase, || {
+                            ui::popover(
+                                ui::select_menu(items)
+                                    .w(px(190.0))
+                                    .mt(px(2.0))
+                                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                        this.menu = None;
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                    }),
+            )
             .into_any_element()
     }
 
@@ -661,6 +677,7 @@ enum Added {
 
 impl Render for ProjectPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.popovers.render();
         let panel = div()
             .id("project-page")
             .role(Role::Main)

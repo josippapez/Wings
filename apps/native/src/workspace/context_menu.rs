@@ -63,8 +63,8 @@ impl Workspace {
     }
 
     pub(super) fn close_menu(&mut self, cx: &mut Context<Self>) {
-        if self.menu.take().is_some() {
-            cx.notify();
+        if let Some(menu) = self.menu.take() {
+            self.leave("menu", menu, crate::ui::motion::POPUP_IN, cx);
         }
     }
 

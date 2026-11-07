@@ -491,3 +491,93 @@ fn the_docked_sidebar_slides_shut_and_open_over_320ms() {
     assert_eq!(left(&window), docked);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Where the first terminal's left edge is drawn: the docked sidebar's edge, through a slide.
+fn terminal_left(window: &TestAppWindow<Workspace>) -> f32 {
+    window.read(|w, cx| {
+        w.terminal(0)
+            .unwrap()
+            .read(cx)
+            .drawn_at()
+            .unwrap()
+            .left()
+            .as_f32()
+    })
+}
+
+/// Toggled again mid-slide, the sidebar turns around from where it is, as the desktop's CSS transition does, rather
+/// than starting over from an edge, and gets back sooner than a whole slide.
+#[test]
+fn toggling_the_sidebar_mid_slide_turns_it_around_where_it_is() {
+    let dir = test_dir("sidebar-slide-reverse");
+    let (app, mut window, _) = open(&dir, &["alpha"]);
+    let at = |window: &mut TestAppWindow<Workspace>, ms: u64| {
+        app.advance_clock(Duration::from_millis(ms));
+        app.run_until_parked();
+        window.draw();
+    };
+    window.draw();
+    let docked = terminal_left(&window);
+    press(&mut window, "b");
+    window.draw();
+    at(&mut window, 60);
+    let reached = terminal_left(&window);
+    assert!(reached < docked - 30.0 && reached > 30.0, "{reached}");
+    press(&mut window, "b");
+    window.draw();
+    let turned = terminal_left(&window);
+    assert!(
+        (turned - reached).abs() < 2.0,
+        "it turns where it was, not at an edge: {turned} vs {reached}"
+    );
+    at(&mut window, 40);
+    assert!(terminal_left(&window) > turned, "and heads back open");
+    let (sliding, left) = window.read(|w, _| (w.side.slide.running, w.side.slide.motion));
+    assert!(sliding);
+    assert!(
+        left.duration() < crate::ui::motion::SLIDE,
+        "back sooner than a whole slide"
+    );
+    at(&mut window, 320);
+    assert!(!window.read(|w, _| w.side.slide.running));
+    assert_eq!(terminal_left(&window), docked);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Under Reduce motion the sidebar takes or gives up its width at once, as the desktop's `[data-sliding]` rule turns
+/// its transition off, but its contents still fade in over 200ms, as the desktop's `transition-opacity` does.
+#[test]
+fn under_reduce_motion_the_sidebar_doesnt_slide_but_still_fades() {
+    let dir = test_dir("sidebar-slide-reduced");
+    let (mut app, mut window, _) = open(&dir, &["alpha"]);
+    app.update(|cx| cx.set_reduce_motion(true));
+    let at = |window: &mut TestAppWindow<Workspace>, ms: u64| {
+        app.advance_clock(Duration::from_millis(ms));
+        app.run_until_parked();
+        window.draw();
+    };
+    window.draw();
+    let docked = terminal_left(&window);
+    press(&mut window, "b");
+    window.draw();
+    assert!(terminal_left(&window) < 30.0, "shut at once");
+    at(&mut window, 250);
+    press(&mut window, "b");
+    window.draw();
+    assert_eq!(terminal_left(&window), docked, "open at once");
+    let fading = window.read(|w, cx| {
+        let slide = &w.side.slide;
+        (
+            slide.running,
+            slide.motion.now(cx.background_executor().now()),
+        )
+    });
+    assert!(fading.0, "its contents still fading in");
+    assert_eq!(fading.1, (1.0, 0.0));
+    at(&mut window, 100);
+    let half = window.read(|w, cx| w.side.slide.motion.now(cx.background_executor().now()).1);
+    assert!(half > 0.0 && half < 1.0, "{half}");
+    at(&mut window, 110);
+    assert!(!window.read(|w, _| w.side.slide.running));
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -9,6 +9,7 @@ mod context_menu;
 mod desktop_parity_tests;
 mod diff;
 mod editor;
+mod exits;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
 mod history;
@@ -52,7 +53,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, ScrollHandle,
-    SharedString, Subscription, Task, Window, canvas, div, prelude::*, px, rgb, rgba,
+    SharedString, Subscription, Task, Window, canvas, deferred, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -82,7 +83,7 @@ use crate::{
 };
 
 /// Around panes that don't have focus.
-use crate::ui::{HAIRLINE, motion};
+use crate::ui::HAIRLINE;
 
 struct Pane {
     /// A shell that couldn't start keeps its pane, showing why, until it's closed.
@@ -188,6 +189,8 @@ pub struct Workspace {
     sidebar: bool,
     /// The sidebar's width, order, git counts and peek.
     side: sidebar::State,
+    /// Layers and popovers that closed, drawn on their way out.
+    exits: exits::Exits,
     /// What each pane's agent is doing, from the last detection, by pane.
     agents: HashMap<usize, Agent>,
     /// What each pane runs now, from the last detection.
@@ -329,6 +332,7 @@ impl Workspace {
             parked: HashMap::new(),
             sidebar: true,
             side: Default::default(),
+            exits: Default::default(),
             agents: HashMap::new(),
             pane_info: HashMap::new(),
             window_active: window.is_window_active(),
@@ -487,6 +491,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_plugins(cx);
+        self.exits.popovers.render();
         // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
         let place = self.place();
         self.nav.visit(place);
@@ -655,6 +660,7 @@ impl Render for Workspace {
         let sidebar = self.sidebar_panel(cx);
         let right = self.right_panel(cx);
         let notices = self.notices_layer(cx);
+        let (under, over) = self.layers(window, cx);
         div()
             .size_full()
             .flex()
@@ -824,40 +830,10 @@ impl Render for Workspace {
                     .children(right)
                     .children(self.sidebar_peek(cx)),
             )
-            .children(dialog_in("settings-in", self.settings_dialog(cx)))
-            .children(dialog_in("plugin-review-in", self.plugin_review_dialog(cx)))
-            .children(dialog_in(
-                "setup-approval-in",
-                self.setup_approval_dialog(cx),
-            ))
-            .children(self.sheet_layer(cx).map(|sheet| {
-                motion::layer_in(
-                    "history-in",
-                    motion::SHEET_BACKDROP,
-                    motion::EASE_IN_OUT,
-                    None,
-                    sheet,
-                )
-            }))
-            .children(dialog_in("palette-in", self.palette_layer(window, cx)))
-            .children(dialog_in("remove-in", self.remove_dialog(cx)))
-            .children(self.inbox_layer(cx).map(|inbox| {
-                motion::layer_in(
-                    "inbox-in",
-                    motion::POPUP_IN,
-                    motion::EASE,
-                    Some(motion::From::Left),
-                    inbox,
-                )
-            }))
+            .children(under)
             .children(notices)
-            .children(self.menu_layer(cx))
-            .children(dialog_in("update-in", self.update_dialog(cx)))
+            .children(over)
+            .child(deferred(crate::ui::tooltip_exit()).with_priority(10))
             .into_any_element()
     }
-}
-
-/// A dialog and its backdrop fading in, as shadcn's `Dialog` does over `duration-100`.
-fn dialog_in(id: &'static str, dialog: Option<AnyElement>) -> Option<AnyElement> {
-    dialog.map(|dialog| motion::layer_in(id, motion::POPUP_IN, motion::EASE, None, dialog))
 }

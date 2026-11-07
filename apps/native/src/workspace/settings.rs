@@ -15,7 +15,7 @@ use crate::{
     },
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, ButtonSize},
+    ui::{self, ButtonSize, motion},
 };
 
 use super::{
@@ -195,7 +195,9 @@ impl Workspace {
     /// Keeps what was typed in the font field, then gives the keys back to the terminal.
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_family(cx);
-        self.settings = None;
+        if let Some(settings) = self.settings.take() {
+            self.leave("settings", settings, crate::ui::motion::POPUP_IN, cx);
+        }
         if let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
@@ -296,16 +298,18 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .when(open, |column| {
-                column.child(ui::popover(ui::select_menu(items).on_mouse_down_out(
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(dialog) = &mut this.settings {
-                            dialog.menu = None;
-                        }
-                        cx.notify();
-                    }),
-                )))
-            })
+            .children(self.popover_phase(id, open, cx).map(|phase| {
+                motion::with_phase(phase, || {
+                    ui::popover(ui::select_menu(items).on_mouse_down_out(cx.listener(
+                        |this, _, _, cx| {
+                            if let Some(dialog) = &mut this.settings {
+                                dialog.menu = None;
+                            }
+                            cx.notify();
+                        },
+                    )))
+                })
+            }))
             .into_any_element()
     }
 
@@ -974,7 +978,7 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
                 )
-                .child(
+                .child(ui::dialog_panel(
                     panel
                         .max_w_full()
                         .max_h_full()
@@ -998,7 +1002,7 @@ impl Workspace {
                                 )),
                             ),
                         ),
-                )
+                ))
                 .into_any_element(),
         )
     }

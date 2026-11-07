@@ -12,7 +12,7 @@ pub use button::{Variant, badge, button, chip};
 pub use menu::{context_menu, menu, menu_item, menu_item_with, menu_separator};
 pub use parts::{disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use status_dot::{spinner as working_spinner, status_dot};
-pub use tooltip::tooltip;
+pub use tooltip::{tip, tooltip, tooltip_exit};
 
 use gpui::{
     AnyElement, BoxShadow, Div, ElementId, Entity, FocusHandle, FontWeight, IntoElement,
@@ -303,6 +303,17 @@ pub fn dialog(
     (backdrop, panel)
 }
 
+/// The dimness of a dialog's backdrop, for one that fades on its own.
+pub fn backdrop_color() -> gpui::Hsla {
+    rgba(BACKDROP).into()
+}
+
+/// A dialog's panel, with its children: its surface zooms as the desktop dialog's `zoom-in-95` does, about its middle
+/// (see `motion::surface`).
+pub fn dialog_panel(panel: impl Styled + IntoElement) -> motion::Surface {
+    motion::surface(panel, (0.5, 0.5))
+}
+
 /// shadcn's `SelectTrigger`: the current choice and a chevron, 176px wide like the desktop's.
 pub fn select_trigger(
     id: impl Into<ElementId>,
@@ -385,9 +396,9 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
         .children(items)
 }
 
-/// Draws `content` above the rest of the window, where it would sit in the layout, fading and sliding it down into
-/// place as the desktop's popovers do.
-pub fn popover(content: impl IntoElement) -> AnyElement {
-    let content = motion::popup_in("popover-in", motion::From::Above, content);
+/// Draws `content` above the rest of the window, where it would sit in the layout, fading, zooming and sliding it down
+/// into place as the desktop's popovers do, or out in the phase popups are built in (`motion::with_phase`).
+pub fn popover(content: impl Styled + IntoElement + 'static) -> AnyElement {
+    let content = motion::popup("popover", motion::From::Above, motion::POPUP_IN, content);
     deferred(anchored().child(content)).into_any_element()
 }

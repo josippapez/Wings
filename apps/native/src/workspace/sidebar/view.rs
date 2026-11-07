@@ -4,9 +4,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role,
-    SharedString, canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString, canvas, div,
+    prelude::*, px, rgb, rgba,
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
@@ -24,7 +24,7 @@ use crate::workspace::{
 };
 
 use super::{
-    now_ms,
+    MIN_WIDTH, now_ms,
     order::{self, Context as OrderBy, Ordered, Sort},
 };
 
@@ -33,24 +33,23 @@ const EDGE: f32 = 8.0;
 
 impl Workspace {
     /// The docked sidebar, as wide as it was dragged, while it is docked or still sliding shut. Toggling it slides the
-    /// panes over, as the desktop does, while its contents keep their width and fade; the terminals refit once the
-    /// panes hold still.
+    /// panes over, as the desktop does, while its contents fade, narrowing with it down to the narrowest sidebar and
+    /// clipped below that, as the desktop's `min-w-[200px]` list; the terminals refit once the panes hold still.
     pub(in crate::workspace) fn sidebar_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.sidebar && !self.side.slide.running {
             return None;
         }
         let width = self.side.width;
-        let panel = self
-            .sidebar_column(cx)
-            .w(px(width))
-            .child(self.resize_edge(cx));
+        let panel = self.sidebar_column(cx).child(self.resize_edge(cx));
         if !self.side.slide.running {
-            return Some(panel.into_any_element());
+            return Some(panel.w(px(width)).into_any_element());
         }
-        let clip = div().flex_none().h_full().overflow_hidden().child(panel);
+        let clip = div().flex_none().h_full().overflow_hidden();
         Some(
             self.follow_slide("sidebar-slide", clip, move |clip, share, opacity| {
-                clip.w(px(width * share)).opacity(opacity)
+                clip.w(px(width * share))
+                    .opacity(opacity)
+                    .child(panel.w(px((width * share).max(MIN_WIDTH))))
             }),
         )
     }
@@ -61,23 +60,23 @@ impl Workspace {
         &self,
         name: &'static str,
         element: E,
-        animate: impl Fn(E, f32, f32) -> E + 'static,
+        animate: impl FnOnce(E, f32, f32) -> E + 'static,
     ) -> AnyElement {
         let slide = &self.side.slide;
         if !slide.running {
             return element.into_any_element();
         }
-        let opening = self.sidebar;
-        element
-            .with_animation(
-                ElementId::NamedInteger(name.into(), slide.count as u64),
-                Animation::new(motion::SLIDE),
-                move |element, t| {
-                    let (share, opacity) = motion::sidebar_frame(t, opening);
-                    animate(element, share, opacity)
-                },
-            )
-            .into_any_element()
+        let (motion, duration) = (slide.motion, slide.motion.duration());
+        motion::tween(
+            element,
+            ElementId::NamedInteger(name.into(), slide.count as u64),
+            duration,
+            move |element, t, _| {
+                let (share, opacity) = motion.after(duration.mul_f32(t));
+                animate(element, share, opacity)
+            },
+        )
+        .into_any_element()
     }
 
     /// Everything the sidebar lists, for the docked sidebar and the peek: the project list scrolls, and the plugins and
@@ -244,16 +243,23 @@ impl Workspace {
                                     },
                                 )),
                             )
-                            .when(self.side.sort_menu, |column| {
-                                column.child(ui::popover(
-                                    ui::select_menu(sorts).mt(px(28.0)).on_mouse_down_out(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.side.sort_menu = false;
-                                            cx.notify();
-                                        }),
-                                    ),
-                                ))
-                            }),
+                            .children(
+                                self.popover_phase("sort-menu", self.side.sort_menu, cx)
+                                    .map(|phase| {
+                                        motion::with_phase(phase, || {
+                                            ui::popover(
+                                                ui::select_menu(sorts)
+                                                    .mt(px(28.0))
+                                                    .on_mouse_down_out(cx.listener(
+                                                        |this, _, _, cx| {
+                                                            this.side.sort_menu = false;
+                                                            cx.notify();
+                                                        },
+                                                    )),
+                                            )
+                                        })
+                                    }),
+                            ),
                     )
                     .child(
                         ui::icon_button("add-project", Icon::Plus, "Add project", ButtonSize::Xs)
@@ -559,7 +565,7 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.cancel_remove(window, cx)),
                 )
-                .child(
+                .child(ui::dialog_panel(
                     panel
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                             if event.keystroke.key == "escape" {
@@ -620,8 +626,7 @@ impl Workspace {
                                             })),
                                         ),
                                 ),
-                        ),
-                )
+                        ),))
                 .into_any_element(),
         )
     }

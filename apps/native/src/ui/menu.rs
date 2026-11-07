@@ -6,7 +6,7 @@ use gpui::{
     Stateful, anchored, deferred, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
-use super::DIALOG;
+use super::{DIALOG, motion};
 use crate::{
     icons::{Icon, icon},
     theme,
@@ -18,7 +18,7 @@ const ACCENT: u32 = 0xffffff14;
 /// The open menu, drawn above everything else with its corner at `at` (in window coordinates), turned to stay in the
 /// window. Add the close handler (`on_mouse_down_out`) to `menu`.
 pub fn context_menu(at: Point<Pixels>, menu: Stateful<Div>) -> AnyElement {
-    let menu = super::motion::popup_in("menu-in", super::motion::From::Above, menu);
+    let menu = motion::popup("menu", motion::From::Corner, motion::POPUP_IN, menu);
     deferred(anchored().position(at).child(menu))
         .with_priority(1)
         .into_any_element()

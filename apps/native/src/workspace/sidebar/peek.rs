@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, ElementId, MouseDownEvent, Role, Task,
-    div, hsla, point, prelude::*, px, rgb, rgba,
+    AnyElement, BoxShadow, Context, ElementId, MouseDownEvent, Role, Task, div, hsla, point,
+    prelude::*, px, rgb, rgba,
 };
 
 use crate::{theme, ui::motion};
@@ -57,55 +57,63 @@ impl Workspace {
         ];
         if peek.open || peek.leaving {
             let (open, width) = (peek.open, self.side.width);
-            let slide = Animation::new(SLIDE).with_easing(motion::spring());
+            // Reduce motion puts it in place at once, as motion does with a transform under `reducedMotion="user"`.
+            let slide = if motion::reduced(cx) {
+                Duration::ZERO
+            } else {
+                SLIDE
+            };
+            let spring = motion::spring();
+            let panel = self
+                .sidebar_column(cx)
+                .id("peek")
+                .role(Role::Complementary)
+                .aria_label("Projects")
+                .occlude()
+                .absolute()
+                // The column is full height: top and bottom set the panel's height instead.
+                .h_auto()
+                .top(px(8.0))
+                .bottom(px(8.0))
+                .left_0()
+                .w(px(width))
+                .overflow_hidden()
+                .rounded_r(px(12.0))
+                .border_1()
+                .border_l_0()
+                .border_color(rgba(theme::HAIRLINE_STRONG))
+                .bg(rgb(theme::POPOVER >> 8))
+                .shadow(vec![BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.5),
+                    offset: point(px(0.0), px(24.0)),
+                    blur_radius: px(64.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+                .pt(px(4.0))
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.side.peek.timer = None;
+                    } else if this.side.peek.open && !this.peek_holds() {
+                        this.peek_in(HIDE_AFTER, cx, |peek| peek.open = false);
+                    }
+                }))
+                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    if this.side.peek.open && !this.peek_holds() {
+                        this.leave_peek(cx);
+                    }
+                }));
             parts.push(
-                self.sidebar_column(cx)
-                    .id("peek")
-                    .role(Role::Complementary)
-                    .aria_label("Projects")
-                    .occlude()
-                    .absolute()
-                    // The column is full height: top and bottom set the panel's height instead.
-                    .h_auto()
-                    .top(px(8.0))
-                    .bottom(px(8.0))
-                    .left_0()
-                    .w(px(width))
-                    .overflow_hidden()
-                    .rounded_r(px(12.0))
-                    .border_1()
-                    .border_l_0()
-                    .border_color(rgba(theme::HAIRLINE_STRONG))
-                    .bg(rgb(theme::POPOVER >> 8))
-                    .shadow(vec![BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.5),
-                        offset: point(px(0.0), px(24.0)),
-                        blur_radius: px(64.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
-                    .pt(px(4.0))
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.side.peek.timer = None;
-                        } else if this.side.peek.open && !this.peek_holds() {
-                            this.peek_in(HIDE_AFTER, cx, |peek| peek.open = false);
-                        }
-                    }))
-                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        if this.side.peek.open && !this.peek_holds() {
-                            this.leave_peek(cx);
-                        }
-                    }))
-                    .with_animation(
-                        ElementId::Name(format!("peek-{}-{open}", peek.slides).into()),
-                        slide,
-                        move |panel, t| {
-                            let t = if open { t } else { 1.0 - t };
-                            panel.left(px(-width * (1.0 - t)))
-                        },
-                    )
-                    .into_any_element(),
+                motion::tween(
+                    panel,
+                    ElementId::Name(format!("peek-{}-{open}", peek.slides).into()),
+                    slide,
+                    move |panel, t, _| {
+                        let t = if open { spring(t) } else { 1.0 - spring(t) };
+                        panel.left(px(-width * (1.0 - t)))
+                    },
+                )
+                .into_any_element(),
             );
         }
         parts

@@ -504,16 +504,19 @@ impl Workspace {
         div()
             .flex_none()
             .child(button)
-            .when(open, |column| {
-                column.child(ui::popover(
-                    ui::select_menu(items)
-                        .mt(px(26.0))
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.sections.menu = None;
-                            cx.notify();
-                        })),
-                ))
-            })
+            .children(
+                self.popover_phase(format!("{id}-sort-menu"), open, cx)
+                    .map(|phase| {
+                        ui::motion::with_phase(phase, || {
+                            ui::popover(ui::select_menu(items).mt(px(26.0)).on_mouse_down_out(
+                                cx.listener(|this, _, _, cx| {
+                                    this.sections.menu = None;
+                                    cx.notify();
+                                }),
+                            ))
+                        })
+                    }),
+            )
             .into_any_element()
     }
 

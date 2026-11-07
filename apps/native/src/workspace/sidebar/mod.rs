@@ -13,7 +13,7 @@ mod view;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, Task, Window};
@@ -46,21 +46,33 @@ pub(super) struct State {
     /// The sort menu is open.
     sort_menu: bool,
     /// The project asked to be removed while it has tabs open, with the focus of the question.
-    removing: Option<(PathBuf, FocusHandle)>,
+    pub(in crate::workspace) removing: Option<(PathBuf, FocusHandle)>,
     git: git::Git,
     peek: peek::Peek,
     slide: Slide,
 }
 
 /// The docked sidebar sliding open or shut, as the desktop's panel does when you toggle it.
-#[derive(Default)]
 struct Slide {
     /// Still sliding, so a closing sidebar is drawn until it is gone.
     running: bool,
     /// Tells one slide from the next, so each starts over.
     count: usize,
+    /// Where its width and its contents' opacity are heading, and from where.
+    motion: motion::SidebarSlide,
     /// Ends the slide when its time is up.
     timer: Option<Task<()>>,
+}
+
+impl Default for Slide {
+    fn default() -> Self {
+        Self {
+            running: false,
+            count: 0,
+            motion: motion::SidebarSlide::at(true, Instant::now()),
+            timer: None,
+        }
+    }
 }
 
 impl Default for State {
@@ -171,11 +183,20 @@ impl Workspace {
     pub(super) fn toggle_docked(&mut self, cx: &mut Context<Self>) {
         self.sidebar = !self.sidebar;
         self.side.peek = peek::Peek::default();
+        let (now, reduced) = (cx.background_executor().now(), motion::reduced(cx));
         let slide = &mut self.side.slide;
+        // Toggled mid-slide, it turns around from where it is, as the desktop's CSS transition does.
+        let from = if slide.running {
+            slide.motion
+        } else {
+            motion::SidebarSlide::at(!self.sidebar, now)
+        };
+        slide.motion = from.toggle(self.sidebar, reduced, now);
         slide.running = true;
         slide.count += 1;
+        let duration = slide.motion.duration();
         slide.timer = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(motion::SLIDE).await;
+            cx.background_executor().timer(duration).await;
             let _ = this.update(cx, |this, cx| {
                 this.side.slide.running = false;
                 cx.notify();
@@ -321,7 +342,9 @@ impl Workspace {
     }
 
     fn cancel_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.side.removing = None;
+        if let Some(removing) = self.side.removing.take() {
+            self.leave("remove", removing, motion::POPUP_IN, cx);
+        }
         if let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }

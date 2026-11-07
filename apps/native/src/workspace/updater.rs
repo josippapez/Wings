@@ -2,7 +2,7 @@
 use super::Workspace;
 use crate::{
     theme,
-    ui::{self, Variant},
+    ui::{self, Variant, motion},
     updater::{self, Available, Prepared},
 };
 use gpui::{
@@ -168,6 +168,9 @@ impl Workspace {
     }
 
     fn close_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.updates.open {
+            self.leave("update", (), motion::POPUP_IN, cx);
+        }
         self.updates.open = false;
         if let Some(focus) = self.updates.previous.take() {
             window.focus(&focus, cx);
@@ -258,6 +261,26 @@ impl Workspace {
         }));
     }
 
+    /// The updates dialog, open or on its way out after it closed.
+    pub(super) fn update_layer(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(AnyElement, motion::Phase)> {
+        if self.updates.open {
+            return self
+                .update_dialog(cx)
+                .map(|dialog| (dialog, motion::Phase::In));
+        }
+        self.leaving(
+            "update",
+            false,
+            |this, ()| this.updates.open = true,
+            |this| std::mem::take(&mut this.updates.open).then_some(()),
+            Self::update_dialog,
+            cx,
+        )
+    }
+
     pub(super) fn update_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.updates.open {
             return None;
@@ -287,7 +310,7 @@ impl Workspace {
         );
         Some(
             backdrop
-                .child(
+                .child(ui::dialog_panel(
                     panel
                         .h_auto()
                         .flex_col()
@@ -379,7 +402,7 @@ impl Workspace {
                                         })),
                                 ),
                         ),
-                )
+                ))
                 .into_any_element(),
         )
     }

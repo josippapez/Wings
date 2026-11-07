@@ -10,7 +10,7 @@ use crate::{
     actions::{GoBack, GoForward, ToggleSidebar},
     icons::{Icon, icon, plugin_glyph},
     theme,
-    ui::{self, ButtonSize, shortcut_icon_button},
+    ui::{self, ButtonSize, motion, shortcut_icon_button},
 };
 
 use super::{Workspace, shortcut_label};
@@ -229,18 +229,23 @@ impl Workspace {
                         .on_click(cx.listener(toggle_menu)),
                     ),
             )
-            .when(self.new_tab_menu, |column| {
-                column.child(ui::popover(
-                    ui::menu("new-tab-items", "New tab")
-                        // A popover starts where its column does, so it clears the buttons itself.
-                        .mt(px(32.0))
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.new_tab_menu = false;
-                            cx.notify();
-                        }))
-                        .children(items),
-                ))
-            })
+            .children(
+                self.popover_phase("new-tab-menu", self.new_tab_menu, cx)
+                    .map(|phase| {
+                        motion::with_phase(phase, || {
+                            ui::popover(
+                                ui::menu("new-tab-items", "New tab")
+                                    // A popover starts where its column does, so it clears the buttons itself.
+                                    .mt(px(32.0))
+                                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                        this.new_tab_menu = false;
+                                        cx.notify();
+                                    }))
+                                    .children(items),
+                            )
+                        })
+                    }),
+            )
             .into_any_element()
     }
 }

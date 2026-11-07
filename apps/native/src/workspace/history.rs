@@ -11,10 +11,10 @@ use std::{
 };
 
 use gpui::{
-    Anchor, Animation, AnimationExt, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity,
-    FocusHandle, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString,
-    Stateful, StyledText, Subscription, Task, Toggled, Window, anchored, deferred, div, hsla,
-    point, prelude::*, px, relative, rgb, rgba,
+    Anchor, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
+    HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
+    Subscription, Task, Toggled, Window, anchored, deferred, div, hsla, point, prelude::*, px,
+    relative, rgb, rgba,
 };
 use wings_agents::history::{
     Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms,
@@ -347,7 +347,8 @@ impl Workspace {
 
     /// Closes the sheet and gives the keys back to what had them: the pane you were in.
     pub(super) fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sheet.take().is_some() {
+        if let Some(sheet) = self.sheet.take() {
+            self.leave("sheet", sheet, motion::SHEET_IN, cx);
             self.show(self.active, window, cx);
         }
     }
@@ -987,7 +988,11 @@ impl Workspace {
             }
         };
         let (backdrop, panel) = ui::dialog("history", "Past sessions", &sheet.focus, WIDTH, 0.0);
-        Some(
+        // The backdrop and the sheet each fade on their own, as the desktop's: the backdrop over 150ms, the sheet over
+        // 200ms as it slides.
+        let phase = motion::phase();
+        let sheet_panel = |panel| motion::sheet_panel(panel, phase);
+        Some(motion::sheet_backdrop(
             backdrop
                 .items_stretch()
                 .justify_end()
@@ -995,7 +1000,7 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_history(window, cx)),
                 )
-                .child(
+                .child(sheet_panel(
                     panel
                         .h_full()
                         .max_h(relative(1.0))
@@ -1035,17 +1040,11 @@ impl Workspace {
                                         this.close_history(window, cx)
                                     })),
                             ),
-                        )
-                        // In from the right, as the desktop's sheet: `ease-in-out` from 2.5rem over.
-                        .with_animation(
-                            "history-sheet-in",
-                            Animation::new(motion::SHEET_IN)
-                                .with_easing(motion::cubic_bezier(motion::EASE_IN_OUT)),
-                            |sheet, t| sheet.left(px(motion::SHEET_SLIDE * (1.0 - t))),
                         ),
-                )
-                .into_any_element(),
-        )
+                )),
+            ui::backdrop_color(),
+            phase,
+        ))
     }
 
     /// A session's "more" menu: resume in the focused pane, fork, copy the command.

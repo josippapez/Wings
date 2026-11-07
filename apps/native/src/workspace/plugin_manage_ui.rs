@@ -644,7 +644,7 @@ impl Workspace {
         Some(
             backdrop
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.skip_review(cx)))
-                .child(
+                .child(ui::dialog_panel(
                     panel.h_auto()
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                             if event.keystroke.key == "escape" {
@@ -696,8 +696,7 @@ impl Workspace {
                                                 .when(!busy, |button| button.on_click(cx.listener(|this, _, window, cx| this.approve_review(window, cx)))),
                                         ),
                                 ),
-                        ),
-                )
+                        ),))
                 .into_any_element(),
         )
     }
