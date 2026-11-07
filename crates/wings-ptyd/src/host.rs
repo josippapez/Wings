@@ -47,11 +47,13 @@ pub struct Config {
     pub exe: Option<PathBuf>,
     /// With no pane and no client for this long, the server exits. `None` runs it until it is replaced or drained.
     pub idle: Option<Duration>,
+    /// The version it says in its `welcome`: `SERVER_VERSION`, or a newer one a test plays.
+    pub version: u32,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None, idle: None }
+        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None, idle: None, version: SERVER_VERSION }
     }
 }
 
@@ -76,10 +78,10 @@ const TICK: Duration = Duration::from_secs(1);
 /// Saved output a client may send ahead of a spawn: a ring's worth, and its end.
 const MAX_STAGED: usize = 2 * REPLAY_BYTES;
 
-/// Serves on `path` until `serve` returns, with the executable it runs from watched for an update.
-pub fn main(path: &Path, idle: Option<Duration>) -> Result<Stopped, io::Error> {
+/// Serves on `path` as `version` until `serve` returns, with the executable it runs from watched for an update.
+pub fn main(path: &Path, idle: Option<Duration>, version: u32) -> Result<Stopped, io::Error> {
     let listener = bind(path)?;
-    Ok(serve(listener, path, Config { exe: std::env::current_exe().ok(), idle, ..Config::default() }))
+    Ok(serve(listener, path, Config { exe: std::env::current_exe().ok(), idle, version, ..Config::default() }))
 }
 
 /// Listens at `path`, in a folder only this user can open. Refuses if another host already answers there.
@@ -264,7 +266,7 @@ impl Host {
         let both = proto::negotiate(proto, min_proto);
         let welcome = HostMsg::Welcome {
             proto: both.unwrap_or(PROTO),
-            host_version: SERVER_VERSION,
+            host_version: self.config.version,
             features: Vec::new(),
             error: both.is_none().then(|| format!("this host speaks protocols {}..={PROTO}, not {min_proto}..={proto}", proto::MIN_PROTO)),
         };

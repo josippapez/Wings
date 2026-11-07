@@ -5,6 +5,8 @@
 //! On macOS it first owns its privacy responsibility, so the shells it runs keep their grants without the app: started
 //! by launchd it detaches into a server that does (`wings_ptyd::launchd`), and with `--own-responsibility` it execs
 //! itself to (`responsibility`). A debug app's plain child keeps the app's.
+//!
+//! A debug build also takes `--server-version <n>`, to play a newer server in tests of an update.
 
 #[cfg(unix)]
 fn main() {
@@ -35,7 +37,13 @@ fn main() {
     let idle = value("--idle-secs")
         .and_then(|secs| secs.parse().ok())
         .map(std::time::Duration::from_secs);
-    match wings_ptyd::host::main(std::path::Path::new(&socket), idle) {
+    let version = if cfg!(debug_assertions) {
+        value("--server-version").and_then(|version| version.parse().ok())
+    } else {
+        None
+    };
+    let version = version.unwrap_or(wings_ptyd::SERVER_VERSION);
+    match wings_ptyd::host::main(std::path::Path::new(&socket), idle, version) {
         Ok(stopped) => eprintln!("wings-terminal-server: stopped ({stopped:?})"),
         // Another server answers there already.
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {

@@ -259,7 +259,7 @@ fn orphans_are_running_panes_of_the_project_no_saved_pane_names() {
 fn the_server_is_copied_out_of_the_bundle_once() {
     let folder = Folder::new("install");
     std::fs::create_dir_all(&folder.0).unwrap();
-    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
     assert_eq!(
         program,
         folder
@@ -272,12 +272,183 @@ fn the_server_is_copied_out_of_the_bundle_once() {
     );
     let first = std::fs::metadata(&program).unwrap().modified().unwrap();
     std::thread::sleep(Duration::from_millis(20));
-    terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
     assert_eq!(
         std::fs::metadata(&program).unwrap().modified().unwrap(),
         first,
         "a running server keeps its file"
     );
+}
+
+/// A build's app bundle, holding its own server binary, as each update brings a new one and deletes the old one.
+fn bundle(folder: &Folder, build: &str) -> PathBuf {
+    let dir = folder.0.join(build);
+    std::fs::create_dir_all(&dir).unwrap();
+    let bundled = dir.join(terminal_server::BINARY);
+    std::fs::copy(BIN, &bundled).unwrap();
+    bundled
+}
+
+/// The executable `pid` runs.
+#[cfg(target_os = "macos")]
+fn executable(pid: u32) -> PathBuf {
+    let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let count =
+        unsafe { libc::proc_pidpath(pid as i32, path.as_mut_ptr().cast(), path.len() as u32) };
+    assert!(count > 0, "no path for {pid}");
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(&path[..count as usize]))
+}
+
+/// A pane the next app attached: it shows what it printed, and still runs what it's sent.
+fn still_runs(socket: &Path, info: &wings_ptyd::proto::PaneInfo, before: &str, word: &str) -> Pane {
+    let (pane, mut events, _) = Pane::attach(socket, info).unwrap();
+    wait_for(&pane, &mut events, before);
+    let typed = format!("echo {}''{}\r", &word[..1], &word[1..]);
+    pane.write(typed.as_bytes()).unwrap();
+    wait_for(&pane, &mut events, word);
+    pane
+}
+
+/// An update as the updater runs one, without its network or launchd: build A's app starts the server from its copy
+/// out of the bundle and opens panes, quits, and its bundle is deleted. Build B, with the same server version, finds
+/// the server and attaches its panes. Build C ships a newer server version: the old server drains and keeps its panes,
+/// which C and its next launch still attach, new panes go to C's server, and the old copy goes once its panes end.
+#[test]
+fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
+    let folder = Folder::new("update");
+    let dir = folder.0.join("srv");
+    let copy = |version: u32| dir.join(format!("bin/{}-v{version}", terminal_server::BINARY));
+
+    let a = bundle(&folder, "a");
+    let servers = Servers::connect(&dir, Some(&Start::Direct { bundled: a.clone() }));
+    let socket = servers.current().expect("build A started a server");
+    assert_eq!(socket, terminal_server::socket(&dir, SERVER_VERSION));
+    let pid = server_pid(&socket);
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        executable(pid),
+        copy(SERVER_VERSION).canonicalize().unwrap(),
+        "it runs from the copy, not the bundle"
+    );
+    let mut opened = Vec::new();
+    for (history, word) in [("h-one", "one"), ("h-two", "two")] {
+        let (pane, mut events) = Pane::spawn(&socket, spawn_request(history), b"").unwrap();
+        pane.write(format!("echo {}''{}\r", &word[..1], &word[1..]).as_bytes())
+            .unwrap();
+        wait_for(&pane, &mut events, word);
+        opened.push(pane);
+    }
+    let shells: Vec<_> = opened.iter().map(Pane::shell_pid).collect();
+    let copied_at = std::fs::metadata(copy(SERVER_VERSION))
+        .unwrap()
+        .modified()
+        .unwrap();
+    // The app quits to install the update: its panes let go, and the old bundle is deleted.
+    drop(servers);
+    for pane in opened {
+        pane.detach();
+    }
+    std::fs::remove_dir_all(a.parent().unwrap()).unwrap();
+
+    // Build B: the same server answers, with the same panes, and nothing new starts.
+    let b = bundle(&folder, "b");
+    let servers = Servers::connect(&dir, Some(&Start::Direct { bundled: b }));
+    assert_eq!(servers.current(), Some(socket.clone()));
+    assert_eq!(server_pid(&socket), pid, "the same server");
+    let mut attached = Vec::new();
+    for (history, before, word) in [("h-one", "one", "again"), ("h-two", "two", "again")] {
+        let (at, info) = servers.claim(history).expect("the pane the server kept");
+        assert_eq!(at, socket);
+        attached.push(still_runs(&at, &info, before, word));
+    }
+    assert_eq!(
+        attached.iter().map(Pane::shell_pid).collect::<Vec<_>>(),
+        shells,
+        "the same shells"
+    );
+    assert_eq!(
+        std::fs::metadata(copy(SERVER_VERSION))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        copied_at,
+        "the copy is kept"
+    );
+    drop(servers);
+    for pane in attached {
+        pane.detach();
+    }
+
+    // Build C ships a newer server: the old one drains and keeps its panes, and C starts its own from a new copy.
+    let newer = SERVER_VERSION + 1;
+    let c = bundle(&folder, "c");
+    let start = Start::Direct { bundled: c };
+    let servers = Servers::connect_as(&dir, Some(&start), newer);
+    let new_socket = servers.current().expect("build C started its server");
+    assert_eq!(new_socket, terminal_server::socket(&dir, newer));
+    assert_eq!(
+        Control::connect(&new_socket)
+            .unwrap()
+            .welcome()
+            .server_version,
+        newer
+    );
+    assert!(copy(newer).is_file(), "the newer server's copy");
+    assert!(
+        copy(SERVER_VERSION).is_file(),
+        "the old server still runs from its copy"
+    );
+    assert!(
+        Pane::spawn(&socket, spawn_request("h-refused"), b"").is_err(),
+        "the old server starts no pane"
+    );
+    let (at, info) = servers.claim("h-one").expect("the old server's pane");
+    assert_eq!(at, socket);
+    still_runs(&at, &info, "again", "still").detach();
+    let (new_pane, mut events) = Pane::spawn(&new_socket, spawn_request("h-new"), b"").unwrap();
+    new_pane.write(b"echo n''ew\r").unwrap();
+    wait_for(&new_pane, &mut events, "new");
+    drop(servers);
+    new_pane.detach();
+
+    // C's next launch keeps its own server, and attaches the panes of both.
+    let servers = Servers::connect_as(&dir, Some(&start), newer);
+    assert_eq!(servers.current(), Some(new_socket.clone()));
+    assert_eq!(
+        servers.claim("h-new").map(|(at, _)| at),
+        Some(new_socket.clone())
+    );
+    let mut old = Vec::new();
+    for history in ["h-one", "h-two"] {
+        let (at, info) = servers.claim(history).expect("the old server's pane");
+        assert_eq!(at, socket);
+        old.push(still_runs(&at, &info, "again", "later"));
+    }
+    Pane::spawn(&new_socket, spawn_request("h-newer"), b"")
+        .expect("C's server still takes new panes");
+
+    // The old panes end: the drained server exits, and the next launch deletes its copy.
+    for pane in old {
+        pane.kill().unwrap();
+        pane.detach();
+    }
+    drop(servers);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid as i32, 0) } == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the drained server is still running"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let servers = Servers::connect_as(&dir, Some(&start), newer);
+    assert_eq!(servers.current(), Some(new_socket));
+    assert!(
+        !copy(SERVER_VERSION).exists(),
+        "the old copy is gone with its server"
+    );
+    assert!(copy(newer).is_file());
 }
 
 /// `ps`'s `field` for `pid`.
@@ -333,7 +504,7 @@ fn a_release_server_owns_its_privacy_responsibility_and_its_shells_inherit_it() 
     std::fs::create_dir_all(&folder.0).unwrap();
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let cmd = serve(
-        &terminal_server::install(Path::new(BIN), &folder.0).unwrap(),
+        &terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap(),
         &socket,
     );
     terminal_server::start_detached(cmd, &folder.0.join("v.log"), |_, _| {
@@ -368,7 +539,7 @@ fn the_launchd_job_detaches_the_server_from_the_app() {
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let log = folder.0.join("v.log");
     // `/tmp`, as in a release app: the job's folder under `folder` would be too long for the `ready` socket.
-    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
     terminal_server::start_detached(serve(&program, &socket), &log, |cmd, log| {
         wings_ptyd::launchd::spawn_without_launchd(cmd, log, Path::new("/tmp"))
     })
@@ -391,7 +562,7 @@ fn when_launchd_fails_the_server_starts_directly_in_its_own_session() {
     std::fs::create_dir_all(&folder.0).unwrap();
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let log = folder.0.join("v.log");
-    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
     terminal_server::start_detached(serve(&program, &socket), &log, |_, _| {
         Err(std::io::Error::other("bootstrap refused"))
     })

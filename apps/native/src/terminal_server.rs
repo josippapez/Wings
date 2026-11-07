@@ -11,9 +11,10 @@
 //! a session of its own, which may end with the app, and says so in the server's log. A debug build runs it as its own
 //! child instead, which ends with the app and keeps the app's privacy responsibility.
 //!
-//! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket per version. One older than
-//! the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have ended, while
-//! new panes go to the app's version. Nothing kills a pane on an upgrade.
+//! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket and a binary copy per version.
+//! One older than the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have
+//! ended, while new panes go to the app's version. Nothing kills a pane on an upgrade. The copy of an older version is
+//! deleted once no server of that version answers.
 //!
 //! When no server answers, the app runs panes in its own process as before, and saves them under the same history
 //! ids, so the server's panes are still found by the next app that reaches it.
@@ -91,6 +92,9 @@ pub enum Start {
     Launchd { bundled: PathBuf },
     /// A plain child of this process, which ends with it: debug builds and tests.
     Child(PathBuf),
+    /// `Launchd` without launchd: the copy of `bundled` starts directly in a session of its own, as when launchd
+    /// fails. Tests of an update use it, which must never load a launchd job.
+    Direct { bundled: PathBuf },
 }
 
 impl Start {
@@ -115,6 +119,7 @@ impl Start {
                     .arg("serve")
                     .arg("--socket")
                     .arg(&socket)
+                    .args(play_version(version))
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(fs::OpenOptions::new().create(true).append(true).open(log)?)
@@ -124,26 +129,46 @@ impl Start {
                 Ok(())
             }
             Start::Launchd { bundled } => {
-                let mut cmd = Command::new(install(bundled, dir)?);
-                cmd.arg("serve")
-                    .arg("--socket")
-                    .arg(&socket)
-                    .arg("--idle-secs")
-                    .arg(IDLE.as_secs().to_string());
+                let cmd = copied(bundled, dir, version, &socket)?;
                 #[cfg(target_os = "macos")]
                 let launch = wings_ptyd::launchd::spawn;
                 #[cfg(not(target_os = "macos"))]
                 let launch = |_: &Command, _: &Path| Err(io::ErrorKind::Unsupported.into());
                 start_detached(cmd, &log, launch)
             }
+            Start::Direct { bundled } => {
+                start_in_own_session(copied(bundled, dir, version, &socket)?, &log)
+            }
         }
+    }
+}
+
+/// The command that serves `socket` from the copy of `bundled` for `version`, as a release app runs it.
+fn copied(bundled: &Path, dir: &Path, version: u32, socket: &Path) -> io::Result<Command> {
+    let mut cmd = Command::new(install(bundled, dir, version)?);
+    cmd.arg("serve")
+        .arg("--socket")
+        .arg(socket)
+        .arg("--idle-secs")
+        .arg(IDLE.as_secs().to_string())
+        .args(play_version(version));
+    Ok(cmd)
+}
+
+/// A debug server's flag to say `version` in its `welcome`, for an app that plays a newer server than this build's
+/// (`Servers::connect_as`). Nothing for this build's own.
+fn play_version(version: u32) -> Vec<String> {
+    if version == SERVER_VERSION {
+        Vec::new()
+    } else {
+        vec!["--server-version".into(), version.to_string()]
     }
 }
 
 /// Starts the server `cmd` with `launch`, else directly in a session of its own, which may end with the app: the
 /// reason goes to stderr and the server's `log`. Either way it owns its privacy responsibility.
 pub fn start_detached(
-    mut cmd: Command,
+    cmd: Command,
     log: &Path,
     launch: impl FnOnce(&Command, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -154,8 +179,16 @@ pub fn start_detached(
         "Couldn't start the terminal server with launchd, so it starts directly and may end with the app: {error}"
     );
     eprintln!("{reason}");
+    writeln!(
+        &fs::OpenOptions::new().create(true).append(true).open(log)?,
+        "{reason}"
+    )?;
+    start_in_own_session(cmd, log)
+}
+
+/// Starts the server `cmd` in a session of its own, owning its privacy responsibility, with its stderr in `log`.
+fn start_in_own_session(mut cmd: Command, log: &Path) -> io::Result<()> {
     let stderr = fs::OpenOptions::new().create(true).append(true).open(log)?;
-    writeln!(&stderr, "{reason}")?;
     #[cfg(target_os = "macos")]
     cmd.arg(wings_ptyd::responsibility::FLAG);
     cmd.stdin(Stdio::null())
@@ -173,19 +206,49 @@ pub fn start_detached(
     Ok(())
 }
 
-/// Copies the bundle's server to `dir/bin/` under its version, once: a server that still runs from an earlier copy
+/// The version a socket or a binary copy in the server's folder is named for: `v4.sock`, `wings-terminal-server-v4`.
+fn version_of(name: &str, prefix: &str, suffix: &str) -> Option<u32> {
+    name.strip_prefix(prefix)?
+        .strip_suffix(suffix)?
+        .parse()
+        .ok()
+}
+
+/// Deletes the binary copies of versions older than `ours` that no server in `live` runs from, so each update that
+/// brings a new server version leaves one copy behind only while its server still has panes.
+fn remove_old_copies(dir: &Path, ours: u32, live: &[u32]) {
+    let prefix = format!("{BINARY}-v");
+    for entry in fs::read_dir(dir.join("bin"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let name = entry.file_name();
+        let Some(version) = version_of(&name.to_string_lossy(), &prefix, "") else {
+            continue;
+        };
+        if version < ours
+            && !live.contains(&version)
+            && let Err(error) = fs::remove_file(entry.path())
+        {
+            eprintln!(
+                "Couldn't delete an older terminal server's copy {}: {error}",
+                entry.path().display()
+            );
+        }
+    }
+}
+
+/// Copies the bundle's server to `dir/bin/` under its `version`, once: a server that still runs from an earlier copy
 /// keeps its file, and its version never names other code (bump `SERVER_VERSION` when the server changes).
-pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
+pub fn install(bundled: &Path, dir: &Path, version: u32) -> io::Result<PathBuf> {
     let bin = dir.join("bin");
     private_dir(&bin)?;
-    let program = bin.join(format!("{BINARY}-v{SERVER_VERSION}"));
+    let program = bin.join(format!("{BINARY}-v{version}"));
     if program.is_file() {
         return Ok(program);
     }
-    let partial = bin.join(format!(
-        ".{BINARY}-v{SERVER_VERSION}.{}",
-        std::process::id()
-    ));
+    let partial = bin.join(format!(".{BINARY}-v{version}.{}", std::process::id()));
     fs::copy(bundled, &partial)?;
     fs::set_permissions(&partial, fs::Permissions::from_mode(0o700))?;
     fs::rename(&partial, &program)?;
@@ -216,6 +279,7 @@ impl Servers {
         let ours = version;
         let mut found = Vec::new();
         let mut current: Option<(u32, PathBuf)> = None;
+        let mut live = Vec::new();
         if let Err(error) = private_dir(dir) {
             eprintln!(
                 "Couldn't make the terminal server's folder {}: {error}",
@@ -241,6 +305,7 @@ impl Servers {
                 continue;
             };
             let version = control.welcome().server_version;
+            live.extend(version_of(&name, "v", ".sock"));
             if version < ours {
                 if let Err(error) = control.drain() {
                     eprintln!(
@@ -269,6 +334,7 @@ impl Servers {
                 ),
             }
         }
+        remove_old_copies(dir, ours, &live);
         let servers = Servers {
             current: Mutex::new(current.map(|(_, path)| path)),
             found: Mutex::new(found),
