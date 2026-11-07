@@ -75,6 +75,7 @@ Run these from Terminal.app, not from a pane in Wings: quitting Wings ends the s
 1. From `apps/native`: `WINGS_SWITCH=1 sh scripts/package-mac-app.sh "Wings is now native"`. In `target/release/bundle/macos/darwin-<arch>/` it writes `Wings-<version>-darwin-<arch>.app.tar.gz` and its `.sig`, `wings-latest-darwin-<arch>.json` and its `.sig`, and `latest.json`.
 2. Publish all five in a release tagged `v<version>` in `josippapez/Wings`, and make it the latest release.
 3. A desktop install finds `latest.json`, verifies the archive with the same updater key, and swaps the bundle in the archive in place of its own `Wings.app` (Tauri's updater skips the archive's top folder). Its restart reads the new `Info.plist` and starts `CFBundleExecutable`, `wings-native`. From then on the replacement's own updater checks `wings-latest-darwin-<arch>.json`.
+   The desktop has no terminal server, so its terminals end at this restart as on any desktop update. The replacement starts its server on its first launch, and from then on its own updater's restarts keep terminals running (see [releasing.md](releasing.md)).
 4. Later releases are made the same way. Keep publishing `latest.json` for desktops that haven't updated yet. Don't make a side-by-side `native-v*` release the latest one while desktops may still update, since it has no `latest.json`.
 
 ## First launch checks
@@ -86,7 +87,7 @@ Run these from Terminal.app, not from a pane in Wings: quitting Wings ends the s
 - [ ] Plugins are on as they were, and none asks for approval again. A plugin with a saved secret (a token) still works without a keychain prompt.
 - [ ] `wings plugin list` in a pane answers (the socket is served). In Claude Code, `/mcp` shows `wings` connected, and a Wings tool such as `list_sessions` works. If the socket isn't served (the desktop had not let go of it yet after an updater restart), quit and reopen Wings.
 - [ ] Settings, Agents shows Claude Code connected in each account, without changing `~/.claude.json`: `jq .mcpServers.wings ~/.claude.json` still runs `/Applications/Wings.app/Contents/MacOS/wings`.
-- [ ] No new macOS privacy prompt for folders you already allowed (Desktop, Documents, Downloads, Full Disk Access, Automation). Approvals are keyed by bundle id and certificate, which match. Panes in the terminal server (`WINGS_TERMINAL_SERVER=1`) run under `wings-terminal-server`'s own signature, so they ask once, as they did in the side-by-side app.
+- [ ] No new macOS privacy prompt for folders you already allowed (Desktop, Documents, Downloads, Full Disk Access, Automation). Approvals are keyed by bundle id and certificate, which match. Panes run in the terminal server by default (Settings > General > "Keep terminals running when Wings quits"; `WINGS_TERMINAL_SERVER=0` or `=1` overrides it), under `wings-terminal-server`'s own signature, so they ask once, as they did in the side-by-side app.
 - [ ] The global shortcut and the quick terminal key work.
 - [ ] Check for Updates answers. Until a release has `wings-latest-darwin-<arch>.json` it reports an error, which is expected.
 - [ ] `launchctl print gui/$(id -u)/dev.wings.ptyd` still finds nothing.
