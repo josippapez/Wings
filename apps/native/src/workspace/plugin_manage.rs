@@ -295,7 +295,7 @@ impl Workspace {
     }
 
     /// Deletes the secrets and storage of a scope nothing can reach any more. A failure only leaves an orphan.
-    fn forget_plugin_data(&self, id: &str, old: &SecretScope) {
+    pub(super) fn forget_plugin_data(&self, id: &str, old: &SecretScope) {
         for name in &old.names {
             if let Err(error) = crate::secrets::delete(id, &old.scope, name) {
                 eprintln!("[plugins] couldn't delete {id} secret {name}: {error}");

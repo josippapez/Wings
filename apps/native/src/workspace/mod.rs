@@ -415,6 +415,14 @@ impl Workspace {
         let env: Arc<dyn Env> = this.plugin_env.clone();
         this.plugins = match (&this.config.plugins, &this.plugin_env.store) {
             (Some(paths), Some(store)) => {
+                let retired = store.lock().unwrap().remove_retired();
+                for result in retired {
+                    match result {
+                        Ok((id, Some(old))) => this.forget_plugin_data(&id, &old),
+                        Ok(_) => {}
+                        Err(error) => eprintln!("Couldn't remove a retired plugin: {error}"),
+                    }
+                }
                 let found = installed::discover_in(&store.lock().unwrap());
                 installed::start(found, paths, &env)
             }

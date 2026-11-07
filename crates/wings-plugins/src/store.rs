@@ -324,6 +324,21 @@ impl Store {
         Ok(secrets)
     }
 
+    /// Uninstalls the copies of Wings' own plugins that were retired from the repo's `plugins/`. Deleting the folder
+    /// there doesn't reach the copies people installed, and with nothing left to update to, an app that can't run them
+    /// lists them as needing an update for good. Returns each one's secrets, for the caller to delete, or why it stayed.
+    pub fn remove_retired(&mut self) -> Vec<Result<(String, Option<SecretScope>), String>> {
+        let retired: Vec<&str> = RETIRED
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(self.source(id), Some(Source::Github { repo, folder: Some(folder) })
+                    if repo.eq_ignore_ascii_case(OFFICIAL_REPO) && folder == format!("plugins/{id}"))
+            })
+            .collect();
+        retired.into_iter().map(|id| self.remove(id).map(|secrets| (id.to_string(), secrets))).collect()
+    }
+
     /// The plugin's current secret scope and the names it stored there.
     pub fn secret_scope(&mut self, id: &str) -> Result<SecretScope, String> {
         let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
@@ -602,6 +617,8 @@ pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>
 
 /// The repo whose `plugins/` folder Settings offers to install from.
 const OFFICIAL_REPO: &str = "josippapez/Wings";
+/// Wings' own plugins that are no longer in the repo: Notes became the Project page.
+const RETIRED: &[&str] = &["notes"];
 
 /// A plugin in the official repo, as Settings offers it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -701,6 +718,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), new_scope()));
         fs::create_dir_all(&dir).unwrap();
         (Store::load(dir.join("plugins"), dir.join("plugins.json"), None), dir)
+    }
+
+    #[test]
+    fn a_retired_wings_plugin_is_uninstalled_but_one_with_its_id_from_elsewhere_stays() {
+        let (mut s, dir) = store();
+        let pkg = || package(&[("wings-plugin.json", &manifest("notes", &[])), ("main.js", "")]);
+        s.install(&pkg(), Source::Github { repo: "josippapez/Wings".into(), folder: Some("plugins/notes".into()) }, None).unwrap();
+        let removed = s.remove_retired();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].as_ref().unwrap().0, "notes");
+        assert!(s.source("notes").is_none() && !dir.join("plugins/notes").exists());
+        s.install(&pkg(), Source::Github { repo: "someone/notes".into(), folder: None }, None).unwrap();
+        assert!(s.remove_retired().is_empty());
+        assert!(s.source("notes").is_some());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
