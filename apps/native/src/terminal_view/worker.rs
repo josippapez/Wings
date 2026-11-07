@@ -183,6 +183,8 @@ pub(super) struct Runtime {
     pub(super) recent: Recent,
     stopped: Arc<AtomicBool>,
     pub(super) visible: Arc<AtomicBool>,
+    /// Set when the shell's output ends: it exited, or the terminal server it ran in went away.
+    pub(super) exited: Arc<AtomicBool>,
 }
 
 impl Runtime {
@@ -367,9 +369,11 @@ fn start_model(
         recent: Arc::new(Mutex::new(VecDeque::new())),
         stopped: Arc::new(AtomicBool::new(false)),
         visible: Arc::new(AtomicBool::new(true)),
+        exited: Arc::new(AtomicBool::new(false)),
     };
     let stopped = runtime.stopped.clone();
     let visible = runtime.visible.clone();
+    let exited = runtime.exited.clone();
     let title = runtime.title.clone();
     let recent = runtime.recent.clone();
     let state = latest.clone();
@@ -392,6 +396,7 @@ fn start_model(
                 options,
                 stopped,
                 visible,
+                exited,
             );
         })
         .map_err(|error| error.to_string())?;
@@ -424,6 +429,7 @@ fn run_model(
     mut options: Options,
     stopped: Arc<AtomicBool>,
     visible: Arc<AtomicBool>,
+    exited: Arc<AtomicBool>,
 ) {
     let mut pane = GridPane::new(cols as usize, rows as usize);
     let mut geometry = Geometry {
@@ -580,6 +586,7 @@ fn run_model(
                     status = Some(error.unwrap_or_else(|| "Shell output closed.".into()));
                     process.reap();
                     closed = true;
+                    exited.store(true, Ordering::Release);
                     Ok(())
                 }
             };
@@ -619,7 +626,8 @@ fn run_model(
         if visible.load(Ordering::Acquire) || closed {
             *latest.lock().unwrap() =
                 Arc::new(snapshot(&mut pane, status.clone(), closed, find.as_mut()));
-            if visible.load(Ordering::Acquire) {
+            // The end goes out even while hidden, so the pane's owner hears its shell exited.
+            if visible.load(Ordering::Acquire) || closed {
                 let _ = dirty.try_send(());
             }
         }

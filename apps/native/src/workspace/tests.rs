@@ -190,6 +190,33 @@ fn splits_move_focus_by_position_and_closing_a_pane_ends_its_shell() {
 }
 
 #[test]
+fn a_pane_whose_shell_exits_closes_and_the_pane_before_it_takes_focus() {
+    let (app, mut window) = open();
+    press(&mut window, "d");
+    assert_eq!(panes(&window), (vec![0, 1], 1));
+    window.update(|w, _, cx| {
+        w.terminal(1)
+            .unwrap()
+            .update(cx, |view, cx| view.write_input("exit\r", cx))
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while panes(&window).0 != [0] {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the exited pane is still there"
+        );
+        // The redraw that carries the exit waits on the clock.
+        app.advance_clock(std::time::Duration::from_millis(20));
+        app.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(panes(&window), (vec![0], 0));
+    window.update(|w, window, cx| {
+        assert!(w.terminal(0).unwrap().focus_handle(cx).is_focused(window));
+    });
+}
+
+#[test]
 fn typing_and_selecting_still_work_in_a_pane_that_was_not_redrawn() {
     let (app, mut window) = open();
     press(&mut window, "d");

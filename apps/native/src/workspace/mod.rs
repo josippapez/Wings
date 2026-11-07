@@ -94,6 +94,8 @@ struct Pane {
     name: Option<SharedString>,
     /// The name field while you edit it, in place of the title.
     renaming: Option<(Entity<TextField>, Subscription)>,
+    /// Closes the pane when its shell exits.
+    _exit: Option<Subscription>,
 }
 
 struct TerminalTab {
@@ -806,7 +808,16 @@ impl Render for Workspace {
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(body)
+                                    // The terminal filling the area stands in for the tab, so the tab is out of
+                                    // sight, not just under it: laid out at its size, but not painted or clickable.
+                                    .child(
+                                        div()
+                                            .size_full()
+                                            .when(self.loose_page().is_some(), |tab| {
+                                                tab.invisible()
+                                            })
+                                            .child(body),
+                                    )
                                     .children(self.quick_layer(cx)),
                             ),
                     )

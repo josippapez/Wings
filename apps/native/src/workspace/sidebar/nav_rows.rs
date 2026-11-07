@@ -137,7 +137,7 @@ impl Workspace {
     }
 
     /// The desktop's `ul aria-label="Terminals"`: each sidebar terminal, the one on screen highlighted, with a button
-    /// that ends its shell where the pointer is.
+    /// that ends its shell, shown where the pointer or the keyboard focus is.
     fn loose_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let page = self.loose_page();
         div()
@@ -165,6 +165,7 @@ impl Workspace {
                     .role(Role::ListItem)
                     .relative()
                     .group(group.clone())
+                    .track_focus(&quick.row)
                     .child(
                         nav_row(
                             ("loose", key),
@@ -174,6 +175,13 @@ impl Workspace {
                         )
                         .aria_selected(active)
                         .pr(px(32.0))
+                        .focusable()
+                        .tab_stop(true)
+                        .focus_visible(|style| {
+                            style
+                                .bg(rgba(theme::HOVER))
+                                .text_color(rgb(theme::FOREGROUND))
+                        })
                         .tooltip(ui::tooltip(tip, None))
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
@@ -189,7 +197,7 @@ impl Workspace {
                             .right(px(4.0))
                             .flex()
                             .items_center()
-                            .opacity(0.0)
+                            .opacity(if quick.row_focused { 1.0 } else { 0.0 })
                             .group_hover(group, |style| style.opacity(1.0))
                             .child(
                                 ui::icon_button(
@@ -198,6 +206,8 @@ impl Workspace {
                                     "Close and end the shell",
                                     ButtonSize::Tiny,
                                 )
+                                .focusable()
+                                .tab_stop(true)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| this.close_quick(key, window, cx),
                                 )),

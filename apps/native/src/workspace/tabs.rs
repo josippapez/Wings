@@ -127,25 +127,7 @@ impl Workspace {
             self.tab_scroll.scroll_to_item(index);
         }
         self.sync_plugin_visibility(cx);
-        let shown: Vec<usize> = match active {
-            Active::Terminal(id) => self
-                .terminals
-                .iter()
-                .find(|tab| tab.id == id)
-                .map(|tab| {
-                    tab.zoomed
-                        .map_or_else(|| tab.layout.panes(), |pane| vec![pane])
-                })
-                .unwrap_or_default(),
-            Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
-        };
-        for (id, pane) in &self.panes {
-            if let Ok(view) = &pane.view {
-                // Hidden terminals keep parsing output but stop painting.
-                let visible = shown.contains(id);
-                view.update(cx, |view, cx| view.set_visible(visible, cx));
-            }
-        }
+        self.sync_pane_visibility(cx);
         match active {
             Active::Terminal(id) => {
                 let focused = self
@@ -176,6 +158,30 @@ impl Workspace {
         self.sync_project_page(cx);
         self.save(cx);
         cx.notify();
+    }
+
+    /// Paints the active tab's panes, unless a sidebar terminal fills the pane area over them, as the desktop's
+    /// `invisible` tab under the terminal page. Hidden terminals keep parsing output and keep their size.
+    pub(super) fn sync_pane_visibility(&mut self, cx: &mut Context<Self>) {
+        let shown: Vec<usize> = match self.active {
+            _ if self.loose_page().is_some() => Vec::new(),
+            Active::Terminal(id) => self
+                .terminals
+                .iter()
+                .find(|tab| tab.id == id)
+                .map(|tab| {
+                    tab.zoomed
+                        .map_or_else(|| tab.layout.panes(), |pane| vec![pane])
+                })
+                .unwrap_or_default(),
+            Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
+        };
+        for (id, pane) in &self.panes {
+            if let Ok(view) = &pane.view {
+                let visible = shown.contains(id);
+                view.update(cx, |view, cx| view.set_visible(visible, cx));
+            }
+        }
     }
 
     /// Next or previous tab, wrapping round.

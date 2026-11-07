@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, DispatchPhase, Entity, Focusable, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, Window, canvas, div, hsla,
-    point, prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, Subscription,
+    Window, canvas, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -19,7 +19,10 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{HAIRLINE, Workspace, panes::tildify};
+use super::{
+    HAIRLINE, Workspace,
+    panes::{Ended, tildify},
+};
 
 /// How the shortcut reads, the desktop's `hotkeyLabel("Ctrl+Backquote")`.
 pub(super) const SHORTCUT: &str = if cfg!(target_os = "macos") {
@@ -69,6 +72,13 @@ pub(super) struct QuickTerminal {
     gesture: Option<Gesture>,
     /// The pane area the panel floats over, measured every frame.
     area: Option<Bounds<Pixels>>,
+    /// Takes its row out once its shell exits.
+    _exit: Subscription,
+    /// Its sidebar row, which shows the close button while the row or the button has focus, as the desktop's
+    /// `group-focus-within/row`.
+    pub(super) row: FocusHandle,
+    pub(super) row_focused: bool,
+    _row_focus: [Subscription; 2],
 }
 
 impl QuickTerminal {
@@ -120,6 +130,16 @@ impl Workspace {
         };
         let key = self.next_loose;
         self.next_loose += 1;
+        let exit = self.close_on_exit(&view, Ended::Loose(key), cx);
+        let row = cx.focus_handle();
+        let row_focus = [
+            cx.on_focus_in(&row, window, move |this, _, cx| {
+                this.loose_row_focused(key, true, cx)
+            }),
+            cx.on_focus_out(&row, window, move |this, _, _, cx| {
+                this.loose_row_focused(key, false, cx)
+            }),
+        ];
         self.loose.push(QuickTerminal {
             key,
             view,
@@ -133,6 +153,10 @@ impl Workspace {
             },
             gesture: None,
             area: None,
+            _exit: exit,
+            row,
+            row_focused: false,
+            _row_focus: row_focus,
         });
         self.place_quick(key, place, false, window, cx);
     }
@@ -173,6 +197,7 @@ impl Workspace {
         }
         view.update(cx, |view, cx| view.set_visible(shown, cx));
         if shown {
+            self.sync_pane_visibility(cx);
             view.focus_handle(cx).focus(window, cx);
         } else {
             self.show(self.active, window, cx);
@@ -182,14 +207,21 @@ impl Workspace {
 
     /// Going to a tab or a project puts the one filling the pane area away, as going to another tab would.
     pub(super) fn leave_loose(&mut self, cx: &mut Context<Self>) {
-        for quick in &mut self.loose {
-            if quick.place == Place::Full {
-                quick.place = Place::Hidden;
-                quick
-                    .view
-                    .update(cx, |view, cx| view.set_visible(false, cx));
-                cx.notify();
-            }
+        let Some(quick) = self.loose.iter_mut().find(|t| t.place == Place::Full) else {
+            return;
+        };
+        quick.place = Place::Hidden;
+        quick
+            .view
+            .update(cx, |view, cx| view.set_visible(false, cx));
+        self.sync_pane_visibility(cx);
+        cx.notify();
+    }
+
+    fn loose_row_focused(&mut self, key: usize, focused: bool, cx: &mut Context<Self>) {
+        if let Some(quick) = self.loose.iter_mut().find(|t| t.key == key) {
+            quick.row_focused = focused;
+            cx.notify();
         }
     }
 
@@ -203,16 +235,26 @@ impl Workspace {
             .map(|t| t.key)
     }
 
-    /// Ends its shell and takes its row out of the sidebar.
+    /// Ends its shell and takes its row out of the sidebar, as its shell exiting does.
     pub(super) fn close_quick(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.loose.iter().position(|t| t.key == key) else {
             return;
         };
-        self.loose.remove(at);
+        let quick = self.loose.remove(at);
         if self.loose_last == Some(key) {
             self.loose_last = self.loose.last().map(|t| t.key);
         }
-        self.show(self.active, window, cx);
+        // The keys go back to the tab when they were in this terminal or its row, or nowhere, as the desktop's
+        // `focusBackFrom`; a shell ending out of sight leaves them where you're typing.
+        let had_keys = window.focused(cx).is_none()
+            || quick.view.focus_handle(cx).contains_focused(window, cx)
+            || quick.row.contains_focused(window, cx);
+        if had_keys {
+            self.show(self.active, window, cx);
+        } else {
+            self.sync_pane_visibility(cx);
+            cx.notify();
+        }
     }
 
     fn quick_gesture(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {

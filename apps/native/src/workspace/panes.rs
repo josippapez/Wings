@@ -3,14 +3,15 @@
 use std::path::PathBuf;
 
 use gpui::{
-    App, Bounds, Context, Entity, Pixels, Role, SharedString, Window, point, prelude::*, px, size,
+    App, Bounds, Context, Entity, Pixels, Role, SharedString, Subscription, Window, point,
+    prelude::*, px, size,
 };
 
 use crate::{
     agents,
     layout::{Dir, Layout, Toward, neighbor},
     saved,
-    terminal_view::TerminalView,
+    terminal_view::{TerminalEvent, TerminalView},
     text_field::{FieldEvent, TextField},
 };
 
@@ -22,6 +23,13 @@ use crate::terminal_server;
 mod server_tests;
 
 use super::{Active, Drag, Pane, Workspace};
+
+/// Whose shell ended: a pane's, or a sidebar terminal's.
+#[derive(Clone, Copy)]
+pub(super) enum Ended {
+    Pane(usize),
+    Loose(usize),
+}
 
 impl Workspace {
     /// A terminal tab's panes in reading order, and the one with focus.
@@ -148,6 +156,10 @@ impl Workspace {
             Some(view) => Ok(view),
             None => TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
         };
+        let exit = view
+            .as_ref()
+            .ok()
+            .map(|view| self.close_on_exit(view, Ended::Pane(id), cx));
         self.panes.insert(
             id,
             Pane {
@@ -156,9 +168,31 @@ impl Workspace {
                 history,
                 name: None,
                 renaming: None,
+                _exit: exit,
             },
         );
         id
+    }
+
+    /// Closes the pane or the sidebar terminal once its shell exits on its own, as the desktop's `onPaneExited`.
+    pub(super) fn close_on_exit(
+        &self,
+        view: &Entity<TerminalView>,
+        ended: Ended,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe(view, move |_, _, _: &TerminalEvent, cx| {
+            // The event arrives with no window at hand; closing needs one to move the focus.
+            let workspace = cx.entity();
+            cx.defer(move |cx| {
+                cx.with_window(workspace.entity_id(), |window, cx| {
+                    workspace.update(cx, |this, cx| match ended {
+                        Ended::Pane(pane) => this.close_pane(pane, window, cx),
+                        Ended::Loose(key) => this.close_quick(key, window, cx),
+                    })
+                });
+            });
+        })
     }
 
     /// The pane in the terminal server: the one it kept running for `history`, else a new one there. `None` runs the

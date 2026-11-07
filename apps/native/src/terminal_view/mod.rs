@@ -21,8 +21,8 @@ use std::{
 
 use async_channel::Receiver;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Pixels,
-    SharedString, Subscription, Task, Window, prelude::*, px,
+    App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
+    Pixels, SharedString, Subscription, Task, Window, prelude::*, px,
 };
 
 pub use input::{OPTION_AS_META, OptionAsMeta};
@@ -193,6 +193,15 @@ pub struct TerminalView {
     cursor_lit: bool,
 }
 
+/// What a terminal tells its owner.
+pub enum TerminalEvent {
+    /// Its shell ended on its own (or its terminal server went away), as the desktop's `pane-exited`. Closing the
+    /// view yourself never sends it.
+    Exited,
+}
+
+impl EventEmitter<TerminalEvent> for TerminalView {}
+
 struct FindBar {
     open: bool,
     field: Entity<TextField>,
@@ -290,6 +299,9 @@ impl TerminalView {
                 while updates.try_recv().is_ok() {}
                 if view
                     .update(cx, |view, cx| {
+                        if view.runtime.exited.swap(false, Ordering::AcqRel) {
+                            cx.emit(TerminalEvent::Exited);
+                        }
                         if view.visible {
                             let cursor = view.snapshot.cursor;
                             view.snapshot = view.latest.lock().unwrap().clone();
@@ -400,6 +412,12 @@ impl TerminalView {
     #[cfg(test)]
     pub(crate) fn grid(&self) -> (usize, usize) {
         (self.snapshot.cols, self.snapshot.rows)
+    }
+
+    /// Whether it paints, for tests of what covers it.
+    #[cfg(test)]
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible
     }
 
     /// Where it was last drawn, for tests of what moves it.
