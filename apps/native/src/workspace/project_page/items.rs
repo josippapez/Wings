@@ -10,7 +10,7 @@ use gpui::{
 use wings_spaces::project_info::{Item, MAX_BODY, MAX_TITLE, Op, Who, fingerprint};
 
 use crate::{
-    icons::{Icon, icon},
+    icons::{Icon, icon, plugin_glyph},
     markdown::{self, Block},
     page::PageView,
     text_field::{FieldEvent, TextField},
@@ -578,6 +578,15 @@ impl ProjectPage {
             || format!("Missing block \u{b7} {plugin_id}/{block_id}"),
             |b| b.title.clone(),
         );
+        // Only a block its plugin still offers has an icon, as on the desktop.
+        let glyph = source.as_ref().map(|b| {
+            plugin_glyph(
+                &b.icon,
+                b.icon_svg.as_deref(),
+                14.0,
+                theme::MUTED_FOREGROUND,
+            )
+        });
         let group = SharedString::from(format!("block-{id}"));
         let confirm = self.removing.as_deref() == Some(id.as_str());
         let (up, down, remove) =
@@ -661,7 +670,7 @@ impl ProjectPage {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::Puzzle, 14.0, theme::MUTED_FOREGROUND))
+                .children(glyph)
                 .child(
                     div()
                         .min_w_0()

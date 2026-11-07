@@ -12,7 +12,7 @@ use wings_plugins::{
 };
 
 use crate::{
-    icons::{Icon, icon},
+    icons::plugin_glyph,
     theme,
     ui::{self, Variant},
 };
@@ -162,7 +162,8 @@ fn source_line(view: &PluginView) -> String {
     }
 }
 
-fn plugin_icon(on: bool, side: f32) -> gpui::Div {
+/// The desktop's `PluginIcon`: the plugin's own SVG (`own`), else a puzzle piece.
+fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
     div()
         .size(px(side))
         .flex_none()
@@ -171,8 +172,9 @@ fn plugin_icon(on: bool, side: f32) -> gpui::Div {
         .justify_center()
         .rounded(px(8.0))
         .bg(rgba(if on { 0xb392f026 } else { 0xffffff0f }))
-        .child(icon(
-            Icon::Puzzle,
+        .child(plugin_glyph(
+            "",
+            own,
             side / 2.0,
             if on {
                 0xc9b2f7
@@ -387,7 +389,7 @@ impl Workspace {
                                 .gap(px(12.0))
                                 .px(px(16.0))
                                 .py(px(10.0))
-                                .child(plugin_icon(false, 32.0))
+                                .child(plugin_icon(false, None, 32.0))
                                 .child(
                                     div()
                                         .flex_1()
@@ -451,7 +453,7 @@ impl Workspace {
                 this.manage.removing = None;
                 cx.notify();
             }))
-            .child(plugin_icon(on, 32.0))
+            .child(plugin_icon(on, view.icon_svg.as_deref(), 32.0))
             .child(
                 div()
                     .flex_1()

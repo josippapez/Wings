@@ -165,15 +165,30 @@ pub fn plugin_glyph(name: &str, own: Option<&str>, size: f32, color: u32) -> Any
         "puzzle" => Some(Icon::Puzzle),
         _ => None,
     };
-    match (named, own) {
-        (Some(glyph), _) => icon(glyph, size, color).into_any_element(),
-        (None, Some(own)) => svg()
-            .data(own.as_bytes())
-            .size(px(size))
-            .flex_none()
-            .text_color(rgb(color))
-            .into_any_element(),
-        (None, None) if name.is_empty() => icon(Icon::Puzzle, size, color).into_any_element(),
-        (None, None) => icon(Icon::Globe, size, color).into_any_element(),
-    }
+    let (glyph, _drew) = match (named, own) {
+        (Some(glyph), _) => (icon(glyph, size, color).into_any_element(), name),
+        (None, Some(own)) => (
+            svg()
+                .data(own.as_bytes())
+                .size(px(size))
+                .flex_none()
+                .text_color(rgb(color))
+                .into_any_element(),
+            "own",
+        ),
+        (None, None) if name.is_empty() => {
+            (icon(Icon::Puzzle, size, color).into_any_element(), "puzzle")
+        }
+        (None, None) => (icon(Icon::Globe, size, color).into_any_element(), "globe"),
+    };
+    // Tests find where each plugin icon was drawn, as `plugin-glyph:<name>`, `:own` for the plugin's SVG.
+    #[cfg(feature = "test-support")]
+    return gpui::div()
+        .relative()
+        .flex_none()
+        .child(glyph)
+        .children(crate::ui::spot(|| format!("plugin-glyph:{_drew}")))
+        .into_any_element();
+    #[cfg(not(feature = "test-support"))]
+    glyph
 }

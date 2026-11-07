@@ -30,7 +30,7 @@ use wings_spaces::project_info::{
 };
 
 use crate::{
-    icons::{Icon, icon},
+    icons::{Icon, icon, plugin_glyph},
     installed::BlockPage,
     page::PageView,
     text_field::{FieldEvent, TextField},
@@ -574,6 +574,7 @@ impl ProjectPage {
         let mut items: Vec<AnyElement> = vec![
             self.menu_item(
                 format!("add-{index}-section"),
+                None,
                 "Section",
                 sections < MAX_SECTIONS,
                 {
@@ -583,6 +584,7 @@ impl ProjectPage {
             ),
             self.menu_item(
                 format!("add-{index}-fact"),
+                None,
                 "Fact",
                 self.facts_has_room(),
                 {
@@ -597,6 +599,12 @@ impl ProjectPage {
             let (plugin, id, at) = (block.plugin.clone(), block.id.clone(), at.clone());
             items.push(self.menu_item(
                 format!("add-{index}-block-{n}"),
+                Some(plugin_glyph(
+                    &block.icon,
+                    block.icon_svg.as_deref(),
+                    16.0,
+                    theme::MUTED_FOREGROUND,
+                )),
                 &block.title,
                 can_block,
                 cx.listener(move |this, _, _, cx| {
@@ -657,11 +665,16 @@ impl ProjectPage {
     fn menu_item(
         &self,
         id: String,
+        glyph: Option<AnyElement>,
         label: &str,
         enabled: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
-        let item = ui::select_item(SharedString::from(id), label.to_owned(), false);
+        let id = SharedString::from(id);
+        let item = match glyph {
+            Some(glyph) => ui::select_item_with(id, glyph, label.to_owned()),
+            None => ui::select_item(id, label.to_owned(), false),
+        };
         if enabled {
             item.on_click(on_click).into_any_element()
         } else {

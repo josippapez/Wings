@@ -291,6 +291,9 @@ pub struct BlockPage {
     pub plugin: String,
     pub id: String,
     pub title: String,
+    /// The icon its manifest names, and its plugin's own SVG, drawn by `icons::plugin_glyph`.
+    pub icon: String,
+    pub icon_svg: Option<String>,
     /// The least height in points, within the manifest's range.
     pub min_height: u32,
     pub host: Arc<PluginHost>,
@@ -313,6 +316,8 @@ pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
                 plugin: installed.id.clone(),
                 id: block.id.clone(),
                 title: block.title.clone(),
+                icon: block.icon.clone(),
+                icon_svg: installed.plugin.icon_svg.clone(),
                 min_height: block.min_height.unwrap_or(160).clamp(least, most),
                 host: installed.host.clone(),
                 source: fs::read_to_string(file).ok()?.into(),

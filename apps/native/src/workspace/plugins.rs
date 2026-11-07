@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use crate::{
-    icons::{Icon, icon},
+    icons::{Icon, icon, plugin_glyph},
     page::PageView,
     saved::SavedPluginTab,
     theme,
@@ -286,6 +286,21 @@ impl Workspace {
                 let active =
                     shown.is_some_and(|tab| tab.plugin == installed.id && tab.view == page.id);
                 let (plugin, view) = (installed.id.clone(), page.id.clone());
+                // The icon its tab and the new tab menu show.
+                let named = installed
+                    .plugin
+                    .manifest
+                    .contributes
+                    .views
+                    .iter()
+                    .find(|declared| declared.id == page.id)
+                    .map_or("", |declared| declared.icon.as_str());
+                let glyph = plugin_glyph(
+                    named,
+                    installed.plugin.icon_svg.as_deref(),
+                    16.0,
+                    theme::MUTED_FOREGROUND,
+                );
                 div()
                     .id(("plugin-page", index))
                     .role(Role::Button)
@@ -305,7 +320,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_plugin_view(&plugin, &view, None, window, cx);
                     }))
-                    .child(icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND))
+                    .child(glyph)
                     .child(
                         div()
                             .min_w_0()

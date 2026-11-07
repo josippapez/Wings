@@ -399,6 +399,31 @@ pub fn select_item(
     selected: bool,
 ) -> Stateful<Div> {
     let label = label.into();
+    select_row(id.into(), label.clone(), label.into_any_element(), selected)
+}
+
+/// A `select_item` with a 16px icon before its label, like a plugin's block in the project page's Add menu.
+pub fn select_item_with(
+    id: impl Into<ElementId>,
+    glyph: impl IntoElement,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
+    let label = label.into();
+    let content = div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .child(glyph)
+        .child(label.clone());
+    select_row(id.into(), label, content.into_any_element(), false)
+}
+
+fn select_row(
+    id: ElementId,
+    label: SharedString,
+    content: AnyElement,
+    selected: bool,
+) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::MenuItem)
@@ -413,7 +438,7 @@ pub fn select_item(
         .cursor_pointer()
         .text_size(px(13.0))
         .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
-        .child(label)
+        .child(content)
         .when(selected, |item| {
             item.child(icon(Icon::Check, 14.0, theme::FOREGROUND))
         })

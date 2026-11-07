@@ -11,11 +11,12 @@ use std::{
 use gpui::{
     Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement,
     MouseButton, MouseDownEvent, Pixels, Render, Role, SharedString, Task, Window, anchored,
-    canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba, svg,
+    canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba,
 };
 
 use crate::{
-    icons::{Icon, icon},
+    icons::{Icon, plugin_glyph},
+    installed::Installed,
     page::{
         PageView,
         plugin::ui::{Badge, CountIcon, PaneStatus, Row, StatusItem, Tone},
@@ -55,6 +56,25 @@ pub(super) fn palette(tone: Tone) -> Palette {
         ring,
         dot,
     }
+}
+
+/// The icon of `installed`'s sidebar `sidebar`, as the desktop's `PluginGlyph`: the one its manifest names, else the
+/// plugin's own SVG.
+fn sidebar_glyph(installed: &Installed, sidebar: &str, size: f32) -> AnyElement {
+    let named = installed
+        .plugin
+        .manifest
+        .contributes
+        .sidebars
+        .iter()
+        .find(|declared| declared.id == sidebar)
+        .map_or("", |declared| declared.icon.as_str());
+    plugin_glyph(
+        named,
+        installed.plugin.icon_svg.as_deref(),
+        size,
+        theme::MUTED_FOREGROUND,
+    )
 }
 
 /// A badge's card, open: which badge, and its buttons while one of them waits for the plugin.
@@ -553,15 +573,7 @@ impl Workspace {
                 let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
                 let key = (plugin.clone(), page.clone());
                 let open = self.right.as_ref() == Some(&key);
-                let mark = match &installed.plugin.icon_svg {
-                    Some(svg_text) => svg()
-                        .data(svg_text.as_bytes())
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                        .into_any_element(),
-                    None => icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND).into_any_element(),
-                };
+                let mark = sidebar_glyph(installed, &page, 16.0);
                 let label = self.plugin_ui.labels.get(&key);
                 let name = match label {
                     Some(label) => format!("{}, {}", sidebar.title, label.text),
@@ -859,6 +871,7 @@ impl Workspace {
             .iter()
             .find(|page| page.id == *sidebar)
             .map(|page| page.title.clone())?;
+        let glyph = sidebar_glyph(installed, sidebar, 14.0);
         let width = self.right_width(viewport);
         let panel = div()
             .id("right-sidebar")
@@ -881,16 +894,20 @@ impl Workspace {
                     .items_center()
                     .gap(px(4.0))
                     .pl(px(4.0))
+                    // The desktop's `h2`: the sidebar's icon, then its title.
                     .child(
                         div()
                             .min_w_0()
                             .flex_1()
-                            .truncate()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
                             .pl(px(8.0))
                             .text_size(px(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(title),
+                            .child(glyph)
+                            .child(div().min_w_0().truncate().child(title)),
                     )
                     .child(
                         ui::icon_button(

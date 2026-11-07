@@ -1377,6 +1377,94 @@ fn dragging_the_right_sidebars_edge_resizes_the_terminal_once_when_it_settles() 
     );
 }
 
+// Plugin icons, drawn as the desktop's `PluginGlyph`.
+
+/// Where the plugin icon `name` was last drawn: one its manifest names, or `own` for the plugin's own SVG.
+fn glyph_at(name: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+    crate::ui::spot_at(&format!("plugin-glyph:{name}"))
+}
+
+/// Cyclops names `clock` for its sidebar, which its button and the panel's title showed on the desktop.
+#[test]
+fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel() {
+    let data = Data::temp();
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html", "icon": "clock" }] } }),
+        "",
+        &[("side", SIDEBAR_PAGE)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    // The button is the last thing in the project bar under the 40px title bar.
+    let button = glyph_at("clock").expect("the button shows the sidebar's icon");
+    assert!(
+        button.center().x > px(950.0)
+            && button.center().y > px(40.0)
+            && button.center().y < px(76.0),
+        "{button:?}"
+    );
+    window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
+    app.advance_clock(crate::ui::motion::SLIDE * 2);
+    app.run_until_parked();
+    window.draw();
+    // Then before the sidebar's title over the 360 panel, after its 4, 4 and 8 of padding.
+    let title = glyph_at("clock").unwrap();
+    assert_eq!(
+        (title.left(), title.center().y),
+        (px(1000.0 - 360.0 + 16.0), px(40.0 + 16.0))
+    );
+}
+
+/// Claude accounts ships its own `icon.svg`, which its row in Settings, Plugins showed on the desktop.
+#[test]
+fn settings_shows_a_plugins_own_icon_on_its_row() {
+    let data = Data::temp();
+    data.install_script(
+        "drawn",
+        json!({ "icon": "icon.svg" }),
+        "",
+        &[],
+        "drawn-scope",
+    );
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    assert!(glyph_at("own").is_none());
+    window.update(|w, window, cx| {
+        w.open_settings(window, cx);
+        w.settings.as_mut().unwrap().section = super::settings::Section::Plugins;
+        cx.notify();
+    });
+    window.draw();
+    // Half the row's 32 tile.
+    let tile = glyph_at("own").expect("the row shows the plugin's icon");
+    assert_eq!(tile.size, size(px(16.0), px(16.0)));
+}
+
+/// A page listed under Plugins in the sidebar shows the icon its tab shows, not a puzzle piece.
+#[test]
+fn the_sidebars_plugin_pages_show_their_icons() {
+    let data = Data::temp();
+    data.install_script(
+        "reviews",
+        json!({ "icon": "icon.svg", "contributes": { "views": [
+            { "id": "pr", "title": "Pull request", "page": "dist/pr.html", "opens": ["tab"], "newTab": true, "icon": "git-compare" },
+            { "id": "list", "title": "List", "page": "dist/list.html", "opens": ["tab"], "newTab": true },
+        ] } }),
+        "",
+        &[("pr", SIDEBAR_PAGE), ("list", SIDEBAR_PAGE)],
+        "reviews-scope",
+    );
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    // In the 248 sidebar, the named icon on one row and the plugin's own on the next.
+    let (named, own) = (glyph_at("git-compare").unwrap(), glyph_at("own").unwrap());
+    assert!(named.right() < px(248.0) && own.right() < px(248.0));
+    assert_eq!(named.left(), own.left());
+    assert!(own.top() > named.bottom());
+}
+
 // Transcripts.
 
 const READER: &str = r#"

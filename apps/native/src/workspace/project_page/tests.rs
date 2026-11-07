@@ -329,3 +329,60 @@ fn a_plugins_block_keeps_the_state_it_saved_with_the_project_page() {
         },
     );
 }
+
+/// Work item names `kanban` for its Sprint block, which the block's title and the Add menu showed on the desktop.
+#[test]
+fn a_plugins_block_shows_the_icon_its_manifest_names_over_it_and_in_the_add_menu() {
+    let data = Data::temp();
+    let project = data.root.join("block-icon-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let app_data = data.root.join("block-icon-app-data");
+    data.install_script(
+        "sprints",
+        json!({ "contributes": { "blocks": [{ "id": "sprint", "title": "Sprint", "page": "dist/sprint.html", "icon": "kanban" }] } }),
+        "",
+        &[("sprint", NOTES)],
+        "sprints-scope",
+    );
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.plugins = Some(data.paths());
+        config.project = project.clone();
+        config.project_info = Some(app_data.clone());
+    });
+    window.update(|w, window, cx| w.open_project_page(project.clone(), window, cx));
+    until(&app, &mut window, "the page never loaded", |w, cx| {
+        w.project_page
+            .as_ref()
+            .is_some_and(|page| page.read(cx).data.is_some())
+    });
+    let page = window.read(|w, _| w.project_page.clone().unwrap());
+    let glyph = || crate::ui::spot_at("plugin-glyph:kanban");
+    // Offered in the Add menu of the empty page.
+    window.update(|_, _, cx| {
+        page.update(cx, |page, cx| {
+            page.menu = Some(Place::Top);
+            cx.notify();
+        })
+    });
+    window.draw();
+    let offered = glyph().expect("the Add menu shows the block's icon");
+    assert_eq!(offered.size, size(px(16.0), px(16.0)));
+    window.update(|_, _, cx| {
+        page.update(cx, |page, cx| {
+            page.add_at(
+                Place::End,
+                Added::Block("sprints".into(), "sprint".into()),
+                cx,
+            )
+        })
+    });
+    until(&app, &mut window, "the block was never placed", |_, cx| {
+        page.read(cx).block_views.len() == 1
+    });
+    // Before the block's title, once the menu has slid away.
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    window.draw();
+    let titled = glyph().unwrap();
+    assert_eq!(titled.size, size(px(14.0), px(14.0)));
+}

@@ -216,6 +216,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("chrome") {
         return chrome(&mut cx, &config, &out);
     }
+    // `-- <out-dir> icons` renders only a plugin's icons: on its sidebar, its pages, its Settings row and its block.
+    if std::env::args().nth(2).as_deref() == Some("icons") {
+        return icons(&mut cx, &config, &out);
+    }
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
@@ -1018,6 +1022,85 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// Settings, Plugins with made-up plugins (one running, one from GitHub with an update, one waiting for approval), the
 /// review before a plugin runs, a setup command an agent proposes, and Settings, Agents. Temp folders only.
+/// A plugin's icons where the desktop draws them: its sidebar open beside its pages under Plugins in the sidebar, its
+/// row in Settings, Plugins, and its block on the project page. It names `kanban` for its sidebar and block and
+/// `git-compare` for one page, and its own SVG (the fixture's gauge) stands for the other.
+fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    let page = |text: &str| {
+        format!(
+            "wings.render(JSON.stringify({{ id: 0, type: '#root', props: {{}}, children: [{{ id: 1, type: '#text', text: '{text}' }}] }}));"
+        )
+    };
+    let (side, pr, list, sprint) = (
+        page("The board"),
+        page("A pull request"),
+        page("A list"),
+        page("This sprint"),
+    );
+    data.install_script(
+        "board",
+        serde_json::json!({ "name": "Board", "icon": "icon.svg", "contributes": {
+            "sidebars": [{ "id": "side", "title": "Board", "page": "dist/side.html", "icon": "kanban" }],
+            "views": [
+                { "id": "pr", "title": "Pull request", "page": "dist/pr.html", "opens": ["tab"], "newTab": true, "icon": "git-compare" },
+                { "id": "list", "title": "List", "page": "dist/list.html", "opens": ["tab"], "newTab": true },
+            ],
+            "blocks": [{ "id": "sprint", "title": "Sprint", "page": "dist/sprint.html", "icon": "kanban" }],
+        } }),
+        "",
+        &[("side", &side), ("pr", &pr), ("list", &list), ("sprint", &sprint)],
+        "board-scope",
+    );
+    // A made-up project page with the block on it, never the user's.
+    let info = out.join("icons-project-info");
+    let _ = std::fs::remove_dir_all(&info);
+    wings_spaces::project_info::Store::new(info.join("projects"), info.join("plugin-storage"))
+        .apply(
+            &base.project.to_string_lossy(),
+            wings_spaces::project_info::Op::AddBlock {
+                plugin_id: "board".into(),
+                block_id: "sprint".into(),
+                at: wings_spaces::project_info::Place::End,
+            },
+        )
+        .expect("place the block");
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    config.project_info = Some(info);
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let project = config.project.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("icons-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        handle
+            .update(cx, |w, _, cx| w.shot_sidebar("board", "side", cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("sidebar"));
+        handle
+            .update(cx, |w, window, cx| w.show_plugins("board", &[], window, cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("settings"));
+        handle
+            .update(cx, |w, window, cx| {
+                w.close_dialogs(cx);
+                w.open_project_page(project.clone(), window, cx);
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_secs(1));
+        save(cx, window, &name("block"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let data = Data::temp();
     data.install("demo", WINGS_VERSION, true, true, Approval::Current, "shot");
