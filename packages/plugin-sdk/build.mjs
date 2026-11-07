@@ -109,10 +109,13 @@ function oneReact(dir) {
   };
 }
 
-/** The mount for a native page: its default export is the component, and the app decides where it shows. */
-const nativeMount = (file) => `import Page from ${JSON.stringify(file)};
+/**
+ * The mount for a native page: its default export is the component, and the app decides where it shows. `fill` goes
+ * along as the browser mount's does, except on a block, whose `showBlock` takes no options.
+ */
+const nativeMount = (file) => `import Page, { page } from ${JSON.stringify(file)};
 import { mount } from "wings-plugin-ui/native";
-mount(<Page />);
+mount(<Page />, { fill: page.place !== "block" && page.fill === true });
 `;
 
 /** Points `wings-plugin-ui` at its native build, which draws a smaller set of components with the same names and props. */

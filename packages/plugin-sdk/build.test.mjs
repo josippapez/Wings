@@ -221,7 +221,7 @@ function fakeUi(dir, { ui, native }) {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "wings-plugin-ui", type: "module", exports: { ".": "./index.js", "./native": "./native.js" } }));
   const names = (list) => list.map((name) => `export const ${name} = () => null;`).join("\n");
   writeFileSync(join(root, "index.js"), `${names(ui)}\n${["showBlock", "showPopover", "showSettings", "showSidebar", "showTab", "showView"].map((name) => `export const ${name} = (element) => { globalThis.shown = { element }; };`).join("\n")}`);
-  writeFileSync(join(root, "native.js"), `${names(native)}\nexport const mount = (element) => { globalThis.mounted = element; };`);
+  writeFileSync(join(root, "native.js"), `${names(native)}\nexport const mount = (element, options) => { globalThis.mounted = element; globalThis.mountedWith = options; };`);
   if (!existsSync(join(dir, "node_modules", "react"))) symlinkSync(join(import.meta.dirname, "node_modules", "react"), join(dir, "node_modules", "react"));
 }
 
@@ -244,6 +244,7 @@ test("a plugin with native: true also gets dist/native/, its browser output stay
   const context = {};
   runInNewContext(readFileSync(join(dir, "dist", "native", "sidebar.js"), "utf8"), context);
   assert.equal(context.mounted.type().props.children, "hi");
+  assert.equal(context.mountedWith.fill, false);
   assert.match(readFileSync(join(dir, "dist", "native", "main.js"), "utf8"), /wings\.onPanes/);
 
   // check sees a native file that's out of date, and pack ships them.
@@ -252,6 +253,19 @@ test("a plugin with native: true also gets dist/native/, its browser output stay
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale, [join(dir, "dist", "native", "sidebar.js")]);
   const zip = unzipSync(new Uint8Array(readFileSync(await pack(dir))));
   assert.deepEqual(Object.keys(zip).filter((name) => name.startsWith("dist/native/")).sort(), ["dist/native/main.js", "dist/native/sidebar.js"]);
+});
+
+test("a native page that says fill: true mounts filling its frame, as the browser mount does, except a block", async (t) => {
+  for (const [place, fill] of [["tab", true], ["view", true], ["block", false]]) {
+    const source = nativePage.replace('{ place: "sidebar" }', `{ place: "${place}", fill: true }`);
+    const dir = plugin({ "src/pages/sidebar.ts": null, "src/pages/sidebar.tsx": source }, { native: true });
+    t.after(() => rmSync(dir, { recursive: true }));
+    fakeUi(dir, { ui: ["Page"], native: ["Page"] });
+    await buildPlugin(dir);
+    const context = {};
+    runInNewContext(readFileSync(join(dir, "dist", "native", "sidebar.js"), "utf8"), context);
+    assert.equal(context.mountedWith.fill, fill, place);
+  }
 });
 
 test("a native plugin without src/main.ts gets an empty dist/native/main.js", async (t) => {

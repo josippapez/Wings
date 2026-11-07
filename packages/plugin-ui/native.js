@@ -125,8 +125,12 @@ function raise(error) {
 
 let container = null;
 
-/** Shows `element` as the page. Calling it again renders the new element in its place, like `showTab` does. */
-export function mount(element) {
+/**
+ * Shows `element` as the page. Calling it again renders the new element in its place, like `showTab` does. `fill` lays
+ * the page out edge to edge with no padding, as `showTab(element, { fill: true })` does; the tree's root carries it.
+ */
+export function mount(element, { fill = false } = {}) {
+  root.props = fill ? { fill: true } : {};
   container ??= reconciler.createContainer(root, ConcurrentRoot, null, false, null, "", raise, () => {}, () => {}, () => {});
   // The first tree is ready when this returns, not on the next turn of the timer loop.
   reconciler.updateContainerSync(element, container, null, null);

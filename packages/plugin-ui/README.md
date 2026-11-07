@@ -186,7 +186,8 @@ and links are spans of their line, and an image shows as its alt text), `CodeBlo
 and `onClick`, which makes a link. `copyText` puts the text on the clipboard through the app, within 5 s of a click or key in the page and up to 1 MB. It renders with
 `react-reconciler` into a JSON tree that the app draws with its own controls, so hooks, state and effects work but there
 is no DOM: no `className`, `style`, `title`, `as` or `aria-*`, and a handler gets a `NativeEvent`, not a DOM event. A
-`Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page. A plugin whose
+`Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page, and `mount(<App />, { fill: true })` lays it out edge to edge with no padding, as
+`fill: true` does in `page`. A plugin whose
 `wings-plugin.json` says `"native": true` has its pages built this way: see Native build in the wings-plugin-sdk README.
 
 ## Ours or your own

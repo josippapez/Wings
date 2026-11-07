@@ -75,4 +75,5 @@ function Components() {
   );
 }
 
-mount(<Components />);
+// A tab page, which fills its tab as `page = { place: "tab", fill: true }` does.
+mount(<Components />, { fill: true });

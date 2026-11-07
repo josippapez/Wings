@@ -359,3 +359,10 @@ test("a code block numbers its lines and marks added, removed and highlighted on
   mount(h(CodeBlock, { lines: [{ text: "a", n: 1 }, { text: "b", n: 2, kind: "added" }, { text: "c", n: 3, kind: "removed", highlighted: true }] }));
   assert.deepEqual(all(last(), "Text").filter((node) => node.props.mono && !node.props.numeric).map((node) => [text(node), node.props.tone, node.props.weight]), [["a", undefined, undefined], ["b", "success", undefined], ["c", "danger", "strong"]]);
 });
+
+test("mount puts fill on the tree's root, so the app lays the page out edge to edge, and leaves it off otherwise", () => {
+  mount(h(Page, null, "Edge"), { fill: true });
+  assert.deepEqual(last().props, { fill: true });
+  mount(h(Page, null, "Padded"));
+  assert.deepEqual(last().props, {});
+});

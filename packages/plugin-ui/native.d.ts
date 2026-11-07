@@ -24,8 +24,11 @@ export interface NativeKeyEvent {
   stopPropagation(): void;
 }
 
-/** Shows `element` as the page. One call per page; calling again renders the new element. Its hooks and handlers run in the page's own JS engine. */
-export function mount(element: ReactElement): void;
+/**
+ * Shows `element` as the page. One call per page; calling again renders the new element. Its hooks and handlers run in
+ * the page's own JS engine. `fill` lays the page out edge to edge with no padding, for a page that scrolls on its own.
+ */
+export function mount(element: ReactElement, options?: { fill?: boolean }): void;
 
 /** A page that fills a tab: a `toolbar`, usually a `Toolbar`, over a body that scrolls. `flush` takes the body's padding and scrolling away. */
 export function Page(props: { toolbar?: ReactNode; flush?: boolean; children?: ReactNode }): ReactElement;

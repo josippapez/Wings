@@ -22,4 +22,5 @@ function Pilot() {
   );
 }
 
-mount(<Pilot />);
+// A tab page, which fills its tab as `page = { place: "tab", fill: true }` does.
+mount(<Pilot />, { fill: true });
