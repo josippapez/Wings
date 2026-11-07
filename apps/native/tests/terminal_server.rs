@@ -32,14 +32,23 @@ impl Folder {
 
 impl Drop for Folder {
     fn drop(&mut self) {
-        for entry in std::fs::read_dir(&self.0).into_iter().flatten().flatten() {
-            if entry.file_name().to_string_lossy().ends_with(".sock")
-                && let Ok(mut control) = Control::connect(&entry.path())
-            {
-                for pane in control.list().unwrap_or_default() {
-                    let _ = control.kill(pane.pane);
+        // Servers sit at the top or one folder down (a data folder's `srv/`), and each left running keeps its shells.
+        let subfolders = std::fs::read_dir(&self.0)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir());
+        for folder in std::iter::once(self.0.clone()).chain(subfolders) {
+            for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+                if entry.file_name().to_string_lossy().ends_with(".sock")
+                    && let Ok(mut control) = Control::connect(&entry.path())
+                {
+                    for pane in control.list().unwrap_or_default() {
+                        let _ = control.kill(pane.pane);
+                    }
+                    let _ = control.drain();
                 }
-                let _ = control.drain();
             }
         }
         let _ = std::fs::remove_dir_all(&self.0);
