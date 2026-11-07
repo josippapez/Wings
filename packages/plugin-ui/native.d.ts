@@ -153,6 +153,8 @@ export function Combobox(props: {
   placeholder?: string;
   maxLength?: number;
   disabled?: boolean;
+  /** Takes the keyboard when it first shows, and the page scrolls it into view. */
+  autoFocus?: boolean;
   filter?: (option: ComboboxOption, query: string) => boolean;
   empty?: ReactNode;
 }): ReactElement;

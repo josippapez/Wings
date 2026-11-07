@@ -264,6 +264,33 @@ fn a_popover_page_has_the_desktops_popover_shell() {
     assert!(at(true).contains("Pressed 1 0."));
 }
 
+/// Thirty lines, then a field that takes the keyboard: Cyclops' entry edit form, opened below the fold.
+const FOCUS_BELOW: &str = r#"
+const lines = Array.from({length:30}, (_,i)=>({id:10+i,type:'Text',children:[{id:100+i,type:'#text',text:'Line '+i}]}));
+wings.render(JSON.stringify({id:0,type:'#root',children:[...lines,{id:5,type:'TextInput',props:{label:'Task',value:'Code review',autoFocus:true}}]}));
+"#;
+
+#[test]
+fn a_field_that_takes_the_keyboard_below_the_fold_is_scrolled_into_view() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(400.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |_, cx| PageView::new(FOCUS_BELOW, cx),
+    );
+    settle(&app, &mut window, shows("Line 29"));
+    for _ in 0..5 {
+        app.run_until_parked();
+        window.draw();
+    }
+    // Thirty 19pt lines and the field run far past 300pt; the shell scrolls until the field's bottom is 14pt in.
+    assert!(window.read(|view, _| view.scrolled()) > 300.0);
+}
+
 /// Two buttons at either end of a 720pt column, the desktop's Schedules form, on a page that fills its frame.
 const COLUMN: &str = r#"
 let left = 0, right = 0;

@@ -106,6 +106,11 @@ impl TextField {
         }
     }
 
+    /// Where the field's text was last drawn, in the window.
+    pub fn bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
     /// Focuses the field with its term selected, so typing replaces it, as in the desktop find bar.
     pub fn select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);

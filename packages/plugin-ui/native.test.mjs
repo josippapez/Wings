@@ -187,6 +187,11 @@ test("a form's inputs take the field's label, hold the page's text and give its 
   assert.match(text(last()), /Needed\./);
 });
 
+test("a combobox hands autoFocus to its field", () => {
+  mount(h(Combobox, { label: "Task", value: "", options: [], onPick: () => {}, autoFocus: true }));
+  assert.equal(find(last(), "TextInput").props.autoFocus, true);
+});
+
 test("a password input says so, and other input types are plain text", () => {
   mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" })));
   const [token, start] = all(last(), "TextInput");

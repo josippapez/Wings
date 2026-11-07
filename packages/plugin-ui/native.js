@@ -398,14 +398,14 @@ export function InlineInput({ label, value, required, onSave, onDone, onChange, 
 const matches = (option, query) => `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.toLowerCase());
 const MOST_SUGGESTIONS = 8;
 /** A text field with its matching `options` under it as chips: the app has no popup list yet. Picking one calls `onPick`. */
-export function Combobox({ label, value, onInput, options, onPick, filter = matches, empty = "No matches.", placeholder, maxLength, disabled }) {
+export function Combobox({ label, value, onInput, options, onPick, filter = matches, empty = "No matches.", placeholder, maxLength, disabled, autoFocus }) {
   const found = options.filter((option) => filter(option, value)).slice(0, MOST_SUGGESTIONS);
   // What the field holds is an option: nothing is left to pick.
   const done = found.length === 1 && found[0].value === value;
   return h(
     Stack,
     { gap: "s" },
-    h(TextInput, { label, value, placeholder, maxLength, disabled, onChange: (event) => onInput?.(event.target.value) }),
+    h(TextInput, { label, value, placeholder, maxLength, disabled, autoFocus, onChange: (event) => onInput?.(event.target.value) }),
     done ? null : found.length
       ? h(Row, { gap: "s", wrap: true }, found.map((option) => h(Chip, { key: option.value, onClick: () => onPick(option) }, option.label)))
       : value ? h(Text, { size: "small", tone: "muted" }, empty) : null,

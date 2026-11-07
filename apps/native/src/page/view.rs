@@ -82,6 +82,10 @@ pub struct PageView {
     error: Option<SharedString>,
     /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
     popover: bool,
+    /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
+    shell_scroll: gpui::ScrollHandle,
+    /// A field that took the keyboard and is brought into view once it has been drawn.
+    reveal: Option<gpui::Entity<crate::text_field::TextField>>,
     _events: Task<()>,
 }
 
@@ -246,6 +250,8 @@ impl PageView {
             chip_focus: RefCell::new(HashMap::new()),
             error,
             popover: false,
+            shell_scroll: gpui::ScrollHandle::new(),
+            reveal: None,
             _events: events,
         }
     }
@@ -383,6 +389,38 @@ impl PageView {
             self.act(&handler, Some(&serde_json::json!({ "value": value })));
             true
         })
+    }
+
+    /// Scrolls the page's shell as little as brings `field` wholly into view, with the shell's 14pt padding around it.
+    /// False until the field has been drawn, when there is nothing yet to scroll to.
+    fn reveal(
+        &self,
+        field: &gpui::Entity<crate::text_field::TextField>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let shown = self.shell_scroll.bounds();
+        let at = field.read(cx).bounds();
+        if at.size.height <= px(0.0) || shown.size.height <= px(0.0) {
+            return false;
+        }
+        let offset = self.shell_scroll.offset();
+        let shift = if at.bottom() + px(14.0) > shown.bottom() {
+            shown.bottom() - at.bottom() - px(14.0)
+        } else if at.top() - px(14.0) < shown.top() {
+            shown.top() - at.top() + px(14.0)
+        } else {
+            return true;
+        };
+        self.shell_scroll
+            .set_offset(gpui::point(offset.x, (offset.y + shift).min(px(0.0))));
+        cx.notify();
+        true
+    }
+
+    /// How far the page's shell is scrolled down, in points.
+    #[cfg(test)]
+    pub(super) fn scrolled(&self) -> f32 {
+        -self.shell_scroll.offset().y.as_f32()
     }
 
     /// The keyboard focus of the page's first text input, for the screenshots to type into.
@@ -1359,11 +1397,23 @@ impl Render for PageView {
             .map(|tree| self.nodes(&tree.children, cx))
             .unwrap_or_default();
         let fill = self.tree.as_ref().is_some_and(|tree| tree.fill);
+        // A field that took the keyboard in the last render is brought into view once it has been drawn.
+        if let Some(field) = self.reveal.clone() {
+            if self.reveal(&field, cx) {
+                self.reveal = None;
+            } else {
+                window.request_animation_frame();
+            }
+        }
+        let mut reveal = None;
         for (id, state) in self.inputs.borrow_mut().iter_mut() {
             if !state.initialized {
                 state.initialized = true;
                 let focus = state.field.read(cx).focus_handle(cx);
                 if state.auto_focus {
+                    // As a browser scrolls a field it focuses into view: one that opens below the fold, like an entry's
+                    // edit form, is brought up once it is drawn.
+                    reveal = Some(state.field.clone());
                     if state.select_on_focus {
                         state
                             .field
@@ -1384,6 +1434,10 @@ impl Render for PageView {
                     }
                 }));
             }
+        }
+        if reveal.is_some() {
+            self.reveal = reveal;
+            window.request_animation_frame();
         }
         div()
             .id("native-page")
@@ -1422,7 +1476,9 @@ impl Render for PageView {
                         shell.gap(px(12.0)).pt(px(12.0)).px(px(14.0)).pb(px(14.0))
                     })
                     // A desktop page longer than its frame scrolls in it.
-                    .when(!fill, |shell| shell.overflow_y_scroll())
+                    .when(!fill, |shell| {
+                        shell.overflow_y_scroll().track_scroll(&self.shell_scroll)
+                    })
                     .children(body),
             )
             .when_some(self.error.clone(), |page, error| {
