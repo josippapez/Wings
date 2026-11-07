@@ -385,7 +385,9 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
         .children(items)
 }
 
-/// Draws `content` above the rest of the window, where it would sit in the layout.
+/// Draws `content` above the rest of the window, where it would sit in the layout, fading and sliding it down into
+/// place as the desktop's popovers do.
 pub fn popover(content: impl IntoElement) -> AnyElement {
+    let content = motion::popup_in("popover-in", motion::From::Above, content);
     deferred(anchored().child(content)).into_any_element()
 }

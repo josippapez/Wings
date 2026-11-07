@@ -11,10 +11,10 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
-    HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
-    Subscription, Task, Toggled, Window, anchored, deferred, div, hsla, point, prelude::*, px,
-    relative, rgb, rgba,
+    Anchor, Animation, AnimationExt, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity,
+    FocusHandle, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString,
+    Stateful, StyledText, Subscription, Task, Toggled, Window, anchored, deferred, div, hsla,
+    point, prelude::*, px, relative, rgb, rgba,
 };
 use wings_agents::history::{
     Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms,
@@ -28,7 +28,7 @@ use crate::{
     projects::shell_quote,
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, ButtonSize, HAIRLINE, Variant},
+    ui::{self, ButtonSize, HAIRLINE, Variant, motion},
 };
 
 use super::Workspace;
@@ -1035,6 +1035,13 @@ impl Workspace {
                                         this.close_history(window, cx)
                                     })),
                             ),
+                        )
+                        // In from the right, as the desktop's sheet: `ease-in-out` from 2.5rem over.
+                        .with_animation(
+                            "history-sheet-in",
+                            Animation::new(motion::SHEET_IN)
+                                .with_easing(motion::cubic_bezier(motion::EASE_IN_OUT)),
+                            |sheet, t| sheet.left(px(motion::SHEET_SLIDE * (1.0 - t))),
                         ),
                 )
                 .into_any_element(),

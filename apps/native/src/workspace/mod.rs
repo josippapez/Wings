@@ -82,7 +82,7 @@ use crate::{
 };
 
 /// Around panes that don't have focus.
-use crate::ui::HAIRLINE;
+use crate::ui::{HAIRLINE, motion};
 
 struct Pane {
     /// A shell that couldn't start keeps its pane, showing why, until it's closed.
@@ -813,16 +813,40 @@ impl Render for Workspace {
                     .children(right)
                     .children(self.sidebar_peek(cx)),
             )
-            .children(self.settings_dialog(cx))
-            .children(self.plugin_review_dialog(cx))
-            .children(self.setup_approval_dialog(cx))
-            .children(self.sheet_layer(cx))
-            .children(self.palette_layer(window, cx))
-            .children(self.remove_dialog(cx))
-            .children(self.inbox_layer(cx))
+            .children(dialog_in("settings-in", self.settings_dialog(cx)))
+            .children(dialog_in("plugin-review-in", self.plugin_review_dialog(cx)))
+            .children(dialog_in(
+                "setup-approval-in",
+                self.setup_approval_dialog(cx),
+            ))
+            .children(self.sheet_layer(cx).map(|sheet| {
+                motion::layer_in(
+                    "history-in",
+                    motion::SHEET_BACKDROP,
+                    motion::EASE_IN_OUT,
+                    None,
+                    sheet,
+                )
+            }))
+            .children(dialog_in("palette-in", self.palette_layer(window, cx)))
+            .children(dialog_in("remove-in", self.remove_dialog(cx)))
+            .children(self.inbox_layer(cx).map(|inbox| {
+                motion::layer_in(
+                    "inbox-in",
+                    motion::POPUP_IN,
+                    motion::EASE,
+                    Some(motion::From::Left),
+                    inbox,
+                )
+            }))
             .children(notices)
             .children(self.menu_layer(cx))
-            .children(self.update_dialog(cx))
+            .children(dialog_in("update-in", self.update_dialog(cx)))
             .into_any_element()
     }
+}
+
+/// A dialog and its backdrop fading in, as shadcn's `Dialog` does over `duration-100`.
+fn dialog_in(id: &'static str, dialog: Option<AnyElement>) -> Option<AnyElement> {
+    dialog.map(|dialog| motion::layer_in(id, motion::POPUP_IN, motion::EASE, None, dialog))
 }

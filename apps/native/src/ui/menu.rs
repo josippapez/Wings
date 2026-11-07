@@ -1,5 +1,5 @@
 //! shadcn's `ContextMenu` (`apps/desktop/src/components/ui/context-menu.tsx`): a popover box of items under the
-//! pointer, each an icon and a label, with hairlines between groups.
+//! pointer, each an icon and a label, with hairlines between groups. It fades and slides in as the desktop's does.
 
 use gpui::{
     AnyElement, BoxShadow, Div, ElementId, IntoElement, Pixels, Point, Role, SharedString,
@@ -18,6 +18,7 @@ const ACCENT: u32 = 0xffffff14;
 /// The open menu, drawn above everything else with its corner at `at` (in window coordinates), turned to stay in the
 /// window. Add the close handler (`on_mouse_down_out`) to `menu`.
 pub fn context_menu(at: Point<Pixels>, menu: Stateful<Div>) -> AnyElement {
+    let menu = super::motion::popup_in("menu-in", super::motion::From::Above, menu);
     deferred(anchored().position(at).child(menu))
         .with_priority(1)
         .into_any_element()

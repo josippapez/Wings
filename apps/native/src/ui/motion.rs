@@ -3,7 +3,10 @@
 
 use std::time::Duration;
 
-use gpui::App;
+use gpui::{
+    Animation, AnimationExt, AnyElement, App, ElementId, IntoElement, ParentElement, Styled, div,
+    px,
+};
 
 /// `--ease-out-soft` in apps/desktop/src/index.css.
 pub const EASE_OUT_SOFT: (f32, f32, f32, f32) = (0.22, 1.0, 0.36, 1.0);
@@ -27,6 +30,11 @@ pub const TOOLTIP_IN: Duration = Duration::from_millis(150);
 pub const POPUP_IN: Duration = Duration::from_millis(100);
 /// How far a tooltip or menu slides in from: `slide-in-from-*-2`, two of Tailwind's 4px spacing steps.
 pub const SLIDE_IN: f32 = 8.0;
+/// The history sheet's dimmed backdrop fading in: `transition-opacity duration-150`.
+pub const SHEET_BACKDROP: Duration = Duration::from_millis(150);
+/// The history sheet coming in from the right: `transition duration-200 ease-in-out` from `translate-x-[2.5rem]`.
+pub const SHEET_IN: Duration = Duration::from_millis(200);
+pub const SHEET_SLIDE: f32 = 40.0;
 
 /// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function.
 pub fn cubic_bezier((x1, y1, x2, y2): (f32, f32, f32, f32)) -> impl Fn(f32) -> f32 + Copy {
@@ -123,6 +131,63 @@ pub fn sidebar_frame(t: f32, opening: bool) -> (f32, f32) {
 pub fn enter_frame(t: f32) -> (f32, f32) {
     let eased = cubic_bezier(EASE)(t);
     (eased, SLIDE_IN * (1.0 - eased))
+}
+
+/// Where a popup slides in from, as shadcn picks `slide-in-from-*` by the side it opens on.
+#[derive(Clone, Copy)]
+pub enum From {
+    /// It opens below its trigger, so it comes down.
+    Above,
+    /// It opens to the right of its trigger, so it comes in from the left.
+    Left,
+}
+
+/// A menu or popover coming in, as shadcn's `duration-100 animate-in fade-in-0 slide-in-from-*-2`. The wrapper takes
+/// the content's place in the layout and no pointer events.
+pub fn popup_in(id: impl Into<ElementId>, from: From, content: impl IntoElement) -> AnyElement {
+    div()
+        .relative()
+        .child(content)
+        .with_animation(id, Animation::new(POPUP_IN), move |popup, t| {
+            let (opacity, offset) = enter_frame(t);
+            slide(popup.opacity(opacity), from, offset)
+        })
+        .into_any_element()
+}
+
+/// A layer over the whole window (a dialog and its backdrop, or a popover and the clear layer that closes it) fading
+/// in over `duration` along `curve`, and sliding `SLIDE_IN` from `from` when there is one. The wrapper covers its
+/// parent as the layer does, and takes no pointer events.
+pub fn layer_in(
+    id: impl Into<ElementId>,
+    duration: Duration,
+    curve: (f32, f32, f32, f32),
+    from: Option<From>,
+    layer: impl IntoElement,
+) -> AnyElement {
+    let ease = cubic_bezier(curve);
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(layer)
+        .with_animation(id, Animation::new(duration), move |layer, t| {
+            let eased = ease(t);
+            let layer = layer.opacity(eased);
+            match from {
+                Some(from) => slide(layer, from, SLIDE_IN * (1.0 - eased)),
+                None => layer,
+            }
+        })
+        .into_any_element()
+}
+
+fn slide<E: Styled>(element: E, from: From, offset: f32) -> E {
+    match from {
+        From::Above => element.top(px(-offset)),
+        From::Left => element.left(px(-offset)),
+    }
 }
 
 /// Follows macOS's Reduce motion, as the desktop follows `prefers-reduced-motion`: GPUI then shows every animation at
