@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.0 · 2026-11-07
+
+- **Wings is now a native Mac app.** It no longer runs in a web view, and its terminals use the Ghostty engine. Your projects, tabs, settings, plugins and saved terminal output come over on the first launch.
+- **Terminals keep running when Wings quits or updates.** They run in a background process and are there when Wings opens again. Settings, General turns this off.
+- **Images in terminals.** Programs can show SIXEL, iTerm2 and Kitty images.
+
 ## 0.1.124 · 2026-11-06
 
 - **Usage limits per Claude Code account.** With more than one account, the HUD keeps each account's limits apart, so it no longer alerts again every time a session of the other account replies. Each terminal's strip shows its own account's limits, and the sidebar lists every account.
