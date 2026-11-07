@@ -304,7 +304,10 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(ui::status_dot(state))
+                .child(ui::status_dot_slot(
+                    state,
+                    format!("project-{}", entry.path.display()),
+                ))
                 .into_any_element(),
             None => project_icon(entry.child),
         };

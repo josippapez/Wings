@@ -14,14 +14,22 @@ type Draw = fn(&mut Workspace, &mut Window, &mut Context<Workspace>) -> AnyEleme
 
 pub(super) struct Part {
     workspace: WeakEntity<Workspace>,
+    /// Its name, for the spinners in it (`ui::drawing_piece`).
+    name: &'static str,
     draw: Draw,
     _changes: Subscription,
 }
 
 impl Part {
-    pub(super) fn new(workspace: &Entity<Workspace>, draw: Draw, cx: &mut App) -> Entity<Part> {
+    pub(super) fn new(
+        workspace: &Entity<Workspace>,
+        name: &'static str,
+        draw: Draw,
+        cx: &mut App,
+    ) -> Entity<Part> {
         cx.new(|cx| Part {
             workspace: workspace.downgrade(),
+            name,
             draw,
             // Anything that changes the workspace draws it again; a terminal or a page changing on its own doesn't.
             _changes: cx.observe(workspace, |_, _, cx| cx.notify()),
@@ -32,9 +40,12 @@ impl Part {
 impl Render for Part {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let draw = self.draw;
-        self.workspace
-            .update(cx, |workspace, cx| draw(workspace, window, cx))
-            .unwrap_or_else(|_| div().into_any_element())
+        let id = window.window_handle().window_id();
+        crate::ui::drawing_piece(self.name, id, || {
+            self.workspace
+                .update(cx, |workspace, cx| draw(workspace, window, cx))
+                .unwrap_or_else(|_| div().into_any_element())
+        })
     }
 }
 
@@ -50,6 +61,7 @@ impl Parts {
         Parts {
             sidebar: Part::new(
                 workspace,
+                "sidebar",
                 |workspace, _, cx| workspace.sidebar_column(cx).w_full().into_any_element(),
                 cx,
             ),

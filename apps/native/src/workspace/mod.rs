@@ -888,6 +888,8 @@ impl Render for Workspace {
                     .children(right)
                     .children(self.sidebar_peek(cx)),
             )
+            // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
+            .child(crate::ui::spinner_layer(window))
             .children(under)
             .children(notices)
             .children(over)
