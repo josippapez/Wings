@@ -950,11 +950,17 @@ impl PageView {
                     .iter()
                     .any(|node| matches!(node, Node::ListButton(_)))
                 {
+                    // A row that opens to a card shows the card under it, as the desktop's block list item does.
+                    let opened = item
+                        .children
+                        .iter()
+                        .any(|node| matches!(node, Node::Card(_)));
                     div()
                         .min_w_0()
                         .w_full()
                         .flex()
-                        .items_center()
+                        .when(opened, |el| el.flex_col())
+                        .when(!opened, |el| el.items_center())
                         .children(self.nodes(&item.children, cx))
                         .into_any_element()
                 } else {

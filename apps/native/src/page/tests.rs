@@ -345,6 +345,27 @@ fn a_stack_with_a_max_width_is_a_centred_column_that_narrow_frames_fill() {
     settle(&app, &mut window, shows("Pressed 1 1."));
 }
 
+/// A list row opened to a card of three lines, as Session detail's activity rows open to their detail.
+const OPENED_ROW: &str = r#"
+let opened = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'List',children:[{id:2,type:'ListItem',children:[
+{id:3,type:'ListButton',props:{onClick:'3:click','aria-expanded':true},children:[{id:4,type:'Text',children:[{id:5,type:'#text',text:'pnpm test'}]}]},
+{id:6,type:'Card',children:[1,2,3].map(i=>({id:10+i,type:'Text',children:[{id:20+i,type:'#text',text:'Detail line '+i}]}))}]}]},
+{id:7,type:'Text',children:[{id:8,type:'#text',text:'Opened '+opened+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{opened++;render();return true;};render();
+"#;
+
+#[test]
+fn a_row_opened_to_a_card_keeps_its_whole_line() {
+    let (app, mut window) = open(OPENED_ROW);
+    settle(&app, &mut window, shows("Opened 0."));
+    let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
+    // The row's own line reaches the far end: beside it was the card, which took that end and pushed the row down to
+    // the card's middle.
+    window.simulate_click(point(px(width - 30.0), px(24.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Opened 1."));
+}
+
 fn open(source: &'static str) -> (TestApp, View) {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
