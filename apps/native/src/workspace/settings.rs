@@ -99,6 +99,8 @@ pub(super) struct Prefs {
     pub(super) diff_wrap: bool,
     /// The diff viewer lists files as a folder tree.
     pub(super) diff_tree: bool,
+    /// The shortcut that brings Wings forward from any app.
+    pub(super) global_hotkey: crate::saved::GlobalHotkey,
 }
 
 impl Default for Prefs {
@@ -113,6 +115,7 @@ impl Default for Prefs {
             notify_sound: SoundSettings::default(),
             diff_wrap: false,
             diff_tree: false,
+            global_hotkey: Default::default(),
         }
     }
 }
@@ -128,6 +131,8 @@ pub(super) struct SettingsDialog {
     /// The Plugins section's GitHub link field.
     pub(super) link: Entity<TextField>,
     _link_events: Subscription,
+    /// Takes the next key press as the global shortcut, while its button waits for one.
+    pub(super) recording: Option<Subscription>,
 }
 
 /// What choosing a select's item does.
@@ -188,6 +193,7 @@ impl Workspace {
             menu: None,
             link,
             _link_events: link_events,
+            recording: None,
         });
         cx.notify();
     }
@@ -195,7 +201,8 @@ impl Workspace {
     /// Keeps what was typed in the font field, then gives the keys back to the terminal.
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_family(cx);
-        if let Some(settings) = self.settings.take() {
+        if let Some(mut settings) = self.settings.take() {
+            settings.recording = None;
             self.leave("settings", settings, crate::ui::motion::POPUP_IN, cx);
         }
         if let Some(pane) = self.focused_pane() {
@@ -344,6 +351,117 @@ impl Workspace {
             None,
             ui::switch(id, on).on_click(cx.listener(move |this, _, _, cx| toggle(this, !on, cx))),
         )
+    }
+
+    /// "Bring Wings forward from any app": the shortcut, which a click lets you press anew, and its switch.
+    fn global_hotkey_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let hotkey = self.prefs.global_hotkey.clone();
+        let recording = self
+            .settings
+            .as_ref()
+            .is_some_and(|d| d.recording.is_some());
+        let text = if recording {
+            "Press a shortcut…".to_owned()
+        } else {
+            crate::hotkey::label(&hotkey.accelerator, cfg!(target_os = "macos"))
+        };
+        let enabled = hotkey.enabled;
+        let key = div()
+            .id("global-hotkey-key")
+            .role(Role::Button)
+            .aria_label("Global shortcut. Press to change it")
+            .h(px(32.0))
+            .min_w(px(96.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(12.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(rgba(if recording {
+                theme::HAIRLINE_STRONG
+            } else {
+                HAIRLINE
+            }))
+            .bg(rgba(0xffffff0a))
+            .text_size(px(13.0))
+            .when(!enabled, |key| key.opacity(0.5))
+            .when(enabled, |key| {
+                key.cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.record_global_hotkey(cx)))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if let Some(dialog) = &mut this.settings
+                            && dialog.recording.take().is_some()
+                        {
+                            cx.notify();
+                        }
+                    }))
+            })
+            .child(text);
+        ui::setting_row(
+            "Bring Wings forward from any app",
+            "Shows Wings and goes to the agent that needs you, or stays where you were if none does.",
+            self.hotkey.error.clone(),
+            div().flex().items_center().gap(px(12.0)).child(key).child(
+                ui::switch("global-hotkey", enabled).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        let mut hotkey = this.prefs.global_hotkey.clone();
+                        hotkey.enabled = !enabled;
+                        this.set_global_hotkey(hotkey, cx);
+                    },
+                )),
+            ),
+        )
+    }
+
+    /// Waits for a key press to become the shortcut, as the desktop's `HotkeyRecorder`: Escape cancels, Backspace puts
+    /// the default back, and a key without Ctrl, Alt or Cmd is ignored. It sees the press before the app's own key
+    /// bindings, so a chord Wings uses itself can be recorded instead of running.
+    pub(super) fn record_global_hotkey(&mut self, cx: &mut Context<Self>) {
+        let this = cx.weak_entity();
+        let listening = cx.intercept_keystrokes(move |event, _, cx| {
+            let keystroke = event.keystroke.clone();
+            if this
+                .update(cx, |this, cx| this.recorded_key(&keystroke, cx))
+                .unwrap_or(false)
+            {
+                cx.stop_propagation();
+            }
+        });
+        if let Some(dialog) = &mut self.settings {
+            dialog.recording = Some(listening);
+        }
+        cx.notify();
+    }
+
+    /// One key press while recording. Returns whether it was taken, which every key press is until recording ends.
+    fn recorded_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        if !self
+            .settings
+            .as_ref()
+            .is_some_and(|d| d.recording.is_some())
+        {
+            return false;
+        }
+        let plain = !keystroke.modifiers.modified();
+        let accelerator = match keystroke.key.as_str() {
+            "escape" => None,
+            "backspace" if plain => Some(crate::saved::DEFAULT_HOTKEY.to_owned()),
+            _ => match crate::hotkey::accelerator_from(keystroke) {
+                Some(accelerator) => Some(accelerator),
+                None => return true,
+            },
+        };
+        if let Some(dialog) = &mut self.settings {
+            dialog.recording = None;
+        }
+        if let Some(accelerator) = accelerator {
+            let mut hotkey = self.prefs.global_hotkey.clone();
+            hotkey.accelerator = accelerator;
+            self.set_global_hotkey(hotkey, cx);
+        }
+        cx.notify();
+        true
     }
 
     fn section_cards(&self, section: Section, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
@@ -549,6 +667,7 @@ impl Workspace {
                     |this, on, cx| this.set_shift_return_meta(on, cx),
                     cx,
                 ),
+                self.global_hotkey_row(cx),
                 ui::setting_row(
                     "Quick terminal",
                     "Shows a terminal in your home folder over whatever you're looking at, and hides it again. Its \
@@ -866,6 +985,7 @@ impl Workspace {
                 if let Some(dialog) = &mut this.settings {
                     dialog.section = section;
                     dialog.menu = None;
+                    dialog.recording = None;
                 }
                 // Claude Code's state is read each time the section opens, as the desktop's does.
                 if section == Section::Agents {

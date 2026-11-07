@@ -108,6 +108,21 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED_FOREGROUND))
                     .children(steps),
             )
+            .children(self.prefs.global_hotkey.enabled.then(|| {
+                let hotkey = crate::hotkey::label(
+                    &self.prefs.global_hotkey.accelerator,
+                    cfg!(target_os = "macos"),
+                );
+                div()
+                    .max_w(px(448.0))
+                    .text_center()
+                    .text_size(px(12.0))
+                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .child(format!(
+                        "From any app, {hotkey} brings Wings forward and goes to that agent. Change it in \
+                         Settings, Keyboard."
+                    ))
+            }))
             .child(
                 ui::button(
                     "welcome-add-project",

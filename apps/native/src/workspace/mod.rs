@@ -12,7 +12,10 @@ mod editor;
 mod exits;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
+mod global_hotkey;
 mod history;
+#[cfg(all(test, feature = "test-support"))]
+mod hotkey_tests;
 mod inbox;
 #[cfg(all(test, feature = "test-support"))]
 mod manage_tests;
@@ -225,6 +228,7 @@ pub struct Workspace {
     inbox: inbox::Inbox,
     /// Claude Code's connection, as Settings, Agents shows it.
     claude: claude::Connection,
+    hotkey: global_hotkey::HotkeyState,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     /// What the Plugins section is doing: installs, reviews waiting, updates found.
@@ -354,6 +358,7 @@ impl Workspace {
             inbox: Default::default(),
             menu: None,
             claude: Default::default(),
+            hotkey: Default::default(),
             manage: Default::default(),
             review_focus: cx.focus_handle(),
             setup_asks: Default::default(),
@@ -473,8 +478,10 @@ impl Workspace {
             notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
             diff_wrap: settings.diff_wrap == Some(true),
             diff_tree: settings.diff_tree == Some(true),
+            global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
         };
         this.find_editors(cx);
+        this.start_global_hotkey(window, cx);
         this.enter_project(window, cx);
         this.start_update_checks(window, cx);
         this

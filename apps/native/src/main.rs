@@ -6,7 +6,7 @@ use wings_native::{
     actions,
     host::{Config, USAGE},
     icons::Assets,
-    projects,
+    projects, saved,
     workspace::Workspace,
 };
 
@@ -43,12 +43,23 @@ fn run() -> Result<(), String> {
     {
         eprintln!("Couldn't copy the desktop app's projects: {error}");
     }
+    // And its global shortcut, so moving over keeps the one you chose.
+    if let (Some(native), Some(desktop)) = (&config.state, projects::desktop_dir())
+        && let Err(error) = saved::seed_global_hotkey(native, &desktop.join("workspace.json"))
+    {
+        eprintln!("Couldn't copy the desktop app's global shortcut: {error}");
+    }
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             actions::bind(cx);
             wings_native::ui::motion::follow_reduce_motion(cx);
             cx.set_menus(actions::menus());
+            #[cfg(target_os = "macos")]
+            match wings_native::hotkey::Hotkeys::system() {
+                Ok(hotkeys) => cx.set_global(hotkeys),
+                Err(error) => eprintln!("Couldn't set up the global shortcut: {error}"),
+            }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

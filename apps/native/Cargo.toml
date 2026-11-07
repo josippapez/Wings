@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 
@@ -70,8 +70,10 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-fe
 # only AppKit's NSSound bindings to the build.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent"], optional = true }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow"], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray"], optional = true }
+# The global shortcut, the version the desktop's tauri-plugin-global-shortcut uses: Carbon's RegisterEventHotKey.
+global-hotkey = { version = "=0.8.0", optional = true }
 
 [[example]]
 name = "shot"

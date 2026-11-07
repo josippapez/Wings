@@ -92,6 +92,36 @@ pub struct NotifySound {
     pub watching: Option<bool>,
 }
 
+/// The global shortcut that brings Wings forward from any app, saved as the desktop's `globalHotkey`: on or off, and
+/// the chord as an accelerator like `Ctrl+Alt+KeyJ`. Either part missing takes the desktop's default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalHotkey {
+    #[serde(default = "on")]
+    pub enabled: bool,
+    #[serde(default = "default_accelerator")]
+    pub accelerator: String,
+}
+
+/// The desktop's `hotkey.default` in `src/lib/commands.json`.
+pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+KeyJ";
+
+fn on() -> bool {
+    true
+}
+
+fn default_accelerator() -> String {
+    DEFAULT_HOTKEY.into()
+}
+
+impl Default for GlobalHotkey {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            accelerator: DEFAULT_HOTKEY.into(),
+        }
+    }
+}
+
 /// What the whole app keeps, the same for every project, as in the desktop app.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -157,6 +187,13 @@ pub struct Settings {
     pub last_active: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_sound: Option<NotifySound>,
+    /// The global shortcut, under the desktop's own name.
+    #[serde(
+        default,
+        rename = "globalHotkey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub global_hotkey: Option<GlobalHotkey>,
     /// The diff viewer wraps long lines, as the desktop's `wings.diff.wrap`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_wrap: Option<bool>,
@@ -203,6 +240,41 @@ pub fn save(path: &Path, project: &str, saved: SavedProject, settings: Settings)
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&file)?)?;
     std::fs::rename(tmp, path)
+}
+
+/// On a launch whose settings have no global shortcut yet, takes the desktop's choice from its `workspace.json`, so
+/// moving to the native app keeps the shortcut you set, or kept off. Returns whether it copied one.
+pub fn seed_global_hotkey(native: &Path, desktop: &Path) -> io::Result<bool> {
+    let mut file = match std::fs::read(native) {
+        Ok(_) => match read(native) {
+            Some(file) => file,
+            // A file this version can't read is left for `save` to replace, not overwritten here.
+            None => return Ok(false),
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => File {
+            version: VERSION,
+            ..File::default()
+        },
+        Err(error) => return Err(error),
+    };
+    if file.settings.global_hotkey.is_some() {
+        return Ok(false);
+    }
+    let Some(hotkey) = std::fs::read(desktop)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|desktop| serde_json::from_value(desktop.get("globalHotkey")?.clone()).ok())
+    else {
+        return Ok(false);
+    };
+    file.settings.global_hotkey = Some(hotkey);
+    if let Some(dir) = native.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = native.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&file)?)?;
+    std::fs::rename(tmp, native)?;
+    Ok(true)
 }
 
 /// History ids become file names, so a hand-edited file can't point anywhere else.
@@ -371,6 +443,82 @@ mod tests {
         );
         assert_eq!(load(&path, "/b"), Some(SavedProject::default()));
         assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_global_shortcut_is_saved_under_the_desktops_name() {
+        let path = temp_file("hotkey");
+        let hotkey = GlobalHotkey {
+            enabled: false,
+            accelerator: "Cmd+Shift+KeyK".into(),
+        };
+        let settings = Settings {
+            global_hotkey: Some(hotkey.clone()),
+            ..Settings::default()
+        };
+        save(&path, "/a", SavedProject::default(), settings).unwrap();
+        let text: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            text["globalHotkey"],
+            serde_json::json!({ "enabled": false, "accelerator": "Cmd+Shift+KeyK" })
+        );
+        assert_eq!(load_settings(&path).global_hotkey, Some(hotkey));
+        // A part missing takes the default, as the desktop's `{ ...DEFAULT_GLOBAL_HOTKEY, ...saved }`.
+        std::fs::write(
+            &path,
+            br#"{"version":1,"globalHotkey":{"enabled":false},"projects":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings(&path).global_hotkey,
+            Some(GlobalHotkey {
+                enabled: false,
+                accelerator: DEFAULT_HOTKEY.into()
+            })
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_first_launch_takes_the_desktops_shortcut_and_later_ones_keep_their_own() {
+        let path = temp_file("hotkey-seed");
+        let desktop = path.with_file_name("desktop.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &desktop,
+            br#"{"version":3,"fontSize":13,"globalHotkey":{"enabled":true,"accelerator":"Ctrl+Shift+KeyW"}}"#,
+        )
+        .unwrap();
+        // No native file yet: it starts with the desktop's choice.
+        assert!(seed_global_hotkey(&path, &desktop).unwrap());
+        assert_eq!(
+            load_settings(&path).global_hotkey.unwrap().accelerator,
+            "Ctrl+Shift+KeyW"
+        );
+        // A native file with its projects and no shortcut keeps them and gains the shortcut.
+        save(&path, "/a", split(), Settings::default()).unwrap();
+        assert!(seed_global_hotkey(&path, &desktop).unwrap());
+        assert_eq!(load(&path, "/a"), Some(split()));
+        // Once the native app has its own, the desktop's no longer counts.
+        let mine = GlobalHotkey {
+            enabled: false,
+            accelerator: DEFAULT_HOTKEY.into(),
+        };
+        let settings = Settings {
+            global_hotkey: Some(mine.clone()),
+            ..Settings::default()
+        };
+        save(&path, "/a", split(), settings).unwrap();
+        assert!(!seed_global_hotkey(&path, &desktop).unwrap());
+        assert_eq!(load_settings(&path).global_hotkey, Some(mine));
+        // No desktop file, or one without the setting: nothing changes.
+        std::fs::remove_file(&path).unwrap();
+        assert!(!seed_global_hotkey(&path, &path.with_file_name("none.json")).unwrap());
+        std::fs::write(&desktop, br#"{"version":3}"#).unwrap();
+        assert!(!seed_global_hotkey(&path, &desktop).unwrap());
+        assert!(!path.exists());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

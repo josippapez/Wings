@@ -17,6 +17,8 @@ pub mod actions;
 #[cfg(feature = "ui")]
 pub mod agents;
 #[cfg(feature = "ui")]
+pub mod hotkey;
+#[cfg(feature = "ui")]
 pub mod icons;
 #[cfg(feature = "ui")]
 pub mod installed;

@@ -96,6 +96,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 },
                 diff_wrap: true,
                 diff_tree: true,
+                global_hotkey: Default::default(),
             }
         );
     });
