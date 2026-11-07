@@ -790,7 +790,8 @@ impl Workspace {
             return;
         };
         let spaces = self.spaces.spaces();
-        let marker = self.config.state.as_deref().map(disconnected_marker);
+        let state = self.config.state.clone();
+        let marker = state.as_deref().map(disconnected_marker);
         self.claude.busy = true;
         if change.is_some() {
             self.claude.error = None;
@@ -814,6 +815,9 @@ impl Workspace {
                     None => Ok(()),
                 }),
             };
+            if change.is_some() && result.is_ok() {
+                super::journal::sync(state.as_deref());
+            }
             let accounts = register::disconnect_targets(&spaces)
                 .into_iter()
                 .map(|name| AccountStatus { status: register::status(name.as_deref()), name })

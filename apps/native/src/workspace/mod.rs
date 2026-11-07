@@ -17,6 +17,7 @@ mod history;
 #[cfg(all(test, feature = "test-support"))]
 mod hotkey_tests;
 mod inbox;
+mod journal;
 #[cfg(all(test, feature = "test-support"))]
 mod manage_tests;
 mod nav;
@@ -415,6 +416,7 @@ impl Workspace {
                 this.spaces.spaces(),
             );
             opencode::connect_on_start(socket, this.config.state.clone());
+            journal::sync_on_start(this.config.state.clone());
         }
         this.transcript_plugins = this
             .plugins

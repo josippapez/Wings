@@ -63,36 +63,7 @@ fn write(path: &Path, config: &Map<String, Value>) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    write_whole(path, text.as_bytes()).map_err(|e| e.to_string())
-}
-
-/// Writes `bytes` to `path` whole or not at all: a temporary file made for you only, given the permissions the file
-/// already has, synced, then renamed over it. OpenCode's config can hold provider keys, so a file only you could read
-/// stays that way, and a new one is yours only. Through a symlink, the file it points at is the one replaced. As
-/// `write_whole` in `wings-spaces`' `claude_accounts.rs`.
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".wings-tmp");
-    let tmp = PathBuf::from(tmp);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = (|| {
-        let mut file = options.open(&tmp)?;
-        file.write_all(bytes)?;
-        if let Ok(meta) = std::fs::metadata(&path) {
-            file.set_permissions(meta.permissions())?;
-        }
-        file.sync_all()?;
-        std::fs::rename(&tmp, &path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    written
+    crate::write_whole(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// The Wings entry under `mcp.servers`, if there is one.

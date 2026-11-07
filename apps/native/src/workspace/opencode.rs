@@ -11,7 +11,7 @@ use wings_connect::opencode::{self, Status};
 use super::Workspace;
 
 /// The file that says you disconnected OpenCode, beside the app's own state.
-fn disconnected_marker(state: &Path) -> PathBuf {
+pub(super) fn disconnected_marker(state: &Path) -> PathBuf {
     state.with_file_name(opencode::DISCONNECTED)
 }
 
@@ -155,6 +155,9 @@ impl Workspace {
                     .and_then(|exe| target.connect(&exe, &socket)),
                 Some(false) => target.disconnect(),
             };
+            if change.is_some() && result.is_ok() {
+                super::journal::sync(state.as_deref());
+            }
             (result, target.status())
         });
         self.opencode.task = Some(cx.spawn(async move |this, cx| {
