@@ -508,6 +508,7 @@ impl Workspace {
             diff_wrap: settings.diff_wrap == Some(true),
             diff_tree: settings.diff_tree == Some(true),
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
+            terminal_server: settings.terminal_server,
         };
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);

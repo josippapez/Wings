@@ -40,16 +40,22 @@ fn run() -> Result<(), String> {
             .ok()
             .filter(|socket| !wings_connect::server::served(socket));
     }
-    // Panes run in the terminal server, where they outlive the app, when it's turned on.
+    // New panes run in the terminal server, where they outlive the app, unless Settings turned it off. Off, the panes a
+    // server still runs are attached all the same.
     #[cfg(unix)]
-    if wings_native::terminal_server::enabled()
-        && let Some(data) = config.state.as_deref().and_then(std::path::Path::parent)
+    if let Some(state) = config.state.as_deref()
+        && let Some(data) = state.parent()
     {
         use wings_native::{
             host::TerminalServers,
-            terminal_server::{Servers, Start, dir},
+            terminal_server::{self, Servers, Start, dir},
         };
-        let servers = Servers::connect(&dir(data), Start::for_this_app().as_ref());
+        let start = Start::for_this_app();
+        let servers = if terminal_server::enabled(saved::load_settings(state).terminal_server) {
+            Servers::connect(&dir(data), start.as_ref())
+        } else {
+            Servers::connect_off(&dir(data), start.as_ref())
+        };
         config.terminal_server = Some(TerminalServers(std::sync::Arc::new(servers)));
     }
     // The first run starts the native project list as a copy of the desktop's.

@@ -103,6 +103,9 @@ pub(super) struct Prefs {
     pub(super) diff_tree: bool,
     /// The shortcut that brings Wings forward from any app.
     pub(super) global_hotkey: crate::saved::GlobalHotkey,
+    /// "Keep terminals running when Wings quits", as saved: `None` until changed, which is on. What this app does now
+    /// is `Servers::is_on`.
+    pub(super) terminal_server: Option<bool>,
 }
 
 impl Default for Prefs {
@@ -119,6 +122,7 @@ impl Default for Prefs {
             diff_wrap: false,
             diff_tree: false,
             global_hotkey: Default::default(),
+            terminal_server: None,
         }
     }
 }
@@ -248,6 +252,31 @@ impl Workspace {
 
     pub(super) fn set_shift_return_meta(&mut self, on: bool, cx: &mut Context<Self>) {
         self.set_look(|look| look.shift_return_meta = on, cx);
+    }
+
+    /// Whether new terminals run in the terminal server: what this app does now, else what was saved, on unless turned
+    /// off.
+    pub(super) fn terminal_server_on(&self) -> bool {
+        #[cfg(unix)]
+        if let Some(servers) = &self.config.terminal_server {
+            return servers.0.is_on();
+        }
+        self.prefs.terminal_server.unwrap_or(true)
+    }
+
+    /// Saves the choice and applies it to the terminals opened from now on. Turned on with no server running, one starts
+    /// in the background, and new terminals run in the app until it answers.
+    pub(super) fn set_terminal_server(&mut self, on: bool, cx: &mut Context<Self>) {
+        #[cfg(unix)]
+        if let Some(servers) = self.config.terminal_server.clone() {
+            servers.0.set_on(on);
+            if on {
+                cx.background_executor()
+                    .spawn(async move { servers.0.start_if_none() })
+                    .detach();
+            }
+        }
+        self.set_prefs(|prefs| prefs.terminal_server = Some(on), cx);
     }
 
     pub(super) fn set_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
@@ -508,7 +537,7 @@ impl Workspace {
                         (label.into(), value == page, choose)
                     })
                     .into();
-                vec![vec![
+                let mut cards = vec![vec![
                     ui::setting_row(
                         "New tab button opens",
                         format!(
@@ -526,7 +555,21 @@ impl Workspace {
                         None,
                         self.select("new-project-opens", "New projects open with", opens, cx),
                     ),
-                ]]
+                ]];
+                if cfg!(unix) {
+                    cards.push(vec![self.switch_row(
+                        "terminal-server",
+                        "Keep terminals running when Wings quits",
+                        "New terminals run in a background process, so what runs in them keeps going when Wings \
+                         quits or updates, and is there when Wings opens again. Changing this applies to new \
+                         terminals. Turned off, new terminals end when Wings quits; ones already running in the \
+                         background keep running until you close them.",
+                        self.terminal_server_on(),
+                        |this, on, cx| this.set_terminal_server(on, cx),
+                        cx,
+                    )]);
+                }
+                cards
             }
             Section::Text => {
                 let family = self.settings.as_ref().map(|d| (d.family.clone(), d.family_error.clone()));

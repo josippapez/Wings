@@ -13,7 +13,8 @@ use std::time::Duration;
 
 fn restart_warning(server_configured: bool) -> &'static str {
     if server_configured {
-        "Terminals outside the server and their agents may stop. Save your work before installing."
+        "Terminals running in the background keep going. Others, and their agents, may stop. Save your work before \
+         installing."
     } else {
         "Restarting may stop running terminals and agents. Save your work before installing."
     }
@@ -51,7 +52,7 @@ mod tests {
 
     #[test]
     fn a_configured_server_does_not_promise_that_fallback_panes_survive() {
-        assert!(restart_warning(true).contains("outside the server"));
+        assert!(restart_warning(true).contains("Others, and their agents, may stop"));
         assert!(restart_warning(true).contains("may stop"));
         assert!(restart_warning(false).contains("may stop running terminals"));
     }
@@ -286,7 +287,11 @@ impl Workspace {
             return None;
         }
         #[cfg(unix)]
-        let server_configured = self.config.terminal_server.is_some();
+        let server_configured = self
+            .config
+            .terminal_server
+            .as_ref()
+            .is_some_and(|servers| servers.0.is_on());
         #[cfg(not(unix))]
         let server_configured = false;
         let (title, message, action) = match &self.updates.state {

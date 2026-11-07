@@ -1,6 +1,7 @@
-//! Terminals that outlive the app. With `WINGS_TERMINAL_SERVER=1`, panes run in `wings-terminal-server` (the
-//! `wings-ptyd` crate), a process of its own that the app reaches over a socket in its data folder. When the app comes
-//! back after a quit, a crash or an update, each saved pane attaches to its program again by its history id.
+//! Terminals that outlive the app. Panes run in `wings-terminal-server` (the `wings-ptyd` crate), a process of its own
+//! that the app reaches over a socket in its data folder. When the app comes back after a quit, a crash or an update,
+//! each saved pane attaches to its program again by its history id. Settings turns it off and on for new panes; it's on
+//! unless turned off, except in a debug build (`enabled`).
 //!
 //! The server never runs from the app bundle: an update deletes the old bundle, and macOS can't attribute a program
 //! whose file is gone, so its panes would lose the privacy grants (Screen Recording, hard links into Desktop). The app
@@ -16,8 +17,8 @@
 //! ended, while new panes go to the app's version. Nothing kills a pane on an upgrade. The copy of an older version is
 //! deleted once no server of that version answers.
 //!
-//! When no server answers, the app runs panes in its own process as before, and saves them under the same history
-//! ids, so the server's panes are still found by the next app that reaches it.
+//! When no server answers, or the server is turned off, the app runs new panes in its own process, and saves them under
+//! the same history ids. Panes a server still runs are attached either way, and keep running until they're closed.
 
 use std::{
     fs,
@@ -28,14 +29,18 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
 
 use wings_ptyd::{SERVER_VERSION, client::Control, proto::PaneInfo};
 
-/// Set to `1` to run panes in the terminal server.
+/// `1` runs new panes in the terminal server and `0` runs them in the app, whatever Settings says: for tests and
+/// debugging.
 pub const ENV: &str = "WINGS_TERMINAL_SERVER";
 
 /// The server binary's name, beside the app's own in its bundle and in the build folder.
@@ -51,8 +56,23 @@ pub const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long the app waits for a server it started to answer.
 const STARTUP: Duration = Duration::from_secs(5);
 
-pub fn enabled() -> bool {
-    std::env::var_os(ENV).is_some_and(|value| value == "1")
+/// Whether new panes start in the server: `ENV` when set, else what Settings saved (`saved`), on unless turned off. A
+/// debug build keeps them in the app unless `ENV` is `1`, since it shares the side-by-side app's settings.
+pub fn enabled(saved: Option<bool>) -> bool {
+    enabled_with(
+        std::env::var_os(ENV).as_deref(),
+        saved,
+        cfg!(debug_assertions),
+    )
+}
+
+/// `enabled` for the value of `ENV`, the saved setting and the kind of build.
+pub fn enabled_with(env: Option<&std::ffi::OsStr>, saved: Option<bool>, debug: bool) -> bool {
+    match env.and_then(|value| value.to_str()) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => !debug && saved.unwrap_or(true),
+    }
 }
 
 /// The server's folder in the app's data folder `data`: its sockets, its log and the copy of its binary. A debug build
@@ -258,8 +278,10 @@ pub fn install(bundled: &Path, dir: &Path, version: u32) -> io::Result<PathBuf> 
 /// The servers this app uses: the one new panes start in, and the panes all of them ran when the app started, until
 /// a saved pane claims each.
 pub struct Servers {
-    /// Where new panes go. `None` runs them in the app.
+    /// Where new panes go while `on`. `None` runs them in the app.
     current: Mutex<Option<PathBuf>>,
+    /// New panes start in a server. Off, they run in the app, and the panes servers already run are still attached.
+    on: AtomicBool,
     found: Mutex<Vec<(PathBuf, PaneInfo)>>,
     /// The folder, the app's server version and how a server starts, to start another when the current one is gone.
     dir: PathBuf,
@@ -271,11 +293,21 @@ impl Servers {
     /// Every server in `dir`: older ones are told to drain, and the app's own version is started with `start` when
     /// no server as new answers.
     pub fn connect(dir: &Path, start: Option<&Start>) -> Servers {
-        Servers::connect_as(dir, start, SERVER_VERSION)
+        Servers::open(dir, start, SERVER_VERSION, true)
     }
 
     /// `connect` for an app whose server is `version`.
     pub fn connect_as(dir: &Path, start: Option<&Start>, version: u32) -> Servers {
+        Servers::open(dir, start, version, true)
+    }
+
+    /// `connect` for an app with the server turned off: it finds the panes servers run, and starts none until it's
+    /// turned on (`set_on`, then `start_if_none`).
+    pub fn connect_off(dir: &Path, start: Option<&Start>) -> Servers {
+        Servers::open(dir, start, SERVER_VERSION, false)
+    }
+
+    fn open(dir: &Path, start: Option<&Start>, version: u32, on: bool) -> Servers {
         let ours = version;
         let mut found = Vec::new();
         let mut current: Option<(u32, PathBuf)> = None;
@@ -287,6 +319,7 @@ impl Servers {
             );
             return Servers {
                 current: Mutex::new(None),
+                on: AtomicBool::new(on),
                 found: Mutex::new(found),
                 dir: dir.to_owned(),
                 version,
@@ -337,15 +370,40 @@ impl Servers {
         remove_old_copies(dir, ours, &live);
         let servers = Servers {
             current: Mutex::new(current.map(|(_, path)| path)),
+            on: AtomicBool::new(on),
             found: Mutex::new(found),
             dir: dir.to_owned(),
             version: ours,
             start: start.cloned(),
         };
-        if servers.current().is_none() {
+        if on && servers.current().is_none() {
             *servers.current.lock().unwrap() = servers.start_one();
         }
         servers
+    }
+
+    /// Whether new panes start in a server.
+    pub fn is_on(&self) -> bool {
+        self.on.load(Ordering::Relaxed)
+    }
+
+    /// Turns the server on or off for new panes. Turned off, the panes servers run keep running until they're closed.
+    /// Turned on, new panes run in the app until a server answers: `start_if_none` starts one.
+    pub fn set_on(&self, on: bool) {
+        self.on.store(on, Ordering::Relaxed);
+    }
+
+    /// Starts the app's own server when none is current, as an app turned off at launch has none. It can take a few
+    /// seconds, so call it off the main thread.
+    pub fn start_if_none(&self) {
+        if self.current.lock().unwrap().is_some() {
+            return;
+        }
+        let started = self.start_one();
+        let mut current = self.current.lock().unwrap();
+        if current.is_none() {
+            *current = started;
+        }
     }
 
     /// Starts the app's own version, if this app starts servers. `None` when it doesn't, or the server didn't come up.
@@ -364,8 +422,11 @@ impl Servers {
         }
     }
 
-    /// The server new panes start in, if any.
+    /// The server new panes start in, if any. `None` while turned off.
     pub fn current(&self) -> Option<PathBuf> {
+        if !self.is_on() {
+            return None;
+        }
         self.current.lock().unwrap().clone()
     }
 

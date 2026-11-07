@@ -59,6 +59,7 @@ fn the_new_settings_are_saved_and_come_back() {
                     };
                     prefs.diff_wrap = true;
                     prefs.diff_tree = true;
+                    prefs.terminal_server = Some(false);
                 },
                 cx,
             );
@@ -99,6 +100,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 diff_wrap: true,
                 diff_tree: true,
                 global_hotkey: Default::default(),
+                terminal_server: Some(false),
             }
         );
     });

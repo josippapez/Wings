@@ -360,3 +360,83 @@ fn a_sidebar_terminal_runs_in_the_server_ends_with_the_app_and_is_not_shown_agai
     drop((window, app));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The shells the server runs, exited or not.
+fn shells_in(socket: &std::path::Path) -> Vec<Option<u32>> {
+    wings_ptyd::client::Control::connect(socket)
+        .unwrap()
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|pane| pane.shell_pid)
+        .collect()
+}
+
+fn newest_shell(window: &TestAppWindow<Workspace>) -> u32 {
+    window.read(|w, cx| {
+        let pane = *w.panes.keys().max().unwrap();
+        w.terminal(pane).unwrap().read(cx).process_id().unwrap()
+    })
+}
+
+#[test]
+fn turned_off_in_settings_new_panes_run_in_the_app_and_the_servers_panes_come_back() {
+    let dir = PathBuf::from("/tmp").join(format!("wso-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let servers = dir.join("srv");
+    std::fs::create_dir_all(&servers).unwrap();
+    let state = dir.join("workspace.json");
+    let socket = server(&servers);
+
+    let (mut app, mut window) = launch(&state, Some(&servers));
+    assert!(window.read(|w, _| w.terminal_server_on()));
+    type_line(&app, &mut window, "echo fi''rst", "first");
+    let kept = shell(&window);
+    // Turned off: the pane in the server stays, and the next one runs in the app.
+    window.update(|w, _, cx| w.set_terminal_server(false, cx));
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    let local = newest_shell(&window);
+    assert_eq!(
+        shells_in(&socket),
+        [Some(kept)],
+        "the new pane isn't in the server"
+    );
+    assert_ne!(local, kept);
+    quit(&mut app);
+    drop((window, app));
+    assert_eq!(
+        crate::saved::load_settings(&state).terminal_server,
+        Some(false),
+        "saved"
+    );
+
+    // The next launch, off as main starts it: the server's pane comes back, and new panes still run in the app.
+    let state_for = state.clone();
+    let off = servers.clone();
+    let (app, mut window) = open_config(move |config| {
+        config.state = Some(state_for);
+        config.terminal_server = Some(TerminalServers(Arc::new(Servers::connect_off(&off, None))));
+    });
+    assert!(!window.read(|w, _| w.terminal_server_on()));
+    assert_eq!(
+        shell(&window),
+        kept,
+        "attached to the shell the server kept"
+    );
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    assert_eq!(shells_in(&socket).len(), 1, "a new pane runs in the app");
+    // Turned on again: the next pane runs in the server.
+    window.update(|w, _, cx| w.set_terminal_server(true, cx));
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    let served = newest_shell(&window);
+    assert!(
+        shells_in(&socket).contains(&Some(served)),
+        "the new pane runs in the server"
+    );
+    assert_eq!(
+        crate::saved::load_settings(&state).terminal_server,
+        Some(true)
+    );
+    drop((window, app));
+    let _ = std::fs::remove_dir_all(&dir);
+}

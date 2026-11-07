@@ -451,6 +451,83 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
     assert!(copy(newer).is_file());
 }
 
+/// Turned off, an app starts no server and runs new panes in itself, yet finds the panes a server runs. Turned on, it
+/// starts one.
+#[test]
+fn turned_off_the_app_starts_no_server_but_finds_the_panes_one_runs() {
+    let folder = Folder::new("off");
+    let start = Start::Child(BIN.into());
+    let off = Servers::connect_off(&folder.0, Some(&start));
+    assert_eq!(off.current(), None);
+    assert!(!off.is_on());
+    assert!(
+        !terminal_server::socket(&folder.0, SERVER_VERSION).exists(),
+        "no server started"
+    );
+
+    let socket = Servers::connect(&folder.0, Some(&start)).current().unwrap();
+    let (pane, mut events) = Pane::spawn(&socket, spawn_request("h-kept"), b"").unwrap();
+    pane.write(b"echo ke''pt\r").unwrap();
+    wait_for(&pane, &mut events, "kept");
+    pane.detach();
+    let off = Servers::connect_off(&folder.0, Some(&start));
+    assert_eq!(off.current(), None, "new panes run in the app");
+    let (at, info) = off.claim("h-kept").expect("the pane the server runs");
+    still_runs(&at, &info, "kept", "attached");
+
+    off.set_on(true);
+    off.start_if_none();
+    assert_eq!(
+        off.current(),
+        Some(socket.clone()),
+        "new panes go to the server again"
+    );
+    off.set_on(false);
+    assert_eq!(off.current(), None);
+    assert!(
+        Control::connect(&socket).is_ok(),
+        "turning it off ends no server"
+    );
+
+    // An app off at launch with no server running starts one once turned on.
+    let empty = Folder::new("off-empty");
+    let servers = Servers::connect_off(&empty.0, Some(&start));
+    servers.set_on(true);
+    assert_eq!(
+        servers.current(),
+        None,
+        "until one answers, new panes run in the app"
+    );
+    servers.start_if_none();
+    assert_eq!(
+        servers.current(),
+        Some(terminal_server::socket(&empty.0, SERVER_VERSION))
+    );
+}
+
+#[test]
+fn the_server_is_on_unless_settings_turn_it_off_and_the_variable_wins_over_both() {
+    use std::ffi::OsStr;
+    let release =
+        |env: Option<&str>, saved| terminal_server::enabled_with(env.map(OsStr::new), saved, false);
+    assert!(release(None, None), "on by default");
+    assert!(release(None, Some(true)));
+    assert!(!release(None, Some(false)), "Settings turned it off");
+    assert!(release(Some("1"), Some(false)), "1 forces it on");
+    assert!(!release(Some("0"), None), "0 forces it off");
+    assert!(
+        release(Some("yes"), None),
+        "anything else leaves it to Settings"
+    );
+    let debug =
+        |env: Option<&str>, saved| terminal_server::enabled_with(env.map(OsStr::new), saved, true);
+    assert!(
+        !debug(None, None) && !debug(None, Some(true)),
+        "a debug build keeps panes in the app"
+    );
+    assert!(debug(Some("1"), Some(false)));
+}
+
 /// `ps`'s `field` for `pid`.
 fn ps(pid: u32, field: &str) -> u32 {
     let out = Command::new("/bin/ps")

@@ -210,6 +210,10 @@ pub struct Settings {
     /// The diff viewer lists files as a folder tree, as the desktop's `wings.diff.tree`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_tree: Option<bool>,
+    /// New terminals run in the terminal server, so they keep running when Wings quits or updates. Absent is on
+    /// (`terminal_server::enabled`). The desktop has no such setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_server: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

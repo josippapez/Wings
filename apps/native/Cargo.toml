@@ -22,7 +22,7 @@ required-features = ["ui"]
 name = "wings-plugin-worker"
 path = "src/bin/wings-plugin-worker.rs"
 
-# Runs the terminals apart from the app so they outlive it, with `WINGS_TERMINAL_SERVER=1` (`terminal_server.rs`).
+# Runs the terminals apart from the app so they outlive it, unless Settings turns it off (`terminal_server.rs`).
 # It ships beside `wings-native` in the bundle, and the app copies it out of the bundle before it runs it.
 [[bin]]
 name = "wings-terminal-server"
