@@ -713,20 +713,7 @@ pub(super) fn disconnected_marker(state: &Path) -> PathBuf {
 /// it, Claude Code gets Wings in the default account and in each one a project uses. Runs `claude`, so off the window's
 /// thread.
 pub(super) fn connect_on_start(socket: PathBuf, state: Option<PathBuf>, spaces: Vec<Space>) {
-    if cfg!(debug_assertions)
-        || state
-            .as_deref()
-            .is_none_or(|s| disconnected_marker(s).exists())
-    {
-        return;
-    }
-    let Some(exe) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| register::installed_wings(&exe))
-    else {
-        return;
-    };
-    let Some(claude) = wings_plugins::exec::find_program("claude") else {
+    let Some((claude, exe)) = to_connect(state.as_deref()) else {
         return;
     };
     std::thread::spawn(move || {
@@ -741,6 +728,46 @@ pub(super) fn connect_on_start(socket: PathBuf, state: Option<PathBuf>, spaces: 
             }
         }
     });
+}
+
+/// Wings in the Claude Code of a named account as a plugin picks it, as the desktop's `connect_claude_account_if_needed`:
+/// only where `connect_on_start` would connect, and only when the account's files don't show Wings there already. A
+/// failure is logged: the account is used all the same. May run `claude`, so off the window's thread.
+pub(super) fn connect_account(socket: &Path, state: Option<&Path>, name: &str) {
+    let Some((claude, exe)) = to_connect(state) else {
+        return;
+    };
+    if let Err(error) = register::connect_if_needed(&claude, &exe, socket, Some(name)) {
+        eprintln!("Couldn't connect Claude Code ({name}): {error}");
+    }
+}
+
+/// The `claude` program and the `wings` program to write into Claude Code's config without being asked: only a release
+/// build of the installed app, as a dev build would point Claude Code at itself, and not once you disconnected it.
+fn to_connect(state: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
+    if cfg!(debug_assertions) || disconnected(state) {
+        return None;
+    }
+    let exe = register::installed_wings(&std::env::current_exe().ok()?)?;
+    Some((wings_plugins::exec::find_program("claude")?, exe))
+}
+
+/// Whether you disconnected Claude Code, so Wings leaves its config alone. An app that keeps no state never connects it.
+fn disconnected(state: Option<&Path>) -> bool {
+    state.is_none_or(|state| disconnected_marker(state).exists())
+}
+
+#[cfg(test)]
+#[test]
+fn claude_code_you_disconnected_is_not_connected_again() {
+    let dir = std::env::temp_dir().join(format!("wings-disconnected-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("state.json");
+    assert!(!disconnected(Some(&state)));
+    std::fs::write(disconnected_marker(&state), "").unwrap();
+    assert!(disconnected(Some(&state)));
+    assert!(disconnected(None), "an app keeping no state, as in tests");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// One Claude Code account as Settings, Agents shows it.

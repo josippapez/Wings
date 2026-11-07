@@ -176,25 +176,29 @@ impl Shared {
                 (index, projects[index].clone())
             }
         };
-        // A named account has its folder and the default account's setup by the time its terminal starts, as when a
-        // project is assigned to it.
-        if let Some(name) = claude_account
-            .as_ref()
-            .and_then(|pick| pick.name.as_deref())
-        {
-            access.env.prepare_claude_account(name)?;
-        }
-        access.env.open_pane(
-            super::OpenPane {
-                cwd,
-                project: projects[index].clone(),
-                input: input.map(|line| line + "\r"),
-                placement: placement.into(),
-                claude_account,
-            },
-            reply,
-        );
-        Ok(())
+        let name = claude_account.as_ref().and_then(|pick| pick.name.clone());
+        let plan = super::OpenPane {
+            cwd,
+            project: projects[index].clone(),
+            input: input.map(|line| line + "\r"),
+            placement: placement.into(),
+            claude_account,
+        };
+        let Some(name) = name else {
+            access.env.open_pane(plan, reply);
+            return Ok(());
+        };
+        // A named account has its folder, the default account's setup and Wings by the time its terminal starts, as
+        // when a project is assigned to it. That may run `claude`, so not on the frame's thread.
+        let env = access.env.clone();
+        thread::Builder::new()
+            .name("plugin-call".into())
+            .spawn(move || match env.prepare_claude_account(&name) {
+                Ok(()) => env.open_pane(plan, reply),
+                Err(error) => reply.err(error),
+            })
+            .map(|_| ())
+            .map_err(|error| format!("The call couldn't start: {error}"))
     }
 
     fn open_view(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {

@@ -28,6 +28,8 @@ pub(super) struct FakeSystem {
     no_notifications: bool,
     /// The named Claude Code accounts made ready for a terminal, never in the user's home.
     prepared: Mutex<Vec<String>>,
+    /// The named accounts Wings was connected into, never in the user's home.
+    connected: Mutex<Vec<String>>,
 }
 
 impl System for FakeSystem {
@@ -54,6 +56,10 @@ impl System for FakeSystem {
 
     fn share_claude_setup(&self, _name: &str, _on: bool) -> Result<(), String> {
         Ok(())
+    }
+
+    fn connect_claude_account(&self, name: &str) {
+        self.connected.lock().unwrap().push(name.to_owned());
     }
 
     fn claude_auth(&self, _name: Option<&str>) -> wings_spaces::claude_accounts::AuthStatus {
@@ -444,6 +450,51 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
     // Two minutes out of view, its page is dropped, and the next show loads it again.
     app.advance_clock(Duration::from_secs(121));
     window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
+}
+
+/// As on the desktop, Wings goes into a named account's Claude Code when a plugin picks the account for a project, opens
+/// a pane in it, or turns its shared setup on or off. Whether Wings may (you didn't disconnect it) is the system's.
+#[test]
+fn picking_a_claude_account_connects_wings_into_it() {
+    let data = Data::temp();
+    let project = data.root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let main = r#"
+        wings.onAction(async () => {
+            try {
+                await wings.setClaudeAccount(PROJECT, 'wings-picked');
+                await wings.shareClaudeSetup('wings-shared', false);
+                await wings.openPane({ claudeAccount: 'wings-started' });
+                await wings.storage.set('done', true);
+            } catch (error) { await wings.storage.set('failed', error.message); }
+        });
+    "#
+    .replace("PROJECT", &json!(project).to_string());
+    data.install_script(
+        "picker",
+        json!({ "permissions": { "panes": [], "claudeAccounts": true } }),
+        &main,
+        &[],
+        "picker-scope",
+    );
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_plugins(&data, &system, |config| config.project = project.clone());
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "pick", |_| {});
+    until(&app, &mut window, "the plugin never finished", |_| {
+        data.saved("picker", "picker-scope", "done").is_some()
+            || data.saved("picker", "picker-scope", "failed").is_some()
+    });
+    assert_eq!(data.saved("picker", "picker-scope", "failed"), None);
+    assert_eq!(
+        *system.connected.lock().unwrap(),
+        ["wings-picked", "wings-shared", "wings-started"]
+    );
+    // Each after its folder and shared setup, which the fake made instead of your home folder.
+    assert_eq!(
+        *system.prepared.lock().unwrap(),
+        ["wings-picked", "wings-started"]
+    );
 }
 
 /// The Claude accounts plugin's "Start Claude as": the pane's shell runs under the account picked, not the project's.

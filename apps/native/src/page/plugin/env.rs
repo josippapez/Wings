@@ -429,7 +429,8 @@ pub trait Env: Send + Sync + 'static {
         Err("Claude Code accounts aren't available in this host".into())
     }
     /// Gets the named account ready for a terminal a plugin opens in it: its folder, then its share of the default
-    /// account's setup unless that is off. The host has checked the plugin may, and that `name` is an account name.
+    /// account's setup unless that is off, then Wings in its Claude Code. The host has checked the plugin may, and that
+    /// `name` is an account name. May run `claude`: called on a thread of its own.
     fn prepare_claude_account(&self, _name: &str) -> Result<(), String> {
         Err("Claude Code accounts aren't available in this host".into())
     }

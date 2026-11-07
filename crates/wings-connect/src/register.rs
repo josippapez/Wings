@@ -115,6 +115,21 @@ pub fn ensure_connected(claude: &Path, exe: &Path, socket: &Path, account: Optio
     }
 }
 
+/// `ensure_connected`, unless the account's files show Wings there already: reading them tells, where asking `claude`
+/// takes half a second.
+pub fn connect_if_needed(claude: &Path, exe: &Path, socket: &Path, account: Option<&str>) -> Result<(), String> {
+    if has_wings(&claude_accounts::user_config(account), &settings::settings_path(account), exe) {
+        return Ok(());
+    }
+    ensure_connected(claude, exe, socket, account)
+}
+
+/// Whether the user config `config` registers `exe` as the Wings server and the settings file `settings` has the status
+/// line and hooks.
+fn has_wings(config: &Path, settings: &Path, exe: &Path) -> bool {
+    wings_mcp_entry(config).is_some_and(|e| e["command"].as_str().is_some_and(|c| Path::new(c) == exe)) && settings::connected(settings)
+}
+
 /// Takes Wings back out of Claude Code: the MCP server goes, and your own status line and hooks are put back as they
 /// were, in every account it is in. `claude` is `None` when Claude Code isn't installed any more.
 pub fn disconnect(claude: Option<&Path>, spaces: &[Space]) -> Result<(), String> {
@@ -186,6 +201,21 @@ mod tests {
         }
         assert_eq!(installed_wings(Path::new("/Applications/W.app/Contents/MacOS/wings-native")), Some("/Applications/W.app/Contents/MacOS/wings".into()));
         assert_eq!(installed_wings(Path::new("/w/target/release/wings-native")), None);
+    }
+
+    #[test]
+    fn an_account_has_wings_only_with_this_server_and_the_status_line_and_hooks() {
+        let dir = std::env::temp_dir().join(format!("wings-has-wings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (config, settings_file, exe) = (dir.join(".claude.json"), dir.join("settings.json"), Path::new("/Apps/W.app/Contents/MacOS/wings"));
+        assert!(!has_wings(&config, &settings_file, exe), "no files");
+        std::fs::write(&config, json!({ "mcpServers": { "wings": { "command": exe } } }).to_string()).unwrap();
+        assert!(!has_wings(&config, &settings_file, exe), "no status line or hooks");
+        settings::add(&settings_file, exe).unwrap();
+        assert!(has_wings(&config, &settings_file, exe));
+        // A moved app is connected again, to point Claude Code at where it is now.
+        assert!(!has_wings(&config, &settings_file, Path::new("/Elsewhere/W.app/Contents/MacOS/wings")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

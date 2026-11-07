@@ -310,6 +310,8 @@ impl Workspace {
             config.agents.clone().unwrap_or_default(),
             spaces.clone(),
             config.plugins.as_ref().map(installed::load_store),
+            config.socket.clone(),
+            config.state.clone(),
         ));
         let sessions = history::Sessions::new(config.sessions.clone());
         let mut this = Self {

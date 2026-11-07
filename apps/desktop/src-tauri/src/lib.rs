@@ -281,18 +281,12 @@ fn prepare_claude_account(app: &AppHandle, name: &str) {
     connect_claude_account_if_needed(app, name);
 }
 
-/// Wings in the Claude Code of a named account, unless the user disconnected it or it is there already: reading the
-/// account's files tells, where asking `claude` takes half a second.
+/// Wings in the Claude Code of a named account, unless the user disconnected it or it is there already.
 fn connect_claude_account_if_needed(app: &AppHandle, name: &str) {
     #[cfg(unix)]
     if let (Some((claude, exe)), Ok(data)) = (claude_to_connect(app), app.path().app_data_dir()) {
-        let account = Some(name);
-        let there = register::wings_mcp_entry(&claude_accounts::user_config(account)).is_some_and(|e| e["command"].as_str().is_some_and(|c| std::path::Path::new(c) == exe))
-            && wings_connect::settings::connected(&wings_connect::settings::settings_path(account));
-        if !there {
-            if let Err(e) = register::ensure_connected(&claude, &exe, &mcp::socket_path(&data), account) {
-                applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
-            }
+        if let Err(e) = register::connect_if_needed(&claude, &exe, &mcp::socket_path(&data), Some(name)) {
+            applog::log_line!("[claude] couldn't connect Claude Code ({name}): {e}");
         }
     }
     #[cfg(not(unix))]

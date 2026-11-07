@@ -168,6 +168,9 @@ pub(super) trait System: Send + Sync + 'static {
     fn prepare_claude_account(&self, name: &str) -> Result<(), String>;
     /// Turns on or off that a named account uses the default account's setup (`claude_accounts::set_shared_setup`).
     fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String>;
+    /// Wings in a named account's Claude Code unless you disconnected it or it is there already, as the desktop's
+    /// `connect_claude_account_if_needed`. Logged when it fails: the account is used all the same.
+    fn connect_claude_account(&self, name: &str);
     /// What `claude auth status` says for an account, `None` being the default one.
     fn claude_auth(&self, name: Option<&str>) -> AuthStatus;
 }
@@ -175,7 +178,12 @@ pub(super) trait System: Send + Sync + 'static {
 /// The real system. A bare binary has no bundle to post notifications from (`UNUserNotificationCenter` needs one), so
 /// a notification is `osascript`'s `display notification`, which any process may use. The title and body go in as the
 /// script's arguments, never in its text, so nothing a plugin writes is read as script.
-struct Os;
+struct Os {
+    /// The socket Claude Code's config points at, and the app's state beside which the disconnected marker is, as the
+    /// app's `Config` has them. Without a socket Claude Code is left alone.
+    socket: Option<PathBuf>,
+    state: Option<PathBuf>,
+}
 
 fn succeeded(what: &str, result: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
     match result {
@@ -230,6 +238,12 @@ impl System for Os {
     fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
         claude_accounts::create_dir(name).map_err(|error| error.to_string())?;
         claude_accounts::set_shared_setup(name, on)
+    }
+
+    fn connect_claude_account(&self, name: &str) {
+        if let Some(socket) = &self.socket {
+            super::claude::connect_account(socket, self.state.as_deref(), name);
+        }
     }
 
     /// Half a second, from `claude`; the answer is on stdout whatever the exit code, which is 1 when signed out. Not
@@ -296,6 +310,8 @@ impl AppEnv {
         claude_dir: PathBuf,
         projects: Arc<Projects>,
         store: Option<wings_plugins::store::Store>,
+        socket: Option<PathBuf>,
+        state: Option<PathBuf>,
     ) -> Self {
         Self {
             events,
@@ -303,7 +319,7 @@ impl AppEnv {
             projects,
             running: Running::default(),
             claude_dir,
-            system: Mutex::new(Arc::new(Os)),
+            system: Mutex::new(Arc::new(Os { socket, state })),
             statusline: Mutex::default(),
             store: store.map(|store| Arc::new(Mutex::new(store))),
             clients: Arc::default(),
@@ -546,15 +562,27 @@ impl Env for AppEnv {
     fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
         let system = self.system();
         self.projects
-            .set_claude_account(project, name, |name| system.prepare_claude_account(name))
+            .set_claude_account(project, name, |name| system.prepare_claude_account(name))?;
+        // After the project list is let go of, as it may run `claude`. The assignment stands if this fails.
+        if let Some(name) = name {
+            system.connect_claude_account(name);
+        }
+        Ok(())
     }
 
     fn prepare_claude_account(&self, name: &str) -> Result<(), String> {
-        self.system().prepare_claude_account(name)
+        let system = self.system();
+        system.prepare_claude_account(name)?;
+        system.connect_claude_account(name);
+        Ok(())
     }
 
     fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
-        self.system().share_claude_setup(name, on)
+        let system = self.system();
+        system.share_claude_setup(name, on)?;
+        // Turned off, the account has its own settings.json back, which may lack Wings.
+        system.connect_claude_account(name);
+        Ok(())
     }
 
     fn agent_activity(&self, session_id: &str) -> Result<serde_json::Value, String> {
