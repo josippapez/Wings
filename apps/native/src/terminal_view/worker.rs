@@ -187,6 +187,9 @@ pub(super) struct Runtime {
     pub(super) visible: Arc<AtomicBool>,
     /// Set when the shell's output ends: it exited, or the terminal server it ran in went away.
     pub(super) exited: Arc<AtomicBool>,
+    /// Where the shell's output goes, so a benchmark can print into the pane as its program would.
+    #[cfg(feature = "test-support")]
+    pub(super) output: Sender<Vec<u8>>,
 }
 
 impl Runtime {
@@ -372,6 +375,8 @@ fn start_model(
         stopped: Arc::new(AtomicBool::new(false)),
         visible: Arc::new(AtomicBool::new(true)),
         exited: Arc::new(AtomicBool::new(false)),
+        #[cfg(feature = "test-support")]
+        output: output.clone(),
     };
     let stopped = runtime.stopped.clone();
     let visible = runtime.visible.clone();

@@ -1,7 +1,8 @@
-//! What a frame costs the window while an agent works: one drawn after the visible terminal changes, as it does up to 60
-//! times a second, and one drawn for the working agent's spinner alone, 30 times a second. Offscreen, with 16 made-up
-//! projects in the sidebar, a made-up Claude Code (a renamed `sleep`) working in the first pane, and the components page
-//! open as a plugin's sidebar on the right.
+//! What a frame costs the window while an agent works: one drawn after the visible terminal is told to redraw with nothing
+//! new on it, one drawn for the working agent's spinner alone, 30 times a second, one after output that changes a
+//! single row (Claude Code's spinner and timer line), and one after output that scrolls the whole screen. Offscreen,
+//! with 16 made-up projects in the sidebar, a made-up Claude Code (a renamed `sleep`) working in the first pane, and the
+//! components page open as a plugin's sidebar on the right.
 //!
 //! cargo run --release --manifest-path apps/native/Cargo.toml --example bench_redraw --features test-support
 
@@ -13,6 +14,7 @@ use wings_native::{
     host::Config,
     icons::Assets,
     installed::fixture::{Data, FIXTURE_MAIN},
+    terminal_view::TerminalView,
     workspace::Workspace,
 };
 
@@ -146,7 +148,10 @@ fn main() {
         draw(&mut cx);
         frames.push(start.elapsed());
     }
-    report("frame after a terminal update", frames);
+    report(
+        "frame after a terminal update with nothing new on it",
+        frames,
+    );
     // The spinner asks to be drawn again 1/30 s on: only the app's clock moves, so nothing else changes. The time
     // includes whatever runs and draws when the clock moves, not only the last draw.
     let mut frames = Vec::new();
@@ -158,6 +163,47 @@ fn main() {
         frames.push(start.elapsed());
     }
     report("frame for the spinner alone", frames);
+    // Output the model has already taken in, drawn as the view draws output that came. Only the draw is timed.
+    let output_frame = |cx: &mut VisualTestAppContext, bytes: String| {
+        cx.read(|cx| TerminalView::print_and_wait(bytes.into_bytes(), &terminal, cx));
+        let start = Instant::now();
+        cx.update(|cx| terminal.update(cx, TerminalView::take_output));
+        cx.run_until_parked();
+        draw(cx);
+        start.elapsed()
+    };
+    // Claude Code's spinner line, three rows from the bottom, with a new spinner frame, time and token count each time.
+    let spinner = ['·', '✢', '✳', '✶', '✻', '✽'];
+    let mut frames = Vec::new();
+    for i in 0..300 {
+        frames.push(output_frame(
+            &mut cx,
+            format!(
+                "\x1b7\x1b[999;1H\x1b[3A\x1b[38;5;174m{} Refactoring the API client…\x1b[0m \x1b[2m({}s · ↓ {:.1}k tokens · esc to interrupt)\x1b[0m\x1b[K\x1b8",
+                spinner[i % spinner.len()],
+                i / 30,
+                i as f32 / 10.0,
+            ),
+        ));
+    }
+    report("frame after output that changes one row", frames);
+    // A screenful of new lines, so every row shows something else.
+    let lines: Vec<String> = claude_like_screen().lines().map(str::to_owned).collect();
+    let mut frames = Vec::new();
+    for i in 0..300 {
+        let mut screen = String::new();
+        for line in lines
+            .iter()
+            .cycle()
+            .skip(i % lines.len() + 1)
+            .take(lines.len())
+        {
+            screen.push_str(line);
+            screen.push_str("\r\n");
+        }
+        frames.push(output_frame(&mut cx, screen));
+    }
+    report("frame after output that scrolls the whole screen", frames);
     let _ = std::process::Command::new("pkill")
         .args(["-f", &fake_claude.display().to_string()])
         .status();

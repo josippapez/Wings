@@ -303,25 +303,7 @@ impl TerminalView {
             while updates.recv().await.is_ok() {
                 cx.background_executor().timer(REDRAW_DELAY).await;
                 while updates.try_recv().is_ok() {}
-                if view
-                    .update(cx, |view, cx| {
-                        if view.runtime.exited.swap(false, Ordering::AcqRel) {
-                            cx.emit(TerminalEvent::Exited);
-                        }
-                        if view.visible {
-                            let cursor = view.snapshot.cursor;
-                            view.snapshot = view.latest.lock().unwrap().clone();
-                            if view.blink.is_some() && view.snapshot.cursor != cursor {
-                                view.restart_blink(cx);
-                            }
-                            if view.snapshot.find_stale {
-                                view.settle_find(cx);
-                            }
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
+                if view.update(cx, Self::take_latest).is_err() {
                     break;
                 }
             }
@@ -382,6 +364,46 @@ impl TerminalView {
             painted_images: Vec::new(),
             _release: release,
         }
+    }
+
+    /// Draws the model's latest snapshot, once output has come.
+    fn take_latest(&mut self, cx: &mut Context<Self>) {
+        if self.runtime.exited.swap(false, Ordering::AcqRel) {
+            cx.emit(TerminalEvent::Exited);
+        }
+        if self.visible {
+            let cursor = self.snapshot.cursor;
+            self.snapshot = self.latest.lock().unwrap().clone();
+            if self.blink.is_some() && self.snapshot.cursor != cursor {
+                self.restart_blink(cx);
+            }
+            if self.snapshot.find_stale {
+                self.settle_find(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Prints `bytes` into the pane as its program would and waits for the model to publish the screen they make, for
+    /// benchmarks of what drawing it costs. `take_output` then takes it, as the view does when output comes.
+    #[cfg(feature = "test-support")]
+    pub fn print_and_wait(bytes: Vec<u8>, view: &Entity<Self>, cx: &App) {
+        let view = view.read(cx);
+        let before = view.latest.lock().unwrap().clone();
+        view.runtime.output.send_blocking(bytes).unwrap();
+        view.runtime
+            .commands
+            .send_blocking(Command::Output)
+            .unwrap();
+        while Arc::ptr_eq(&view.latest.lock().unwrap(), &before) {
+            std::thread::yield_now();
+        }
+    }
+
+    /// Takes the model's latest snapshot as output that came does, for benchmarks.
+    #[cfg(feature = "test-support")]
+    pub fn take_output(&mut self, cx: &mut Context<Self>) {
+        self.take_latest(cx);
     }
 
     /// Blinks only in the focused pane of the active window, as xterm pauses on blur, so nothing redraws for it
