@@ -45,7 +45,7 @@ The `Wings Native` folder is only read. Nothing either app kept is deleted.
 `main` (desktop 0.1.121 to 0.1.124) is merged into `native`, with per-account usage limits in `crates/wings-connect`. Still to do:
 
 - **Blockers.**
-  - Bump the desktop's version (`apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`) above the last desktop release, for example to 0.2.0. The replacement takes its version from there, and the desktop's updater offers only a higher version than its own 0.1.124.
+  - Bump the desktop's version (`apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`) to 0.2.0 (decided), above the last desktop release. The replacement takes its version from there, and the desktop's updater offers only a higher version than its own 0.1.124.
   - Connect Wings into a named Claude Code account when a project or plugin picks it, as the desktop's `connect_claude_account_if_needed` does, and run `sync_shared_settings` when a pane opens, so an account sharing the default setup picks up a `settings.json` change made since the app started. Both are being ported; check they have landed before building the switch. Without the first, an account picked after launch has no Wings tools until the next launch (native connects only the accounts it finds on start, `connect_on_start` in `apps/native/src/workspace/claude.rs`).
 - **Follow-ups**, which the desktop does and native doesn't yet:
   - Restore a pane in the Claude Code account it was opened in. The desktop's `workspace.json` `claudeAccounts` (pane key to `{name}`) has nowhere to go in native's saved panes, so the import leaves it out and those panes come back in their project's account.
