@@ -10,8 +10,8 @@ use std::{
 
 use gpui::{
     Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement,
-    MouseButton, MouseDownEvent, Pixels, Render, Role, SharedString, Task, Window, anchored,
-    canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba,
+    MouseButton, MouseDownEvent, Pixels, Render, Role, SharedString, StyleRefinement, Task, Window,
+    anchored, canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba,
 };
 
 use crate::{
@@ -932,8 +932,9 @@ impl Workspace {
                     .border_1()
                     .border_color(rgba(HAIRLINE))
                     .bg(rgb(theme::SURFACE))
-                    // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge.
-                    .child(page),
+                    // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge. It keeps its
+                    // last drawing until it changes, so a busy terminal doesn't rebuild it every frame.
+                    .child(page.cached(StyleRefinement::default().size_full())),
             );
         let panel = panel.child(self.right_resize_edge(cx));
         let Some(share) = share else {

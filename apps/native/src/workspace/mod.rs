@@ -28,6 +28,7 @@ mod opencode;
 mod palette;
 mod pane_card;
 mod panes;
+mod parts;
 mod persist;
 mod plugin_env;
 mod plugin_manage;
@@ -61,7 +62,8 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, ScrollHandle,
-    SharedString, Subscription, Task, Window, canvas, deferred, div, prelude::*, px, rgb, rgba,
+    SharedString, StyleRefinement, Subscription, Task, Window, canvas, deferred, div, prelude::*,
+    px, rgb, rgba,
 };
 
 use crate::{
@@ -177,6 +179,8 @@ pub struct Workspace {
     next_tab: usize,
     next_pane: usize,
     issues: Entity<IssuesView>,
+    /// The cached pieces of the window, from just after the workspace is made (see `parts`).
+    parts: Option<parts::Parts>,
     issues_focus: FocusHandle,
     new_focus: FocusHandle,
     /// Keeps the selected tab in the part of the strip that is not covered by controls.
@@ -336,6 +340,7 @@ impl Workspace {
             next_tab: 0,
             next_pane: 0,
             issues,
+            parts: None,
             issues_focus: cx.focus_handle().tab_stop(true),
             new_focus: cx.focus_handle().tab_stop(true),
             tab_scroll: ScrollHandle::new(),
@@ -517,6 +522,14 @@ impl Workspace {
         this.enter_project(window, cx);
         this.start_update_checks(window, cx);
         this.start_plugin_update_checks(window, cx);
+        // The cached pieces need the workspace's entity, which exists once this returns (see `parts`).
+        let workspace = cx.weak_entity();
+        cx.defer(move |cx| {
+            if let Some(workspace) = workspace.upgrade() {
+                let parts = parts::Parts::new(&workspace, cx);
+                workspace.update(cx, |this, _| this.parts = Some(parts));
+            }
+        });
         this
     }
 
@@ -618,7 +631,12 @@ impl Render for Workspace {
                     None => div().into_any_element(),
                 },
                 Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
-                    Some(tab) => page_card(tab.page.clone()),
+                    // Kept as last drawn until the page changes, so a busy terminal doesn't rebuild it every frame.
+                    Some(tab) => page_card(
+                        tab.page
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
                     None => div().into_any_element(),
                 },
                 Active::Project => match &self.project_page {

@@ -95,3 +95,7 @@ required-features = ["test-support"]
 [dev-dependencies]
 # Builds .wings-plugin packages for the install tests; the version wings-plugins unpacks them with.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[[example]]
+name = "bench_redraw"
+required-features = ["test-support"]

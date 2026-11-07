@@ -5,8 +5,8 @@ use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
     AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString, canvas, div,
-    prelude::*, px, rgb, rgba,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString, StyleRefinement,
+    canvas, div, prelude::*, px, rgb, rgba,
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
@@ -40,7 +40,21 @@ impl Workspace {
             return None;
         }
         let width = self.side.width;
-        let panel = self.sidebar_column(cx).child(self.resize_edge(cx));
+        // The list, kept as last drawn until the workspace changes, and the edge that drags it wider.
+        let list = match &self.parts {
+            Some(parts) => parts
+                .sidebar
+                .clone()
+                .cached(StyleRefinement::default().size_full())
+                .into_any_element(),
+            None => self.sidebar_column(cx).w_full().into_any_element(),
+        };
+        let panel = div()
+            .relative()
+            .flex_none()
+            .h_full()
+            .child(list)
+            .child(self.resize_edge(cx));
         if !self.side.slide.running {
             return Some(panel.w(px(width)).into_any_element());
         }
@@ -81,7 +95,7 @@ impl Workspace {
 
     /// Everything the sidebar lists, for the docked sidebar and the peek: the project list scrolls, and the plugins and
     /// agents stay at the bottom, as in the desktop sidebar.
-    pub(super) fn sidebar_column(&self, cx: &mut Context<Self>) -> Div {
+    pub(in crate::workspace) fn sidebar_column(&self, cx: &mut Context<Self>) -> Div {
         div()
             .relative()
             .flex_none()
