@@ -52,6 +52,33 @@ impl Drop for Folder {
             }
         }
         let _ = std::fs::remove_dir_all(&self.0);
+        if std::thread::panicking() {
+            return;
+        }
+        // Each of them exits once drained, so one still running after a while is a server the test lost track of.
+        let pattern = format!("{}/", self.0.display());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = Command::new("/usr/bin/pgrep")
+                .arg("-f")
+                .arg(&pattern)
+                .output()
+                .unwrap();
+            let left: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| line.trim().parse().ok())
+                .collect();
+            if left.is_empty() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                for &pid in &left {
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+                panic!("servers left running in {pattern}: {left:?}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 

@@ -435,8 +435,11 @@ impl Servers {
     /// up; panes then run in the app.
     pub fn replace(&self, gone: &Path) -> Option<PathBuf> {
         let mut current = self.current.lock().unwrap();
-        // Another pane found it gone first and started the next one.
-        if current.as_deref().is_some_and(|now| now != gone) {
+        // Another pane found it gone first and started the next one, at the same path when it's the same version.
+        if current
+            .as_deref()
+            .is_some_and(|now| now != gone || Control::connect(now).is_ok())
+        {
             return current.clone();
         }
         *current = self.start_one();
