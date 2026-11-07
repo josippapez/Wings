@@ -71,8 +71,9 @@ pub struct PageView {
     /// A press on that select's trigger found its menu open, so the click that follows closes it. The menu closes
     /// itself on any press outside it, the trigger's too, which would otherwise have the click open it again.
     pressed_open: bool,
-    /// How wide each select was drawn, by node id: its menu is as wide.
-    select_widths: HashMap<u64, Pixels>,
+    /// Where each select was drawn, by node id, and how tall the window was: its menu is as wide, and as tall as the
+    /// room on one side of it.
+    select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
     fields: RefCell<HashMap<u64, SearchState>>,
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
@@ -242,7 +243,7 @@ impl PageView {
             open: HashSet::new(),
             menu: None,
             pressed_open: false,
-            select_widths: HashMap::new(),
+            select_bounds: HashMap::new(),
             fields: RefCell::new(HashMap::new()),
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
@@ -389,6 +390,29 @@ impl PageView {
             self.act(&handler, Some(&serde_json::json!({ "value": value })));
             true
         })
+    }
+
+    /// Opens the menu of the select named `label`, or showing it, as a click on it would. False when the page has no
+    /// such select.
+    #[cfg(feature = "test-support")]
+    pub fn open_select(&mut self, label: &str, cx: &mut Context<Self>) -> bool {
+        fn find(nodes: &[Node], label: &str) -> Option<u64> {
+            nodes.iter().find_map(|node| match node {
+                Node::Select(select) if select.label == label || select.shown() == label => {
+                    Some(select.id)
+                }
+                other => other.parts().into_iter().find_map(|part| find(part, label)),
+            })
+        }
+        let found = self
+            .tree
+            .as_ref()
+            .and_then(|tree| find(&tree.children, label));
+        if let Some(id) = found {
+            self.menu = Some(id);
+            cx.notify();
+        }
+        found.is_some()
     }
 
     /// Scrolls the page's shell as little as brings `field` wholly into view, with the shell's 14pt padding around it.
@@ -1362,17 +1386,23 @@ impl PageView {
         let entity = cx.entity();
         let measure = canvas(
             |_, _, _| {},
-            move |bounds, _, _, cx| {
+            move |bounds, _, window, cx| {
+                let height = window.viewport_size().height;
                 entity.update(cx, |view, _| {
-                    view.select_widths.insert(id, bounds.size.width);
+                    view.select_bounds.insert(id, (bounds, height));
                 });
             },
         )
         .absolute()
         .size_full();
         let menu = open.then(|| {
+            let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
             // As wide as the select, and no narrower than the desktop's 144px.
-            let width = (self.select_widths.get(&id).copied().unwrap_or_default()).max(px(144.0));
+            let width = bounds.size.width.max(px(144.0));
+            // As the desktop's, no taller than the room under the select, or over it when there is more there, and it
+            // scrolls: Cyclops' hundred projects ran off the window, and once taller than the window it was moved up to
+            // cover it from the top. Its box starts 36pt down, under the select, or ends at the select's top.
+            let room = (window_height - bounds.top()).max(bounds.top()) - px(36.0 + 8.0);
             let current = select.current();
             let items = select.options.iter().enumerate().map(|(at, option)| {
                 let item = ui::select_item(
@@ -1392,6 +1422,9 @@ impl PageView {
             ui::popover(
                 ui::select_menu(items)
                     .w(width)
+                    .max_h(room)
+                    .id(ElementId::NamedInteger("page-select-menu".into(), id))
+                    .overflow_y_scroll()
                     .on_mouse_down_out(cx.listener(|view, _, _, cx| {
                         view.menu = None;
                         cx.notify();

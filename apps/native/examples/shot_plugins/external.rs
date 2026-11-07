@@ -19,7 +19,8 @@ use wings_native::{host::Config, installed::fixture::Data, page::PageView, works
 use super::{app, save, wait};
 
 /// Made-up Cyclops answers in place of `wings.fetch`, and a token that is there in place of `wings.secrets.has`: a timer
-/// running for an hour and five minutes, and a week of entries, two with a task as long as real ones run.
+/// running for an hour and five minutes, a week of entries, two with a task as long as real ones run, and as many
+/// projects as a studio's account has.
 const CYCLOPS: &str = r#"
 globalThis.__shot = (() => {
   const now = Date.now(), minute = 60e3, hour = 60 * minute;
@@ -27,7 +28,9 @@ globalThis.__shot = (() => {
   const pad = (n) => String(n).padStart(2, '0');
   const local = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
   const at = (days, h, m) => { const d = new Date(now - days * 24 * hour); d.setHours(h, m, 0, 0); return d.getTime(); };
-  const projects = [{ id: 'p1', name: 'Wings', clientName: 'Prototyp' }, { id: 'p2', name: 'Website', clientName: 'Acme' }];
+  const projects = [{ id: 'p1', name: 'Wings', clientName: 'Prototyp' }, { id: 'p2', name: 'Website', clientName: 'Acme' },
+    { id: 'p3', name: 'Storefront rebuild for the spring launch', clientName: 'Northwind Traders' },
+    ...Array.from({ length: 120 }, (_, i) => ({ id: `q${i}`, name: `Project ${i + 1}`, clientName: `Client ${i % 30 + 1}` }))];
   const timers = [{ id: 't1', projectId: 'p1', task: 'Native plugin popovers', startedAt: iso(now - 65 * minute), endedAt: null, entryDate: local(now) }];
   const entry = (id, project, task, days, h, m, minutes) => {
     const start = at(days, h, m);
@@ -146,6 +149,8 @@ struct State {
     shows: &'static str,
     /// Typed into the field that has the keyboard once there.
     typed: Option<&'static str>,
+    /// The select, by its name or what it shows, whose menu is opened once there.
+    select: Option<&'static str>,
 }
 
 const fn sidebar(
@@ -159,6 +164,7 @@ const fn sidebar(
         presses,
         shows,
         typed: None,
+        select: None,
     }
 }
 
@@ -169,6 +175,7 @@ const fn popover(name: &'static str, shows: &'static str) -> State {
         presses: &[],
         shows,
         typed: None,
+        select: None,
     }
 }
 
@@ -227,7 +234,16 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
                 ..sidebar("suggest", &[], "Native plugin popovers")
             },
             sidebar("edit", &["Edit Code review"], "Save"),
+            // The project picker's menu, open over the page.
+            State {
+                select: Some("Wings · Prototyp"),
+                ..sidebar("projects", &[], "Native plugin popovers")
+            },
             popover("popover", "Native plugin popovers"),
+            State {
+                select: Some("Wings · Prototyp"),
+                ..popover("popover-projects", "Native plugin popovers")
+            },
         ],
     );
     // Not connected yet: the API token field, with a token typed in, which shows as dots once the bundle is built with
@@ -437,6 +453,16 @@ fn shoot_in(
                 wait(cx, window, Duration::from_millis(200));
             }
             shows(cx, state.shows);
+            if let Some(label) = state.select {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !page.update(cx, |page, cx| page.open_select(label, cx)) {
+                    if Instant::now() > deadline {
+                        eprintln!("{name} {}: no select named {label}", state.name);
+                        break;
+                    }
+                    wait(cx, window, Duration::from_millis(50));
+                }
+            }
             if let Some(text) = state.typed {
                 let focus = cx.read(|cx| page.read(cx).first_input_focus(cx));
                 if let Some(focus) = focus {

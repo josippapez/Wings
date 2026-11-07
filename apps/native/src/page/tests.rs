@@ -729,3 +729,26 @@ fn a_disclosure_summary_longer_than_its_line_wraps() {
     // button sat 50pt higher.
     assert!(pressed_at(&app, &mut window, (40.0, 110.0), "Pressed 1."));
 }
+
+/// A select of sixty options at the top of a 400pt frame, as Cyclops' projects in its form.
+const LONG_SELECT: &str = r#"
+let picked = 'none';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Select',props:{label:'Project',value:'o0',onChange:'1:change',options:Array.from({length:60},(_,i)=>({value:'o'+i,label:'Project '+i}))}},
+{id:2,type:'Text',children:[{id:3,type:'#text',text:'Picked '+picked+'.'}]}]}));}
+globalThis.__wingsEvent=(_,json)=>{picked=JSON.parse(json).value;render();return true;};render();
+"#;
+
+#[test]
+fn a_select_menu_longer_than_the_window_scrolls_to_its_last_option() {
+    let (app, mut window) = open_narrow(LONG_SELECT, 300.0);
+    settle(&app, &mut window, shows("Picked none."));
+    click(&mut window, (100.0, 30.0));
+    settle(&app, &mut window, PageView::menu_open);
+    // The menu ends 8pt above the frame's bottom and scrolls, so its last option is pressed there. It ran on past the
+    // window, which moved it up to start at the top, and there was option 10.
+    window.simulate_scroll(point(px(100.0), px(200.0)), point(px(0.0), px(-10_000.0)));
+    window.draw();
+    click(&mut window, (100.0, 370.0));
+    settle(&app, &mut window, shows("Picked o59."));
+}

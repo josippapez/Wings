@@ -430,15 +430,19 @@ fn select_row(
         .aria_label(label.clone())
         .aria_selected(selected)
         .h(px(32.0))
+        // 32pt in a menu that scrolls too, which would otherwise squeeze its rows to fit.
+        .flex_none()
         .flex()
         .items_center()
         .justify_between()
+        .gap(px(8.0))
         .px(px(8.0))
         .rounded(px(6.0))
         .cursor_pointer()
         .text_size(px(13.0))
         .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
-        .child(content)
+        // A label wider than the menu, like a Cyclops project's name and client, ends in an ellipsis inside it.
+        .child(div().min_w_0().truncate().child(content))
         .when(selected, |item| {
             item.child(icon(Icon::Check, 14.0, theme::FOREGROUND))
         })
