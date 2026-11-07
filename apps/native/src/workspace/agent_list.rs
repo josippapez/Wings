@@ -133,9 +133,9 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(match agent.kind {
-                        AgentKind::Claude => icon(Icon::Claude, 14.0, CLAUDE).into_any_element(),
-                        _ => icon(Icon::Terminal, 14.0, theme::FOREGROUND).into_any_element(),
+                    .child({
+                        let (glyph, color) = glyph(agent.kind);
+                        icon(glyph, 14.0, color)
                     }),
             )
             .child(
@@ -218,9 +218,24 @@ fn elapsed(ms: u64) -> String {
     }
 }
 
+/// An agent's icon and its color, as the desktop's `PaneIcon` draws it.
+fn glyph(kind: AgentKind) -> (Icon, u32) {
+    match kind {
+        AgentKind::Claude => (Icon::Claude, CLAUDE),
+        AgentKind::Opencode => (Icon::Opencode, theme::FOREGROUND),
+        _ => (Icon::Terminal, theme::FOREGROUND),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::elapsed;
+    use super::{AgentKind, Icon, elapsed, glyph};
+
+    #[test]
+    fn opencode_shows_its_own_icon() {
+        assert_eq!(glyph(AgentKind::Opencode).0, Icon::Opencode);
+        assert_eq!(glyph(AgentKind::Claude).0, Icon::Claude);
+    }
 
     #[test]
     fn elapsed_reads_like_the_desktop() {
