@@ -10,7 +10,7 @@ mod tooltip;
 
 pub use button::{Variant, badge, button, chip};
 pub use menu::{context_menu, menu, menu_item, menu_item_with, menu_separator};
-pub use parts::{disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
+pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use status_dot::{
     drawing_piece, spinner as working_spinner, spinner_layer, status_dot, status_dot_slot,
 };

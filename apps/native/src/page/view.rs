@@ -545,6 +545,18 @@ impl PageView {
         if nodes.iter().all(|node| matches!(node, Node::Str { .. })) {
             return self.inline(nodes, cx);
         }
+        div()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(gap))
+            .children(self.items(nodes, cx))
+            .into_any_element()
+    }
+
+    /// The items of a flex box, as CSS makes them: each component one, and a run of plain strings one between them. A
+    /// row of "Updated ", "14 h ago" and buttons spread apart put the gap of a row between the two words.
+    fn items(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut items = Vec::new();
         let mut run: Vec<Node> = Vec::new();
         for node in nodes {
@@ -553,20 +565,18 @@ impl PageView {
                 continue;
             }
             if !run.is_empty() {
-                items.push(plain_text(&std::mem::take(&mut run)).into_any_element());
+                items.push(
+                    div()
+                        .child(plain_text(&std::mem::take(&mut run)))
+                        .into_any_element(),
+                );
             }
             items.push(self.node(node, cx));
         }
         if !run.is_empty() {
-            items.push(plain_text(&run).into_any_element());
+            items.push(div().child(plain_text(&run)).into_any_element());
         }
-        div()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(gap))
-            .children(items)
-            .into_any_element()
+        items
     }
 
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
@@ -588,7 +598,10 @@ impl PageView {
                     .when(!page.flush, |body| {
                         body.gap(px(10.0)).p(px(14.0)).overflow_y_scroll()
                     })
-                    .children(self.nodes(&page.body, cx));
+                    .children(page.body.iter().map(|node| match node {
+                        Node::Board(board) if page.flush => self.board(board, true, cx),
+                        node => self.node(node, cx),
+                    }));
                 div()
                     .flex_1()
                     .min_h_0()
@@ -651,7 +664,7 @@ impl PageView {
                 .when_some(stack.max_width, |el, width| {
                     el.w_full().max_w(px(width)).mx_auto()
                 })
-                .children(self.nodes(&stack.children, cx))
+                .children(self.items(&stack.children, cx))
                 .into_any_element(),
             Node::Row(row) => div()
                 .min_w_0()
@@ -678,7 +691,7 @@ impl PageView {
                 })
                 .when(row.wrap, |el| el.flex_wrap())
                 .when(row.grow, |el| el.flex_1())
-                .children(self.nodes(&row.children, cx))
+                .children(self.items(&row.children, cx))
                 .into_any_element(),
             Node::Text(text) => {
                 // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
@@ -1033,7 +1046,7 @@ impl PageView {
             )
             .into_any_element(),
             Node::Meter(meter) => board_view::meter(meter),
-            Node::Board(board) => self.board(board, cx),
+            Node::Board(board) => self.board(board, false, cx),
             Node::BoardRow(row) => self.board_row(&row.children, cx),
             Node::BoardColumn(column) => self.board_column(column, cx),
             Node::List(list) => ui::list(self.nodes(&list.children, cx)).into_any_element(),

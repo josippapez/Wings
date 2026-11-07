@@ -34,6 +34,16 @@ pub fn plain_card(content: impl IntoIterator<Item = AnyElement>) -> Div {
         .children(content)
 }
 
+/// `.w-board-column` and `.w-board-cell`: a box on the surface colour with a hairline edge, 8px in.
+pub fn board_box() -> Div {
+    div()
+        .p(px(8.0))
+        .rounded(px(theme::RADIUS))
+        .border_1()
+        .border_color(rgba(HAIRLINE))
+        .bg(rgba(SURFACE))
+}
+
 /// `.w-heading`: a section's name in small muted type, a little further from what's above than other rows are.
 pub fn heading(content: impl IntoElement) -> Div {
     div()

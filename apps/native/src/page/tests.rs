@@ -764,6 +764,48 @@ fn a_log_lines_number_sits_by_its_first_line_when_the_line_wraps() {
     assert!(pressed_at(&app, &mut window, (17.0, 22.0), "Pressed 1."));
 }
 
+/// A board of one column with a card in it, as Issues' board in its page with no padding of its own. The card can be
+/// pressed.
+const BOARD: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[
+{id:8,type:'Page',props:{flush:true},children:[{id:9,type:'Slot',props:{name:'body'},children:[
+{id:1,type:'Board',props:{label:'Issues'},children:[
+{id:2,type:'BoardColumn',children:[{id:3,type:'Slot',props:{name:'title'},children:[{id:4,type:'#text',text:'To do'}]},
+{id:5,type:'Slot',props:{name:'body'},children:[{id:6,type:'Button',props:{variant:'outline',onClick:'6:click'},children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}]}]}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_boards_columns_are_boxes_inside_the_pages_padding() {
+    let (app, mut window) = open_narrow(BOARD, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The column is 14pt in from the frame, the page's padding the board takes on, and its card 9pt into the column, so
+    // the card starts at 23. Both used to start at the frame's edge.
+    assert!(!pressed_at(&app, &mut window, (6.0, 54.0), "Pressed 1."));
+    assert!(pressed_at(&app, &mut window, (30.0, 54.0), "Pressed 1."));
+}
+
+/// A stack of two strings and a button, as a `Time` with its prefix ("Updated ", "14 h ago") makes. The button can be
+/// pressed.
+const TWO_STRINGS: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Stack',children:[{id:2,type:'#text',text:'Updated '},{id:3,type:'#text',text:'14 h ago'},
+{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn strings_side_by_side_in_a_stack_are_one_line_of_it() {
+    let (app, mut window) = open_narrow(TWO_STRINGS, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // One line of text and the stack's 8pt gap put the button at 41 to 73. Each string was a line of its own, which put
+    // it at 68 to 100.
+    assert!(pressed_at(&app, &mut window, (40.0, 50.0), "Pressed 1."));
+    assert!(!pressed_at(&app, &mut window, (40.0, 90.0), "Pressed 2."));
+}
+
 /// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.
 const LONG_SUMMARY: &str = r#"
 let pressed = 0;
