@@ -57,6 +57,20 @@ fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: PathBuf) {
     println!("{}", path.display());
 }
 
+/// An offscreen app with real rendering. Plugin pages run on threads of their own and wake their views from there,
+/// which the app's test scheduler records as nondeterminism by capturing a symbolized backtrace on the waking thread.
+/// The first one takes about a second in a debug build, inside the page's turn, so the page was stopped for running too
+/// long and stayed empty. Allowing parking turns that check off, as the app's own window tests do.
+fn app() -> VisualTestAppContext {
+    let mut cx = VisualTestAppContext::with_asset_source(
+        gpui_platform::current_platform(false),
+        std::sync::Arc::new(Assets),
+    );
+    cx.executor().allow_parking();
+    cx.update(actions::bind);
+    cx
+}
+
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "shots".into()));
     std::fs::create_dir_all(&out).expect("create the output folder");
@@ -127,11 +141,7 @@ fn main() {
     config.projects = None;
     config.agents = None;
     config.plugins = Some(data.paths());
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     for width in [1000.0, 640.0] {
         let config = config.clone();
         let handle = cx
@@ -320,11 +330,7 @@ fn changes(out: PathBuf) {
         }
     })
     .unwrap();
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     for (name, source) in [
         (
             "sidebar",
@@ -490,11 +496,7 @@ fn schedules(out: PathBuf) {
         },
     )
     .unwrap();
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     let source = include_str!("../../../plugins/schedules/dist/native/schedules.js");
     // What to press to reach each view, and a text it shows.
     let views = [
@@ -716,11 +718,7 @@ fn session_detail(out: PathBuf) {
         },
     )
     .unwrap();
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     let source = include_str!("../../../plugins/session-detail/dist/native/sidebar.js");
     // What the panes are, the rows to open, and a text the page shows once it has drawn it. 360 is the sidebar's own width.
     let views: [(&str, Vec<PaneEntry>, &[&str], &str); 4] = [
@@ -862,11 +860,7 @@ fn disk(out: PathBuf) {
         },
     )
     .unwrap();
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     let source = include_str!("../../../plugins/disk/dist/native/map.js");
     // The Scan buttons come in the page's order: a disk's each, then the home folder's, then the project's, which is the folder.
     let scan = wings_disk_usage::disks().len() + 1;
@@ -1001,11 +995,7 @@ fn pr_tracker(out: PathBuf) {
         }
     })
     .unwrap();
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     let tab = include_str!("../../../plugins/pr-tracker/dist/native/pr.js");
     let settings = include_str!("../../../plugins/pr-tracker/dist/native/settings.js");
     let args = json!({
@@ -1098,11 +1088,7 @@ type StatePage<'a> = (
 
 /// Renders each of `pages` of the plugin `host` runs at 1000 and 640 points wide, into `<prefix>-<name>-<width>.png`.
 fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[StatePage]) {
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
     for width in [1000.0, 640.0] {
         for &(name, source, args, place, presses, expected) in pages {
             let state = wings_native::page::plugin::FrameState::new(place, None, |_| Ok(()));

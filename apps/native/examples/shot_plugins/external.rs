@@ -14,12 +14,9 @@ use std::{
 };
 
 use gpui::{AnyWindowHandle, AppContext, Entity, VisualTestAppContext, WindowHandle, px, size};
-use wings_native::{
-    actions, host::Config, icons::Assets, installed::fixture::Data, page::PageView,
-    workspace::Workspace,
-};
+use wings_native::{host::Config, installed::fixture::Data, page::PageView, workspace::Workspace};
 
-use super::{save, wait};
+use super::{app, save, wait};
 
 /// Made-up Cyclops answers in place of `wings.fetch`, and a token that is there in place of `wings.secrets.has`: a timer
 /// running for an hour and five minutes, and a week of entries.
@@ -199,11 +196,7 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
             ),
         );
     }
-    let mut cx = VisualTestAppContext::with_asset_source(
-        gpui_platform::current_platform(false),
-        std::sync::Arc::new(Assets),
-    );
-    cx.update(actions::bind);
+    let mut cx = app();
 
     let cyclops = root.join("wings-cyclops");
     let fake_cyclops = |page: &str| {
