@@ -161,6 +161,7 @@ impl Workspace {
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .hover(|style| style.bg(rgba(theme::HOVER)))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_older(cx)))
+                        .children(ui::spot(|| "older".into()))
                         .child(icon(
                             if open {
                                 Icon::ChevronDown
@@ -188,6 +189,7 @@ impl Workspace {
                 sort == self.side.sort,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.set_sort(sort, cx)))
+            .children(ui::spot(|| format!("sort:{}", sort.label())))
             .into_any_element()
         });
         // The desktop's `h-8 pr-2 pl-4`, above the list rather than in it, so it stays put while the list scrolls.
@@ -236,12 +238,11 @@ impl Workspace {
                                     "Sort projects",
                                     ButtonSize::Xs,
                                 )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.side.sort_menu = !this.side.sort_menu;
-                                        cx.notify();
-                                    },
-                                )),
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.side.sort_menu = !this.side.sort_menu;
+                                    cx.notify();
+                                }))
+                                .children(ui::spot(|| "sidebar-sort".into())),
                             )
                             .children(
                                 self.popover_phase("sort-menu", self.side.sort_menu, cx)
@@ -346,6 +347,7 @@ impl Workspace {
                     this.open_menu(MenuTarget::Project(menu_of.clone()), event.position, cx)
                 }),
             )
+            .children(ui::spot(|| format!("project:{}", entry.name)))
             .child(
                 // The desktop's `Item`, with its transparent 1px border: 42px with a branch line.
                 div()
@@ -467,11 +469,10 @@ impl Workspace {
                                 "Remove from sidebar",
                                 ButtonSize::Xs,
                             )
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.request_remove(remove_it.clone(), window, cx)
-                                },
-                            )),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_remove(remove_it.clone(), window, cx)
+                            }))
+                            .children(ui::spot(|| format!("project-remove:{}", entry.name))),
                         )
                     }),
             )

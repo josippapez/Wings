@@ -303,6 +303,43 @@ pub fn dialog(
     (backdrop, panel)
 }
 
+/// In builds with `test-support`, notes where its parent is drawn under `name`, so the screenshot example points at
+/// it from the layout as a person would, rather than at coordinates that go stale (`spot_at`). Nothing otherwise.
+pub fn spot(name: impl FnOnce() -> String) -> Option<AnyElement> {
+    #[cfg(feature = "test-support")]
+    {
+        let name = name();
+        Some(
+            gpui::canvas(
+                move |bounds, _, _| SPOTS.with_borrow_mut(|spots| spots.insert(name, bounds)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .into_any_element(),
+        )
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        let _ = name;
+        None
+    }
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static SPOTS: std::cell::RefCell<std::collections::HashMap<String, gpui::Bounds<gpui::Pixels>>> =
+        Default::default();
+}
+
+/// Where the element spotted as `name` was last drawn.
+#[cfg(feature = "test-support")]
+pub fn spot_at(name: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+    SPOTS.with_borrow(|spots| spots.get(name).copied())
+}
+
 /// The dimness of a dialog's backdrop, for one that fades on its own.
 pub fn backdrop_color() -> gpui::Hsla {
     rgba(BACKDROP).into()

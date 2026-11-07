@@ -38,6 +38,20 @@ fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Durati
     }
 }
 
+/// Only the app's clock moves, so an animation can be caught partway.
+fn wait_fake(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
+    cx.advance_clock(duration);
+    cx.run_until_parked();
+    let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+}
+
+/// The middle of the element last drawn under `name` (`ui::spot`).
+fn spot(name: &str) -> gpui::Point<gpui::Pixels> {
+    wings_native::ui::spot_at(name)
+        .unwrap_or_else(|| panic!("{name} wasn't drawn"))
+        .center()
+}
+
 fn click(
     cx: &mut VisualTestAppContext,
     window: AnyWindowHandle,
@@ -611,30 +625,32 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let name = |state: &str| out.join(format!("sidebar-{state}-{width}.png"));
         wait(cx, window, Duration::from_secs(3));
         save(cx, window, &name("counts"));
-        // Pointing at the third row, the shown project: its buttons replace the pin. The nav above has three more 28px
-        // rows, 1px apart, than the Inbox row alone did.
-        let third = point(
-            px(120.0),
-            px(78.0 + 3.0 * 29.0 + 40.0 + 2.0 + 40.0 + 2.0 + 20.0),
-        );
-        mouse_move(cx, window, third, false);
+        // Pointing at the shown project's row: its buttons replace the pin. Where things are comes from where they were
+        // last drawn, not from coordinates that go stale as the sidebar changes.
+        let row = spot("project:acme-api");
+        mouse_move(cx, window, point(px(120.0), row.y), false);
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("hover"));
-        // Its X asks first, as it has a tab open.
-        click(cx, window, point(px(222.0), third.y));
+        // Its X asks first, as it has a tab open; halfway through going away after Escape, then gone.
+        click(cx, window, spot("project-remove:acme-api"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("remove"));
         cx.simulate_keystrokes(window, "escape");
+        wait_fake(cx, window, Duration::from_millis(50));
+        save(cx, window, &name("remove-closing"));
         mouse_move(cx, window, point(px(500.0), px(300.0)), false);
+        wait(cx, window, Duration::from_millis(300));
         // The sort menu, from the header's middle button, then Name, its last item.
-        click(cx, window, point(px(204.0), px(62.0)));
+        click(cx, window, spot("sidebar-sort"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("sort"));
-        click(cx, window, point(px(220.0), px(194.0)));
+        click(cx, window, spot("sort:Name"));
+        wait_fake(cx, window, Duration::from_millis(50));
+        save(cx, window, &name("sort-closing"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("sorted"));
         // "Older" is closed under the list; open it.
-        click(cx, window, point(px(60.0), px(288.0)));
+        click(cx, window, spot("older"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("older"));
         // The edge dragged out past the widest, and in past the narrowest.
@@ -803,8 +819,15 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             wait(cx, window, Duration::from_millis(100));
             mouse(cx, window, point(at.x + px(1.0), at.y), None);
             wait(cx, window, Duration::from_millis(800));
+            // `wait` moves the app's clock less than real time, so the tooltip may still be fading in.
+            wait_fake(cx, window, Duration::from_millis(200));
             save(cx, window, &name(state));
         }
+        // The pointer leaves the last one: halfway through fading and shrinking out.
+        mouse(cx, window, point(px(500.0), px(400.0)), None);
+        wait_fake(cx, window, Duration::from_millis(0));
+        wait_fake(cx, window, Duration::from_millis(75));
+        save(cx, window, &name("tooltip-closing"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }
