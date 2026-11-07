@@ -59,6 +59,13 @@ interface RowProps extends Pick<EntryListProps, "onRow" | "onFocusRow" | "onTogg
   loading: boolean;
 }
 
+/**
+ * Where a row with nothing to open has its chevron, so its size lines up with the sizes above and below it. The native
+ * app takes no width from the page's CSS, so there it is an em space and a three-per-em space of the list's 12px text,
+ * the 16px of a chevron icon.
+ */
+const ChevronSpace = () => (WINGS_NATIVE ? <Text aria-hidden>{"\u2003\u2004"}</Text> : <Stack gap="none" className="dk-chevron-space" />);
+
 function EntryRow({ row, index, total, color, selected, pointed, collected, open, loading, onRow, onFocusRow, onToggleCollect, onReveal, onPreview }: RowProps) {
   const item = collectedOf(row);
   const files = row.kind === "entry" || row.kind === "extra";
@@ -99,7 +106,7 @@ function EntryRow({ row, index, total, color, selected, pointed, collected, open
         <Text grow truncate>{label}</Text>
         {collected ? <Icon name="check" label="In the Collector" className="dk-collected" /> : null}
         {row.restricted ? <Text tone="info" size="small">No access</Text> : <Text numeric tone="muted" className="dk-size">{bytes(row.size)}</Text>}
-        {loading ? <Spinner className="dk-chevron" /> : row.openable || row.kind === "hidden" || row.kind === "smaller" ? <Icon name="chevron-down" className="dk-chevron" data-open={open ? "" : undefined} /> : <Stack gap="none" className="dk-chevron-space" />}
+        {loading ? <Spinner className="dk-chevron" /> : row.openable || row.kind === "hidden" || row.kind === "smaller" ? <Icon name="chevron-down" className="dk-chevron" data-open={open ? "" : undefined} /> : <ChevronSpace />}
       </ListButton>
       {menu.length ? (
         <Menu className="dk-row-menu" variant="ghost" size="icon-xs" align="end" label="⋯" aria-label={`More for ${row.name}`} items={menu} />
