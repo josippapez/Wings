@@ -73,7 +73,7 @@ fn write(path: &Path, settings: &Map<String, Value>) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(path, text).map_err(|e| e.to_string())
+    crate::write_whole(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 fn command(settings: &Map<String, Value>) -> Option<&str> {
@@ -284,6 +284,23 @@ mod tests {
 
         assert!(remove(&path).unwrap());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_the_file_whole_and_keeps_it_yours_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let exe = Path::new("/Applications/Wings.app/Contents/MacOS/wings");
+        let path = file("private", "{}\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(add(&path, exe).unwrap());
+        assert_eq!(mode(&path), 0o600);
+        assert!(!path.with_extension("json.wings-tmp").exists());
+        let new = path.with_file_name("new-settings.json");
+        let _ = std::fs::remove_file(&new);
+        assert!(add(&new, exe).unwrap());
+        assert_eq!(mode(&new), 0o600, "a new settings file is for you only");
     }
 
     #[test]
