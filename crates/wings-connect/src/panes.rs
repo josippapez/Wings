@@ -192,7 +192,7 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
                     reply["reusedTab"] = json!(true);
                 }
                 if let (true, Ok(exe)) = (opened.ran, std::env::current_exe()) {
-                    reply["waitCommand"] = json!(format!("'{}' wait {}", exe.display(), opened.pane_id));
+                    reply["waitCommand"] = json!(format!("'{}' wait {}", wait_program(exe).display(), opened.pane_id));
                 }
                 if run && !opened.ran {
                     reply["note"] = json!("Running commands in new tabs is off in Wings Settings, Agents, so the command waits for the user to press Enter. To start it now, run it yourself in the background.");
@@ -341,7 +341,7 @@ fn send_to_agent(host: &dyn Host, caller: Option<&str>, id: &str, message: &str)
     let mut reply = json!({ "sent": true, "submitted": submitted });
     if submitted {
         if let Ok(exe) = std::env::current_exe() {
-            reply["waitCommand"] = json!(format!("'{}' wait {id}", exe.display()));
+            reply["waitCommand"] = json!(format!("'{}' wait {id}", wait_program(exe).display()));
         }
     } else {
         reply["note"] = json!("Letting agents message each other is off in Wings Settings, Agents, so the message waits in that agent's prompt for the user to press Enter.");
@@ -457,6 +457,13 @@ fn plan_open(spaces: &[Space], caller: Option<&PaneRow>, cwd: Option<&str>, comm
         None => (current.ok_or("Pass cwd, a folder inside one of the user's Wings projects")?, None),
     };
     Ok(OpenPlan { space_id: spaces[project].id.clone(), cwd: dir, input, run, next_to: None })
+}
+
+/// The program that runs `wings wait`: the desktop app's own executable, or the `wings` command beside the native app's
+/// executable in its bundle, since the native app doesn't take commands.
+fn wait_program(exe: PathBuf) -> PathBuf {
+    let command = exe.with_file_name("wings");
+    if command.is_file() { command } else { exe }
 }
 
 #[cfg(test)]
@@ -649,6 +656,17 @@ mod tests {
         let reply: Value = serde_json::from_str(&run(&allowed, "send_to_agent", json!({ "pane_id": "p2", "message": "go" }), None).unwrap()).unwrap();
         assert_eq!(reply["waitCommand"], json!(format!("'{}' wait p2", std::env::current_exe().unwrap().display())));
         assert!(allowed.sent.borrow()[1].1.starts_with("(Message from another agent,"));
+    }
+
+    #[test]
+    fn wait_runs_the_wings_command_beside_the_native_app() {
+        let bundle = std::env::temp_dir().join(format!("wings-wait-{}", std::process::id()));
+        std::fs::create_dir_all(&bundle).unwrap();
+        let app = bundle.join("wings-native");
+        assert_eq!(wait_program(app.clone()), app, "the desktop's app is the command itself");
+        std::fs::write(bundle.join("wings"), "").unwrap();
+        assert_eq!(wait_program(app), bundle.join("wings"));
+        std::fs::remove_dir_all(bundle).unwrap();
     }
 
     #[test]
