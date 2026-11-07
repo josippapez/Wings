@@ -131,15 +131,16 @@ impl Workspace {
         self.open_pane_as(cwd, history, None, cx)
     }
 
-    /// `open_pane` under the Claude Code account `account` (its folder, or `None` for the default one) instead of the
-    /// project's, with `Some`.
+    /// `open_pane` under the Claude Code account `account` instead of the project's, with `Some`. A name that isn't an
+    /// account's, from a file edited by hand, is the project's.
     pub(super) fn open_pane_as(
         &mut self,
         cwd: Option<PathBuf>,
         history: Option<String>,
-        account: Option<Option<PathBuf>>,
+        account: Option<wings_spaces::claude_accounts::AccountPick>,
         cx: &mut Context<Self>,
     ) -> usize {
+        let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
         let id = self.next_pane;
         self.next_pane += 1;
         let folder = cwd
@@ -159,8 +160,10 @@ impl Workspace {
             .as_deref()
             .map(|state| saved::load_history(state, &history))
             .unwrap_or_default();
-        let account =
-            account.unwrap_or_else(|| self.spaces.claude_config_dir(&self.config.project));
+        let account = match &pick {
+            Some(pick) => wings_spaces::claude_accounts::pick_dir(pick).unwrap_or_default(),
+            None => self.spaces.claude_config_dir(&self.config.project),
+        };
         #[cfg(unix)]
         let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
         #[cfg(not(unix))]
@@ -180,6 +183,7 @@ impl Workspace {
                 focus: cx.focus_handle(),
                 history,
                 name: None,
+                claude_account: pick,
                 renaming: None,
                 _exit: exit,
             },

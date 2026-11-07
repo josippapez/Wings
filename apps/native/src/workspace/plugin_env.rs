@@ -893,15 +893,10 @@ impl Workspace {
         };
         self.switch_project(plan.project, window, cx);
         // The account `openPane` asked for, else the project's. The host checked the plugin may, and the name.
-        let account = plan
-            .claude_account
-            .map(|pick| claude_accounts::pick_dir(&pick))
-            .transpose();
-        let account = match account {
-            Ok(account) => account,
-            Err(error) => return reply.err(error),
-        };
-        let pane = self.open_pane_as(Some(cwd), None, account, cx);
+        if let Some(Err(error)) = plan.claude_account.as_ref().map(claude_accounts::pick_dir) {
+            return reply.err(error);
+        }
+        let pane = self.open_pane_as(Some(cwd), None, plan.claude_account, cx);
         if let Err(error) = &self.panes[&pane].view {
             let error = error.to_string();
             self.panes.remove(&pane);

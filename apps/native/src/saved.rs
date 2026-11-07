@@ -31,6 +31,10 @@ pub enum SavedLayout {
         /// A name you gave the pane, shown instead of its program's title.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// The Claude Code account its shell runs under when it isn't its project's, as a plugin's `openPane` chose it:
+        /// `{ "name": null }` for the default account. Absent in files from before it, which use the project's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
     },
     Split {
         dir: SavedDir,
@@ -391,11 +395,13 @@ mod tests {
                             cwd: None,
                             history: None,
                             name: None,
+                            claude_account: None,
                         }),
                         b: Box::new(SavedLayout::Pane {
                             cwd: None,
                             history: None,
                             name: None,
+                            claude_account: None,
                         }),
                     },
                     focused: 1,
@@ -406,6 +412,9 @@ mod tests {
                         cwd: Some("/tmp".into()),
                         history: Some("1a-2".into()),
                         name: Some("server".into()),
+                        claude_account: Some(wings_spaces::claude_accounts::AccountPick {
+                            name: Some("work".into()),
+                        }),
                     },
                     focused: 0,
                     zoomed: None,
@@ -582,6 +591,7 @@ mod tests {
                 cwd: None,
                 history: None,
                 name: None,
+                claude_account: None,
             }
         );
         save(&path, "/a", split(), settings(13.0)).unwrap();

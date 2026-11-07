@@ -100,6 +100,8 @@ struct Pane {
     history: String,
     /// A name you gave the pane, shown instead of its program's title, as in the desktop app.
     name: Option<SharedString>,
+    /// The Claude Code account its shell runs under when a plugin chose one apart from the project's.
+    claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
     /// The name field while you edit it, in place of the title.
     renaming: Option<(Entity<TextField>, Subscription)>,
     /// Closes the pane when its shell exits.

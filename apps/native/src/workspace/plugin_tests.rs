@@ -467,7 +467,11 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
         "starter-scope",
     );
     let system = Arc::new(FakeSystem::default());
-    let (app, mut window) = open_plugins(&data, &system, |config| config.project = project.clone());
+    let state = data.root.join("workspace.json");
+    let (app, mut window) = open_plugins(&data, &system, |config| {
+        config.project = project.clone();
+        config.state = Some(state.clone());
+    });
     let host = window.read(|w, _| w.plugins[0].host.clone());
     host.send_action("0", "start", |_| {});
     until(&app, &mut window, "the pane never opened", |_| {
@@ -501,6 +505,47 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
         assert!(
             Instant::now() < deadline,
             "the shell never printed {expected}"
+        );
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop((app, window));
+
+    // Relaunched, the pane comes back under that account, and so does its shell, not under the project's.
+    let (app, mut window) = open_plugins(&data, &system, |config| {
+        config.project = project.clone();
+        config.state = Some(state.clone());
+    });
+    let restored = window.read(|w, _| {
+        let account = |pane: &super::Pane| pane.claude_account.clone();
+        w.panes.values().filter_map(account).collect::<Vec<_>>()
+    });
+    assert_eq!(
+        restored,
+        [wings_spaces::claude_accounts::AccountPick {
+            name: Some("wings-native-test".into())
+        }]
+    );
+    let pane = window.read(|w, _| {
+        *w.panes
+            .iter()
+            .find(|(_, pane)| pane.claude_account.is_some())
+            .unwrap()
+            .0
+    });
+    let terminal = window.read(|w, _| w.terminal(pane).unwrap());
+    window.update(|_, _, cx| {
+        terminal.update(cx, |view, cx| {
+            view.write_input("echo account-''dir:$CLAUDE_CONFIG_DIR\r", cx)
+        })
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !String::from_utf8_lossy(&window.read(|_, cx| terminal.read(cx).recent_output()))
+        .contains(&expected)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the restored shell never printed {expected}"
         );
         app.run_until_parked();
         std::thread::sleep(Duration::from_millis(20));

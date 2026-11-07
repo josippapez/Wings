@@ -53,8 +53,14 @@ impl Workspace {
 
     fn restore_layout(&mut self, saved: &SavedLayout, cx: &mut Context<Self>) -> Layout {
         match saved {
-            SavedLayout::Pane { cwd, history, name } => {
-                let pane = self.open_pane(cwd.clone(), history.clone(), cx);
+            SavedLayout::Pane {
+                cwd,
+                history,
+                name,
+                claude_account,
+            } => {
+                let pane =
+                    self.open_pane_as(cwd.clone(), history.clone(), claude_account.clone(), cx);
                 if let Some(saved) = self.panes.get_mut(&pane) {
                     saved.name = name.clone().filter(|name| !name.is_empty()).map(Into::into);
                 }
@@ -90,6 +96,7 @@ impl Workspace {
                     .and_then(|view| view.read(cx).cwd()),
                 history: pane.map(|pane| pane.history.clone()),
                 name: pane.and_then(|pane| pane.name.as_ref().map(ToString::to_string)),
+                claude_account: pane.and_then(|pane| pane.claude_account.clone()),
             }
         };
         let layout = |node: &Layout| saved_layout(node, &pane);

@@ -8,7 +8,7 @@ use crate::saved::{self, SavedDir, SavedLayout, SavedPluginTab, SavedProject, Sa
 /// A desktop `workspace.json` with every key the desktop writes (`SavedWorkspace` in `App.tsx`, and main's
 /// `claudeAccounts`), in the shapes the real file has, with made-up values.
 fn desktop_workspace() -> serde_json::Value {
-    json!({
+    let mut workspace = json!({
         "version": 1,
         "activeSpaceId": "/work/both",
         "activeTabBySpace": { "/work/both": "t2", "/work/desk": "v1" },
@@ -75,7 +75,22 @@ fn desktop_workspace() -> serde_json::Value {
         "agentRuns": { "p1": { "kind": "claude", "pid": 1, "startedAt": 1 } },
         "openedBy": { "p1": "tasks" },
         "claudeAccounts": { "p1": { "name": "work" } }
-    })
+    });
+    // Set apart: one more level in the literal is past `json!`'s recursion limit.
+    workspace["claudeAccounts"] = json!({ "p1": { "name": "work" }, "p2": { "name": 5 }, "p3": { "name": "../x" }, "p4": { "name": null } });
+    workspace
+}
+
+/// `pane` run under the Claude Code account `name`, `None` being the default one.
+fn pane_as(cwd: &str, history: &str, name: Option<&str>) -> SavedLayout {
+    SavedLayout::Pane {
+        cwd: Some(cwd.into()),
+        history: Some(history.into()),
+        name: None,
+        claude_account: Some(wings_spaces::claude_accounts::AccountPick {
+            name: name.map(Into::into),
+        }),
+    }
 }
 
 fn pane(cwd: &str, history: Option<&str>, name: Option<&str>) -> SavedLayout {
@@ -83,6 +98,7 @@ fn pane(cwd: &str, history: Option<&str>, name: Option<&str>) -> SavedLayout {
         cwd: Some(cwd.into()),
         history: history.map(Into::into),
         name: name.map(Into::into),
+        claude_account: None,
     }
 }
 
@@ -139,7 +155,8 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
         SavedProject {
             tabs: vec![
                 SavedTab {
-                    layout: pane("/work/both", Some("aaaa-1"), None),
+                    // The desktop's `claudeAccounts`: the pane opened as the work account stays it.
+                    layout: pane_as("/work/both", "aaaa-1", Some("work")),
                     focused: 0,
                     zoomed: None,
                 },
@@ -147,6 +164,7 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
                     layout: SavedLayout::Split {
                         dir: SavedDir::Row,
                         ratio: 0.4,
+                        // An account entry that isn't `{ name }` with an account name, or null, is dropped.
                         a: Box::new(pane("/work/both/api", Some("aaaa-2"), Some("server"))),
                         // A history id that isn't a plain name is dropped, as both apps drop it.
                         b: Box::new(pane("/work/both/web", None, None)),
@@ -163,7 +181,7 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
         projects["/work/desk"],
         SavedProject {
             tabs: vec![SavedTab {
-                layout: pane("/work/desk", Some("aaaa-4"), None),
+                layout: pane_as("/work/desk", "aaaa-4", None),
                 focused: 0,
                 zoomed: None,
             }],

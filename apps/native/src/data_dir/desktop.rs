@@ -10,6 +10,7 @@ use std::{
 };
 
 use serde::Deserialize;
+use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
 use crate::saved::{
     GlobalHotkey, NotifySound, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedTab,
@@ -153,6 +154,11 @@ pub struct Workspace {
     /// Each pane's saved output in `scrollback/`, by pane key.
     #[serde(default)]
     pub histories: HashMap<String, String>,
+    /// The Claude Code account of each pane that runs under one other than its project's, by pane key, as
+    /// `{ "name": "work" }` or `{ "name": null }`. Read loosely, as the desktop's `savedClaudeAccount` does: an entry of
+    /// another shape is dropped, not the whole file.
+    #[serde(default)]
+    pub claude_accounts: HashMap<String, serde_json::Value>,
 }
 
 /// The desktop's workspace at `path`, when it is one the desktop itself would load.
@@ -272,6 +278,17 @@ impl Workspace {
                         .filter(|history| valid_history_id(history))
                         .cloned(),
                     name: name.clone().filter(|name| !name.is_empty()),
+                    claude_account: self.claude_accounts.get(id).and_then(|pick| {
+                        match pick.get("name")? {
+                            serde_json::Value::String(name) if valid_name(name) => {
+                                Some(AccountPick {
+                                    name: Some(name.clone()),
+                                })
+                            }
+                            serde_json::Value::Null => Some(AccountPick { name: None }),
+                            _ => None,
+                        }
+                    }),
                 }
             }
             Layout::Split { dir, ratio, a, b } => SavedLayout::Split {
