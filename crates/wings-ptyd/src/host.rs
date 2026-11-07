@@ -241,17 +241,12 @@ impl Host {
         }
         let id = self.next_client.fetch_add(1, Ordering::Relaxed);
         let client = Arc::new(Client::new(id, self.config.client_queue));
-        self.clients.lock().unwrap().insert(id, client.clone());
-        self.clients_changed.notify_all();
         let host = self.clone();
-        let spawned = thread::Builder::new().name("ptyd-client".into()).spawn(move || {
+        let _ = thread::Builder::new().name("ptyd-client".into()).spawn(move || {
             host.serve_client(&client, stream);
             client.close();
             host.leave(&client);
         });
-        if spawned.is_err() {
-            self.clients.lock().unwrap().remove(&id);
-        }
     }
 
     fn leave(&self, client: &Arc<Client>) {
@@ -279,6 +274,9 @@ impl Host {
             return;
         }
         client.send(None, welcome);
+        // Only now does it hear what every app hears: a title or an exit sent before the welcome would take its place.
+        self.clients.lock().unwrap().insert(client.id, client.clone());
+        self.clients_changed.notify_all();
         let writer = client.clone();
         let Ok(mut socket) = write_half.try_clone() else { return };
         let spawned = thread::Builder::new().name("ptyd-write".into()).spawn(move || {
@@ -887,6 +885,21 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn an_app_connecting_while_a_pane_changes_its_title_is_welcomed_first() {
+        let (path, _host) = test_host(config());
+        let mut client = TestClient::connect(&path);
+        let pane = client.spawn("titles");
+        // Every title change goes to every connected app, a new one included.
+        client.type_in(pane, "i=0; while true; do i=$((i+1)); printf '\\033]0;t%s\\007' $i; done\r");
+        client.until("the titles", |c| c.events.iter().filter(|e| matches!(e, HostMsg::Title { .. })).count() > 10);
+        for _ in 0..300 {
+            let (_, welcome) = TestClient::hello(&path, PROTO, proto::MIN_PROTO);
+            assert!(matches!(welcome, Some(HostMsg::Welcome { error: None, .. })), "{welcome:?}");
+        }
+        client.call(Request::Kill { pane });
     }
 
     #[test]
