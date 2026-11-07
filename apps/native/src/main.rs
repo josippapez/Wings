@@ -47,6 +47,7 @@ fn run() -> Result<(), String> {
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             actions::bind(cx);
+            wings_native::ui::motion::follow_reduce_motion(cx);
             cx.set_menus(actions::menus());
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

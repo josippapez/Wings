@@ -364,8 +364,10 @@ impl Workspace {
                     }
                 }
             }),
-            _activation: cx.observe_window_activation(window, |this, window, _| {
+            _activation: cx.observe_window_activation(window, |this, window, cx| {
                 this.window_active = window.is_window_active();
+                // Reduce motion turned on or off in System Settings takes effect when you come back.
+                crate::ui::motion::follow_reduce_motion(cx);
                 for installed in &this.plugins {
                     installed.host.publish_focus(this.window_active);
                 }

@@ -3,6 +3,7 @@
 
 mod button;
 mod menu;
+pub mod motion;
 mod parts;
 mod status_dot;
 mod tooltip;
