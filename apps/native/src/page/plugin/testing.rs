@@ -14,7 +14,7 @@ use wings_spaces::{claude_accounts::Accounts, spaces::WorktreeSetup};
 use super::{
     Access, Env, PaneEntry, PanePort, PluginHost, Project, Running, ToolCall,
     tests::Root,
-    ui::{Badge, PaneStatus},
+    ui::{Badge, PaneStatus, SidebarLabel},
 };
 use crate::{
     page::runtime::{Event, PageRuntime},
@@ -44,6 +44,12 @@ pub(super) enum Seen {
     ProjectSection(String, String, String, Option<Vec<super::SectionRow>>),
     /// A plugin's confirmed sort: plugin, section, sort.
     SectionSort(String, String, String),
+    /// A named Claude Code account got ready for a terminal.
+    PreparedAccount(String),
+    /// A named account's share of the default account's setup turned on or off.
+    SharedSetup(String, bool),
+    /// A plugin's label by a title bar button: plugin, sidebar or view, label.
+    SidebarLabel(String, String, Option<SidebarLabel>),
 }
 
 pub(super) struct FakeEnv {
@@ -236,7 +242,11 @@ impl Env for FakeEnv {
     }
 
     fn claude_accounts(&self) -> Result<Accounts, String> {
-        Ok(self.spaces.lock().unwrap().claude_accounts())
+        Ok(self
+            .spaces
+            .lock()
+            .unwrap()
+            .claude_accounts(|_| Default::default()))
     }
 
     fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
@@ -245,6 +255,16 @@ impl Env for FakeEnv {
             .lock()
             .unwrap()
             .set_claude_account(project, name, |_| Ok(()))
+    }
+
+    fn prepare_claude_account(&self, name: &str) -> Result<(), String> {
+        self.record(Seen::PreparedAccount(name.into()));
+        Ok(())
+    }
+
+    fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
+        self.record(Seen::SharedSetup(name.into(), on));
+        Ok(())
     }
 
     fn agent_activity(&self, session_id: &str) -> Result<Value, String> {
@@ -306,6 +326,10 @@ impl Env for FakeEnv {
 
     fn set_pane_status(&self, plugin: &str, pane: &str, status: Option<PaneStatus>) {
         self.record(Seen::Status(plugin.into(), pane.into(), status));
+    }
+
+    fn set_sidebar_label(&self, plugin: &str, page: &str, label: Option<SidebarLabel>) {
+        self.record(Seen::SidebarLabel(plugin.into(), page.into(), label));
     }
 
     fn set_project_section(

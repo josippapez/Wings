@@ -216,7 +216,11 @@ impl Projects {
     }
 
     /// The Claude Code accounts and the one each project uses, by the project's folder, which is its id to plugins.
-    pub fn claude_accounts(&self) -> claude_accounts::Accounts {
+    /// `auth` says whether an account is signed in, `None` being the default one; it is asked of each side by side.
+    pub fn claude_accounts(
+        &self,
+        auth: impl Fn(Option<&str>) -> claude_accounts::AuthStatus + Sync,
+    ) -> claude_accounts::Accounts {
         let spaces: Vec<Space> = self
             .store
             .lock()
@@ -228,7 +232,7 @@ impl Projects {
                 ..space.clone()
             })
             .collect();
-        claude_accounts::list(&spaces)
+        claude_accounts::list_with(&spaces, auth)
     }
 
     /// Makes new terminals in the project in folder `project` use the account `name`, or the default account with
@@ -612,7 +616,7 @@ mod tests {
             .unwrap();
         assert_eq!(projects.claude_config_dir(&alpha), Some(work));
         assert_eq!(
-            projects.claude_accounts().projects,
+            projects.claude_accounts(|_| Default::default()).projects,
             [(folder(&alpha), "work".to_owned())].into()
         );
         // A name that isn't one, from a list edited by hand, is no account. Neither is a folder the list lacks.

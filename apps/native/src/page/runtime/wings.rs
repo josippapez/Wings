@@ -9,7 +9,8 @@
 //! The rest of the desktop's frame API that a native plugin can use is here too, written as `apps/desktop/public/
 //! plugin-sdk.js` writes it: `onPanes`, `setBadge`, `setPaneStatus` and `onAction`, `exec`, `openUrl`, `ports`,
 //! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `onHook`, `closeView`, `project`, and
-//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts` and `setClaudeAccount`, `fetch`, `secrets`
+//! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts`, `setClaudeAccount` and `shareClaudeSetup`,
+//! `setSidebarLabel`, `fetch`, `secrets`
 //! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`. `onReply` is accepted and never called: the
 //! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal. `copyText` is
 //! the native app's own, for `wings-plugin-ui/native`'s `copyText`: a desktop frame has the browser's clipboard instead.
@@ -140,6 +141,8 @@ const SETUP: &str = r#"
         // is never sent. Plugins resend on every poll. The host drops a closed pane's, which `forgetPanes` mirrors.
         const sentBadges = new Map();
         const sentStatuses = new Map();
+        // The same for each sidebar's label, by sidebar id: it isn't a pane's, so a pane list never clears it.
+        const sentLabels = new Map();
         // Sends only when `value` differs from the last one sent under `key`. A call that fails is forgotten, so the next one retries.
         const sendChanged = (sent, key, value, method, params) => {
             const json = JSON.stringify(value);
@@ -293,7 +296,7 @@ const SETUP: &str = r#"
             setTabState: (state) => call('setTabState', { state }),
             blockState: () => call('blockState', {}),
             setBlockState: (state) => call('setBlockState', { state }),
-            openPane: ({ command = null, args = [], cwd = null, placement = 'tab' } = {}) => call('openPane', { command, args, cwd, placement }),
+            openPane: ({ command = null, args = [], cwd = null, placement = 'tab', claudeAccount } = {}) => call('openPane', { command, args, cwd, placement, claudeAccount }),
             openView: (id, { as, args, newTab } = {}) => call('openView', { id, as, args, newTab: newTab === true }),
             viewArgs: () => (native.viewArgs == null ? null : JSON.parse(native.viewArgs)),
             openSettings: () => call('openSettings', {}),
@@ -306,6 +309,7 @@ const SETUP: &str = r#"
             setWorktreeSetup: (projectId, options) => call('setWorktreeSetup', { projectId: projectId ?? null, include: options?.include, setup: options?.setup }),
             claudeAccounts: () => call('claudeAccounts', {}),
             setClaudeAccount: (projectId, name) => call('setClaudeAccount', { projectId, name: name ?? null }),
+            shareClaudeSetup: (name, on) => call('shareClaudeSetup', { name, on: on === true }),
             setProjectSection: (projectId, sectionId, rows) => call('setProjectSection', { projectId, sectionId, rows }),
             setSectionSort: (sectionId, sort) => call('setSectionSort', { sectionId, sort }),
             onSectionSort: (listener) => subscribe(listeners.sectionSort, listener),
@@ -327,6 +331,8 @@ const SETUP: &str = r#"
             onAction: (listener) => subscribe(listeners.action, listener),
             setBadge: (paneId, badge) => sendChanged(sentBadges, paneId, badge, 'setBadge', { paneId, badge }),
             setPaneStatus: (paneId, status) => sendChanged(sentStatuses, paneId, status, 'setPaneStatus', { paneId, status }),
+            setSidebarLabel: (sidebarId, label, { rows, tone } = {}) =>
+                sendChanged(sentLabels, sidebarId, [label, rows, tone], 'setSidebarLabel', { sidebarId, label, rows, tone }),
             exec: (program, args = [], { cwd = null, timeoutMs = null, onOutput } = {}) =>
                 call('exec', {
                     program: String(program),

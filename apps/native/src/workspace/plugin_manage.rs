@@ -389,6 +389,8 @@ impl Workspace {
             shown.remove(id);
         }
         self.plugin_ui.statuses.retain(|_, shown| !shown.is_empty());
+        self.plugin_ui.labels.retain(|(plugin, _), _| plugin != id);
+        self.plugin_ui.popover.forget(id);
         if self
             .badge_card
             .as_ref()

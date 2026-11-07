@@ -80,6 +80,8 @@ pub struct PageView {
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
+    /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
+    popover: bool,
     _events: Task<()>,
 }
 
@@ -98,6 +100,23 @@ impl PageView {
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
         Self::start(cx, |on_event| host.open_hidden_page(source, on_event))
+    }
+
+    /// Like `in_plugin`, for a page shown in the popover under its sidebar's title bar button.
+    pub fn in_plugin_popover(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
+        Self {
+            popover: true,
+            ..Self::in_plugin(host, source, cx)
+        }
+    }
+
+    /// A bare page drawn as a popover's, for tests.
+    #[cfg(test)]
+    pub fn new_popover(source: &str, cx: &mut Context<Self>) -> Self {
+        Self {
+            popover: true,
+            ..Self::new(source, cx)
+        }
     }
 
     /// Like `in_plugin`, for a tab `wings.openView` opened with `args`, which the page reads with `viewArgs`.
@@ -226,6 +245,7 @@ impl PageView {
             sunbursts: RefCell::new(HashMap::new()),
             chip_focus: RefCell::new(HashMap::new()),
             error,
+            popover: false,
             _events: events,
         }
     }
@@ -1344,8 +1364,13 @@ impl Render for PageView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it.
-            .bg(rgb(theme::SURFACE))
+            // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
+            // `bg-popover` of a popover.
+            .bg(rgb(if self.popover {
+                ui::DIALOG
+            } else {
+                theme::SURFACE
+            }))
             .text_color(rgb(theme::FOREGROUND))
             .text_size(px(13.0))
             // plugin-ui.css's body line height, so rows come out as tall as the desktop's.
@@ -1360,7 +1385,15 @@ impl Render for PageView {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .when(!fill, |shell| shell.gap(px(10.0)).p(px(14.0)))
+                    .when(!fill && !self.popover, |shell| {
+                        shell.gap(px(10.0)).p(px(14.0))
+                    })
+                    // `.w-shell[data-place="popover"]`.
+                    .when(!fill && self.popover, |shell| {
+                        shell.gap(px(12.0)).pt(px(12.0)).px(px(14.0)).pb(px(14.0))
+                    })
+                    // A desktop page longer than its frame scrolls in it.
+                    .when(!fill, |shell| shell.overflow_y_scroll())
                     .children(body),
             )
             .when_some(self.error.clone(), |page, error| {

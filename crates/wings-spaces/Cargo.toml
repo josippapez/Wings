@@ -10,7 +10,8 @@ name = "wings_spaces"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# An account's `settings.json` copy keeps the default account's key order.
+serde_json = { version = "1", features = ["preserve_order"] }
 # Names a project's folder in the Project page's data.
 sha2 = "0.11"
 # `find_program` finds git the way the plugin runner finds any program.

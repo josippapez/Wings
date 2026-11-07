@@ -17,7 +17,7 @@ use async_channel::Sender;
 use gpui::{Context, SharedString, Task};
 use wings_plugins::transcript::{Line, transcript_event};
 use wings_spaces::{
-    claude_accounts::{self, Accounts},
+    claude_accounts::{self, Accounts, AuthStatus},
     spaces::WorktreeSetup,
 };
 
@@ -26,7 +26,7 @@ use crate::{
     page::plugin::{
         Env, Notification, OpenPane, OpenView, PaneEntry, PanePort, Project, Running, SectionRow,
         SessionEntry, ToolCall,
-        ui::{Badge, PaneStatus},
+        ui::{Badge, PaneStatus, SidebarLabel},
     },
     ports,
     projects::{Projects, with_setup},
@@ -126,6 +126,11 @@ pub(super) enum UiEvent {
         pane: String,
         status: Option<PaneStatus>,
     },
+    SidebarLabel {
+        plugin: String,
+        page: String,
+        label: Option<SidebarLabel>,
+    },
     /// A notification the system couldn't show, for the window to show itself.
     Notice {
         title: String,
@@ -152,6 +157,13 @@ pub(super) enum UiEvent {
 pub(super) trait System: Send + Sync + 'static {
     fn open_url(&self, url: &str) -> Result<(), String>;
     fn notify(&self, title: &str, body: &str) -> Result<(), String>;
+    /// Makes a named Claude Code account's folder and gives it its share of the default account's setup (unless that is
+    /// off), as the desktop's `prepare_claude_account`. The terminal starts all the same if sharing fails.
+    fn prepare_claude_account(&self, name: &str) -> Result<(), String>;
+    /// Turns on or off that a named account uses the default account's setup (`claude_accounts::set_shared_setup`).
+    fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String>;
+    /// What `claude auth status` says for an account, `None` being the default one.
+    fn claude_auth(&self, name: Option<&str>) -> AuthStatus;
 }
 
 /// The real system. A bare binary has no bundle to post notifications from (`UNUserNotificationCenter` needs one), so
@@ -199,6 +211,37 @@ impl System for Os {
                 Command::new("notify-send").args([title, body]).status(),
             )
         }
+    }
+
+    fn prepare_claude_account(&self, name: &str) -> Result<(), String> {
+        claude_accounts::create_dir(name).map_err(|error| error.to_string())?;
+        if let Err(error) = claude_accounts::sync_shared_setup(name) {
+            eprintln!("[claude] couldn't share the default account's setup with {name}: {error}");
+        }
+        Ok(())
+    }
+
+    fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
+        claude_accounts::create_dir(name).map_err(|error| error.to_string())?;
+        claude_accounts::set_shared_setup(name, on)
+    }
+
+    /// Half a second, from `claude`; the answer is on stdout whatever the exit code, which is 1 when signed out. Not
+    /// signed in when `claude` can't run.
+    fn claude_auth(&self, name: Option<&str>) -> AuthStatus {
+        let Some(claude) = wings_plugins::exec::find_program("claude") else {
+            return AuthStatus::default();
+        };
+        let mut command = Command::new(claude);
+        if let Some(name) = name {
+            command.env("CLAUDE_CONFIG_DIR", claude_accounts::dir(Some(name)));
+        }
+        let out = command
+            .args(["auth", "status"])
+            .stdin(std::process::Stdio::null())
+            .output();
+        out.map(|out| claude_accounts::read_auth_status(&String::from_utf8_lossy(&out.stdout)))
+            .unwrap_or_default()
     }
 }
 
@@ -488,15 +531,24 @@ impl Env for AppEnv {
     }
 
     fn claude_accounts(&self) -> Result<Accounts, String> {
-        Ok(self.projects.claude_accounts())
+        let system = self.system();
+        Ok(self
+            .projects
+            .claude_accounts(|name| system.claude_auth(name)))
     }
 
     fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
-        self.projects.set_claude_account(project, name, |name| {
-            claude_accounts::create_dir(name)
-                .map(drop)
-                .map_err(|error| error.to_string())
-        })
+        let system = self.system();
+        self.projects
+            .set_claude_account(project, name, |name| system.prepare_claude_account(name))
+    }
+
+    fn prepare_claude_account(&self, name: &str) -> Result<(), String> {
+        self.system().prepare_claude_account(name)
+    }
+
+    fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
+        self.system().share_claude_setup(name, on)
     }
 
     fn agent_activity(&self, session_id: &str) -> Result<serde_json::Value, String> {
@@ -552,6 +604,14 @@ impl Env for AppEnv {
         });
     }
 
+    fn set_sidebar_label(&self, plugin: &str, page: &str, label: Option<SidebarLabel>) {
+        self.send(UiEvent::SidebarLabel {
+            plugin: plugin.to_owned(),
+            page: page.to_owned(),
+            label,
+        });
+    }
+
     fn set_project_section(
         &self,
         plugin: &str,
@@ -603,6 +663,9 @@ pub(super) struct PluginUi {
     /// By pane, then plugin id, which is also the order they are drawn in.
     pub(super) badges: HashMap<usize, BTreeMap<String, Badge>>,
     pub(super) statuses: HashMap<usize, BTreeMap<String, PaneStatus>>,
+    /// The label by each sidebar's or view's title bar button, by plugin id and page id.
+    pub(super) labels: HashMap<(String, String), SidebarLabel>,
+    pub(super) popover: super::plugin_ui::HoverPopover,
     /// The notifications the system couldn't show, newest last.
     pub(super) notices: Vec<Notice>,
     next_notice: usize,
@@ -761,6 +824,17 @@ impl Workspace {
                 };
                 set(&mut self.plugin_ui.statuses, pane, plugin, status);
             }
+            UiEvent::SidebarLabel {
+                plugin,
+                page,
+                label,
+            } => {
+                let key = (plugin, page);
+                match label {
+                    Some(label) => self.plugin_ui.labels.insert(key, label),
+                    None => self.plugin_ui.labels.remove(&key),
+                };
+            }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
             UiEvent::Notified(notification) => self.inbox_plugin(notification),
             UiEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
@@ -810,7 +884,16 @@ impl Workspace {
             Err(error) => return reply.err(error),
         };
         self.switch_project(plan.project, window, cx);
-        let pane = self.open_pane(Some(cwd), None, cx);
+        // The account `openPane` asked for, else the project's. The host checked the plugin may, and the name.
+        let account = plan
+            .claude_account
+            .map(|pick| claude_accounts::pick_dir(&pick))
+            .transpose();
+        let account = match account {
+            Ok(account) => account,
+            Err(error) => return reply.err(error),
+        };
+        let pane = self.open_pane_as(Some(cwd), None, account, cx);
         if let Err(error) = &self.panes[&pane].view {
             let error = error.to_string();
             self.panes.remove(&pane);

@@ -239,6 +239,31 @@ fn a_page_that_does_not_fill_keeps_the_desktops_14pt_padding() {
     settle(&app, &mut window, shows("Pressed 1 1."));
 }
 
+#[test]
+fn a_popover_page_has_the_desktops_popover_shell() {
+    // `.w-shell[data-place="popover"] { padding: 12px 14px 14px }`: 13pt down is padding on a sidebar's page and a
+    // button on a popover's.
+    let at = |popover: bool| {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let mut window = app.open_window(move |_, cx| {
+            if popover {
+                PageView::new_popover(corners!("{}"), cx)
+            } else {
+                PageView::new(corners!("{}"), cx)
+            }
+        });
+        settle(&app, &mut window, shows("Pressed 0 0."));
+        window.simulate_click(point(px(16.0), px(13.0)), MouseButton::Left);
+        thread::sleep(Duration::from_millis(100));
+        app.run_until_parked();
+        window.draw();
+        window.read(|view, _| view.text())
+    };
+    assert!(at(false).contains("Pressed 0 0."));
+    assert!(at(true).contains("Pressed 1 0."));
+}
+
 /// Two buttons at either end of a 720pt column, the desktop's Schedules form, on a page that fills its frame.
 const COLUMN: &str = r#"
 let left = 0, right = 0;

@@ -2,7 +2,11 @@
 //! in a panel on the right, and the notifications the system couldn't show. These follow the desktop's
 //! `pane-badge.tsx`, `pane-status.tsx` and `right-sidebar.tsx`.
 
-use std::{rc::Rc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    time::Duration,
+};
 
 use gpui::{
     Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement,
@@ -525,10 +529,19 @@ impl Workspace {
             cx.notify();
         } else {
             self.show_sidebar(plugin, sidebar, cx);
+            // Not over its own open sidebar: closed rather than hidden, so it doesn't come back when the sidebar closes.
+            let key = (plugin.to_owned(), sidebar.to_owned());
+            if self.plugin_ui.popover.open.as_ref() == Some(&key) {
+                self.hide_popover(cx);
+            }
+            self.plugin_ui.popover.hovered = None;
         }
     }
 
-    /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right.
+    /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right. A
+    /// label the plugin set (`setSidebarLabel`) follows the icon behind a tone dot, as the desktop's `ProjectBar` draws
+    /// it, and its rows show when you point at the button. A sidebar with a popover page shows that instead, under the
+    /// button, while you point at it (the desktop's `WithPopover`).
     pub(super) fn sidebar_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.plugins
             .iter()
@@ -540,10 +553,8 @@ impl Workspace {
             })
             .map(|(installed, sidebar)| {
                 let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
-                let open = self
-                    .right
-                    .as_ref()
-                    .is_some_and(|(open, shown)| *open == plugin && *shown == page);
+                let key = (plugin.clone(), page.clone());
+                let open = self.right.as_ref() == Some(&key);
                 let mark = match &installed.plugin.icon_svg {
                     Some(svg_text) => svg()
                         .data(svg_text.as_bytes())
@@ -553,20 +564,233 @@ impl Workspace {
                         .into_any_element(),
                     None => icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND).into_any_element(),
                 };
-                ui::ghost_button(
+                let label = self.plugin_ui.labels.get(&key);
+                let name = match label {
+                    Some(label) => format!("{}, {}", sidebar.title, label.text),
+                    None => sidebar.title.clone(),
+                };
+                let has_popover = installed
+                    .plugin
+                    .manifest
+                    .contributes
+                    .sidebars
+                    .iter()
+                    .any(|declared| declared.id == page && declared.popover.is_some())
+                    && !self.plugin_ui.popover.missing.contains(&key);
+                let content = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(mark)
+                    .when_some(label, |content, label| {
+                        content.child(ui::dot(tone_dot(label.tone))).child(
+                            div()
+                                .max_w(px(200.0))
+                                .truncate()
+                                .text_size(px(12.0))
+                                .child(label.text.clone()),
+                        )
+                    });
+                let button = ui::untipped_ghost_button(
                     SharedString::from(format!("plugin-sidebar-{plugin}-{page}")),
-                    sidebar.title.clone(),
-                    None,
+                    name.clone(),
                     ButtonSize::Sm,
                     Some(open),
-                    mark,
+                    content,
                 )
-                .on_click(
+                .when(label.is_some(), |button| button.w_auto().px(px(8.0)));
+                // The popover shows more than a tooltip would.
+                let button = if has_popover {
+                    let key = key.clone();
+                    button.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.hover_popover(key.clone(), false, *hovered, cx)
+                    }))
+                } else if let Some(label) = label.filter(|label| !label.rows.is_empty()) {
+                    let tip = LabelTip {
+                        title: sidebar.title.clone(),
+                        rows: label.rows.clone(),
+                    };
+                    button.tooltip(move |_, cx| cx.new(|_| tip.clone()).into())
+                } else {
+                    button.tooltip(ui::tooltip(name, None))
+                };
+                let button = button.on_click(
                     cx.listener(move |this, _, _, cx| this.toggle_sidebar(&plugin, &page, cx)),
-                )
-                .into_any_element()
+                );
+                let card = has_popover.then(|| self.popover_card(&key, cx)).flatten();
+                div()
+                    .relative()
+                    .flex_none()
+                    .child(button)
+                    .children(card)
+                    .into_any_element()
             })
             .collect()
+    }
+
+    /// The popover page of the sidebar `key` under its button, while it is shown or on its way out.
+    fn popover_card(&self, key: &(String, String), cx: &mut Context<Self>) -> Option<AnyElement> {
+        let shown = self.plugin_ui.popover.open.as_ref() == Some(key);
+        let phase = self.popover_phase(format!("plugin-popover-{}-{}", key.0, key.1), shown, cx)?;
+        let (page, (width, height)) = self.plugin_ui.popover.pages.get(key)?;
+        let hovered = key.clone();
+        let card = div()
+            .id(SharedString::from(format!(
+                "plugin-popover-{}-{}",
+                key.0, key.1
+            )))
+            .role(Role::Dialog)
+            .w(px(*width as f32))
+            .h(px(*height as f32))
+            .overflow_hidden()
+            .rounded(px(theme::RADIUS))
+            .border_1()
+            .border_color(rgba(0xece9e41a))
+            .bg(rgb(ui::DIALOG))
+            // shadcn's `shadow-md`.
+            .shadow(vec![
+                BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.1),
+                    offset: point(px(0.0), px(4.0)),
+                    blur_radius: px(6.0),
+                    spread_radius: px(-1.0),
+                    inset: false,
+                },
+                BoxShadow {
+                    color: hsla(0.0, 0.0, 0.0, 0.1),
+                    offset: point(px(0.0), px(2.0)),
+                    blur_radius: px(4.0),
+                    spread_radius: px(-2.0),
+                    inset: false,
+                },
+            ])
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.hover_popover(hovered.clone(), true, *over, cx)
+            }))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(page.clone());
+        Some(motion::with_phase(phase, || {
+            // Zero-size, at the button's bottom right: the popover hangs 6pt under it, right edge to right edge, as the
+            // desktop's `align="end" sideOffset={6}`.
+            div()
+                .absolute()
+                .top(px(28.0 + 6.0))
+                .right_0()
+                .w(px(0.0))
+                .h(px(0.0))
+                .child(deferred(
+                    anchored()
+                        .anchor(Anchor::TopRight)
+                        .snap_to_window_with_margin(px(8.0))
+                        .child(motion::popup(
+                            "plugin-popover",
+                            motion::From::Above,
+                            motion::POPUP_IN,
+                            card,
+                        )),
+                ))
+                .into_any_element()
+        }))
+    }
+
+    /// The pointer came onto (`hovered`) or left the button of the sidebar `key`, or its popover (`card`). It shows
+    /// after `POPOVER_OPEN_DELAY` over either and goes `POPOVER_CLOSE_DELAY` after leaving both, as Base UI's
+    /// `HoverCardTrigger delay={300} closeDelay={200}`; never over its own open sidebar, which shows the same and more.
+    pub(super) fn hover_popover(
+        &mut self,
+        key: (String, String),
+        card: bool,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let popover = &mut self.plugin_ui.popover;
+        if hovered && popover.hovered.as_ref() != Some(&key) {
+            popover.hovered = Some(key.clone());
+            popover.over = [false; 2];
+        }
+        if popover.hovered.as_ref() == Some(&key) {
+            popover.over[card as usize] = hovered;
+        }
+        let over = popover.hovered.as_ref() == Some(&key) && popover.over.contains(&true);
+        let shown = popover.open.as_ref() == Some(&key);
+        if over && (shown || self.right.as_ref() == Some(&key)) {
+            popover.timer = None;
+        } else if over {
+            popover.timer = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(POPOVER_OPEN_DELAY).await;
+                let _ = this.update(cx, |this, cx| this.show_popover(key, cx));
+            }));
+        } else if shown {
+            popover.timer = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(POPOVER_CLOSE_DELAY).await;
+                let _ = this.update(cx, |this, cx| this.hide_popover(cx));
+            }));
+        } else {
+            popover.timer = None;
+        }
+    }
+
+    /// Shows the popover page of the sidebar `key`, loading it the first time or after it was unloaded.
+    pub(super) fn show_popover(&mut self, key: (String, String), cx: &mut Context<Self>) {
+        if self.right.as_ref() == Some(&key) {
+            return;
+        }
+        if !self.plugin_ui.popover.pages.contains_key(&key) {
+            let Some(installed) = self.plugins.iter().find(|installed| installed.id == key.0)
+            else {
+                return;
+            };
+            let Some((source, width, height)) = crate::installed::popover(installed, &key.1) else {
+                // Declared, with no native build: the button keeps its tooltip.
+                self.plugin_ui.popover.missing.insert(key);
+                cx.notify();
+                return;
+            };
+            let host = installed.host.clone();
+            let page = cx.new(|cx| PageView::in_plugin_popover(&host, &source, cx));
+            self.plugin_ui
+                .popover
+                .pages
+                .insert(key.clone(), (page, (width, height)));
+        }
+        if self.plugin_ui.popover.open.as_ref() != Some(&key) {
+            self.hide_popover(cx);
+        }
+        let popover = &mut self.plugin_ui.popover;
+        popover.unload.remove(&key);
+        if let Some((page, _)) = popover.pages.get(&key) {
+            page.read(cx).set_visible(true);
+        }
+        popover.open = Some(key);
+        cx.notify();
+    }
+
+    /// Hides the popover that is shown. Its page stays, out of view, for `POPOVER_UNLOAD` so it shows again at once, and
+    /// is then dropped: the next show loads it again.
+    pub(super) fn hide_popover(&mut self, cx: &mut Context<Self>) {
+        let popover = &mut self.plugin_ui.popover;
+        popover.timer = None;
+        let Some(key) = popover.open.take() else {
+            return;
+        };
+        if let Some((page, _)) = popover.pages.get(&key) {
+            page.read(cx).set_visible(false);
+        }
+        let unloaded = key.clone();
+        popover.unload.insert(
+            key,
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(POPOVER_UNLOAD).await;
+                let _ = this.update(cx, |this, _| {
+                    let popover = &mut this.plugin_ui.popover;
+                    if popover.open.as_ref() != Some(&unloaded) {
+                        popover.pages.remove(&unloaded);
+                    }
+                    popover.unload.remove(&unloaded);
+                });
+            }),
+        );
+        cx.notify();
     }
 
     /// The panel on the right, with the open sidebar's page, or nothing while none is open. Opening or closing it
@@ -868,6 +1092,100 @@ pub(super) struct RightSlide {
     /// Tells one slide from the next, so each starts over.
     count: u64,
     timer: Option<Task<()>>,
+}
+
+/// How long the pointer rests on a sidebar's button before its popover shows, and how long after it leaves the button
+/// and the popover before it goes: the desktop's `HoverCardTrigger delay={300} closeDelay={200}`.
+const POPOVER_OPEN_DELAY: Duration = Duration::from_millis(300);
+const POPOVER_CLOSE_DELAY: Duration = Duration::from_millis(200);
+/// How long a hidden popover's page is kept before it is dropped: the desktop's `POPOVER_UNLOAD_MS`.
+const POPOVER_UNLOAD: Duration = Duration::from_secs(120);
+
+/// A popover's page and its size in points.
+pub(super) type PopoverPage = (Entity<PageView>, (u32, u32));
+
+/// The sidebars' popover pages (`contributes.sidebars[].popover`), by plugin and sidebar id.
+#[derive(Default)]
+pub(super) struct HoverPopover {
+    /// The one shown.
+    pub(super) open: Option<(String, String)>,
+    /// The pages loaded, shown or kept hidden until they unload, with their size in points.
+    pub(super) pages: HashMap<(String, String), PopoverPage>,
+    /// Popovers a manifest declares that have no native build.
+    missing: HashSet<(String, String)>,
+    /// The sidebar the pointer was last on, and whether it is over its button and over its popover.
+    hovered: Option<(String, String)>,
+    over: [bool; 2],
+    /// Shows or hides it after its delay.
+    timer: Option<Task<()>>,
+    unload: HashMap<(String, String), Task<()>>,
+}
+
+impl HoverPopover {
+    /// Drops what a plugin that stopped showed.
+    pub(super) fn forget(&mut self, plugin: &str) {
+        if self.open.as_ref().is_some_and(|(open, _)| open == plugin) {
+            self.open = None;
+            self.timer = None;
+        }
+        self.pages.retain(|(owner, _), _| owner != plugin);
+        self.unload.retain(|(owner, _), _| owner != plugin);
+        self.missing.retain(|(owner, _)| owner != plugin);
+    }
+}
+
+/// The dot before a sidebar's label: green with no tone, amber or red when the plugin needs attention (the desktop's
+/// `ToneDot`).
+pub(super) fn tone_dot(tone: Option<Tone>) -> u32 {
+    match tone {
+        Some(Tone::Warning) => theme::WORKING,
+        Some(Tone::Danger) => theme::BLOCKED,
+        _ => theme::DONE,
+    }
+}
+
+/// What a sidebar's button shows when you point at it while its plugin set a label with rows: the title over them.
+#[derive(Clone)]
+struct LabelTip {
+    title: String,
+    rows: Vec<(String, String)>,
+}
+
+impl Render for LabelTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (title, rows) = (self.title.clone(), self.rows.clone());
+        ui::tip(
+            motion::TOOLTIP_IN,
+            Rc::new(move || {
+                // The desktop's `<dl>` in the tooltip: labels at 60%, values cut to the width.
+                let grid = rows.iter().map(|(label, value)| {
+                    div()
+                        .flex()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(rgba(theme::BACKGROUND << 8 | 0x99))
+                                .child(label.clone()),
+                        )
+                        .child(div().min_w_0().truncate().child(value.clone()))
+                });
+                div()
+                    .max_w(px(320.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .rounded(px(6.0))
+                    .bg(rgb(theme::FOREGROUND))
+                    .text_size(px(12.0))
+                    .text_color(rgb(theme::BACKGROUND))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(title.clone()))
+                    .child(div().flex().flex_col().gap(px(2.0)).children(grid))
+            }),
+        )
+    }
 }
 
 /// The card a status strip shows when you point at it.

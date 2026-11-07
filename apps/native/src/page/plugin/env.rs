@@ -13,13 +13,13 @@ use std::{
 use serde::Serialize;
 use wings_plugins::{manifest::Plugin, permissions::may_hear_event};
 use wings_spaces::{
-    claude_accounts::Accounts,
+    claude_accounts::{AccountPick, Accounts},
     spaces::{Space, WorktreeSetup},
 };
 
 use super::{
     PluginHost,
-    ui::{Badge, PaneStatus},
+    ui::{Badge, PaneStatus, SidebarLabel},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -50,6 +50,8 @@ pub struct OpenPane {
     pub project: PathBuf,
     pub input: Option<String>,
     pub placement: String,
+    /// The Claude Code account the pane's shell runs under instead of its project's (`openPane`'s `claudeAccount`).
+    pub claude_account: Option<AccountPick>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -426,6 +428,16 @@ pub trait Env: Send + Sync + 'static {
     fn set_claude_account(&self, _project: &str, _name: Option<&str>) -> Result<(), String> {
         Err("Claude Code accounts aren't available in this host".into())
     }
+    /// Gets the named account ready for a terminal a plugin opens in it: its folder, then its share of the default
+    /// account's setup unless that is off. The host has checked the plugin may, and that `name` is an account name.
+    fn prepare_claude_account(&self, _name: &str) -> Result<(), String> {
+        Err("Claude Code accounts aren't available in this host".into())
+    }
+    /// Turns on or off that the named account uses the default account's setup. The host has checked the plugin may,
+    /// and that `name` is an account name.
+    fn share_claude_setup(&self, _name: &str, _on: bool) -> Result<(), String> {
+        Err("Claude Code accounts aren't available in this host".into())
+    }
     /// What the OpenCode session `session_id` is doing, as `wings.agentActivity` answers it, asked of OpenCode's
     /// background service. The host has checked the plugin may. Takes a while: called on a thread of its own.
     fn agent_activity(&self, _session_id: &str) -> Result<serde_json::Value, String> {
@@ -464,6 +476,9 @@ pub trait Env: Send + Sync + 'static {
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>);
     /// The plugin set, or with `None` took away, the status under a pane's terminal.
     fn set_pane_status(&self, plugin: &str, pane: &str, status: Option<PaneStatus>);
+    /// The plugin set, or with `None` took away, the label by the title bar button of its sidebar or view `page`, which
+    /// the host has checked it has.
+    fn set_sidebar_label(&self, _plugin: &str, _page: &str, _label: Option<SidebarLabel>) {}
 }
 
 /// A plugin that is on and approved, and the app it runs in: what every call of its frames is checked against.

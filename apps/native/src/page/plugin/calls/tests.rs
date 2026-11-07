@@ -3,7 +3,8 @@
 
 use std::{fs, sync::mpsc, time::Duration};
 
-use serde_json::json;
+use serde_json::{Value, json};
+use wings_spaces::claude_accounts::AccountPick;
 
 use crate::page::plugin::{
     PanePort, PluginHost,
@@ -995,11 +996,173 @@ fn claude_accounts_are_refused_to_a_plugin_without_their_permission() {
             .spaces
             .lock()
             .unwrap()
-            .claude_accounts()
+            .claude_accounts(|_| Default::default())
             .projects
             .is_empty()
     );
     let _ = fs::remove_dir_all(folder);
+}
+
+#[test]
+fn share_claude_setup_turns_an_accounts_sharing_on_and_off_with_the_permission() {
+    let (rig, folder) = accounts(true);
+    for (on, js) in [(true, "true"), (false, "false")] {
+        assert_eq!(
+            rig.allowed(&format!(
+                "return await wings.shareClaudeSetup('work', {js});"
+            )),
+            json!(null)
+        );
+        assert_eq!(
+            rig.env.seen().last(),
+            Some(&Seen::SharedSetup("work".into(), on))
+        );
+    }
+    // As the desktop's frame does: anything but `true` is off.
+    rig.allowed("return await wings.shareClaudeSetup('work', 'yes');");
+    assert_eq!(
+        rig.env.seen().last(),
+        Some(&Seen::SharedSetup("work".into(), false))
+    );
+    let before = rig.env.seen().len();
+    for (args, error) in [
+        (
+            "null, true",
+            "shareClaudeSetup takes an account name and true or false",
+        ),
+        (
+            "'../etc', true",
+            "\"../etc\" isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit",
+        ),
+        (
+            "'Work', false",
+            "\"Work\" isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit",
+        ),
+    ] {
+        assert_eq!(
+            rig.refused(&format!("return await wings.shareClaudeSetup({args});")),
+            error,
+            "{args}"
+        );
+    }
+    assert_eq!(rig.env.seen().len(), before, "nothing reached the folders");
+    let (without, other) = accounts(false);
+    assert_eq!(
+        without.refused("return await wings.shareClaudeSetup('work', true);"),
+        "probe may not use Claude Code accounts"
+    );
+    assert!(without.env.seen().is_empty());
+    let _ = fs::remove_dir_all(folder);
+    let _ = fs::remove_dir_all(other);
+}
+
+#[test]
+fn open_pane_runs_under_the_account_asked_for_only_with_the_permission() {
+    let open = |permissions: Value| {
+        let rig = Rig::new(json!({ "permissions": permissions }), vec![]);
+        let path = rig.root.config("probe").root.canonicalize().unwrap();
+        *rig.env.projects.lock().unwrap() = vec![path];
+        rig
+    };
+    let rig = open(json!({ "panes": ["claude"], "claudeAccounts": true }));
+    rig.allowed("return await wings.openPane({ command: 'claude', claudeAccount: 'work' });");
+    let seen = rig.env.seen();
+    // The account is made ready before its terminal opens.
+    assert_eq!(seen[0], Seen::PreparedAccount("work".into()));
+    let Seen::OpenPane(plan) = &seen[1] else {
+        panic!("no pane plan: {seen:?}")
+    };
+    assert_eq!(
+        plan.claude_account,
+        Some(AccountPick {
+            name: Some("work".into())
+        })
+    );
+    // null is the default account, whatever the project uses; left out, the project's own.
+    rig.allowed("return await wings.openPane({ command: 'claude', claudeAccount: null });");
+    rig.allowed("return await wings.openPane({ command: 'claude' });");
+    let plans: Vec<_> = rig
+        .env
+        .seen()
+        .into_iter()
+        .filter_map(|seen| match seen {
+            Seen::OpenPane(plan) => Some(plan.claude_account),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plans[1], Some(AccountPick { name: None }));
+    assert_eq!(plans[2], None);
+    for (body, error) in [
+        (
+            "wings.openPane({ claudeAccount: 5 })",
+            "openPane claudeAccount is an account name, or null for the default account",
+        ),
+        (
+            "wings.openPane({ claudeAccount: '../etc' })",
+            "\"../etc\" isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit",
+        ),
+    ] {
+        assert_eq!(rig.refused(&format!("return await {body};")), error);
+    }
+    // Without `claudeAccounts`, a pane may only run under its project's account.
+    let plain = open(json!({ "panes": ["claude"] }));
+    for account in ["'work'", "null"] {
+        assert_eq!(
+            plain.refused(&format!(
+                "return await wings.openPane({{ command: 'claude', claudeAccount: {account} }});"
+            )),
+            "probe may not use Claude Code accounts"
+        );
+    }
+    assert!(plain.env.seen().is_empty());
+    plain.allowed("return await wings.openPane({ command: 'claude' });");
+}
+
+#[test]
+fn a_sidebar_label_is_cleaned_and_only_for_the_plugins_own_pages() {
+    let rig = Rig::new(
+        json!({ "contributes": {
+            "sidebars": [{ "id": "tracker", "title": "T", "page": "dist/s.html" }],
+            "views": [{ "id": "board", "title": "B", "page": "dist/b.html", "opens": ["tab"] }],
+        } }),
+        vec![],
+    );
+    let label = |seen: Vec<Seen>| match seen.last() {
+        Some(Seen::SidebarLabel(plugin, page, label)) => {
+            (plugin.clone(), page.clone(), label.clone())
+        }
+        other => panic!("{other:?}"),
+    };
+    rig.allowed(&format!(
+        "return await wings.setSidebarLabel('tracker', '{}', {{ tone: 'danger', rows: [{{ label: 'Project', value: 'Wings' }}, {{ label: '', value: 'x' }}, ...Array(8).fill({{ label: 'n', value: 'v' }})] }});",
+        "1:05:00 ".repeat(20)
+    ));
+    let (plugin, page, shown) = label(rig.env.seen());
+    assert_eq!((plugin.as_str(), page.as_str()), ("probe", "tracker"));
+    let shown = shown.unwrap();
+    assert_eq!(shown.text.encode_utf16().count(), 80);
+    assert_eq!(shown.tone, Some(crate::page::plugin::ui::Tone::Danger));
+    // Six rows at most, and one without a label is dropped.
+    assert_eq!(shown.rows.len(), 5);
+    assert_eq!(shown.rows[0], ("Project".into(), "Wings".into()));
+    // A view's button takes one too, and a tone that isn't warning or danger is the live green dot.
+    rig.allowed("return await wings.setSidebarLabel('board', '3', { tone: 'success' });");
+    assert_eq!(label(rig.env.seen()).2.unwrap().tone, None);
+    // null, or no text, clears it.
+    for clear in ["null", "''"] {
+        rig.allowed(&format!(
+            "await wings.setSidebarLabel('tracker', 'x'); return await wings.setSidebarLabel('tracker', {clear});"
+        ));
+        assert_eq!(label(rig.env.seen()).2, None, "{clear}");
+    }
+    assert_eq!(
+        rig.refused("return await wings.setSidebarLabel('elsewhere', 'x');"),
+        "probe has no sidebar or view elsewhere"
+    );
+    // The same label again is never sent.
+    let before = rig.env.seen().len();
+    rig.allowed("await wings.setSidebarLabel('tracker', 'same'); return await wings.setSidebarLabel('tracker', 'same');");
+    assert_eq!(rig.env.seen().len(), before + 1);
 }
 
 #[test]

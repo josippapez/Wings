@@ -26,6 +26,8 @@ pub(super) struct FakeSystem {
     notified: Mutex<Vec<(String, String)>>,
     /// The system can't show notifications.
     no_notifications: bool,
+    /// The named Claude Code accounts made ready for a terminal, never in the user's home.
+    prepared: Mutex<Vec<String>>,
 }
 
 impl System for FakeSystem {
@@ -43,6 +45,19 @@ impl System for FakeSystem {
             .unwrap()
             .push((title.to_owned(), body.to_owned()));
         Ok(())
+    }
+
+    fn prepare_claude_account(&self, name: &str) -> Result<(), String> {
+        self.prepared.lock().unwrap().push(name.to_owned());
+        Ok(())
+    }
+
+    fn share_claude_setup(&self, _name: &str, _on: bool) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn claude_auth(&self, _name: Option<&str>) -> wings_spaces::claude_accounts::AuthStatus {
+        Default::default()
     }
 }
 
@@ -363,6 +378,133 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
         w.plugins[0].host.frames() == 4
     });
     focused(&app, &mut window, "one", true);
+}
+
+/// Cyclops' title bar button: its running timer as a label by the button, and its popover page while you point at it.
+#[test]
+fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button() {
+    let data = Data::temp();
+    let page = |text: &str| {
+        format!(
+            "wings.render(JSON.stringify({{id:0,type:'#root',children:[{{id:1,type:'Text',children:[{{id:2,type:'#text',text:'{text}'}}]}}]}}));"
+        )
+    };
+    let (sidebar, popover) = (page("In the sidebar"), page("In the popover"));
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
+            "popover": { "page": "dist/popover.html", "width": 360, "height": 240 } }] } }),
+        "wings.setSidebarLabel('tracker', '1:05:00', { tone: 'warning' });",
+        &[("sidebar", &sidebar), ("popover", &popover)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let key = ("timer".to_owned(), "tracker".to_owned());
+    until(&app, &mut window, "the label never came", |w| {
+        w.plugin_ui.labels.contains_key(&key)
+    });
+    window.read(|w, _| {
+        let label = &w.plugin_ui.labels[&key];
+        assert_eq!(label.text, "1:05:00");
+        assert_eq!(
+            super::plugin_ui::tone_dot(label.tone),
+            crate::theme::WORKING
+        );
+    });
+    // Pointing at the button shows the popover after its delay, with the popover's own page.
+    window.update(|w, _, cx| w.hover_popover(key.clone(), false, true, cx));
+    app.advance_clock(Duration::from_millis(250));
+    window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None, "not at once"));
+    app.advance_clock(Duration::from_millis(60));
+    window.read(|w, _| assert_eq!(w.plugin_ui.popover.open.as_ref(), Some(&key)));
+    let shown = window.read(|w, _| w.plugin_ui.popover.pages[&key].0.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|_, cx| shown.read(cx).text().contains("In the popover")) {
+        assert!(Instant::now() < deadline, "the popover page never drew");
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Moving from the button onto the popover keeps it; leaving both closes it, and its page stays loaded, hidden.
+    window.update(|w, _, cx| {
+        w.hover_popover(key.clone(), false, false, cx);
+        w.hover_popover(key.clone(), true, true, cx);
+    });
+    app.advance_clock(Duration::from_millis(300));
+    window.read(|w, _| assert_eq!(w.plugin_ui.popover.open.as_ref(), Some(&key)));
+    window.update(|w, _, cx| w.hover_popover(key.clone(), true, false, cx));
+    app.advance_clock(Duration::from_millis(210));
+    window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None));
+    window.read(|w, _| assert!(w.plugin_ui.popover.pages.contains_key(&key)));
+    // Not over its own open sidebar.
+    window.update(|w, _, cx| w.show_sidebar("timer", "tracker", cx));
+    window.update(|w, _, cx| w.hover_popover(key.clone(), false, true, cx));
+    app.advance_clock(Duration::from_millis(400));
+    window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None));
+    // Two minutes out of view, its page is dropped, and the next show loads it again.
+    app.advance_clock(Duration::from_secs(121));
+    window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
+}
+
+/// The Claude accounts plugin's "Start Claude as": the pane's shell runs under the account picked, not the project's.
+#[test]
+fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
+    let data = Data::temp();
+    let project = data.root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    data.install_script(
+        "starter",
+        json!({ "permissions": { "panes": [], "claudeAccounts": true } }),
+        // On an action, which the test sends once the fake system is in place: never the real one, which makes the folder.
+        r#"
+            wings.onAction(async () => {
+                try {
+                    await wings.storage.set('opened', await wings.openPane({ claudeAccount: 'wings-native-test' }));
+                } catch (error) { await wings.storage.set('failed', error.message); }
+            });
+        "#,
+        &[],
+        "starter-scope",
+    );
+    let system = Arc::new(FakeSystem::default());
+    let (app, mut window) = open_plugins(&data, &system, |config| config.project = project.clone());
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "start", |_| {});
+    until(&app, &mut window, "the pane never opened", |_| {
+        data.saved("starter", "starter-scope", "opened").is_some()
+            || data.saved("starter", "starter-scope", "failed").is_some()
+    });
+    assert_eq!(data.saved("starter", "starter-scope", "failed"), None);
+    // Made ready by the fake system, so nothing was made in your home folder.
+    assert_eq!(*system.prepared.lock().unwrap(), ["wings-native-test"]);
+    let pane: usize = data.saved("starter", "starter-scope", "opened").unwrap()["paneId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let terminal = window.read(|w, _| w.terminal(pane).unwrap());
+    window.update(|_, _, cx| {
+        terminal.update(cx, |view, cx| {
+            view.write_input("echo account-''dir:$CLAUDE_CONFIG_DIR\r", cx)
+        })
+    });
+    let expected = format!(
+        "account-dir:{}",
+        wings_spaces::claude_accounts::dir(Some("wings-native-test")).display()
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = window.read(|_, cx| terminal.read(cx).recent_output());
+        if String::from_utf8_lossy(&output).contains(&expected) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the shell never printed {expected}"
+        );
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

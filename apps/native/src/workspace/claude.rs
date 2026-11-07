@@ -170,6 +170,7 @@ impl Workspace {
             project,
             input,
             placement: placement.into(),
+            claude_account: None,
         };
         self.open_plugin_pane(plan, reply, window, cx);
         let opened = answer

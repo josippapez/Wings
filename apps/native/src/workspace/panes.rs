@@ -128,6 +128,18 @@ impl Workspace {
         history: Option<String>,
         cx: &mut Context<Self>,
     ) -> usize {
+        self.open_pane_as(cwd, history, None, cx)
+    }
+
+    /// `open_pane` under the Claude Code account `account` (its folder, or `None` for the default one) instead of the
+    /// project's, with `Some`.
+    pub(super) fn open_pane_as(
+        &mut self,
+        cwd: Option<PathBuf>,
+        history: Option<String>,
+        account: Option<Option<PathBuf>>,
+        cx: &mut Context<Self>,
+    ) -> usize {
         let id = self.next_pane;
         self.next_pane += 1;
         let folder = cwd
@@ -147,7 +159,8 @@ impl Workspace {
             .as_deref()
             .map(|state| saved::load_history(state, &history))
             .unwrap_or_default();
-        let account = self.spaces.claude_config_dir(&self.config.project);
+        let account =
+            account.unwrap_or_else(|| self.spaces.claude_config_dir(&self.config.project));
         #[cfg(unix)]
         let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
         #[cfg(not(unix))]

@@ -21,12 +21,12 @@ use wings_plugins::{
     },
     transcript::transcript_entries,
 };
-use wings_spaces::claude_accounts::valid_name;
+use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
 use super::{
     Shared,
     env::{Access, ToolCall},
-    ui::{clean_badge, clean_pane_status},
+    ui::{clean_badge, clean_pane_status, clean_sidebar_label},
 };
 use crate::page::runtime::Reply;
 
@@ -142,6 +142,26 @@ impl Shared {
             _ => return Err("openPane args must be a list of strings".into()),
         };
         let input = wings_plugins::panes::pane_input(&access.plugin, text("command")?, &args)?;
+        // Absent is the project's own account, null the default account, a string a named one.
+        let claude_account = match params.get("claudeAccount") {
+            None => None,
+            Some(Value::Null) => Some(AccountPick { name: None }),
+            Some(Value::String(name)) => Some(AccountPick {
+                name: Some(name.clone()),
+            }),
+            Some(_) => {
+                return Err(
+                    "openPane claudeAccount is an account name, or null for the default account"
+                        .into(),
+                );
+            }
+        };
+        if let Some(pick) = &claude_account {
+            may_use_accounts(access)?;
+            if let Some(name) = &pick.name {
+                account_name(name)?;
+            }
+        }
         let projects = access.env.projects();
         let current_path = access.env.current_project();
         let current = current_path
@@ -156,12 +176,21 @@ impl Shared {
                 (index, projects[index].clone())
             }
         };
+        // A named account has its folder and the default account's setup by the time its terminal starts, as when a
+        // project is assigned to it.
+        if let Some(name) = claude_account
+            .as_ref()
+            .and_then(|pick| pick.name.as_deref())
+        {
+            access.env.prepare_claude_account(name)?;
+        }
         access.env.open_pane(
             super::OpenPane {
                 cwd,
                 project: projects[index].clone(),
                 input: input.map(|line| line + "\r"),
                 placement: placement.into(),
+                claude_account,
             },
             reply,
         );
@@ -338,6 +367,10 @@ impl Shared {
             "setClaudeAccount" => {
                 self.off_thread(reply, move |_| set_claude_account(&access, &params));
             }
+            "shareClaudeSetup" => {
+                self.off_thread(reply, move |_| share_claude_setup(&access, &params));
+            }
+            "setSidebarLabel" => reply.done(set_sidebar_label(&access, &params)),
             "fetch" | "secretSet" | "secretDelete" | "secretHas" | "post" | "sendToAgent"
             | "openSettings" | "emit" => self.forge_call(method, params, reply, access),
             "setProjectSection" => reply.done(self.set_project_section(&access, &params)),
@@ -711,12 +744,46 @@ fn set_claude_account(access: &Access, params: &Value) -> Result<String, String>
         }
     };
     may_use_accounts(access)?;
-    if let Some(name) = name.filter(|name| !valid_name(name)) {
-        return Err(format!(
-            "{name:?} isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit"
-        ));
+    if let Some(name) = name {
+        account_name(name)?;
     }
     access.env.set_claude_account(project, name)?;
+    Ok("null".into())
+}
+
+/// The desktop's `claude_account_name`: nothing but an account name becomes part of a folder name.
+fn account_name(name: &str) -> Result<(), String> {
+    if valid_name(name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name:?} isn't an account name: up to 32 lowercase letters, digits and dashes, starting with a letter or digit"
+        ))
+    }
+}
+
+/// `shareClaudeSetup`: whether a named account uses the default account's setup.
+fn share_claude_setup(access: &Access, params: &Value) -> Result<String, String> {
+    let (Some(Value::String(name)), Some(Value::Bool(on))) = (params.get("name"), params.get("on"))
+    else {
+        return Err("shareClaudeSetup takes an account name and true or false".into());
+    };
+    may_use_accounts(access)?;
+    account_name(name)?;
+    access.env.share_claude_setup(name, *on)?;
+    Ok("null".into())
+}
+
+/// `setSidebarLabel`: the label by one of the plugin's sidebar or view buttons, or none with a `null` label.
+fn set_sidebar_label(access: &Access, params: &Value) -> Result<String, String> {
+    let page = js_string(params.get("sidebarId"));
+    let plugin = &access.plugin.manifest.id;
+    if !pages(&access.plugin).contains(&page) {
+        return Err(format!("{plugin} has no sidebar or view {page}"));
+    }
+    access
+        .env
+        .set_sidebar_label(plugin, &page, clean_sidebar_label(params));
     Ok("null".into())
 }
 

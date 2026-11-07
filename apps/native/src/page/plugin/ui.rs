@@ -202,6 +202,35 @@ pub fn clean_badge(raw: &Value) -> Option<Badge> {
     })
 }
 
+/// The short text a plugin shows next to its sidebar's title bar button, like a running timer (`setSidebarLabel`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SidebarLabel {
+    pub text: String,
+    /// Shown when you point at the button.
+    pub rows: Vec<(String, String)>,
+    /// `Warning` or `Danger` when the plugin says it needs attention; `None` is the green, live dot.
+    pub tone: Option<Tone>,
+}
+
+/// The desktop's `setSidebarLabel` case: the label cut to 80, up to 6 rows of a label (40) and a value (120), and a
+/// tone only if it is `warning` or `danger`. No text, or `null`, clears the label.
+pub fn clean_sidebar_label(params: &Value) -> Option<SidebarLabel> {
+    let text = cut(params.get("label"), 80).filter(|text| !text.is_empty())?;
+    let rows = items(params.get("rows"), 6)
+        .filter_map(|row| {
+            let label = cut(row.get("label"), 40).filter(|text| !text.is_empty())?;
+            let value = cut(row.get("value"), 120).filter(|text| !text.is_empty())?;
+            Some((label, value))
+        })
+        .collect();
+    let tone = match params.get("tone").and_then(Value::as_str) {
+        Some("warning") => Some(Tone::Warning),
+        Some("danger") => Some(Tone::Danger),
+        _ => None,
+    };
+    Some(SidebarLabel { text, rows, tone })
+}
+
 /// JS truthiness of a JSON value.
 fn is_truthy(value: &Value) -> bool {
     match value {

@@ -321,6 +321,22 @@ pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
         .collect()
 }
 
+/// The popover page of `installed`'s sidebar `sidebar`, shown under its title bar button: its native build
+/// (`dist/native/<page>.js`), read now, and its size in points.
+pub fn popover(installed: &Installed, sidebar: &str) -> Option<(Arc<str>, u32, u32)> {
+    let contributes = &installed.plugin.manifest.contributes;
+    let popover = contributes
+        .sidebars
+        .iter()
+        .find(|page| page.id == sidebar)?
+        .popover
+        .as_ref()?;
+    let stem = Path::new(&popover.page).file_stem()?.to_str()?;
+    let file = native_file(&installed.plugin.dir, stem)?;
+    let source = fs::read_to_string(file).ok()?;
+    Some((source.into(), popover.width, popover.height))
+}
+
 /// Installed plugins on disk for tests and the screenshot example.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixture;

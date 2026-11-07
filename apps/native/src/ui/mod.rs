@@ -31,7 +31,7 @@ pub const HAIRLINE: u32 = 0xffffff12;
 /// The desktop's `--input` border around a field.
 const INPUT_BORDER: u32 = 0xffffff1a;
 /// The desktop dialog's `--popover`.
-const DIALOG: u32 = 0x201d23;
+pub const DIALOG: u32 = 0x201d23;
 /// The desktop's `bg-black/10` behind a dialog. Its `backdrop-blur-xs` has no GPUI counterpart.
 const BACKDROP: u32 = 0x0000001a;
 /// `--input` at 30%, the fill of a field or a select, and at 50% when pointed at.
@@ -84,13 +84,23 @@ pub fn ghost_button(
     on: Option<bool>,
     content: impl IntoElement,
 ) -> Stateful<Div> {
-    let pressed = on == Some(true);
     let label = label.into();
+    untipped_ghost_button(id, label.clone(), size, on, content).tooltip(tooltip(label, shortcut))
+}
+
+/// `ghost_button` with no tooltip, for a button that shows something else when you point at it.
+pub fn untipped_ghost_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    size: ButtonSize,
+    on: Option<bool>,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    let pressed = on == Some(true);
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label.clone())
-        .tooltip(tooltip(label, shortcut))
+        .aria_label(label.into())
         .when_some(on, |button, on| {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
         })
