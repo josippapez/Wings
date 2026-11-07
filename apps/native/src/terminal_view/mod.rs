@@ -409,19 +409,19 @@ impl TerminalView {
     }
 
     /// The grid the shell was last given, as columns and rows, for tests that count its resizes.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn grid(&self) -> (usize, usize) {
         (self.snapshot.cols, self.snapshot.rows)
     }
 
     /// Whether it paints, for tests of what covers it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn is_visible(&self) -> bool {
         self.visible
     }
 
     /// Where it was last drawn, for tests of what moves it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn drawn_at(&self) -> Option<Bounds<Pixels>> {
         self.bounds
     }
