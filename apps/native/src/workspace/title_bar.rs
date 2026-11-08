@@ -35,6 +35,9 @@ impl Workspace {
         let (back, forward) = (self.can_navigate(true), self.can_navigate(false));
         div()
             .id("title-bar")
+            // As wide as the window, not as its tabs: wider, the tabs pushed the + button off the window instead of
+            // scrolling.
+            .w_full()
             .h(px(TITLE_BAR_HEIGHT))
             .flex_none()
             .flex()

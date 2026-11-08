@@ -1160,3 +1160,17 @@ fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst(
         assert_eq!(w.inbox.events.len(), 4);
     });
 }
+
+/// Fourteen tabs don't fit in 1000 points: they scroll, and the + button after them stays in the window.
+#[test]
+fn overflowing_tabs_scroll_inside_the_window() {
+    let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});
+    for _ in 0..14 {
+        press(&mut window, "t");
+    }
+    window.draw();
+    window.read(|workspace, _| {
+        // The + button and its menu's chevron take 44 points after the strip.
+        assert!(workspace.tab_scroll.bounds().right() <= px(1000.0 - 44.0));
+    });
+}
