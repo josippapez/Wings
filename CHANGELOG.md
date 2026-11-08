@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.3 · 2026-11-08
+
+- **Tabs reorder by dragging** along the title bar, and keep their order after a restart.
+- **Agents come back after a restart.** A tab whose agent is gone resumes its Claude Code or OpenCode session.
+- **Closing the window keeps your terminals running**, the same as quitting.
+- **Updates look as they did on the desktop.** An update shows in the sidebar and as a toast, and the update dialog shows the download's progress. Checking for app and plugin updates is faster.
+- **Diffs are coloured** like the desktop's.
+- **Issue pages** cut long linked issue titles inside the properties column, and you edit the title by clicking it.
+- **An abandoned Azure DevOps pull request** no longer shows as open or offers Vote.
+
 ## 0.2.2 · 2026-11-08
 
 - **Updates install.** The installer took the new version's "ready" signal for a failure and put the old version back.
