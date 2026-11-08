@@ -4,8 +4,8 @@
 use std::{cell::Cell, time::Duration};
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Role,
-    SharedString, StyleRefinement, Subscription, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, Context, Div, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels,
+    Role, SharedString, StyleRefinement, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -189,6 +189,38 @@ pub(super) struct SettingsDialog {
 type Choose = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>)>;
 /// A select's choice: its label, whether it is the current one, and what choosing it does.
 type Choice = (SharedString, bool, Choose);
+
+/// Where an agent's connection to Wings stands, as its card in Agents names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnState {
+    Checking,
+    NotChecked,
+    NotInstalled,
+    Connected,
+    /// Claude Code with its tools but not its status line and hooks, or the other way round.
+    Partly,
+    NotConnected,
+}
+
+impl ConnState {
+    fn label(self) -> &'static str {
+        match self {
+            ConnState::Checking => "Checking…",
+            ConnState::NotChecked => "Not checked",
+            ConnState::NotInstalled => "Not installed",
+            ConnState::Connected => "Connected",
+            ConnState::Partly => "Partly connected",
+            ConnState::NotConnected => "Not connected",
+        }
+    }
+
+    fn installed(self) -> bool {
+        matches!(
+            self,
+            ConnState::Connected | ConnState::Partly | ConnState::NotConnected
+        )
+    }
+}
 
 impl Workspace {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -606,303 +638,322 @@ impl Workspace {
         true
     }
 
+    /// A setting whose control is a select, which is named after the setting.
+    fn select_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        hint: impl Into<SharedString>,
+        choices: Vec<Choice>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        ui::setting_row(label, hint, None, self.select(id, label, choices, cx))
+    }
+
     fn section_cards(&self, section: &Section, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
-        let current = look(cx);
         match section {
-            Section::General => {
-                let mut tabs: Vec<(String, String)> = vec![
-                    ("terminal".into(), "Terminal".into()),
-                    ("ask".into(), "Choose each time".into()),
-                    ("project".into(), "Project page".into()),
-                ];
-                for installed in &self.plugins {
-                    for page in installed.pages.iter().filter(|page| page.new_tab) {
-                        tabs.push((format!("{}:{}", installed.id, page.id), page.title.clone()));
-                    }
-                }
-                let chosen = if tabs.iter().any(|(key, _)| *key == self.prefs.new_tab) {
-                    self.prefs.new_tab.clone()
-                } else {
-                    "terminal".into()
-                };
-                let new_tab = tabs
-                    .into_iter()
-                    .map(|(key, label)| {
-                        let selected = key == chosen;
-                        let choose: Choose =
-                            Box::new(move |this, cx| {
-                                let key = key.clone();
-                                this.set_prefs(|prefs| prefs.new_tab = key, cx)
-                            });
-                        (label.into(), selected, choose)
-                    })
-                    .collect();
-                let page = self.prefs.new_project_page;
-                let opens = [(false, "Terminal"), (true, "Project page")]
-                    .map(|(value, label)| {
-                        let choose: Choose =
-                            Box::new(move |this, cx| {
-                                this.set_prefs(|prefs| prefs.new_project_page = value, cx)
-                            });
-                        (label.into(), value == page, choose)
-                    })
-                    .into();
-                let mut cards = vec![vec![
-                    ui::setting_row(
-                        "New tab button opens",
-                        format!(
-                            "What the + button does: open a terminal or the Project page, choose each time from the \
-                             menu, or open a plugin page. Plugin pages that declare \"newTab\": true in their view show \
-                             here and in the menu next to the button. {} always opens a terminal.",
-                            shortcut_label("T", false)
-                        ),
-                        None,
-                        self.select("new-tab-page", "New tab button opens", new_tab, cx),
-                    ),
-                    ui::setting_row(
-                        "New projects open with",
-                        "The first tab of a project you add to Wings.",
-                        None,
-                        self.select("new-project-opens", "New projects open with", opens, cx),
-                    ),
-                ]];
-                if cfg!(unix) {
-                    cards.push(vec![self.switch_row(
-                        "terminal-server",
-                        "Keep terminals running when Wings quits",
-                        "New terminals run in a background process, so what runs in them keeps going when Wings \
-                         quits or updates, and is there when Wings opens again. Changing this applies to new \
-                         terminals. Turned off, new terminals end when Wings quits; ones already running in the \
-                         background keep running until you close them.",
-                        self.terminal_server_on(),
-                        |this, on, cx| this.set_terminal_server(on, cx),
-                        cx,
-                    )]);
-                }
-                cards
-            }
-            Section::Text => {
-                let family = self.settings.as_ref().map(|d| (d.family.clone(), d.family_error.clone()));
-                let (field, error) = family.expect("the dialog is open");
-                vec![vec![
-                    ui::setting_row(
-                        "Font family",
-                        "Tried before the default monospace fonts. Leave empty for the default. Enter applies it.",
-                        error,
-                        ui::input(field),
-                    ),
-                    ui::setting_row(
-                        "Line height",
-                        "Spacing between lines, as a multiple of the font size.",
-                        None,
-                        self.select(
-                            "line-height",
-                            "Line height",
-                            Self::look_choices(
-                                LINE_HEIGHTS.map(|value| (value, format!("{value:.1}"))),
-                                current.line_height,
-                                |look, value| look.line_height = value,
-                            ),
-                            cx,
-                        ),
-                    ),
-                    ui::setting_row(
-                        "Minimum contrast",
-                        "Lightens or darkens text that is hard to read on its background.",
-                        None,
-                        self.select(
-                            "min-contrast",
-                            "Minimum contrast",
-                            Self::look_choices(
-                                CONTRASTS.map(|(value, label)| (value, label.to_owned())),
-                                current.min_contrast,
-                                |look, value| look.min_contrast = value,
-                            ),
-                            cx,
-                        ),
-                    ),
-                ]]
-            }
-            Section::Cursor => vec![vec![
-                ui::setting_row(
-                    "Cursor style",
-                    "The cursor programs get until they set their own.",
-                    None,
-                    self.select(
-                        "cursor-style",
-                        "Cursor style",
-                        Self::look_choices(
-                            CURSOR_STYLES.map(|(shape, _, label)| (shape, label.to_owned())),
-                            current.cursor,
-                            |look, shape| look.cursor = shape,
-                        ),
-                        cx,
-                    ),
-                ),
-                self.switch_row(
-                    "cursor-blink",
-                    "Blink",
-                    "The cursor turns off and on in the pane you're typing in.",
-                    current.cursor_blink,
-                    |this, on, cx| this.set_look(|look| look.cursor_blink = on, cx),
-                    cx,
-                ),
-                ui::setting_row(
-                    "When the pane isn't focused",
-                    "How the cursor looks in the panes you aren't typing in.",
-                    None,
-                    self.select(
-                        "cursor-inactive",
-                        "When the pane isn't focused",
-                        Self::look_choices(
-                            INACTIVE_CURSORS.map(|(style, _, label)| (style, label.to_owned())),
-                            current.inactive_cursor,
-                            |look, style| look.inactive_cursor = style,
-                        ),
-                        cx,
-                    ),
-                ),
-            ]],
-            Section::History => vec![
-                vec![
-                    ui::setting_row(
-                        "Scrollback",
-                        "Lines kept per pane. A smaller number drops older history.",
-                        None,
-                        self.select(
-                            "scrollback",
-                            "Scrollback",
-                            Self::look_choices(
-                                SCROLLBACKS.map(|lines| (lines, format!("{} lines", thousands(lines)))),
-                                current.scrollback,
-                                |look, lines| look.scrollback = lines,
-                            ),
-                            cx,
-                        ),
-                    ),
-                    self.switch_row(
-                        "copy-on-select",
-                        "Copy on select",
-                        "Copies the selection to the clipboard when you let go of the mouse.",
-                        current.copy_on_select,
-                        |this, on, cx| this.set_look(|look| look.copy_on_select = on, cx),
-                        cx,
-                    ),
-                ],
-                vec![
-                    self.switch_row(
-                        "terminal-images",
-                        "Show images in the terminal",
-                        "Draws images that programs print, such as SIXEL, iTerm2 and Kitty images. Each pane keeps \
-                         up to 24 MB of them.",
-                        current.images,
-                        |this, on, cx| this.set_look(|look| look.images = on, cx),
-                        cx,
-                    ),
-                    self.switch_row(
-                        "clipboard-write",
-                        "Let programs copy to the clipboard",
-                        "Lets a program in a pane, such as tmux or a remote shell, put text on your clipboard (OSC \
-                         52). Programs can never read it.",
-                        current.clipboard_write,
-                        |this, on, cx| this.set_look(|look| look.clipboard_write = on, cx),
-                        cx,
-                    ),
-                ],
-            ],
-            Section::Keyboard => vec![vec![
-                ui::setting_row(
-                    "Use Option as Meta",
-                    "The other Option key still types characters like ~ and @.",
-                    None,
-                    self.select(
-                        "option-as-meta",
-                        "Use Option as Meta",
-                        Self::look_choices(
-                            OPTION_AS_META.map(|(choice, _, label)| (choice, label.to_owned())),
-                            current.option_as_meta,
-                            |look, choice| look.option_as_meta = choice,
-                        ),
-                        cx,
-                    ),
-                ),
-                self.switch_row(
-                    "shift-return-meta",
-                    "Shift-Return sends Meta Return",
-                    "Adds a new line in Claude Code instead of sending the prompt.",
-                    current.shift_return_meta,
-                    |this, on, cx| this.set_shift_return_meta(on, cx),
-                    cx,
-                ),
-                self.global_hotkey_row(cx),
-                ui::setting_row(
-                    "Quick terminal",
-                    "Shows a terminal in your home folder over whatever you're looking at, and hides it again. Its \
-                     shell keeps running while hidden.",
-                    None,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .h(px(32.0))
-                                .flex()
-                                .items_center()
-                                .px(px(12.0))
-                                .rounded(px(6.0))
-                                .border_1()
-                                .border_color(rgba(HAIRLINE))
-                                .bg(rgba(0xffffff0a))
-                                .text_size(px(13.0))
-                                .when(!self.prefs.quick_terminal, |key| key.opacity(0.5))
-                                .child(super::quick::SHORTCUT),
-                        )
-                        .child(ui::switch("quick-terminal-key", self.prefs.quick_terminal).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.set_prefs(|prefs| prefs.quick_terminal = !prefs.quick_terminal, cx)
-                            }),
-                        )),
-                ),
-            ]],
-            Section::Editor => {
-                let current = self.default_editor().cloned();
-                let control = current.as_ref().map(|current| {
-                    let choices = self
-                        .editors
-                        .iter()
-                        .map(|editor| {
-                            let id = editor.id.clone();
-                            let choose: Choose =
-                                Box::new(move |this, cx| {
-                                    let id = id.clone();
-                                    this.set_prefs(|prefs| prefs.editor = Some(id), cx)
-                                });
-                            (editor.name.clone().into(), editor.id == current.id, choose)
-                        })
-                        .collect();
-                    self.select("default-editor", "Open projects in", choices, cx)
-                });
-                vec![vec![ui::setting_row(
-                    "Open projects in",
-                    if current.is_some() {
-                        "The first item of a project's Open in menu. The others are one click further."
-                    } else {
-                        "No editor found. Install VS Code, Cursor or Zed, or an editor app in /Applications."
-                    },
-                    None,
-                    div().children(control),
-                )]]
-            }
+            Section::General => self.general_cards(cx),
+            Section::Text => self.text_cards(cx),
+            Section::Cursor => self.cursor_cards(cx),
+            Section::History => self.history_cards(cx),
+            Section::Keyboard => self.keyboard_cards(cx),
+            Section::Editor => self.editor_cards(cx),
             Section::Agents => self.agents_cards(cx),
             Section::Notifications => self.notification_cards(cx),
             Section::Plugins | Section::Plugin(_) => Vec::new(),
         }
     }
 
-    /// Claude Code's connection, as the desktop's Agents chip shows it: whether its sessions get Wings' tools, and its
-    /// status line and hooks go through Wings, with Connect, Reconnect and Disconnect for every account at once, then
-    /// each account's own state.
+    /// What the + button opens, a new project's first tab, and whether terminals outlive Wings.
+    fn general_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let mut tabs: Vec<(String, String)> = vec![
+            ("terminal".into(), "Terminal".into()),
+            ("ask".into(), "Choose each time".into()),
+            ("project".into(), "Project page".into()),
+        ];
+        for installed in &self.plugins {
+            for page in installed.pages.iter().filter(|page| page.new_tab) {
+                tabs.push((format!("{}:{}", installed.id, page.id), page.title.clone()));
+            }
+        }
+        let chosen = if tabs.iter().any(|(key, _)| *key == self.prefs.new_tab) {
+            self.prefs.new_tab.clone()
+        } else {
+            "terminal".into()
+        };
+        let new_tab = tabs
+            .into_iter()
+            .map(|(key, label)| {
+                let selected = key == chosen;
+                let choose: Choose = Box::new(move |this, cx| {
+                    let key = key.clone();
+                    this.set_prefs(|prefs| prefs.new_tab = key, cx)
+                });
+                (label.into(), selected, choose)
+            })
+            .collect();
+        let page = self.prefs.new_project_page;
+        let opens = [(false, "Terminal"), (true, "Project page")]
+            .map(|(value, label)| {
+                let choose: Choose = Box::new(move |this, cx| {
+                    this.set_prefs(|prefs| prefs.new_project_page = value, cx)
+                });
+                (label.into(), value == page, choose)
+            })
+            .into();
+        let mut cards = vec![vec![
+            self.select_row(
+                "new-tab-page",
+                "New tab button opens",
+                format!(
+                    "What the + button does: open a terminal or the Project page, choose each time from the \
+                     menu, or open a plugin page. Plugin pages that declare \"newTab\": true in their view show \
+                     here and in the menu next to the button. {} always opens a terminal.",
+                    shortcut_label("T", false)
+                ),
+                new_tab,
+                cx,
+            ),
+            self.select_row(
+                "new-project-opens",
+                "New projects open with",
+                "The first tab of a project you add to Wings.",
+                opens,
+                cx,
+            ),
+        ]];
+        if cfg!(unix) {
+            cards.push(vec![self.switch_row(
+                "terminal-server",
+                "Keep terminals running when Wings quits",
+                "New terminals run in a background process, so what runs in them keeps going when Wings \
+                 quits or updates, and is there when Wings opens again. Changing this applies to new \
+                 terminals. Turned off, new terminals end when Wings quits; ones already running in the \
+                 background keep running until you close them.",
+                self.terminal_server_on(),
+                |this, on, cx| this.set_terminal_server(on, cx),
+                cx,
+            )]);
+        }
+        cards
+    }
+
+    /// The terminals' font, line height and contrast.
+    fn text_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = look(cx);
+        let family = self
+            .settings
+            .as_ref()
+            .map(|d| (d.family.clone(), d.family_error.clone()));
+        let (field, error) = family.expect("the dialog is open");
+        vec![vec![
+            ui::setting_row(
+                "Font family",
+                "Tried before the default monospace fonts. Leave empty for the default. Enter applies it.",
+                error,
+                ui::input(field),
+            ),
+            self.select_row(
+                "line-height",
+                "Line height",
+                "Spacing between lines, as a multiple of the font size.",
+                Self::look_choices(
+                    LINE_HEIGHTS.map(|value| (value, format!("{value:.1}"))),
+                    current.line_height,
+                    |look, value| look.line_height = value,
+                ),
+                cx,
+            ),
+            self.select_row(
+                "min-contrast",
+                "Minimum contrast",
+                "Lightens or darkens text that is hard to read on its background.",
+                Self::look_choices(
+                    CONTRASTS.map(|(value, label)| (value, label.to_owned())),
+                    current.min_contrast,
+                    |look, value| look.min_contrast = value,
+                ),
+                cx,
+            ),
+        ]]
+    }
+
+    /// The cursor's style, whether it blinks, and how it looks in the panes you aren't typing in.
+    fn cursor_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = look(cx);
+        vec![vec![
+            self.select_row(
+                "cursor-style",
+                "Cursor style",
+                "The cursor programs get until they set their own.",
+                Self::look_choices(
+                    CURSOR_STYLES.map(|(shape, _, label)| (shape, label.to_owned())),
+                    current.cursor,
+                    |look, shape| look.cursor = shape,
+                ),
+                cx,
+            ),
+            self.switch_row(
+                "cursor-blink",
+                "Blink",
+                "The cursor turns off and on in the pane you're typing in.",
+                current.cursor_blink,
+                |this, on, cx| this.set_look(|look| look.cursor_blink = on, cx),
+                cx,
+            ),
+            self.select_row(
+                "cursor-inactive",
+                "When the pane isn't focused",
+                "How the cursor looks in the panes you aren't typing in.",
+                Self::look_choices(
+                    INACTIVE_CURSORS.map(|(style, _, label)| (style, label.to_owned())),
+                    current.inactive_cursor,
+                    |look, style| look.inactive_cursor = style,
+                ),
+                cx,
+            ),
+        ]]
+    }
+
+    /// History and selection: the scrollback, copy on select, images, and programs writing the clipboard.
+    fn history_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = look(cx);
+        vec![
+            vec![
+                self.select_row(
+                    "scrollback",
+                    "Scrollback",
+                    "Lines kept per pane. A smaller number drops older history.",
+                    Self::look_choices(
+                        SCROLLBACKS.map(|lines| (lines, format!("{} lines", thousands(lines)))),
+                        current.scrollback,
+                        |look, lines| look.scrollback = lines,
+                    ),
+                    cx,
+                ),
+                self.switch_row(
+                    "copy-on-select",
+                    "Copy on select",
+                    "Copies the selection to the clipboard when you let go of the mouse.",
+                    current.copy_on_select,
+                    |this, on, cx| this.set_look(|look| look.copy_on_select = on, cx),
+                    cx,
+                ),
+            ],
+            vec![
+                self.switch_row(
+                    "terminal-images",
+                    "Show images in the terminal",
+                    "Draws images that programs print, such as SIXEL, iTerm2 and Kitty images. Each pane keeps \
+                     up to 24 MB of them.",
+                    current.images,
+                    |this, on, cx| this.set_look(|look| look.images = on, cx),
+                    cx,
+                ),
+                self.switch_row(
+                    "clipboard-write",
+                    "Let programs copy to the clipboard",
+                    "Lets a program in a pane, such as tmux or a remote shell, put text on your clipboard (OSC \
+                     52). Programs can never read it.",
+                    current.clipboard_write,
+                    |this, on, cx| this.set_look(|look| look.clipboard_write = on, cx),
+                    cx,
+                ),
+            ],
+        ]
+    }
+
+    /// Option as Meta, Shift-Return, and the global and quick terminal shortcuts.
+    fn keyboard_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = look(cx);
+        vec![vec![
+            self.select_row(
+                "option-as-meta",
+                "Use Option as Meta",
+                "The other Option key still types characters like ~ and @.",
+                Self::look_choices(
+                    OPTION_AS_META.map(|(choice, _, label)| (choice, label.to_owned())),
+                    current.option_as_meta,
+                    |look, choice| look.option_as_meta = choice,
+                ),
+                cx,
+            ),
+            self.switch_row(
+                "shift-return-meta",
+                "Shift-Return sends Meta Return",
+                "Adds a new line in Claude Code instead of sending the prompt.",
+                current.shift_return_meta,
+                |this, on, cx| this.set_shift_return_meta(on, cx),
+                cx,
+            ),
+            self.global_hotkey_row(cx),
+            ui::setting_row(
+                "Quick terminal",
+                "Shows a terminal in your home folder over whatever you're looking at, and hides it again. Its \
+                 shell keeps running while hidden.",
+                None,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .h(px(32.0))
+                            .flex()
+                            .items_center()
+                            .px(px(12.0))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(rgba(HAIRLINE))
+                            .bg(rgba(0xffffff0a))
+                            .text_size(px(13.0))
+                            .when(!self.prefs.quick_terminal, |key| key.opacity(0.5))
+                            .child(super::quick::SHORTCUT),
+                    )
+                    .child(
+                        ui::switch("quick-terminal-key", self.prefs.quick_terminal).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.set_prefs(
+                                    |prefs| prefs.quick_terminal = !prefs.quick_terminal,
+                                    cx,
+                                )
+                            }),
+                        ),
+                    ),
+            ),
+        ]]
+    }
+
+    /// The editor a project's Open in menu starts with.
+    fn editor_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let current = self.default_editor().cloned();
+        let control = current.as_ref().map(|current| {
+            let choices = self
+                .editors
+                .iter()
+                .map(|editor| {
+                    let id = editor.id.clone();
+                    let choose: Choose = Box::new(move |this, cx| {
+                        let id = id.clone();
+                        this.set_prefs(|prefs| prefs.editor = Some(id), cx)
+                    });
+                    (editor.name.clone().into(), editor.id == current.id, choose)
+                })
+                .collect();
+            self.select("default-editor", "Open projects in", choices, cx)
+        });
+        vec![vec![ui::setting_row(
+            "Open projects in",
+            if current.is_some() {
+                "The first item of a project's Open in menu. The others are one click further."
+            } else {
+                "No editor found. Install VS Code, Cursor or Zed, or an editor app in /Applications."
+            },
+            None,
+            div().children(control),
+        )]]
+    }
+
     /// The desktop's Notifications section: whether a sound plays, which one, and whether it also plays for the pane
     /// on screen.
     fn notification_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
@@ -969,6 +1020,9 @@ impl Workspace {
         ]]
     }
 
+    /// Claude Code's connection, as the desktop's Agents chip shows it: whether its sessions get Wings' tools, and its
+    /// status line and hooks go through Wings, with Connect, Reconnect and Disconnect for every account at once, then
+    /// each account's own state.
     fn agents_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
         use super::claude::Change;
         let link = &self.claude;
@@ -978,18 +1032,16 @@ impl Workspace {
             .and_then(|accounts| accounts.first())
             .map(|account| account.status.clone());
         let state = match &default {
-            None if link.busy => "Checking…",
-            None => "Not checked",
-            Some(s) if !s.claude => "Not installed",
-            Some(s) if s.connected && s.statusline => "Connected",
-            Some(s) if s.connected || s.statusline => "Partly connected",
-            Some(_) => "Not connected",
+            None if link.busy => ConnState::Checking,
+            None => ConnState::NotChecked,
+            Some(s) if !s.claude => ConnState::NotInstalled,
+            Some(s) if s.connected && s.statusline => ConnState::Connected,
+            Some(s) if s.connected || s.statusline => ConnState::Partly,
+            Some(_) => ConnState::NotConnected,
         };
-        let installed = default.as_ref().is_some_and(|s| s.claude);
-        let off = state == "Not connected";
         let summary = match state {
-            "Not installed" => "Install Claude Code to give it plugin tools.",
-            "Connected" => {
+            ConnState::NotInstalled => "Install Claude Code to give it plugin tools.",
+            ConnState::Connected => {
                 "Its sessions get Wings' and plugin tools, and plugins get its usage numbers. Your own status line \
                  still shows."
             }
@@ -999,68 +1051,29 @@ impl Workspace {
             }
         };
         let busy = link.busy;
-        let mut buttons = div().flex().items_center().gap(px(8.0));
-        if installed && !off {
-            buttons = buttons.child(
-                ui::button(
-                    "claude-disconnect",
-                    "Disconnect Claude Code",
-                    ui::Variant::Ghost,
-                    busy,
-                    "Disconnect",
-                )
-                .when(!busy, |b| {
-                    b.on_click(
-                        cx.listener(|this, _, _, cx| this.change_claude(Change::Disconnect, cx)),
-                    )
-                }),
-            );
-        }
-        if installed {
-            let (label, variant) = if state == "Connected" {
-                ("Reconnect", ui::Variant::Outline)
-            } else {
-                ("Connect", ui::Variant::Secondary)
-            };
-            buttons = buttons.child(
-                ui::button(
-                    "claude-connect",
-                    format!("{label} Claude Code"),
-                    variant,
-                    busy,
-                    label,
-                )
-                .when(!busy, |b| {
-                    b.on_click(
-                        cx.listener(|this, _, _, cx| this.change_claude(Change::Connect(None), cx)),
-                    )
-                }),
-            );
-        }
-        let error = link.error.clone().map(SharedString::from);
-        // The buttons go under the text, so a narrow window doesn't squeeze it into a column of single words.
-        let mut main = vec![
-            div()
-                .flex()
-                .flex_col()
-                .child(ui::setting_row(
-                    format!("Claude Code · {state}"),
-                    format!(
-                        "{summary} Connect and Disconnect apply to every account a project uses."
-                    ),
-                    error,
-                    div(),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .px(px(16.0))
-                        .pb(px(12.0))
-                        .child(buttons),
-                )
-                .into_any_element(),
-        ];
+        let buttons = Self::connection_buttons(
+            "claude",
+            "Claude Code",
+            state,
+            busy,
+            |this, connect, cx| {
+                let change = if connect {
+                    Change::Connect(None)
+                } else {
+                    Change::Disconnect
+                };
+                this.change_claude(change, cx)
+            },
+            cx,
+        );
+        // Its buttons' row stays, empty, while it isn't installed.
+        let mut main = vec![Self::connection_card(
+            "Claude Code",
+            state,
+            format!("{summary} Connect and Disconnect apply to every account a project uses."),
+            link.error.clone(),
+            Some(buttons),
+        )];
         if let Some(status) = default.as_ref().filter(|s| s.connected) {
             let on = status.always_load;
             main.push(ui::setting_row(
@@ -1156,76 +1169,107 @@ impl Workspace {
     fn opencode_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let link = &self.opencode;
         let state = match &link.status {
-            None if link.busy => "Checking…",
-            None => "Not checked",
-            Some(s) if !s.opencode => "Not installed",
-            Some(s) if s.connected => "Connected",
-            Some(_) => "Not connected",
+            None if link.busy => ConnState::Checking,
+            None => ConnState::NotChecked,
+            Some(s) if !s.opencode => ConnState::NotInstalled,
+            Some(s) if s.connected => ConnState::Connected,
+            Some(_) => ConnState::NotConnected,
         };
         let summary = match state {
-            "Not installed" => "Install OpenCode to give it plugin tools.",
-            "Connected" => "Its sessions get Wings' and plugin tools.",
+            ConnState::NotInstalled => "Install OpenCode to give it plugin tools.",
+            ConnState::Connected => "Its sessions get Wings' and plugin tools.",
             _ => {
                 "Connect it so its sessions get Wings' and plugin tools. Wings adds itself to OpenCode's global \
                  config and keeps the rest of it as it was."
             }
         };
-        let installed = link.status.as_ref().is_some_and(|s| s.opencode);
-        let busy = link.busy;
+        let buttons = state.installed().then(|| {
+            Self::connection_buttons(
+                "opencode",
+                "OpenCode",
+                state,
+                link.busy,
+                |this, connect, cx| this.change_opencode(connect, cx),
+                cx,
+            )
+        });
+        Self::connection_card("OpenCode", state, summary, link.error.clone(), buttons)
+    }
+
+    /// An agent's connection card: "<name> · <state>" and what it means, then its buttons. They go under the text, so a
+    /// narrow window doesn't squeeze it into a column of single words.
+    fn connection_card(
+        name: &str,
+        state: ConnState,
+        summary: impl Into<SharedString>,
+        error: Option<String>,
+        buttons: Option<Div>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(ui::setting_row(
+                format!("{name} · {}", state.label()),
+                summary,
+                error.map(SharedString::from),
+                div(),
+            ))
+            .children(buttons.map(|buttons| {
+                div()
+                    .flex()
+                    .justify_end()
+                    .px(px(16.0))
+                    .pb(px(12.0))
+                    .child(buttons)
+            }))
+            .into_any_element()
+    }
+
+    /// An installed agent's Connect, or Reconnect once it is connected, after Disconnect while it is connected at all.
+    /// `change` connects it on `true` and disconnects it on `false`.
+    fn connection_buttons(
+        id: &str,
+        name: &str,
+        state: ConnState,
+        busy: bool,
+        change: fn(&mut Workspace, bool, &mut Context<Workspace>),
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut buttons = div().flex().items_center().gap(px(8.0));
-        if installed && state == "Connected" {
+        if matches!(state, ConnState::Connected | ConnState::Partly) {
             buttons = buttons.child(
                 ui::button(
-                    "opencode-disconnect",
-                    "Disconnect OpenCode",
+                    format!("{id}-disconnect"),
+                    format!("Disconnect {name}"),
                     ui::Variant::Ghost,
                     busy,
                     "Disconnect",
                 )
                 .when(!busy, |b| {
-                    b.on_click(cx.listener(|this, _, _, cx| this.change_opencode(false, cx)))
+                    b.on_click(cx.listener(move |this, _, _, cx| change(this, false, cx)))
                 }),
             );
         }
-        if installed {
-            let (label, variant) = if state == "Connected" {
+        if state.installed() {
+            let (label, variant) = if state == ConnState::Connected {
                 ("Reconnect", ui::Variant::Outline)
             } else {
                 ("Connect", ui::Variant::Secondary)
             };
             buttons = buttons.child(
                 ui::button(
-                    "opencode-connect",
-                    format!("{label} OpenCode"),
+                    format!("{id}-connect"),
+                    format!("{label} {name}"),
                     variant,
                     busy,
                     label,
                 )
                 .when(!busy, |b| {
-                    b.on_click(cx.listener(|this, _, _, cx| this.change_opencode(true, cx)))
+                    b.on_click(cx.listener(move |this, _, _, cx| change(this, true, cx)))
                 }),
             );
         }
-        div()
-            .flex()
-            .flex_col()
-            .child(ui::setting_row(
-                format!("OpenCode · {state}"),
-                summary,
-                link.error.clone().map(SharedString::from),
-                div(),
-            ))
-            .when(installed, |card| {
-                card.child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .px(px(16.0))
-                        .pb(px(12.0))
-                        .child(buttons),
-                )
-            })
-            .into_any_element()
+        buttons
     }
 
     pub(super) fn settings_dialog(

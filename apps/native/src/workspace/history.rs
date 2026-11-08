@@ -209,6 +209,37 @@ fn relative_time(count: i64, unit: &str) -> String {
     }
 }
 
+/// The line under a session's title: when it was last active, on which branch, in which folder unless it is the
+/// project's own (by its path from the project, or by its last part over every project or outside this one), and how
+/// many messages matched when more than one did. `project` is this project's folder.
+fn session_meta(hit: &Hit, now: u64, project: &str, all: bool) -> String {
+    let place = hit.cwd.as_deref().and_then(|cwd| {
+        if cwd == project {
+            return None;
+        }
+        match cwd.strip_prefix(&format!("{project}/")) {
+            Some(inside) if !all => Some(inside.to_owned()),
+            _ => cwd
+                .rsplit('/')
+                .find(|part| !part.is_empty())
+                .map(str::to_owned),
+        }
+    });
+    format!(
+        "{}{}{}{}",
+        ago(now, hit.last_active_ms),
+        hit.git_branch
+            .as_ref()
+            .map_or(String::new(), |b| format!(" on {b}")),
+        place.map_or(String::new(), |p| format!(" in {p}")),
+        if hit.matches > 1 {
+            format!(" · {} matching messages", hit.matches)
+        } else {
+            String::new()
+        },
+    )
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -604,23 +635,93 @@ impl Workspace {
     /// The sheet over the right side of the window, or nothing while it is closed.
     pub(super) fn sheet_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let sheet = self.sheet.as_ref()?;
+        let query = sheet.field.read(cx).text.clone();
+        let filtered =
+            !query.trim().is_empty() || sheet.branch.is_some() || sheet.since != Since::Any;
+        let header = self.history_header(sheet, cx);
+        let body: AnyElement = match &sheet.results {
+            None => skeleton(),
+            Some(results) if results.sessions.is_empty() => empty(
+                if filtered { "No session matches" } else { "No past sessions yet" },
+                if filtered {
+                    "Every word has to appear in the session. Try fewer words, another branch or a longer time."
+                } else if sheet.all {
+                    "Sessions you run with Claude Code or OpenCode show up here."
+                } else {
+                    "Sessions you run in this project show up here."
+                }
+                .to_owned(),
+            ),
+            Some(results) => self.session_list(sheet, results, &terms(&query), cx),
+        };
+        let (backdrop, panel) = ui::dialog("history", "Past sessions", &sheet.focus, WIDTH, 0.0);
+        // The backdrop and the sheet each fade on their own, as the desktop's: the backdrop over 150ms, the sheet over
+        // 200ms as it slides.
+        let phase = motion::phase();
+        let sheet_panel = |panel| motion::sheet_panel(panel, phase);
+        Some(motion::sheet_backdrop(
+            backdrop
+                .items_stretch()
+                .justify_end()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| this.close_history(window, cx)),
+                )
+                .child(sheet_panel(
+                    panel
+                        .h_full()
+                        .max_h(relative(1.0))
+                        .max_w(relative(0.92))
+                        .rounded(px(0.0))
+                        .border_0()
+                        .border_l_1()
+                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .shadow(vec![BoxShadow {
+                            color: hsla(0.0, 0.0, 0.0, 0.5),
+                            offset: point(px(0.0), px(24.0)),
+                            blur_radius: px(64.0),
+                            spread_radius: px(0.0),
+                            inset: false,
+                        }])
+                        .flex_col()
+                        .bg(rgba(theme::POPOVER))
+                        // Escape from a button the sheet's field doesn't have the keys for.
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.key == "escape" {
+                                this.escape_history(window, cx);
+                            }
+                        }))
+                        .child(header)
+                        .child(
+                            div()
+                                .id("history-list")
+                                .min_h_0()
+                                .flex_1()
+                                .overflow_y_scroll()
+                                .child(body),
+                        )
+                        .child(
+                            div().absolute().top(px(12.0)).right(px(12.0)).child(
+                                ui::icon_button("close-history", Icon::X, "Close", ButtonSize::Sm)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_history(window, cx)
+                                    })),
+                            ),
+                        ),
+                )),
+            ui::backdrop_color(),
+            phase,
+        ))
+    }
+
+    /// The sheet's top: its heading, this project or every one, the search field, and the time and branch filters.
+    fn history_header(&self, sheet: &Sheet, cx: &mut Context<Self>) -> Div {
         let project = self
             .projects
             .iter()
             .find(|project| project.path == self.config.project);
         let project_name = project.map_or("this project", |project| project.name.as_str());
-        let query = sheet.field.read(cx).text.clone();
-        let words = terms(&query);
-        let filtered =
-            !query.trim().is_empty() || sheet.branch.is_some() || sheet.since != Since::Any;
         let loading = sheet.results.as_ref().is_some_and(|r| r.opencode_loading);
-        let live: Vec<&str> = self
-            .agents
-            .values()
-            .filter_map(|agent| agent.session_id.as_deref())
-            .collect();
-        let idle = self.prompt_pane();
-
         let heading = div()
             .flex()
             .flex_col()
@@ -694,12 +795,36 @@ impl Workspace {
                 this.refine_history(|sheet| sheet.since = since, cx)
             }))
         }));
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .p(px(16.0))
+            .border_b_1()
+            .border_color(rgba(HAIRLINE))
+            .child(heading)
+            .child(scope)
+            .child(search)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(since)
+                    .child(self.branch_picker(sheet, cx)),
+            )
+    }
+
+    /// The branch filter: its button, and the branches of the listed sessions while its menu is open.
+    fn branch_picker(&self, sheet: &Sheet, cx: &mut Context<Self>) -> Div {
         let branches = sheet
             .results
             .as_ref()
             .map(|r| r.branches.as_slice())
             .unwrap_or(&[]);
-        let branch = div()
+        div()
             .relative()
             .min_w_0()
             .child(
@@ -781,289 +906,204 @@ impl Workspace {
                             cx.notify();
                         })),
                 ))
-            });
-        let header = div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .p(px(16.0))
-            .border_b_1()
-            .border_color(rgba(HAIRLINE))
-            .child(heading)
-            .child(scope)
-            .child(search)
-            .child(
+            })
+    }
+
+    /// The sessions found, then how many of how many are shown and "Show more" when there are more.
+    fn session_list(
+        &self,
+        sheet: &Sheet,
+        results: &Results,
+        words: &[String],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let now = now_ms();
+        let live: Vec<&str> = self
+            .agents
+            .values()
+            .filter_map(|agent| agent.session_id.as_deref())
+            .collect();
+        let mut rows: Vec<AnyElement> = results
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(at, hit)| {
+                let running = live.contains(&hit.id.as_str());
+                self.session_row(sheet, at, hit, now, words, running, cx)
+            })
+            .collect();
+        if results.total > results.sessions.len() {
+            rows.push(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(px(8.0))
-                    .child(since)
-                    .child(branch),
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .text_size(px(12.0))
+                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .child(format!(
+                        "Showing {} of {}",
+                        results.sessions.len(),
+                        results.total
+                    ))
+                    .child(
+                        ui::button(
+                            "history-more-sessions",
+                            "Show more",
+                            Variant::Ghost,
+                            false,
+                            "Show more",
+                        )
+                        .h(px(28.0))
+                        .text_size(px(12.0))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(sheet) = &mut this.sheet {
+                                sheet.limit += PAGE;
+                            }
+                            this.search_history(cx);
+                        })),
+                    )
+                    .into_any_element(),
             );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .p(px(8.0))
+            .children(rows)
+            .into_any_element()
+    }
 
-        let body: AnyElement = match &sheet.results {
-            None => skeleton(),
-            Some(results) if results.sessions.is_empty() => empty(
-                if filtered { "No session matches" } else { "No past sessions yet" },
-                if filtered {
-                    "Every word has to appear in the session. Try fewer words, another branch or a longer time."
-                } else if sheet.all {
-                    "Sessions you run with Claude Code or OpenCode show up here."
-                } else {
-                    "Sessions you run in this project show up here."
-                }
-                .to_owned(),
-            ),
-            Some(results) => {
-                let now = now_ms();
-                let mut rows: Vec<AnyElement> = results
-                    .sessions
-                    .iter()
-                    .enumerate()
-                    .map(|(at, hit)| {
-                        let session = self.session_of(hit);
-                        let running = live.contains(&hit.id.as_str());
-                        let launchable = session.is_some();
-                        let title = one_line(
-                            hit.title
-                                .as_deref()
-                                .or(hit.first_prompt.as_deref())
-                                .unwrap_or("Untitled session"),
-                        );
-                        let detail: Option<AnyElement> = match hit.snippets.first() {
-                            Some(snippet) => Some(snippet_text(snippet, hit.agent, &words)),
-                            None => hit
-                                .title
-                                .as_ref()
-                                .zip(hit.first_prompt.as_ref())
-                                .map(|(_, prompt)| muted_lines(one_line(prompt)).into_any_element()),
-                        };
-                        let place = hit.cwd.as_deref().and_then(|cwd| {
-                            if cwd == self.config.project.to_string_lossy() {
-                                return None;
-                            }
-                            let here = self.config.project.to_string_lossy();
-                            match cwd.strip_prefix(&format!("{here}/")) {
-                                Some(inside) if !sheet.all => Some(inside.to_owned()),
-                                _ => cwd.rsplit('/').find(|part| !part.is_empty()).map(str::to_owned),
-                            }
-                        });
-                        let meta = format!(
-                            "{}{}{}{}",
-                            ago(now, hit.last_active_ms),
-                            hit.git_branch.as_ref().map_or(String::new(), |b| format!(" on {b}")),
-                            place.map_or(String::new(), |p| format!(" in {p}")),
-                            if hit.matches > 1 {
-                                format!(" · {} matching messages", hit.matches)
-                            } else {
-                                String::new()
-                            },
-                        );
-                        let menu_open = sheet.menu == Some(Menu::Session(hit.id.clone()));
-                        let copied = sheet.copied.as_ref() == Some(&hit.id);
-                        let group = SharedString::from(format!("session-{at}"));
-                        div()
-                            .id(("history-session", at))
-                            .group(group.clone())
-                            .flex()
-                            .items_start()
-                            .gap(px(8.0))
-                            .p(px(10.0))
-                            .rounded(px(10.0))
-                            .hover(|style| style.bg(rgba(theme::HOVER)))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.0))
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(agent_mark(hit.agent))
-                                            .child(div().min_w_0().truncate().child(title)),
-                                    )
-                                    .children(detail)
-                                    .child(
-                                        div()
-                                            .mt(px(2.0))
-                                            .truncate()
-                                            .text_size(px(12.0))
-                                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                                            .child(meta),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .relative()
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(2.0))
-                                    .opacity(if menu_open { 1.0 } else { 0.0 })
-                                    .group_hover(group, |style| style.opacity(1.0))
-                                    .child({
-                                        let session = session.clone();
-                                        let disabled = running || !launchable;
-                                        let button = ui::button(
-                                            ("history-resume", at),
-                                            if running { "Running" } else { "Resume" },
-                                            if running { Variant::Ghost } else { Variant::Secondary },
-                                            disabled,
-                                            if running { "Running" } else { "Resume" },
-                                        )
-                                        .h(px(28.0))
-                                        .px(px(12.0))
-                                        .rounded_full()
-                                        .text_size(px(12.0));
-                                        if let (false, Some(session)) = (disabled, session) {
-                                            button.on_click(cx.listener(move |this, _, window, cx| {
-                                                this.start_session(&session, false, window, cx)
-                                            }))
-                                        } else {
-                                            button
-                                        }
-                                    })
-                                    .child(
-                                        ui::icon_button(
-                                            ("history-more", at),
-                                            Icon::Ellipsis,
-                                            "More for this session",
-                                            ButtonSize::Sm,
-                                        )
-                                        .on_click({
-                                            let id = hit.id.clone();
-                                            cx.listener(move |this, _, _, cx| {
-                                                if let Some(sheet) = &mut this.sheet {
-                                                    let menu = Menu::Session(id.clone());
-                                                    sheet.menu = (sheet.menu.as_ref() != Some(&menu)).then_some(menu);
-                                                }
-                                                cx.notify();
-                                            })
-                                        }),
-                                    )
-                                    .when(menu_open, |slot| {
-                                        slot.child(self.session_menu(
-                                            at,
-                                            self.session_of(hit),
-                                            copied,
-                                            idle,
-                                            cx,
-                                        ))
-                                    }),
-                            )
-                            .into_any_element()
-                    })
-                    .collect();
-                if results.total > results.sessions.len() {
-                    rows.push(
+    /// One session: its agent and title, what matched, when and where it ran, and Resume and its menu, which show while
+    /// the pointer is over it or the menu is open.
+    #[allow(clippy::too_many_arguments)]
+    fn session_row(
+        &self,
+        sheet: &Sheet,
+        at: usize,
+        hit: &Hit,
+        now: u64,
+        words: &[String],
+        running: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let session = self.session_of(hit);
+        let launchable = session.is_some();
+        let title = one_line(
+            hit.title
+                .as_deref()
+                .or(hit.first_prompt.as_deref())
+                .unwrap_or("Untitled session"),
+        );
+        let detail: Option<AnyElement> = match hit.snippets.first() {
+            Some(snippet) => Some(snippet_text(snippet, hit.agent, words)),
+            None => hit
+                .title
+                .as_ref()
+                .zip(hit.first_prompt.as_ref())
+                .map(|(_, prompt)| muted_lines(one_line(prompt)).into_any_element()),
+        };
+        let meta = session_meta(hit, now, &self.config.project.to_string_lossy(), sheet.all);
+        let menu_open = sheet.menu == Some(Menu::Session(hit.id.clone()));
+        let copied = sheet.copied.as_ref() == Some(&hit.id);
+        let group = SharedString::from(format!("session-{at}"));
+        div()
+            .id(("history-session", at))
+            .group(group.clone())
+            .flex()
+            .items_start()
+            .gap(px(8.0))
+            .p(px(10.0))
+            .rounded(px(10.0))
+            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .gap(px(8.0))
-                            .px(px(10.0))
-                            .py(px(8.0))
+                            .gap(px(6.0))
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(agent_mark(hit.agent))
+                            .child(div().min_w_0().truncate().child(title)),
+                    )
+                    .children(detail)
+                    .child(
+                        div()
+                            .mt(px(2.0))
+                            .truncate()
                             .text_size(px(12.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(format!(
-                                "Showing {} of {}",
-                                results.sessions.len(),
-                                results.total
-                            ))
-                            .child(
-                                ui::button(
-                                    "history-more-sessions",
-                                    "Show more",
-                                    Variant::Ghost,
-                                    false,
-                                    "Show more",
-                                )
-                                .h(px(28.0))
-                                .text_size(px(12.0))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(sheet) = &mut this.sheet {
-                                        sheet.limit += PAGE;
-                                    }
-                                    this.search_history(cx);
-                                })),
-                            )
-                            .into_any_element(),
-                    );
-                }
+                            .child(meta),
+                    ),
+            )
+            .child(
                 div()
+                    .relative()
+                    .flex_none()
                     .flex()
-                    .flex_col()
-                    .p(px(8.0))
-                    .children(rows)
-                    .into_any_element()
-            }
-        };
-        let (backdrop, panel) = ui::dialog("history", "Past sessions", &sheet.focus, WIDTH, 0.0);
-        // The backdrop and the sheet each fade on their own, as the desktop's: the backdrop over 150ms, the sheet over
-        // 200ms as it slides.
-        let phase = motion::phase();
-        let sheet_panel = |panel| motion::sheet_panel(panel, phase);
-        Some(motion::sheet_backdrop(
-            backdrop
-                .items_stretch()
-                .justify_end()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| this.close_history(window, cx)),
-                )
-                .child(sheet_panel(
-                    panel
-                        .h_full()
-                        .max_h(relative(1.0))
-                        .max_w(relative(0.92))
-                        .rounded(px(0.0))
-                        .border_0()
-                        .border_l_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
-                        .shadow(vec![BoxShadow {
-                            color: hsla(0.0, 0.0, 0.0, 0.5),
-                            offset: point(px(0.0), px(24.0)),
-                            blur_radius: px(64.0),
-                            spread_radius: px(0.0),
-                            inset: false,
-                        }])
-                        .flex_col()
-                        .bg(rgba(theme::POPOVER))
-                        // Escape from a button the sheet's field doesn't have the keys for.
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.escape_history(window, cx);
-                            }
-                        }))
-                        .child(header)
-                        .child(
-                            div()
-                                .id("history-list")
-                                .min_h_0()
-                                .flex_1()
-                                .overflow_y_scroll()
-                                .child(body),
+                    .items_center()
+                    .gap(px(2.0))
+                    .opacity(if menu_open { 1.0 } else { 0.0 })
+                    .group_hover(group, |style| style.opacity(1.0))
+                    .child({
+                        let session = session.clone();
+                        let disabled = running || !launchable;
+                        let button = ui::button(
+                            ("history-resume", at),
+                            if running { "Running" } else { "Resume" },
+                            if running {
+                                Variant::Ghost
+                            } else {
+                                Variant::Secondary
+                            },
+                            disabled,
+                            if running { "Running" } else { "Resume" },
                         )
-                        .child(
-                            div().absolute().top(px(12.0)).right(px(12.0)).child(
-                                ui::icon_button("close-history", Icon::X, "Close", ButtonSize::Sm)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.close_history(window, cx)
-                                    })),
-                            ),
-                        ),
-                )),
-            ui::backdrop_color(),
-            phase,
-        ))
+                        .h(px(28.0))
+                        .px(px(12.0))
+                        .rounded_full()
+                        .text_size(px(12.0));
+                        if let (false, Some(session)) = (disabled, session) {
+                            button.on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_session(&session, false, window, cx)
+                            }))
+                        } else {
+                            button
+                        }
+                    })
+                    .child(
+                        ui::icon_button(
+                            ("history-more", at),
+                            Icon::Ellipsis,
+                            "More for this session",
+                            ButtonSize::Sm,
+                        )
+                        .on_click({
+                            let id = hit.id.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                if let Some(sheet) = &mut this.sheet {
+                                    let menu = Menu::Session(id.clone());
+                                    sheet.menu =
+                                        (sheet.menu.as_ref() != Some(&menu)).then_some(menu);
+                                }
+                                cx.notify();
+                            })
+                        }),
+                    )
+                    .when(menu_open, |slot| {
+                        slot.child(self.session_menu(at, session, copied, self.prompt_pane(), cx))
+                    }),
+            )
+            .into_any_element()
     }
 
     /// A session's "more" menu: resume in the focused pane, fork, copy the command.
@@ -1444,6 +1484,47 @@ mod tests {
         assert_eq!(ago(now, minutes(3 * 60)), "3 hours ago");
         assert_eq!(ago(now, minutes(24 * 60)), "yesterday");
         assert_eq!(ago(now, minutes(5 * 24 * 60)), "5 days ago");
+    }
+
+    #[test]
+    fn a_sessions_line_says_when_where_and_how_many_messages_matched() {
+        let now = 1_000_000_000_000;
+        let hit = |cwd: Option<&str>, branch: Option<&str>, matches| Hit {
+            id: "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d".into(),
+            agent: Agent::Claude,
+            cwd: cwd.map(Into::into),
+            title: None,
+            first_prompt: None,
+            git_branch: branch.map(Into::into),
+            last_active_ms: now - 5 * 60_000,
+            last_active: None,
+            messages: 4,
+            matches,
+            snippets: Vec::new(),
+            name: None,
+        };
+        let project = "/work/acme-web";
+        let meta =
+            |cwd, branch, matches, all| session_meta(&hit(cwd, branch, matches), now, project, all);
+        // The project's own folder, or none, goes unsaid; one matching message too.
+        assert_eq!(
+            meta(Some(project), Some("main"), 1, false),
+            "5 minutes ago on main"
+        );
+        assert_eq!(meta(None, None, 0, true), "5 minutes ago");
+        // A folder inside the project by its path from there, except over every project.
+        let inside = Some("/work/acme-web/packages/ui");
+        assert_eq!(meta(inside, None, 0, false), "5 minutes ago in packages/ui");
+        assert_eq!(meta(inside, None, 0, true), "5 minutes ago in ui");
+        // Any other folder by its last part, even one whose name starts with the project's.
+        assert_eq!(
+            meta(Some("/work/acme-web-login"), None, 0, false),
+            "5 minutes ago in acme-web-login"
+        );
+        assert_eq!(
+            meta(Some("/work/acme-api/"), Some("release-2"), 3, false),
+            "5 minutes ago on release-2 in acme-api · 3 matching messages"
+        );
     }
 
     #[test]

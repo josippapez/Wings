@@ -344,80 +344,18 @@ impl Workspace {
             _ => None,
         };
         let group = SharedString::from(format!("{id}-group"));
-        let close = match active {
-            Active::Terminal(tab) => Some(
-                ui::icon_button(
-                    SharedString::from(format!("{id}-close")),
-                    Icon::X,
-                    "Close tab",
-                    ButtonSize::Tiny,
-                )
-                .absolute()
-                .top(px(CLOSE_INSET))
-                .right(px(CLOSE_INSET))
-                .opacity(0.0)
-                .group_hover(group.clone(), |style| style.opacity(1.0))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(index) = this.terminals.iter().position(|t| t.id == tab) {
-                        this.close_tab(index, window, cx);
-                        cx.notify();
-                    }
-                })),
-            ),
-            Active::Plugin(tab) => Some(
-                ui::icon_button(
-                    SharedString::from(format!("{id}-close")),
-                    Icon::X,
-                    "Close tab",
-                    ButtonSize::Tiny,
-                )
-                .absolute()
-                .top(px(CLOSE_INSET))
-                .right(px(CLOSE_INSET))
-                .opacity(0.0)
-                .group_hover(group.clone(), |style| style.opacity(1.0))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(index) = this.plugin_tabs.iter().position(|t| t.id == tab) {
-                        this.close_plugin_tab(index, window, cx);
-                        cx.notify();
-                    }
-                })),
-            ),
-            Active::Project => Some(
-                ui::icon_button(
-                    SharedString::from(format!("{id}-close")),
-                    Icon::X,
-                    "Close tab",
-                    ButtonSize::Tiny,
-                )
-                .absolute()
-                .top(px(CLOSE_INSET))
-                .right(px(CLOSE_INSET))
-                .opacity(0.0)
-                .group_hover(group.clone(), |style| style.opacity(1.0))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.close_project_page(window, cx);
-                    cx.notify();
-                })),
-            ),
-            Active::Issues => Some(
-                ui::icon_button(
-                    SharedString::from(format!("{id}-close")),
-                    Icon::X,
-                    "Close tab",
-                    ButtonSize::Tiny,
-                )
-                .absolute()
-                .top(px(CLOSE_INSET))
-                .right(px(CLOSE_INSET))
-                .opacity(0.0)
-                .group_hover(group.clone(), |style| style.opacity(1.0))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.close_issues(window, cx);
-                    cx.notify();
-                })),
-            ),
-        };
+        let close = ui::icon_button(
+            SharedString::from(format!("{id}-close")),
+            Icon::X,
+            "Close tab",
+            ButtonSize::Tiny,
+        )
+        .absolute()
+        .top(px(CLOSE_INSET))
+        .right(px(CLOSE_INSET))
+        .opacity(0.0)
+        .group_hover(group.clone(), |style| style.opacity(1.0))
+        .on_click(cx.listener(move |this, _, window, cx| this.close_tab_of(active, window, cx)));
         // Cmd-1 to Cmd-9 reach the first nine.
         let key = self
             .tabs()
@@ -512,7 +450,7 @@ impl Workspace {
             .child(glyph)
             .child(div().min_w_0().truncate().child(label))
             .children(splits)
-            .children(close)
+            .child(close)
     }
 
     /// A plugin page's tab icon: the one its view names in the manifest, as the desktop's `PluginGlyph`.
