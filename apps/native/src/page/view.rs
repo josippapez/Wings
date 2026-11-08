@@ -1219,10 +1219,16 @@ impl PageView {
                     .when(item.vertical, |el| {
                         el.flex_col().items_stretch().gap(px(2.0))
                     })
+                    // Lined up on the first lines of its texts, as `.w-list-button[data-align="baseline"]`: Session
+                    // detail's "You" and the time sat halfway down a prompt that wraps to three lines.
+                    .when_some(
+                        line_height(&button.children).filter(|_| item.baseline),
+                        |el, height| el.items_start().line_height(px(height)),
+                    )
                     // The twisty is a 12pt chevron centred on the row, as the desktop's and a disclosure's are: the
                     // "⌄" glyph it was sits at the bottom of its line, below the row's text.
                     .when_some(item.expanded, |el, expanded| {
-                        el.aria_expanded(expanded).child(crate::icons::icon(
+                        let chevron = crate::icons::icon(
                             if expanded {
                                 crate::icons::Icon::ChevronDown
                             } else {
@@ -1230,7 +1236,17 @@ impl PageView {
                             },
                             12.0,
                             theme::MUTED_FOREGROUND,
-                        ))
+                        );
+                        // On a row lined up on its first lines, the chevron is centred on the first.
+                        let first = line_height(&button.children).filter(|_| item.baseline);
+                        el.aria_expanded(expanded).child(match first {
+                            Some(height) => div()
+                                .flex_none()
+                                .mt(px((height - 12.0) / 2.0))
+                                .child(chevron)
+                                .into_any_element(),
+                            None => chevron.into_any_element(),
+                        })
                     })
                     .children(self.nodes(&button.children, cx));
                 if !button.disabled {

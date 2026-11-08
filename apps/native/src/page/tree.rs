@@ -492,6 +492,8 @@ pub struct ListButton {
     pub indent: f32,
     pub expanded: Option<bool>,
     pub vertical: bool,
+    /// `align="baseline"`: its parts line up on their first lines, as a prompt's name and time beside its text.
+    pub baseline: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1150,6 +1152,7 @@ impl Walk {
                     .clamp(0.0, 240.0) as f32,
                 expanded: props.get("aria-expanded").and_then(Value::as_bool),
                 vertical: str_prop(&props, "layout") == Some("column"),
+                baseline: str_prop(&props, "align") == Some("baseline"),
             }),
             "Select" | "Chips" => {
                 let select = Select {

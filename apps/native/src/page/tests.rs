@@ -845,6 +845,27 @@ fn a_column_list_buttons_lines_are_close_together() {
     assert!(!pressed_at(&app, &mut window, (40.0, 60.0), "Pressed 2."));
 }
 
+/// A prompt in Session detail's activity: a list button lined up on its first lines, the name that can be pressed, the
+/// prompt that wraps, and its time.
+const PROMPT: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'ListButton',props:{align:'baseline','aria-expanded':false},children:[
+{id:2,type:'Text',props:{tone:'info',weight:'strong',onClick:'2:click'},children:[{id:3,type:'#text',text:'You'}]},
+{id:4,type:'Text',props:{grow:true},children:[{id:5,type:'#text',text:'Rework the checkout page so the coupon field sits under the order summary'}]},
+{id:6,type:'Text',props:{tone:'muted'},children:[{id:7,type:'#text',text:'11:46 PM'}]}]},
+{id:8,type:'Text',children:[{id:9,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_list_button_lined_up_on_baselines_keeps_its_name_by_the_first_line() {
+    let (app, mut window) = open_narrow(PROMPT, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // "You" is on the prompt's first line, 17 to 36 down; it sat halfway down the prompt's three lines, from 36.
+    assert!(pressed_at(&app, &mut window, (45.0, 24.0), "Pressed 1."));
+}
+
 /// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.
 const LONG_SUMMARY: &str = r#"
 let pressed = 0;
