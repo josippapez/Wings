@@ -1363,6 +1363,24 @@ impl PageView {
                 theme::FOREGROUND,
             )
             .into_any_element(),
+            // GPUI draws an svg as a mask in its text colour, which is the drawing's `currentColor`.
+            Node::Svg(drawing) => {
+                let image = gpui::svg()
+                    .data(drawing.markup.as_bytes())
+                    .size(px(drawing.size))
+                    .flex_none()
+                    .text_color(rgb(drawing.tone.map_or(theme::FOREGROUND, tone_color)));
+                match &drawing.label {
+                    Some(label) => div()
+                        .id(ElementId::NamedInteger("page-svg".into(), drawing.id))
+                        .role(Role::Image)
+                        .aria_label(label.clone())
+                        .flex_none()
+                        .child(image)
+                        .into_any_element(),
+                    None => image.into_any_element(),
+                }
+            }
             Node::Graph(graph) => self.graph(graph, cx),
             Node::Avatar(avatar) => rich_view::avatar(avatar),
             Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),

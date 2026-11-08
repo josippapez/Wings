@@ -162,6 +162,29 @@ export function Combobox(props: {
 export function Menu(props: { label: ReactNode; items: MenuItem[]; variant?: ButtonVariant; size?: ButtonSize; disabled?: boolean; "aria-label"?: string }): ReactElement;
 /** One of Lucide's icons, in the colour of the text. */
 export function Icon(props: { name: IconName; label?: string }): ReactElement;
+/** How an `Svg` paints a shape: the app draws it in one colour, so a shape is painted in it or not at all. */
+export type SvgPaint = "none" | "currentColor";
+/**
+ * A small drawing of your own, as `ui`'s: SVG shapes in a square `viewBox`, `size` px square (16 by default, up to 64),
+ * in `tone`'s colour or the text's. The app draws `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`
+ * and `g` with their geometry and the paint props below, on the svg or on a shape, in numbers without units, and
+ * `opacity` makes a part fainter. Up to 32 shapes and 4 KB of markup; an `Svg` with any other element, prop or value
+ * isn't drawn.
+ */
+export function Svg(props: {
+  viewBox: string;
+  size?: number;
+  tone?: Tone;
+  label?: string;
+  fill?: SvgPaint;
+  stroke?: SvgPaint;
+  strokeWidth?: number | string;
+  strokeLinecap?: "butt" | "round" | "square";
+  strokeLinejoin?: "miter" | "round" | "bevel";
+  fillRule?: "nonzero" | "evenodd";
+  opacity?: number | string;
+  children?: ReactNode;
+}): ReactElement;
 /** Small figures side by side, label over value. A `title` isn't shown. */
 export function Stats(props: { items: Stat[] }): ReactElement;
 /** Label and value pairs, one per line. */

@@ -339,6 +339,12 @@ export type IconName = "check" | "chevron-down" | "copy" | "trash";
  * decoration unless it has a `label`, so a button that holds only an icon needs its own `aria-label`.
  */
 export function Icon(props: Omit<Props<"svg">, "children"> & { name: IconName; label?: string }): ReactElement;
+/**
+ * A small drawing of your own, like an icon Lucide doesn't have: `children` are SVG's shapes in a square `viewBox`,
+ * drawn `size` px square (16 by default) in `tone`'s colour, or the text's, as `currentColor`. It is decoration unless
+ * it has a `label`. The native app draws fewer shapes and props, in that one colour: see native.d.ts.
+ */
+export function Svg(props: Omit<Props<"svg">, "children"> & { viewBox: string; size?: number; tone?: Tone; label?: string; children?: ReactNode }): ReactElement;
 
 /**
  * A labelled field with a `hint` or an `error` under it, for the `TextInput`, `SearchField`, `Select` or `Combobox` in

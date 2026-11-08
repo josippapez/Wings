@@ -1,7 +1,7 @@
 // wings-plugin-ui/native: the components of ui.js that the native Wings app draws, rendered by React into a JSON tree
 // instead of into a DOM. The page runs in a JS engine with no document, and the app turns each tree into its own
 // controls. Handlers never leave the page: the tree names them by id, and the app sends the id back when one fires.
-import { createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Children, createContext, createElement as h, Fragment, isValidElement, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
 import { errorMessage } from "wings-plugin-sdk/async";
@@ -427,6 +427,21 @@ export function Menu({ label, items, variant, size, disabled, ...rest }) {
 /** One of Lucide's icons, in the colour of the text. */
 export function Icon({ name }) {
   return h("Icon", { name });
+}
+/** The shapes in `children` as `[tag, props]`, or `[tag, props, shapes]` for one that holds more; a fragment's are its own. */
+function shapesOf(children) {
+  const shapes = [];
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return;
+    const { children: inner, ...props } = child.props;
+    if (child.type === Fragment) shapes.push(...shapesOf(inner));
+    else shapes.push(inner === undefined ? [child.type, props] : [child.type, props, shapesOf(inner)]);
+  });
+  return shapes;
+}
+/** A small drawing of your own. Its shapes go to the app as data, which checks each one and draws them in one colour. */
+export function Svg(props) {
+  return h("Svg", { ...pick(props, ["viewBox", "size", "tone", "label", "fill", "stroke", "strokeWidth", "strokeLinecap", "strokeLinejoin", "fillRule", "opacity"]), shapes: shapesOf(props.children) });
 }
 /** Small figures side by side, label over value. */
 export function Stats({ items }) {

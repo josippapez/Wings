@@ -281,20 +281,25 @@ textarea::placeholder {
   min-width: 0;
 }
 
-/* Text. */
-.w-text[data-tone="muted"] {
+/* Text, and a page's own drawing (`Svg`), which is drawn in its colour. */
+.w-text[data-tone="muted"],
+.w-svg[data-tone="muted"] {
   color: var(--wings-muted);
 }
-.w-text[data-tone="info"] {
+.w-text[data-tone="info"],
+.w-svg[data-tone="info"] {
   color: var(--wings-info);
 }
-.w-text[data-tone="success"] {
+.w-text[data-tone="success"],
+.w-svg[data-tone="success"] {
   color: var(--wings-success);
 }
-.w-text[data-tone="warn"] {
+.w-text[data-tone="warn"],
+.w-svg[data-tone="warn"] {
   color: var(--wings-warning);
 }
-.w-text[data-tone="danger"] {
+.w-text[data-tone="danger"],
+.w-svg[data-tone="danger"] {
   color: var(--wings-danger);
 }
 .w-text[data-size="small"] {
@@ -656,6 +661,10 @@ h3.w-heading {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+/* A page's own drawing keeps the size its `size` gives it. */
+.w-svg {
+  flex: none;
 }
 /* An icon is as big as the text it sits in, a little smaller in small buttons. :where() keeps a component's own size. */
 .w-icon {

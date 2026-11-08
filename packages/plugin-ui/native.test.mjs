@@ -1,11 +1,11 @@
 // node --test: what the native components render, as the JSON tree the app draws.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement as h, useEffect, useState } from "react";
+import { createElement as h, Fragment, useEffect, useState } from "react";
 
 const trees = [];
 globalThis.wings = { render: (json) => trees.push(JSON.parse(json)) };
-const { Avatar, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chip, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, Timeline, TimelineCard, TimelineNote, mount, useAction, useTabState } = await import("./native.js");
+const { Avatar, Svg, Markdown, ProjectGate, Skeleton, Skeletons, Summary, SummaryChip, Tabs, ListDetail, CodeBlock, useViewArgs, Badge, Button, Card, Checkbox, Chip, Chips, Combobox, Confirm, Disclosure, Dot, Empty, Field, Gauge, Graph, Heading, Icon, List, ListButton, ListItem, Loading, Menu, Notice, Page, Properties, Row, SearchField, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Title, Toolbar, Bar, Scroll, Split, Sunburst, Timeline, TimelineCard, TimelineNote, mount, useAction, useTabState } = await import("./native.js");
 
 const find = (node, type) => (node.type === type ? node : node.children?.map((child) => find(child, type)).find(Boolean));
 const all = (node, type) => [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap((child) => all(child, type))];
@@ -273,6 +273,20 @@ test("a dot takes a CSS colour from data, a sunburst sends compact wedges and he
   globalThis.__wingsEvent(map.props.onPoint, '{"index":-2}');
   globalThis.__wingsEvent(map.props.onSelect, '{"index":0,"meta":true}');
   assert.deepEqual(heard, [["point", -2], ["select", 0, true]]);
+});
+
+test("an svg sends its shapes as data, a fragment's and a group's included, and only the props it documents", () => {
+  mount(h(Svg, { viewBox: "0 0 16 16", size: 18, tone: "warn", label: "Epic", fill: "none", stroke: "currentColor", strokeWidth: "1.4", className: "x", onClick() {} },
+    h(Fragment, null, h("rect", { x: "2.5", y: 2.5, width: 11, height: 11, rx: "2.5" }), h("path", { d: "m5.5 8.2 1.8 1.8" })),
+    [h("g", { key: "g", opacity: 0.3 }, h("circle", { cx: 8, cy: 8, r: 2 }))],
+    "text the app has no shape for",
+    null));
+  const svg = find(last(), "Svg");
+  assert.deepEqual(svg.children, []);
+  assert.deepEqual(svg.props, {
+    viewBox: "0 0 16 16", size: 18, tone: "warn", label: "Epic", fill: "none", stroke: "currentColor", strokeWidth: "1.4",
+    shapes: [["rect", { x: "2.5", y: 2.5, width: 11, height: 11, rx: "2.5" }], ["path", { d: "m5.5 8.2 1.8 1.8" }], ["g", { opacity: 0.3 }, [["circle", { cx: 8, cy: 8, r: 2 }]]]],
+  });
 });
 
 test("tab state is null until the app's saved state is read through check, and a set saves it", async () => {

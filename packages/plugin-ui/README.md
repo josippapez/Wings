@@ -177,7 +177,7 @@ export function SaveButton({ saving, save }: { saving: boolean; save: () => void
 `wings-plugin-ui/native` has the components a page of the native Wings app can use, with the names and props of the ones
 above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `Loading`, `Card`, `Heading`, `Dot`,
 `Gauge`, `List`, `ListItem`, `Disclosure` and `Select`, and for forms `Field`, `FieldGroup`, `TextInput`, `Textarea`,
-`Chip`, `Combobox` (its matches are chips under the field), `Menu` (its items show under the button), `Icon`,
+`Chip`, `Combobox` (its matches are chips under the field), `Menu` (its items show under the button), `Icon`, `Svg`,
 `Properties`, `Stats` and `Time`, and for a pull request's page `Title`, `Avatar`, `Skeleton`, `Skeletons`, `Summary`,
 `SummaryChip`, `Tabs` (drawn as `Chips`), `Timeline`, `ListDetail`, `Markdown` (the same parser as the web one: bold, code
 and links are spans of their line, and an image shows as its alt text), `CodeBlock` (no colours by language),
@@ -283,10 +283,11 @@ does:
 | Component | Props | Renders |
 | --- | --- | --- |
 | `Icon` | `name` (`check`, `chevron-down`, `copy`, `trash`), `label` | One of Lucide's icons in the colour of the text around it. Decoration unless it has a `label` |
+| `Svg` | `viewBox`, `size`, `tone`, `label`, the svg's own props, SVG shapes as `children` | A small drawing of your own, like an icon Lucide doesn't have, `size` px square (16 by default) in `tone`'s colour or the text's, as `currentColor`. Decoration unless it has a `label`. The native app draws it in that one colour, from `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon` and `g` with their geometry and `fill`, `stroke`, `strokeWidth`, `strokeLinecap`, `strokeLinejoin`, `fillRule` and `opacity` (fill and stroke `none` or `currentColor`), up to 32 shapes in a square `viewBox`; it leaves out an `Svg` with anything else |
 | `Textarea` | `label`, `rows`, the textarea's own props | A multi-line input that joins a `Field` like `TextInput` does |
 | `InlineInput` | `label`, `value`, `required`, `onSave`, `onDone`, `className` | A one-line input for editing in place. Enter or leaving saves, Escape cancels. If `onSave` throws, it stays open with the text and shows the message under it |
 | `Notice` | `tone` (`info`, `success`, `warn`, `danger`) | A short tinted message. `warn` and `danger` are announced at once |
 | `Confirm` | `title`, `actions` (`id`, `label`, `onConfirm`, `variant`, `autoFocus`), `cancelLabel`, `onCancel` | A card in the page that asks before something is done. If an action throws, it stays open and shows the message above its buttons. The page closes it from inside `onConfirm` once it worked |
 
-`Meter` and `Gauge` also take the `success` tone. Class names: `w-icon`, `w-textarea` (next to `w-input`), `w-inline-input`,
+`Meter` and `Gauge` also take the `success` tone. Class names: `w-icon`, `w-svg` with `data-tone`, `w-textarea` (next to `w-input`), `w-inline-input`,
 `w-notice` with `data-tone`, `w-confirm`.

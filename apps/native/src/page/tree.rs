@@ -10,7 +10,9 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 mod sunburst;
+mod svg;
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
+pub use svg::Svg;
 
 /// The largest tree JSON the host parses.
 pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
@@ -163,6 +165,7 @@ pub enum Node {
     SearchField(SearchField),
     Input(Input),
     Icon(Icon),
+    Svg(Svg),
     Graph(Graph),
     Avatar(Avatar),
     Skeleton(Skeleton),
@@ -727,6 +730,7 @@ impl Node {
             | Node::SearchField(_)
             | Node::Input(_)
             | Node::Icon(_)
+            | Node::Svg(_)
             | Node::Graph(_)
             | Node::Avatar(_)
             | Node::Skeleton(_)
@@ -818,6 +822,7 @@ impl Walk {
                 | "TextInput"
                 | "Textarea"
                 | "Icon"
+                | "Svg"
                 | "Graph"
                 | "Avatar"
                 | "Skeleton"
@@ -1130,6 +1135,11 @@ impl Walk {
             }
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
                 Some(name) => Node::Icon(Icon { id, name }),
+                None => return Ok(None),
+            },
+            // One that holds anything the app doesn't draw is left out, as an icon it has no name for is.
+            "Svg" => match svg::parse(id, &props) {
+                Some(drawing) => Node::Svg(drawing),
                 None => return Ok(None),
             },
             "ListButton" => Node::ListButton(ListButton {
@@ -1747,6 +1757,124 @@ mod tests {
         props["rows"][0]["subject"] = serde_json::json!("x".repeat(4097));
         assert!(graph(1, &props).is_err());
     }
+    fn svg(props: Value) -> Option<Svg> {
+        match tree(json!([{"id":1,"type":"Svg","props":props,"children":[]}]))
+            .unwrap()
+            .children
+            .pop()
+        {
+            Some(Node::Svg(drawing)) => Some(drawing),
+            None => None,
+            Some(other) => panic!("an svg, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_svg_is_drawn_from_markup_the_app_writes_from_its_checked_shapes() {
+        let drawing = svg(json!({
+            "viewBox":"0 0 16 16","size":18,"tone":"warn","label":"Epic",
+            "fill":"none","stroke":"currentColor","strokeWidth":"1.4","strokeLinecap":"round",
+            "shapes":[
+                ["rect",{"x":"2.5","y":2.5,"width":11,"height":"11","rx":2.5}],
+                ["path",{"d":"M9 1.8 3.5 9H8l-1 5.2L12.5 7H8Z","fillRule":"evenodd"}],
+                ["g",{"opacity":0.3},[["circle",{"cx":8,"cy":8,"r":2}],["line",{"x1":0,"y1":0,"x2":-4,"y2":4}]]],
+                ["polygon",{"points":"0,0 4,0 4,4"}]]
+        }))
+        .unwrap();
+        assert_eq!(
+            (drawing.size, drawing.tone, drawing.label.as_deref()),
+            (18.0, Some(Tone::Warn), Some("Epic"))
+        );
+        assert_eq!(
+            drawing.markup,
+            concat!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">"#,
+                r#"<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>"#,
+                r#"<path d="M9 1.8 3.5 9H8l-1 5.2L12.5 7H8Z" fill-rule="evenodd"/>"#,
+                r#"<g opacity="0.3"><circle cx="8" cy="8" r="2"/><line x1="0" y1="0" x2="-4" y2="4"/></g>"#,
+                r#"<polygon points="0,0 4,0 4,4"/>"#,
+                "</svg>"
+            )
+        );
+        // Without a size it is 16 points, and a size past an icon's is cut to 64.
+        let plain = |props: Value| svg(props).unwrap();
+        assert_eq!(plain(json!({"viewBox":"0 0 24 24","shapes":[]})).size, 16.0);
+        assert_eq!(
+            plain(json!({"viewBox":"0,0,24,24","size":1e9,"shapes":[]})).size,
+            64.0
+        );
+    }
+
+    #[test]
+    fn an_svg_with_anything_the_app_does_not_draw_is_left_out() {
+        let with = |shapes: Value| json!({"viewBox":"0 0 16 16","shapes":shapes});
+        let mut nested = json!([["path",{"d":"M0 0h1"}]]);
+        for _ in 0..5 {
+            nested = json!([["g", {}, nested]]);
+        }
+        let many: Vec<Value> = (0..=svg::MAX_SHAPES)
+            .map(|_| json!(["path",{"d":"M0 0h1"}]))
+            .collect();
+        // At the limits, it is drawn: what is left out below is left out for the one thing wrong with it.
+        let mut deepest = json!([["path",{"d":"M0 0h1"}]]);
+        for _ in 0..4 {
+            deepest = json!([["g", {}, deepest]]);
+        }
+        let most = Value::Array(many[1..].to_vec());
+        for drawn in [
+            with(json!([["path",{"d":"M0 0h1"}]])),
+            with(deepest),
+            with(most),
+        ] {
+            assert!(svg(drawn.clone()).is_some(), "{drawn}");
+        }
+        for refused in [
+            // Elements that load files, fonts or styles, and attributes outside the allowlist.
+            with(json!([["image",{"href":"/etc/passwd","width":16,"height":16}]])),
+            with(json!([["text",{"x":0,"y":0},[]]])),
+            with(json!([["style", {}]])),
+            with(json!([["use",{"href":"#a"}]])),
+            with(json!([["path",{"d":"M0 0h1","href":"x"}]])),
+            with(json!([["path",{"d":"M0 0h1","style":"fill:red"}]])),
+            with(json!([["path",{"d":"M0 0h1","transform":"scale(9)"}]])),
+            with(json!([["rect",{"d":"M0 0h1"}]])),
+            // Values that aren't what the attribute takes, or would end it.
+            with(json!([["path",{"d":"M0 0\" onload=\"x"}]])),
+            with(json!([["path",{"d":"M0 0<script>"}]])),
+            with(json!([["polygon",{"points":"0,0 M 4,4"}]])),
+            with(json!([["path",{"d":"M0 0h1","fill":"red"}]])),
+            with(json!([["path",{"d":"M0 0h1","stroke":"url(#paint)"}]])),
+            with(json!([["path",{"d":"M0 0h1","strokeLinecap":"pointy"}]])),
+            with(json!([["rect",{"width":-1}]])),
+            with(json!([["rect",{"width":"10px"}]])),
+            with(json!([["rect",{"x":"NaN"}]])),
+            with(json!([["rect",{"x":1e9}]])),
+            with(json!([["rect",{"x":true}]])),
+            with(json!([["g",{"opacity":2}]])),
+            // Shapes that aren't shapes, or hold shapes when only a g does.
+            with(json!([["path",{"d":"M0 0h1"},[["path",{"d":"M0 0h1"}]]]])),
+            with(json!([[7, {}]])),
+            with(json!([["path"]])),
+            with(json!(["path"])),
+            with(json!({"path":{}})),
+            json!({"viewBox":"0 0 16 16"}),
+            // Over the limits.
+            with(Value::Array(many)),
+            with(nested),
+            with(json!([["path",{"d":"M0 0".repeat(svg::MAX_MARKUP_BYTES)}]])),
+            // A view box that isn't four numbers of a square.
+            json!({"shapes":[]}),
+            json!({"viewBox":"0 0 16","shapes":[]}),
+            json!({"viewBox":"0 0 16 8","shapes":[]}),
+            json!({"viewBox":"0 0 0 0","shapes":[]}),
+            json!({"viewBox":"0 0 1e9 1e9","shapes":[]}),
+            json!({"viewBox":"a b c d","shapes":[]}),
+            json!({"viewBox":"0 0 16 16","fill":"blue","shapes":[]}),
+        ] {
+            assert_eq!(svg(refused.clone()), None, "{refused}");
+        }
+    }
+
     #[test]
     fn parses_a_split_a_scroll_a_bar_and_a_dot_with_a_colour() {
         let parsed = tree(json!([

@@ -757,6 +757,18 @@ export function Icon({ name, label, className, ...rest }) {
 }
 const icon = (name, className) => h(Icon, { name, className });
 
+/**
+ * A small drawing of your own, like an icon Lucide doesn't have: SVG shapes in `viewBox`, `size` px square, in `tone`'s
+ * colour or the text's, as `currentColor`. Decoration, unless it has a `label`.
+ */
+export function Svg({ size = 16, tone, label, className, children, ...rest }) {
+  return h(
+    "svg",
+    { ...rest, className: cx("w-svg", className), "data-tone": tone, width: size, height: size, ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true }) },
+    children,
+  );
+}
+
 const FieldIdContext = createContext(undefined);
 const GroupContext = createContext(null);
 

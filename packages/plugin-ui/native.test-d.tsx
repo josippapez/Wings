@@ -30,13 +30,14 @@ import {
   SearchField as NativeSearchField,
   Stack as NativeStack,
   Spinner as NativeSpinner,
+  Svg as NativeSvg,
   Text as NativeText,
   TextInput as NativeTextInput,
   Textarea as NativeTextarea,
   Time as NativeTime,
   Toolbar as NativeToolbar,
 } from "./native";
-import type { Badge, Button, Card, Checkbox, Chip, Combobox, Confirm, Disclosure, Dot, Empty, Field, FieldGroup, Gauge, Heading, Icon, List, ListItem, Loading, Menu, Notice, Page, Properties, Row, Select, Spinner, Stack, Text, TextInput, Textarea, Time, Toolbar } from "./ui";
+import type { Badge, Button, Card, Checkbox, Chip, Combobox, Confirm, Disclosure, Dot, Empty, Field, FieldGroup, Gauge, Heading, Icon, List, ListItem, Loading, Menu, Notice, Page, Properties, Row, Select, Spinner, Stack, Svg, Text, TextInput, Textarea, Time, Toolbar } from "./ui";
 
 // What a native component takes, a ui component takes too.
 type Props<F> = F extends (props: infer P) => unknown ? P : never;
@@ -68,13 +69,14 @@ export const sameProps: [
   Takes<typeof NativeMenu, typeof Menu>,
   Takes<typeof NativeProperties, typeof Properties>,
   Takes<typeof NativeTime, typeof Time>,
+  Takes<typeof NativeSvg, typeof Svg>,
   // A handler gets the native event, so only the other props are the same.
   Props<typeof NativeButton> extends Omit<Props<typeof Button>, "onClick" | "onKeyDown"> ? true : never,
   Props<typeof NativeChip> extends Omit<Props<typeof Chip>, "onClick"> ? true : never,
   Props<typeof NativeText> extends Omit<Props<typeof Text>, "onClick"> ? true : never,
   Props<typeof NativeTextInput> extends Omit<Props<typeof TextInput>, "onChange" | "onKeyDown" | "onBlur"> ? true : never,
   Props<typeof NativeTextarea> extends Omit<Props<typeof Textarea>, "onChange" | "onKeyDown" | "onBlur"> ? true : never,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 export const page = (
   <NativePage toolbar={<NativeToolbar title="Pilot" actions={<NativeBadge tone="info">ready</NativeBadge>} />}>
@@ -115,6 +117,10 @@ export const notNative = [
   <NativeBadge tone="muted" />,
   // @ts-expect-error a dot's tone leaves out "success", like ui's
   <NativeDot tone="success" />,
+  // @ts-expect-error the app draws an svg in one colour: a shape is painted in it or not at all
+  <NativeSvg viewBox="0 0 16 16" fill="red" />,
+  // @ts-expect-error an svg needs its viewBox
+  <NativeSvg size={14} />,
   // @ts-expect-error a select's handler gets the value picked, not an event
   <NativeSelect options={[{ value: "a", label: "A" }]} onChange={(event: MouseEvent) => event.clientX} />,
 ];

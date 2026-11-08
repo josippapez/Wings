@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Meter, Notice, ProjectGate, Row, Stack, Title, languageOf } from "./ui.js";
+import { Avatar, Badge, Summary, SummaryChip, Skeleton, Skeletons, Time, Timeline, TimelineCard, TimelineNote, ago, Button, Card, Page, Toolbar, Chips, Combobox, Dot, Empty, Heading, Icon, Meter, Svg, Notice, ProjectGate, Row, Stack, Title, languageOf } from "./ui.js";
 
 const html = (element) => renderToStaticMarkup(element);
 
@@ -12,6 +12,14 @@ test("Dot takes a colour from data as --w-color, and only then", () => {
   assert.match(html(h(Dot, { color: "#cc293d" })), /<span class="w-dot" style="--w-color:#cc293d" data-color="" aria-hidden="true">/);
   assert.equal(html(h(Dot, { tone: "danger" })), '<span class="w-dot" data-tone="danger" aria-hidden="true"></span>');
   assert.doesNotMatch(html(h(Dot, { tone: "danger", color: "#cc293d" })), /data-tone/);
+});
+
+test("Svg draws its shapes at its size in its tone, and is named only with a label", () => {
+  assert.equal(
+    html(h(Svg, { viewBox: "0 0 16 16", size: 18, tone: "warn", fill: "none" }, h("path", { d: "M9 1.8 3.5 9H8Z" }))),
+    '<svg viewBox="0 0 16 16" fill="none" class="w-svg" data-tone="warn" width="18" height="18" aria-hidden="true"><path d="M9 1.8 3.5 9H8Z"></path></svg>',
+  );
+  assert.match(html(h(Svg, { viewBox: "0 0 16 16", label: "Epic" })), /<svg viewBox="0 0 16 16" class="w-svg" width="16" height="16" role="img" aria-label="Epic">/);
 });
 
 test("Chips pass each option's other props to its button, and mark the one that's on", () => {
