@@ -40,6 +40,7 @@ const issues = [
     ],
   }),
   issue("WEB-5", "Rename the cart store to match the checkout naming", "done", "task", 60),
+  issue("WEB-7", "Hide the summary card for an empty cart", "todo", "task", 20, { parent: "WEB-4", priority: "low" }),
   issue("WEB-6", "Upgrade the date picker", "done", "task", 70, { parent: "WEB-10" }),
   issue("WEB-10", "Checkout redesign", "in_progress", "epic", 80, { description: "The checkout pages on the new design system." }),
 ];

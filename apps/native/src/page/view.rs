@@ -412,6 +412,32 @@ impl PageView {
         })
     }
 
+    /// Turns on the `Chip` that shows `label`, as a click on it would, unless it's on already. False when the page has
+    /// no such chip.
+    #[cfg(feature = "test-support")]
+    pub fn turn_on_chip(&self, label: &str) -> bool {
+        fn find<'a>(nodes: &'a [Node], label: &str) -> Option<&'a tree::Button> {
+            nodes.iter().find_map(|node| match node {
+                Node::Button(button)
+                    if button.chip && plain_text(&button.children).starts_with(label) =>
+                {
+                    Some(button)
+                }
+                other => other.parts().into_iter().find_map(|part| find(part, label)),
+            })
+        }
+        let found = self
+            .tree
+            .as_ref()
+            .and_then(|tree| find(&tree.children, label));
+        found.is_some_and(|chip| {
+            if let (false, Some(handler)) = (chip.pressed, &chip.on_click) {
+                self.act(handler, None);
+            }
+            true
+        })
+    }
+
     /// Opens the menu of the select named `label`, or showing it, as a click on it would. False when the page has no
     /// such select.
     #[cfg(feature = "test-support")]

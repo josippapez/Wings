@@ -1119,7 +1119,9 @@ fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[
                 // Each chip shows once the page has loaded what it needs.
                 let deadline = Instant::now() + Duration::from_secs(10);
                 while !handle
-                    .read_with(&cx, |view, _| view.press_chip(label))
+                    .read_with(&cx, |view, _| {
+                        view.press_chip(label) || view.turn_on_chip(label)
+                    })
                     .unwrap()
                 {
                     assert!(
@@ -1327,5 +1329,19 @@ fn tasks(out: PathBuf) {
             ),
             ("block", block, None, Block, &[], "Open board"),
         ],
+    );
+    // On its own, after the others: Group by parent stays on for every Issues tab once it's turned on.
+    shoot_pages(
+        &out,
+        &host,
+        "tasks",
+        &[(
+            "list-parent",
+            board,
+            None,
+            Tab,
+            &["List", "Group by parent"],
+            "No parent",
+        )],
     );
 }
