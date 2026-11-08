@@ -188,7 +188,16 @@ fn main() {
                 })
                 .expect("open updater fixture");
             let window: AnyWindowHandle = handle.into();
-            for state in ["available", "error", "progress"] {
+            for state in [
+                "checking",
+                "current",
+                "available",
+                "no-notes",
+                "downloading",
+                "verifying",
+                "installing",
+                "error",
+            ] {
                 handle
                     .update(&mut cx, |workspace, window, cx| {
                         workspace.sample_update(state, window, cx)

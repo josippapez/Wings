@@ -147,6 +147,11 @@ impl Release {
             APP.tag, self.version, self.artifact
         )
     }
+
+    /// The release's page on GitHub, where the dialog sends you when it has no notes.
+    pub fn page(&self) -> String {
+        format!("{REPO}/tag/{}{}", APP.tag, self.version)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -156,8 +161,61 @@ pub struct Available {
     signature: Vec<u8>,
 }
 
-trait Transport {
+impl Available {
+    /// A release to draw, never to install: it has no signed metadata.
+    #[cfg(feature = "test-support")]
+    pub fn sample(version: &str, notes: &str) -> Self {
+        Available {
+            release: Release {
+                bundle_identifier: APP.bundle_identifier.into(),
+                version: version.into(),
+                platform: platform().into(),
+                artifact: format!("{}-{version}-{}.app.tar.gz", APP.archive, platform()),
+                size: 13_529_763,
+                sha256: "0".repeat(64),
+                notes: notes.into(),
+            },
+            manifest: Vec::new(),
+            signature: Vec::new(),
+        }
+    }
+}
+
+trait Transport: Sync {
     fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()>;
+}
+
+/// What a refused request says. GitHub answers 5xx, mostly 504, for a while after a release is published: like the
+/// desktop's updater, the update isn't asked for again on its own, the dialog says so and offers Retry.
+fn status_error(code: u16) -> String {
+    if code >= 500 {
+        format!(
+            "GitHub couldn't send the update just now (HTTP {code}). A new release can take a few minutes to become \
+             available. Try again shortly."
+        )
+    } else {
+        format!("Update request failed: HTTP {code}")
+    }
+}
+
+/// The archive as it arrives, telling `progress` how many bytes have so far.
+struct Counting<'a, W> {
+    inner: W,
+    received: u64,
+    progress: &'a mut dyn FnMut(u64),
+}
+
+impl<W: Write> Write for Counting<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        self.received += written as u64;
+        (self.progress)(self.received);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 struct Https;
@@ -189,7 +247,10 @@ impl Transport for Https {
         let mut url = url.to_owned();
         for _ in 0..6 {
             trusted_url(&url)?;
-            let mut response = agent.get(&url).call().map_err(err)?;
+            let mut response = agent.get(&url).call().map_err(|error| match error {
+                ureq::Error::StatusCode(code) => status_error(code),
+                error => err(error),
+            })?;
             if response.status().is_redirection() {
                 let location = response
                     .headers()
@@ -230,10 +291,20 @@ fn check_with(
     arch: &str,
 ) -> Result<Option<Available>> {
     let url = format!("{REPO}/latest/download/{}-{arch}.json", APP.feed);
-    let mut manifest = Vec::new();
-    let mut signature = Vec::new();
-    transport.get(&url, MAX_META, &mut manifest)?;
-    transport.get(&format!("{url}.sig"), 4096, &mut signature)?;
+    let fetch = |url: &str, max: u64| -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        transport.get(url, max, &mut bytes)?;
+        Ok(bytes)
+    };
+    // The feed and its signature are asked for together, so a check waits for one trip through GitHub's redirects, as
+    // the desktop's single `latest.json` does, not two in a row.
+    let signature_url = format!("{url}.sig");
+    let (manifest, signature) = std::thread::scope(|scope| {
+        let signature = scope.spawn(|| fetch(&signature_url, 4096));
+        let manifest = fetch(&url, MAX_META);
+        (manifest, signature.join().unwrap())
+    });
+    let (manifest, signature) = (manifest?, signature?);
     authenticate(&manifest, &signature, key)?;
     let release: Release = serde_json::from_slice(&manifest).map_err(err)?;
     if !release.validate(current, arch)? {
@@ -436,11 +507,13 @@ pub struct Prepared {
     pub version: String,
 }
 
+/// `progress` hears how many bytes of the archive have arrived each time more do, out of `release.size`.
 fn prepare_with(
     available: &Available,
     target: &Path,
     transport: &impl Transport,
     verify_code: impl Fn(&Path) -> Result<()>,
+    mut progress: impl FnMut(u64),
 ) -> Result<Prepared> {
     let directory = tempfile::Builder::new()
         .prefix(".wings-update-")
@@ -448,7 +521,15 @@ fn prepare_with(
         .map_err(err)?;
     let archive = directory.path().join("update.tar.gz");
     let mut file = File::create(&archive).map_err(err)?;
-    transport.get(&available.release.url(), available.release.size, &mut file)?;
+    transport.get(
+        &available.release.url(),
+        available.release.size,
+        &mut Counting {
+            inner: &mut file,
+            received: 0,
+            progress: &mut progress,
+        },
+    )?;
     file.sync_all().map_err(err)?;
     verify_archive(&archive, &available.release)?;
     let bundle = extract(&archive, directory.path())?;
@@ -463,8 +544,12 @@ fn prepare_with(
     })
 }
 
-pub fn prepare(available: &Available, target: &Path) -> Result<Prepared> {
-    prepare_with(available, target, &Https, codesign)
+pub fn prepare(
+    available: &Available,
+    target: &Path,
+    progress: impl FnMut(u64),
+) -> Result<Prepared> {
+    prepare_with(available, target, &Https, codesign, progress)
 }
 
 #[derive(Serialize, Deserialize)]

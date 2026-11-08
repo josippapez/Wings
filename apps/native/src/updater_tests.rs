@@ -1,16 +1,20 @@
 use super::*;
-use std::{cell::RefCell, io::Cursor};
+use std::{
+    cell::RefCell,
+    io::Cursor,
+    sync::{Condvar, Mutex},
+};
 
 struct Fixture {
     manifest: Vec<u8>,
     signature: Vec<u8>,
     key: String,
     archive: Vec<u8>,
-    calls: RefCell<Vec<String>>,
+    calls: Mutex<Vec<String>>,
 }
 impl Transport for Fixture {
     fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()> {
-        self.calls.borrow_mut().push(url.to_owned());
+        self.calls.lock().unwrap().push(url.to_owned());
         let bytes = if url.ends_with(".sig") {
             &self.signature
         } else if url.ends_with(".json") {
@@ -21,7 +25,11 @@ impl Transport for Fixture {
         if bytes.len() as u64 > max {
             return Err("fixture exceeds requested limit".into());
         }
-        output.write_all(bytes).map_err(err)
+        // In pieces, as a download arrives.
+        for piece in bytes.chunks(64) {
+            output.write_all(piece).map_err(err)?;
+        }
+        Ok(())
     }
 }
 fn signed(bytes: &[u8], seed: u8) -> (String, Vec<u8>) {
@@ -103,7 +111,7 @@ fn fixture(archive: Vec<u8>, change: impl FnOnce(&mut Release)) -> Fixture {
         signature,
         key,
         archive,
-        calls: RefCell::new(Vec::new()),
+        calls: Mutex::new(Vec::new()),
     }
 }
 fn checked(f: &Fixture) -> Result<Option<Available>> {
@@ -121,7 +129,7 @@ fn signed_check_download_stage_and_restart_share_the_production_path() {
     let target = dir.path().join("Installed.app");
     fs::create_dir(&target).unwrap();
     fs::write(target.join("old"), "usable").unwrap();
-    let prepared = prepare_with(&available, &target, &f, |_| Ok(())).unwrap();
+    let prepared = prepare_with(&available, &target, &f, |_| Ok(()), |_| {}).unwrap();
     let staged = prepared.directory.path().join(ROOT);
     validate_bundle(&staged, "0.2.0").unwrap();
     #[cfg(target_os = "macos")]
@@ -133,9 +141,10 @@ fn signed_check_download_stage_and_restart_share_the_production_path() {
         assert_eq!(fs::read_to_string(staged.join("old")).unwrap(), "usable");
         validate_bundle(&target, "0.2.0").unwrap();
     }
-    assert_eq!(f.calls.borrow().len(), 3);
+    assert_eq!(f.calls.lock().unwrap().len(), 3);
     assert!(
-        f.calls.borrow()[2].starts_with(&format!("{REPO}/download/native-v0.2.0/Wings-native-"))
+        f.calls.lock().unwrap()[2]
+            .starts_with(&format!("{REPO}/download/native-v0.2.0/Wings-native-"))
     );
 }
 
@@ -147,7 +156,7 @@ fn metadata_is_authenticated_before_it_is_parsed() {
     let (wrong, _) = signed(b"unused", 2);
     f.key = wrong;
     assert!(checked(&f).is_err());
-    assert_eq!(f.calls.borrow().len(), 4);
+    assert_eq!(f.calls.lock().unwrap().len(), 4);
 }
 
 #[test]
@@ -183,7 +192,7 @@ fn archive_tampering_and_bad_bundles_leave_the_old_app_untouched() {
         let dir = temp();
         let target = dir.path().join("Installed.app");
         fs::create_dir(&target).unwrap();
-        assert!(prepare_with(&available, &target, &f, |_| Ok(())).is_err());
+        assert!(prepare_with(&available, &target, &f, |_| Ok(()), |_| {}).is_err());
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
     let mut f = fixture(archive("0.2.0", None, None), |_| {});
@@ -191,12 +200,12 @@ fn archive_tampering_and_bad_bundles_leave_the_old_app_untouched() {
     f.archive[20] ^= 1;
     let dir = temp();
     assert!(
-        prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()))
+        prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()), |_| {})
             .unwrap_err()
             .contains("digest")
     );
     f.archive.push(0);
-    assert!(prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(())).is_err());
+    assert!(prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()), |_| {}).is_err());
 }
 
 #[test]
@@ -212,7 +221,7 @@ fn hostile_tar_paths_links_and_unexpected_roots_are_rejected() {
         let available = checked(&f).unwrap().unwrap();
         let dir = temp();
         assert!(
-            prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(())).is_err(),
+            prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()), |_| {}).is_err(),
             "{path}"
         );
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
@@ -286,7 +295,16 @@ fn native_updates_must_include_the_terminal_server() {
     );
     let available = checked(&fixture).unwrap().unwrap();
     let dir = temp();
-    assert!(prepare_with(&available, &dir.path().join("app"), &fixture, |_| Ok(())).is_err());
+    assert!(
+        prepare_with(
+            &available,
+            &dir.path().join("app"),
+            &fixture,
+            |_| Ok(()),
+            |_| {}
+        )
+        .is_err()
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -463,16 +481,20 @@ fn expanded_archive_limit_and_code_signature_failures_are_errors() {
     let available = checked(&f).unwrap().unwrap();
     let dir = temp();
     assert!(
-        prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()))
+        prepare_with(&available, &dir.path().join("app"), &f, |_| Ok(()), |_| {})
             .unwrap_err()
             .contains("expands")
     );
     let f = fixture(archive("0.2.0", None, None), |_| {});
     let available = checked(&f).unwrap().unwrap();
     assert!(
-        prepare_with(&available, &dir.path().join("app"), &f, |_| Err(
-            "invalid code signature".into()
-        ))
+        prepare_with(
+            &available,
+            &dir.path().join("app"),
+            &f,
+            |_| Err("invalid code signature".into()),
+            |_| {}
+        )
         .unwrap_err()
         .contains("code signature")
     );
@@ -555,7 +577,7 @@ fn packaged_release_downloads_verifies_stages_and_swaps_only_inside_a_fixture() 
     let target = dir.path().join("Installed.app");
     fs::create_dir(&target).unwrap();
     fs::write(target.join("original"), "still recoverable").unwrap();
-    let prepared = prepare_with(&available, &target, &fixture, codesign).unwrap();
+    let prepared = prepare_with(&available, &target, &fixture, codesign, |_| {}).unwrap();
     let staged = prepared.directory.path().join(ROOT);
     replace_and_restart(&target, &staged, swap, |path| {
         validate_bundle(path, VERSION)
@@ -586,4 +608,74 @@ fn a_confirmation_from_an_app_that_already_hung_up_counts() {
     std::thread::sleep(Duration::from_millis(100));
     let (connection, _) = listener.accept().unwrap();
     read_confirmation(connection, Duration::from_secs(5)).unwrap();
+}
+
+/// Each answer waits, up to a deadline, until the other request is in flight too: asked one after the other, the first
+/// gives up.
+struct Together {
+    inner: Fixture,
+    waiting: Mutex<usize>,
+    arrived: Condvar,
+}
+impl Transport for Together {
+    fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()> {
+        let mut waiting = self.waiting.lock().unwrap();
+        *waiting += 1;
+        self.arrived.notify_all();
+        let (waiting, timeout) = self
+            .arrived
+            .wait_timeout_while(waiting, Duration::from_secs(2), |waiting| *waiting < 2)
+            .unwrap();
+        drop(waiting);
+        if timeout.timed_out() {
+            return Err(format!("{url} was asked for alone"));
+        }
+        self.inner.get(url, max, output)
+    }
+}
+
+#[test]
+fn the_feed_and_its_signature_are_asked_for_at_once() {
+    let f = fixture(archive("0.2.0", None, None), |_| {});
+    let key = f.key.clone();
+    let together = Together {
+        inner: f,
+        waiting: Mutex::new(0),
+        arrived: Condvar::new(),
+    };
+    let available = check_with(&together, &key, "0.1.0", platform()).unwrap();
+    assert_eq!(available.unwrap().release.version, "0.2.0");
+}
+
+#[test]
+fn a_download_reports_the_bytes_received_as_they_arrive() {
+    let f = fixture(archive("0.2.0", None, None), |_| {});
+    let available = checked(&f).unwrap().unwrap();
+    let dir = temp();
+    let target = dir.path().join("Installed.app");
+    fs::create_dir(&target).unwrap();
+    let mut reported = Vec::new();
+    prepare_with(
+        &available,
+        &target,
+        &f,
+        |_| Ok(()),
+        |received| reported.push(received),
+    )
+    .unwrap();
+    assert!(reported.len() > 2, "{reported:?}");
+    assert!(reported.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(reported.last(), Some(&available.release.size));
+}
+
+#[test]
+fn a_release_github_is_still_publishing_says_to_try_again_later() {
+    for code in [502, 503, 504] {
+        let message = status_error(code);
+        assert!(
+            message.contains(&code.to_string()) && message.contains("Try again"),
+            "{message}"
+        );
+    }
+    assert!(!status_error(404).contains("Try again"));
 }
