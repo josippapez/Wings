@@ -1,7 +1,7 @@
 // Small pieces the Issues pages share.
 
 import { useEffect, useRef, type ComponentProps } from "react";
-import { Badge, Button, Card, Confirm, Dot, Icon, ListButton, Meter, Row, Summary, SummaryChip, Text, Time } from "wings-plugin-ui";
+import { Badge, Button, Card, Confirm, Dot, Icon, ListButton, Meter, Row, Summary, SummaryChip, Svg, Text, Time } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { agentLabel } from "../lib/commands";
 import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueType, type Op, type Priority, type Status } from "../lib/domain";
@@ -58,12 +58,21 @@ const TYPE_PATH: Record<IssueType, React.ReactNode> = {
   epic: <path d="M9 1.8 3.5 9H8l-1 5.2L12.5 7H8Z" />,
 };
 
-const TYPE_TONE = { task: "muted", bug: "danger", feature: undefined, epic: "warn" } as const;
+/** tasks.css's `.tk-type[data-type]` colours, for the native app. */
+const TYPE_TONE = { task: "muted", bug: "danger", feature: "success", epic: "warn" } as const;
 
-/** A small icon for an issue's type, coloured by it. Decoration unless `label`: the card or page names the type in text too. */
-export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) {
-  // The native app draws no SVG: a dot in the type's colour.
-  if (WINGS_NATIVE) return <Dot tone={TYPE_TONE[type]} label={label ? TYPE_LABEL[type] : undefined} />;
+/**
+ * A small icon for an issue's type, coloured by it. Decoration unless `label`: the card or page names the type in text
+ * too. `size` is the native app's; tasks.css sizes the desktop's, 18px in the title row as there.
+ */
+export function TypeIcon({ type, label, size = 14 }: { type: IssueType; label?: boolean; size?: number }) {
+  if (WINGS_NATIVE) {
+    return (
+      <Svg viewBox="0 0 16 16" size={size} tone={TYPE_TONE[type]} label={label ? TYPE_LABEL[type] : undefined} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        {TYPE_PATH[type]}
+      </Svg>
+    );
+  }
   return (
     <svg className="tk-type" data-type={type} viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...(label ? { role: "img", "aria-label": TYPE_LABEL[type] } : { "aria-hidden": true })}>
       <title>{TYPE_LABEL[type]}</title>
@@ -72,15 +81,28 @@ export function TypeIcon({ type, label }: { type: IssueType; label?: boolean }) 
   );
 }
 
+/** The urgent icon's square (x 1.5 to 14.5, corners of 3) with the exclamation mark's two strokes (1.8 wide, round) as holes. */
+const URGENT_CUT =
+  "M4.5 1.5h7a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-7a3 3 0 0 1 3-3Z" +
+  "M8 3.6a.9.9 0 0 0-.9.9V9a.9.9 0 0 0 1.8 0V4.5a.9.9 0 0 0-.9-.9Z" +
+  "M8 10.3a.9.9 0 0 0-.9.9v.3a.9.9 0 0 0 1.8 0v-.3a.9.9 0 0 0-.9-.9Z";
+
 /**
  * Linear's priority icon: three bars filled by level, an exclamation mark in a square for urgent, a dash for none. Named
  * for a screen reader with `label`, otherwise decoration next to text that says it.
  */
 export function PriorityIcon({ priority = "none", label }: { priority?: Priority; label?: boolean }) {
   const filled = { urgent: 3, high: 3, medium: 2, low: 1, none: 0 }[priority];
+  const dashes = <path d="M3 8h2M7 8h2M11 8h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />;
+  const bars = [0, 1, 2].map((i) => <rect key={i} x={2 + i * 4.5} y={10 - i * 3.5} width="3" height={4 + i * 3.5} rx="1" fill="currentColor" opacity={i < filled ? 1 : 0.3} />);
   if (WINGS_NATIVE) {
-    const bars = priority === "urgent" ? "!" : priority === "none" ? "–" : "▰".repeat(filled) + "▱".repeat(3 - filled);
-    return <Text tone={priority === "urgent" ? "warn" : priority === "high" ? undefined : "muted"} size="tiny" title={label ? PRIORITY_LABEL[priority] : undefined}>{bars}</Text>;
+    // In tasks.css's `.tk-priority[data-priority]` colours. The app draws in one colour, so urgent's mark is cut out of
+    // its square, showing the page as the desktop's primary-fg mark does.
+    return (
+      <Svg viewBox="0 0 16 16" size={14} tone={priority === "urgent" ? "warn" : priority === "high" ? undefined : "muted"} label={label ? PRIORITY_LABEL[priority] : undefined}>
+        {priority === "urgent" ? <path d={URGENT_CUT} fill="currentColor" fillRule="evenodd" /> : priority === "none" ? dashes : bars}
+      </Svg>
+    );
   }
   return (
     <svg className="tk-priority" data-priority={priority} viewBox="0 0 16 16" width="14" height="14" {...(label ? { role: "img", "aria-label": PRIORITY_LABEL[priority] } : { "aria-hidden": true })}>
@@ -91,9 +113,9 @@ export function PriorityIcon({ priority = "none", label }: { priority?: Priority
           <path d="M8 4.5v4.5M8 11.2v.3" stroke="var(--wings-primary-fg)" strokeWidth="1.8" strokeLinecap="round" />
         </>
       ) : priority === "none" ? (
-        <path d="M3 8h2M7 8h2M11 8h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        dashes
       ) : (
-        [0, 1, 2].map((i) => <rect key={i} x={2 + i * 4.5} y={10 - i * 3.5} width="3" height={4 + i * 3.5} rx="1" fill="currentColor" opacity={i < filled ? 1 : 0.3} />)
+        bars
       )}
     </svg>
   );

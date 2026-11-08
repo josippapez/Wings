@@ -47,13 +47,13 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   const [editing, setEditing] = useState(false);
   return (
     <Box className="tk-title-row">
-      <TypeIcon type={issue.type} label />
+      <TypeIcon type={issue.type} label size={18} />
       {editing ? (
         <InlineInput label="Title" className="tk-title-input" value={issue.title} maxLength={LIMITS.title} required onSave={(title) => apply({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
       ) : WINGS_NATIVE ? (
-        // The native app's buttons are one 14px line, so the title is large text that wraps, with its own Edit after
-        // the key.
-        <NativeHeading size="large" weight="strong" grow>{issue.title}</NativeHeading>
+        // The native app's buttons are one 14px line, so the title is large text that wraps, with its own Edit at the
+        // row's end.
+        <NativeHeading size="large" weight="strong">{issue.title}</NativeHeading>
       ) : (
         <Title as="h1" className="tk-title">
           <Button variant="ghost" className="tk-title-button" title="Edit the title" onClick={() => setEditing(true)} onKeyDown={(e) => { if (e.key === "F2") setEditing(true); }}>

@@ -3,7 +3,7 @@
 use super::{
     plugin::{PluginHost, tests::Root},
     tree::{Level, Node, Tree},
-    view::{PageView, level_color, three_lines},
+    view::{PageView, baseline_drops, level_color, three_lines},
 };
 use crate::theme;
 use gpui::{Keystroke, MouseButton, TestApp, TestAppWindow, point, px};
@@ -1011,4 +1011,56 @@ fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_
         &mut window,
         shows("Task=Checkout redesign!, started 3."),
     );
+}
+
+/// An issue's title row: a large title that doesn't grow, and its key after it on its baseline.
+const TITLE_ROW: &str = r#"
+let heard = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'l',align:'baseline'},children:[
+{id:2,type:'Text',props:{size:'large',weight:'strong'},children:[{id:3,type:'#text',text:'Backfill order totals for rows created before the currency column existed'}]},
+{id:4,type:'Text',props:{size:'small',mono:true,onClick:'4:click'},children:[{id:5,type:'#text',text:'WEB-3'}]}]},
+{id:6,type:'Text',children:[{id:7,type:'#text',text:'Heard '+heard+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{heard++;render();return true;};render();
+"#;
+
+#[test]
+fn a_title_in_a_baseline_row_wraps_and_keeps_its_key_beside_it() {
+    let (app, mut window) = open_narrow(TITLE_ROW, 300.0);
+    settle(&app, &mut window, shows("Heard 0."));
+    // The key is clickable, so a click finds it: on the title's first line, at the frame's right, after the title has
+    // wrapped. GPUI took the narrowest the title could be as its whole line, so the key sat past the frame's edge.
+    assert!(pressed_at(&app, &mut window, (266.0, 27.0), "Heard 1."));
+}
+
+#[test]
+fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
+    let row = |texts: &str| {
+        let tree = Tree::parse(&format!(
+            r##"{{"id":0,"type":"#root","children":[{{"id":1,"type":"Row","props":{{"align":"baseline"}},"children":[{texts}]}}]}}"##
+        ))
+        .unwrap();
+        let Node::Row(row) = &tree.children[0] else {
+            panic!("a row")
+        };
+        row.clone()
+    };
+    let title = r##"{"id":2,"type":"Text","props":{"size":"large","weight":"strong"},"children":[{"id":3,"type":"#text","text":"Checkout summary card"}]}"##;
+    let key = r##"{"id":4,"type":"Text","props":{"size":"small","mono":true},"children":[{"id":5,"type":"#text","text":"WEB-4"}]}"##;
+    let mut app = TestApp::new();
+    app.update(|cx| {
+        // The key is set in the middle of a line as tall as the title's, so its baseline was higher by the difference
+        // of their half ascent-less-descent; it starts that much lower now, and the title where it was.
+        let drops = baseline_drops(&row(&format!("{title},{key}")), cx).unwrap();
+        assert_eq!(drops[0], 0.0);
+        assert!(drops[1] > 1.0, "{drops:?}");
+        // Texts of one size stay level, and a row that isn't a baseline row of texts is left as it is.
+        assert_eq!(
+            baseline_drops(&row(&format!("{key},{key}")), cx),
+            Some(vec![0.0, 0.0])
+        );
+        let mut center = row(&format!("{title},{key}"));
+        center.align = crate::page::tree::Align::Center;
+        assert_eq!(baseline_drops(&center, cx), None);
+    });
 }

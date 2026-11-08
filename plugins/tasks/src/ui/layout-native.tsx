@@ -55,7 +55,18 @@ export function Layout({ tag, className = "", children }: { tag: string; classNa
     );
   }
   if (classes.includes("tk-props")) return <Column gap="l" width={240}>{children}</Column>;
-  if (classes.includes("tk-title-row")) return <Row gap="m" align="start">{children}</Row>;
+  // tasks.css's title row: the type icon centred on the title, and the key right after the title on its baseline. The
+  // native Edit goes at the row's end.
+  if (classes.includes("tk-title-row")) {
+    const [icon, title, key, ...edit] = Children.toArray(children);
+    return (
+      <Row gap="m">
+        {icon}
+        <Row gap="l" align="baseline" grow>{title}{key}</Row>
+        {edit}
+      </Row>
+    );
+  }
   if (is(ROWS)) return <Row gap="s">{children}</Row>;
   if (is(MUTED)) return <Text tone="muted" size="small">{children}</Text>;
   if (tag === "span") return <Text grow={classes.includes("tk-link-title")} truncate={classes.includes("tk-link-title")}>{children}</Text>;

@@ -1387,3 +1387,48 @@ fn tasks_issue_tab_saves_a_title_edited_in_place() {
         tree.text().contains("Fix the sign-in redirect") && title_input(&tree.children).is_none()
     });
 }
+
+/// The Issue tab's title row starts with the issue's type icon, the desktop's checked square for a task, at the
+/// title row's 18 points and in the task's muted colour. It was a dot.
+#[test]
+fn tasks_issue_tab_draws_the_type_icon_by_its_title() {
+    let rig = tasks_rig();
+    {
+        let (page, events, _saved) = open_with_state(
+            &rig.host,
+            &native("tasks", "board.js"),
+            None,
+            super::StatePlace::Tab,
+            None,
+        );
+        add_issue(&page, &events, "Fix the login redirect");
+    }
+    let args = json!({ "key": "WEB-1", "projectId": "/work/web" });
+    let (_page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "issue.js"),
+        Some(&args),
+        super::StatePlace::Tab,
+        None,
+    );
+    fn type_icon(nodes: &[Node]) -> Option<&crate::page::tree::Svg> {
+        nodes.iter().find_map(|node| match node {
+            Node::Svg(icon) if icon.label.as_deref() == Some("Task") => Some(icon),
+            other => other.parts().into_iter().find_map(type_icon),
+        })
+    }
+    let issue = tree(&events, "the issue's type icon", |tree| {
+        tree.text().contains("Fix the login redirect") && type_icon(&tree.children).is_some()
+    });
+    let icon = type_icon(&issue.children).unwrap();
+    assert_eq!(
+        (icon.size, icon.tone),
+        (18.0, Some(crate::page::tree::Tone::Muted))
+    );
+    assert!(
+        icon.markup
+            .contains(r#"<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="m5.5 8.2 1.8 1.8 3.2-3.6"/>"#),
+        "{}",
+        icon.markup
+    );
+}

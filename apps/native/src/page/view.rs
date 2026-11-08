@@ -605,6 +605,74 @@ impl PageView {
         items
     }
 
+    /// A `Text`. In a baseline row it has a `drop`: its first line starts that many points down, onto the row's
+    /// baseline, and it narrows to its longest word and wraps when the row is short of room, as a CSS flex item does
+    /// even when it doesn't grow. GPUI takes a text's narrowest as its whole line, so an issue's long title ran over the
+    /// key and the Edit after it.
+    fn text_element(
+        &self,
+        text: &tree::Text,
+        drop: Option<f32>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
+        // word when it has to. A text that grows in a row, squeezed by the buttons beside it, would come apart a
+        // letter or two a line, so it is never narrower than its longest word, as in the desktop.
+        let least = ((text.grow || drop.is_some()) && !text.truncate).then(|| {
+            let size = match text.size {
+                TextSize::Small => 12.0,
+                TextSize::Tiny => 11.0,
+                TextSize::Large => 20.0,
+                TextSize::Field => 14.0,
+                TextSize::Normal => 13.0,
+            };
+            let weight = match text.weight {
+                Weight::Normal => FontWeight::NORMAL,
+                Weight::Medium => FontWeight::MEDIUM,
+                Weight::Strong => FontWeight::SEMIBOLD,
+            };
+            longest_word(&plain_text(&text.children), size, weight, text.mono, cx)
+        });
+        let element = div()
+            .when_some(drop.filter(|drop| *drop > 0.0), |el, drop| el.pt(px(drop)))
+            .when(text.truncate, |el| el.min_w_0())
+            .when_some(least, |el, least| el.min_w(px(least)))
+            .when(text.grow, |el| el.flex_1())
+            .when(text.truncate, |el| el.truncate())
+            .when(text.clamp, three_lines)
+            .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
+            .map(|el| match text.size {
+                TextSize::Normal => el,
+                TextSize::Small => el.text_size(px(12.0)),
+                TextSize::Tiny => el.text_size(px(11.0)),
+                TextSize::Large => el.text_size(px(20.0)).line_height(px(26.0)),
+                TextSize::Field => el.text_size(px(14.0)).line_height(relative(1.5)),
+            })
+            .map(|el| match text.weight {
+                Weight::Normal => el,
+                Weight::Medium => el.font_weight(FontWeight::MEDIUM),
+                Weight::Strong => el.font_weight(FontWeight::SEMIBOLD),
+            })
+            .when_some(text.tone, |el, tone| el.text_color(rgb(tone_color(tone))))
+            // A text with nothing in it takes no line, as an empty span takes none in CSS: PR tracker's "A
+            // token is saved." left a blank line over the field while it was still asking.
+            .when(
+                text.children
+                    .iter()
+                    .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
+                |el| el.child(self.inline(&text.children, cx)),
+            );
+        match text.on_click.clone() {
+            Some(handler) => element
+                .id(ElementId::NamedInteger("page-text".into(), text.id))
+                .cursor_pointer()
+                .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
+                .on_click(cx.listener(move |view, _, _, _| view.act(&handler, None)))
+                .into_any_element(),
+            None => element.into_any_element(),
+        }
+    }
+
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Str { text, .. } => div().child(text.clone()).into_any_element(),
@@ -702,9 +770,8 @@ impl PageView {
                     // GPUI's text tells the layout no baseline, so a baseline row lines up the bottoms of its items'
                     // first boxes: a value that starts with a dot, like Properties' "● New", sat under its label, and a
                     // value that wraps put its label on its last line, as a log line's number sat by its last line.
-                    // Texts with lines of one height have their first lines' baselines level when their tops are, so
-                    // the row's texts take the tallest of their lines, which puts texts of two sizes, like a code
-                    // line's number and its text, within half a point of level.
+                    // The row's texts take the tallest of their lines, and each starts as far down as puts its first
+                    // baseline on the lowest one (`baseline_drops`).
                     Align::Baseline => match line_height(&row.children) {
                         Some(height) => el.items_start().line_height(px(height)),
                         None => el.items_baseline(),
@@ -717,65 +784,20 @@ impl PageView {
                 })
                 .when(row.wrap, |el| el.flex_wrap())
                 .when(row.grow, |el| el.flex_1())
-                .children(self.items(&row.children, cx))
+                .children(match baseline_drops(row, cx) {
+                    Some(drops) => row
+                        .children
+                        .iter()
+                        .zip(drops)
+                        .map(|(node, drop)| match node {
+                            Node::Text(text) => self.text_element(text, Some(drop), cx),
+                            other => self.node(other, cx),
+                        })
+                        .collect(),
+                    None => self.items(&row.children, cx),
+                })
                 .into_any_element(),
-            Node::Text(text) => {
-                // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
-                // word when it has to. A text that grows in a row, squeezed by the buttons beside it, would come apart a
-                // letter or two a line, so it is never narrower than its longest word, as in the desktop.
-                let least = (text.grow && !text.truncate).then(|| {
-                    let size = match text.size {
-                        TextSize::Small => 12.0,
-                        TextSize::Tiny => 11.0,
-                        TextSize::Large => 20.0,
-                        TextSize::Field => 14.0,
-                        TextSize::Normal => 13.0,
-                    };
-                    let weight = match text.weight {
-                        Weight::Normal => FontWeight::NORMAL,
-                        Weight::Medium => FontWeight::MEDIUM,
-                        Weight::Strong => FontWeight::SEMIBOLD,
-                    };
-                    longest_word(&plain_text(&text.children), size, weight, text.mono, cx)
-                });
-                let element = div()
-                    .when(text.truncate, |el| el.min_w_0())
-                    .when_some(least, |el, least| el.min_w(px(least)))
-                    .when(text.grow, |el| el.flex_1())
-                    .when(text.truncate, |el| el.truncate())
-                    .when(text.clamp, three_lines)
-                    .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
-                    .map(|el| match text.size {
-                        TextSize::Normal => el,
-                        TextSize::Small => el.text_size(px(12.0)),
-                        TextSize::Tiny => el.text_size(px(11.0)),
-                        TextSize::Large => el.text_size(px(20.0)).line_height(px(26.0)),
-                        TextSize::Field => el.text_size(px(14.0)).line_height(relative(1.5)),
-                    })
-                    .map(|el| match text.weight {
-                        Weight::Normal => el,
-                        Weight::Medium => el.font_weight(FontWeight::MEDIUM),
-                        Weight::Strong => el.font_weight(FontWeight::SEMIBOLD),
-                    })
-                    .when_some(text.tone, |el, tone| el.text_color(rgb(tone_color(tone))))
-                    // A text with nothing in it takes no line, as an empty span takes none in CSS: PR tracker's "A
-                    // token is saved." left a blank line over the field while it was still asking.
-                    .when(
-                        text.children
-                            .iter()
-                            .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
-                        |el| el.child(self.inline(&text.children, cx)),
-                    );
-                match text.on_click.clone() {
-                    Some(handler) => element
-                        .id(ElementId::NamedInteger("page-text".into(), text.id))
-                        .cursor_pointer()
-                        .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
-                        .on_click(cx.listener(move |view, _, _, _| view.act(&handler, None)))
-                        .into_any_element(),
-                    None => element.into_any_element(),
-                }
-            }
+            Node::Text(text) => self.text_element(text, None, cx),
             Node::Button(button) => {
                 let id = ElementId::NamedInteger("page-button".into(), button.id);
                 let label = button
@@ -1918,6 +1940,61 @@ pub(super) fn three_lines<E: Styled>(el: E) -> E {
     el.line_clamp(3).text_ellipsis()
 }
 
+/// The font a page's text is drawn in.
+fn page_font(weight: FontWeight, mono: bool, cx: &gpui::App) -> gpui::FontId {
+    let family = if mono {
+        DEFAULT_FONT_FAMILY
+    } else {
+        ".SystemUIFont"
+    };
+    cx.text_system().resolve_font(&gpui::Font {
+        weight,
+        ..gpui::font(family)
+    })
+}
+
+/// How far down each text of a baseline row of texts starts its first line, so that their baselines meet, as CSS lines
+/// them up; `None` for any other row. Their lines are the tallest's, but for the sizes that set their own, and GPUI sets
+/// a line's text in its middle with the baseline `(ascent - descent) / 2` under it, so a smaller text's baseline sat
+/// higher than a larger one's: an issue's key three points over its title's.
+pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>> {
+    let line = line_height(&row.children).filter(|_| row.align == Align::Baseline)?;
+    let system = cx.text_system();
+    let baselines: Vec<f32> = row
+        .children
+        .iter()
+        .map(|node| {
+            let Node::Text(text) = node else { return 0.0 };
+            let (size, line) = match text.size {
+                TextSize::Normal => (13.0, line),
+                TextSize::Small => (12.0, line),
+                TextSize::Tiny => (11.0, line),
+                TextSize::Large => (20.0, 26.0),
+                TextSize::Field => (14.0, 21.0),
+            };
+            let weight = match text.weight {
+                Weight::Normal => FontWeight::NORMAL,
+                Weight::Medium => FontWeight::MEDIUM,
+                Weight::Strong => FontWeight::SEMIBOLD,
+            };
+            let font = page_font(weight, text.mono, cx);
+            // A font's descent is under its baseline, so GPUI gives it as a negative length.
+            let (ascent, descent) = (
+                system.ascent(font, px(size)),
+                system.descent(font, px(size)),
+            );
+            line / 2.0 + (ascent + descent).as_f32() / 2.0
+        })
+        .collect();
+    let lowest = baselines.iter().copied().fold(0.0, f32::max);
+    Some(
+        baselines
+            .into_iter()
+            .map(|baseline| lowest - baseline)
+            .collect(),
+    )
+}
+
 /// The height of the tallest line of `nodes`, when they are all texts: a text's lines are 1.45 of its size, the page's
 /// line height, but for the sizes that set their own.
 fn line_height(nodes: &[Node]) -> Option<f32> {
@@ -1966,16 +2043,8 @@ fn variant(variant: tree::Variant) -> ui::Variant {
 
 /// The width of the widest word of `text` at `size`, in the page's font or the terminal's with `mono`.
 fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
-    let family = if mono {
-        DEFAULT_FONT_FAMILY
-    } else {
-        ".SystemUIFont"
-    };
     let system = cx.text_system();
-    let font = system.resolve_font(&gpui::Font {
-        weight,
-        ..gpui::font(family)
-    });
+    let font = page_font(weight, mono, cx);
     let width = |word: &str| {
         word.chars()
             .filter_map(|c| system.advance(font, px(size), c).ok())
