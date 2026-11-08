@@ -1,7 +1,7 @@
 // The Issue tab without its data: one issue with its spec, status, links, sessions and activity. The tab page feeds it
 // from storage, a fixture from made-up data.
 
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ComponentProps, type ReactElement } from "react";
 import { Button, Card, Empty, InlineInput, Loading, Menu, Page, Stack, Text, Title, Toolbar } from "wings-plugin-ui";
 import { lastSession } from "../lib/actor";
 import { AGENT_KINDS, AGENTS } from "../lib/commands";
@@ -39,6 +39,9 @@ export interface IssueViewProps {
   onOpenIssue: (key: string, newTab: boolean) => void;
 }
 
+/** The native Text, which also takes `size="large"` (wings-plugin-ui/native.js passes it on). */
+const NativeHeading = Text as unknown as (props: Omit<ComponentProps<typeof Text>, "size"> & { size: "large" }) => ReactElement;
+
 /** The title, large, with the key beside it. Click it, or press Enter or F2 on it, to edit. */
 function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
   const [editing, setEditing] = useState(false);
@@ -47,6 +50,10 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
       <TypeIcon type={issue.type} label />
       {editing ? (
         <InlineInput label="Title" className="tk-title-input" value={issue.title} maxLength={LIMITS.title} required onSave={(title) => apply({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
+      ) : WINGS_NATIVE ? (
+        // The native app's buttons are one 14px line, so the title is large text that wraps, with its own Edit after
+        // the key.
+        <NativeHeading size="large" weight="strong" grow>{issue.title}</NativeHeading>
       ) : (
         <Title as="h1" className="tk-title">
           <Button variant="ghost" className="tk-title-button" title="Edit the title" onClick={() => setEditing(true)} onKeyDown={(e) => { if (e.key === "F2") setEditing(true); }}>
@@ -55,6 +62,7 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
         </Title>
       )}
       <Text as="span" mono tone="muted" size="small" className="tk-title-key">{issue.key}</Text>
+      {WINGS_NATIVE && !editing ? <Button variant="ghost" size="xs" aria-label="Edit the title" onClick={() => setEditing(true)}>Edit</Button> : null}
     </Box>
   );
 }

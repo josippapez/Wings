@@ -93,7 +93,10 @@ function PullRequest({ issue, apply, onOpenUrl }: { issue: Issue; apply: Apply; 
       {editing ? (
         <InlineInput label="Pull request URL" className="tk-prop-input" value={pr} maxLength={LIMITS.pr} placeholder="https://" onSave={(value) => apply({ kind: "update", key: issue.key, pr: value })} onDone={() => setEditing(false)} />
       ) : pr ? (
-        <Button variant="outline" size="xs" className="tk-pr-chip" title={pr} onClick={() => onOpenUrl(pr)}>{prLabel(pr)} <Inline aria-hidden="true">↗</Inline></Button>
+        // In a row, so the native app's column doesn't stretch the chip across it.
+        <Row>
+          <Button variant="outline" size="xs" className="tk-pr-chip" title={pr} onClick={() => onOpenUrl(pr)}>{prLabel(pr)} <Inline aria-hidden="true">↗</Inline></Button>
+        </Row>
       ) : (
         <Text as="span" tone="muted" size="small">None</Text>
       )}
