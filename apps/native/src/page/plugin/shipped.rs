@@ -1271,10 +1271,14 @@ fn tasks_list_starts_with_the_groups_its_tab_saved_as_folded_and_saves_an_unfold
     let board = add_issue(&page, &events, "Fix the login redirect");
     let view = chips_named(&board.children, "View").unwrap();
     assert!(page.dispatch(&view, Some(&json!({ "value": "list" }))));
+    // A group's bar is a row that folds it.
     fn group(nodes: &[Node]) -> Option<(Option<bool>, Option<String>)> {
         nodes.iter().find_map(|node| match node {
-            Node::Disclosure(group) if plain_text(&group.summary).contains("To do") => {
-                Some((group.open, group.on_open_change.clone()))
+            Node::ListButton(group)
+                if group.expanded.is_some()
+                    && plain_text(&group.button.children).contains("To do") =>
+            {
+                Some((group.expanded, group.button.on_click.clone()))
             }
             other => other.parts().into_iter().find_map(group),
         })
@@ -1282,7 +1286,7 @@ fn tasks_list_starts_with_the_groups_its_tab_saved_as_folded_and_saves_an_unfold
     let list = tree(&events, "the list", |tree| group(&tree.children).is_some());
     let (open, toggle) = group(&list.children).unwrap();
     assert_eq!(open, Some(false));
-    assert!(page.dispatch(&toggle.unwrap(), Some(&json!({ "open": true }))));
+    assert!(page.dispatch(&toggle.unwrap(), None));
     tree(&events, "the unfolded group", |tree| {
         group(&tree.children).is_some_and(|(open, _)| open == Some(true))
     });

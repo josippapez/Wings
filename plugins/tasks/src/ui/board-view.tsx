@@ -1,7 +1,7 @@
 // The Issues tab without its data: the board for a list of issues. The tab page feeds it from storage, a fixture from made-up data.
 
-import { useState } from "react";
-import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Chip, Chips, Disclosure, Icon, List, ListButton, ListItem, Loading, Page, SearchField, Text, Time, Toolbar } from "wings-plugin-ui";
+import { useState, type ReactNode } from "react";
+import { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Card, Chip, Chips, Disclosure, Icon, List, ListButton, ListItem, Loading, Page, Row, SearchField, Stack, Text, Time, Toolbar } from "wings-plugin-ui";
 import { AddIssue } from "./AddIssue";
 import { canParent, FLOW, STATUS_LABEL, STATUSES, type Issue, type Op } from "../lib/domain";
 import { iso } from "../lib/format";
@@ -10,6 +10,7 @@ import { childrenOf, progress } from "../lib/relations";
 import { matchesQuery } from "../lib/search";
 import { ChildProgress, DeleteConfirm, ErrorText, IssueCard, isDeleteKey, openProps, PriorityIcon, SessionMarker, StatusDot, StatusSummary, TypeIcon, useScrollIntoView, type Send } from "./parts";
 import { Box, Inline, Para, SectionBox } from "./layout";
+import { Column } from "./layout-native";
 
 export interface BoardViewProps {
   project: WingsProject;
@@ -57,6 +58,13 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
   // Both show at the top of the body, and the trash button or arrow that caused them can be far down the board.
   const errorRef = useScrollIntoView<HTMLDivElement>(error);
   const confirmRef = useScrollIntoView<HTMLDivElement>(doomed?.key);
+  const views = (
+    <>
+      <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
+      {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
+      <Chip pressed={showCanceled} onClick={() => onShowCanceled(!showCanceled)}>Show canceled ({count("canceled")})</Chip>
+    </>
+  );
 
   const move = (issue: Issue, by: 1 | -1) => {
     const next = FLOW[FLOW.indexOf(issue.status) + by];
@@ -86,9 +94,8 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
             <>
               <StatusSummary issues={all} />
               <SearchField className="tk-search" label="Search issues" placeholder="Search issues" value={query} onChange={(e) => onQuery(e.target.value)} />
-              <Chips label="View" options={LAYOUTS} value={layout} onChange={onLayout} />
-              {hasParents ? <Chip pressed={byParent} onClick={() => onByParent(!byParent)}>Group by parent</Chip> : null}
-              <Chip pressed={showCanceled} onClick={() => onShowCanceled(!showCanceled)}>Show canceled ({count("canceled")})</Chip>
+              {/* Together, so they go onto the second line as one, as the desktop's narrow toolbar wraps them. */}
+              {WINGS_NATIVE ? <Row gap="m" wrap>{views}</Row> : views}
             </>
           ) : null}
         </Toolbar>
@@ -188,10 +195,10 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
                 <Icon name="chevron-down" />
               </Button>
               <ListButton className="tk-row tk-tree-root" data-status={root.status} {...openProps((newTab) => onOpen(root, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(root))} aria-label={`Open ${root.key}: ${root.title}`}>
-                <PriorityIcon priority={root.priority} label />
+                <Cell width={PRIORITY_WIDTH}><PriorityIcon priority={root.priority} label /></Cell>
                 <TypeIcon type={root.type} label />
-                <Inline className="tk-key">{root.key}</Inline>
-                <Text as="span" grow truncate className="tk-row-title">{root.title}</Text>
+                <Cell width={KEY_WIDTH}><Inline className="tk-key">{root.key}</Inline></Cell>
+                <Text as="span" grow truncate weight="strong" tone={isClosed(root) ? "muted" : undefined} className="tk-row-title">{root.title}</Text>
                 <ChildProgress {...progress(childrenOf(issues, root.key))} />
                 <Inline className="tk-row-status"><StatusDot status={root.status} />{STATUS_LABEL[root.status]}</Inline>
                 <Inline className="tk-row-time" />
@@ -202,9 +209,9 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
           </SectionBox>
         ))}
         {loose.length ? (
-          <Disclosure className="tk-list-group" open={isOpen("")} onOpenChange={(open) => onFold("", open)} summary={<Inline className="tk-col-title">No parent<Inline className="tk-count">{loose.length}</Inline></Inline>}>
+          <ListGroup open={isOpen("")} onOpenChange={(open) => onFold("", open)} summary={<Inline className="tk-col-title">No parent<Inline className="tk-count">{loose.length}</Inline></Inline>}>
             <List compact aria-label="No parent">{loose.map((i) => row(i, 0))}</List>
-          </Disclosure>
+          </ListGroup>
         ) : null}
       </Box>
     );
@@ -216,19 +223,47 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
   return (
     <Box className="tk-list">
       {groups.map(({ status, issues: rows }) => (
-        <Disclosure
+        <ListGroup
           key={status}
-          className="tk-list-group"
           open={isOpen(`status:${status}`)}
           onOpenChange={(open) => onFold(`status:${status}`, open)}
           summary={<Inline className="tk-col-title"><StatusDot status={status} />{STATUS_LABEL[status]}<Inline className="tk-count">{rows.length}</Inline></Inline>}
         >
           <List compact aria-label={STATUS_LABEL[status]}>{rows.map((i) => row(i))}</List>
-        </Disclosure>
+        </ListGroup>
       ))}
     </Box>
   );
 }
+
+/**
+ * A group of the list under its bar, which folds it. The native app draws a Disclosure as a line of muted text that
+ * tasks.css can't style, so there the bar is a card holding a row that folds the group.
+ */
+function ListGroup({ open, onOpenChange, summary, children }: { open: boolean; onOpenChange: (open: boolean) => void; summary: ReactNode; children: ReactNode }) {
+  if (!WINGS_NATIVE) return <Disclosure className="tk-list-group" open={open} onOpenChange={onOpenChange} summary={summary}>{children}</Disclosure>;
+  return (
+    <Stack gap="s">
+      <Card>
+        <ListButton aria-expanded={open} onClick={() => onOpenChange(!open)}>
+          <Text weight="strong">{summary}</Text>
+        </ListButton>
+      </Card>
+      {open ? children : null}
+    </Stack>
+  );
+}
+
+/** How wide a row's priority and key are in the native app, so the titles after them line up: the widest priority, ▰▰▱, and tasks.css's `.tk-row .tk-key`. */
+const PRIORITY_WIDTH = 20;
+const KEY_WIDTH = 52;
+
+/** Part of a row at a fixed width. tasks.css sizes it in the browser; the native app needs a column that wide. */
+function Cell({ width, children }: { width: number; children: ReactNode }) {
+  return WINGS_NATIVE ? <Column width={width}>{children}</Column> : children;
+}
+
+const isClosed = (i: Issue) => i.status === "done" || i.status === "canceled";
 
 /**
  * One issue as a row: key, type and title, then its parent (in the status list), its children's progress, the Claude
@@ -237,26 +272,33 @@ function IssueList({ project, issues, byParent, showCanceled, folded, onFold, on
  */
 function IssueRow({ issue: i, issues, parent, depth, onOpen, onDelete }: { issue: Issue; issues: Issue[]; parent?: Issue; depth?: number; onOpen: (issue: Issue, newTab: boolean) => void; onDelete: (issue: Issue) => void }) {
   const done = canParent(i.type) ? progress(childrenOf(issues, i.key)) : null;
+  // Under its group head's priority icon: in the native app past the head's card edge and fold button too.
+  const indent = !depth ? {} : WINGS_NATIVE ? { indent: 41 + (depth - 1) * 24 } : { style: { paddingLeft: `${36 + (depth - 1) * 24}px` } };
   return (
     <ListItem className="tk-row-item">
-      <ListButton className="tk-row" data-status={i.status} style={depth ? { paddingLeft: `${36 + (depth - 1) * 24}px` } : undefined} {...openProps((newTab) => onOpen(i, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(i))} aria-label={`Open ${i.key}: ${i.title}`}>
+      <ListButton className="tk-row" data-status={i.status} {...indent} {...openProps((newTab) => onOpen(i, newTab))} onKeyDown={(e) => isDeleteKey(e) && (e.preventDefault(), onDelete(i))} aria-label={`Open ${i.key}: ${i.title}`}>
         {depth && depth > 1 ? <Inline className="tk-tree-elbow" aria-hidden>└</Inline> : null}
-        <PriorityIcon priority={i.priority} label />
-        <Inline className="tk-key">{i.key}</Inline>
+        <Cell width={PRIORITY_WIDTH}><PriorityIcon priority={i.priority} label /></Cell>
+        <Cell width={KEY_WIDTH}><Inline className="tk-key">{i.key}</Inline></Cell>
         <TypeIcon type={i.type} />
-        <Text as="span" grow truncate className="tk-row-title">{i.title}</Text>
+        <Text as="span" grow truncate tone={isClosed(i) ? "muted" : undefined} className="tk-row-title">{i.title}</Text>
         {parent ? <Inline className="tk-row-parent" title={`In ${parent.key} ${parent.title}`}><TypeIcon type={parent.type} /><Inline className="tk-link-title">{parent.title}</Inline></Inline> : null}
         {done?.total ? <ChildProgress {...done} /> : null}
         <SessionMarker issue={i} />
         {depth !== undefined ? <Inline className="tk-row-status"><StatusDot status={i.status} />{STATUS_LABEL[i.status]}</Inline> : null}
-        <Time className="tk-row-time" iso={iso(i.updatedAt)} />
+        {/* The native app takes tasks.css's classes from boxes only, so there the time is in one. */}
+        {WINGS_NATIVE ? <Inline className="tk-row-time"><Time iso={iso(i.updatedAt)} /></Inline> : <Time className="tk-row-time" iso={iso(i.updatedAt)} />}
       </ListButton>
       <DeleteButton issue={i} onDelete={onDelete} />
     </ListItem>
   );
 }
 
-/** A row's trash button, over its right end where the time is, shown while you're on the row. */
+/**
+ * A row's trash button, over its right end where the time is, shown while you're on the row. The native app can't
+ * show it only then, so it has none: Delete on the row, or the issue's own page, deletes it there.
+ */
 function DeleteButton({ issue, onDelete }: { issue: Issue; onDelete: (issue: Issue) => void }) {
+  if (WINGS_NATIVE) return null;
   return <Button size="icon-xs" variant="ghost" className="tk-row-delete" aria-label={`Delete ${issue.key}`} title="Delete (Del)" onClick={() => onDelete(issue)}><Icon name="trash" /></Button>;
 }

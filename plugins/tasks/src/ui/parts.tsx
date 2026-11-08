@@ -8,6 +8,7 @@ import { FLOW, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, type Issue, type IssueT
 import { iso } from "../lib/format";
 import { descendantsOf } from "../lib/relations";
 import { Box, Inline } from "./layout";
+import { Column } from "./layout-native";
 
 /** Sends an operation to main. A failure shows in the page's error card; an editor that must stay open uses `apply`, which rejects. */
 export type Send = (op: Op) => Promise<unknown>;
@@ -143,8 +144,15 @@ export function SessionMarker({ issue }: { issue: Issue }) {
 
 /** How many of an epic's or feature's children are done, as a short bar and "3/7". */
 export function ChildProgress({ done, total }: { done: number; total: number }) {
-  // A native Meter is as wide as its row, so the native app shows the count alone.
-  if (WINGS_NATIVE) return <Text tone="muted" size="tiny">{done}/{total} done</Text>;
+  // A native Meter is as wide as what holds it: in a 40px column, as tasks.css sizes it.
+  if (WINGS_NATIVE) {
+    return (
+      <Row gap="s">
+        <Column width={40}><Meter percent={(done / total) * 100} label={`${done} of ${total} child issues done`} tone="success" /></Column>
+        <Text tone="muted" size="tiny">{done}/{total}</Text>
+      </Row>
+    );
+  }
   return (
     <Inline className="tk-child-progress" title={`${done} of ${total} child issues done`}>
       <Meter percent={(done / total) * 100} label={`${done} of ${total} child issues done`} tone="success" />
