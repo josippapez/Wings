@@ -107,7 +107,7 @@ fn run() -> Result<(), String> {
             .detach();
 
             let bounds = Bounds::centered(None, size(px(1000.0), px(640.0)), cx);
-            cx.open_window(
+            let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     // The tabs sit in the title bar beside the traffic lights, as in the desktop app.
@@ -117,14 +117,21 @@ fn run() -> Result<(), String> {
                         traffic_light_position: Some(point(px(18.0), px(13.0))),
                     }),
                     app_owns_titlebar_drag: true,
-                    // The desktop's glass: what's behind the window shows through the sidebar, blurred.
-                    window_background: WindowBackgroundAppearance::Blurred,
+                    // The desktop's glass: what's behind the window shows through the sidebar, blurred by the
+                    // vibrancy under it (`under_window_vibrancy`). Elsewhere GPUI's own blur.
+                    window_background: if cfg!(target_os = "macos") {
+                        WindowBackgroundAppearance::Transparent
+                    } else {
+                        WindowBackgroundAppearance::Blurred
+                    },
                     window_min_size: Some(size(px(640.0), px(320.0))),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| Workspace::new(config, window, cx)),
             )
             .expect("Could not open the Wings native window");
+            #[cfg(target_os = "macos")]
+            let _ = window.update(cx, |_, window, _| under_window_vibrancy(window));
             if let Some(path) = &restart_ack
                 && let Err(error) = wings_native::updater::acknowledge_startup(path)
             {
@@ -133,6 +140,42 @@ fn run() -> Result<(), String> {
             cx.activate(true);
         });
     Ok(())
+}
+
+/// The desktop's window effect (`underWindowBackground`, following the window's active state): AppKit's vibrancy with
+/// its own dark tint, under the 58% glass. GPUI's blur strips that tint, which left a light window behind showing
+/// through grey unless the glass was nearly opaque.
+#[cfg(target_os = "macos")]
+fn under_window_vibrancy(window: &gpui::Window) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+        NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+    };
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: GPUI's window view, alive while its window is.
+    let view = unsafe { &*handle.ns_view.as_ptr().cast::<NSView>() };
+    let Some(content) = view.window().and_then(|window| window.contentView()) else {
+        return;
+    };
+    let effect = NSVisualEffectView::initWithFrame(mtm.alloc(), content.bounds());
+    effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    effect.setState(NSVisualEffectState::FollowsWindowActiveState);
+    effect.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
 }
 
 /// macOS keeps freed blocks in its large-allocation cache, so the scrollback hidden panes give back

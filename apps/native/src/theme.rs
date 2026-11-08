@@ -1,10 +1,8 @@
 //! The dark palette from apps/desktop/src/index.css, shared with plugin-tokens.mjs.
 
 pub const BACKGROUND: u32 = 0x0f0e12;
-/// The desktop's `--glass` tint over the window's blur, behind the sidebar and title bar, made stronger:
-/// GPUI's blur drops the material's own dark tint, which the desktop keeps under its 58% glass, so at 58%
-/// a light window behind showed through grey.
-pub const GLASS: u32 = 0x1a171cd9;
+/// The desktop's `--glass`, 58%, over the window's vibrancy, behind the sidebar and title bar.
+pub const GLASS: u32 = 0x1a171c94;
 pub const SURFACE: u32 = 0x17151b;
 pub const FOREGROUND: u32 = 0xece9e4;
 pub const MUTED_FOREGROUND: u32 = 0x9d978f;
