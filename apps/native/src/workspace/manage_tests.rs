@@ -97,6 +97,76 @@ fn offered(id: &str) -> wings_plugins::store::Available {
     }
 }
 
+/// Answers only once `expected` lookups are in flight together, or gives up after a while: asked one by one, every
+/// lookup fails.
+struct Together {
+    expected: usize,
+    waiting: Mutex<usize>,
+    arrived: std::sync::Condvar,
+}
+
+impl Together {
+    fn wait(&self) -> Result<(), String> {
+        let mut waiting = self.waiting.lock().unwrap();
+        *waiting += 1;
+        self.arrived.notify_all();
+        let (waiting, timeout) = self
+            .arrived
+            .wait_timeout_while(waiting, Duration::from_secs(2), |waiting| {
+                *waiting < self.expected
+            })
+            .unwrap();
+        drop(waiting);
+        if timeout.timed_out() {
+            return Err("asked alone".into());
+        }
+        Ok(())
+    }
+}
+
+impl super::plugin_manage::UpdateSource for Together {
+    fn latest(&self, _: &str, _: Option<&str>) -> Result<Option<String>, String> {
+        self.wait()?;
+        Ok(Some("2.0.0".into()))
+    }
+
+    fn available(&self) -> Result<Vec<wings_plugins::store::Available>, String> {
+        self.wait()?;
+        Ok(vec![offered("new")])
+    }
+}
+
+/// Like the desktop's `Promise.all`, each plugin's latest version and the catalogue are asked for at once.
+#[test]
+fn plugin_update_lookups_and_the_catalogue_are_asked_for_at_once() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    for id in ["one", "two", "three"] {
+        let source = Source::Github {
+            repo: format!("owner/{id}"),
+            folder: None,
+        };
+        install(&mut window, package(id, "1.0.0", &[]), source, None).unwrap();
+    }
+    let source = Arc::new(Together {
+        expected: 4,
+        waiting: Mutex::new(0),
+        arrived: std::sync::Condvar::new(),
+    });
+    window.update(|w, _, cx| {
+        w.manage.update_source = Some(source.clone());
+        w.check_plugin_updates(true, cx);
+    });
+    until(&app, &mut window, "check never completed", |w| {
+        !w.manage.checking
+    });
+    window.read(|w, _| {
+        assert!(w.manage.row_error.is_empty(), "{:?}", w.manage.row_error);
+        assert_eq!(w.manage.updates.len(), 3);
+        assert_eq!(w.manage.available.len(), 1);
+    });
+}
+
 #[test]
 fn plugin_updates_manual_results_catalog_persistence_and_no_automatic_install() {
     let data = Data::temp();

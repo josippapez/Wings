@@ -633,22 +633,33 @@ pub struct Available {
 
 /// Every plugin in the official repo's `plugins/` folder that runs on this Wings, from the default branch.
 pub fn available() -> Result<Vec<Available>, String> {
+    let token = access();
+    available_with(|url, accept| {
+        let mut response = get(url, accept, token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
+        response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())
+    })
+}
+
+/// `available`, reading each address's text with `fetch`. The manifests are asked for all at once, so the list takes
+/// two round trips to GitHub rather than one per plugin.
+fn available_with(fetch: impl Fn(&str, &str) -> Result<String, String> + Sync) -> Result<Vec<Available>, String> {
     #[derive(Deserialize)]
     struct Item {
         name: String,
         #[serde(rename = "type")]
         kind: String,
     }
-    let token = access();
-    let mut response = get(&format!("{API}repos/{OFFICIAL_REPO}/contents/plugins"), JSON, token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
-    let items: Vec<Item> = serde_json::from_str(&response.body_mut().read_to_string().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let items: Vec<Item> = serde_json::from_str(&fetch(&format!("{API}repos/{OFFICIAL_REPO}/contents/plugins"), JSON)?).map_err(|e| e.to_string())?;
+    let folders: Vec<String> = items.into_iter().filter(|i| i.kind == "dir").map(|item| format!("plugins/{}", item.name)).collect();
+    let manifests = std::thread::scope(|scope| {
+        let fetch = &fetch;
+        let asked: Vec<_> =
+            folders.iter().map(|folder| scope.spawn(move || fetch(&manifest_url(OFFICIAL_REPO, folder), "application/vnd.github.raw+json"))).collect();
+        asked.into_iter().map(|manifest| manifest.join().unwrap()).collect::<Vec<_>>()
+    });
     let mut list = Vec::new();
-    for item in items.into_iter().filter(|i| i.kind == "dir") {
-        let folder = format!("plugins/{}", item.name);
-        let mut response =
-            get(&manifest_url(OFFICIAL_REPO, &folder), "application/vnd.github.raw+json", token.as_deref()).map_err(|e| github_error(OFFICIAL_REPO, e))?;
-        let text = response.body_mut().with_config().limit(1024 * 1024).read_to_string().map_err(|e| e.to_string())?;
-        list.extend(available_from(&folder, &text));
+    for (folder, text) in folders.iter().zip(manifests) {
+        list.extend(available_from(folder, &text?));
     }
     Ok(list)
 }
@@ -684,6 +695,30 @@ fn manifest_version(text: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Each manifest answers only once all three are asked for, or gives up after a while: one by one, the list fails.
+    #[test]
+    fn the_catalogue_asks_for_every_manifest_at_once() {
+        let waiting = Mutex::new(0);
+        let arrived = std::sync::Condvar::new();
+        let list = available_with(|url, _| {
+            if url.ends_with("/contents/plugins") {
+                return Ok(r#"[{"name":"a","type":"dir"},{"name":"b","type":"dir"},{"name":"README.md","type":"file"},{"name":"c","type":"dir"}]"#.into());
+            }
+            let mut count = waiting.lock().unwrap();
+            *count += 1;
+            arrived.notify_all();
+            let (count, timeout) = arrived.wait_timeout_while(count, Duration::from_secs(2), |count| *count < 3).unwrap();
+            drop(count);
+            if timeout.timed_out() {
+                return Err(format!("{url} was asked for alone"));
+            }
+            let id = url.trim_end_matches("/wings-plugin.json").rsplit('/').next().unwrap();
+            Ok(serde_json::json!({ "id": id, "name": id, "version": "1.0.0" }).to_string())
+        })
+        .unwrap();
+        assert_eq!(list.iter().map(|plugin| plugin.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    }
 
     #[test]
     fn a_github_token_only_goes_to_the_api() {

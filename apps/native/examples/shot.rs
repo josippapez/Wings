@@ -1642,6 +1642,14 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         };
         show(cx, "tracker");
         save(cx, window, &name("plugins-update"));
+        handle
+            .update(cx, |w, _, cx| w.show_plugin_check(true, cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("plugins-checking"));
+        handle
+            .update(cx, |w, _, cx| w.show_plugin_check(false, cx))
+            .unwrap();
         show(cx, "notes");
         save(cx, window, &name("plugins-waiting"));
         handle

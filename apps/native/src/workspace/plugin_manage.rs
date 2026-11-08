@@ -797,18 +797,30 @@ impl Workspace {
             .update_source
             .clone()
             .unwrap_or_else(|| Arc::new(GithubUpdates));
+        // Every plugin and the catalogue at once, as the desktop's `Promise.all`: a check waits for the slowest answer,
+        // not for the sum of a dozen round trips to GitHub.
         let found = cx.background_executor().spawn(async move {
-            let versions = asked
-                .into_iter()
-                .map(|(id, version, repo, folder)| {
-                    let latest = source.latest(&repo, folder.as_deref());
-                    (
-                        id,
-                        latest.map(|latest| store::newer_version(&version, latest.as_deref())),
-                    )
-                })
-                .collect::<Vec<_>>();
-            (versions, source.available())
+            std::thread::scope(|scope| {
+                let offered = scope.spawn(|| source.available());
+                let versions = asked
+                    .iter()
+                    .map(|(id, version, repo, folder)| {
+                        let source = &source;
+                        scope.spawn(move || {
+                            let latest = source.latest(repo, folder.as_deref());
+                            (
+                                id.clone(),
+                                latest
+                                    .map(|latest| store::newer_version(version, latest.as_deref())),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|lookup| lookup.join().unwrap())
+                    .collect::<Vec<_>>();
+                (versions, offered.join().unwrap())
+            })
         });
         self.manage.plugin_check = Some(cx.spawn(async move |this, cx| {
             let (found, offered) = found.await;
@@ -951,6 +963,12 @@ impl Workspace {
                 .updates
                 .insert((*id).to_owned(), (*version).to_owned());
         }
+        cx.notify();
+    }
+
+    /// Settings, Plugins while a check for updates runs, or not.
+    pub fn show_plugin_check(&mut self, checking: bool, cx: &mut Context<Self>) {
+        self.manage.checking = checking;
         cx.notify();
     }
 

@@ -3,8 +3,8 @@
 //! row. The desktop shows the list and the page side by side; Settings here is too narrow for two columns.
 
 use gpui::{
-    AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role, SharedString,
-    deferred, div, prelude::*, px, rgb, rgba,
+    AnimationExt, AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role,
+    SharedString, deferred, div, prelude::*, px, rgb, rgba,
 };
 use wings_plugins::{
     manifest::Manifest,
@@ -12,7 +12,7 @@ use wings_plugins::{
 };
 
 use crate::{
-    icons::plugin_glyph,
+    icons::{Icon, icon, plugin_glyph},
     theme,
     ui::{self, Variant},
 };
@@ -26,6 +26,47 @@ fn ui_name(kind: &str) -> String {
         "diff" => "Diff viewer".into(),
         other => other.into(),
     }
+}
+
+/// One of the desktop's `size="xs"` ghost buttons over the installed list: its icon, or a turning ring in its place
+/// while it `works`, when it is dimmed and doesn't answer a click. Add the click handler to the result.
+fn header_button(
+    id: &'static str,
+    label: SharedString,
+    glyph: Icon,
+    works: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let mark = if works {
+        div()
+            .id(SharedString::from(format!("{id}-busy")))
+            .size(px(16.0))
+            .flex_none()
+            .with_animation(
+                SharedString::from(format!("{id}-turn")),
+                gpui::Animation::new(std::time::Duration::from_secs(1))
+                    .repeat()
+                    .with_max_fps(30.0),
+                |ring, turn| ring.child(ui::working_spinner(turn * std::f32::consts::TAU)),
+            )
+            .into_any_element()
+    } else {
+        icon(glyph, 12.0, theme::FOREGROUND).into_any_element()
+    };
+    ui::button(
+        id,
+        label.clone(),
+        Variant::Ghost,
+        works,
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(mark)
+            .child(label),
+    )
+    .h(px(24.0))
+    .px(px(8.0))
+    .text_size(px(12.0))
 }
 
 /// The host of an https address, as the desktop's `new URL(url).host`.
@@ -300,16 +341,11 @@ impl Workspace {
                     .items_center()
                     .gap(px(4.0))
                     .child(
-                        ui::button(
+                        header_button(
                             "plugin-check-updates",
-                            "Check for updates",
-                            Variant::Ghost,
+                            "Check for updates".into(),
+                            Icon::RefreshCw,
                             manage.checking,
-                            if manage.checking {
-                                "Checking…"
-                            } else {
-                                "Check for updates"
-                            },
                         )
                         .children(ui::spot(|| "plugin-check-updates".into()))
                         .when(!manage.checking, |button| {
@@ -321,12 +357,11 @@ impl Workspace {
                     .when(!updatable.is_empty(), |row| {
                         let label = format!("Update all ({})", updatable.len());
                         row.child(
-                            ui::button(
+                            header_button(
                                 "plugin-update-all",
-                                label.clone(),
-                                Variant::Ghost,
+                                label.into(),
+                                Icon::CircleArrowUp,
                                 updating,
-                                label,
                             )
                             .when(!updating, |button| {
                                 button.on_click(cx.listener(move |this, _, window, cx| {

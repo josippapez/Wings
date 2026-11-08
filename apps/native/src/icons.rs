@@ -45,6 +45,7 @@ icons!(
     ChartColumn = "chart-column",
     Check = "check",
     Circle = "circle",
+    CircleArrowUp = "circle-arrow-up",
     CircleCheck = "circle-check",
     CircleDot = "circle-dot",
     CircleDotDashed = "circle-dot-dashed",
