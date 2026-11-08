@@ -142,17 +142,20 @@ impl Workspace {
     ) -> usize {
         let id = self.next_pane;
         self.next_pane += 1;
-        self.open_pane_at(id, cwd, history, account, cx);
+        self.open_pane_at(id, cwd, history, account, None, cx);
         id
     }
 
-    /// `open_pane_as` under `id`, which a tab restored at launch already holds for the pane (`start_waiting`).
+    /// `open_pane_as` under `id`, which a tab restored at launch already holds for the pane (`start_waiting`). A restored
+    /// pane's agent `session` resumes in the new shell when the pane doesn't attach to a program the terminal server
+    /// still runs, as the desktop's restore types its resume line only into a pane that can't attach.
     pub(super) fn open_pane_at(
         &mut self,
         id: usize,
         cwd: Option<PathBuf>,
         history: Option<String>,
         account: Option<wings_spaces::claude_accounts::AccountPick>,
+        session: Option<saved::SavedSession>,
         cx: &mut Context<Self>,
     ) {
         let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
@@ -182,11 +185,20 @@ impl Workspace {
         let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
         #[cfg(not(unix))]
         let served = None;
-        let view = match served {
-            Some(view) => Ok(view),
-            None => TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
+        let (view, attached) = match served {
+            Some((view, attached)) => (Ok(view), attached),
+            None => (
+                TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
+                false,
+            ),
         };
-        self.insert_pane(id, view, history, pick, cx);
+        if !attached
+            && let Ok(view) = &view
+            && let Some(line) = session.as_ref().and_then(super::history::resume_line)
+        {
+            view.update(cx, |view, cx| view.write_input(&line, cx));
+        }
+        self.insert_pane(id, view, history, pick, session, cx);
     }
 
     /// Keeps `view` as the pane `id`, which closes when its shell exits.
@@ -196,6 +208,7 @@ impl Workspace {
         view: Result<Entity<TerminalView>, SharedString>,
         history: String,
         claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+        session: Option<saved::SavedSession>,
         cx: &mut Context<Self>,
     ) {
         let exit = view
@@ -210,6 +223,8 @@ impl Workspace {
                 history,
                 name: None,
                 claude_account,
+                session,
+                agent_seen: false,
                 renaming: None,
                 _exit: exit,
             },
@@ -224,6 +239,7 @@ impl Workspace {
         &mut self,
         history: &str,
         account: Option<wings_spaces::claude_accounts::AccountPick>,
+        session: Option<saved::SavedSession>,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
         let servers = self.config.terminal_server.as_ref()?.0.clone();
@@ -236,7 +252,7 @@ impl Workspace {
         let id = self.next_pane;
         self.next_pane += 1;
         let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
-        self.insert_pane(id, Ok(view), history.to_owned(), pick, cx);
+        self.insert_pane(id, Ok(view), history.to_owned(), pick, session, cx);
         Some(id)
     }
 
@@ -261,7 +277,7 @@ impl Workspace {
         })
     }
 
-    /// The pane in the terminal server: the one it kept running for `history`, else a new one there
+    /// The pane in the terminal server: the one it kept running for `history`, attached (`true`), else a new one there
     /// (`open_new_in_server`). `None` runs the pane in the app. A pane that ended while the app was away leaves what it
     /// printed in `output`, above the new shell.
     #[cfg(unix)]
@@ -272,12 +288,12 @@ impl Workspace {
         output: &mut Vec<u8>,
         account: &Option<PathBuf>,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::Entity<TerminalView>> {
+    ) -> Option<(gpui::Entity<TerminalView>, bool)> {
         let servers = self.config.terminal_server.as_ref()?.0.clone();
         if let Some((socket, pane)) = servers.claim(history) {
             if !pane.exited {
                 match TerminalView::attach_in_server(&socket, &pane, cx) {
-                    Ok(view) => return Some(view),
+                    Ok(view) => return Some((view, true)),
                     Err(error) => eprintln!("{error}"),
                 }
             } else {
@@ -292,6 +308,7 @@ impl Workspace {
         }
         let space = self.project_key();
         self.open_new_in_server(&space, history, folder, output, account, cx)
+            .map(|view| (view, false))
     }
 
     /// A new shell in the terminal server under `space_id` and `history`. A server that stopped is replaced by a new

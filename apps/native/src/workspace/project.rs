@@ -92,7 +92,7 @@ impl Workspace {
                 .any(|pane| self.panes.contains_key(&pane));
             let mut adopted = None;
             for history in servers.0.orphans(&key, &saved_ids) {
-                if let Some(pane) = self.attach_hidden(&history, None, cx) {
+                if let Some(pane) = self.attach_hidden(&history, None, None, cx) {
                     let tab = self.pane_tab(pane, cx);
                     adopted = Some(tab.id);
                     terminals.push(tab);

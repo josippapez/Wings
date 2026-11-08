@@ -128,6 +128,25 @@ pub(super) fn resume_command(agent: Agent, id: &str) -> Option<String> {
     Some(argv.map(shell_quote).join(" "))
 }
 
+/// The line a restored pane types to continue its saved session, Enter included, as the desktop's `resumeLine`: Claude
+/// Code's with the flags it was started with, unless one holds a control character, which would act as a key press.
+pub(super) fn resume_line(session: &crate::saved::SavedSession) -> Option<String> {
+    use crate::saved::SessionKind;
+    let agent = match session.kind {
+        SessionKind::Claude => Agent::Claude,
+        SessionKind::Opencode => Agent::OpenCode,
+    };
+    let mut line = resume_command(agent, &session.id)?;
+    if agent == Agent::Claude && session.args.iter().all(|arg| typeable(arg)) {
+        for arg in &session.args {
+            line.push(' ');
+            line.push_str(&shell_quote(arg));
+        }
+    }
+    line.push('\r');
+    Some(line)
+}
+
 /// The line that starts a copy of a session. Only Claude Code can fork.
 pub(super) fn fork_command(agent: Agent, id: &str) -> Option<String> {
     (agent == Agent::Claude && claude_id(id)).then(|| {
@@ -1343,6 +1362,59 @@ mod tests {
             Some("opencode --session ses_01HZabcdefgh")
         );
         assert_eq!(fork_command(Agent::OpenCode, "ses_01HZabcdefgh"), None);
+    }
+
+    /// The desktop's `resumeLine` cases in `resume.test.ts`.
+    #[test]
+    fn a_restored_pane_resumes_with_the_flags_its_session_started_with() {
+        use crate::saved::{SavedSession, SessionKind};
+        let session = |kind, id: &str, args: &[&str]| SavedSession {
+            kind,
+            id: id.into(),
+            args: args.iter().map(ToString::to_string).collect(),
+        };
+        let claude = "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d";
+        assert_eq!(
+            resume_line(&session(
+                SessionKind::Claude,
+                claude,
+                &[
+                    "--model",
+                    "opus",
+                    "--append-system-prompt",
+                    "say \"hi\", don't ask"
+                ]
+            ))
+            .as_deref(),
+            Some(
+                "claude --resume 0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d --model opus --append-system-prompt \
+                 'say \"hi\", don'\\''t ask'\r"
+            )
+        );
+        // A flag that would press a key keeps every flag out.
+        assert_eq!(
+            resume_line(&session(
+                SessionKind::Claude,
+                claude,
+                &["--model", "opus\r"]
+            ))
+            .as_deref(),
+            Some("claude --resume 0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d\r")
+        );
+        // OpenCode takes no start flags.
+        assert_eq!(
+            resume_line(&session(
+                SessionKind::Opencode,
+                "ses_01HZabcdefgh",
+                &["--x"]
+            ))
+            .as_deref(),
+            Some("opencode --session ses_01HZabcdefgh\r")
+        );
+        assert_eq!(
+            resume_line(&session(SessionKind::Claude, "$(id)", &[])),
+            None
+        );
     }
 
     #[test]

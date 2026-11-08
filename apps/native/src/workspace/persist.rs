@@ -27,6 +27,7 @@ pub(super) struct WaitingPane {
     history: Option<String>,
     name: Option<gpui::SharedString>,
     claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+    session: Option<saved::SavedSession>,
 }
 
 impl Workspace {
@@ -53,7 +54,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         for pane in waiting.panes {
-            self.open_pane_at(pane.id, pane.cwd, pane.history, pane.claude_account, cx);
+            self.open_pane_at(
+                pane.id,
+                pane.cwd,
+                pane.history,
+                pane.claude_account,
+                pane.session,
+                cx,
+            );
             if let Some(saved) = self.panes.get_mut(&pane.id) {
                 saved.name = pane.name;
             }
@@ -128,17 +136,28 @@ impl Workspace {
                 history,
                 name,
                 claude_account,
+                session,
             } => {
                 let name: Option<gpui::SharedString> =
                     name.clone().filter(|name| !name.is_empty()).map(Into::into);
                 let pane = match waiting {
                     None => {
-                        self.open_pane_as(cwd.clone(), history.clone(), claude_account.clone(), cx)
+                        let id = self.next_pane;
+                        self.next_pane += 1;
+                        self.open_pane_at(
+                            id,
+                            cwd.clone(),
+                            history.clone(),
+                            claude_account.clone(),
+                            session.clone(),
+                            cx,
+                        );
+                        id
                     }
                     Some(waiting) => {
                         #[cfg(unix)]
                         let attached = history.as_deref().and_then(|history| {
-                            self.attach_hidden(history, claude_account.clone(), cx)
+                            self.attach_hidden(history, claude_account.clone(), session.clone(), cx)
                         });
                         #[cfg(not(unix))]
                         let attached = None;
@@ -151,6 +170,7 @@ impl Workspace {
                                 history: history.clone(),
                                 name: name.clone(),
                                 claude_account: claude_account.clone(),
+                                session: session.clone(),
                             });
                             id
                         })
@@ -192,6 +212,7 @@ impl Workspace {
                 history: pane.map(|pane| pane.history.clone()),
                 name: pane.and_then(|pane| pane.name.as_ref().map(ToString::to_string)),
                 claude_account: pane.and_then(|pane| pane.claude_account.clone()),
+                session: pane.and_then(|pane| pane.session.clone()),
             }
         };
         let layout = |node: &Layout| saved_layout(node, &pane);

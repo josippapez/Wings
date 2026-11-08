@@ -6,7 +6,8 @@ use std::{collections::HashMap, path::PathBuf};
 use gpui::{App, Context, Task};
 
 use crate::{
-    agents::{self, Agent, AgentState, PaneProbe, Scan, Watcher},
+    agents::{self, Agent, AgentKind, AgentState, PaneProbe, Scan, Watcher},
+    saved::{SavedSession, SessionKind},
     transcripts,
 };
 
@@ -132,9 +133,46 @@ impl Workspace {
                 }
             }
             let before = std::mem::replace(&mut self.agents, agents);
+            self.sync_sessions();
             self.inbox_agents(&before);
             self.pane_info = info;
             cx.notify();
+        }
+    }
+
+    /// Keeps each pane's agent session for the next restore, as the desktop's `syncPaneSession`: the session of the agent
+    /// in it, the one before kept while a resumed agent has yet to report its id; none for an agent that can't resume;
+    /// and none once an agent seen this launch has left, so a pane whose agent you quit doesn't resume it. A restored
+    /// session stays until its agent shows.
+    fn sync_sessions(&mut self) {
+        for (id, pane) in &mut self.panes {
+            let Some(agent) = self.agents.get(id) else {
+                if std::mem::take(&mut pane.agent_seen) {
+                    pane.session = None;
+                }
+                continue;
+            };
+            pane.agent_seen = true;
+            let kind = match agent.kind {
+                AgentKind::Claude => SessionKind::Claude,
+                AgentKind::Opencode => SessionKind::Opencode,
+                AgentKind::Codex | AgentKind::Cursor | AgentKind::Grok => {
+                    pane.session = None;
+                    continue;
+                }
+            };
+            let id = agent.session_id.clone().or_else(|| {
+                let before = pane
+                    .session
+                    .as_ref()
+                    .filter(|session| session.kind == kind)?;
+                Some(before.id.clone())
+            });
+            pane.session = id.map(|id| SavedSession {
+                kind,
+                id,
+                args: agent.args.clone(),
+            });
         }
     }
 

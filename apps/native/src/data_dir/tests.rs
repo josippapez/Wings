@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, fs, path::Path};
 use serde_json::json;
 
 use super::{REPLACEMENT_STATE, desktop, migrate, state_file_in};
-use crate::saved::{self, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedTab, Settings};
+use crate::saved::{
+    self, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedSession, SavedTab, SessionKind,
+    Settings,
+};
 
 /// A desktop `workspace.json` with every key the desktop writes (`SavedWorkspace` in `App.tsx`, and main's
 /// `claudeAccounts`), in the shapes the real file has, with made-up values.
@@ -53,8 +56,8 @@ fn desktop_workspace() -> serde_json::Value {
             { "id": "v1", "spaceId": "/work/desk", "view": { "pluginId": "tasks", "viewId": "issue" }, "args": { "id": 7 }, "at": 2 }
         ],
         "projectTabs": [{ "id": "pt", "spaceId": "/work/both", "project": true, "at": 3 }],
-        "sessions": { "p1": "session-1", "p2": null },
-        "sessionKinds": { "p1": "claude" },
+        "sessions": { "p1": "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d", "p2": null, "p3": "ses_01HZabcdefgh", "p4": "codex-1" },
+        "sessionKinds": { "p1": "claude", "p3": "opencode", "p4": "codex" },
         "asleep": [],
         "sleep": { "enabled": true, "minutes": 15 },
         "notifySound": { "enabled": false, "sound": "pop", "watching": true },
@@ -90,7 +93,20 @@ fn pane_as(cwd: &str, history: &str, name: Option<&str>) -> SavedLayout {
         claude_account: Some(wings_spaces::claude_accounts::AccountPick {
             name: name.map(Into::into),
         }),
+        session: None,
     }
+}
+
+/// The pane `layout` with the agent session a restore resumes in it.
+fn resuming(mut layout: SavedLayout, kind: SessionKind, id: &str, args: &[&str]) -> SavedLayout {
+    if let SavedLayout::Pane { session, .. } = &mut layout {
+        *session = Some(SavedSession {
+            kind,
+            id: id.into(),
+            args: args.iter().map(ToString::to_string).collect(),
+        });
+    }
+    layout
 }
 
 fn pane(cwd: &str, history: Option<&str>, name: Option<&str>) -> SavedLayout {
@@ -99,6 +115,7 @@ fn pane(cwd: &str, history: Option<&str>, name: Option<&str>) -> SavedLayout {
         history: history.map(Into::into),
         name: name.map(Into::into),
         claude_account: None,
+        session: None,
     }
 }
 
@@ -155,8 +172,14 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
         SavedProject {
             tabs: vec![
                 SavedTab {
-                    // The desktop's `claudeAccounts`: the pane opened as the work account stays it.
-                    layout: pane_as("/work/both", "aaaa-1", Some("work")),
+                    // The desktop's `claudeAccounts`: the pane opened as the work account stays it. Its `sessions`,
+                    // `sessionKinds` and `sessionArgs`: the session it resumes, with the flags it started with.
+                    layout: resuming(
+                        pane_as("/work/both", "aaaa-1", Some("work")),
+                        SessionKind::Claude,
+                        "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d",
+                        &["--model", "opus"],
+                    ),
                     focused: 0,
                     zoomed: None,
                 },
@@ -167,7 +190,12 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
                         // An account entry that isn't `{ name }` with an account name, or null, is dropped.
                         a: Box::new(pane("/work/both/api", Some("aaaa-2"), Some("server"))),
                         // A history id that isn't a plain name is dropped, as both apps drop it.
-                        b: Box::new(pane("/work/both/web", None, None)),
+                        b: Box::new(resuming(
+                            pane("/work/both/web", None, None),
+                            SessionKind::Opencode,
+                            "ses_01HZabcdefgh",
+                            &[],
+                        )),
                     },
                     focused: 1,
                     zoomed: Some(1),
@@ -181,6 +209,7 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
         projects["/work/desk"],
         SavedProject {
             tabs: vec![SavedTab {
+                // A session of an agent this app can't resume is left out.
                 layout: pane_as("/work/desk", "aaaa-4", None),
                 focused: 0,
                 zoomed: None,

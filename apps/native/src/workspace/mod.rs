@@ -112,6 +112,10 @@ struct Pane {
     name: Option<SharedString>,
     /// The Claude Code account its shell runs under when a plugin chose one apart from the project's.
     claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+    /// The agent session it ran, saved so a restore that can't attach to its program resumes it (`sync_sessions`).
+    session: Option<saved::SavedSession>,
+    /// Its agent was seen this launch, so the agent leaving ends the session. A restored session waits for its agent.
+    agent_seen: bool,
     /// The name field while you edit it, in place of the title.
     renaming: Option<(Entity<TextField>, Subscription)>,
     /// Closes the pane when its shell exits.

@@ -13,8 +13,8 @@ use serde::Deserialize;
 use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
 use crate::saved::{
-    GlobalHotkey, NotifySound, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedTab,
-    Settings, valid_history_id,
+    GlobalHotkey, NotifySound, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedSession,
+    SavedTab, SessionKind, Settings, valid_history_id,
 };
 
 /// `LayoutNode` in `apps/desktop/src/lib/layout.ts`.
@@ -167,6 +167,16 @@ pub struct Workspace {
     /// another shape is dropped, not the whole file.
     #[serde(default)]
     pub claude_accounts: HashMap<String, serde_json::Value>,
+    /// The agent session last seen in each pane, by pane key: `null` once its agent left.
+    #[serde(default)]
+    pub sessions: HashMap<String, Option<String>>,
+    /// Which agent each session is, by pane key: `claude` or `opencode`. Absent in files from before opencode, whose
+    /// sessions are Claude Code's.
+    #[serde(default)]
+    pub session_kinds: HashMap<String, String>,
+    /// The flags each pane's session was started with, by pane key.
+    #[serde(default)]
+    pub session_args: HashMap<String, Vec<String>>,
 }
 
 /// The desktop's workspace at `path`, when it is one the desktop itself would load.
@@ -300,6 +310,7 @@ impl Workspace {
                             _ => None,
                         }
                     }),
+                    session: self.session(id),
                 }
             }
             Layout::Split { dir, ratio, a, b } => SavedLayout::Split {
@@ -309,6 +320,24 @@ impl Workspace {
                 b: Box::new(self.layout(b, keys)),
             },
         }
+    }
+}
+
+impl Workspace {
+    /// The pane's session as the desktop's restore reads it, to resume where the pane can't attach. A kind this app
+    /// doesn't know is left out.
+    fn session(&self, key: &str) -> Option<SavedSession> {
+        let id = self.sessions.get(key)?.clone()?;
+        let kind = match self.session_kinds.get(key).map(String::as_str) {
+            None | Some("claude") => SessionKind::Claude,
+            Some("opencode") => SessionKind::Opencode,
+            Some(_) => return None,
+        };
+        Some(SavedSession {
+            kind,
+            id,
+            args: self.session_args.get(key).cloned().unwrap_or_default(),
+        })
     }
 }
 

@@ -678,3 +678,248 @@ fn a_project_restored_behind_the_shown_one_shows_its_tabs_once_and_starts_only_i
     drop((window, app));
     projects.end();
 }
+
+/// A session id as Claude Code makes them.
+const SESSION: &str = "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d";
+
+/// The flags the made-up agent starts with, which a resume types again. With `--version` among them the resume line is
+/// harmless in the test's real shell: a `claude` installed there prints its version and exits.
+const FLAGS: [&str; 3] = ["--model", "opus", "--version"];
+
+fn agent_session() -> crate::saved::SavedSession {
+    crate::saved::SavedSession {
+        kind: crate::saved::SessionKind::Claude,
+        id: SESSION.into(),
+        args: FLAGS.map(String::from).to_vec(),
+    }
+}
+
+fn resume_line() -> String {
+    format!("claude --resume {SESSION} {}\r", FLAGS.join(" "))
+}
+
+/// The folder in alpha that the agent's pane works in.
+fn sub(projects: &TwoProjects) -> PathBuf {
+    projects.alpha.join("sub")
+}
+
+/// In the shown pane, `cd`s into `sub` and starts a made-up `claude` there with `FLAGS` (bash under that name, whose
+/// flags detection reads as Claude Code's), gives it `SESSION` as Claude Code's session file would, and waits until the
+/// pane keeps that session. The pane and the agent's pid.
+fn start_agent(
+    projects: &TwoProjects,
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+) -> (usize, u32) {
+    std::fs::create_dir_all(sub(projects)).unwrap();
+    let claude = projects.dir.join("agent/claude");
+    std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("/bin/bash", &claude).unwrap();
+    let pane = window.read(|w, _| w.focused_pane().unwrap());
+    let run = format!(
+        "cd '{}' && '{}' -c 'sleep 60; true' {}\r",
+        sub(projects).display(),
+        claude.display(),
+        FLAGS.join(" ")
+    );
+    window.update(|w, _, cx| {
+        w.terminal(pane)
+            .unwrap()
+            .update(cx, |view, cx| view.write_input(&run, cx))
+    });
+    wait_for(
+        app,
+        window,
+        |w| w.agents.contains_key(&pane),
+        "the agent was never detected",
+    );
+    let pid = window.read(|w, _| w.agents[&pane].pid);
+    std::fs::write(
+        projects.claude.join(format!("sessions/{pid}.json")),
+        format!(r#"{{"sessionId":"{SESSION}"}}"#),
+    )
+    .unwrap();
+    wait_for(
+        app,
+        window,
+        |w| w.panes[&pane].session == Some(agent_session()),
+        "the pane never kept its agent's session",
+    );
+    (pane, pid)
+}
+
+/// The session saved with alpha's first pane.
+fn saved_session(projects: &TwoProjects) -> Option<crate::saved::SavedSession> {
+    let alpha = crate::saved::load(
+        &projects.dir.join("workspace.json"),
+        &projects.alpha.to_string_lossy(),
+    )
+    .unwrap();
+    match &alpha.tabs[0].layout {
+        crate::saved::SavedLayout::Pane { session, .. } => session.clone(),
+        crate::saved::SavedLayout::Split { .. } => panic!("one pane was saved"),
+    }
+}
+
+/// The shown pane's shell, what Wings typed into it, and the folder it's in.
+fn shown_pane(window: &TestAppWindow<Workspace>) -> (Option<u32>, Vec<String>, Option<PathBuf>) {
+    window.read(|w, cx| {
+        let view = w.terminal(w.focused_pane().unwrap()).unwrap().read(cx);
+        (view.process_id(), view.written().to_vec(), view.cwd())
+    })
+}
+
+/// What the server runs for the saved pane `history`: whether its program ended, or `None` once it's gone.
+fn served(socket: &Path, history: &str) -> Option<bool> {
+    wings_ptyd::client::Control::connect(socket)
+        .unwrap()
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|pane| pane.history_id.as_deref() == Some(history))
+        .map(|pane| pane.exited)
+}
+
+fn wait_served(socket: &Path, history: &str, want: Option<bool>) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while served(socket, history) != want {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server never had {want:?} for the pane"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn after_a_relaunch_a_pane_whose_program_is_gone_resumes_its_agents_session_in_its_folder_with_its_flags()
+ {
+    let projects = TwoProjects::new("wsr");
+    let (mut app, mut window) = projects.launch();
+    let (pane, _) = start_agent(&projects, &app, &mut window);
+    let history = window.read(|w, _| w.panes[&pane].history.clone());
+    let (before, ..) = shown_pane(&window);
+    quit(&mut app);
+    drop((window, app));
+    assert_eq!(
+        saved_session(&projects),
+        Some(agent_session()),
+        "saved with its pane"
+    );
+    // While the app was away the server lost the pane, as a reboot loses them all.
+    let mut control = wings_ptyd::client::Control::connect(&projects.socket).unwrap();
+    let gone = control
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|pane| pane.history_id.as_deref() == Some(history.as_str()))
+        .unwrap();
+    control.kill(gone.pane).unwrap();
+    wait_served(&projects.socket, &history, None);
+
+    let (app, window) = projects.launch();
+    let (shell, written, cwd) = shown_pane(&window);
+    assert_ne!(shell, before, "a new shell");
+    assert_eq!(cwd, Some(sub(&projects)), "in the folder the pane was in");
+    assert_eq!(
+        written,
+        [resume_line()],
+        "the session resumes with its flags"
+    );
+    drop((window, app));
+    projects.end();
+}
+
+#[test]
+fn after_a_relaunch_a_pane_whose_shell_ended_while_the_app_was_away_resumes_its_agents_session() {
+    let projects = TwoProjects::new("wsq");
+    let (mut app, mut window) = projects.launch();
+    let (pane, pid) = start_agent(&projects, &app, &mut window);
+    let history = window.read(|w, _| w.panes[&pane].history.clone());
+    let (shell, ..) = shown_pane(&window);
+    quit(&mut app);
+    drop((window, app));
+    // The agent and then its shell ended; the server keeps what the pane printed.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+        libc::kill(shell.unwrap() as i32, libc::SIGKILL);
+    }
+    wait_served(&projects.socket, &history, Some(true));
+
+    let (app, window) = projects.launch();
+    let (_, written, cwd) = shown_pane(&window);
+    assert_eq!(cwd, Some(sub(&projects)));
+    assert_eq!(written, [resume_line()]);
+    drop((window, app));
+    projects.end();
+}
+
+#[test]
+fn after_a_relaunch_a_pane_the_app_ran_itself_resumes_its_agents_session() {
+    let projects = TwoProjects::new("wsx");
+    let launch = || {
+        let (alpha, dir, claude) = (
+            projects.alpha.clone(),
+            projects.dir.clone(),
+            projects.claude.clone(),
+        );
+        open_config(move |config| {
+            config.project = alpha;
+            config.projects = Some(dir.join("spaces.json"));
+            config.state = Some(dir.join("workspace.json"));
+            config.agents = Some(claude);
+            config.terminal_server = None;
+        })
+    };
+    let (mut app, mut window) = launch();
+    start_agent(&projects, &app, &mut window);
+    quit(&mut app);
+    drop((window, app));
+
+    // Its shell ended with the app, so the next one starts the session again.
+    let (mut app, window) = launch();
+    let (_, written, cwd) = shown_pane(&window);
+    assert_eq!(cwd, Some(sub(&projects)));
+    assert_eq!(written, [resume_line()]);
+    quit(&mut app);
+    drop((window, app));
+    projects.end();
+}
+
+#[test]
+fn after_a_relaunch_a_pane_whose_agent_still_runs_is_attached_and_given_nothing_until_its_agent_quits()
+ {
+    let projects = TwoProjects::new("wsk");
+    let (mut app, mut window) = projects.launch();
+    let (pane, pid) = start_agent(&projects, &app, &mut window);
+    let (shell, ..) = shown_pane(&window);
+    quit(&mut app);
+    drop((window, app));
+
+    let (mut app, window) = projects.launch();
+    let (attached, written, _) = shown_pane(&window);
+    assert_eq!(attached, shell, "attached to the shell the server kept");
+    assert!(written.is_empty(), "nothing typed into it: {written:?}");
+    let pane_now = window.read(|w, _| w.focused_pane().unwrap());
+    assert_eq!(pane_now, pane);
+    wait_for(
+        &app,
+        &window,
+        |w| w.agents.contains_key(&pane) && w.panes[&pane].session == Some(agent_session()),
+        "the running agent and its session",
+    );
+    // You quit the agent: its pane no longer resumes it.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGTERM);
+    }
+    wait_for(
+        &app,
+        &window,
+        |w| !w.agents.contains_key(&pane) && w.panes[&pane].session.is_none(),
+        "the session stayed after its agent quit",
+    );
+    quit(&mut app);
+    drop((window, app));
+    assert_eq!(saved_session(&projects), None);
+    projects.end();
+}

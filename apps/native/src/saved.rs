@@ -35,6 +35,10 @@ pub enum SavedLayout {
         /// `{ "name": null }` for the default account. Absent in files from before it, which use the project's.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+        /// The agent session last seen in the pane, which a restore continues when the pane can't attach to its
+        /// program again, as the desktop's `sessions`, `sessionKinds` and `sessionArgs`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<SavedSession>,
     },
     Split {
         dir: SavedDir,
@@ -42,6 +46,25 @@ pub enum SavedLayout {
         a: Box<SavedLayout>,
         b: Box<SavedLayout>,
     },
+}
+
+/// Which agent CLI a saved session belongs to, as the desktop's `SessionKind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    Claude,
+    Opencode,
+}
+
+/// An agent session a pane ran, to continue in a new shell there: `claude --resume <id>` with the flags it was
+/// started with, or `opencode --session <id>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedSession {
+    pub kind: SessionKind,
+    pub id: String,
+    /// Claude Code's start flags, without the ones that choose a session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -420,12 +443,18 @@ mod tests {
                             history: None,
                             name: None,
                             claude_account: None,
+                            session: None,
                         }),
                         b: Box::new(SavedLayout::Pane {
                             cwd: None,
                             history: None,
                             name: None,
                             claude_account: None,
+                            session: Some(SavedSession {
+                                kind: SessionKind::Opencode,
+                                id: "ses_01HZabcdefgh".into(),
+                                args: Vec::new(),
+                            }),
                         }),
                     },
                     focused: 1,
@@ -438,6 +467,11 @@ mod tests {
                         name: Some("server".into()),
                         claude_account: Some(wings_spaces::claude_accounts::AccountPick {
                             name: Some("work".into()),
+                        }),
+                        session: Some(SavedSession {
+                            kind: SessionKind::Claude,
+                            id: "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d".into(),
+                            args: vec!["--model".into(), "opus".into()],
                         }),
                     },
                     focused: 0,
@@ -616,6 +650,7 @@ mod tests {
                 history: None,
                 name: None,
                 claude_account: None,
+                session: None,
             }
         );
         save(&path, "/a", split(), settings(13.0)).unwrap();

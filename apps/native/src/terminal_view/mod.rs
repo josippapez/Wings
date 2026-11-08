@@ -203,6 +203,9 @@ pub struct TerminalView {
     /// How many times it drew itself, for tests of what draws again.
     #[cfg(test)]
     drawn: usize,
+    /// What Wings typed into it (`write_input`), for tests of what a pane is given.
+    #[cfg(test)]
+    written: Vec<String>,
     _release: Subscription,
 }
 
@@ -374,6 +377,8 @@ impl TerminalView {
             _release: release,
             #[cfg(test)]
             drawn: 0,
+            #[cfg(test)]
+            written: Vec::new(),
         };
         view.show(latest.lock().unwrap().clone());
         view
@@ -491,6 +496,12 @@ impl TerminalView {
     #[cfg(test)]
     pub(crate) fn drawn(&self) -> usize {
         self.drawn
+    }
+
+    /// What Wings typed into it, oldest first, for tests of what a pane is given.
+    #[cfg(test)]
+    pub(crate) fn written(&self) -> &[String] {
+        &self.written
     }
 
     /// Where it was last drawn, for tests of what moves it.

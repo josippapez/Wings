@@ -307,6 +307,8 @@ impl TerminalView {
         if text.ends_with('\r') {
             self.typed = false;
         }
+        #[cfg(test)]
+        self.written.push(text.to_owned());
         self.send(Command::Input(text.as_bytes().to_vec()), cx);
     }
 }
