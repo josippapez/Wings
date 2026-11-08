@@ -168,12 +168,24 @@ impl Workspace {
         } else {
             " A .worktreeinclude in the repo would take precedence over this list."
         };
+        let include_hint = hint(format!(
+            "One pattern per line, gitignore syntax. Only files your repo ignores are \
+             copied, never tracked ones. Start a line with ! to leave files out, like \
+             !.claude/hooks/slow.sh. Lines starting with # are notes.{}",
+            if failed { "" } else { file }
+        ));
+        let setup_hint = hint(
+            "Any shell line, like ./scripts/setup-worktree.sh or make bootstrap && \
+             pnpm install. It runs in the new worktree's folder, in the first \
+             terminal opened there, and the agent starts once it succeeds."
+                .into(),
+        );
         let (backdrop, panel) = ui::dialog(
             "worktree-setup",
             "Worktree setup",
             &dialog.focus,
             512.0,
-            0.0,
+            None,
         );
         Some(
             backdrop
@@ -183,7 +195,6 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .h_auto()
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                             if event.keystroke.key == "escape" {
                                 this.close_worktree_setup(window, cx);
@@ -191,28 +202,14 @@ impl Workspace {
                             }
                         }))
                         .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .gap(px(16.0))
-                                .p(px(24.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(4.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(16.0))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child("Worktree setup"),
-                                        )
-                                        .child(hint(format!(
-                                            "What a new worktree of {} gets before its agent starts.",
-                                            dialog.name
-                                        ))),
-                                )
+                            ui::dialog_body()
+                                .child(ui::dialog_header(
+                                    "Worktree setup",
+                                    hint(format!(
+                                        "What a new worktree of {} gets before its agent starts.",
+                                        dialog.name
+                                    )),
+                                ))
                                 .child(
                                     div()
                                         .id("worktree-setup-fields")
@@ -223,33 +220,23 @@ impl Workspace {
                                         .flex_col()
                                         .gap(px(16.0))
                                         .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(6.0))
-                                        .child(label("Local files to copy"))
-                                        .child(dialog.include.clone())
-                                        .child(hint(format!(
-                                            "One pattern per line, gitignore syntax. Only files your repo ignores are \
-                                             copied, never tracked ones. Start a line with ! to leave files out, like \
-                                             !.claude/hooks/slow.sh. Lines starting with # are notes.{}",
-                                            if failed { "" } else { file }
-                                        ))),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(6.0))
-                                        .child(label("Setup command"))
-                                        .child(dialog.setup.clone())
-                                        .child(hint(
-                                            "Any shell line, like ./scripts/setup-worktree.sh or make bootstrap && \
-                                             pnpm install. It runs in the new worktree's folder, in the first \
-                                             terminal opened there, and the agent starts once it succeeds."
-                                                .into(),
-                                        )),
-                                ),
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(6.0))
+                                                .child(label("Local files to copy"))
+                                                .child(dialog.include.clone())
+                                                .child(include_hint),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(6.0))
+                                                .child(label("Setup command"))
+                                                .child(dialog.setup.clone())
+                                                .child(setup_hint),
+                                        ),
                                 )
                                 .when_some(dialog.error.clone(), |form, error| {
                                     form.child(
@@ -264,10 +251,7 @@ impl Workspace {
                                     )
                                 })
                                 .child(
-                                    div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap(px(8.0))
+                                    ui::dialog_footer()
                                         .child(
                                             ui::button(
                                                 "worktree-setup-cancel",
@@ -276,9 +260,11 @@ impl Workspace {
                                                 false,
                                                 "Cancel",
                                             )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.close_worktree_setup(window, cx)
-                                            })),
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.close_worktree_setup(window, cx)
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             ui::button(
@@ -288,11 +274,16 @@ impl Workspace {
                                                 failed,
                                                 "Save",
                                             )
-                                            .when(!failed, |button| {
-                                                button.on_click(cx.listener(|this, _, window, cx| {
-                                                    this.save_worktree_setup(window, cx)
-                                                }))
-                                            }),
+                                            .when(
+                                                !failed,
+                                                |button| {
+                                                    button.on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.save_worktree_setup(window, cx)
+                                                        },
+                                                    ))
+                                                },
+                                            ),
                                         ),
                                 ),
                         ),

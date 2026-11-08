@@ -50,10 +50,7 @@ impl Workspace {
                             )
                         })
                         .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .gap(px(8.0))
+                            ui::dialog_footer()
                                 .child(
                                     ui::button(
                                         ("plugin-update-dismiss", index),

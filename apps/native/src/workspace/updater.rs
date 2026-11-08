@@ -759,10 +759,7 @@ impl Workspace {
                     )
                 })
                 .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
+                    ui::dialog_footer()
                         .child(
                             button("update-whats-new", "What's new", Variant::Ghost).on_click(
                                 cx.listener(|this, _, window, cx| {
@@ -991,14 +988,11 @@ impl Workspace {
             SharedString::from(content.title.clone()),
             &self.updates.focus,
             448.0,
-            360.0,
+            None,
         );
         let footer = (content.dismiss.is_some() || content.action.is_some()).then(|| {
             // The desktop's `DialogFooter`: a tinted strip under a hairline, its buttons on the right.
-            div()
-                .flex()
-                .justify_end()
-                .gap(px(8.0))
+            ui::dialog_footer()
                 .p(px(16.0))
                 .border_t_1()
                 .border_color(rgba(theme::BORDER))
@@ -1025,7 +1019,6 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .h_auto()
                         .flex_col()
                         .text_size(px(14.0))
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

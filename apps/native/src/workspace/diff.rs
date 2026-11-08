@@ -5,9 +5,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, AppContext, Context, DispatchPhase, Focusable, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Orientation, Pixels, Role, StyleRefinement, Window, canvas, div,
-    prelude::*, px, rgb, rgba,
+    AnyElement, AppContext, Context, Focusable, Pixels, StyleRefinement, Window, div, prelude::*,
+    px, rgb, rgba,
 };
 
 use super::{Active, HAIRLINE, Workspace};
@@ -16,7 +15,7 @@ use crate::{
         View,
         viewer::{Event, Viewer},
     },
-    saved, theme,
+    saved, theme, ui,
 };
 
 /// The desktop's `SIDES.diff`: how narrow and how wide the dock can be dragged, and where it starts.
@@ -25,8 +24,6 @@ pub(super) const MAX_WIDTH: f32 = 1600.0;
 pub(super) const INITIAL_WIDTH: f32 = 620.0;
 /// The desktop's `minSize={320}` of the tabs beside the dock: they keep this much while the window has it.
 const TABS_MIN: f32 = 320.0;
-/// The gap between the tab's cards and the dock's card, which takes the drag.
-const EDGE: f32 = 8.0;
 
 pub(super) struct Dock {
     /// The project and tab on screen when the diff opened, which it docks beside. None, as with no project, fills the
@@ -299,70 +296,17 @@ impl Workspace {
     /// The dock's left edge, the gap between the tab's cards and the dock's, which you drag. Its line shows when you
     /// point at it. The window listens for the pointer while it is down, so the drag goes on wherever the pointer is.
     fn diff_resize_edge(&self, cx: &mut Context<Self>) -> AnyElement {
-        let dragging = self.plugin_ui.diff_dock.resize.is_some();
-        let entity = cx.entity();
-        div()
-            .id("diff-dock-edge")
-            .group("diff-dock-edge")
-            .role(Role::Splitter)
-            .aria_label("Resize diff")
-            .aria_orientation(Orientation::Vertical)
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left(px(-EDGE))
-            .w(px(EDGE))
-            .cursor_col_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    this.start_diff_resize(event.position.x, window.viewport_size().width, cx)
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .right_0()
-                    .w(px(1.0))
-                    .when(dragging, |line| line.bg(rgba(theme::HAIRLINE_STRONG)))
-                    .group_hover("diff-dock-edge", |style| {
-                        style.bg(rgba(theme::HAIRLINE_STRONG))
-                    }),
-            )
-            .when(dragging, |edge| {
-                edge.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, _| {
-                            let moved = entity.clone();
-                            window.on_mouse_event(
-                                move |event: &MouseMoveEvent, phase, window, cx| {
-                                    if phase == DispatchPhase::Bubble {
-                                        let viewport = window.viewport_size().width;
-                                        moved.update(cx, |this, cx| {
-                                            if event.dragging() {
-                                                this.diff_resize_to(event.position.x, viewport, cx);
-                                            } else {
-                                                this.end_diff_resize(cx);
-                                            }
-                                        });
-                                    }
-                                },
-                            );
-                            let released = entity.clone();
-                            window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                                if phase == DispatchPhase::Bubble {
-                                    released.update(cx, |this, cx| this.end_diff_resize(cx));
-                                }
-                            });
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-            })
-            .into_any_element()
+        ui::resize_edge(
+            "diff-dock-edge",
+            "Resize diff",
+            ui::Side::Right,
+            self.plugin_ui.diff_dock.resize.is_some(),
+            cx,
+            |this, x, window, cx| this.start_diff_resize(x, window.viewport_size().width, cx),
+            |this, x, window, cx| this.diff_resize_to(x, window.viewport_size().width, cx),
+            Self::end_diff_resize,
+        )
+        .left(px(-ui::RESIZE_EDGE))
+        .into_any_element()
     }
 }

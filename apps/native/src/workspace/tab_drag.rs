@@ -4,9 +4,10 @@
 //! plugin pages among plugin pages. The project page and Issues stay where they are.
 
 use gpui::{
-    AnyElement, Axis, Context, DispatchPhase, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Subscription, canvas, prelude::*,
+    AnyElement, Axis, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*,
 };
+
+use crate::ui;
 
 use super::{
     Active, Workspace,
@@ -208,25 +209,23 @@ impl Workspace {
             canvas(
                 |_, _, _| {},
                 move |_, _, window, _| {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            moved.update(cx, |this, cx| {
-                                // Let go outside the window, it ends where it is.
-                                if event.dragging() {
-                                    this.drag_tab_to(event.position, cx);
-                                } else {
-                                    this.drop_tab(cx);
-                                }
-                            });
-                        }
-                    });
-                    let released = entity.clone();
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                            released.update(cx, |this, cx| this.drop_tab(cx));
-                        }
-                    });
+                    ui::window_drag(
+                        window,
+                        &entity,
+                        |this, event, _, cx| {
+                            // Let go outside the window, it ends where it is.
+                            if event.dragging() {
+                                this.drag_tab_to(event.position, cx);
+                            } else {
+                                this.drop_tab(cx);
+                            }
+                        },
+                        |this, event, cx| {
+                            if event.button == MouseButton::Left {
+                                this.drop_tab(cx);
+                            }
+                        },
+                    );
                 },
             )
             .absolute()

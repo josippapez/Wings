@@ -7,8 +7,8 @@
 use std::{path::PathBuf, rc::Rc};
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Subscription, Window, canvas, div, prelude::*, px, rgb,
+    AnyElement, Bounds, Context, Entity, FocusHandle, Focusable, Pixels, Point, Subscription,
+    Window, canvas, div, prelude::*, px, rgb,
 };
 
 #[cfg(unix)]
@@ -292,22 +292,20 @@ impl Workspace {
             {
                 let entity = cx.entity();
                 move |_, _, window, _| {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble && event.dragging() {
-                            moved.update(cx, |this, cx| this.quick_gesture(event.position, cx));
-                        }
-                    });
-                    let released = entity.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            released.update(cx, |this, _| {
-                                for quick in &mut this.loose {
-                                    quick.gesture = None;
-                                }
-                            });
-                        }
-                    });
+                    ui::window_drag(
+                        window,
+                        &entity,
+                        |this, event, _, cx| {
+                            if event.dragging() {
+                                this.quick_gesture(event.position, cx);
+                            }
+                        },
+                        |this, _, _| {
+                            for quick in &mut this.loose {
+                                quick.gesture = None;
+                            }
+                        },
+                    );
                 }
             },
         )

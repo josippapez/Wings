@@ -5,7 +5,7 @@
 
 use std::{sync::mpsc, time::Duration};
 
-use gpui::{AnyElement, Context, FontWeight, KeyDownEvent, Task, div, prelude::*, px, rgb, rgba};
+use gpui::{AnyElement, Context, KeyDownEvent, Task, div, prelude::*, px, rgb, rgba};
 use wings_connect::panes::SETUP_APPROVAL_WAIT;
 
 use crate::{
@@ -129,17 +129,19 @@ impl Workspace {
                 .text_color(rgb(theme::MUTED_FOREGROUND))
                 .child(text)
         };
+        let when_it_runs =
+            label("It runs in every new worktree of this project before the agent starts.");
         let (backdrop, panel) = ui::dialog(
             "setup-approval",
             "Allow this setup command?",
             &self.review_focus,
             512.0,
-            400.0,
+            None,
         );
         Some(
             backdrop
                 .child(ui::dialog_panel(
-                    panel.h_auto()
+                    panel
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                             if event.keystroke.key == "escape" {
                                 this.answer_setup(false, cx);
@@ -147,27 +149,23 @@ impl Workspace {
                             }
                         }))
                         .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .gap(px(16.0))
-                                .p(px(24.0))
-                                .child(
+                            ui::dialog_body()
+                                .child(ui::dialog_header(
+                                    "Allow this setup command?",
                                     div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(4.0))
-                                        .child(div().text_size(px(16.0)).font_weight(FontWeight::SEMIBOLD).child("Allow this setup command?"))
-                                        .child(
-                                            div().text_size(px(13.0)).text_color(rgb(theme::MUTED_FOREGROUND)).child(format!(
-                                                "{} asks to set the setup command for {}.{}",
-                                                ask.pane,
-                                                ask.project,
-                                                if waiting > 0 { format!(" {waiting} more waiting.") } else { String::new() }
-                                            )),
-                                        ),
-                                )
+                                        .text_size(px(13.0))
+                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .child(format!(
+                                            "{} asks to set the setup command for {}.{}",
+                                            ask.pane,
+                                            ask.project,
+                                            if waiting > 0 {
+                                                format!(" {waiting} more waiting.")
+                                            } else {
+                                                String::new()
+                                            }
+                                        )),
+                                ))
                                 .child(
                                     div()
                                         .id("setup-approval-commands")
@@ -182,33 +180,68 @@ impl Workspace {
                                                 .flex_col()
                                                 .gap(px(4.0))
                                                 .child(label("Now"))
-                                                .child(code(ask.current.clone().unwrap_or_else(|| "none".into()), true)),
+                                                .child(code(
+                                                    ask.current
+                                                        .clone()
+                                                        .unwrap_or_else(|| "none".into()),
+                                                    true,
+                                                )),
                                         )
                                         .child(
-                                            div().flex().flex_col().gap(px(4.0)).child(label("Proposed, exactly as it will run")).child(code(
-                                                if ask.proposed.is_empty() { "(clear it)".into() } else { ask.proposed.clone() },
-                                                false,
-                                            )),
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(4.0))
+                                                .child(label("Proposed, exactly as it will run"))
+                                                .child(code(
+                                                    if ask.proposed.is_empty() {
+                                                        "(clear it)".into()
+                                                    } else {
+                                                        ask.proposed.clone()
+                                                    },
+                                                    false,
+                                                )),
                                         )
-                                        .child(label("It runs in every new worktree of this project before the agent starts.")),
+                                        .child(when_it_runs),
                                 )
                                 .child(
-                                    div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap(px(8.0))
+                                    ui::dialog_footer()
                                         .child(
-                                            ui::button("setup-approval-deny", "Deny", Variant::Ghost, false, "Deny")
-                                                .on_click(cx.listener(|this, _, _, cx| this.answer_setup(false, cx))),
+                                            ui::button(
+                                                "setup-approval-deny",
+                                                "Deny",
+                                                Variant::Ghost,
+                                                false,
+                                                "Deny",
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.answer_setup(false, cx)
+                                                }),
+                                            ),
                                         )
                                         .child(
-                                            ui::button("setup-approval-allow", "Allow", Variant::Default, !asks.armed, "Allow")
-                                                .when(asks.armed, |button| {
-                                                    button.on_click(cx.listener(|this, _, _, cx| this.answer_setup(true, cx)))
-                                                }),
+                                            ui::button(
+                                                "setup-approval-allow",
+                                                "Allow",
+                                                Variant::Default,
+                                                !asks.armed,
+                                                "Allow",
+                                            )
+                                            .when(
+                                                asks.armed,
+                                                |button| {
+                                                    button.on_click(cx.listener(
+                                                        |this, _, _, cx| {
+                                                            this.answer_setup(true, cx)
+                                                        },
+                                                    ))
+                                                },
+                                            ),
                                         ),
                                 ),
-                        ),))
+                        ),
+                ))
                 .into_any_element(),
         )
     }

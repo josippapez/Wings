@@ -2,6 +2,7 @@
 //! GPUI elements, so every screen shares one look. Each returns an element to add handlers to.
 
 mod button;
+mod drag;
 mod menu;
 pub mod motion;
 mod parts;
@@ -10,6 +11,7 @@ mod status_dot;
 mod tooltip;
 
 pub use button::{Variant, badge, button, chip};
+pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};
 pub use menu::{context_menu, menu, menu_item, menu_item_with, menu_separator};
 pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use slots::{drawing_piece, slot, slot_layer};
@@ -275,13 +277,14 @@ pub fn setting_row(
 }
 
 /// shadcn's `Dialog`: a dimmed backdrop over the window, and the panel in its middle. Add the
-/// close handlers to the backdrop and the content to the panel.
+/// close handlers to the backdrop and the content to the panel. With no `height`, the panel is as
+/// tall as its content.
 pub fn dialog(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     focus: &FocusHandle,
     width: f32,
-    height: f32,
+    height: impl Into<Option<f32>>,
 ) -> (Stateful<Div>, Stateful<Div>) {
     let id: ElementId = id.into();
     let backdrop = div()
@@ -304,7 +307,10 @@ pub fn dialog(
         .relative()
         .w(px(width))
         .max_w(relative(0.92))
-        .h(px(height))
+        .map(|panel| match height.into() {
+            Some(height) => panel.h(px(height)),
+            None => panel.h_auto(),
+        })
         .max_h(relative(0.9))
         .flex()
         .overflow_hidden()
@@ -362,6 +368,31 @@ pub fn backdrop_color() -> gpui::Hsla {
 /// (see `motion::surface`).
 pub fn dialog_panel(panel: impl Styled + IntoElement) -> motion::Surface {
     motion::surface(panel, (0.5, 0.5))
+}
+
+/// A dialog's content, 24px in from its edges and 16px between its parts.
+pub fn dialog_body() -> Div {
+    div().w_full().flex().flex_col().gap(px(16.0)).p(px(24.0))
+}
+
+/// The desktop's `DialogHeader`: the dialog's title over its description.
+pub fn dialog_header(title: impl IntoElement, description: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .text_size(px(16.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(description)
+}
+
+/// The desktop's `DialogFooter`: a dialog's or a notice's buttons, on the right and 8px apart.
+pub fn dialog_footer() -> Div {
+    div().flex().justify_end().gap(px(8.0))
 }
 
 /// shadcn's `SelectTrigger`: the current choice and a chevron, 176px wide like the desktop's.

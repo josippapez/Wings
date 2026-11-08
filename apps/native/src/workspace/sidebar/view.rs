@@ -5,9 +5,8 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
-    AnyElement, Axis, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString,
-    StyleRefinement, canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, Axis, Context, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
+    MouseDownEvent, Role, SharedString, StyleRefinement, div, prelude::*, px, rgb, rgba,
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
@@ -29,9 +28,6 @@ use super::{
     MIN_WIDTH, now_ms,
     order::{self, Context as OrderBy, Ordered, Sort},
 };
-
-/// The width of the strip at the sidebar's edge that takes the drag.
-const EDGE: f32 = 8.0;
 
 impl Workspace {
     /// The docked sidebar, as wide as it was dragged, while it is docked or still sliding shut. Toggling it slides the
@@ -533,68 +529,18 @@ impl Workspace {
     /// The edge you drag. Invisible until you point at it. The window listens for the pointer while it is down, so the
     /// drag goes on wherever the pointer is.
     fn resize_edge(&self, cx: &mut Context<Self>) -> AnyElement {
-        let dragging = self.side.resize.is_some();
-        let entity = cx.entity();
-        div()
-            .id("sidebar-edge")
-            .group("sidebar-edge")
-            .role(Role::Splitter)
-            .aria_label("Resize sidebar")
-            .aria_orientation(Orientation::Vertical)
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .right_0()
-            .w(px(EDGE))
-            .cursor_col_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.start_resize(event.position.x, cx)
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .right_0()
-                    .w(px(1.0))
-                    .when(dragging, |line| line.bg(rgba(theme::HAIRLINE_STRONG)))
-                    .group_hover("sidebar-edge", |style| {
-                        style.bg(rgba(theme::HAIRLINE_STRONG))
-                    }),
-            )
-            .when(dragging, |edge| {
-                edge.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, _| {
-                            let moved = entity.clone();
-                            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                                if phase == DispatchPhase::Bubble {
-                                    moved.update(cx, |this, cx| {
-                                        if event.dragging() {
-                                            this.resize_to(event.position.x, cx);
-                                        } else {
-                                            this.end_resize(cx);
-                                        }
-                                    });
-                                }
-                            });
-                            let released = entity.clone();
-                            window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                                if phase == DispatchPhase::Bubble {
-                                    released.update(cx, |this, cx| this.end_resize(cx));
-                                }
-                            });
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-            })
-            .into_any_element()
+        ui::resize_edge(
+            "sidebar-edge",
+            "Resize sidebar",
+            ui::Side::Right,
+            self.side.resize.is_some(),
+            cx,
+            |this, x, _, cx| this.start_resize(x, cx),
+            |this, x, _, cx| this.resize_to(x, cx),
+            Self::end_resize,
+        )
+        .right_0()
+        .into_any_element()
     }
 
     /// Asks before a project with tabs open is removed, which closes them and any agents running in them.
@@ -649,10 +595,7 @@ impl Workspace {
                                         )),
                                 )
                                 .child(
-                                    div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap(px(8.0))
+                                    ui::dialog_footer()
                                         .child(
                                             ui::button(
                                                 "cancel-remove",

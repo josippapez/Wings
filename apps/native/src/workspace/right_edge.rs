@@ -1,12 +1,9 @@
 //! The right-hand panel's width: the edge you drag to resize it, within the desktop's `SIDES.right`, and the width the
 //! workspace file keeps, as the project sidebar's (`sidebar/mod.rs`).
 
-use gpui::{
-    AnyElement, Context, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Orientation, Pixels, Role, canvas, div, prelude::*, px, rgba,
-};
+use gpui::{AnyElement, Context, Pixels, prelude::*};
 
-use crate::{saved, theme};
+use crate::{saved, ui};
 
 use super::Workspace;
 
@@ -16,8 +13,6 @@ pub(super) const MAX_WIDTH: f32 = 640.0;
 pub(super) const INITIAL_WIDTH: f32 = 360.0;
 /// The desktop's `minSize={320}` of the panel between the sidebars: the panes keep this much while the window has it.
 const MAIN_MIN: f32 = 320.0;
-/// The width of the strip at the panel's edge that takes the drag, as the project sidebar's.
-const EDGE: f32 = 8.0;
 
 pub(super) struct Size {
     pub(super) width: f32,
@@ -96,74 +91,17 @@ impl Workspace {
     /// The panel's left edge, which you drag. Invisible until you point at it. The window listens for the pointer while
     /// it is down, so the drag goes on wherever the pointer is.
     pub(super) fn right_resize_edge(&self, cx: &mut Context<Self>) -> AnyElement {
-        let dragging = self.plugin_ui.right_size.resize.is_some();
-        let entity = cx.entity();
-        div()
-            .id("right-sidebar-edge")
-            .group("right-sidebar-edge")
-            .role(Role::Splitter)
-            .aria_label("Resize right sidebar")
-            .aria_orientation(Orientation::Vertical)
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left_0()
-            .w(px(EDGE))
-            .cursor_col_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    this.start_right_resize(event.position.x, window.viewport_size().width, cx)
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(1.0))
-                    .when(dragging, |line| line.bg(rgba(theme::HAIRLINE_STRONG)))
-                    .group_hover("right-sidebar-edge", |style| {
-                        style.bg(rgba(theme::HAIRLINE_STRONG))
-                    }),
-            )
-            .when(dragging, |edge| {
-                edge.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, _| {
-                            let moved = entity.clone();
-                            window.on_mouse_event(
-                                move |event: &MouseMoveEvent, phase, window, cx| {
-                                    if phase == DispatchPhase::Bubble {
-                                        let viewport = window.viewport_size().width;
-                                        moved.update(cx, |this, cx| {
-                                            if event.dragging() {
-                                                this.right_resize_to(
-                                                    event.position.x,
-                                                    viewport,
-                                                    cx,
-                                                );
-                                            } else {
-                                                this.end_right_resize(cx);
-                                            }
-                                        });
-                                    }
-                                },
-                            );
-                            let released = entity.clone();
-                            window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                                if phase == DispatchPhase::Bubble {
-                                    released.update(cx, |this, cx| this.end_right_resize(cx));
-                                }
-                            });
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-            })
-            .into_any_element()
+        ui::resize_edge(
+            "right-sidebar-edge",
+            "Resize right sidebar",
+            ui::Side::Left,
+            self.plugin_ui.right_size.resize.is_some(),
+            cx,
+            |this, x, window, cx| this.start_right_resize(x, window.viewport_size().width, cx),
+            |this, x, window, cx| this.right_resize_to(x, window.viewport_size().width, cx),
+            Self::end_right_resize,
+        )
+        .left_0()
+        .into_any_element()
     }
 }

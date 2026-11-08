@@ -12,8 +12,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Role, SharedString, StyleRefinement, Window, canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, Context, MouseButton, Pixels, Point, Role, SharedString, StyleRefinement,
+    Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -779,24 +779,20 @@ impl Workspace {
             {
                 let entity = cx.entity();
                 move |_, _, window, _| {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble && event.dragging() {
-                            moved.update(cx, |this, cx| {
+                    ui::window_drag(
+                        window,
+                        &entity,
+                        move |this, event, _, cx| {
+                            if event.dragging() {
                                 this.float_gesture(owner, event.position, cx)
-                            });
-                        }
-                    });
-                    let released = entity.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            released.update(cx, |this, _| {
-                                if let Some(panel) = this.agent_terminals.panels.get_mut(&owner) {
-                                    panel.gesture = None;
-                                }
-                            });
-                        }
-                    });
+                            }
+                        },
+                        move |this, _, _| {
+                            if let Some(panel) = this.agent_terminals.panels.get_mut(&owner) {
+                                panel.gesture = None;
+                            }
+                        },
+                    );
                 }
             },
         )

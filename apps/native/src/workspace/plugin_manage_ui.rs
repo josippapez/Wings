@@ -804,14 +804,22 @@ impl Workspace {
             format!("Turn on {}?", shown.manifest.name),
             focus,
             448.0,
-            520.0,
+            None,
         );
         let changed = !shown.approved && shown.enabled;
+        let description = muted(if changed {
+            "This version asks for different access than you approved before."
+        } else {
+            "Here's what it will be able to do."
+        });
         Some(
             backdrop
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.skip_review(cx)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.skip_review(cx)),
+                )
                 .child(ui::dialog_panel(
-                    panel.h_auto()
+                    panel
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                             if event.keystroke.key == "escape" {
                                 this.skip_review(cx);
@@ -819,12 +827,7 @@ impl Workspace {
                             }
                         }))
                         .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .gap(px(16.0))
-                                .p(px(24.0))
+                            ui::dialog_body()
                                 .child(
                                     div()
                                         .flex()
@@ -835,34 +838,70 @@ impl Workspace {
                                                 .flex()
                                                 .items_baseline()
                                                 .gap(px(12.0))
-                                                .child(div().text_size(px(16.0)).font_weight(FontWeight::SEMIBOLD).child(format!("Turn on {}?", shown.manifest.name)))
-                                                .when(more, |title| title.child(muted(format!("1 of {}", self.manage.reviews.len())))),
+                                                .child(
+                                                    div()
+                                                        .text_size(px(16.0))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(format!(
+                                                            "Turn on {}?",
+                                                            shown.manifest.name
+                                                        )),
+                                                )
+                                                .when(more, |title| {
+                                                    title.child(muted(format!(
+                                                        "1 of {}",
+                                                        self.manage.reviews.len()
+                                                    )))
+                                                }),
                                         )
-                                        .child(muted(if changed {
-                                            "This version asks for different access than you approved before."
-                                        } else {
-                                            "Here's what it will be able to do."
-                                        })),
+                                        .child(description),
                                 )
-                                .child(
-                                    div().id("plugin-review-access").max_h(px(320.0)).overflow_y_scroll().child(access_list(&shown.manifest)),
-                                )
-                                .child(muted("Commands run as you, so only turn on plugins you trust."))
                                 .child(
                                     div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap(px(8.0))
+                                        .id("plugin-review-access")
+                                        .max_h(px(320.0))
+                                        .overflow_y_scroll()
+                                        .child(access_list(&shown.manifest)),
+                                )
+                                .child(muted(
+                                    "Commands run as you, so only turn on plugins you trust.",
+                                ))
+                                .child(
+                                    ui::dialog_footer()
                                         .child(
-                                            ui::button("plugin-review-cancel", if more { "Not now" } else { "Cancel" }, Variant::Ghost, false, if more { "Not now" } else { "Cancel" })
-                                                .on_click(cx.listener(|this, _, _, cx| this.skip_review(cx))),
+                                            ui::button(
+                                                "plugin-review-cancel",
+                                                if more { "Not now" } else { "Cancel" },
+                                                Variant::Ghost,
+                                                false,
+                                                if more { "Not now" } else { "Cancel" },
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.skip_review(cx)),
+                                            ),
                                         )
                                         .child(
-                                            ui::button("plugin-review-approve", "Turn on", Variant::Default, busy, "Turn on")
-                                                .when(!busy, |button| button.on_click(cx.listener(|this, _, window, cx| this.approve_review(window, cx)))),
+                                            ui::button(
+                                                "plugin-review-approve",
+                                                "Turn on",
+                                                Variant::Default,
+                                                busy,
+                                                "Turn on",
+                                            )
+                                            .when(
+                                                !busy,
+                                                |button| {
+                                                    button.on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.approve_review(window, cx)
+                                                        },
+                                                    ))
+                                                },
+                                            ),
                                         ),
                                 ),
-                        ),))
+                        ),
+                ))
                 .into_any_element(),
         )
     }

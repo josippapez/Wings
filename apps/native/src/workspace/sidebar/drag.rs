@@ -5,14 +5,14 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{
-    AnyElement, Context, DispatchPhase, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    Subscription, canvas, prelude::*,
-};
+use gpui::{AnyElement, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*};
 
-use crate::workspace::{
-    Workspace,
-    drag_slot::{DRAG_THRESHOLD, Laid},
+use crate::{
+    ui,
+    workspace::{
+        Workspace,
+        drag_slot::{DRAG_THRESHOLD, Laid},
+    },
 };
 
 use super::order::Sort;
@@ -251,25 +251,23 @@ impl Workspace {
             canvas(
                 |_, _, _| {},
                 move |_, _, window, _| {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble {
-                            moved.update(cx, |this, cx| {
-                                // Let go outside the window, it ends where it is.
-                                if event.dragging() {
-                                    this.drag_project_to(event.position, cx);
-                                } else {
-                                    this.drop_project(cx);
-                                }
-                            });
-                        }
-                    });
-                    let released = entity.clone();
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                            released.update(cx, |this, cx| this.drop_project(cx));
-                        }
-                    });
+                    ui::window_drag(
+                        window,
+                        &entity,
+                        |this, event, _, cx| {
+                            // Let go outside the window, it ends where it is.
+                            if event.dragging() {
+                                this.drag_project_to(event.position, cx);
+                            } else {
+                                this.drop_project(cx);
+                            }
+                        },
+                        |this, event, cx| {
+                            if event.button == MouseButton::Left {
+                                this.drop_project(cx);
+                            }
+                        },
+                    );
                 },
             )
             .absolute()

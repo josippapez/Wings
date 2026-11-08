@@ -67,10 +67,9 @@ mod worktree_setup;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, ScrollHandle,
-    SharedString, StyleRefinement, Subscription, Task, Window, canvas, deferred, div, prelude::*,
-    px, rgb, rgba,
+    AnyElement, Bounds, Context, Entity, FocusHandle, Focusable, MouseButton, MouseDownEvent,
+    MouseUpEvent, NavigationDirection, Pixels, ScrollHandle, SharedString, StyleRefinement,
+    Subscription, Task, Window, canvas, deferred, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -699,26 +698,20 @@ impl Workspace {
                             {
                                 let entity = cx.entity();
                                 move |_, _, window, _| {
-                                    let moved = entity.clone();
-                                    window.on_mouse_event(
-                                        move |event: &MouseMoveEvent, phase, _, cx| {
-                                            if phase == DispatchPhase::Bubble && event.dragging() {
-                                                moved.update(cx, |this, cx| {
-                                                    this.drag_to(event.position, cx)
-                                                });
+                                    ui::window_drag(
+                                        window,
+                                        &entity,
+                                        |this, event, _, cx| {
+                                            if event.dragging() {
+                                                this.drag_to(event.position, cx)
+                                            }
+                                        },
+                                        |this, _, cx| {
+                                            if this.drag.take().is_some() {
+                                                this.save(cx);
                                             }
                                         },
                                     );
-                                    let released = entity.clone();
-                                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                                        if phase == DispatchPhase::Bubble {
-                                            released.update(cx, |this, cx| {
-                                                if this.drag.take().is_some() {
-                                                    this.save(cx);
-                                                }
-                                            });
-                                        }
-                                    });
                                 }
                             },
                         )

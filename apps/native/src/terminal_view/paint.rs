@@ -3,14 +3,17 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, ElementInputHandler, Global,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, Role, ShapedLine, SharedString,
-    StrikethroughStyle, TextAlign, TextRun, UnderlineStyle, Window, canvas, div, fill, font,
-    outline, point, prelude::*, px, rgb, rgba, size,
+    BorderStyle, Bounds, ContentMask, Context, Corners, ElementInputHandler, Global, Pixels, Point,
+    RenderImage, Role, ShapedLine, SharedString, StrikethroughStyle, TextAlign, TextRun,
+    UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*, px, rgb, rgba,
+    size,
 };
 use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags, ImageLayer};
 
-use crate::actions::{self, Copy, Paste};
+use crate::{
+    actions::{self, Copy, Paste},
+    ui,
+};
 
 use super::{
     InactiveCursor, TerminalView, font_size, line_height,
@@ -534,18 +537,12 @@ impl Render for TerminalView {
                     ElementInputHandler::new(bounds, paint_view.clone()),
                     cx,
                 );
-                let move_view = paint_view.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble {
-                        move_view.update(cx, |view, cx| view.mouse_move(event, cx));
-                    }
-                });
-                let up_view = paint_view.clone();
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble {
-                        up_view.update(cx, |view, cx| view.mouse_up(event, cx));
-                    }
-                });
+                ui::window_drag(
+                    window,
+                    &paint_view,
+                    |view, event, _, cx| view.mouse_move(event, cx),
+                    |view, event, cx| view.mouse_up(event, cx),
+                );
                 let mut paint_error = None;
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     window.paint_quad(fill(bounds, rgb(data.snapshot.background)));
