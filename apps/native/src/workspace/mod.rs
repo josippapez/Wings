@@ -721,7 +721,7 @@ impl Workspace {
     /// The terminals of the tab on screen, each at the slot its pane's card leaves in the main column
     /// (`pane_card::TERMINALS`). Each is drawn again only when it changes, which no longer draws the main column again.
     /// None while a terminal fills the area in place of the tab, as the tab isn't painted then.
-    fn tab_terminals(&self) -> Vec<(SharedString, AnyElement)> {
+    fn tab_terminals(&self, cx: &gpui::App) -> Vec<(SharedString, AnyElement)> {
         let Active::Terminal(id) = self.active else {
             return Vec::new();
         };
@@ -736,9 +736,14 @@ impl Workspace {
             .into_iter()
             .filter_map(|pane| {
                 let view = self.panes.get(&pane)?.view.as_ref().ok()?;
-                let terminal = view
-                    .clone()
-                    .cached(StyleRefinement::default().size_full())
+                // Named after its pane, as the card around it is: drawn in its own layer, the terminal is no longer
+                // inside the card's group, and a screen reader would lose which pane it is.
+                let terminal = div()
+                    .id(("terminal-pane", pane))
+                    .size_full()
+                    .role(gpui::Role::Group)
+                    .aria_label(self.pane_title(pane, cx))
+                    .child(view.clone().cached(StyleRefinement::default().size_full()))
                     .into_any_element();
                 Some((pane_card::terminal_slot(pane), terminal))
             })
@@ -971,7 +976,7 @@ impl Render for Workspace {
                     .children(sidebar)
                     .child(main)
                     // Over the main column, as if in it: what draws over the terminals in it follows.
-                    .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals()))
+                    .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     .child(ui::slot_layer(
                         QUICK,
                         self.quick_layer(cx)
