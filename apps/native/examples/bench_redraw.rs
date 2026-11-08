@@ -1,6 +1,7 @@
 //! What a frame costs the window while an agent works: one drawn after the visible terminal is told to redraw with nothing
 //! new on it, one drawn for the working agent's spinner alone, 30 times a second, one after output that changes a
-//! single row (Claude Code's spinner and timer line), and one after output that scrolls the whole screen. Offscreen,
+//! single row (Claude Code's spinner and timer line), one after output that scrolls the whole screen, and the one-row
+//! frame again with the tab split in two, the other pane full of text too. Offscreen,
 //! with 16 made-up projects in the sidebar, a made-up Claude Code (a renamed `sleep`) working in the first pane, and the
 //! components page open as a plugin's sidebar on the right.
 //!
@@ -124,8 +125,9 @@ fn main() {
         })
         .unwrap();
 
-    // `-- <png>` saves the window as measured, to check what the frames draw.
-    if let Some(path) = std::env::args().nth(1) {
+    // `-- <png>` saves the window as measured, to check what the frames draw, and `<png>` with `.split.png` for its ending the split tab.
+    let png = std::env::args().nth(1);
+    if let Some(path) = &png {
         cx.capture_screenshot(window).unwrap().save(path).unwrap();
     }
     let report = |what: &str, mut frames: Vec<Duration>| {
@@ -173,18 +175,18 @@ fn main() {
         start.elapsed()
     };
     // Claude Code's spinner line, three rows from the bottom, with a new spinner frame, time and token count each time.
-    let spinner = ['·', '✢', '✳', '✶', '✻', '✽'];
+    let spinner_line = |i: usize| {
+        let spinner = ['·', '✢', '✳', '✶', '✻', '✽'];
+        format!(
+            "\x1b7\x1b[999;1H\x1b[3A\x1b[38;5;174m{} Refactoring the API client…\x1b[0m \x1b[2m({}s · ↓ {:.1}k tokens · esc to interrupt)\x1b[0m\x1b[K\x1b8",
+            spinner[i % spinner.len()],
+            i / 30,
+            i as f32 / 10.0,
+        )
+    };
     let mut frames = Vec::new();
     for i in 0..300 {
-        frames.push(output_frame(
-            &mut cx,
-            format!(
-                "\x1b7\x1b[999;1H\x1b[3A\x1b[38;5;174m{} Refactoring the API client…\x1b[0m \x1b[2m({}s · ↓ {:.1}k tokens · esc to interrupt)\x1b[0m\x1b[K\x1b8",
-                spinner[i % spinner.len()],
-                i / 30,
-                i as f32 / 10.0,
-            ),
-        ));
+        frames.push(output_frame(&mut cx, spinner_line(i)));
     }
     report("frame after output that changes one row", frames);
     // A screenful of new lines, so every row shows something else.
@@ -204,6 +206,31 @@ fn main() {
         frames.push(output_frame(&mut cx, screen));
     }
     report("frame after output that scrolls the whole screen", frames);
+    // Split right; the new pane shows the same screen, and the first one goes on working.
+    cx.simulate_keystrokes(window, "cmd-d");
+    settle(&mut cx, Duration::from_secs(2));
+    cx.simulate_input(window, &format!("cat '{}'", screen.display()));
+    cx.simulate_keystrokes(window, "enter");
+    settle(&mut cx, Duration::from_secs(2));
+    if let Some(path) = &png {
+        let split = std::path::Path::new(path).with_extension("split.png");
+        cx.capture_screenshot(window).unwrap().save(split).unwrap();
+    }
+    let mut frames = Vec::new();
+    for i in 0..300 {
+        frames.push(output_frame(&mut cx, spinner_line(i)));
+    }
+    report(
+        "frame after output that changes one row, in one of two panes",
+        frames,
+    );
+    // `<png>` with `.quick.png` for its ending: a floating quick terminal over the split tab.
+    if let Some(path) = &png {
+        cx.simulate_keystrokes(window, "ctrl-`");
+        settle(&mut cx, Duration::from_secs(2));
+        let quick = std::path::Path::new(path).with_extension("quick.png");
+        cx.capture_screenshot(window).unwrap().save(quick).unwrap();
+    }
     let _ = std::process::Command::new("pkill")
         .args(["-f", &fake_claude.display().to_string()])
         .status();
