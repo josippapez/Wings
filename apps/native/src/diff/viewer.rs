@@ -5,6 +5,7 @@ mod threads;
 use super::{
     Update, View,
     comments::{self, Comment, Thread},
+    highlight::{self, FileColors, Span},
     patch::{DiffLine, DiffLineKind, DiffStatus},
     rows::{CodeRow, ListRow, Notes, code_rows, file_path, list_rows, with_notes},
 };
@@ -17,9 +18,9 @@ use crate::{
 };
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    KeyDownEvent, ListAlignment, ListOffset, ListState, Pixels, Role, ScrollEvent, ScrollStrategy,
-    SharedString, Stateful, Subscription, Task, UniformListScrollHandle, Window, div, list, point,
-    prelude::*, px, rgb, rgba, uniform_list,
+    HighlightStyle, KeyDownEvent, ListAlignment, ListOffset, ListState, Pixels, Role, ScrollEvent,
+    ScrollStrategy, SharedString, Stateful, StyledText, Subscription, Task,
+    UniformListScrollHandle, Window, div, list, point, prelude::*, px, rgb, rgba, uniform_list,
 };
 use std::{
     cell::RefCell,
@@ -79,6 +80,10 @@ pub struct Viewer {
     widest: usize,
     /// Each file's added and removed lines, for the file list and the header's totals.
     counts: Vec<(usize, usize)>,
+    /// The syntax colours of the files opened so far, by index. A file shows plain until its colours come.
+    colors: HashMap<usize, FileColors>,
+    /// The open file's colours being worked out off the window's thread, for that file of that patch.
+    coloring: Option<(usize, Arc<super::patch::Diff>, Task<()>)>,
     code_width: f32,
     scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
@@ -169,6 +174,8 @@ impl Viewer {
             split_x: px(0.0),
             widest: 0,
             counts: Vec::new(),
+            colors: HashMap::new(),
+            coloring: None,
             code_width: 0.0,
             scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
@@ -298,6 +305,10 @@ impl Viewer {
         let mut rebuild = update.focus.is_some();
         if let Some(patch) = update.patch {
             rebuild |= self.view.update.patch.as_ref() != Some(&patch);
+            // A file that didn't change keeps its colours, so a live diff's reload doesn't draw it plain again.
+            let old = self.view.update.patch.as_deref();
+            self.colors
+                .retain(|at, _| old.and_then(|old| old.files.get(*at)) == patch.files.get(*at));
             self.view.update.patch = Some(patch);
             self.view.update.error = None;
         }
@@ -447,7 +458,7 @@ impl Viewer {
         self.wrap || !self.notes.is_empty()
     }
 
-    fn rebuild(&mut self, cx: &App) {
+    fn rebuild(&mut self, cx: &mut Context<Self>) {
         self.rows.clear();
         self.notes.clear();
         self.relist(cx);
@@ -482,6 +493,7 @@ impl Viewer {
         };
         let rows = code_rows(&file.hunks, self.split());
         self.place_notes(rows);
+        self.color_file(cx);
         let diff = self.view.update.patch.as_ref().unwrap();
         let file = &diff.files[self.selected];
         let focus = self.view.update.focus.as_ref().filter(|f| f.line.is_some());
@@ -519,6 +531,51 @@ impl Viewer {
             item_ix: target,
             offset_in_item: px(0.0),
         });
+    }
+
+    /// Works out the open file's syntax colours off the window's thread, unless they're known or under way.
+    fn color_file(&mut self, cx: &mut Context<Self>) {
+        let (index, Some(diff)) = (self.selected, self.view.update.patch.clone()) else {
+            return;
+        };
+        let under_way = self
+            .coloring
+            .as_ref()
+            .is_some_and(|(at, of, _)| *at == index && Arc::ptr_eq(of, &diff));
+        if self.colors.contains_key(&index) || under_way || index >= diff.files.len() {
+            return;
+        }
+        let work = cx.background_executor().spawn({
+            let diff = diff.clone();
+            async move { highlight::file_colors(&diff.files[index]) }
+        });
+        let task = cx.spawn({
+            let diff = diff.clone();
+            async move |this, cx| {
+                let colors = work.await;
+                let _ = this.update(cx, |this, cx| {
+                    if this
+                        .view
+                        .update
+                        .patch
+                        .as_ref()
+                        .is_some_and(|now| Arc::ptr_eq(now, &diff))
+                    {
+                        this.colors.insert(index, colors);
+                        cx.notify();
+                    }
+                });
+            }
+        });
+        self.coloring = Some((index, diff, task));
+    }
+
+    /// A line's colours on its old side or its new one, or none until they come.
+    fn spans(&self, hunk: usize, line: usize, old: bool) -> &[Span] {
+        self.colors
+            .get(&self.selected)
+            .and_then(|file| file.get(hunk)?.get(line))
+            .map_or(&[], |colors| if old { &colors.old } else { &colors.new })
     }
 
     /// Moves unwrapped side-by-side code sideways, as far as its longest line goes.
@@ -752,6 +809,8 @@ impl Viewer {
             CodeRow::Line(h, l) => {
                 let line = &file.hunks[h].lines[l];
                 let (mark, color, bg) = colors(line.kind);
+                // One column shows a removed line as the old file has it, else as the new one does, as the desktop.
+                let spans = self.spans(h, l, line.kind == DiffLineKind::Deleted);
                 // In the list of `varied_rows` the text moves sideways on its own, under the line numbers.
                 let text = if self.varied_rows() && !self.wrap {
                     div()
@@ -759,9 +818,9 @@ impl Viewer {
                         .min_w_0()
                         .flex()
                         .overflow_hidden()
-                        .child(self.code_text(line, self.split_x))
+                        .child(self.code_text(line, spans, self.split_x))
                 } else {
-                    self.code_text(line, px(0.0))
+                    self.code_text(line, spans, px(0.0))
                 };
                 row.bg(rgba(bg))
                     .text_color(rgb(color))
@@ -773,9 +832,11 @@ impl Viewer {
             }
             CodeRow::Split { hunk, left, right } => {
                 let lines = &file.hunks[hunk].lines;
-                row.child(self.split_side(left.map(|l| &lines[l]), true))
+                let side =
+                    |at: Option<usize>, old| at.map(|l| (&lines[l], self.spans(hunk, l, old)));
+                row.child(self.split_side(side(left, true), true))
                     .child(div().w(px(1.0)).flex_none().bg(rgba(ui::HAIRLINE)))
-                    .child(self.split_side(right.map(|l| &lines[l]), false))
+                    .child(self.split_side(side(right, false), false))
                     .into_any_element()
             }
             CodeRow::Notes(n) => self.notes_row(&self.notes[n], cx),
@@ -783,9 +844,9 @@ impl Viewer {
     }
 
     /// One column of a side-by-side row: the old file's line on the left, the new one's on the right.
-    fn split_side(&self, line: Option<&DiffLine>, old: bool) -> Div {
+    fn split_side(&self, line: Option<(&DiffLine, &[Span])>, old: bool) -> Div {
         let side = div().flex_1().min_w_0().flex().overflow_hidden();
-        let Some(line) = line else {
+        let Some((line, spans)) = line else {
             return side;
         };
         let (mark, color, bg) = colors(line.kind);
@@ -793,11 +854,23 @@ impl Viewer {
             .text_color(rgb(color))
             .child(number(if old { line.old_line } else { line.new_line }))
             .child(div().w(px(22.0)).flex_none().child(mark))
-            .child(self.code_text(line, self.split_x))
+            .child(self.code_text(line, spans, self.split_x))
     }
 
-    /// A line's text, moved left by `shift` when unwrapped side by side.
-    fn code_text(&self, line: &DiffLine, shift: Pixels) -> Div {
+    /// A line's text in its syntax colours, moved left by `shift` when unwrapped side by side. As on the desktop, a
+    /// changed line keeps its colours on its green or red background.
+    fn code_text(&self, line: &DiffLine, spans: &[Span], shift: Pixels) -> Div {
+        let mut start = 0;
+        let highlights = spans.iter().map(|span| {
+            let range = start..span.end;
+            start = span.end;
+            let style = HighlightStyle {
+                color: Some(rgb(span.color).into()),
+                font_style: span.italic.then_some(gpui::FontStyle::Italic),
+                ..HighlightStyle::default()
+            };
+            (range, style)
+        });
         let text = format!(
             "{}{}",
             line.text,
@@ -807,10 +880,12 @@ impl Viewer {
                 ""
             }
         );
+        let text = StyledText::new(text).with_highlights(highlights.collect::<Vec<_>>());
+        let code = div().text_color(rgb(highlight::FOREGROUND));
         if self.wrap {
-            div().flex_1().min_w_0().pr(px(12.0)).child(text)
+            code.flex_1().min_w_0().pr(px(12.0)).child(text)
         } else {
-            div().flex_none().ml(-shift).child(text)
+            code.flex_none().ml(-shift).child(text)
         }
     }
 
@@ -1192,7 +1267,7 @@ impl Viewer {
     }
 }
 
-/// A line's mark, text colour and background.
+/// A line's mark, the mark's colour and the line's background.
 fn colors(kind: DiffLineKind) -> (&'static str, u32, u32) {
     match kind {
         DiffLineKind::Added => ("+", theme::DONE, 0x7dd3a712),
@@ -1944,6 +2019,113 @@ mod comment_tests {
             assert_eq!(v.threads[0].replies.len(), 1);
             let top = v.wrapped.logical_scroll_top();
             assert_eq!((top.item_ix, top.offset_in_item), (11, px(40.0)));
+        });
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod color_tests {
+    use super::*;
+    use crate::{
+        diff::{self, patch::parse_patch},
+        page::plugin::PluginConfig,
+    };
+    use gpui::TestApp;
+
+    fn view(patch: &str) -> View {
+        View {
+            id: "test:3".into(),
+            plugin_id: "test".into(),
+            title: "Changes".into(),
+            subtitle: String::new(),
+            cwd: String::new(),
+            refresh: false,
+            update: diff::clean_update(&serde_json::json!({ "patch": patch })).unwrap(),
+        }
+    }
+
+    fn host() -> Arc<PluginHost> {
+        Arc::new(PluginHost::new(PluginConfig {
+            id: "test".into(),
+            root: std::env::temp_dir(),
+            scope: "test".into(),
+        }))
+    }
+
+    /// The colour of the stretch of `spans` that holds byte `at`.
+    fn color_at(spans: &[Span], at: usize) -> Option<u32> {
+        spans
+            .iter()
+            .find(|span| span.end > at)
+            .map(|span| span.color)
+    }
+
+    #[test]
+    fn a_big_file_opens_plain_and_takes_its_colours_from_off_the_window_thread() {
+        let lines: String = (0..10_000)
+            .map(|i| format!("+let value_{i} = compute({i}); // note\n"))
+            .collect();
+        let patch = format!(
+            "diff --git a/src/big.rs b/src/big.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/big.rs\n@@ -0,0 +1,10000 @@\n{lines}"
+        );
+        let (view, host) = (view(&patch), host());
+        let mut app = TestApp::new();
+        let (window, at_open) = app.update(|cx| {
+            let window = cx
+                .open_window(Default::default(), |_, cx| {
+                    cx.new(|cx| Viewer::new(view, host, cx))
+                })
+                .unwrap();
+            (
+                window,
+                window.read_with(cx, |v, _| !v.colors.is_empty()).unwrap(),
+            )
+        });
+        assert!(
+            !at_open,
+            "the colours were worked out before the diff opened"
+        );
+        // The work ran once the window's thread was free, and the lines take the desktop's colours.
+        let spans = app.read(|cx| {
+            window
+                .read_with(cx, |v, _| v.spans(0, 9_999, false).to_vec())
+                .unwrap()
+        });
+        let text = "let value_9999 = compute(9999); // note";
+        assert_eq!(
+            color_at(&spans, text.find("9999)").unwrap()),
+            Some(0x68cdf2)
+        );
+        assert_eq!(color_at(&spans, text.find("//").unwrap()), Some(0x737373));
+    }
+
+    #[test]
+    fn a_reload_keeps_the_colours_of_files_that_did_not_change() {
+        let patch = |b: &str| {
+            format!(
+                "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-let a = 1;\n+let a = 2;\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1 +1 @@\n-let b = 1;\n+{b}\n"
+            )
+        };
+        let (view, host) = (view(&patch("let b = 2;")), host());
+        let mut app = TestApp::new();
+        let mut window = app.open_window(move |_, cx| Viewer::new(view, host, cx));
+        window.update(|v, _, cx| v.select_file(1, cx));
+        window.read(|v, _| assert_eq!(v.colors.len(), 2));
+        // b.rs changes, and is the file open: a.rs keeps its colours and b.rs takes its new line's.
+        let changed = Arc::new(parse_patch(&patch("let b = 3; // three")).unwrap());
+        window.update(|v, _, cx| {
+            v.update(
+                Update {
+                    patch: Some(changed),
+                    ..Update::default()
+                },
+                cx,
+            );
+            assert!(v.colors.contains_key(&0) && !v.colors.contains_key(&1));
+        });
+        window.read(|v, _| {
+            let at = "let b = 3; // three".find("//").unwrap();
+            assert_eq!(color_at(v.spans(0, 1, false), at), Some(0x737373));
         });
     }
 }

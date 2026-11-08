@@ -1,6 +1,7 @@
-//! What a frame costs while a big diff scrolls: a made-up file of 10,000 changed and unchanged lines, scrolled three
-//! rows a frame by the mouse wheel, in one column and side by side, without review comments and with 300 threads of a
-//! comment and two replies each spread through it. Offscreen, in a 1000 x 640 window filled by the diff.
+//! What a frame costs while a big diff scrolls: a made-up file of 10,000 changed and unchanged lines, drawn plain first
+//! and then in its syntax colours, scrolled three rows a frame by the mouse wheel, in one column and side by side,
+//! without review comments and with 300 threads of a comment and two replies each spread through it. Offscreen, in a
+//! 1000 x 640 window filled by the diff.
 //!
 //! cargo run --release --manifest-path apps/native/Cargo.toml --example bench_diff_scroll --features test-support
 //!
@@ -145,9 +146,13 @@ fn main() {
             let draw = |cx: &mut VisualTestAppContext| {
                 let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
             };
-            cx.run_until_parked();
+            // The first frame, as the window shows it before the code's colours come.
             draw(&mut cx);
             let first = opened.elapsed();
+            // Here the test dispatcher works out the colours on this thread; the app does it on a background one.
+            cx.run_until_parked();
+            draw(&mut cx);
+            let colored = opened.elapsed();
             let mut frames = Vec::new();
             for _ in 0..400 {
                 let start = Instant::now();
@@ -173,8 +178,9 @@ fn main() {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             let mean = frames.iter().sum::<Duration>() / frames.len() as u32;
             println!(
-                "{what}: first frame {:.1} ms; scrolling median {:.2} ms, mean {:.2} ms, p90 {:.2} ms, max {:.2} ms ({} frames)",
+                "{what}: first frame {:.1} ms, coloured by {:.1} ms; scrolling median {:.2} ms, mean {:.2} ms, p90 {:.2} ms, max {:.2} ms ({} frames)",
                 ms(first),
+                ms(colored),
                 ms(frames[frames.len() / 2]),
                 ms(mean),
                 ms(frames[frames.len() * 9 / 10]),

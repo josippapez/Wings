@@ -1,5 +1,7 @@
 //! The central plugin diff contract and parsed, browser-free patches.
 pub mod comments;
+#[cfg(feature = "ui")]
+pub mod highlight;
 pub mod patch;
 pub mod rows;
 #[cfg(feature = "ui")]

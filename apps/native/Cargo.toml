@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey", "dep:raw-window-handle"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:global-hotkey", "dep:raw-window-handle", "dep:syntect", "dep:two-face"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 # The build that replaces the desktop app: `Wings.app` on the desktop's data folder (`src/data_dir.rs`), made by
@@ -66,6 +66,10 @@ plist = "1.10.1"
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# A diff's syntax colours (`diff/highlight.rs`): TextMate-style grammars, so the desktop's pierre-dark theme applies as is,
+# and two-face adds bat's TypeScript, TSX, TOML and Dockerfile grammars that syntect's own set lacks.
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "dump-load", "regex-onig"], optional = true }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"], optional = true }
 # The frames of the images terminals draw, the version GPUI's own `RenderImage` is made of.
 image = { version = "0.25.10", default-features = false, optional = true }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, optional = true }
