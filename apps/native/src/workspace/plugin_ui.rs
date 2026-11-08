@@ -567,50 +567,121 @@ impl Workspace {
     /// The project bar's plugin buttons, as the desktop's: the pinned ones in the order they were pinned, then others up
     /// to `INLINE_BUTTONS`, and a menu of the rest that also chooses which stay in the bar.
     pub(super) fn sidebar_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let all: Vec<_> = self
+        // As the desktop's `pagesOf`: each plugin's sidebars, then its pages with a button that open as a tab or a
+        // window (the places a native page can open from here).
+        let all: Vec<BarButton> = self
             .plugins
             .iter()
             .flat_map(|installed| {
-                installed
-                    .sidebars
+                let sidebars = installed.sidebars.iter().map(move |sidebar| BarButton {
+                    installed,
+                    id: sidebar.id.clone(),
+                    title: sidebar.title.clone(),
+                    kind: Kind::Sidebar(sidebar),
+                });
+                let views = installed
+                    .plugin
+                    .manifest
+                    .contributes
+                    .views
                     .iter()
-                    .map(move |sidebar| (installed, sidebar))
+                    .filter(|view| view.button)
+                    .filter(|view| installed.pages.iter().any(|page| page.id == view.id))
+                    .filter_map(move |view| {
+                        let kind = match view.opens.first()?.as_str() {
+                            "tab" => Kind::Tab,
+                            "window" => Kind::Window,
+                            _ => return None,
+                        };
+                        Some(BarButton {
+                            installed,
+                            id: view.id.clone(),
+                            title: view.title.clone(),
+                            kind,
+                        })
+                    });
+                sidebars.chain(views)
             })
             .collect();
-        let key_of = |(installed, sidebar): &(&Installed, &crate::installed::Sidebar)| {
-            format!("{}:{}", installed.id, sidebar.id)
-        };
-        let keys: Vec<String> = all.iter().map(key_of).collect();
+        let keys: Vec<String> = all.iter().map(BarButton::key).collect();
         let (inline, overflow) = split_buttons(&keys, &self.plugin_ui.pinned);
         let pinned_any = inline
             .iter()
             .any(|at| self.plugin_ui.pinned.contains(&keys[*at]));
-        let overflow: Vec<_> = overflow.iter().map(|at| all[*at]).collect();
         let mut buttons: Vec<AnyElement> = inline
             .iter()
-            .map(|at| self.sidebar_button(all[*at].0, all[*at].1, cx))
+            .map(|at| self.bar_button(&all[*at], cx))
             .collect();
         if !overflow.is_empty() || pinned_any {
+            let overflow: Vec<&BarButton> = overflow.iter().map(|at| &all[*at]).collect();
             let keys: Vec<_> = all
                 .iter()
-                .map(|button| (key_of(button), button.1.title.clone()))
+                .map(|button| (button.key(), button.title.clone()))
                 .collect();
             buttons.push(self.buttons_menu(&overflow, keys, cx));
         }
         buttons
     }
 
+    fn bar_button(&self, button: &BarButton, cx: &mut Context<Self>) -> AnyElement {
+        let installed = button.installed;
+        let (plugin, id) = (installed.id.clone(), button.id.clone());
+        let opens = match button.kind {
+            Kind::Sidebar(sidebar) => return self.sidebar_button(installed, sidebar, cx),
+            Kind::Tab => Kind::Tab,
+            Kind::Window => Kind::Window,
+        };
+        let shown = matches!(opens, Kind::Tab)
+            && matches!(self.active, super::Active::Plugin(tab)
+                if self.plugin_tabs.iter().any(|t| t.id == tab && t.plugin == plugin && t.view == id));
+        ui::untipped_ghost_button(
+            SharedString::from(format!("plugin-view-{plugin}-{id}")),
+            button.title.clone(),
+            ButtonSize::Sm,
+            Some(shown),
+            button.glyph(16.0),
+        )
+        .tooltip(ui::tooltip(button.title.clone(), None))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_bar_view(&plugin, &id, &opens, window, cx)
+        }))
+        .into_any_element()
+    }
+
+    /// Opens a page from its bar button, in the first place its manifest lists.
+    fn open_bar_view(
+        &mut self,
+        plugin: &str,
+        id: &str,
+        opens: &Kind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.plugin_ui.buttons_menu = false;
+        match opens {
+            Kind::Window => {
+                if let Err(error) = self.open_plugin_window(plugin, id, cx) {
+                    eprintln!("Couldn't open {plugin}'s {id}: {error}");
+                }
+            }
+            _ => {
+                self.open_plugin_view(plugin, id, None, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
     /// The "…" after the plugin buttons: the ones that didn't fit, then "Keep in bar" with a check by each pinned one.
     fn buttons_menu(
         &self,
-        overflow: &[(&Installed, &crate::installed::Sidebar)],
+        overflow: &[&BarButton],
         all: Vec<(String, String)>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut items: Vec<AnyElement> = overflow
             .iter()
-            .map(|(installed, sidebar)| {
-                let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
+            .map(|button| {
+                let (plugin, page) = (button.installed.id.clone(), button.id.clone());
                 // A live label, like a running timer, after the title as in the bar.
                 let label = self
                     .plugin_ui
@@ -628,15 +699,23 @@ impl Workspace {
                             .child(ui::dot(tone_dot(label.tone)))
                             .child(div().min_w_0().truncate().child(label.text.clone()))
                     });
+                let opens = match button.kind {
+                    Kind::Sidebar(_) => None,
+                    Kind::Tab => Some(Kind::Tab),
+                    Kind::Window => Some(Kind::Window),
+                };
                 ui::select_item_with(
                     SharedString::from(format!("plugin-more-{plugin}-{page}")),
-                    sidebar_glyph(installed, &page, 16.0),
-                    sidebar.title.clone(),
+                    button.glyph(16.0),
+                    button.title.clone(),
                 )
                 .children(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.plugin_ui.buttons_menu = false;
-                    this.toggle_sidebar(&plugin, &page, cx);
+                .on_click(cx.listener(move |this, _, window, cx| match &opens {
+                    None => {
+                        this.plugin_ui.buttons_menu = false;
+                        this.toggle_sidebar(&plugin, &page, cx);
+                    }
+                    Some(opens) => this.open_bar_view(&plugin, &page, opens, window, cx),
                 }))
                 .into_any_element()
             })
@@ -1406,6 +1485,51 @@ impl Workspace {
     }
 }
 
+/// What a plugin button in the project bar opens.
+enum Kind<'a> {
+    Sidebar(&'a crate::installed::Sidebar),
+    Tab,
+    Window,
+}
+
+/// One of the project bar's plugin buttons: a sidebar, or a page that opens as a tab or a window.
+struct BarButton<'a> {
+    installed: &'a Installed,
+    id: String,
+    title: String,
+    kind: Kind<'a>,
+}
+
+impl BarButton<'_> {
+    /// As the desktop's button keys, which pins are saved by.
+    fn key(&self) -> String {
+        format!("{}:{}", self.installed.id, self.id)
+    }
+
+    fn glyph(&self, size: f32) -> AnyElement {
+        match self.kind {
+            Kind::Sidebar(_) => sidebar_glyph(self.installed, &self.id, size),
+            _ => {
+                let named = self
+                    .installed
+                    .plugin
+                    .manifest
+                    .contributes
+                    .views
+                    .iter()
+                    .find(|view| view.id == self.id)
+                    .map_or("", |view| view.icon.as_str());
+                plugin_glyph(
+                    named,
+                    self.installed.plugin.icon_svg.as_deref(),
+                    size,
+                    theme::MUTED_FOREGROUND,
+                )
+            }
+        }
+    }
+}
+
 /// Which plugin buttons show in the bar and which go in its menu, by index into `keys`, as the desktop's `ProjectBar`:
 /// the pinned ones in the order they were pinned, then the others in order up to `INLINE_BUTTONS`.
 fn split_buttons(keys: &[String], pinned: &[String]) -> (Vec<usize>, Vec<usize>) {
@@ -1450,5 +1574,47 @@ mod pin_tests {
             split_buttons(&all, &keys(&["gone:1"])),
             (vec![0, 1, 2], vec![3, 4])
         );
+    }
+}
+
+#[cfg(test)]
+mod bar_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::super::plugin_tests::open_plugins;
+    use super::Kind;
+    use crate::installed::fixture::Data;
+
+    const PAGE: &str = r#"
+const { h, mount } = wings.ui;
+mount(h('Page', null, h('Text', null, 'A page')));
+"#;
+
+    /// As the desktop's bar: a plugin's pages that open as a tab or a window get a button beside its sidebars, unless
+    /// the manifest says `button: false`, and a tab page's button opens it as a tab.
+    #[test]
+    fn a_plugins_tab_pages_get_bar_buttons_beside_its_sidebars() {
+        let data = Data::temp();
+        data.install_script(
+            "disk",
+            json!({ "contributes": {
+                "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }],
+                "views": [
+                    { "id": "map", "title": "Disk usage", "page": "dist/map.html", "opens": ["tab"] },
+                    { "id": "one", "title": "One item", "page": "dist/one.html", "opens": ["tab"], "button": false },
+                ],
+            } }),
+            "",
+            &[("side", PAGE), ("map", PAGE), ("one", PAGE)],
+            "disk-scope",
+        );
+        let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+        window.update(|w, window, cx| {
+            assert_eq!(w.sidebar_buttons(cx).len(), 2, "the sidebar and Disk usage, not One item");
+            w.open_bar_view("disk", "map", &Kind::Tab, window, cx);
+            assert!(w.plugin_tabs.iter().any(|tab| tab.plugin == "disk" && tab.view == "map"));
+        });
     }
 }
