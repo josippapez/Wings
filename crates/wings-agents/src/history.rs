@@ -17,7 +17,7 @@
 //! tokenizer, which keeps substring matching.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, fs,
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -688,6 +688,10 @@ impl History {
             .filter(|(_, _, s)| !s.messages.is_empty() && project.is_none_or(|p| s.in_project(p)))
             .collect();
         scope.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.id.cmp(&b.2.id)));
+        // Resuming a session in another account copies its transcript there, so one session can have two: list the one
+        // that moved on last.
+        let mut seen = HashSet::new();
+        scope.retain(|(_, _, s)| seen.insert(s.id.as_str()));
         let mut branches = Vec::new();
         for (_, _, s) in &scope {
             for branch in s.branches.iter().rev() {
@@ -1148,6 +1152,20 @@ mod tests {
         found.sort();
         assert_eq!(found, [("a", Some(mine.as_path())), ("b", Some(theirs.as_path()))]);
         assert!(serde_json::to_value(&results).unwrap()["sessions"][0].get("transcript").is_none(), "the MCP tool's answer stays as it was");
+        let _ = (fs::remove_dir_all(&default), fs::remove_dir_all(&work));
+    }
+
+    #[test]
+    fn a_session_copied_into_another_account_is_listed_once_as_the_copy_that_moved_on_last() {
+        let (default, work) = (temp_claude_dir("copied-default"), temp_claude_dir("copied-work"));
+        let original = transcript(&work, "/w/app", "a", &[user("/w/app", "main", "Fix the login")]);
+        let copy = transcript(&default, "/w/app", "a", &[user("/w/app", "main", "Fix the login"), assistant("Done")]);
+        let earlier = std::time::SystemTime::now() - Duration::from_secs(60);
+        fs::File::options().write(true).open(&original).unwrap().set_modified(earlier).unwrap();
+        let results = History::default().search(&[default.clone(), work.clone()], "", &Filter::default(), 10);
+        let found: Vec<Option<&Path>> = results.sessions.iter().map(|h| h.transcript.as_deref()).collect();
+        assert_eq!(found, [Some(copy.as_path())]);
+        assert_eq!(results.total, 1);
         let _ = (fs::remove_dir_all(&default), fs::remove_dir_all(&work));
     }
 
