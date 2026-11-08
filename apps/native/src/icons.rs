@@ -115,6 +115,7 @@ icons!(
     Trash = "trash",
     Type = "type",
     User = "user",
+    Wrench = "wrench",
     X = "x",
 );
 

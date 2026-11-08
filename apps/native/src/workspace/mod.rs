@@ -56,6 +56,7 @@ mod tests;
 mod title_bar;
 mod updater;
 mod welcome;
+mod worktree_setup;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -251,6 +252,7 @@ pub struct Workspace {
     review_focus: FocusHandle,
     /// Setup commands agents asked to set, waiting for you.
     setup_asks: setup_approval::SetupAsks,
+    worktree_setup: Option<worktree_setup::WorktreeSetupDialog>,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -386,6 +388,7 @@ impl Workspace {
             manage: Default::default(),
             review_focus: cx.focus_handle(),
             setup_asks: Default::default(),
+            worktree_setup: None,
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {

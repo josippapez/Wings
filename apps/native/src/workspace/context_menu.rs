@@ -283,6 +283,12 @@ impl Workspace {
                 at(|this, path, window, cx| this.open_project_page(path, window, cx)),
             ),
             Item(
+                Icon::Wrench,
+                "Worktree setup…".into(),
+                false,
+                at(|this, path, window, cx| this.open_worktree_setup(path, window, cx)),
+            ),
+            Item(
                 Icon::FolderOpen,
                 reveal_label().into(),
                 false,

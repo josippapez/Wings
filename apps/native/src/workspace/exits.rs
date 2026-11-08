@@ -258,6 +258,12 @@ impl Workspace {
             Self::setup_approval_dialog,
             cx,
         );
+        let worktree_setup = self.layer(
+            "worktree-setup",
+            |this| &mut this.worktree_setup,
+            |this, cx| this.worktree_setup_dialog(window, cx),
+            cx,
+        );
         let sheet = self.layer("sheet", |this| &mut this.sheet, Self::sheet_layer, cx);
         let palette = self.layer(
             "palette",
@@ -278,6 +284,7 @@ impl Workspace {
             dialog("settings", settings),
             dialog("plugin-review", review),
             dialog("setup-approval", setup),
+            dialog("worktree-setup", worktree_setup),
             sheet.map(|(sheet, phase)| motion::sheet_layer(phase, sheet)),
             dialog("palette", palette),
             dialog("remove", remove),

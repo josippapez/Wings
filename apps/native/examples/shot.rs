@@ -52,6 +52,23 @@ fn spot(name: &str) -> gpui::Point<gpui::Pixels> {
         .center()
 }
 
+fn right_click(
+    cx: &mut VisualTestAppContext,
+    window: AnyWindowHandle,
+    position: gpui::Point<gpui::Pixels>,
+) {
+    cx.simulate_event(
+        window,
+        MouseDownEvent {
+            position,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        },
+    );
+}
+
 fn click(
     cx: &mut VisualTestAppContext,
     window: AnyWindowHandle,
@@ -695,6 +712,15 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         save(cx, window, &name("sort-closing"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("sorted"));
+        // The project's menu, and its Worktree setup.
+        right_click(cx, window, spot("project:acme-api"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("menu"));
+        click(cx, window, spot("menu:Worktree setup…"));
+        wait(cx, window, Duration::from_millis(400));
+        save(cx, window, &name("worktree-setup"));
+        cx.simulate_keystrokes(window, "escape");
+        wait(cx, window, Duration::from_millis(300));
         // "Older" is closed under the list; open it.
         click(cx, window, spot("older"));
         wait(cx, window, Duration::from_millis(300));

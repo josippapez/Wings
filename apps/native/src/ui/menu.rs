@@ -97,8 +97,10 @@ pub fn menu_item_with(
         .text_size(px(14.0))
         .text_color(rgb(color))
         .whitespace_nowrap()
+        .relative()
+        .children(super::spot(|| format!("menu:{label}")))
         .child(glyph)
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(div().flex_1().min_w_0().truncate().child(label.clone()))
         .when(disabled, |item| {
             item.opacity(0.5).a11y_synthetic_children(|builder| {
                 builder.parent_node().set_disabled();
