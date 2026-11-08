@@ -309,6 +309,68 @@ fn the_wheel_scrolls_history_and_typing_returns_to_the_bottom() {
 }
 
 #[test]
+fn a_frame_shapes_again_only_the_rows_whose_text_or_cursor_changed() {
+    let (app, mut window) = open("printf 'one\\ntwo\\nthree'; sleep 30");
+    // Settled once the grid has its fitted size too, so no resize comes into the counts.
+    settle(&app, &mut window, |view| {
+        shows("three")(view)
+            && view.geometry.is_some_and(|fitted| {
+                (fitted.cols as usize, fitted.rows as usize)
+                    == (view.snapshot.cols, view.snapshot.rows)
+            })
+    });
+    window.update(|view, window, cx| {
+        window.activate_window();
+        view.focus.focus(window, cx);
+    });
+    window.draw();
+    let shaped = |window: &mut View| {
+        window.draw();
+        window.update(|view, _, _| std::mem::take(&mut view.rows.shaped))
+    };
+    shaped(&mut window);
+    window.update(|_, _, cx| cx.notify());
+    assert_eq!(shaped(&mut window), 0, "nothing new");
+
+    // The program rewrites the second row and puts the cursor back.
+    window.read(|view, _| {
+        view.runtime
+            .output
+            .send_blocking(b"\x1b7\x1b[2;1HTWO\x1b8".to_vec())
+            .unwrap();
+        view.runtime
+            .commands
+            .send_blocking(Command::Output)
+            .unwrap();
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|view, _| visible_text(&view.latest.lock().unwrap()).contains("TWO")) {
+        assert!(Instant::now() < deadline, "the output never came");
+        thread::sleep(Duration::from_millis(10));
+    }
+    app.advance_clock(REDRAW_DELAY);
+    app.run_until_parked();
+    assert!(window.read(|view, _| visible_text(&view.snapshot).contains("TWO")));
+    assert_eq!(shaped(&mut window), 1, "the rewritten row");
+
+    // A blink changes how the cursor's row draws its character under the cursor.
+    app.advance_clock(BLINK_INTERVAL);
+    app.run_until_parked();
+    assert!(!window.read(|view, _| view.cursor_lit));
+    assert_eq!(shaped(&mut window), 1, "the cursor's row");
+
+    window.update(|_, _, cx| {
+        cx.set_global(TerminalLook {
+            min_contrast: 4.5,
+            ..TerminalLook::default()
+        })
+    });
+    let rows = window.read(|view, _| view.snapshot.rows);
+    assert_eq!(shaped(&mut window), rows, "every row in the new contrast");
+    window.update(|view, _, _| view.runtime.shutdown());
+}
+
+#[test]
 fn the_focused_cursor_blinks_until_blink_is_turned_off() {
     let (app, mut window) = open("printf ready; sleep 30");
     settle(&app, &mut window, shows("ready"));

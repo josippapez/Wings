@@ -1,12 +1,12 @@
 //! Drawing the terminal: glyph runs, the cell styles they use, and the view's render pass.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, ElementInputHandler, Global,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, Role, ShapedLine, StrikethroughStyle,
-    TextAlign, TextRun, UnderlineStyle, Window, canvas, div, fill, font, outline, point,
-    prelude::*, px, rgb, rgba, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, Role, ShapedLine, SharedString,
+    StrikethroughStyle, TextAlign, TextRun, UnderlineStyle, Window, canvas, div, fill, font,
+    outline, point, prelude::*, px, rgb, rgba, size,
 };
 use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags, ImageLayer};
 
@@ -81,11 +81,11 @@ fn readable(bg: u32, fg: u32, ratio: f32) -> u32 {
     }
 }
 
-/// The text style a cell draws with. A focused block cursor draws its cell in the background colour.
+/// The text style a cell draws with. Under the focused block cursor it draws in the `background` colour.
 fn cell_run(
     cell: &PaintCell,
-    snapshot: &Snapshot,
-    focused: bool,
+    block_cursor: bool,
+    background: u32,
     min_contrast: f32,
     base: &TextRun,
 ) -> TextRun {
@@ -96,12 +96,8 @@ fn cell_run(
     if cell.flags.contains(Flags::ITALIC) {
         run.font = run.font.italic();
     }
-    let block_cursor = focused
-        && snapshot.cursor.is_some_and(|(row, col, _, shape)| {
-            row == cell.row && col == cell.col && shape == CursorShape::Block
-        });
     run.color = rgb(if block_cursor {
-        snapshot.background
+        background
     } else if min_contrast > 1.0 {
         readable(cell.bg, cell.fg, min_contrast)
     } else {
@@ -128,10 +124,12 @@ fn cell_run(
 /// a place of its own in the window's draw order, which costs more than its glyphs, so styles share a line. Like the
 /// desktop's frame encoder, a line holds only characters that fill exactly one cell in any monospace font (printable
 /// ASCII, box drawing and blocks), so fixed-width shaping keeps every glyph on its cell. Anything else gets a line of
-/// its own. Blank cells inside a line become spaces.
+/// its own. Blank cells inside a line become spaces. The cell at `block_cursor`, (row, column), draws in the
+/// `background` colour.
 fn glyph_runs(
-    snapshot: &Snapshot,
-    focused: bool,
+    cells: &[PaintCell],
+    block_cursor: Option<(usize, usize)>,
+    background: u32,
     min_contrast: f32,
     base: &TextRun,
 ) -> Vec<(usize, usize, String, Vec<TextRun>)> {
@@ -164,14 +162,10 @@ fn glyph_runs(
     }
     let mut runs = Vec::new();
     let mut open: Option<Open> = None;
-    let block_cursor = snapshot
-        .cursor
-        .filter(|&(.., shape)| focused && shape == CursorShape::Block)
-        .map(|(row, col, ..)| (row, col));
     // What the open line's last style was made from: a cell with the same draws in that style, so most cells extend it
     // without making a style of their own to compare.
     let mut last_look = None;
-    for cell in &snapshot.cells {
+    for cell in cells {
         let next = |open: &Open| open.row == cell.row && open.col + open.cells == cell.col;
         if cell.text.is_empty() {
             if let Some(run) = &mut open
@@ -185,15 +179,11 @@ fn glyph_runs(
             }
             continue;
         }
-        let look = (
-            cell.flags,
-            cell.fg,
-            cell.bg,
-            block_cursor == Some((cell.row, cell.col)),
-        );
+        let cursor = block_cursor == Some((cell.row, cell.col));
+        let look = (cell.flags, cell.fg, cell.bg, cursor);
         let style = || TextRun {
             len: cell.text.len(),
-            ..cell_run(cell, snapshot, focused, min_contrast, base)
+            ..cell_run(cell, cursor, background, min_contrast, base)
         };
         if shares_cells(&cell.text)
             && let Some(run) = &mut open
@@ -268,6 +258,111 @@ fn spans(
     spans
 }
 
+/// Row `row` of `snapshot`'s cells; none past its last row.
+fn row_cells(snapshot: &Snapshot, row: usize) -> &[PaintCell] {
+    let cols = snapshot.cols;
+    snapshot
+        .cells
+        .get(row * cols..(row + 1) * cols)
+        .unwrap_or_default()
+}
+
+/// Whether two rows' cells draw the same text. What draws under or over the text, such as the selection and find
+/// matches, doesn't count.
+fn same_text(a: &[PaintCell], b: &[PaintCell]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| a.text == b.text && a.fg == b.fg && a.bg == b.bg && a.flags == b.flags)
+}
+
+/// A screen row's text, shaped, as (first column, line).
+pub(super) struct RowText {
+    /// The column of the focused block cursor on the row when it was shaped, whose character draws in the background
+    /// colour.
+    cursor: Option<usize>,
+    lines: Vec<(usize, ShapedLine)>,
+}
+
+/// What shaped text depends on besides the cells: the font family and size, the minimum contrast and the cell width.
+type Shaping = (SharedString, f32, f32, Pixels);
+
+/// Each screen row's text as last shaped. Usually only a row or two of a busy terminal changes between frames, such as
+/// an agent's spinner line, so a frame shapes only the rows whose cells or block cursor changed and keeps the rest.
+#[derive(Default)]
+pub(super) struct Rows {
+    rows: Vec<Option<Rc<RowText>>>,
+    shaping: Option<Shaping>,
+    /// Rows shaped so far, for tests of what a frame shapes again.
+    #[cfg(test)]
+    pub(super) shaped: usize,
+}
+
+impl Rows {
+    /// Forgets the rows whose text `new` changes from `old`, the snapshot the kept rows were shaped from.
+    pub(super) fn update(&mut self, old: &Snapshot, new: &Snapshot) {
+        self.rows.resize(new.rows, None);
+        for (row, text) in self.rows.iter_mut().enumerate() {
+            if text.is_some() && !same_text(row_cells(old, row), row_cells(new, row)) {
+                *text = None;
+            }
+        }
+    }
+
+    /// Each row's text in `snapshot`, the one last given to `update`, shaping the rows it doesn't keep.
+    fn shape(
+        &mut self,
+        snapshot: &Snapshot,
+        block_cursor: Option<(usize, usize)>,
+        shaping: Shaping,
+        base: &TextRun,
+        window: &Window,
+    ) -> Vec<Rc<RowText>> {
+        if self.shaping.as_ref() != Some(&shaping) {
+            self.rows.fill(None);
+        }
+        let (_, font_px, min_contrast, cell_width) = shaping;
+        self.shaping = Some(shaping);
+        let mut shaped = Vec::with_capacity(self.rows.len());
+        for (row, kept) in self.rows.iter_mut().enumerate() {
+            let cursor = block_cursor
+                .filter(|&(at, _)| at == row)
+                .map(|(_, col)| col);
+            let text = match kept {
+                Some(text) if text.cursor == cursor => text.clone(),
+                _ => {
+                    let runs = glyph_runs(
+                        row_cells(snapshot, row),
+                        block_cursor,
+                        snapshot.background,
+                        min_contrast,
+                        base,
+                    );
+                    let lines = runs
+                        .into_iter()
+                        .map(|(_, col, text, runs)| {
+                            let line = window.text_system().shape_line(
+                                text.into(),
+                                px(font_px),
+                                &runs,
+                                Some(cell_width),
+                            );
+                            (col, line)
+                        })
+                        .collect();
+                    #[cfg(test)]
+                    {
+                        self.shaped += 1;
+                    }
+                    kept.insert(Rc::new(RowText { cursor, lines })).clone()
+                }
+            };
+            shaped.push(text);
+        }
+        shaped
+    }
+}
+
 /// Textures of closed panes' images, freed by the next frame a terminal draws.
 #[derive(Default)]
 pub(super) struct RetiredImages(pub(super) Vec<Arc<RenderImage>>);
@@ -318,7 +413,10 @@ fn paint_images(window: &mut Window, bounds: Bounds<Pixels>, data: &PaintData, l
 
 struct PaintData {
     snapshot: Arc<Snapshot>,
-    glyphs: Vec<(Point<Pixels>, ShapedLine)>,
+    /// Each row's text, top to bottom.
+    rows: Vec<Rc<RowText>>,
+    /// The text being composed, at the cursor.
+    marked: Option<(Point<Pixels>, ShapedLine)>,
     cell_width: Pixels,
     line_height: Pixels,
     focused: bool,
@@ -343,7 +441,7 @@ impl Render for TerminalView {
                 let look = super::look(cx);
                 let row_height = line_height(font_px, look.line_height);
                 let base_run = TextRun {
-                    font: font(look.family),
+                    font: font(look.family.clone()),
                     color: rgb(FOREGROUND).into(),
                     ..Default::default()
                 };
@@ -363,31 +461,27 @@ impl Render for TerminalView {
                 // 8.04pt at 13px up to whole points made 9pt cells and spaced the text out.
                 let scale = window.scale_factor();
                 let cell_width = px((measured.as_f32() * scale).floor() / scale);
-                prepaint_view.update(cx, |view, cx| {
-                    view.layout(bounds, cell_width, row_height, cx)
+                let rows = prepaint_view.update(cx, |view, cx| {
+                    view.layout(bounds, cell_width, row_height, cx);
+                    let block_cursor = view
+                        .snapshot
+                        .cursor
+                        .filter(|&(.., shape)| {
+                            shape == CursorShape::Block
+                                && view.cursor_lit
+                                && view.focus.is_focused(window)
+                        })
+                        .map(|(row, col, ..)| (row, col));
+                    let shaping = (look.family, font_px, look.min_contrast, cell_width);
+                    let snapshot = view.snapshot.clone();
+                    view.rows
+                        .shape(&snapshot, block_cursor, shaping, &base_run, window)
                 });
                 let view = prepaint_view.read(cx);
                 let snapshot = view.snapshot.clone();
                 let focused = view.focus.is_focused(window);
                 let lit = view.cursor_lit;
-                let mut glyphs = Vec::new();
-                for (row, col, text, runs) in
-                    glyph_runs(&snapshot, focused && lit, look.min_contrast, &base_run)
-                {
-                    let line = window.text_system().shape_line(
-                        text.into(),
-                        px(font_px),
-                        &runs,
-                        Some(cell_width),
-                    );
-                    glyphs.push((
-                        point(
-                            bounds.left() + cell_width * col,
-                            bounds.top() + px(row_height) * row,
-                        ),
-                        line,
-                    ));
-                }
+                let mut marked = None;
                 if !view.marked.is_empty()
                     && let Some((row, col, _, _)) = snapshot.cursor
                 {
@@ -406,7 +500,7 @@ impl Render for TerminalView {
                         &[run],
                         Some(cell_width),
                     );
-                    glyphs.push((
+                    marked = Some((
                         point(
                             bounds.left() + cell_width * col,
                             bounds.top() + px(row_height) * row,
@@ -416,7 +510,8 @@ impl Render for TerminalView {
                 }
                 PaintData {
                     snapshot,
-                    glyphs,
+                    rows,
+                    marked,
                     cell_width,
                     line_height: px(row_height),
                     focused,
@@ -492,9 +587,19 @@ impl Render for TerminalView {
                             rgb(data.snapshot.cursor_color),
                         ));
                     }
-                    for (origin, line) in &data.glyphs {
+                    let row_lines = data.rows.iter().enumerate().flat_map(|(row, text)| {
+                        text.lines.iter().map(move |(col, line)| {
+                            let origin = point(
+                                bounds.left() + data.cell_width * *col,
+                                bounds.top() + data.line_height * row,
+                            );
+                            (origin, line)
+                        })
+                    });
+                    let marked = data.marked.as_ref().map(|(origin, line)| (*origin, line));
+                    for (origin, line) in row_lines.chain(marked) {
                         if let Err(error) =
-                            line.paint(*origin, data.line_height, TextAlign::Left, None, window, cx)
+                            line.paint(origin, data.line_height, TextAlign::Left, None, window, cx)
                         {
                             paint_error = Some(format!("Terminal drawing failed: {error}"));
                             break;
@@ -689,7 +794,7 @@ impl Render for TerminalView {
 mod tests {
     use super::*;
     use crate::terminal_view::snapshot::snapshot;
-    use wings_terminal::grid::GridPane;
+    use wings_terminal::grid::{GridPane, SelectionType, Side};
 
     #[test]
     fn minimum_contrast_lightens_dim_text_and_leaves_readable_text() {
@@ -711,7 +816,7 @@ mod tests {
             font: font("Menlo"),
             ..Default::default()
         };
-        let lines: Vec<_> = glyph_runs(&frame, false, 1.0, &base)
+        let lines: Vec<_> = glyph_runs(&frame.cells, None, frame.background, 1.0, &base)
             .into_iter()
             .map(|(row, col, text, runs)| {
                 let lens: Vec<_> = runs.iter().map(|run| run.len).collect();
@@ -731,6 +836,35 @@ mod tests {
                 line(1, 1, "g", &[1]),
             ]
         );
+    }
+
+    #[test]
+    fn new_output_forgets_the_shaped_text_of_only_the_rows_whose_cells_it_changed() {
+        let mut pane = GridPane::new(10, 4);
+        pane.feed(b"one\r\ntwo\r\nthree\r\nfour");
+        let before = snapshot(&mut pane, None, false, None);
+        let mut rows = Rows::default();
+        rows.update(&Snapshot::default(), &before);
+        for row in &mut rows.rows {
+            *row = Some(Rc::new(RowText {
+                cursor: None,
+                lines: Vec::new(),
+            }));
+        }
+        // New text on the second row, the third in red, and the first selected, which draws over its text.
+        pane.feed(b"\x1b[2;1HTWO\x1b[3;1H\x1b[31mthree");
+        pane.select_from(0, 0, Side::Left, SelectionType::Simple);
+        pane.select_to(0, 2, Side::Right);
+        let after = snapshot(&mut pane, None, false, None);
+        assert!(after.cells[0].selected);
+        rows.update(&before, &after);
+        let kept: Vec<bool> = rows.rows.iter().map(Option::is_some).collect();
+        assert_eq!(kept, [true, false, false, true]);
+        // A row the screen no longer has goes with it.
+        let mut smaller = GridPane::new(10, 2);
+        smaller.feed(b"one\r\ntwo");
+        rows.update(&after, &snapshot(&mut smaller, None, false, None));
+        assert_eq!(rows.rows.len(), 2);
     }
 
     #[test]

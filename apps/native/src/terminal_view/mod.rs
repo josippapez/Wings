@@ -163,6 +163,8 @@ pub struct TerminalView {
     runtime: Runtime,
     latest: Latest,
     snapshot: Arc<Snapshot>,
+    /// The text of `snapshot`'s rows, shaped again only where it changes.
+    rows: paint::Rows,
     bounds: Option<Bounds<Pixels>>,
     cell_width: Pixels,
     line_height: f32,
@@ -333,10 +335,11 @@ impl TerminalView {
                 .0
                 .extend(painted);
         });
-        Self {
+        let mut view = Self {
             focus: cx.focus_handle(),
             runtime,
-            snapshot: latest.lock().unwrap().clone(),
+            snapshot: Arc::default(),
+            rows: paint::Rows::default(),
             latest: latest.clone(),
             bounds: None,
             cell_width: px(8.0),
@@ -363,7 +366,9 @@ impl TerminalView {
             cursor_lit: true,
             painted_images: Vec::new(),
             _release: release,
-        }
+        };
+        view.show(latest.lock().unwrap().clone());
+        view
     }
 
     /// Draws the model's latest snapshot, once output has come.
@@ -373,7 +378,8 @@ impl TerminalView {
         }
         if self.visible {
             let cursor = self.snapshot.cursor;
-            self.snapshot = self.latest.lock().unwrap().clone();
+            let latest = self.latest.lock().unwrap().clone();
+            self.show(latest);
             if self.blink.is_some() && self.snapshot.cursor != cursor {
                 self.restart_blink(cx);
             }
@@ -382,6 +388,12 @@ impl TerminalView {
             }
             cx.notify();
         }
+    }
+
+    /// Draws `snapshot` from the next frame, keeping the shaped text of the rows it doesn't change.
+    fn show(&mut self, snapshot: Arc<Snapshot>) {
+        let old = std::mem::replace(&mut self.snapshot, snapshot);
+        self.rows.update(&old, &self.snapshot);
     }
 
     /// Prints `bytes` into the pane as its program would and waits for the model to publish the screen they make, for
@@ -514,7 +526,8 @@ impl TerminalView {
         self.visible = visible;
         self.runtime.visible.store(visible, Ordering::Release);
         if visible {
-            self.snapshot = self.latest.lock().unwrap().clone();
+            let latest = self.latest.lock().unwrap().clone();
+            self.show(latest);
             self.send(Command::Refresh, cx);
             cx.notify();
         }
