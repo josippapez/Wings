@@ -1967,7 +1967,10 @@ fn the_sidebar_lists_no_plugin_pages() {
         assert!(w.plugin_list(cx).is_none());
     });
     window.draw();
-    assert!(glyph_at("git-compare").is_none() && glyph_at("own").is_none());
+    // Their icons show only on their buttons in the project bar, right of the 248 sidebar.
+    for glyph in ["git-compare", "own"] {
+        assert!(glyph_at(glyph).is_none_or(|at| at.left() >= px(248.0)), "{glyph} in the sidebar");
+    }
 }
 
 // Transcripts.
