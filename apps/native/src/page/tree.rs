@@ -908,7 +908,7 @@ impl Walk {
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,
-                name: cut(str_prop(&props, "name").unwrap_or_default().to_owned()),
+                name: text_prop(&props, "name"),
                 large: str_prop(&props, "size") == Some("large"),
             }),
             "Skeleton" => Node::Skeleton(Skeleton {
@@ -927,24 +927,19 @@ impl Walk {
                 },
                 height: number(&props, "height").unwrap_or(14.0).clamp(1.0, 400.0) as f32,
             }),
-            "Button" => {
-                let disabled = on("disabled");
-                Node::Button(Button {
-                    id,
-                    variant: choice(&props, "variant"),
-                    size: choice(&props, "size"),
-                    chip: on("chip"),
-                    pressed: on("pressed"),
-                    disabled,
-                    label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
-                    wrap: on("wrap"),
-                    on_click: str_prop(&props, "onClick")
-                        .filter(|handler| !disabled && valid_handler(handler))
-                        .map(str::to_owned),
-                    on_key_down: handler("onKeyDown"),
-                    children: parts(children),
-                })
-            }
+            "Button" => Node::Button(Button {
+                id,
+                variant: choice(&props, "variant"),
+                size: choice(&props, "size"),
+                chip: on("chip"),
+                pressed: on("pressed"),
+                disabled: on("disabled"),
+                label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
+                wrap: on("wrap"),
+                on_click: handler("onClick"),
+                on_key_down: handler("onKeyDown"),
+                children: parts(children),
+            }),
             "Notice" => Node::Notice(Notice {
                 id,
                 tone,
@@ -953,20 +948,15 @@ impl Walk {
             "Spinner" => Node::Spinner(Spinner {
                 id,
                 large: str_prop(&props, "size") == Some("large"),
-                label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                label: text_prop(&props, "label"),
             }),
-            "Checkbox" => {
-                let disabled = on("disabled");
-                Node::Checkbox(Checkbox {
-                    id,
-                    checked: on("checked"),
-                    disabled,
-                    on_change: str_prop(&props, "onChange")
-                        .filter(|handler| !disabled && valid_handler(handler))
-                        .map(str::to_owned),
-                    children: parts(children),
-                })
-            }
+            "Checkbox" => Node::Checkbox(Checkbox {
+                id,
+                checked: on("checked"),
+                disabled: on("disabled"),
+                on_change: handler("onChange"),
+                children: parts(children),
+            }),
             "Confirm" => {
                 let mut slots = Slots(children);
                 Node::Confirm(Confirm {
@@ -1039,7 +1029,7 @@ impl Walk {
                 let mut slots = Slots(children);
                 Node::Gauge(Gauge {
                     id,
-                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    label: text_prop(&props, "label"),
                     percent: number(&props, "percent").unwrap_or(0.0).clamp(0.0, 100.0),
                     levels: levels(&props),
                     note: slots.take("note"),
@@ -1047,7 +1037,7 @@ impl Walk {
             }
             "Meter" => Node::Meter(Meter {
                 id,
-                label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                label: text_prop(&props, "label"),
                 percent: number(&props, "percent").unwrap_or(0.0).clamp(0.0, 100.0),
                 tone,
             }),
@@ -1061,7 +1051,7 @@ impl Walk {
                 };
                 Node::Board(Board {
                     id,
-                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    label: text_prop(&props, "label"),
                     lanes,
                     header,
                     body,
@@ -1075,7 +1065,7 @@ impl Walk {
                 let mut slots = Slots(children);
                 Node::BoardColumn(BoardColumn {
                     id,
-                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    label: text_prop(&props, "label"),
                     cell: on("cell"),
                     count: props.get("count").and_then(Value::as_u64),
                     title: slots.take("title"),
@@ -1104,44 +1094,35 @@ impl Walk {
             "Graph" => Node::Graph(graph(id, &props)?),
             "SearchField" => Node::SearchField(SearchField {
                 id,
-                label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
-                placeholder: cut(str_prop(&props, "placeholder")
-                    .unwrap_or_default()
-                    .to_owned()),
+                label: text_prop(&props, "label"),
+                placeholder: text_prop(&props, "placeholder"),
                 value: str_prop(&props, "defaultValue").map(str::to_owned),
                 on_input: str_prop(&props, "onInput")
                     .filter(|s| valid_handler(s))
                     .map(str::to_owned),
             }),
-            "TextInput" | "Textarea" => {
-                let disabled = on("disabled");
-                Node::Input(Input {
-                    id,
-                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
-                    placeholder: cut(str_prop(&props, "placeholder")
-                        .unwrap_or_default()
-                        .to_owned()),
-                    value: str_prop(&props, "value")
-                        .unwrap_or_default()
-                        .chars()
-                        .take(MAX_INPUT_CHARS)
-                        .collect(),
-                    rows: (kind == "Textarea")
-                        .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
-                    disabled,
-                    max_length: number(&props, "maxLength")
-                        .filter(|max| *max >= 0.0)
-                        .map(|max| max as usize),
-                    on_change: str_prop(&props, "onChange")
-                        .filter(|handler| !disabled && valid_handler(handler))
-                        .map(str::to_owned),
-                    on_key_down: handler("onKeyDown"),
-                    on_blur: handler("onBlur"),
-                    auto_focus: on("autoFocus"),
-                    select_on_focus: on("selectOnFocus"),
-                    password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
-                })
-            }
+            "TextInput" | "Textarea" => Node::Input(Input {
+                id,
+                label: text_prop(&props, "label"),
+                placeholder: text_prop(&props, "placeholder"),
+                value: str_prop(&props, "value")
+                    .unwrap_or_default()
+                    .chars()
+                    .take(MAX_INPUT_CHARS)
+                    .collect(),
+                rows: (kind == "Textarea")
+                    .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
+                disabled: on("disabled"),
+                max_length: number(&props, "maxLength")
+                    .filter(|max| *max >= 0.0)
+                    .map(|max| max as usize),
+                on_change: handler("onChange"),
+                on_key_down: handler("onKeyDown"),
+                on_blur: handler("onBlur"),
+                auto_focus: on("autoFocus"),
+                select_on_focus: on("selectOnFocus"),
+                password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
+            }),
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
                 Some(name) => Node::Icon(Icon { id, name }),
                 None => return Ok(None),
@@ -1161,9 +1142,7 @@ impl Walk {
                     disabled: on("disabled"),
                     label: None,
                     wrap: false,
-                    on_click: str_prop(&props, "onClick")
-                        .filter(|s| !on("disabled") && valid_handler(s))
-                        .map(str::to_owned),
+                    on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
                     children: parts(children),
                 },
@@ -1177,7 +1156,7 @@ impl Walk {
             "Select" | "Chips" => {
                 let select = Select {
                     id,
-                    label: cut(str_prop(&props, "label").unwrap_or_default().to_owned()),
+                    label: text_prop(&props, "label"),
                     options: options(&props),
                     value: str_prop(&props, "value").map(|value| cut(value.to_owned())),
                     on_change: str_prop(&props, "onChange")
@@ -1205,6 +1184,11 @@ fn cut(text: String) -> String {
 
 fn str_prop<'a>(props: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
     props.get(name).and_then(Value::as_str)
+}
+
+/// A string prop as text the page shows, cut to `MAX_TEXT_CHARS`, or nothing when it isn't one.
+fn text_prop(props: &Map<String, Value>, name: &str) -> String {
+    cut(str_prop(props, name).unwrap_or_default().to_owned())
 }
 
 fn number(props: &Map<String, Value>, name: &str) -> Option<f64> {
