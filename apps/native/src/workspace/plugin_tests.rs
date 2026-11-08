@@ -1530,9 +1530,9 @@ fn settings_shows_a_plugins_own_icon_on_its_row() {
     assert_eq!(tile.size, size(px(16.0), px(16.0)));
 }
 
-/// A page listed under Plugins in the sidebar shows the icon its tab shows, not a puzzle piece.
+/// As in the desktop, a plugin's pages open from the + menu and the project's sections, not from a list in the sidebar.
 #[test]
-fn the_sidebars_plugin_pages_show_their_icons() {
+fn the_sidebar_lists_no_plugin_pages() {
     let data = Data::temp();
     data.install_script(
         "reviews",
@@ -1545,12 +1545,12 @@ fn the_sidebars_plugin_pages_show_their_icons() {
         "reviews-scope",
     );
     let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| {
+        assert_eq!(w.plugins.len(), 1, "the plugin runs");
+        assert!(w.plugin_list(cx).is_none());
+    });
     window.draw();
-    // In the 248 sidebar, the named icon on one row and the plugin's own on the next.
-    let (named, own) = (glyph_at("git-compare").unwrap(), glyph_at("own").unwrap());
-    assert!(named.right() < px(248.0) && own.right() < px(248.0));
-    assert_eq!(named.left(), own.left());
-    assert!(own.top() > named.bottom());
+    assert!(glyph_at("git-compare").is_none() && glyph_at("own").is_none());
 }
 
 // Transcripts.

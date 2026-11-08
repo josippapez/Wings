@@ -1,9 +1,5 @@
-//! Pages of the desktop's plugins as tabs. The sidebar's Plugins list offers the pages that open as tabs and have a native
-//! build, and each one open runs a frame of its plugin until the tab closes. A plugin that is on but has no native build
-//! is listed too, as needing an update for the native app.
-//!
-//! The desktop also lists these pages in the + menu, as title bar buttons and under a project's sections. Only the
-//! sidebar list is here, and a page opens from it without arguments; `wings.openView` can open one with arguments.
+//! Pages of the desktop's plugins as tabs. Each one open runs a frame of its plugin until the tab closes. A plugin that
+//! is on but has no native build is listed in the sidebar, as needing an update for the native app.
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, Role, SharedString, Window, div,
@@ -11,16 +7,13 @@ use gpui::{
 };
 
 use crate::{
-    icons::{Icon, icon, plugin_glyph},
+    icons::{Icon, icon},
     page::PageView,
     saved::SavedPluginTab,
     theme,
 };
 
-use super::{
-    Active, HAIRLINE, Workspace,
-    project::{SIDEBAR_ACCENT, SIDEBAR_FOREGROUND},
-};
+use super::{Active, HAIRLINE, Workspace};
 
 /// A page of a plugin open as a tab. Its frame stops when the tab is dropped.
 pub(super) struct PluginTab {
@@ -265,79 +258,9 @@ impl Workspace {
         cached.1.clone()
     }
 
-    /// The sidebar's Plugins section, or nothing while no plugin offers a page or waits for a native build.
+    /// The sidebar's Plugins section, which shows only while a plugin waits for a native build. Pages open from the +
+    /// menu and the project's sections, as in the desktop.
     pub(super) fn plugin_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let shown = match self.active {
-            Active::Plugin(id) => self.plugin_tabs.iter().find(|tab| tab.id == id),
-            _ => None,
-        };
-        let rows: Vec<_> = self
-            .plugins
-            .iter()
-            .flat_map(|installed| {
-                installed
-                    .pages
-                    .iter()
-                    .filter(|page| page.new_tab)
-                    .map(move |page| (installed, page))
-            })
-            .enumerate()
-            .map(|(index, (installed, page))| {
-                let active =
-                    shown.is_some_and(|tab| tab.plugin == installed.id && tab.view == page.id);
-                let (plugin, view) = (installed.id.clone(), page.id.clone());
-                // The icon its tab and the new tab menu show.
-                let named = installed
-                    .plugin
-                    .manifest
-                    .contributes
-                    .views
-                    .iter()
-                    .find(|declared| declared.id == page.id)
-                    .map_or("", |declared| declared.icon.as_str());
-                let glyph = plugin_glyph(
-                    named,
-                    installed.plugin.icon_svg.as_deref(),
-                    16.0,
-                    theme::MUTED_FOREGROUND,
-                );
-                div()
-                    .id(("plugin-page", index))
-                    .role(Role::Button)
-                    .aria_label(page.title.clone())
-                    .aria_selected(active)
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .py(px(3.0))
-                    .px(px(8.0))
-                    .rounded(px(theme::RADIUS))
-                    .cursor_pointer()
-                    .when(active, |row| row.bg(rgba(SIDEBAR_ACCENT)))
-                    .when(!active, |row| {
-                        row.hover(|style| style.bg(rgba(theme::HOVER)))
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_plugin_view(&plugin, &view, None, window, cx);
-                    }))
-                    .child(glyph)
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .line_height(px(18.0))
-                            .font_weight(if active {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::MEDIUM
-                            })
-                            .text_color(rgb(SIDEBAR_FOREGROUND))
-                            .child(page.title.clone()),
-                    )
-            })
-            .collect();
         // On and approved, but with no native build: the desktop runs it, and here it is listed with what it needs,
         // rather than missing, and opens its entry in Settings → Plugins. More than two take one row, so a dozen
         // desktop-only plugins don't push the projects off the sidebar.
@@ -399,7 +322,7 @@ impl Workspace {
                     )
             })
             .collect();
-        if rows.is_empty() && waiting.is_empty() {
+        if waiting.is_empty() {
             return None;
         }
         Some(
@@ -429,7 +352,6 @@ impl Workspace {
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child("Plugins"),
                 )
-                .children(rows)
                 .children(waiting)
                 .into_any_element(),
         )
