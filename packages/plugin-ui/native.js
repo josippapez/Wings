@@ -1,13 +1,15 @@
 // wings-plugin-ui/native: the components of ui.js that the native Wings app draws, rendered by React into a JSON tree
 // instead of into a DOM. The page runs in a JS engine with no document, and the app turns each tree into its own
 // controls. Handlers never leave the page: the tree names them by id, and the app sends the id back when one fires.
-import { Children, createContext, createElement as h, Fragment, isValidElement, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Children, createContext, createElement as h, Fragment, isValidElement, useContext, useEffect, useRef, useState } from "react";
 import Reconciler from "react-reconciler";
 import { ConcurrentRoot, DefaultEventPriority } from "react-reconciler/constants.js";
-import { errorMessage } from "wings-plugin-sdk/async";
 import { ago } from "wings-plugin-sdk/format";
 import { emojify, parseBlocks, parseInline } from "./markdown.js";
 import { languageOf } from "./highlight.js";
+import { projectGate, useAction } from "./hooks.js";
+
+export { useAction, useBlockState, useTabState, useViewArgs } from "./hooks.js";
 
 const root = { id: 0, type: "#root", props: {}, children: [] };
 let nextId = 1;
@@ -619,53 +621,8 @@ export function useProject() {
   }, []);
   return project;
 }
-/** What `wings.openView` opened the tab with, as `check` reads it, or `null` when there were no args or `check` returns `null` or `undefined` for them. Read once. */
-export function useViewArgs(check) {
-  const [args] = useState(() => {
-    const raw = globalThis.wings.viewArgs();
-    return raw === null ? null : (check(raw) ?? null);
-  });
-  return args;
-}
 /** Shows `children(project)` once the app says which project the page is about, keyed by the project's id. */
-export function ProjectGate({ loading = "Loading…", empty, children }) {
-  const project = useProject();
-  if (project === undefined) return h(Loading, null, loading);
-  if (project === null) return h(Empty, { title: empty?.title ?? "No project", description: empty?.description });
-  return h(Fragment, { key: project.id }, children(project));
-}
-function useSaved(read, write, initial, check) {
-  const [value, setValue] = useState(null);
-  useEffect(() => {
-    void read().catch(() => null).then((raw) => setValue((raw == null ? undefined : check(raw)) ?? initial));
-  }, []);
-  return [value, (next) => {
-    setValue(next);
-    write(next).catch(() => {});
-  }];
-}
-export const useTabState = (initial, check) => useSaved(() => wings.tabState(), (state) => wings.setTabState(state), initial, check);
-export const useBlockState = (initial, check) => useSaved(() => wings.blockState(), (state) => wings.setBlockState(state), initial, check);
-/** Runs the page's async actions and keeps what its buttons and error card show, as `useAction` of `wings-plugin-ui` does. */
-export function useAction() {
-  const [running, setRunning] = useState(0);
-  const [error, setError] = useState(null);
-  const run = useCallback(async (fn) => {
-    setRunning((n) => n + 1);
-    setError(null);
-    try {
-      await fn();
-      return true;
-    } catch (e) {
-      setError(errorMessage(e));
-      return false;
-    } finally {
-      setRunning((n) => n - 1);
-    }
-  }, []);
-  const clear = useCallback(() => setError(null), []);
-  return { run, busy: running > 0, error, clear };
-}
+export const ProjectGate = /* @__PURE__ */ projectGate(useProject, Loading, Empty);
 
 /** `[0xRRGGBB, alpha]` of a CSS `#rrggbb`, `rgb(r, g, b)` or `rgba(r, g, b, a)` colour; undefined for any other. */
 function rgbaOf(css) {
