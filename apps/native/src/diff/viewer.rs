@@ -44,9 +44,9 @@ pub struct Viewer {
     /// Side by side, else one column, once chosen (`split`).
     split_choice: Option<bool>,
     /// Drawn beside a tab rather than filling the window.
-    docked: bool,
+    pub(crate) docked: bool,
     /// Filling the window, it has a tab to dock beside.
-    can_dock: bool,
+    pub(crate) can_dock: bool,
     /// Docked, the file list shows.
     dock_files: bool,
     /// Long lines wrap; else they scroll sideways.

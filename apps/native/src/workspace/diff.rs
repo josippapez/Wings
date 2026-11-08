@@ -34,6 +34,9 @@ pub(super) struct Dock {
     tab: Option<(PathBuf, Active)>,
     /// Filling the window though it has a tab to dock beside.
     expanded: bool,
+    /// The window has room for the dock beside the tab's 320. Without it the diff fills the window, as squeezing the
+    /// tab left its terminal a sliver.
+    fits: bool,
     pub(super) width: f32,
     /// While the edge is dragged: where the pointer was, and how wide the dock was drawn, when the drag started.
     resize: Option<(Pixels, f32)>,
@@ -44,6 +47,7 @@ impl Default for Dock {
         Self {
             tab: None,
             expanded: false,
+            fits: true,
             width: INITIAL_WIDTH,
             resize: None,
         }
@@ -89,10 +93,12 @@ impl Workspace {
         };
         self.plugin_ui.diff = None;
         window.activate_window();
+        let fits = self.dock_fits(window.viewport_size().width);
         let dock = &mut self.plugin_ui.diff_dock;
+        dock.fits = fits;
         dock.tab = (!self.welcome).then(|| (self.config.project.clone(), self.active));
         dock.expanded = false;
-        let can_dock = dock.tab.is_some();
+        let can_dock = dock.tab.is_some() && dock.fits;
         let prefs = &self.prefs;
         let (wrap, tree, files) = (prefs.diff_wrap, prefs.diff_tree, prefs.diff_dock_files);
         let viewer = cx.new(|cx| {
@@ -139,12 +145,27 @@ impl Workspace {
         let Some((viewer, _)) = &self.plugin_ui.diff else {
             return;
         };
-        let can_dock = dock.tab.is_some();
-        dock.expanded = expanded && can_dock;
+        dock.expanded = expanded && dock.tab.is_some();
+        let can_dock = dock.tab.is_some() && dock.fits;
         let docked = can_dock && !dock.expanded;
         viewer.update(cx, |viewer, cx| viewer.set_dock(docked, can_dock, cx));
         viewer.focus_handle(cx).focus(window, cx);
         cx.notify();
+    }
+
+    /// Notes whether a window `viewport` wide has room for the dock, and tells the viewer when that changes, so it
+    /// draws itself filling the window, with no button to dock.
+    pub(super) fn sync_diff_room(&mut self, viewport: Pixels, cx: &mut Context<Self>) {
+        let fits = self.dock_fits(viewport);
+        let dock = &mut self.plugin_ui.diff_dock;
+        if dock.fits == fits {
+            return;
+        }
+        dock.fits = fits;
+        if let (Some((viewer, _)), Some(_)) = (&self.plugin_ui.diff, &dock.tab) {
+            let docked = fits && !dock.expanded;
+            viewer.update(cx, |viewer, cx| viewer.set_dock(docked, fits, cx));
+        }
     }
 
     /// Docked only while its tab is on screen; on another tab it's kept, out of sight, for when that tab comes back.
@@ -152,7 +173,7 @@ impl Workspace {
         self.plugin_ui.diff.as_ref()?;
         let dock = &self.plugin_ui.diff_dock;
         match &dock.tab {
-            Some(_) if dock.expanded => Some(Shown::Full),
+            Some(_) if dock.expanded || !dock.fits => Some(Shown::Full),
             Some((project, tab)) => {
                 (!self.welcome && *project == self.config.project && *tab == self.active)
                     .then_some(Shown::Docked)
@@ -182,16 +203,26 @@ impl Workspace {
         }
     }
 
-    /// The widest the dock can be in a window `viewport` wide: the tab beside it keeps its 320, but the dock never goes
-    /// under its 360.
-    fn diff_room(&self, viewport: Pixels) -> f32 {
+    /// The window leaves the dock its 360 beside the tab's 320.
+    fn dock_fits(&self, viewport: Pixels) -> bool {
+        self.diff_space(viewport) >= MIN_WIDTH
+    }
+
+    /// The width beside the sidebars and the tab's 320.
+    fn diff_space(&self, viewport: Pixels) -> f32 {
         let left = if self.sidebar { self.side.width } else { 0.0 };
         let right = if self.right.is_some() {
             self.right_width(viewport)
         } else {
             0.0
         };
-        (viewport.as_f32() - left - right - TABS_MIN).clamp(MIN_WIDTH, MAX_WIDTH)
+        viewport.as_f32() - left - right - TABS_MIN
+    }
+
+    /// The widest the dock can be in a window `viewport` wide: the tab beside it keeps its 320, but the dock never goes
+    /// under its 360.
+    fn diff_room(&self, viewport: Pixels) -> f32 {
+        self.diff_space(viewport).clamp(MIN_WIDTH, MAX_WIDTH)
     }
 
     /// How wide the dock is drawn: as dragged, within the room the window leaves it.

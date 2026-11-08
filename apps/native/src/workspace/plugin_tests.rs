@@ -378,6 +378,40 @@ fn a_diff_docks_beside_the_tab_it_opened_from_and_shows_only_on_that_tab() {
     assert!(window.read(|w, _| w.plugin_ui.diff.is_none()));
 }
 
+/// A window with no room for the dock beside the tab's 320 shows the diff filling it, with no button to dock, rather than
+/// squeezing the terminal to a sliver; given room, the diff docks again.
+#[test]
+fn a_window_too_narrow_for_the_dock_shows_the_diff_filling_it() {
+    let data = Data::temp();
+    install_differ(&data);
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.simulate_resize(size(px(800.0), px(640.0)));
+    window.draw();
+    open_diff(&mut window);
+    window.draw();
+    // 800 less the 248 sidebar leaves the tab's 320 and only 232 for the dock, under its 360.
+    assert_eq!(
+        diff_at(),
+        gpui::Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(640.0)))
+    );
+    window.read(|w, cx| {
+        let viewer = w.plugin_ui.diff.as_ref().unwrap().0.read(cx);
+        assert!(
+            !viewer.docked && !viewer.can_dock,
+            "no Expand or Dock button"
+        );
+    });
+
+    // With the sidebar hidden there is room again, and it docks.
+    window.update(|w, _, cx| w.toggle_docked(cx));
+    window.draw();
+    window.draw();
+    window.read(|w, cx| {
+        assert_eq!(w.diff_shown(), Some(super::diff::Shown::Docked));
+        assert!(w.plugin_ui.diff.as_ref().unwrap().0.read(cx).docked);
+    });
+}
+
 /// The dock's left edge drags within the desktop's `SIDES.diff`, leaving the tab its 320, and the width is written once
 /// the pointer is released and comes back on the next launch, as the sidebars' do.
 #[test]

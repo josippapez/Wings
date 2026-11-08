@@ -791,6 +791,7 @@ impl Render for Workspace {
         let place = self.place();
         self.nav.visit(place);
         self.close_diff_without_tab();
+        self.sync_diff_room(window.viewport_size().width, cx);
         if self.diff_shown() == Some(diff::Shown::Full)
             && let Some((viewer, _)) = &self.plugin_ui.diff
         {
