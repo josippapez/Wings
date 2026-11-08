@@ -146,6 +146,8 @@ pub struct Workspace {
     #[serde(default)]
     pub notify_sound: Option<NotifySound>,
     #[serde(default)]
+    pub pinned_buttons: Option<Vec<String>>,
+    #[serde(default)]
     pub agents_run_commands: Option<bool>,
     #[serde(default)]
     pub agents_message: Option<bool>,
@@ -215,6 +217,7 @@ impl Workspace {
             notify_sound: self.notify_sound.clone(),
             agents_run_commands: self.agents_run_commands,
             agents_message: self.agents_message,
+            pinned_buttons: self.pinned_buttons.clone(),
             ..Settings::default()
         }
     }

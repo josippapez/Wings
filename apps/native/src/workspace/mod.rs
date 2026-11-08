@@ -487,6 +487,16 @@ impl Workspace {
         this.start_sidebar(&settings, window, cx);
         this.plugin_ui.right_size = right_edge::Size::load(&settings);
         this.plugin_ui.diff_dock = diff::Dock::load(&settings);
+        // A replacement that moved in before pins were read takes them from the desktop's file beside its own.
+        this.plugin_ui.pinned = settings
+            .pinned_buttons
+            .clone()
+            .or_else(|| {
+                let state = this.config.state.as_deref()?;
+                crate::data_dir::desktop::read(&state.with_file_name("workspace.json"))?
+                    .pinned_buttons
+            })
+            .unwrap_or_default();
         let installed = |family: &String| cx.text_system().all_font_names().contains(family);
         let defaults = TerminalLook::default();
         // Only the desktop's choices, so a hand-edited file can't ask for a million lines.

@@ -226,6 +226,10 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
     assert_eq!(settings.project_sort.as_deref(), Some("worked"));
     assert_eq!(settings.notify_sound.unwrap().sound.as_deref(), Some("pop"));
     assert_eq!(settings.agents_message, Some(false));
+    assert_eq!(
+        settings.pinned_buttons,
+        Some(vec!["cyclops:tracker".to_string()])
+    );
     assert_eq!(settings.last_active["/work/both"], 2000);
 
     let mut ids = desktop::history_ids(&file);

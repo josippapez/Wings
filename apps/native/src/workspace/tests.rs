@@ -1177,3 +1177,28 @@ fn overflowing_tabs_scroll_inside_the_window() {
         assert!(workspace.tab_scroll.bounds().right() <= px(1000.0 - 44.0));
     });
 }
+
+/// The plugin buttons pinned on the desktop stay pinned in a replacement that moved in before pins were read, and a pin
+/// made here is saved in the native app's own file.
+#[test]
+fn the_desktops_pinned_plugin_buttons_carry_over_and_new_pins_are_saved() {
+    let dir = std::env::temp_dir().join(format!("wings-native-pins-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("workspace.json"),
+        r#"{"version":1,"pinnedButtons":["cyclops:tracker","tasks:board"]}"#,
+    )
+    .unwrap();
+    let state = dir.join("native-workspace.json");
+    let (_app, mut window) = open_with(Some(state.clone()));
+    window.read(|w, _| assert_eq!(w.plugin_ui.pinned, ["cyclops:tracker", "tasks:board"]));
+    window.update(|w, _, cx| w.toggle_pin("cyclops:tracker", cx));
+    window.update(|w, _, cx| w.toggle_pin("disk:map", cx));
+    let saved = crate::saved::load_settings(&state);
+    assert_eq!(
+        saved.pinned_buttons,
+        Some(vec!["tasks:board".to_string(), "disk:map".to_string()])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

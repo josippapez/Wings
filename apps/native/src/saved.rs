@@ -219,6 +219,10 @@ pub struct Settings {
     /// The docked diff's width in points, as last dragged, as the desktop's `widths.diff`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_width: Option<f32>,
+    /// The plugin buttons kept in the project bar, as `plugin:sidebar` in the order they were pinned, as the
+    /// desktop's `pinnedButtons`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_buttons: Option<Vec<String>>,
     /// New terminals run in the terminal server, so they keep running when Wings quits or updates. Absent is on
     /// (`terminal_server::enabled`). The desktop has no such setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]

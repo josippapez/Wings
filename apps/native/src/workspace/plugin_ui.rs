@@ -27,6 +27,10 @@ use crate::{
 
 use super::{Workspace, plugin_env::ACTION_TIMEOUT};
 
+/// The desktop's `INLINE_BUTTONS`: plugin buttons that show before the rest move into a menu. Pinned ones always show,
+/// and take these places first.
+const INLINE_BUTTONS: usize = 3;
+
 /// The desktop's `--popover`, the card's colour.
 const CARD: u32 = 0x201d23;
 /// A pane's status strip: fixed, so an update never changes the terminal's rows. Only the strip appearing or going away
@@ -560,8 +564,11 @@ impl Workspace {
     /// label the plugin set (`setSidebarLabel`) follows the icon behind a tone dot, as the desktop's `ProjectBar` draws
     /// it, and its rows show when you point at the button. A sidebar with a popover page shows that instead, under the
     /// button, while you point at it (the desktop's `WithPopover`).
+    /// The project bar's plugin buttons, as the desktop's: the pinned ones in the order they were pinned, then others up
+    /// to `INLINE_BUTTONS`, and a menu of the rest that also chooses which stay in the bar.
     pub(super) fn sidebar_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        self.plugins
+        let all: Vec<_> = self
+            .plugins
             .iter()
             .flat_map(|installed| {
                 installed
@@ -569,7 +576,151 @@ impl Workspace {
                     .iter()
                     .map(move |sidebar| (installed, sidebar))
             })
+            .collect();
+        let key_of = |(installed, sidebar): &(&Installed, &crate::installed::Sidebar)| {
+            format!("{}:{}", installed.id, sidebar.id)
+        };
+        let keys: Vec<String> = all.iter().map(key_of).collect();
+        let (inline, overflow) = split_buttons(&keys, &self.plugin_ui.pinned);
+        let pinned_any = inline
+            .iter()
+            .any(|at| self.plugin_ui.pinned.contains(&keys[*at]));
+        let overflow: Vec<_> = overflow.iter().map(|at| all[*at]).collect();
+        let mut buttons: Vec<AnyElement> = inline
+            .iter()
+            .map(|at| self.sidebar_button(all[*at].0, all[*at].1, cx))
+            .collect();
+        if !overflow.is_empty() || pinned_any {
+            let keys: Vec<_> = all
+                .iter()
+                .map(|button| (key_of(button), button.1.title.clone()))
+                .collect();
+            buttons.push(self.buttons_menu(&overflow, keys, cx));
+        }
+        buttons
+    }
+
+    /// The "…" after the plugin buttons: the ones that didn't fit, then "Keep in bar" with a check by each pinned one.
+    fn buttons_menu(
+        &self,
+        overflow: &[(&Installed, &crate::installed::Sidebar)],
+        all: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut items: Vec<AnyElement> = overflow
+            .iter()
             .map(|(installed, sidebar)| {
+                let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
+                // A live label, like a running timer, after the title as in the bar.
+                let label = self
+                    .plugin_ui
+                    .labels
+                    .get(&(plugin.clone(), page.clone()))
+                    .map(|label| {
+                        div()
+                            .ml(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .max_w(px(200.0))
+                            .text_size(px(12.0))
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(ui::dot(tone_dot(label.tone)))
+                            .child(div().min_w_0().truncate().child(label.text.clone()))
+                    });
+                ui::select_item_with(
+                    SharedString::from(format!("plugin-more-{plugin}-{page}")),
+                    sidebar_glyph(installed, &page, 16.0),
+                    sidebar.title.clone(),
+                )
+                .children(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.plugin_ui.buttons_menu = false;
+                    this.toggle_sidebar(&plugin, &page, cx);
+                }))
+                .into_any_element()
+            })
+            .collect();
+        if !overflow.is_empty() {
+            items.push(ui::menu_separator());
+        }
+        items.push(
+            div()
+                .px(px(8.0))
+                .py(px(6.0))
+                .text_size(px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .child("Keep in bar")
+                .into_any_element(),
+        );
+        items.extend(all.into_iter().map(|(key, title)| {
+            let checked = self.plugin_ui.pinned.contains(&key);
+            ui::select_item(SharedString::from(format!("keep-{key}")), title, checked)
+                .role(Role::MenuItemCheckBox)
+                .aria_toggled(if checked {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(&key, cx)))
+                .into_any_element()
+        }));
+        let label = if overflow.is_empty() {
+            "Plugin buttons".to_string()
+        } else {
+            format!("{} more from plugins", overflow.len())
+        };
+        let open = self.plugin_ui.buttons_menu;
+        div()
+            .flex()
+            .flex_col()
+            .items_end()
+            .child(
+                ui::icon_button("plugin-buttons", Icon::Ellipsis, label, ButtonSize::Sm).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.plugin_ui.buttons_menu = !this.plugin_ui.buttons_menu;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .children(
+                self.popover_phase("plugin-buttons-menu", open, cx)
+                    .map(|phase| {
+                        motion::with_phase(phase, || {
+                            ui::popover(ui::select_menu(items).w(px(224.0)).on_mouse_down_out(
+                                cx.listener(|this, _, _, cx| {
+                                    this.plugin_ui.buttons_menu = false;
+                                    cx.notify();
+                                }),
+                            ))
+                        })
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// Keeps a plugin button in the bar, or lets it go back to its place among the others.
+    pub(super) fn toggle_pin(&mut self, key: &str, cx: &mut Context<Self>) {
+        let pinned = &mut self.plugin_ui.pinned;
+        match pinned.iter().position(|kept| kept == key) {
+            Some(at) => {
+                pinned.remove(at);
+            }
+            None => pinned.push(key.to_owned()),
+        }
+        self.save(cx);
+        cx.notify();
+    }
+
+    fn sidebar_button(
+        &self,
+        installed: &Installed,
+        sidebar: &crate::installed::Sidebar,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        {
+            {
                 let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
                 let key = (plugin.clone(), page.clone());
                 let open = self.right.as_ref() == Some(&key);
@@ -634,8 +785,8 @@ impl Workspace {
                     .child(button)
                     .children(card)
                     .into_any_element()
-            })
-            .collect()
+            }
+        }
     }
 
     /// The popover page of the sidebar `key` under its button, while it is shown or on its way out.
@@ -1252,5 +1403,52 @@ impl Workspace {
             .pages
             .get(&key)
             .map(|(page, _)| page.clone())
+    }
+}
+
+/// Which plugin buttons show in the bar and which go in its menu, by index into `keys`, as the desktop's `ProjectBar`:
+/// the pinned ones in the order they were pinned, then the others in order up to `INLINE_BUTTONS`.
+fn split_buttons(keys: &[String], pinned: &[String]) -> (Vec<usize>, Vec<usize>) {
+    let mut inline: Vec<usize> = pinned
+        .iter()
+        .filter_map(|key| keys.iter().position(|k| k == key))
+        .collect();
+    let rest: Vec<usize> = (0..keys.len())
+        .filter(|at| !pinned.contains(&keys[*at]))
+        .collect();
+    let free = INLINE_BUTTONS.saturating_sub(inline.len()).min(rest.len());
+    inline.extend(&rest[..free]);
+    (inline, rest[free..].to_vec())
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::split_buttons;
+
+    fn keys(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn three_buttons_show_and_the_rest_go_in_the_menu() {
+        let all = keys(&["a:1", "b:1", "c:1", "d:1", "e:1"]);
+        assert_eq!(split_buttons(&all, &[]), (vec![0, 1, 2], vec![3, 4]));
+    }
+
+    #[test]
+    fn pinned_buttons_show_first_in_the_order_they_were_pinned_and_take_the_places() {
+        let all = keys(&["a:1", "b:1", "c:1", "d:1", "e:1"]);
+        assert_eq!(
+            split_buttons(&all, &keys(&["e:1", "c:1"])),
+            (vec![4, 2, 0], vec![1, 3])
+        );
+        // More pinned than places: all of them show, and nothing else.
+        let pins = keys(&["e:1", "d:1", "c:1", "b:1"]);
+        assert_eq!(split_buttons(&all, &pins), (vec![4, 3, 2, 1], vec![0]));
+        // A pin of a plugin that's gone counts for nothing.
+        assert_eq!(
+            split_buttons(&all, &keys(&["gone:1"])),
+            (vec![0, 1, 2], vec![3, 4])
+        );
     }
 }

@@ -706,6 +706,10 @@ pub(super) struct PluginUi {
     pub(super) needs_update: std::cell::RefCell<NeedsUpdate>,
     /// The notifications the system couldn't show, newest last.
     pub(super) notices: Vec<Notice>,
+    /// The plugin buttons kept in the project bar, as `plugin:sidebar`, in the order they were pinned.
+    pub(super) pinned: Vec<String>,
+    /// The project bar's menu of plugin buttons is open.
+    pub(super) buttons_menu: bool,
     next_notice: usize,
     notice_timers: Vec<Task<()>>,
     pub(super) right_slide: super::plugin_ui::RightSlide,
