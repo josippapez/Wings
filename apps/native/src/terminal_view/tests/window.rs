@@ -427,3 +427,35 @@ fn left_option_types_meta_and_right_option_is_left_to_text_input() {
     super::input::OPTION_KEYS.set((false, false));
     window.update(|view, _, _| view.runtime.shutdown());
 }
+
+#[test]
+fn a_hidden_window_gets_no_new_screens_until_it_shows_again() {
+    let (app, mut window) = open("printf 'ready'; sleep 30");
+    settle(&app, &mut window, shows("ready"));
+    window.update(|view, _, cx| view.set_window_visible(false, cx));
+    let print = |window: &mut View, bytes: &[u8]| {
+        let bytes = bytes.to_vec();
+        window.read(|view, _| {
+            view.runtime.output.send_blocking(bytes).unwrap();
+            view.runtime
+                .commands
+                .send_blocking(Command::Output)
+                .unwrap();
+        });
+    };
+    print(&mut window, b"\r\nunseen");
+    // The model reads it, but makes no screen nobody can see.
+    thread::sleep(Duration::from_millis(300));
+    assert!(!window.read(|view, _| visible_text(&view.latest.lock().unwrap()).contains("unseen")));
+
+    window.update(|view, _, cx| view.set_window_visible(true, cx));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|view, _| visible_text(&view.latest.lock().unwrap()).contains("unseen")) {
+        assert!(
+            Instant::now() < deadline,
+            "no screen came when the window showed: {:?}",
+            window.read(|view, _| visible_text(&view.latest.lock().unwrap()))
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}

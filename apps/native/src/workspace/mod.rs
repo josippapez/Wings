@@ -254,6 +254,7 @@ pub struct Workspace {
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
+    _visibility: Subscription,
     _quit: Subscription,
 }
 
@@ -396,6 +397,19 @@ impl Workspace {
                     {
                         break;
                     }
+                }
+            }),
+            _visibility: cx.observe_window_visibility(window, |this, visibility, _, cx| {
+                let terminals = this
+                    .panes
+                    .values()
+                    .filter_map(|pane| pane.view.as_ref().ok().cloned())
+                    .chain(this.loose.iter().map(|quick| quick.view().clone()))
+                    .collect::<Vec<_>>();
+                for terminal in terminals {
+                    terminal.update(cx, |view, cx| {
+                        view.set_window_visible(visibility.is_visible(), cx)
+                    });
                 }
             }),
             _activation: cx.observe_window_activation(window, |this, window, cx| {

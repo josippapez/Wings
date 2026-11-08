@@ -183,6 +183,8 @@ pub struct TerminalView {
     /// Keys you typed are waiting in the prompt, not yet sent with Enter or cleared with Ctrl-C (the desktop's PaneInput).
     typed: bool,
     visible: bool,
+    /// The window is covered, minimized or on a locked screen, so nothing it draws is seen.
+    window_hidden: bool,
     autofocus: bool,
     /// Wheel movement smaller than one line, kept for the next event.
     scroll_rest: f32,
@@ -359,6 +361,7 @@ impl TerminalView {
             marked: String::new(),
             typed: false,
             visible: true,
+            window_hidden: false,
             autofocus: true,
             scroll_rest: 0.0,
             drag: None,
@@ -535,8 +538,23 @@ impl TerminalView {
             });
         }
         self.visible = visible;
-        self.runtime.visible.store(visible, Ordering::Release);
-        if visible {
+        self.sync_model_visibility(cx);
+    }
+
+    /// The window's visibility, from its owner. While nothing in the window can be seen, the model keeps reading the
+    /// shell's output but stops making screens for a view that won't draw them, and makes one when the window shows.
+    pub fn set_window_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.window_hidden != visible {
+            return;
+        }
+        self.window_hidden = !visible;
+        self.sync_model_visibility(cx);
+    }
+
+    fn sync_model_visibility(&mut self, cx: &mut Context<Self>) {
+        let shown = self.visible && !self.window_hidden;
+        self.runtime.visible.store(shown, Ordering::Release);
+        if shown {
             let latest = self.latest.lock().unwrap().clone();
             self.show(latest);
             self.send(Command::Refresh, cx);
