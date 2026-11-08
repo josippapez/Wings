@@ -341,6 +341,56 @@ fn sized<T: Default>() -> T {
     value
 }
 
+/// `value` as the `void *out` a Ghostty getter writes its answer into.
+fn out_ptr<T>(value: &mut T) -> *mut c_void {
+    value as *mut T as *mut c_void
+}
+
+// Typed forms of Ghostty's getters. Each writes what `data` names into `value`, and some read it first: a sized
+// struct's size, the handle to fill, a buffer's capacity.
+//
+// Safety: the handle is live, and `T` is the type Ghostty documents for `data`.
+
+unsafe fn terminal_get<T>(
+    term: GhosttyTerminal,
+    data: GhosttyTerminalData,
+    value: &mut T,
+) -> GhosttyResult {
+    unsafe { ghostty_terminal_get(term, data, out_ptr(value)) }
+}
+
+unsafe fn render_state_get<T>(
+    render: GhosttyRenderState,
+    data: GhosttyRenderStateData,
+    value: &mut T,
+) -> GhosttyResult {
+    unsafe { ghostty_render_state_get(render, data, out_ptr(value)) }
+}
+
+unsafe fn render_state_row_get<T>(
+    rows: GhosttyRenderStateRowIterator,
+    data: GhosttyRenderStateRowData,
+    value: &mut T,
+) -> GhosttyResult {
+    unsafe { ghostty_render_state_row_get(rows, data, out_ptr(value)) }
+}
+
+unsafe fn render_state_row_cells_get<T>(
+    cells: GhosttyRenderStateRowCells,
+    data: GhosttyRenderStateRowCellsData,
+    value: &mut T,
+) -> GhosttyResult {
+    unsafe { ghostty_render_state_row_cells_get(cells, data, out_ptr(value)) }
+}
+
+unsafe fn row_get<T>(row: GhosttyRow, data: GhosttyRowData, value: &mut T) -> GhosttyResult {
+    unsafe { ghostty_row_get(row, data, out_ptr(value)) }
+}
+
+unsafe fn cell_get<T>(cell: GhosttyCell, data: GhosttyCellData, value: &mut T) -> GhosttyResult {
+    unsafe { ghostty_cell_get(cell, data, out_ptr(value)) }
+}
+
 fn shared(userdata: *mut c_void) -> &'static mut Shared {
     unsafe { &mut *(userdata as *mut Shared) }
 }
@@ -365,15 +415,10 @@ unsafe extern "C" fn on_write_pty(
 /// Ghostty sets the title before it calls this, so the title event keeps its place among the others.
 unsafe extern "C" fn on_title(term: GhosttyTerminal, userdata: *mut c_void) {
     let mut title = GhosttyString::default();
-    let title = unsafe {
-        ghostty_terminal_get(
-            term,
-            GHOSTTY_TERMINAL_DATA_TITLE,
-            &mut title as *mut _ as *mut c_void,
-        ) == GHOSTTY_SUCCESS
-    }
-    .then(|| String::from_utf8_lossy(unsafe { string(title) }).into_owned())
-    .filter(|title| !title.is_empty());
+    let title =
+        unsafe { terminal_get(term, GHOSTTY_TERMINAL_DATA_TITLE, &mut title) == GHOSTTY_SUCCESS }
+            .then(|| String::from_utf8_lossy(unsafe { string(title) }).into_owned())
+            .filter(|title| !title.is_empty());
     shared(userdata).events.push(Event::Title(title));
 }
 
@@ -660,11 +705,7 @@ impl GridPane {
         let mut cursor: GhosttyRenderStateCursor = sized();
         unsafe {
             ghostty_render_state_update(self.render, self.term);
-            ghostty_render_state_get(
-                self.render,
-                GHOSTTY_RENDER_STATE_DATA_CURSOR,
-                &mut cursor as *mut _ as *mut c_void,
-            );
+            render_state_get(self.render, GHOSTTY_RENDER_STATE_DATA_CURSOR, &mut cursor);
         }
         cursor.visual_style
     }
@@ -795,19 +836,14 @@ impl GridPane {
 
     fn get<T: Default>(&self, data: GhosttyTerminalData) -> Option<T> {
         let mut value = T::default();
-        let result =
-            unsafe { ghostty_terminal_get(self.term, data, &mut value as *mut T as *mut c_void) };
+        let result = unsafe { terminal_get(self.term, data, &mut value) };
         (result == GHOSTTY_SUCCESS).then_some(value)
     }
 
     fn mode_on(&self, mode: GhosttyMode) -> bool {
         let mut config = GhosttyTerminalModeConfig { mode, value: false };
         unsafe {
-            ghostty_terminal_get(
-                self.term,
-                GHOSTTY_TERMINAL_DATA_MODE,
-                &mut config as *mut _ as *mut c_void,
-            );
+            terminal_get(self.term, GHOSTTY_TERMINAL_DATA_MODE, &mut config);
         }
         config.value
     }
@@ -925,11 +961,7 @@ impl GridPane {
     pub fn color(&self, index: usize) -> u32 {
         let mut palette = [GhosttyColorRgb::default(); 256];
         unsafe {
-            ghostty_terminal_get(
-                self.term,
-                GHOSTTY_TERMINAL_DATA_COLOR_PALETTE,
-                palette.as_mut_ptr() as *mut c_void,
-            );
+            terminal_get(self.term, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, &mut palette);
         }
         packed(palette[index])
     }
@@ -952,11 +984,7 @@ impl GridPane {
         self.read_rows(self.render, |_, row| cells.extend(row));
         let mut cursor: GhosttyRenderStateCursor = sized();
         unsafe {
-            ghostty_render_state_get(
-                self.render,
-                GHOSTTY_RENDER_STATE_DATA_CURSOR,
-                &mut cursor as *mut _ as *mut c_void,
-            );
+            render_state_get(self.render, GHOSTTY_RENDER_STATE_DATA_CURSOR, &mut cursor);
         }
         let cursor = (cursor.visible && cursor.viewport_has_value).then(|| Cursor {
             row: cursor.viewport_y as usize,
@@ -977,10 +1005,10 @@ impl GridPane {
         let mut placements = Vec::new();
         unsafe {
             let mut iter = self.image_iter;
-            if ghostty_render_state_get(
+            if render_state_get(
                 self.render,
                 GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR,
-                &mut iter as *mut _ as *mut c_void,
+                &mut iter,
             ) != GHOSTTY_SUCCESS
             {
                 return placements;
@@ -1010,21 +1038,21 @@ impl GridPane {
                 ];
                 let [sx, sy, sw, sh] = &mut source;
                 let mut values: [*mut c_void; 15] = [
-                    &mut protocol as *mut _ as *mut c_void,
-                    &mut id as *mut _ as *mut c_void,
-                    &mut generation as *mut _ as *mut c_void,
-                    &mut layer as *mut _ as *mut c_void,
-                    &mut z as *mut _ as *mut c_void,
-                    &mut col as *mut _ as *mut c_void,
-                    &mut row as *mut _ as *mut c_void,
-                    &mut offset_x as *mut _ as *mut c_void,
-                    &mut offset_y as *mut _ as *mut c_void,
-                    &mut width as *mut _ as *mut c_void,
-                    &mut height as *mut _ as *mut c_void,
-                    sx as *mut _ as *mut c_void,
-                    sy as *mut _ as *mut c_void,
-                    sw as *mut _ as *mut c_void,
-                    sh as *mut _ as *mut c_void,
+                    out_ptr(&mut protocol),
+                    out_ptr(&mut id),
+                    out_ptr(&mut generation),
+                    out_ptr(&mut layer),
+                    out_ptr(&mut z),
+                    out_ptr(&mut col),
+                    out_ptr(&mut row),
+                    out_ptr(&mut offset_x),
+                    out_ptr(&mut offset_y),
+                    out_ptr(&mut width),
+                    out_ptr(&mut height),
+                    out_ptr(sx),
+                    out_ptr(sy),
+                    out_ptr(sw),
+                    out_ptr(sh),
                 ];
                 let read = ghostty_render_state_image_get_multi(
                     iter,
@@ -1062,11 +1090,7 @@ impl GridPane {
     pub(crate) fn image_bytes(&self) -> u64 {
         let mut usage: GhosttyTerminalMemoryUsage = sized();
         unsafe {
-            ghostty_terminal_get(
-                self.term,
-                GHOSTTY_TERMINAL_DATA_MEMORY_USAGE,
-                &mut usage as *mut _ as *mut c_void,
-            );
+            terminal_get(self.term, GHOSTTY_TERMINAL_DATA_MEMORY_USAGE, &mut usage);
         }
         usage.primary_image_bytes + usage.alternate_image_bytes
     }
@@ -1076,10 +1100,10 @@ impl GridPane {
     pub fn image_pixels(&self, id: u32) -> Option<crate::images::Rgba> {
         let mut graphics: GhosttyKittyGraphics = ptr::null_mut();
         unsafe {
-            if ghostty_terminal_get(
+            if terminal_get(
                 self.term,
                 GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
-                &mut graphics as *mut _ as *mut c_void,
+                &mut graphics,
             ) != GHOSTTY_SUCCESS
                 || graphics.is_null()
             {
@@ -1099,10 +1123,10 @@ impl GridPane {
                 GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
             ];
             let mut values: [*mut c_void; 4] = [
-                &mut width as *mut _ as *mut c_void,
-                &mut height as *mut _ as *mut c_void,
-                &mut format as *mut _ as *mut c_void,
-                &mut pixels as *mut _ as *mut c_void,
+                out_ptr(&mut width),
+                out_ptr(&mut height),
+                out_ptr(&mut format),
+                out_ptr(&mut pixels),
             ];
             if ghostty_kitty_graphics_image_get_multi(
                 image,
@@ -1143,50 +1167,26 @@ impl GridPane {
     fn read_rows(&self, render: GhosttyRenderState, mut f: impl FnMut(i32, Vec<Cell>)) {
         let mut colors: GhosttyRenderStateColors = sized();
         unsafe {
-            ghostty_render_state_get(
-                render,
-                GHOSTTY_RENDER_STATE_DATA_COLORS,
-                &mut colors as *mut _ as *mut c_void,
-            );
+            render_state_get(render, GHOSTTY_RENDER_STATE_DATA_COLORS, &mut colors);
             let mut rows_it = self.rows_it;
-            ghostty_render_state_get(
-                render,
-                GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                &mut rows_it as *mut _ as *mut c_void,
-            );
+            render_state_get(render, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &mut rows_it);
             let (fg, bg) = (packed(colors.foreground), packed(colors.background));
             let mut utf8 = Vec::new();
             while ghostty_render_state_row_iterator_next(rows_it) {
                 let mut y: i32 = 0;
-                ghostty_render_state_row_get(
-                    rows_it,
-                    GHOSTTY_RENDER_STATE_ROW_DATA_VIEWPORT_Y,
-                    &mut y as *mut _ as *mut c_void,
-                );
+                render_state_row_get(rows_it, GHOSTTY_RENDER_STATE_ROW_DATA_VIEWPORT_Y, &mut y);
                 let mut raw: GhosttyRow = 0;
-                ghostty_render_state_row_get(
-                    rows_it,
-                    GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
-                    &mut raw as *mut _ as *mut c_void,
-                );
+                render_state_row_get(rows_it, GHOSTTY_RENDER_STATE_ROW_DATA_RAW, &mut raw);
                 let mut wraps = false;
-                ghostty_row_get(
-                    raw,
-                    GHOSTTY_ROW_DATA_WRAP,
-                    &mut wraps as *mut _ as *mut c_void,
-                );
+                row_get(raw, GHOSTTY_ROW_DATA_WRAP, &mut wraps);
                 let mut selection: GhosttyRenderStateRowSelection = sized();
-                let selected = ghostty_render_state_row_get(
+                let selected = render_state_row_get(
                     rows_it,
                     GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION,
-                    &mut selection as *mut _ as *mut c_void,
+                    &mut selection,
                 ) == GHOSTTY_SUCCESS;
                 let mut cells = self.cells;
-                ghostty_render_state_row_get(
-                    rows_it,
-                    GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                    &mut cells as *mut _ as *mut c_void,
-                );
+                render_state_row_get(rows_it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &mut cells);
                 let mut row = Vec::with_capacity(self.cols);
                 while ghostty_render_state_row_cells_next(cells) {
                     let x = row.len() as u16;
@@ -1269,11 +1269,7 @@ impl GridPane {
         unsafe {
             ghostty_render_state_update(self.render, self.term);
             let mut dirty: GhosttyRenderStateDirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
-            ghostty_render_state_get(
-                self.render,
-                GHOSTTY_RENDER_STATE_DATA_DIRTY,
-                &mut dirty as *mut _ as *mut c_void,
-            );
+            render_state_get(self.render, GHOSTTY_RENDER_STATE_DATA_DIRTY, &mut dirty);
             if dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL {
                 return None;
             }
@@ -1282,19 +1278,15 @@ impl GridPane {
                 return Some(lines);
             }
             let mut rows_it = self.rows_it;
-            ghostty_render_state_get(
+            render_state_get(
                 self.render,
                 GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                &mut rows_it as *mut _ as *mut c_void,
+                &mut rows_it,
             );
             let mut y = 0;
             while ghostty_render_state_row_iterator_next(rows_it) {
                 let mut row_dirty = false;
-                ghostty_render_state_row_get(
-                    rows_it,
-                    GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
-                    &mut row_dirty as *mut _ as *mut c_void,
-                );
+                render_state_row_get(rows_it, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &mut row_dirty);
                 if row_dirty {
                     lines.push(y);
                 }
@@ -1550,11 +1542,7 @@ impl GridPane {
                 let (mut cell, mut text): (GhosttyCell, bool) = (0, false);
                 unsafe {
                     ghostty_grid_ref_cell(&at, &mut cell) == GHOSTTY_SUCCESS
-                        && ghostty_cell_get(
-                            cell,
-                            GHOSTTY_CELL_DATA_HAS_TEXT,
-                            &mut text as *mut _ as *mut c_void,
-                        ) == GHOSTTY_SUCCESS
+                        && cell_get(cell, GHOSTTY_CELL_DATA_HAS_TEXT, &mut text) == GHOSTTY_SUCCESS
                         && text
                 }
             })
@@ -1713,36 +1701,27 @@ unsafe fn read_cell(
     utf8: &mut Vec<u8>,
 ) -> Cell {
     unsafe {
-        let get = |data, out: *mut c_void| ghostty_render_state_row_cells_get(cells, data, out);
         let mut raw: GhosttyCell = 0;
-        get(
-            GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
-            &mut raw as *mut _ as *mut c_void,
-        );
+        render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &mut raw);
         let mut wide: GhosttyCellWide = GHOSTTY_CELL_WIDE_NARROW;
-        ghostty_cell_get(
-            raw,
-            GHOSTTY_CELL_DATA_WIDE,
-            &mut wide as *mut _ as *mut c_void,
-        );
+        cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &mut wide);
         let mut style = GhosttyStyle::default();
-        get(
-            GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
-            &mut style as *mut _ as *mut c_void,
-        );
+        render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &mut style);
         let mut color = GhosttyColorRgb::default();
-        let mut fg = if get(
+        let mut fg = if render_state_row_cells_get(
+            cells,
             GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
-            &mut color as *mut _ as *mut c_void,
+            &mut color,
         ) == GHOSTTY_SUCCESS
         {
             packed(color)
         } else {
             default_fg
         };
-        let mut bg = if get(
+        let mut bg = if render_state_row_cells_get(
+            cells,
             GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-            &mut color as *mut _ as *mut c_void,
+            &mut color,
         ) == GHOSTTY_SUCCESS
         {
             packed(color)
@@ -1795,9 +1774,10 @@ unsafe fn read_cell(
                 cap: utf8.capacity(),
                 len: 0,
             };
-            let mut result = get(
+            let mut result = render_state_row_cells_get(
+                cells,
                 GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
-                &mut buffer as *mut _ as *mut c_void,
+                &mut buffer,
             );
             if result == GHOSTTY_OUT_OF_SPACE {
                 utf8.reserve(buffer.len);
@@ -1806,9 +1786,10 @@ unsafe fn read_cell(
                     cap: utf8.capacity(),
                     len: 0,
                 };
-                result = get(
+                result = render_state_row_cells_get(
+                    cells,
                     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
-                    &mut buffer as *mut _ as *mut c_void,
+                    &mut buffer,
                 );
             }
             if result == GHOSTTY_SUCCESS && buffer.len > 0 {
