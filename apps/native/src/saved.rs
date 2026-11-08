@@ -180,6 +180,9 @@ pub struct Settings {
     /// A message an agent or plugin sends to another agent is submitted with Enter, as the desktop's `agentsMessage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents_message: Option<bool>,
+    /// Where the first terminal an agent opens goes: `below`, `right` or `float`, as the desktop's `agentTerminalsOpen`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_terminals_open: Option<String>,
     /// The sidebar's width in points, as last dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<f32>,

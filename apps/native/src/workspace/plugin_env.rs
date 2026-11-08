@@ -903,6 +903,41 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The shell `plan` asks for, in its project, which is then the one shown: what `open_plugin_pane` opens before it
+    /// places it.
+    pub(super) fn start_plugin_pane(
+        &mut self,
+        plan: &OpenPane,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Result<usize, String> {
+        if !self
+            .projects
+            .iter()
+            .any(|project| project.path == plan.project)
+        {
+            return Err("The pane's project is no longer open".into());
+        }
+        let roots: Vec<_> = self
+            .projects
+            .iter()
+            .map(|project| project.path.clone())
+            .collect();
+        let (_, cwd) = wings_plugins::panes::pane_cwd(&plan.cwd, &roots, None)?;
+        self.switch_project(plan.project.clone(), window, cx);
+        // The account `openPane` asked for, else the project's. The host checked the plugin may, and the name.
+        if let Some(Err(error)) = plan.claude_account.as_ref().map(claude_accounts::pick_dir) {
+            return Err(error);
+        }
+        let pane = self.open_pane_as(Some(cwd), None, plan.claude_account.clone(), cx);
+        if let Err(error) = &self.panes[&pane].view {
+            let error = error.to_string();
+            self.panes.remove(&pane);
+            return Err(error);
+        }
+        Ok(pane)
+    }
+
     pub(super) fn open_plugin_pane(
         &mut self,
         plan: OpenPane,
@@ -910,33 +945,10 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        if !self
-            .projects
-            .iter()
-            .any(|project| project.path == plan.project)
-        {
-            return reply.err("The pane's project is no longer open".into());
-        }
-        let roots: Vec<_> = self
-            .projects
-            .iter()
-            .map(|project| project.path.clone())
-            .collect();
-        let cwd = match wings_plugins::panes::pane_cwd(&plan.cwd, &roots, None) {
-            Ok((_, cwd)) => cwd,
+        let pane = match self.start_plugin_pane(&plan, window, cx) {
+            Ok(pane) => pane,
             Err(error) => return reply.err(error),
         };
-        self.switch_project(plan.project, window, cx);
-        // The account `openPane` asked for, else the project's. The host checked the plugin may, and the name.
-        if let Some(Err(error)) = plan.claude_account.as_ref().map(claude_accounts::pick_dir) {
-            return reply.err(error);
-        }
-        let pane = self.open_pane_as(Some(cwd), None, plan.claude_account, cx);
-        if let Err(error) = &self.panes[&pane].view {
-            let error = error.to_string();
-            self.panes.remove(&pane);
-            return reply.err(error);
-        }
         let split =
             (plan.placement != "tab")
                 .then_some(self.active)

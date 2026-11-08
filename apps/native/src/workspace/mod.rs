@@ -2,6 +2,9 @@
 //! Issues tab, with the desktop app's shortcuts.
 
 mod agent_list;
+mod agent_terminals;
+#[cfg(all(test, feature = "test-support"))]
+mod agent_terminals_tests;
 mod claude;
 pub use claude::AccountStatus;
 mod context_menu;
@@ -12,6 +15,7 @@ mod editor;
 mod exits;
 #[cfg(all(test, feature = "test-support"))]
 mod finder_tests;
+mod floating;
 mod global_hotkey;
 mod harnesses;
 mod history;
@@ -212,6 +216,8 @@ pub struct Workspace {
     agents: HashMap<usize, Agent>,
     /// What each pane runs now, from the last detection.
     pane_info: HashMap<usize, PaneInfo>,
+    /// The terminals agents opened with `open_pane`, and which float over their agent.
+    agent_terminals: agent_terminals::AgentTerminals,
     window_active: bool,
     settings: Option<settings::SettingsDialog>,
     updates: updater::Updates,
@@ -365,6 +371,7 @@ impl Workspace {
             exits: Default::default(),
             agents: HashMap::new(),
             pane_info: HashMap::new(),
+            agent_terminals: Default::default(),
             window_active: window.is_window_active(),
             settings: None,
             updates: updater::Updates::new(cx),
@@ -557,6 +564,9 @@ impl Workspace {
             // Off unless turned on, as the desktop's `saved.agentsRunCommands === true`.
             agents_run_commands: settings.agents_run_commands == Some(true),
             agents_message: settings.agents_message == Some(true),
+            agent_terminals_open: agent_terminals::Opens::parse(
+                settings.agent_terminals_open.as_deref(),
+            ),
             notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
             seen_plugins: settings.seen_plugins,
             diff_wrap: settings.diff_wrap == Some(true),
@@ -699,6 +709,7 @@ impl Workspace {
                                 &tab.layout,
                                 &mut Vec::new(),
                                 tab.focused,
+                                &self.floating_in(&tab.layout),
                                 cx,
                             ),
                         };
@@ -783,8 +794,7 @@ impl Workspace {
         if self.welcome || self.loose_page().is_some() {
             return Vec::new();
         }
-        tab.layout
-            .panes()
+        self.card_panes(tab)
             .into_iter()
             .filter_map(|pane| {
                 let view = self.panes.get(&pane)?.view.as_ref().ok()?;
@@ -1033,6 +1043,11 @@ impl Render for Workspace {
                     .child(main)
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
+                    // The terminals an agent opened floating over its pane, over its terminal.
+                    .child(ui::slot_layer(
+                        agent_terminals::FLOATS,
+                        self.float_layer(cx),
+                    ))
                     .child(ui::slot_layer(
                         QUICK,
                         self.quick_layer(cx)

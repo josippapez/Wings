@@ -52,6 +52,7 @@ fn the_new_settings_are_saved_and_come_back() {
                     prefs.new_project_page = true;
                     prefs.agents_run_commands = true;
                     prefs.agents_message = true;
+                    prefs.agent_terminals_open = agent_terminals::Opens::Float;
                     prefs.notify_sound = SoundSettings {
                         enabled: false,
                         sound: SoundId::Ping,
@@ -92,6 +93,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 new_project_page: true,
                 agents_run_commands: true,
                 agents_message: true,
+                agent_terminals_open: agent_terminals::Opens::Float,
                 notify_sound: SoundSettings {
                     enabled: false,
                     sound: SoundId::Ping,

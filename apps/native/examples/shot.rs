@@ -241,6 +241,11 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-dock") {
         return diff_dock(&mut cx, &config, &out);
     }
+    // `-- <out-dir> agent-terminals` renders only the terminals an agent opened: below it, floating over it, hidden,
+    // to its right, and Settings, Agents.
+    if std::env::args().nth(2).as_deref() == Some("agent-terminals") {
+        return agent_terminals(&mut cx, &config, &fake_claude, &claude_dir, &out);
+    }
     // `-- <out-dir> plugin-settings` renders only Settings showing plugins' own settings pages, and Plugins beside them.
     if std::env::args().nth(2).as_deref() == Some("plugin-settings") {
         return plugin_settings(&mut cx, &config, &out);
@@ -1264,6 +1269,108 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// A made-up plugin's diff of three files, opened from the terminal tab: docked beside it, filling the window, and docked
 /// again with its file list hidden.
+/// An agent (the made-up `claude`) in the first pane opens a dev server, which runs, and a test run, which waits for
+/// Enter. Then the buttons on its terminals float them over it, minimise and dock the panel, hide them and move them
+/// to its right; and Settings, Agents with where they open.
+fn agent_terminals(
+    cx: &mut VisualTestAppContext,
+    config: &Config,
+    fake_claude: &Path,
+    claude_dir: &Path,
+    out: &Path,
+) {
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("agent-terminals-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(3));
+        cx.simulate_input(window, &format!("exec '{}' 131", fake_claude.display()));
+        cx.simulate_keystrokes(window, "enter");
+        wait(cx, window, Duration::from_secs(1));
+        let pids = std::process::Command::new("pgrep")
+            .args(["-f", &format!("{} 131", fake_claude.display())])
+            .output()
+            .expect("run pgrep");
+        for pid in String::from_utf8_lossy(&pids.stdout).split_whitespace() {
+            std::fs::write(
+                claude_dir.join(format!("sessions/{pid}.json")),
+                r#"{"status":"busy","name":"Fix the login redirect"}"#,
+            )
+            .expect("write a session file");
+        }
+        wait(cx, window, Duration::from_secs(2));
+        let open = |cx: &mut VisualTestAppContext, command: &str, run: bool| {
+            handle
+                .update(cx, |workspace, window, cx| {
+                    workspace.sample_agent_terminal(0, command, run, window, cx)
+                })
+                .expect("open the agent's terminal");
+        };
+        open(
+            cx,
+            "printf '\\n  VITE v6.0.0  ready in 412 ms\\n\\n  Local:   http://localhost:5173/\\n'; sleep 301",
+            true,
+        );
+        // Long enough for a shell with a slow profile to start and run it, so it's busy.
+        wait(cx, window, Duration::from_secs(8));
+        save(cx, window, &name("below"));
+        // The dev server keeps it busy, so the test run gets a terminal of its own, beside it.
+        open(cx, "pnpm test --watch", false);
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &name("two"));
+        click(cx, window, spot("agent-float:1"));
+        wait(cx, window, Duration::from_secs(1));
+        save(cx, window, &name("floated"));
+        click(cx, window, spot("float-minimise:0"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("minimised"));
+        click(cx, window, spot("float-dock:0"));
+        wait(cx, window, Duration::from_millis(500));
+        click(cx, window, spot("agent-hide:1"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("hidden"));
+        click(cx, window, spot("agent-terminals:0"));
+        wait(cx, window, Duration::from_millis(500));
+        click(cx, window, spot("agent-move:1"));
+        wait(cx, window, Duration::from_secs(1));
+        save(cx, window, &name("right"));
+        cx.simulate_keystrokes(window, "cmd-,");
+        wait(cx, window, Duration::from_millis(300));
+        click(cx, window, spot("settings-nav:Agents"));
+        wait(cx, window, Duration::from_millis(300));
+        // Down to its last card, where the choice is.
+        cx.simulate_event(
+            window,
+            gpui::ScrollEvent {
+                position: point(px(width / 2.0 + 80.0), px(400.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-3000.0))),
+                ..Default::default()
+            },
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("settings"));
+        click(cx, window, spot("select:agent-terminals-open"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("settings-menu"));
+        click(cx, window, spot("select-item:agent-terminals-open-2"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("settings-float"));
+        cx.simulate_keystrokes(window, "escape");
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+    for pattern in [format!("{} 131", fake_claude.display()), "sleep 301".into()] {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &pattern])
+            .status();
+    }
+}
+
 fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let patch = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,8 +1,10 @@\n use std::time::Duration;\n \n pub fn load() -> Config {\n-    let timeout = 10;\n+    // A slow network gets room to answer before the client gives up.\n+    let timeout = 30;\n+    validate(timeout);\n     Config {\n         timeout: Duration::from_secs(timeout),\n-        retries: 1,\n+        retries: 3,\n     }\n }\ndiff --git a/src/client/retry.rs b/src/client/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/client/retry.rs\n@@ -0,0 +1,4 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    200 * 2u64.pow(attempt)\n+}\n+\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,3 @@\n ## Configuration\n-The client waits 10 seconds.\n+The client waits 30 seconds and retries three times.\n \n";
     let data = Data::temp();

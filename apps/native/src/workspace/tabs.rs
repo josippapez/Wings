@@ -169,10 +169,7 @@ impl Workspace {
                 .terminals
                 .iter()
                 .find(|tab| tab.id == id)
-                .map(|tab| {
-                    tab.zoomed
-                        .map_or_else(|| tab.layout.panes(), |pane| vec![pane])
-                })
+                .map(|tab| self.shown_panes(tab))
                 .unwrap_or_default(),
             Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
         };

@@ -55,20 +55,75 @@ impl Layout {
 
     /// Puts `new` beside `target`: to the right for a row, below for a column.
     pub fn split(&mut self, target: usize, dir: Dir, new: usize) {
+        self.split_at(target, dir, new, 0.5)
+    }
+
+    /// `split`, with `target` taking `ratio` of the length.
+    pub fn split_at(&mut self, target: usize, dir: Dir, new: usize, ratio: f32) {
         match self {
             Layout::Pane(id) if *id == target => {
                 *self = Layout::Split {
                     dir,
-                    ratio: 0.5,
+                    ratio,
                     a: Box::new(Layout::Pane(target)),
                     b: Box::new(Layout::Pane(new)),
                 }
             }
             Layout::Pane(_) => {}
             Layout::Split { a, b, .. } => {
-                a.split(target, dir, new);
-                b.split(target, dir, new);
+                a.split_at(target, dir, new, ratio);
+                b.split_at(target, dir, new, ratio);
             }
+        }
+    }
+
+    /// The split with an agent's own pane on its first side and a terminal it opened on its second, as the desktop's
+    /// `agentSplit`: its path from the root and its direction.
+    pub fn agent_split(
+        &self,
+        owner: usize,
+        opened: &dyn Fn(usize) -> bool,
+    ) -> Option<(Vec<bool>, Dir)> {
+        let Layout::Split { dir, a, b, .. } = self else {
+            return None;
+        };
+        if **a == Layout::Pane(owner) && b.panes().into_iter().any(opened) {
+            return Some((Vec::new(), *dir));
+        }
+        [(false, a), (true, b)]
+            .into_iter()
+            .find_map(|(second, side)| {
+                let (mut path, dir) = side.agent_split(owner, opened)?;
+                path.insert(0, second);
+                Some((path, dir))
+            })
+    }
+
+    pub fn set_dir(&mut self, path: &[bool], to: Dir) {
+        match (self, path.split_first()) {
+            (Layout::Split { dir, .. }, None) => *dir = to,
+            (Layout::Split { a, b, .. }, Some((second, rest))) => {
+                if *second { b } else { a }.set_dir(rest, to)
+            }
+            _ => {}
+        }
+    }
+
+    /// The side of a split on screen when every pane of its other side is `hidden` (an agent's terminals floating over
+    /// it), with its step in the path, as the desktop's `without`: it takes the split's whole place. `None` while both
+    /// sides show.
+    pub fn only_side<'a>(
+        a: &'a Layout,
+        b: &'a Layout,
+        hidden: &[usize],
+    ) -> Option<(bool, &'a Layout)> {
+        let shown = |side: &Layout| side.panes().iter().any(|pane| !hidden.contains(pane));
+        if !shown(a) {
+            Some((true, b))
+        } else if !shown(b) {
+            Some((false, a))
+        } else {
+            None
         }
     }
 
@@ -101,20 +156,32 @@ impl Layout {
     }
 
     /// The same sizes the rendered flex rows give: the first side takes `ratio` of the length,
-    /// then the divider, then the rest.
-    pub fn place(&self, bounds: Bounds<Pixels>) -> Placed {
+    /// then the divider, then the rest. The `hidden` panes take no place (`only_side`).
+    pub fn place(&self, bounds: Bounds<Pixels>, hidden: &[usize]) -> Placed {
         let mut placed = Placed::default();
-        self.place_into(bounds, &mut Vec::new(), &mut placed);
+        self.place_into(bounds, hidden, &mut Vec::new(), &mut placed);
         placed
     }
 
-    fn place_into(&self, bounds: Bounds<Pixels>, path: &mut Vec<bool>, placed: &mut Placed) {
+    fn place_into(
+        &self,
+        bounds: Bounds<Pixels>,
+        hidden: &[usize],
+        path: &mut Vec<bool>,
+        placed: &mut Placed,
+    ) {
         let Layout::Split { dir, ratio, a, b } = self else {
             if let Layout::Pane(id) = self {
                 placed.panes.push((*id, bounds));
             }
             return;
         };
+        if let Some((second, side)) = Layout::only_side(a, b, hidden) {
+            path.push(second);
+            side.place_into(bounds, hidden, path, placed);
+            path.pop();
+            return;
+        }
         placed.splits.push((path.clone(), *dir, bounds));
         let gap = px(DIVIDER);
         let (first, second) = match dir {
@@ -141,7 +208,7 @@ impl Layout {
         };
         for (second_side, child, child_bounds) in [(false, a, first), (true, b, second)] {
             path.push(second_side);
-            child.place_into(child_bounds, path, placed);
+            child.place_into(child_bounds, hidden, path, placed);
             path.pop();
         }
     }
@@ -205,7 +272,7 @@ mod tests {
 
     #[test]
     fn placing_matches_the_rendered_flex_sizes_and_finds_neighbours() {
-        let placed = three().place(area());
+        let placed = three().place(area(), &[]);
         let at = |id| placed.panes.iter().find(|(pane, _)| *pane == id).unwrap().1;
         assert_eq!((at(1).size.width, at(2).size.width), (px(404.0), px(396.0)));
         assert_eq!(at(2).origin.x, px(412.0));

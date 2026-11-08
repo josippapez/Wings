@@ -427,7 +427,10 @@ impl Workspace {
             .terminals
             .iter()
             .find(|t| t.id == tab && t.zoomed.is_none())
-            .and_then(|tab| neighbor(&tab.layout.place(area).panes, tab.focused, toward));
+            .and_then(|tab| {
+                let placed = tab.layout.place(area, &self.floating_in(&tab.layout));
+                neighbor(&placed.panes, tab.focused, toward)
+            });
         if let Some(next) = next {
             self.focus_pane(next, window, cx);
         }
@@ -446,7 +449,7 @@ impl Workspace {
         };
         let split = self.terminals.iter().find(|t| t.id == tab).and_then(|t| {
             t.layout
-                .place(area)
+                .place(area, &self.floating_in(&t.layout))
                 .splits
                 .into_iter()
                 .find(|(at, _, _)| *at == path)

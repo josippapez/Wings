@@ -22,7 +22,9 @@ use crate::{
 };
 
 use super::{
-    HAIRLINE, Workspace, shortcut_label,
+    HAIRLINE, Workspace,
+    agent_terminals::Opens,
+    shortcut_label,
     sound::{self, SoundId, SoundSettings},
 };
 
@@ -125,6 +127,8 @@ pub(super) struct Prefs {
     pub(super) agents_run_commands: bool,
     /// "Let agents message each other": a message for an agent is submitted with Enter.
     pub(super) agents_message: bool,
+    /// "Agent terminals open": where the first terminal an agent opens goes.
+    pub(super) agent_terminals_open: Opens,
     /// The sound for new notifications.
     pub(super) notify_sound: SoundSettings,
     /// Official plugins already announced as new.
@@ -151,6 +155,7 @@ impl Default for Prefs {
             new_project_page: false,
             agents_run_commands: false,
             agents_message: false,
+            agent_terminals_open: Default::default(),
             notify_sound: SoundSettings::default(),
             seen_plugins: Vec::new(),
             diff_wrap: false,
@@ -417,6 +422,7 @@ impl Workspace {
             .enumerate()
             .map(|(index, (label, selected, choose))| {
                 ui::select_item(SharedString::from(format!("{id}-{index}")), label, selected)
+                    .children(ui::spot(|| format!("select-item:{id}-{index}")))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = &mut this.settings {
                             dialog.menu = None;
@@ -433,6 +439,7 @@ impl Workspace {
             .child(
                 ui::select_trigger(id, label, value)
                     .w(width)
+                    .children(ui::spot(|| format!("select:{id}")))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = &mut this.settings {
                             dialog.menu = (dialog.menu != Some(id)).then_some(id);
@@ -1112,6 +1119,27 @@ impl Workspace {
                 self.prefs.agents_message,
                 |this, on, cx| this.set_prefs(|prefs| prefs.agents_message = on, cx),
                 cx,
+            ),
+            ui::setting_row(
+                "Agent terminals open",
+                "Where the first terminal an agent opens for a command goes: in a split below the agent, in a split \
+                 to its right, or floating over it. Its next ones follow, and the buttons on the split switch that \
+                 agent afterwards.",
+                None,
+                self.select(
+                    "agent-terminals-open",
+                    "Agent terminals open",
+                    Opens::CHOICES
+                        .into_iter()
+                        .map(|(opens, label)| {
+                            let choose: Choose = Box::new(move |this, cx| {
+                                this.set_prefs(|prefs| prefs.agent_terminals_open = opens, cx)
+                            });
+                            (label.into(), opens == self.prefs.agent_terminals_open, choose)
+                        })
+                        .collect(),
+                    cx,
+                ),
             ),
         ];
         // The CLIs first, as the desktop's Agents section starts with them.

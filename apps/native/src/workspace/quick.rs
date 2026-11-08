@@ -4,12 +4,11 @@
 //! running. Drag a floating one's header to move it, its top-left corner to resize it, fill the window with it like a
 //! tab, or minimise it to a bar. Like the desktop's, they're in no tab, so nothing saves them.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, Subscription,
-    Window, canvas, div, hsla, point, prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Subscription, Window, canvas, div, prelude::*, px, rgb,
 };
 
 #[cfg(unix)]
@@ -22,7 +21,8 @@ use crate::{
 };
 
 use super::{
-    HAIRLINE, Workspace,
+    Workspace,
+    floating::{EDGE, Gesture, Panel, Rect},
     panes::{Ended, tildify},
 };
 
@@ -33,21 +33,6 @@ pub(super) const SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl+`"
 };
 
-/// The desktop's `PANEL_EDGE`, and the panel's smallest size.
-const EDGE: f32 = 12.0;
-const MIN_W: f32 = 280.0;
-const MIN_H: f32 = 120.0;
-
-/// Where the panel sits, as distances from the bottom-right corner of the pane area, so a smaller window never leaves
-/// it out of view.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Rect {
-    pub(super) right: f32,
-    pub(super) bottom: f32,
-    pub(super) w: f32,
-    pub(super) h: f32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Place {
     /// Out of sight, its shell still running.
@@ -55,14 +40,6 @@ pub(super) enum Place {
     Floating,
     /// Fills the pane area in place of the tab.
     Full,
-}
-
-/// A move of the header or a resize from the corner: where the pointer and the panel were when it started.
-#[derive(Clone, Copy)]
-struct Gesture {
-    resize: bool,
-    from: Point<Pixels>,
-    rect: Rect,
 }
 
 pub(super) struct QuickTerminal {
@@ -281,25 +258,7 @@ impl Workspace {
         let (Some(gesture), Some(area)) = (quick.gesture, quick.area) else {
             return;
         };
-        let (dx, dy) = (
-            (position.x - gesture.from.x).as_f32(),
-            (position.y - gesture.from.y).as_f32(),
-        );
-        let (width, height) = (area.size.width.as_f32(), area.size.height.as_f32());
-        let r = gesture.rect;
-        quick.rect = if gesture.resize {
-            Rect {
-                w: (r.w - dx).clamp(MIN_W, (width - r.right).max(MIN_W)),
-                h: (r.h - dy).clamp(MIN_H, (height - r.bottom).max(MIN_H)),
-                ..r
-            }
-        } else {
-            Rect {
-                right: (r.right - dx).clamp(0.0, (width - r.w).max(0.0)),
-                bottom: (r.bottom - dy).clamp(0.0, (height - r.h).max(0.0)),
-                ..r
-            }
-        };
+        quick.rect = gesture.rect_at(position, area);
         cx.notify();
     }
 
@@ -374,179 +333,93 @@ impl Workspace {
         let full = quick.place == Place::Full;
         let collapsed = quick.minimised && !full;
         let title = quick.title(cx);
-        let header = div()
-            .id(("quick-terminal-header", key))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .h(px(if collapsed { 28.0 } else { 32.0 }))
-            .pl(px(12.0))
-            .pr(px(4.0))
-            .text_size(px(12.0))
-            .when(!full, |header| {
-                header.cursor_grab().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
-                            quick.gesture = Some(Gesture {
-                                resize: false,
-                                from: event.position,
-                                rect: quick.rect,
-                            });
-                        }
-                        cx.stop_propagation();
-                    }),
-                )
-            })
-            .when(collapsed, |header| {
-                header.on_click(cx.listener(move |this, _, window, cx| {
-                    this.place_quick(key, Place::Floating, false, window, cx)
-                }))
-            })
-            .child(icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND))
-            .child(
+        let mut header = vec![
+            icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title)
+                .into_any_element(),
+        ];
+        if !full && self.prefs.quick_terminal && self.loose_last == Some(key) {
+            header.push(
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(title),
-            )
-            .when(
-                !full && self.prefs.quick_terminal && self.loose_last == Some(key),
-                |header| {
-                    header.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(SHORTCUT),
-                    )
+                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .child(SHORTCUT)
+                    .into_any_element(),
+            );
+        }
+        header.push(div().flex_1().into_any_element());
+        if !collapsed {
+            header.push(
+                ui::icon_button(
+                    ("quick-fill", key),
+                    if full { Icon::Minimize } else { Icon::Maximize },
+                    if full {
+                        "Detach to a floating panel"
+                    } else {
+                        "Fill the window like a tab"
+                    },
+                    ButtonSize::Xs,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let to = if full { Place::Floating } else { Place::Full };
+                    this.place_quick(key, to, false, window, cx)
+                }))
+                .into_any_element(),
+            );
+        }
+        if !collapsed && !full {
+            header.push(
+                ui::icon_button(
+                    ("quick-minimise", key),
+                    Icon::Minus,
+                    "Minimise to a bar",
+                    ButtonSize::Xs,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.place_quick(key, Place::Floating, true, window, cx)
+                }))
+                .into_any_element(),
+            );
+        }
+        header.push(
+            ui::icon_button(
+                ("quick-close", key),
+                Icon::X,
+                "Close and end the shell",
+                if collapsed {
+                    ButtonSize::Tiny
+                } else {
+                    ButtonSize::Xs
                 },
             )
-            .child(div().flex_1())
-            .when(!collapsed, |header| {
-                header.child(
-                    ui::icon_button(
-                        ("quick-fill", key),
-                        if full { Icon::Minimize } else { Icon::Maximize },
-                        if full {
-                            "Detach to a floating panel"
-                        } else {
-                            "Fill the window like a tab"
-                        },
-                        ButtonSize::Xs,
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let to = if full { Place::Floating } else { Place::Full };
-                        this.place_quick(key, to, false, window, cx)
-                    })),
-                )
-            })
-            .when(!collapsed && !full, |header| {
-                header.child(
-                    ui::icon_button(
-                        ("quick-minimise", key),
-                        Icon::Minus,
-                        "Minimise to a bar",
-                        ButtonSize::Xs,
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.place_quick(key, Place::Floating, true, window, cx)
-                    })),
-                )
-            })
-            .child(
-                ui::icon_button(
-                    ("quick-close", key),
-                    Icon::X,
-                    "Close and end the shell",
-                    if collapsed {
-                        ButtonSize::Tiny
-                    } else {
-                        ButtonSize::Xs
-                    },
-                )
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.close_quick(key, window, cx)),
-                ),
-            );
-        let panel = div()
-            .id(("quick-terminal", key))
-            .role(Role::Group)
-            .aria_label("Terminal")
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .border_1()
-            .bg(rgb(theme::SURFACE))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(header)
-            .when(!collapsed, |panel| {
-                panel.child(div().flex_1().min_h_0().child(quick.view.clone()))
-            })
-            .map(|panel| {
-                if full {
-                    panel
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .rounded(px(14.0))
-                        .border_color(rgba(HAIRLINE))
-                } else {
-                    let r = quick.rect;
-                    // Never wider or taller than the area it floats over, like the desktop's `max-w-full`.
-                    let (w, h) = quick.area.map_or((r.w, r.h), |area| {
-                        (
-                            r.w.min(area.size.width.as_f32() - r.right),
-                            r.h.min(area.size.height.as_f32() - r.bottom),
-                        )
-                    });
-                    panel
-                        .absolute()
-                        .right(px(r.right))
-                        .bottom(px(r.bottom))
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
-                        .shadow(vec![BoxShadow {
-                            color: hsla(0.0, 0.0, 0.0, 0.35),
-                            offset: point(px(0.0), px(10.0)),
-                            blur_radius: px(15.0),
-                            spread_radius: px(-3.0),
-                            inset: false,
-                        }])
-                        .map(|panel| {
-                            if collapsed {
-                                panel.h(px(28.0)).rounded_full().bg(rgba(theme::POPOVER))
-                            } else {
-                                panel.w(px(w)).h(px(h)).rounded(px(12.0))
-                            }
-                        })
+            .on_click(cx.listener(move |this, _, window, cx| this.close_quick(key, window, cx)))
+            .into_any_element(),
+        );
+        let panel = Panel {
+            id: format!("quick-terminal-{key}").into(),
+            label: "Terminal".into(),
+            rect: quick.rect,
+            area: quick.area,
+            collapsed,
+            full,
+        };
+        panel.render(
+            header,
+            quick.view.clone().into_any_element(),
+            Rc::new(move |this: &mut Workspace, resize, from| {
+                if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
+                    quick.gesture = Some(Gesture::new(resize, from, quick.rect));
                 }
-            })
-            .when(!collapsed && !full, |panel| {
-                panel.child(
-                    div()
-                        .id(("quick-resize", key))
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size(px(16.0))
-                        .cursor_nwse_resize()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
-                                    quick.gesture = Some(Gesture {
-                                        resize: true,
-                                        from: event.position,
-                                        rect: quick.rect,
-                                    });
-                                }
-                                cx.stop_propagation();
-                            }),
-                        ),
-                )
-            });
-        panel.into_any_element()
+            }),
+            Rc::new(move |this: &mut Workspace, window, cx| {
+                this.place_quick(key, Place::Floating, false, window, cx)
+            }),
+            cx,
+        )
     }
 }

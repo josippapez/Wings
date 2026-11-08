@@ -15,7 +15,12 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
-use super::{HAIRLINE, Workspace, context_menu::MenuTarget, shortcut_label};
+use super::{
+    HAIRLINE, Workspace,
+    agent_terminals::{FLOATS, float_slot},
+    context_menu::MenuTarget,
+    shortcut_label,
+};
 
 /// A divider's line while the pointer is on it (`bg-white/25`).
 const DIVIDER_HOVER: u32 = 0xffffff40;
@@ -31,12 +36,14 @@ pub(super) fn terminal_slot(pane: usize) -> SharedString {
 }
 
 impl Workspace {
+    /// The cards of `node`, but the `hidden` panes, which float over their agent.
     pub(super) fn layout_element(
         &self,
         tab: usize,
         node: &Layout,
         path: &mut Vec<bool>,
         focused: usize,
+        hidden: &[usize],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Layout::Split { dir, ratio, a, b } = node else {
@@ -45,12 +52,18 @@ impl Workspace {
             };
             return self.pane_card(*pane, *pane == focused, false, cx);
         };
+        if let Some((second, side)) = Layout::only_side(a, b, hidden) {
+            path.push(second);
+            let shown = self.layout_element(tab, side, path, focused, hidden, cx);
+            path.pop();
+            return shown;
+        }
         let row = *dir == Dir::Row;
         path.push(false);
-        let first = self.layout_element(tab, a, path, focused, cx);
+        let first = self.layout_element(tab, a, path, focused, hidden, cx);
         path.pop();
         path.push(true);
-        let second = self.layout_element(tab, b, path, focused, cx);
+        let second = self.layout_element(tab, b, path, focused, hidden, cx);
         path.pop();
         let at = path.clone();
         let group = SharedString::from(format!("divider-{tab}-{at:?}"));
@@ -142,7 +155,7 @@ impl Workspace {
             // the card's border over it, where its corners curve over the terminal.
             Some((Ok(_), _)) => {
                 let card = card.clone();
-                ui::slot(
+                let terminal = ui::slot(
                     TERMINALS,
                     terminal_slot(pane),
                     Some(Rc::new(move |window: &mut Window| {
@@ -150,8 +163,28 @@ impl Workspace {
                             paint_card_border(card, border, window);
                         }
                     })),
-                )
-                .into_any_element()
+                );
+                // The terminals the agent in it opened that float over it draw in a layer over its terminal.
+                let floating = self
+                    .terminals
+                    .iter()
+                    .find(|tab| tab.layout.panes().contains(&pane))
+                    .is_some_and(|tab| self.has_floating(pane, &tab.layout));
+                div()
+                    .relative()
+                    .size_full()
+                    .child(terminal)
+                    .when(floating, |body| {
+                        body.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .child(ui::slot(FLOATS, float_slot(pane), None)),
+                        )
+                    })
+                    .into_any_element()
             }
             Some((Err(error), focus)) => div()
                 .track_focus(focus)
@@ -169,6 +202,9 @@ impl Workspace {
             None => div().into_any_element(),
         };
         let badges = self.badge_pills(pane, cx);
+        let opened_by = self.opened_by_pill(pane, cx);
+        let opened_terminals = self.agent_terminals_button(pane, zoomed, cx);
+        let opened_buttons = self.opened_buttons(pane, cx);
         let strip = self.status_strip(pane, cx);
         let header = div()
             .id(SharedString::from(format!("pane-header-{pane}")))
@@ -230,14 +266,19 @@ impl Workspace {
                 header.child(
                     div()
                         .min_w_0()
+                        // Beside the pill naming the agent that opened it, the folder gives way first.
+                        .when(opened_by.is_some(), |detail| detail.flex_shrink(100.0))
                         .truncate()
                         .text_size(px(12.0))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child(detail),
                 )
             })
+            .children(opened_by)
+            .children(opened_terminals)
             .child(div().flex_1())
             .children(badges)
+            .children(opened_buttons)
             .child(
                 div()
                     .flex_none()

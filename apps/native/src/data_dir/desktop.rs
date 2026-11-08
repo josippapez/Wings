@@ -154,6 +154,8 @@ pub struct Workspace {
     pub agents_run_commands: Option<bool>,
     #[serde(default)]
     pub agents_message: Option<bool>,
+    #[serde(default)]
+    pub agent_terminals_open: Option<String>,
     /// The folder each pane's shell was in, by pane key.
     #[serde(default)]
     pub cwds: HashMap<String, String>,
@@ -220,6 +222,7 @@ impl Workspace {
             notify_sound: self.notify_sound.clone(),
             agents_run_commands: self.agents_run_commands,
             agents_message: self.agents_message,
+            agent_terminals_open: self.agent_terminals_open.clone(),
             pinned_buttons: self.pinned_buttons.clone(),
             ..Settings::default()
         }

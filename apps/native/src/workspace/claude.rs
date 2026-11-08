@@ -130,8 +130,10 @@ impl Workspace {
         }
     }
 
-    /// `open_pane`: a terminal in the project, as a split below the caller's pane when it is given and on screen,
-    /// with the command typed, and run only while "Let Claude run commands in new tabs" is on.
+    /// `open_pane`: a terminal in the project, as a split beside the caller's pane when it is given, where Settings,
+    /// Agents says (`open_agent_split`), else as a tab, with the command typed, and run only while "Let Claude run
+    /// commands in new tabs" is on. A command goes to a terminal the same agent opened before that sits idle instead,
+    /// as the desktop's `onMcpOpenPane`.
     pub(super) fn claude_open_pane(
         &mut self,
         plan: OpenPlan,
@@ -139,22 +141,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<Opened, String> {
         let project = PathBuf::from(&plan.space_id);
-        let below = plan
+        let owner = plan
             .next_to
             .as_deref()
             .and_then(|pane| self.plugin_pane(pane));
-        if let Some(pane) = below {
-            self.switch_project(project.clone(), window, cx);
-            if let Some(tab) = self
-                .terminals
-                .iter_mut()
-                .find(|tab| tab.layout.panes().contains(&pane))
-            {
-                tab.focused = pane;
-                self.active = Active::Terminal(tab.id);
-            }
-        }
-        let placement = if below.is_some() { "below" } else { "tab" };
         // Enter only while the user lets Claude run commands in new tabs, as the desktop's `onMcpOpenPane`.
         let ran = plan.run && plan.input.is_some() && self.prefs.agents_run_commands;
         let typed = if ran {
@@ -162,26 +152,60 @@ impl Workspace {
         } else {
             plan.input
         };
+        if let Some(typed) = &typed
+            && let Some(pane) =
+                self.reuse_agent_terminal(&project, plan.cwd.clone(), owner, typed, cx)
+        {
+            return Ok(Opened {
+                pane_id: pane.to_string(),
+                ran,
+                reused: true,
+            });
+        }
+        let mut tab = None;
+        if let Some(pane) = owner {
+            self.switch_project(project.clone(), window, cx);
+            if let Some(found) = self
+                .terminals
+                .iter_mut()
+                .find(|tab| tab.layout.panes().contains(&pane))
+            {
+                found.focused = pane;
+                self.active = Active::Terminal(found.id);
+                tab = Some(found.id);
+            }
+        }
         let input = with_setup(self.spaces.take_setup(&project).as_deref(), typed);
-        let cwd = plan.cwd.map_or_else(|| project.clone(), PathBuf::from);
-        let (reply, answer) = Reply::channel();
-        let plan = OpenPane {
+        let cwd = plan
+            .cwd
+            .clone()
+            .map_or_else(|| project.clone(), PathBuf::from);
+        let open = OpenPane {
             cwd,
-            project,
+            project: project.clone(),
             input,
-            placement: placement.into(),
+            placement: "tab".into(),
             claude_account: None,
         };
-        self.open_plugin_pane(plan, reply, window, cx);
-        let opened = answer
-            .wait(Duration::ZERO)
-            .ok_or("The window didn't open the pane")??;
-        let opened: Value = serde_json::from_str(&opened).map_err(|e| e.to_string())?;
-        let pane_id = opened["paneId"]
-            .as_str()
-            .ok_or("The window didn't say which pane it opened")?;
+        let owner = owner.filter(|_| tab.is_some());
+        let pane = match (tab, owner) {
+            (Some(tab), Some(owner)) => self.open_agent_split(tab, owner, open, window, cx)?,
+            _ => {
+                let (reply, answer) = Reply::channel();
+                self.open_plugin_pane(open, reply, window, cx);
+                let opened = answer
+                    .wait(Duration::ZERO)
+                    .ok_or("The window didn't open the pane")??;
+                let opened: Value = serde_json::from_str(&opened).map_err(|e| e.to_string())?;
+                opened["paneId"]
+                    .as_str()
+                    .and_then(|pane| pane.parse().ok())
+                    .ok_or("The window didn't say which pane it opened")?
+            }
+        };
+        self.note_agent_terminal(pane, project, plan.cwd, owner);
         Ok(Opened {
-            pane_id: pane_id.to_owned(),
+            pane_id: pane.to_string(),
             ran,
             reused: false,
         })

@@ -460,6 +460,11 @@ impl TerminalView {
         }));
     }
 
+    /// Leaves the keys where they are when it first shows, as for a terminal an agent opens beside its own pane.
+    pub fn keep_focus_away(&mut self) {
+        self.autofocus = false;
+    }
+
     /// Ends the shell, also one in the terminal server, which would otherwise run on after the app quits.
     pub fn end(&self) {
         self.runtime.shutdown();
