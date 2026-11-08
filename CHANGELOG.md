@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.1 · 2026-11-08
+
+- **Looks and works as the desktop app did.** The Issues and pull request pages, plugin settings, the project bar's plugin buttons and their menu, the translucent sidebar, and dialogs are back to the desktop's design.
+- **Projects reorder by dragging** in the Manual sort, or with Move up and Move down, and keep the order you had.
+- **Terminals an agent opens** can go below, beside or floating over it, and hide when you don't need them.
+- **A diff docks beside its tab** instead of covering the window.
+- **Worktree setup** is back in a project's menu.
+- **Agents in every project show after Wings restarts**, not only in the one on screen.
+
 ## 0.2.0 · 2026-11-07
 
 - **Wings is now a native Mac app.** It no longer runs in a web view, and its terminals use the Ghostty engine. Your projects, tabs, settings, plugins and saved terminal output come over on the first launch.
