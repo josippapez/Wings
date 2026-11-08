@@ -1,5 +1,6 @@
 //! Drawing the sidebar: the desktop's project list with its header buttons, rows, git counts and "Older" group, the edge
-//! you drag to resize it, and the question before a project with tabs open is removed.
+//! you drag to resize it, the row you drag to move a project, and the question before a project with tabs open is
+//! removed.
 
 use std::{collections::HashSet, path::PathBuf};
 
@@ -24,7 +25,9 @@ use crate::workspace::{
 };
 
 use super::{
-    MIN_WIDTH, now_ms,
+    MIN_WIDTH,
+    drag::Slot,
+    now_ms,
     order::{self, Context as OrderBy, Ordered, Sort},
 };
 
@@ -116,9 +119,10 @@ impl Workspace {
                     .mb(px(8.0))
                     .child(self.settings_row(cx)),
             )
+            .children(self.drag_listeners(cx))
     }
 
-    fn project_order(&self) -> Ordered {
+    pub(super) fn project_order(&self) -> Ordered {
         let busy: HashSet<PathBuf> = self
             .agents
             .values()
@@ -138,6 +142,7 @@ impl Workspace {
 
     fn project_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let Ordered { shown, older } = self.project_order();
+        let shown = self.dragged_order(shown);
         let tops = older
             .iter()
             .filter(|&&row| !self.projects[row].child)
@@ -326,12 +331,16 @@ impl Workspace {
         } else {
             (counts, None)
         };
-        let hovered = self.side.hovered == Some(index);
+        let dragged = self.dragged_top(&entry.path);
+        // The dragged row stays under the pointer, so it keeps the buttons of the row pointed at, as the desktop's
+        // does; GPUI reports no hover over a row while it is pressed.
+        let hovered = self.side.hovered == Some(index) || dragged.is_some();
         let (shown, pinned) = (entry.path.clone(), entry.pinned);
         let (pin_it, remove_it) = (entry.path.clone(), entry.path.clone());
         let page_of = entry.path.clone();
         let menu_of = entry.path.clone();
-        div()
+        let pressed = entry.path.clone();
+        let row = div()
             .id(("project", index))
             .role(Role::Button)
             .aria_label(entry.name.clone())
@@ -354,10 +363,22 @@ impl Workspace {
                     cx.notify();
                 }
             }))
+            .when(dragged.is_some(), |row| {
+                row.cursor_grabbing().block_mouse_except_scroll()
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
+                if this.drag_click() {
+                    return;
+                }
                 this.leave_loose(cx);
                 this.switch_project(shown.clone(), window, cx)
             }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.press_project(&pressed, event.position, cx)
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -493,7 +514,13 @@ impl Workspace {
                         )
                     }),
             )
-            .into_any_element()
+            .into_any_element();
+        // A project's row can be dragged up or down in the Manual sort, so where it is laid out is noted.
+        if self.side.sort == Sort::Manual && !entry.child {
+            Slot::new(row, entry.path.clone(), self.side.rows.clone(), dragged).into_any_element()
+        } else {
+            row
+        }
     }
 
     /// The edge you drag. Invisible until you point at it. The window listens for the pointer while it is down, so the

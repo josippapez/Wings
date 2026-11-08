@@ -1,6 +1,7 @@
 //! The project sidebar: its width you drag, the order and "Older" group of its projects, the git counts on its rows,
-//! adding, removing and pinning projects, and the peek of a closed sidebar. The window draws it from `view`.
+//! adding, removing, pinning and moving projects, and the peek of a closed sidebar. The window draws it from `view`.
 
+mod drag;
 mod git;
 mod nav_rows;
 pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, row_hint};
@@ -43,6 +44,12 @@ pub(super) struct State {
     resize: Option<Resize>,
     /// The row the pointer is on, which shows its buttons.
     hovered: Option<usize>,
+    /// A project's row pressed, and moving up or down the list once it is dragged.
+    drag: Option<drag::Drag>,
+    /// Where the rows a drag moves among were laid out.
+    rows: drag::Rows,
+    /// A drag just ended: the click its release makes doesn't select the project.
+    swallow_click: bool,
     /// The sort menu is open.
     sort_menu: bool,
     /// The project asked to be removed while it has tabs open, with the focus of the question.
@@ -84,6 +91,9 @@ impl Default for State {
             last_active: BTreeMap::new(),
             resize: None,
             hovered: None,
+            drag: None,
+            rows: drag::Rows::default(),
+            swallow_click: false,
             sort_menu: false,
             removing: None,
             git: git::Git::default(),

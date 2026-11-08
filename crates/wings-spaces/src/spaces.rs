@@ -102,6 +102,18 @@ impl SpaceStore {
         }
     }
 
+    /// Moves the space `id` to the place of the space `slot`, as the desktop's `reorder`: just above it when it moves up,
+    /// just below it when it moves down. A worktree is shown under its project wherever it sits in the list.
+    pub fn reorder(&mut self, id: &str, slot: &str) {
+        let at = |id: &str| self.spaces.iter().position(|s| s.id == id);
+        let (Some(from), Some(to)) = (at(id), at(slot)) else { return };
+        if from != to {
+            let space = self.spaces.remove(from);
+            self.spaces.insert(to, space);
+            self.save();
+        }
+    }
+
     /// The project whose worktree settings apply to `id`: a worktree uses its project's.
     pub fn settings_owner(&self, id: &str) -> Option<&Space> {
         settings_owner_in(&self.spaces, id)

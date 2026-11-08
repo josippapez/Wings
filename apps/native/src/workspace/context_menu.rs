@@ -315,7 +315,7 @@ impl Workspace {
         ]];
         if !entry.child {
             let pinned = entry.pinned;
-            groups.push(vec![Item(
+            let mut items = vec![Item(
                 if pinned { Icon::PinOff } else { Icon::Pin },
                 if pinned { "Unpin" } else { "Pin to top" }.into(),
                 false,
@@ -324,7 +324,19 @@ impl Workspace {
                 } else {
                     at(|this, path, _, cx| this.pin_project(&path, true, cx))
                 },
-            )]);
+            )];
+            // In the Manual sort, a listed project moves one place, as far as the others of its kind go.
+            if let Some((up, down)) = self.project_steps(&entry.path) {
+                let step = |slot: Option<PathBuf>| {
+                    let project = entry.path.clone();
+                    slot.and_then(|slot| {
+                        run(move |this, _, cx| this.move_project(&project, &slot, cx))
+                    })
+                };
+                items.push(Item(Icon::ArrowUp, "Move up".into(), false, step(up)));
+                items.push(Item(Icon::ArrowDown, "Move down".into(), false, step(down)));
+            }
+            groups.push(items);
         }
         groups.push(vec![Item(
             Icon::Trash,

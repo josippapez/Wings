@@ -581,3 +581,298 @@ fn under_reduce_motion_the_sidebar_doesnt_slide_but_still_fades() {
     assert!(!window.read(|w, _| w.side.slide.running));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The middle of the row of project `name`, where it was last drawn.
+fn row(name: &str) -> gpui::Point<gpui::Pixels> {
+    crate::ui::spot_at(&format!("project:{name}"))
+        .unwrap_or_else(|| panic!("{name}'s row wasn't drawn"))
+        .center()
+}
+
+fn names(window: &TestAppWindow<Workspace>) -> Vec<String> {
+    window.read(|w, _| w.projects.iter().map(|p| p.name.clone()).collect())
+}
+
+/// Presses at `from` and moves the pointer to `to` in `steps`, drawing after each, as a hand does: how long each of
+/// those frames took to draw.
+fn drag_to(
+    window: &mut TestAppWindow<Workspace>,
+    from: gpui::Point<gpui::Pixels>,
+    to: gpui::Point<gpui::Pixels>,
+    steps: usize,
+) -> Vec<Duration> {
+    window.simulate_mouse_down(from, MouseButton::Left);
+    window.draw();
+    moves(window, from, to, steps)
+}
+
+/// The pointer moved from `from` to `to` with the button down, in `steps`, drawing after each.
+fn moves(
+    window: &mut TestAppWindow<Workspace>,
+    from: gpui::Point<gpui::Pixels>,
+    to: gpui::Point<gpui::Pixels>,
+    steps: usize,
+) -> Vec<Duration> {
+    (1..=steps)
+        .map(|step| {
+            let t = step as f32 / steps as f32;
+            window.simulate_event(MouseMoveEvent {
+                position: point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t),
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            });
+            let start = Instant::now();
+            window.draw();
+            start.elapsed()
+        })
+        .collect()
+}
+
+fn release(window: &mut TestAppWindow<Workspace>, at: gpui::Point<gpui::Pixels>) {
+    window.simulate_mouse_up(at, MouseButton::Left);
+    window.draw();
+}
+
+/// The desktop's `dragSpace`: in the Manual sort a project's row follows the pointer, the others make room as it passes
+/// them, and the list is written once, when it is let go, without selecting the project it was let go on. Each frame
+/// of the drag draws the sidebar alone.
+#[test]
+fn dragging_a_project_past_others_moves_it_there_and_saves_the_list_once_it_is_let_go() {
+    let dir = test_dir("sidebar-drag");
+    let (_app, mut window, folders) = open(&dir, &["alpha", "beta", "gamma"]);
+    window.draw();
+    let file = dir.join("spaces.json");
+    let before = std::fs::read(&file).unwrap();
+    let drawn = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let parts = w.parts.as_ref().expect("the pieces");
+            (
+                parts.main.read(cx).drawn,
+                parts.title_bar.read(cx).drawn,
+                parts.sidebar.read(cx).drawn,
+            )
+        })
+    };
+    let (alpha, beta, gamma) = (row("alpha"), row("beta"), row("gamma"));
+    // Pressing draws the window again, as any click does.
+    window.simulate_mouse_down(gamma, MouseButton::Left);
+    window.draw();
+    let (main, title_bar, sidebar) = drawn(&window);
+
+    // Gamma up past beta's middle, not yet alpha's: it takes beta's place and beta makes room under it.
+    let mid = point(gamma.x, beta.y - px(4.0));
+    let frames = moves(&mut window, gamma, mid, 12);
+    assert!(
+        (row("gamma").y - mid.y).abs() < px(0.5),
+        "it follows the pointer: {:?} vs {mid:?}",
+        row("gamma")
+    );
+    assert_eq!(row("beta").y, gamma.y, "beta moved down into gamma's place");
+    assert_eq!(row("alpha").y, alpha.y);
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        before,
+        "nothing is written while it moves"
+    );
+    let (main_after, title_bar_after, sidebar_after) = drawn(&window);
+    assert_eq!(
+        (main_after, title_bar_after),
+        (main, title_bar),
+        "the panes and title bar kept their drawing"
+    );
+    assert!(
+        sidebar_after >= sidebar + 12,
+        "the sidebar drew each move: {sidebar} to {sidebar_after}"
+    );
+    let total: Duration = frames.iter().sum();
+    eprintln!(
+        "[measure] project drag: {} frames, {:.2} ms a frame on average, {:.2} ms at most",
+        frames.len(),
+        total.as_secs_f64() * 1000.0 / frames.len() as f64,
+        frames.iter().max().unwrap().as_secs_f64() * 1000.0,
+    );
+
+    // On up past alpha, and let go on alpha's old place: first in the list, written once, and alpha still shown.
+    let top = point(gamma.x, alpha.y - px(4.0));
+    moves(&mut window, mid, top, 6);
+    assert_eq!(
+        names(&window),
+        ["alpha", "beta", "gamma"],
+        "the list itself waits for the release"
+    );
+    release(&mut window, top);
+    assert_eq!(names(&window), ["gamma", "alpha", "beta"]);
+    assert_eq!(
+        window.read(|w, _| w.project().to_path_buf()),
+        folders[0],
+        "the release selects nothing"
+    );
+    let listed: Vec<wings_spaces::spaces::Space> =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|space| space.name.as_str())
+            .collect::<Vec<_>>(),
+        ["gamma", "alpha", "beta"]
+    );
+    assert_eq!(row("gamma").y, alpha.y, "it sits in its new place");
+
+    // The order comes back after a relaunch.
+    drop((window, _app));
+    let (_app, window, _) = open(&dir, &["alpha", "beta", "gamma"]);
+    assert_eq!(names(&window), ["gamma", "alpha", "beta"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `trackDrag`'s threshold: a press that moves less than 5px is still a click and selects the project; one that moves
+/// further is a drag, which selects nothing, and Escape puts a dragged project back with nothing written.
+#[test]
+fn a_press_that_hardly_moves_still_selects_and_escape_puts_a_dragged_project_back() {
+    let dir = test_dir("sidebar-drag-click");
+    let (_app, mut window, folders) = open(&dir, &["alpha", "beta", "gamma"]);
+    window.draw();
+    let file = dir.join("spaces.json");
+    let before = std::fs::read(&file).unwrap();
+    let shown = |window: &TestAppWindow<Workspace>| window.read(|w, _| w.project().to_path_buf());
+
+    let beta = row("beta");
+    let nudged = point(beta.x, beta.y + px(4.0));
+    drag_to(&mut window, beta, nudged, 2);
+    release(&mut window, nudged);
+    assert_eq!(shown(&window), folders[1], "a click selects");
+
+    let alpha = row("alpha");
+    let moved = point(alpha.x, alpha.y + px(6.0));
+    drag_to(&mut window, alpha, moved, 3);
+    release(&mut window, moved);
+    assert_eq!(shown(&window), folders[1], "a drag selects nothing");
+    assert_eq!(names(&window), ["alpha", "beta", "gamma"]);
+
+    // Gamma dragged to the top, then Escape: back where it was, and the release after it is no click either.
+    let gamma = row("gamma");
+    let top = point(gamma.x, alpha.y - px(4.0));
+    drag_to(&mut window, gamma, top, 10);
+    assert_eq!(row("alpha").y, beta.y, "alpha made room");
+    window.simulate_keystroke("escape");
+    window.draw();
+    assert_eq!(row("gamma").y, gamma.y);
+    assert_eq!(row("alpha").y, alpha.y);
+    // The pointer is on alpha's row now, where it was let go.
+    release(&mut window, top);
+    assert_eq!(shown(&window), folders[1]);
+    assert_eq!(names(&window), ["alpha", "beta", "gamma"]);
+    assert_eq!(std::fs::read(&file).unwrap(), before, "nothing was written");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The desktop's Move up and Move down in a project's menu: one place at a time, disabled at the ends, and among the
+/// projects of its kind, since pinned ones always lead.
+#[test]
+fn move_up_and_move_down_in_a_projects_menu_move_it_one_place() {
+    let dir = test_dir("sidebar-move-menu");
+    let (_app, mut window, _) = open(&dir, &["alpha", "beta", "gamma"]);
+    window.draw();
+    let choose = |window: &mut TestAppWindow<Workspace>, name: &str, item: &str| {
+        window.simulate_mouse_down(row(name), MouseButton::Right);
+        window.draw();
+        let at = crate::ui::spot_at(&format!("menu:{item}"))
+            .unwrap_or_else(|| panic!("no {item} in {name}'s menu"))
+            .center();
+        window.simulate_click(at, MouseButton::Left);
+        window.draw();
+        window.update(|w, _, cx| w.close_menu(cx));
+        window.draw();
+    };
+    choose(&mut window, "gamma", "Move up");
+    assert_eq!(names(&window), ["alpha", "gamma", "beta"]);
+    choose(&mut window, "alpha", "Move down");
+    assert_eq!(names(&window), ["gamma", "alpha", "beta"]);
+    // At the ends they are disabled.
+    choose(&mut window, "gamma", "Move up");
+    choose(&mut window, "beta", "Move down");
+    assert_eq!(names(&window), ["gamma", "alpha", "beta"]);
+    let listed: Vec<wings_spaces::spaces::Space> =
+        serde_json::from_slice(&std::fs::read(dir.join("spaces.json")).unwrap()).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|space| space.name.as_str())
+            .collect::<Vec<_>>(),
+        ["gamma", "alpha", "beta"]
+    );
+    // Beta pinned leads, and alpha, the first of the others, goes no higher.
+    window.update(|w, _, cx| w.pin_project(&dir.join("beta"), true, cx));
+    window.draw();
+    assert_eq!(names(&window), ["beta", "gamma", "alpha"]);
+    choose(&mut window, "gamma", "Move up");
+    assert_eq!(names(&window), ["beta", "gamma", "alpha"]);
+    choose(&mut window, "alpha", "Move up");
+    assert_eq!(names(&window), ["beta", "alpha", "gamma"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Only a listed project moves, and only in the Manual sort: not in another sort, not a worktree, not one under "Older",
+/// as the desktop's rows with no `onPointerDown`. Their menus have no Move up or Move down either.
+#[test]
+fn only_a_listed_project_in_the_manual_sort_can_be_dragged() {
+    let dir = test_dir("sidebar-drag-only");
+    let folders: Vec<PathBuf> = ["alpha", "alpha-fix", "beta", "gamma", "old"]
+        .iter()
+        .map(|name| dir.join(name))
+        .collect();
+    for folder in &folders {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    let space = |at: usize| serde_json::json!({ "id": folders[at], "name": folders[at].file_name().unwrap().to_string_lossy(), "path": folders[at] });
+    let mut spaces: Vec<_> = (0..folders.len()).map(space).collect();
+    spaces[1]["parent"] = serde_json::json!(folders[0]);
+    std::fs::write(
+        dir.join("spaces.json"),
+        serde_json::to_vec(&spaces).unwrap(),
+    )
+    .unwrap();
+    let (_app, mut window, _) = open(&dir, &["alpha", "alpha-fix", "beta", "gamma", "old"]);
+    window.update(|w, _, cx| {
+        w.side
+            .last_active
+            .insert(folders[4].to_string_lossy().into_owned(), 1);
+        w.toggle_older(cx);
+    });
+    window.draw();
+    let file = dir.join("spaces.json");
+    let before = std::fs::read(&file).unwrap();
+    let still = |window: &mut TestAppWindow<Workspace>, name: &str, to: &str| {
+        let (from, to) = (row(name), row(to));
+        let to = point(from.x, to.y - px(4.0));
+        drag_to(window, from, to, 10);
+        assert_eq!(row(name), from, "{name}'s row stays put");
+        release(window, to);
+        assert_eq!(std::fs::read(&file).unwrap(), before, "{name} didn't move");
+    };
+    // Their menus have no Move up or Move down.
+    let steps = |window: &TestAppWindow<Workspace>, name: &str| {
+        window.read(|w, _| w.project_steps(&dir.join(name)))
+    };
+    still(&mut window, "alpha-fix", "alpha");
+    still(&mut window, "old", "alpha");
+    assert_eq!(
+        (steps(&window, "alpha-fix"), steps(&window, "old")),
+        (None, None)
+    );
+    window.update(|w, _, cx| w.set_sort(Sort::Name, cx));
+    window.draw();
+    still(&mut window, "gamma", "alpha");
+    assert_eq!(steps(&window, "gamma"), None);
+    // In the Manual sort the same drag moves gamma to the top.
+    window.update(|w, _, cx| w.set_sort(Sort::Manual, cx));
+    window.draw();
+    let (from, to) = (row("gamma"), row("alpha"));
+    drag_to(&mut window, from, point(from.x, to.y - px(4.0)), 10);
+    release(&mut window, point(from.x, to.y - px(4.0)));
+    assert_eq!(
+        names(&window),
+        ["gamma", "alpha", "alpha-fix", "beta", "old"]
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

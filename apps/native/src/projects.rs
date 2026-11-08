@@ -83,6 +83,32 @@ impl Projects {
         store.set_pinned(&id, pinned);
     }
 
+    /// Moves the project in folder `project` to the place of the one in folder `slot`, as the desktop's `onMoveSpace`,
+    /// and saves the list; its worktrees stay under it. The folder the app was opened in joins the list where it is
+    /// shown, first, when it is one of the two.
+    pub fn move_project(&self, project: &str, slot: &str) {
+        let mut store = self.store.lock().unwrap();
+        if self.unlisted_launch(&store)
+            && [project, slot]
+                .iter()
+                .any(|folder| Path::new(folder) == self.launch)
+        {
+            store
+                .spaces
+                .insert(0, spaces::new_space(&self.launch.to_string_lossy()));
+        }
+        let id = |store: &SpaceStore, folder: &str| {
+            store
+                .spaces
+                .iter()
+                .find(|space| space.path == folder)
+                .map(|space| space.id.clone())
+        };
+        if let (Some(project), Some(slot)) = (id(&store, project), id(&store, slot)) {
+            store.reorder(&project, &slot);
+        }
+    }
+
     /// Pinned projects first, then the rest, each in the list's order, with its worktrees right under it; the folder
     /// the app was opened in leads when the list doesn't hold it.
     pub fn entries(&self) -> Vec<ProjectEntry> {
@@ -692,6 +718,41 @@ mod tests {
             with_setup(Some("make"), Some("claude".into())).as_deref(),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn a_moved_project_takes_the_place_of_another_with_its_worktrees_under_it() {
+        let dir = temp("move");
+        let file = dir.join("spaces.json");
+        let list = json!([
+            { "id": "a", "name": "alpha", "path": "/nowhere/alpha" },
+            { "id": "b", "name": "beta", "path": "/nowhere/beta" },
+            { "id": "t", "name": "beta-fix", "path": "/nowhere/beta-fix", "parent": "b" },
+            { "id": "c", "name": "gamma", "path": "/nowhere/gamma" },
+        ]);
+        std::fs::write(&file, serde_json::to_vec(&list).unwrap()).unwrap();
+        let projects = Projects::open(Some(file.clone()), "/nowhere/launch".into());
+        let names = || {
+            projects
+                .entries()
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>()
+        };
+        projects.move_project("/nowhere/gamma", "/nowhere/alpha");
+        assert_eq!(names(), ["launch", "gamma", "alpha", "beta", "beta-fix"]);
+        // The folder the app was opened in, shown first without being listed, joins the list there.
+        projects.move_project("/nowhere/beta", "/nowhere/launch");
+        assert_eq!(names(), ["beta", "beta-fix", "launch", "gamma", "alpha"]);
+        let saved: Vec<Space> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            saved
+                .iter()
+                .map(|space| space.name.as_str())
+                .collect::<Vec<_>>(),
+            ["beta", "launch", "gamma", "alpha", "beta-fix"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

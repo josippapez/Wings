@@ -547,8 +547,8 @@ fn mouse_move(
 }
 
 /// The sidebar: git counts from real temp repos (ahead, behind, changed, a worktree), a pinned project, the "Older"
-/// group, hovering a row, the sort menu, the question before a project with tabs is removed, dragging the edge to both
-/// limits, and the peek of a closed sidebar.
+/// group, hovering a row, dragging a project up the list and its Move up and Move down, the sort menu, the question
+/// before a project with tabs is removed, dragging the edge to both limits, and the peek of a closed sidebar.
 fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let day = 24 * 60 * 60 * 1000u64;
     let now = std::time::SystemTime::now()
@@ -705,6 +705,46 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         cx.simulate_keystrokes(window, "escape");
         wait_fake(cx, window, Duration::from_millis(50));
         save(cx, window, &name("remove-closing"));
+        mouse_move(cx, window, point(px(500.0), px(300.0)), false);
+        wait(cx, window, Duration::from_millis(300));
+        // In the Manual sort, docs dragged up most of the way to acme-api: it follows the pointer, past acme-api's
+        // middle, and acme-api has made room under it. Then let go there.
+        let (from, to) = (spot("project:docs"), spot("project:acme-api"));
+        let to = point(from.x, to.y - px(6.0));
+        mouse_move(cx, window, from, false);
+        wait(cx, window, Duration::from_millis(100));
+        cx.simulate_event(
+            window,
+            MouseDownEvent {
+                position: from,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+        );
+        for step in 1..=8 {
+            let y = from.y + (to.y - from.y) * (step as f32 / 8.0);
+            mouse_move(cx, window, point(from.x, y), true);
+            wait(cx, window, Duration::from_millis(20));
+        }
+        save(cx, window, &name("dragging"));
+        cx.simulate_event(
+            window,
+            gpui::MouseUpEvent {
+                position: to,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            },
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("dragged"));
+        // Its menu: Move up stops at the first project that isn't pinned, Move down goes on.
+        right_click(cx, window, spot("project:docs"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("menu-move"));
+        click(cx, window, point(px(700.0), px(600.0)));
         mouse_move(cx, window, point(px(500.0), px(300.0)), false);
         wait(cx, window, Duration::from_millis(300));
         // The sort menu, from the header's middle button, then Name, its last item.
