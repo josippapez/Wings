@@ -1065,6 +1065,8 @@ impl Viewer {
                     .min_h_0()
                     .min_w_0()
                     .overflow_x_scroll()
+                    // Else GPUI turns a vertical wheel into sideways movement here, as nothing scrolls vertically.
+                    .restrict_scroll_to_axis()
                     .track_scroll(&self.horizontal)
                     .child(rows.w(px(self.code_width)).min_w(gpui::relative(1.0)))
                     .into_any_element()
@@ -1614,6 +1616,34 @@ mod layout_tests {
         });
         std::mem::forget(subscription);
         (app, window, layouts)
+    }
+
+    /// A vertical wheel over one column of unwrapped code scrolls it down, not sideways: with only sideways scrolling,
+    /// GPUI turns a vertical wheel into sideways movement unless told to keep to the axis.
+    #[test]
+    fn a_vertical_wheel_over_unwrapped_code_does_not_move_it_sideways() {
+        let long = "x".repeat(400);
+        let lines: String = (0..60).map(|i| format!("+{long}{i}\n")).collect();
+        let patch =
+            format!("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -0,0 +1,60 @@\n{lines}");
+        let (_app, mut window, _) = open(&patch);
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        window.simulate_event(gpui::ScrollEvent {
+            position: point(px(600.0), px(300.0)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-200.0))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: Default::default(),
+        });
+        window.draw();
+        window.read(|v, _| {
+            assert_eq!(v.horizontal.offset().x, px(0.0));
+            assert!(
+                v.scroll.0.borrow().base_handle.offset().y < px(0.0),
+                "it didn't scroll down"
+            );
+        });
     }
 
     #[test]
