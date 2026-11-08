@@ -1,11 +1,13 @@
 // The form that adds or changes a schedule, or an entry that waits for something to be assigned to you.
 
-import { useEffect, useState } from "react";
-import { Button, Card, Chip, Chips, Combobox, Field, FieldGroup, Notice, Row, Select, Stack, TextInput, Textarea } from "wings-plugin-ui";
-import { DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, stateOptions, WATCH_NAME, type WatchDraft } from "../lib/assigned";
+import { useState } from "react";
+import { Button, Card, Chips, Field, FieldGroup, Notice, Row, Select, Stack, TextInput } from "wings-plugin-ui";
+import { WATCH_NAME, type WatchDraft } from "../lib/assigned";
 import type { WatchView } from "../lib/messages";
-import { includeText, worktreeChange, type WorktreeChange, type WorktreeSetup } from "../lib/worktree-setup";
-import { AGENTS, DAYS, DAY_NUMBERS, EVERY_HOURS, type Agent, type Draft, type Schedule } from "../lib/schedule";
+import type { WorktreeChange, WorktreeSetup } from "../lib/worktree-setup";
+import { AGENTS, type Agent, type Draft, type Schedule } from "../lib/schedule";
+import { ScheduleFields, useScheduleFields } from "./ScheduleFields";
+import { useWatchFields, WatchFields } from "./WatchFields";
 import "./schedules.css";
 
 interface Props {
@@ -27,67 +29,22 @@ interface Props {
   loadWorktreeSetup?: (projectId: string) => Promise<WorktreeSetup>;
 }
 
-const WEEKDAYS = [1, 2, 3, 4, 5];
-
 export function ScheduleForm({ schedule, watch, projects, here, busy, error, onSave, onSaveWatch, onCancel, loadBranches, loadWorktreeSetup }: Props) {
   // An entry keeps its kind: only a new one picks it.
   const [kind, setKind] = useState<"schedule" | "assigned">(watch ? "assigned" : "schedule");
   const [name, setName] = useState(schedule?.name ?? watch?.name ?? "");
   const [projectId, setProjectId] = useState(schedule?.projectId ?? watch?.projectId ?? here ?? projects[0]?.id ?? "");
   const [agent, setAgent] = useState<Agent>(schedule?.agent ?? watch?.agent ?? "claude");
-  const [prompt, setPrompt] = useState(schedule?.prompt ?? "");
-  const [template, setTemplate] = useState(watch?.prompt ?? DEFAULT_PROMPT);
-  const [minFree, setMinFree] = useState(String(watch?.minFreeGb ?? DEFAULT_MIN_FREE_GB));
-  const [states, setStates] = useState<string[] | undefined>(watch?.states);
-  const [prefixes, setPrefixes] = useState((watch?.prefixes ?? []).join(", "));
-  const [base, setBase] = useState(watch?.base ?? "");
-  const [branches, setBranches] = useState<string[]>([]);
-  useEffect(() => {
-    if (kind !== "assigned" || !projectId || !loadBranches) return;
-    let live = true;
-    loadBranches(projectId).then((b) => live && setBranches(b), () => live && setBranches([]));
-    return () => void (live = false);
-  }, [kind, projectId, loadBranches]);
-  // The project's own setting, loaded for the project picked; the fields start from it and only a change is saved.
-  const [loaded, setLoaded] = useState<{ projectId: string; setup: WorktreeSetup } | null>(null);
-  const [includeField, setIncludeField] = useState("");
-  const [setupField, setSetupField] = useState("");
-  useEffect(() => {
-    setLoaded(null);
-    if (kind !== "assigned" || !projectId || !loadWorktreeSetup) return;
-    let live = true;
-    loadWorktreeSetup(projectId).then(
-      (setup) => {
-        if (!live) return;
-        setLoaded({ projectId, setup });
-        setIncludeField(includeText(setup));
-        setSetupField(setup.setup ?? "");
-      },
-      () => {},
-    );
-    return () => void (live = false);
-  }, [kind, projectId, loadWorktreeSetup]);
-  const [mode, setMode] = useState<"every" | "daily">(schedule?.when.kind ?? "daily");
-  const [hours, setHours] = useState(schedule?.when.kind === "every" ? schedule.when.hours : 24);
-  const [time, setTime] = useState(schedule?.when.kind === "daily" ? schedule.when.time : "09:00");
-  const [days, setDays] = useState(schedule?.when.kind === "daily" ? schedule.when.days : WEEKDAYS);
+  // Both kinds keep their fields here, so a new entry that tries the other kind and comes back finds what it typed.
+  const scheduleFields = useScheduleFields(schedule);
+  const watchFields = useWatchFields(watch, kind === "assigned", projectId, loadBranches, loadWorktreeSetup);
 
   // The Save button runs it on a click, which also covers Enter in a field, and stops the form from submitting a second time.
   const submit = (e: { preventDefault(): void }) => {
     e.preventDefault();
-    // Another project has other states, so it picks its own at its first check.
-    if (kind === "assigned") {
-      const change = loaded && worktreeChange(loaded.setup, includeField, setupField);
-      return onSaveWatch(
-        { name, projectId, agent, prompt: template, minFreeGb: Number(minFree), states: watch && watch.projectId !== projectId ? undefined : states, prefixes: prefixes.split(",").map((p) => p.trim()), base },
-        loaded && change ? { projectId: loaded.projectId, change } : undefined,
-      );
-    }
-    onSave({ name, projectId, agent, prompt, when: mode === "every" ? { kind: "every", hours } : { kind: "daily", time, days } });
+    if (kind === "assigned") return onSaveWatch(...watchFields.draft({ name, projectId, agent }));
+    onSave({ name, projectId, agent, ...scheduleFields.draft() });
   };
-  const toggleDay = (n: number) => setDays(days.includes(n) ? days.filter((d) => d !== n) : [...days, n]);
-  const toggleState = (name: string) => setStates((states ?? []).includes(name) ? (states ?? []).filter((x) => x !== name) : [...(states ?? []), name]);
-  const stateNames = watch ? stateOptions({ states, tickets: watch.tickets }) : [];
 
   return (
     <Card as="form" onSubmit={submit} aria-label={schedule || watch ? "Edit entry" : "New entry"}>
@@ -121,98 +78,7 @@ export function ScheduleForm({ schedule, watch, projects, here, busy, error, onS
             <Chips label="Agent" value={agent} onChange={setAgent} options={(Object.keys(AGENTS) as Agent[]).map((value) => ({ value, label: AGENTS[value].label }))} />
           </Field>
         </Row>
-        {kind === "schedule" ? (
-          <>
-            <Field label="Prompt" hint="What the agent is asked to do. It goes in as one line: line breaks become spaces.">
-              <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="Check yesterday's failed CI runs and open a fix for the flaky test." />
-            </Field>
-            <FieldGroup label="When">
-              <Stack gap="m">
-                <Chips
-                  label="When"
-                  value={mode}
-                  onChange={setMode}
-                  options={[
-                    { value: "daily", label: "At a time of day" },
-                    { value: "every", label: "Every few hours" },
-                  ]}
-                />
-                {mode === "every" ? (
-                  <Field label="Every">
-                    <Select
-                      label="Every"
-                      value={String(hours)}
-                      onChange={(v) => setHours(Number(v))}
-                      options={EVERY_HOURS.map((h) => ({ value: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
-                    />
-                  </Field>
-                ) : (
-                  <Row gap="l" wrap align="start">
-                    <Field label="Time">
-                      <TextInput type="time" value={time} onChange={(e) => setTime(e.target.value)} required />
-                    </Field>
-                    <FieldGroup label="Days">
-                      <Row gap="s" wrap>
-                        {DAYS.map((label, i) => (
-                          <Chip key={label} pressed={days.includes(DAY_NUMBERS[i])} onClick={() => toggleDay(DAY_NUMBERS[i])}>
-                            {label}
-                          </Chip>
-                        ))}
-                      </Row>
-                    </FieldGroup>
-                  </Row>
-                )}
-              </Stack>
-            </FieldGroup>
-          </>
-        ) : (
-          <>
-            <Field label="Prompt" hint="Sent to the agent as one line. {id}, {title} and {url} become the ticket's number, title and link.">
-              <Textarea value={template} onChange={(e) => setTemplate(e.target.value)} rows={4} />
-            </Field>
-            <Field label="Keep free" hint="In GB. Wings won't make the worktree when the disk it goes on has less room than this.">
-              <TextInput type="number" min={0} step={1} value={minFree} onChange={(e) => setMinFree(e.target.value)} required />
-            </Field>
-            <FieldGroup
-              label="Ask about tickets in these states"
-              hint={
-                stateNames.length
-                  ? "Tickets in other states are listed but not asked about. A ticket is asked about once, and one that moves into these states later is asked about then. Leave all off to ask about every state."
-                  : "The states show up after the first check. Wings then picks the ones that mean nobody has started: Open on GitHub and GitLab, and New, To Do, Ready for Development and the like on Azure DevOps."
-              }
-            >
-              {stateNames.length ? (
-                <Row gap="s" wrap>
-                  {stateNames.map((name) => (
-                    <Chip key={name} pressed={(states ?? []).includes(name)} onClick={() => toggleState(name)}>
-                      {name}
-                    </Chip>
-                  ))}
-                </Row>
-              ) : null}
-            </FieldGroup>
-            <Field label="Start branches from" hint="Pick one of this project's branches or type one, like origin/develop. Empty starts from the repo's default branch.">
-              <Combobox label="Start branches from" freeText value={base} onInput={setBase} onPick={(o) => setBase(o.value)} options={branches.map((b) => ({ value: b, label: b }))} maxLength={200} placeholder="The default branch" />
-            </Field>
-            <Field label="Only titles starting with" hint="Optional, separated by commas, like FE or BE. Other tickets are listed as for another project and not asked about. Empty asks about every title.">
-              <TextInput value={prefixes} onChange={(e) => setPrefixes(e.target.value)} maxLength={200} placeholder="FE, BE" />
-            </Field>
-            <FieldGroup label="New worktrees" hint="The project's own settings, shared with Worktree setup in the sidebar: a change here changes it there too.">
-              <Stack gap="m">
-                <Field
-                  label="Copy into new worktrees"
-                  hint={`One pattern per line, .gitignore syntax: only files the repo ignores are copied, and a line starting with ! leaves files out. They are copied, not linked, so leave big folders out.${loaded?.setup.hasIncludeFile ? " This repo has a .worktreeinclude, so that file is used and this list is ignored." : ""}`}
-                >
-                  <Textarea value={includeField} onChange={(e) => setIncludeField(e.target.value)} rows={6} disabled={!loaded} spellCheck={false} />
-                </Field>
-                <Field label="Setup command" hint="One shell line, like pnpm install. It runs in the new worktree before the agent starts, and the agent starts once it succeeds.">
-                  <TextInput value={setupField} onChange={(e) => setSetupField(e.target.value)} disabled={!loaded} spellCheck={false} placeholder="pnpm install" />
-                </Field>
-              </Stack>
-            </FieldGroup>
-            <Notice>Wings asks the project's Azure DevOps, GitHub or GitLab what is assigned to you every 5 minutes, using its origin remote. You are asked first: nothing starts until you press Start.</Notice>
-          </>
-        )}
+        {kind === "schedule" ? <ScheduleFields fields={scheduleFields} /> : <WatchFields watch={watch} fields={watchFields} />}
         {projects.length === 0 ? <Notice tone="warn">Add a project in Wings first. An entry runs inside one.</Notice> : null}
         {error ? <Notice tone="danger">{error}</Notice> : null}
         <Row gap="m" wrap>

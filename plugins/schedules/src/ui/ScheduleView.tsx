@@ -1,11 +1,11 @@
 // The Schedules tab: what is waiting for you, the saved entries with what each does next and last did, and the form to add or change one.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge, Button, Card, Confirm, Disclosure, Empty, Heading, Icon, ListItem, List, Loading, Menu, Notice, Page, Row, Stack, Text, Time, Toolbar, useAction } from "wings-plugin-ui";
 import { asks, describeCheck, SOURCE_LABELS, startedElsewhere, titleWanted, watchName, type AssignedTicket, type Waiting, type WatchDraft } from "../lib/assigned";
 import type { State, WatchView } from "../lib/messages";
 import type { WorktreeChange, WorktreeSetup } from "../lib/worktree-setup";
-import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Draft, type Run, type Schedule } from "../lib/schedule";
+import { AGENTS, describeNext, describeWhen, nameOf, nextRun, type Agent, type Draft, type Run, type Schedule } from "../lib/schedule";
 import { ScheduleForm } from "./ScheduleForm";
 import "./schedules.css";
 
@@ -52,6 +52,8 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
   const action = useAction();
   const [checking, setChecking] = useState<string | null>(null);
   const [everywhere, setEverywhere] = useState(false);
+  /** Opens the form on an entry, or on a new one for null, or goes back to the list for false, without the last action's error. */
+  const edit = (id: string | null | false) => (action.clear(), setEditing(id));
 
   if (error && !state) {
     return (
@@ -82,7 +84,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
       <Page
         toolbar={
           <Toolbar title="Schedules">
-            <Button variant="ghost" onClick={() => (action.clear(), setEditing(false))}>
+            <Button variant="ghost" onClick={() => edit(false)}>
               ← Schedules
             </Button>
             <Text tone="muted">{schedule ? nameOf(schedule) : watch ? watchName(watch) : "New entry"}</Text>
@@ -102,7 +104,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
             error={action.error}
             onSave={(draft) => void action.run(() => onSave(schedule?.id ?? null, draft)).then((ok) => ok && setEditing(false))}
             onSaveWatch={(draft, worktree) => void action.run(() => onSaveWatch(watch?.id ?? null, draft, worktree)).then((ok) => ok && setEditing(false))}
-            onCancel={() => (action.clear(), setEditing(false))}
+            onCancel={() => edit(false)}
           />
         </Stack>
       </Page>
@@ -112,7 +114,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
   const doomedSchedule = schedules.find((s) => s.id === deleting);
   const doomedWatch = watches.find((w) => w.id === deleting);
   const add = (
-    <Button onClick={() => (action.clear(), setEditing(null))}>
+    <Button onClick={() => edit(null)}>
       Add entry
     </Button>
   );
@@ -202,7 +204,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
                   now={now}
                   busy={action.busy}
                   onRun={() => void action.run(() => onRun(s.id))}
-                  onEdit={() => (action.clear(), setEditing(s.id))}
+                  onEdit={() => edit(s.id)}
                   onToggle={() => void action.run(() => onToggle(s.id))}
                   onDelete={() => setDeleting(s.id)}
                 />
@@ -214,7 +216,7 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
                   project={projectName(w.projectId)}
                   now={now}
                   busy={action.busy}
-                  onEdit={() => (action.clear(), setEditing(w.id))}
+                  onEdit={() => edit(w.id)}
                   onToggle={() => void action.run(() => onToggleWatch(w.id))}
                   onDelete={() => setDeleting(w.id)}
                   checking={checking === w.id}
@@ -233,6 +235,57 @@ export function ScheduleView({ state, error, now, here = null, focusWatch, inbox
   );
 }
 
+/** What every entry has: whether it runs, and the agent it starts. */
+type Entry = { enabled: boolean; agent: Agent };
+
+/**
+ * A saved entry's card: its name, Paused while it is, its project, agent and `what` starts it, then `children`, with
+ * `actions` beside them. `below`, like a watch's tickets, goes under it all: a card given it, even null, stacks the two.
+ */
+function EntryCard({ entry, name, project, what, actions, below, children }: { entry: Entry; name: string; project: string; what: string; actions: ReactNode; below?: ReactNode; children: ReactNode }) {
+  const row = (
+    <Row gap="l" justify="between" wrap grow>
+      <Stack gap="xs" grow>
+        <Row gap="m" wrap>
+          <Text weight="strong" truncate>
+            {name}
+          </Text>
+          {entry.enabled ? null : <Badge size="sm">Paused</Badge>}
+        </Row>
+        <Text tone="muted" size="small">
+          {project} · {AGENTS[entry.agent].label} · {what}
+        </Text>
+        {children}
+      </Stack>
+      <Row gap="s" wrap align="start">
+        {actions}
+      </Row>
+    </Row>
+  );
+  return (
+    <ListItem align="start">
+      <Card className="sc-item">{below === undefined ? row : <Stack gap="m">{row}{below}</Stack>}</Card>
+    </ListItem>
+  );
+}
+
+/** Every entry's Edit, Pause or Resume, and Delete buttons, which name it `label` to a screen reader. */
+function EntryActions({ entry, label, busy, onEdit, onToggle, onDelete }: Pick<ItemProps, "busy" | "onEdit" | "onToggle" | "onDelete"> & { entry: Entry; label: string }) {
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={onEdit} aria-label={`Edit ${label}`}>
+        Edit
+      </Button>
+      <Button variant="outline" size="sm" onClick={onToggle} disabled={busy} aria-label={`${entry.enabled ? "Pause" : "Resume"} ${label}`}>
+        {entry.enabled ? "Pause" : "Resume"}
+      </Button>
+      <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={`Delete ${label}`}>
+        <Icon name="trash" />
+      </Button>
+    </>
+  );
+}
+
 interface ItemProps {
   s: Schedule;
   project: string;
@@ -247,40 +300,19 @@ interface ItemProps {
 function Item({ s, project, now, busy, onRun, onEdit, onToggle, onDelete }: ItemProps) {
   const name = nameOf(s);
   const next = nextRun(s);
+  const actions = (
+    <>
+      <Button variant="outline" size="sm" onClick={onRun} disabled={busy} aria-label={`Run ${name} now`}>
+        Run now
+      </Button>
+      <EntryActions entry={s} label={name} busy={busy} onEdit={onEdit} onToggle={onToggle} onDelete={onDelete} />
+    </>
+  );
   return (
-    <ListItem align="start">
-      <Card className="sc-item">
-        <Row gap="l" justify="between" wrap grow>
-          <Stack gap="xs" grow>
-            <Row gap="m" wrap>
-              <Text weight="strong" truncate>
-                {name}
-              </Text>
-              {s.enabled ? null : <Badge size="sm">Paused</Badge>}
-            </Row>
-            <Text tone="muted" size="small">
-              {project} · {AGENTS[s.agent].label} · {describeWhen(s.when)}
-            </Text>
-            <Text size="small">{s.enabled ? (next === null ? "No day picked" : `Next run ${describeNext(next, now)}`) : "Next run when resumed"}</Text>
-            <LastRun run={s.lastRun} now={now} />
-          </Stack>
-          <Row gap="s" wrap align="start">
-            <Button variant="outline" size="sm" onClick={onRun} disabled={busy} aria-label={`Run ${name} now`}>
-              Run now
-            </Button>
-            <Button variant="outline" size="sm" onClick={onEdit} aria-label={`Edit ${name}`}>
-              Edit
-            </Button>
-            <Button variant="outline" size="sm" onClick={onToggle} disabled={busy} aria-label={`${s.enabled ? "Pause" : "Resume"} ${name}`}>
-              {s.enabled ? "Pause" : "Resume"}
-            </Button>
-            <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={`Delete ${name}`}>
-              <Icon name="trash" />
-            </Button>
-          </Row>
-        </Row>
-      </Card>
-    </ListItem>
+    <EntryCard entry={s} name={name} project={project} what={describeWhen(s.when)} actions={actions}>
+      <Text size="small">{s.enabled ? (next === null ? "No day picked" : `Next run ${describeNext(next, now)}`) : "Next run when resumed"}</Text>
+      <LastRun run={s.lastRun} now={now} />
+    </EntryCard>
   );
 }
 
@@ -305,77 +337,54 @@ function WatchItem({ w, project, now, busy, onEdit, onToggle, onDelete, checking
   const label = `${watchName(w)} in ${project}`;
   const unsupported = w.source?.kind === "unsupported";
   const tickets = w.tickets ?? [];
+  const actions = (
+    <>
+      {w.enabled && check?.problem === "signed-out" ? (
+        <Button size="sm" onClick={onSignIn} disabled={busy} aria-label={`Sign in for ${label}`}>
+          Sign in
+        </Button>
+      ) : null}
+      {w.enabled && check?.problem === "missing" ? (
+        <Button size="sm" onClick={onInstall} disabled={busy} aria-label={`Install the CLI for ${label}`}>
+          Install
+        </Button>
+      ) : null}
+      {w.enabled && !unsupported ? (
+        <Button variant="outline" size="sm" onClick={onCheck} disabled={busy} busy={checking} aria-label={`${check && !check.ok ? "Try" : "Check"} ${label} ${check && !check.ok ? "again" : "now"}`}>
+          {check && !check.ok ? "Try again" : "Check now"}
+        </Button>
+      ) : null}
+      <EntryActions entry={w} label={label} busy={busy} onEdit={onEdit} onToggle={onToggle} onDelete={onDelete} />
+    </>
+  );
+  const below = tickets.length ? (
+    <Disclosure summary={`Assigned to you (${tickets.length})`}>
+      <List compact>
+        {tickets.map((t) => (
+          <TicketRow key={t.id} t={t} asked={asks(w, t)} titleOk={titleWanted(w.prefixes, t.title)} startedAt={w.started?.[t.id]} now={now} busy={busy} targets={w.targets} onStart={(projectId) => onStartTicket(t.id, !asks(w, t) || !!startedElsewhere(t) || !!w.started?.[t.id], projectId)} onOpen={() => onOpen(t.url)} />
+        ))}
+      </List>
+    </Disclosure>
+  ) : null;
   return (
-    <ListItem align="start">
-      <Card className="sc-item">
-        <Stack gap="m">
-        <Row gap="l" justify="between" wrap grow>
-          <Stack gap="xs" grow>
-            <Row gap="m" wrap>
-              <Text weight="strong" truncate>
-                {watchName(w)}
-              </Text>
-              {w.enabled ? null : <Badge size="sm">Paused</Badge>}
-            </Row>
-            <Text tone="muted" size="small">
-              {project} · {AGENTS[w.agent].label} · {w.source ? SOURCE_LABELS[w.source.kind] : "Checking the remote"}
+    <EntryCard entry={w} name={watchName(w)} project={project} what={w.source ? SOURCE_LABELS[w.source.kind] : "Checking the remote"} actions={actions} below={below}>
+      {w.enabled ? (
+        <Row gap="s" wrap>
+          {check && !unsupported ? (
+            <Text tone="muted" size="small" as="span">
+              <Time iso={new Date(check.at).toISOString()} prefix="Checked " now={now} />
             </Text>
-            {w.enabled ? (
-              <Row gap="s" wrap>
-                {check && !unsupported ? (
-                  <Text tone="muted" size="small" as="span">
-                    <Time iso={new Date(check.at).toISOString()} prefix="Checked " now={now} />
-                  </Text>
-                ) : null}
-                <Text size="small" tone={check && !check.ok ? "danger" : undefined}>
-                  {describeCheck(check, w.source)}
-                </Text>
-              </Row>
-            ) : (
-              <Text size="small">Not looking while paused</Text>
-            )}
-            {w.waiting.length ? <Text size="small">{w.waiting.length === 1 ? "1 ticket is waiting for you" : `${w.waiting.length} tickets are waiting for you`}</Text> : null}
-            {w.lastRun ? <LastRun run={w.lastRun} now={now} prefix="Last started " /> : null}
-          </Stack>
-          <Row gap="s" wrap align="start">
-            {w.enabled && check?.problem === "signed-out" ? (
-              <Button size="sm" onClick={onSignIn} disabled={busy} aria-label={`Sign in for ${label}`}>
-                Sign in
-              </Button>
-            ) : null}
-            {w.enabled && check?.problem === "missing" ? (
-              <Button size="sm" onClick={onInstall} disabled={busy} aria-label={`Install the CLI for ${label}`}>
-                Install
-              </Button>
-            ) : null}
-            {w.enabled && !unsupported ? (
-              <Button variant="outline" size="sm" onClick={onCheck} disabled={busy} busy={checking} aria-label={`${check && !check.ok ? "Try" : "Check"} ${label} ${check && !check.ok ? "again" : "now"}`}>
-                {check && !check.ok ? "Try again" : "Check now"}
-              </Button>
-            ) : null}
-            <Button variant="outline" size="sm" onClick={onEdit} aria-label={`Edit ${label}`}>
-              Edit
-            </Button>
-            <Button variant="outline" size="sm" onClick={onToggle} disabled={busy} aria-label={`${w.enabled ? "Pause" : "Resume"} ${label}`}>
-              {w.enabled ? "Pause" : "Resume"}
-            </Button>
-            <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={`Delete ${label}`}>
-              <Icon name="trash" />
-            </Button>
-          </Row>
+          ) : null}
+          <Text size="small" tone={check && !check.ok ? "danger" : undefined}>
+            {describeCheck(check, w.source)}
+          </Text>
         </Row>
-        {tickets.length ? (
-          <Disclosure summary={`Assigned to you (${tickets.length})`}>
-            <List compact>
-              {tickets.map((t) => (
-                <TicketRow key={t.id} t={t} asked={asks(w, t)} titleOk={titleWanted(w.prefixes, t.title)} startedAt={w.started?.[t.id]} now={now} busy={busy} targets={w.targets} onStart={(projectId) => onStartTicket(t.id, !asks(w, t) || !!startedElsewhere(t) || !!w.started?.[t.id], projectId)} onOpen={() => onOpen(t.url)} />
-              ))}
-            </List>
-          </Disclosure>
-        ) : null}
-        </Stack>
-      </Card>
-    </ListItem>
+      ) : (
+        <Text size="small">Not looking while paused</Text>
+      )}
+      {w.waiting.length ? <Text size="small">{w.waiting.length === 1 ? "1 ticket is waiting for you" : `${w.waiting.length} tickets are waiting for you`}</Text> : null}
+      {w.lastRun ? <LastRun run={w.lastRun} now={now} prefix="Last started " /> : null}
+    </EntryCard>
   );
 }
 
