@@ -732,7 +732,14 @@ impl PageView {
                         Weight::Strong => el.font_weight(FontWeight::SEMIBOLD),
                     })
                     .when_some(text.tone, |el, tone| el.text_color(rgb(tone_color(tone))))
-                    .child(self.inline(&text.children, cx));
+                    // A text with nothing in it takes no line, as an empty span takes none in CSS: PR tracker's "A
+                    // token is saved." left a blank line over the field while it was still asking.
+                    .when(
+                        text.children
+                            .iter()
+                            .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
+                        |el| el.child(self.inline(&text.children, cx)),
+                    );
                 match text.on_click.clone() {
                     Some(handler) => element
                         .id(ElementId::NamedInteger("page-text".into(), text.id))
@@ -1207,7 +1214,11 @@ impl PageView {
                     .rounded(px(6.0))
                     .border_1()
                     .border_color(rgba(0))
-                    .when(item.vertical, |el| el.flex_col().items_stretch())
+                    // Its lines 2pt apart, as Changes' `.commit` stacks a commit's subject over its hash and author:
+                    // 8pt between a commit's own lines put them further apart than the commits were.
+                    .when(item.vertical, |el| {
+                        el.flex_col().items_stretch().gap(px(2.0))
+                    })
                     // The twisty is a 12pt chevron centred on the row, as the desktop's and a disclosure's are: the
                     // "⌄" glyph it was sits at the bottom of its line, below the row's text.
                     .when_some(item.expanded, |el, expanded| {

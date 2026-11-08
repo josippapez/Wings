@@ -806,6 +806,45 @@ fn strings_side_by_side_in_a_stack_are_one_line_of_it() {
     assert!(!pressed_at(&app, &mut window, (40.0, 90.0), "Pressed 2."));
 }
 
+/// An empty text over a button, as PR tracker's line that says whether a token is saved, before it knows. The button
+/// can be pressed.
+const EMPTY_TEXT: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Stack',children:[{id:2,type:'Text',children:[{id:3,type:'#text',text:''}]},
+{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn an_empty_text_takes_no_line() {
+    let (app, mut window) = open_narrow(EMPTY_TEXT, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // Under the stack's 8pt gap the button is at 22 to 54. The empty text took a line, which put it at 41 to 73.
+    assert!(pressed_at(&app, &mut window, (40.0, 28.0), "Pressed 1."));
+    assert!(!pressed_at(&app, &mut window, (40.0, 64.0), "Pressed 2."));
+}
+
+/// A commit in Changes' history: a list button of two lines, its subject over a line that can be pressed.
+const COMMIT: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'ListButton',props:{layout:'column'},children:[{id:2,type:'Text',children:[{id:3,type:'#text',text:'Add coupon validation'}]},
+{id:4,type:'Text',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'aaaaaaa Ada Lovelace'}]}]},
+{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_column_list_buttons_lines_are_close_together() {
+    let (app, mut window) = open_narrow(COMMIT, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The second line is 2pt under the subject, from 38 to 57; it was 8pt under it, from 44 to 63, further than the
+    // next commit was from this one.
+    assert!(pressed_at(&app, &mut window, (40.0, 40.0), "Pressed 1."));
+    assert!(!pressed_at(&app, &mut window, (40.0, 60.0), "Pressed 2."));
+}
+
 /// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.
 const LONG_SUMMARY: &str = r#"
 let pressed = 0;
