@@ -164,6 +164,13 @@ fn glyph_runs(
     }
     let mut runs = Vec::new();
     let mut open: Option<Open> = None;
+    let block_cursor = snapshot
+        .cursor
+        .filter(|&(.., shape)| focused && shape == CursorShape::Block)
+        .map(|(row, col, ..)| (row, col));
+    // What the open line's last style was made from: a cell with the same draws in that style, so most cells extend it
+    // without making a style of their own to compare.
+    let mut last_look = None;
     for cell in &snapshot.cells {
         let next = |open: &Open| open.row == cell.row && open.col + open.cells == cell.col;
         if cell.text.is_empty() {
@@ -178,24 +185,39 @@ fn glyph_runs(
             }
             continue;
         }
-        let mut style = cell_run(cell, snapshot, focused, min_contrast, base);
-        style.len = cell.text.len();
+        let look = (
+            cell.flags,
+            cell.fg,
+            cell.bg,
+            block_cursor == Some((cell.row, cell.col)),
+        );
+        let style = || TextRun {
+            len: cell.text.len(),
+            ..cell_run(cell, snapshot, focused, min_contrast, base)
+        };
         if shares_cells(&cell.text)
             && let Some(run) = &mut open
             && next(run)
         {
             run.text.push_str(&cell.text);
             run.cells += 1;
+            let same = last_look.replace(look) == Some(look);
             match run.styles.last_mut() {
-                Some(last)
-                    if TextRun {
-                        len: style.len,
-                        ..last.clone()
-                    } == style =>
-                {
-                    last.len += style.len
+                Some(last) if same => last.len += cell.text.len(),
+                last => {
+                    let style = style();
+                    match last {
+                        Some(last)
+                            if TextRun {
+                                len: style.len,
+                                ..last.clone()
+                            } == style =>
+                        {
+                            last.len += style.len
+                        }
+                        _ => run.styles.push(style),
+                    }
                 }
-                _ => run.styles.push(style),
             }
             continue;
         }
@@ -208,10 +230,11 @@ fn glyph_runs(
                 col: cell.col,
                 cells: 1,
                 text: cell.text.clone(),
-                styles: vec![style],
+                styles: vec![style()],
             });
+            last_look = Some(look);
         } else {
-            runs.push((cell.row, cell.col, cell.text.clone(), vec![style]));
+            runs.push((cell.row, cell.col, cell.text.clone(), vec![style()]));
         }
     }
     if let Some(done) = open {
