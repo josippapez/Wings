@@ -606,14 +606,8 @@ fn restart_and_confirm(
             if poll.revents & libc::POLLIN == 0 {
                 return Err("The app restart handshake socket failed".into());
             }
-            let (mut connection, _) = listener.accept().map_err(err)?;
-            connection.set_read_timeout(Some(timeout)).map_err(err)?;
-            let mut byte = [0];
-            connection.read_exact(&mut byte).map_err(err)?;
-            if byte[0] != b'R' {
-                return Err("Invalid app startup confirmation".into());
-            }
-            Ok(())
+            let (connection, _) = listener.accept().map_err(err)?;
+            read_confirmation(connection, timeout)
         })();
         if confirmed.is_err() {
             let _ = child.kill();
@@ -631,6 +625,23 @@ fn restart_and_confirm(
         eprintln!("The app opened, but its restart handshake could not be removed: {cleanup}");
     }
     result
+}
+
+/// The new app's one-byte startup confirmation. The app writes it and hangs up at once, and macOS refuses a read
+/// timeout on a socket whose peer has gone (EINVAL): failing on that killed every new app that confirmed, and rolled
+/// the update back. Then the byte is already buffered, so the read needs no timeout.
+#[cfg(target_os = "macos")]
+fn read_confirmation(
+    mut connection: std::os::unix::net::UnixStream,
+    timeout: Duration,
+) -> Result<()> {
+    let _ = connection.set_read_timeout(Some(timeout));
+    let mut byte = [0];
+    connection.read_exact(&mut byte).map_err(err)?;
+    if byte[0] != b'R' {
+        return Err("Invalid app startup confirmation".into());
+    }
+    Ok(())
 }
 
 /// Called before GPUI or any app services start.

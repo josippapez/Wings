@@ -567,3 +567,23 @@ fn packaged_release_downloads_verifies_stages_and_swaps_only_inside_a_fixture() 
         "still recoverable"
     );
 }
+
+/// The real app writes its confirmation and hangs up before the installer reads it, and macOS then refuses the read
+/// timeout. That still counts as confirmed.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_confirmation_from_an_app_that_already_hung_up_counts() {
+    use std::{
+        io::Write,
+        os::unix::net::{UnixListener, UnixStream},
+    };
+    let dir = temp();
+    let socket = dir.path().join("restart.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut app = UnixStream::connect(&socket).unwrap();
+    app.write_all(b"R").unwrap();
+    drop(app);
+    std::thread::sleep(Duration::from_millis(100));
+    let (connection, _) = listener.accept().unwrap();
+    read_confirmation(connection, Duration::from_secs(5)).unwrap();
+}
