@@ -704,6 +704,254 @@ fn an_unrelated_redraw_does_not_reset_the_tab_strip_scroll_position() {
     window.read(|workspace, _| assert_eq!(workspace.tab_scroll.offset().x, px(0.0)));
 }
 
+/// Presses at `from` and moves the pointer to `to` in `steps`, drawing after each, as a hand does: how long each of
+/// those frames took to draw.
+pub(super) fn drag_to(
+    window: &mut TestAppWindow<Workspace>,
+    from: gpui::Point<gpui::Pixels>,
+    to: gpui::Point<gpui::Pixels>,
+    steps: usize,
+) -> Vec<std::time::Duration> {
+    window.simulate_mouse_down(from, MouseButton::Left);
+    window.draw();
+    moves(window, from, to, steps)
+}
+
+/// The pointer moved from `from` to `to` with the button down, in `steps`, drawing after each.
+pub(super) fn moves(
+    window: &mut TestAppWindow<Workspace>,
+    from: gpui::Point<gpui::Pixels>,
+    to: gpui::Point<gpui::Pixels>,
+    steps: usize,
+) -> Vec<std::time::Duration> {
+    (1..=steps)
+        .map(|step| {
+            let t = step as f32 / steps as f32;
+            window.simulate_event(MouseMoveEvent {
+                position: point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t),
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            });
+            let start = std::time::Instant::now();
+            window.draw();
+            start.elapsed()
+        })
+        .collect()
+}
+
+pub(super) fn release(window: &mut TestAppWindow<Workspace>, at: gpui::Point<gpui::Pixels>) {
+    window.simulate_mouse_up(at, MouseButton::Left);
+    window.draw();
+}
+
+/// The middle of `tab` where it was last drawn.
+fn tab_at(tab: Active) -> gpui::Point<gpui::Pixels> {
+    crate::ui::spot_at(&format!("tab:{tab:?}"))
+        .unwrap_or_else(|| panic!("{tab:?} wasn't drawn"))
+        .center()
+}
+
+/// The desktop's `dragTab`: a tab follows the pointer, the others of its kind make room as it passes their middles, and
+/// the order is written once, when it is let go, without selecting the tab. Each frame of the drag draws the title bar
+/// alone. A terminal goes no further than the last terminal, as Move Tab Right: Issues stays last.
+#[test]
+fn dragging_a_tab_past_others_moves_it_there_and_saves_the_order_once_it_is_let_go() {
+    use Active::{Issues, Terminal};
+    let dir = std::env::temp_dir().join(format!("wings-native-tab-drag-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("workspace.json");
+    // The tab split in two, which is how it is known after a relaunch.
+    let split_at = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            w.terminals
+                .iter()
+                .position(|tab| tab.layout.panes().len() == 2)
+        })
+    };
+    {
+        let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+            config.state = Some(file.clone())
+        });
+        press(&mut window, "d");
+        press(&mut window, "t");
+        press(&mut window, "t");
+        window.draw();
+        assert_eq!(split_at(&window), Some(0));
+        let before = std::fs::read(&file).unwrap();
+        let drawn = |window: &TestAppWindow<Workspace>| {
+            window.read(|w, cx| {
+                let parts = w.parts.as_ref().expect("the pieces");
+                (
+                    parts.main.read(cx).drawn,
+                    parts.title_bar.read(cx).drawn,
+                    parts.sidebar.read(cx).drawn,
+                )
+            })
+        };
+        let (first, second, third, issues) = (
+            tab_at(Terminal(0)),
+            tab_at(Terminal(1)),
+            tab_at(Terminal(2)),
+            tab_at(Issues),
+        );
+        // Pressing draws the window again, as any click does.
+        window.simulate_mouse_down(first, MouseButton::Left);
+        window.draw();
+        let (main, title_bar, sidebar) = drawn(&window);
+
+        // Past the second's middle, not yet the third's: it takes the second's place and the second makes room.
+        let mid = point(second.x + px(4.0), first.y);
+        let frames = moves(&mut window, first, mid, 12);
+        assert!(
+            (tab_at(Terminal(0)).x - mid.x).abs() < px(0.5),
+            "it follows the pointer: {:?} vs {mid:?}",
+            tab_at(Terminal(0))
+        );
+        assert_eq!(
+            tab_at(Terminal(1)),
+            first,
+            "the second moved into its place"
+        );
+        assert_eq!(tab_at(Terminal(2)), third);
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "nothing is written while it moves"
+        );
+        let (main_after, title_bar_after, sidebar_after) = drawn(&window);
+        assert_eq!(
+            (main_after, sidebar_after),
+            (main, sidebar),
+            "the panes and sidebar kept their drawing"
+        );
+        assert!(
+            title_bar_after >= title_bar + 12,
+            "the title bar drew each move: {title_bar} to {title_bar_after}"
+        );
+        let total: std::time::Duration = frames.iter().sum();
+        eprintln!(
+            "[measure] tab drag: {} frames, {:.2} ms a frame on average, {:.2} ms at most",
+            frames.len(),
+            total.as_secs_f64() * 1000.0 / frames.len() as f64,
+            frames.iter().max().unwrap().as_secs_f64() * 1000.0,
+        );
+
+        // On over Issues, which isn't a terminal and stays where it is. Let go there: last of the terminals, written once.
+        let far = point(issues.x + px(20.0), first.y);
+        moves(&mut window, mid, far, 6);
+        assert_eq!(tab_at(Terminal(2)), second);
+        assert_eq!(tab_at(Issues), issues);
+        assert_eq!(
+            state(&window).0,
+            vec![Terminal(0), Terminal(1), Terminal(2), Issues],
+            "the strip itself waits for the release"
+        );
+        release(&mut window, far);
+        assert_eq!(
+            state(&window),
+            (
+                vec![Terminal(1), Terminal(2), Terminal(0), Issues],
+                Terminal(2)
+            ),
+            "the release selects nothing"
+        );
+        assert_eq!(tab_at(Terminal(0)), third, "it sits in its new place");
+        assert_ne!(std::fs::read(&file).unwrap(), before);
+    }
+    // The order comes back after a relaunch.
+    let (_app, window) = open_with(Some(file));
+    assert_eq!(split_at(&window), Some(2));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `trackDrag`'s threshold: a press that moves less than 5px is still a click and selects the tab; one that moves
+/// further is a drag, which selects nothing, and Escape puts a dragged tab back with nothing written.
+#[test]
+fn a_press_that_hardly_moves_still_selects_a_tab_and_escape_puts_a_dragged_one_back() {
+    use Active::{Issues, Terminal};
+    let dir = std::env::temp_dir().join(format!("wings-native-tab-click-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("workspace.json");
+    let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.state = Some(file.clone())
+    });
+    press(&mut window, "t");
+    press(&mut window, "t");
+    window.draw();
+    let (first, second, third) = (
+        tab_at(Terminal(0)),
+        tab_at(Terminal(1)),
+        tab_at(Terminal(2)),
+    );
+    let strip = vec![Terminal(0), Terminal(1), Terminal(2), Issues];
+
+    let nudged = point(first.x + px(4.0), first.y);
+    drag_to(&mut window, first, nudged, 2);
+    release(&mut window, nudged);
+    assert_eq!(state(&window).1, Terminal(0), "a click selects");
+
+    let moved = point(second.x + px(6.0), second.y);
+    drag_to(&mut window, second, moved, 3);
+    release(&mut window, moved);
+    assert_eq!(
+        state(&window),
+        (strip.clone(), Terminal(0)),
+        "a drag selects nothing"
+    );
+    let before = std::fs::read(&file).unwrap();
+
+    // The first dragged past the third, then Escape: back where it was, and the release after it is no click either.
+    let far = point(third.x + px(4.0), first.y);
+    drag_to(&mut window, first, far, 10);
+    assert_eq!(tab_at(Terminal(1)), first, "the second made room");
+    window.simulate_keystroke("escape");
+    window.draw();
+    assert_eq!(tab_at(Terminal(0)), first);
+    assert_eq!(tab_at(Terminal(1)), second);
+    release(&mut window, far);
+    assert_eq!(state(&window), (strip, Terminal(0)));
+    assert_eq!(std::fs::read(&file).unwrap(), before, "nothing was written");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// In a strip too narrow for its tabs, scrolled to the shown one at its end, a tab dragged onto its neighbour's place on
+/// screen takes it, and the strip stays scrolled where it was.
+#[test]
+fn a_tab_dragged_in_a_scrolled_strip_moves_among_the_tabs_on_screen() {
+    use Active::Terminal;
+    let (_app, mut window) = open_sized(Some(size(px(640.0), px(640.0))), |_| {});
+    for _ in 0..8 {
+        press(&mut window, "t");
+    }
+    assert_active_tab_is_visible(&mut window);
+    let (offset, strip) = window.read(|w, _| (w.tab_scroll.offset().x, w.tab_scroll.bounds()));
+    assert!(offset < px(0.0), "the strip is scrolled: {offset:?}");
+    let (last, neighbour) = (tab_at(Terminal(8)), tab_at(Terminal(7)));
+    assert!(
+        strip.contains(&last) && strip.contains(&neighbour),
+        "both are on screen"
+    );
+
+    let to = point(neighbour.x - px(4.0), last.y);
+    drag_to(&mut window, last, to, 10);
+    assert!(
+        (tab_at(Terminal(8)).x - to.x).abs() < px(0.5),
+        "it follows the pointer"
+    );
+    assert_eq!(tab_at(Terminal(7)), last, "its neighbour made room");
+    release(&mut window, to);
+    assert_eq!(
+        state(&window).0[6..9],
+        [Terminal(6), Terminal(8), Terminal(7)]
+    );
+    assert_eq!(
+        window.read(|w, _| w.tab_scroll.offset().x),
+        offset,
+        "the strip didn't scroll"
+    );
+    assert_active_tab_is_visible(&mut window);
+}
+
 #[test]
 fn a_claude_in_a_pane_shows_its_name_and_state_on_the_pane_tab_and_project() {
     use crate::agents::AgentState;

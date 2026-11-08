@@ -3,28 +3,22 @@
 //! and moved 5px, its row follows the pointer and the others make room as it passes them. The list is saved once,
 //! when it is let go; Escape puts it back. Pinned projects always lead, so a project moves among those of its kind.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, App, Bounds, Context, DispatchPhase, Element, ElementId, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Subscription, Window, canvas, point, prelude::*, px,
+    AnyElement, Context, DispatchPhase, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Subscription, canvas, prelude::*,
 };
 
-use crate::workspace::Workspace;
+use crate::workspace::{
+    Workspace,
+    drag_slot::{DRAG_THRESHOLD, Laid},
+};
 
 use super::order::Sort;
 
-/// How far the pointer moves before a press is a drag, so a click still selects: `trackDrag`'s threshold.
-const THRESHOLD: f64 = 5.0;
-
 /// Where each listed project's row was laid out when last drawn, by folder, which a drag measures the others by.
-pub(super) type Rows = Rc<RefCell<HashMap<PathBuf, Bounds<Pixels>>>>;
+pub(super) type Rows = Laid<PathBuf>;
 
 /// A press on a project's row, and the drag it becomes.
 pub(super) struct Drag {
@@ -130,7 +124,7 @@ impl Workspace {
             return;
         };
         if !drag.moving {
-            if (at - drag.from).magnitude() < THRESHOLD {
+            if (at - drag.from).magnitude() < DRAG_THRESHOLD {
                 return;
             }
             drag.moving = true;
@@ -289,98 +283,6 @@ impl Workspace {
         match &self.parts {
             Some(parts) if self.sidebar => parts.sidebar.update(cx, |_, cx| cx.notify()),
             _ => cx.notify(),
-        }
-    }
-}
-
-/// A listed project's row in the Manual sort: notes where it was laid out, and draws the dragged one at `top` instead,
-/// under the pointer, over the other rows as the desktop's `z-index` puts it, with its hitbox, so it stays the row
-/// pointed at and the rows it passes over aren't.
-pub(super) struct Slot {
-    row: Option<AnyElement>,
-    project: PathBuf,
-    rows: Rows,
-    top: Option<Pixels>,
-}
-
-impl Slot {
-    pub(super) fn new(row: AnyElement, project: PathBuf, rows: Rows, top: Option<Pixels>) -> Self {
-        Self {
-            row: Some(row),
-            project,
-            rows,
-            top,
-        }
-    }
-}
-
-impl IntoElement for Slot {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
-impl Element for Slot {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let row = self.row.as_mut().expect("laid out once");
-        (row.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.rows.borrow_mut().insert(self.project.clone(), bounds);
-        match (self.top, self.row.take()) {
-            // Drawn after everything else, still clipped by the list.
-            (Some(top), Some(row)) => {
-                let at = window.element_offset() + point(px(0.0), top - bounds.top());
-                window.defer_draw(row, at, 1, Some(window.content_mask()));
-            }
-            (None, Some(mut row)) => {
-                row.prepaint(window, cx);
-                self.row = Some(row);
-            }
-            (_, None) => {}
-        }
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if let Some(row) = &mut self.row {
-            row.paint(window, cx);
         }
     }
 }

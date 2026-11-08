@@ -1,6 +1,6 @@
 //! Renders the native window offscreen at 1000 and 640 points wide and saves each state as a PNG:
-//! tabs, a terminal's colors and a selection, splits, renaming a pane, a zoomed pane, find, Issues, a plugin page,
-//! agents and Settings, and the pages of `pages/` on their own: the pilot and the components page.
+//! tabs and dragging one, a terminal's colors and a selection, splits, renaming a pane, a zoomed pane, find, Issues, a
+//! plugin page, agents and Settings, and the pages of `pages/` on their own: the pilot and the components page.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir>
@@ -208,6 +208,10 @@ fn main() {
     // `-- <out-dir> sidebar` renders only the sidebar's states.
     if std::env::args().nth(2).as_deref() == Some("sidebar") {
         return sidebar(&mut cx, &config, &out);
+    }
+    // `-- <out-dir> tab-drag` renders only dragging a tab along the title bar.
+    if std::env::args().nth(2).as_deref() == Some("tab-drag") {
+        return tab_drag(&mut cx, &config, &out);
     }
     // `-- <out-dir> parity` renders only Settings' sections, Open in editor, the welcome and the quick terminal.
     if std::env::args().nth(2).as_deref() == Some("parity") {
@@ -518,6 +522,57 @@ fn main() {
         wait(&mut cx, window, Duration::from_millis(300));
     }
     sidebar(&mut cx, &config, &out);
+    tab_drag(&mut cx, &config, &out);
+}
+
+/// Dragging a tab along the title bar: four terminals, the shown one, last, dragged most of the way onto its neighbour,
+/// which has made room under it, then let go there. At 640 the strip is scrolled to it.
+fn tab_drag(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    for width in [1000.0, 640.0] {
+        let config = base.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("tab-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(2));
+        cx.simulate_keystrokes(window, "cmd-t cmd-t cmd-t");
+        wait(cx, window, Duration::from_secs(2));
+        let (from, neighbour) = (spot("tab:Terminal(3)"), spot("tab:Terminal(2)"));
+        let to = point(neighbour.x - px(24.0), from.y);
+        mouse_move(cx, window, from, false);
+        wait(cx, window, Duration::from_millis(100));
+        cx.simulate_event(
+            window,
+            MouseDownEvent {
+                position: from,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+        );
+        for step in 1..=8 {
+            let x = from.x + (to.x - from.x) * (step as f32 / 8.0);
+            mouse_move(cx, window, point(x, from.y), true);
+            wait(cx, window, Duration::from_millis(20));
+        }
+        save(cx, window, &name("dragging"));
+        cx.simulate_event(
+            window,
+            gpui::MouseUpEvent {
+                position: to,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            },
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("dragged"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) {

@@ -11,6 +11,7 @@ mod context_menu;
 #[cfg(all(test, feature = "test-support"))]
 mod desktop_parity_tests;
 mod diff;
+mod drag_slot;
 mod editor;
 mod exits;
 #[cfg(all(test, feature = "test-support"))]
@@ -54,6 +55,7 @@ mod setup_approval;
 mod sidebar;
 mod sound;
 mod status;
+mod tab_drag;
 mod tabs;
 #[cfg(all(test, feature = "test-support"))]
 mod tests;
@@ -144,7 +146,7 @@ struct Drag {
     bounds: Bounds<Pixels>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Active {
     Terminal(usize),
     /// A page of an installed plugin, by tab id.
@@ -192,6 +194,8 @@ pub struct Workspace {
     new_focus: FocusHandle,
     /// Keeps the selected tab in the part of the strip that is not covered by controls.
     tab_scroll: ScrollHandle,
+    /// A tab being dragged along the strip (`tab_drag`).
+    tab_drags: tab_drag::TabDrags,
     /// The inputs that change the tab strip's available width.
     tab_layout: Option<(Pixels, bool, Option<f32>, bool, usize)>,
     active: Active,
@@ -355,6 +359,7 @@ impl Workspace {
             issues_focus: cx.focus_handle().tab_stop(true),
             new_focus: cx.focus_handle().tab_stop(true),
             tab_scroll: ScrollHandle::new(),
+            tab_drags: Default::default(),
             tab_layout: None,
             active: Active::Issues,
             issues_open: true,
@@ -604,32 +609,39 @@ impl Workspace {
 impl Workspace {
     /// The title bar with the tabs, drawn as a piece of its own (`parts`).
     fn title_bar_part(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let mut tabs: Vec<AnyElement> = self
+        let mut tabs: Vec<(Active, AnyElement)> = self
             .terminals
             .iter()
             .map(|tab| {
-                self.tab(
+                (
                     Active::Terminal(tab.id),
-                    self.label(tab.id, cx),
-                    self.tab_state(tab.id),
-                    &tab.focus,
-                    cx,
+                    self.tab(
+                        Active::Terminal(tab.id),
+                        self.label(tab.id, cx),
+                        self.tab_state(tab.id),
+                        &tab.focus,
+                        cx,
+                    )
+                    .into_any_element(),
                 )
-                .into_any_element()
             })
             .collect();
         tabs.extend(self.plugin_tabs.iter().map(|tab| {
-            self.tab(
+            (
                 Active::Plugin(tab.id),
-                tab.title.clone(),
-                None,
-                &tab.focus,
-                cx,
+                self.tab(
+                    Active::Plugin(tab.id),
+                    tab.title.clone(),
+                    None,
+                    &tab.focus,
+                    cx,
+                )
+                .into_any_element(),
             )
-            .into_any_element()
         }));
         if self.project_page.is_some() {
-            tabs.push(
+            tabs.push((
+                Active::Project,
                 self.tab(
                     Active::Project,
                     "Project page".into(),
@@ -638,11 +650,12 @@ impl Workspace {
                     cx,
                 )
                 .into_any_element(),
-            );
+            ));
         }
         // With the Issues plugin's own board, that is the Issues tab, among the plugin pages.
         if self.issues_open && !self.has_tasks_board() {
-            tabs.push(
+            tabs.push((
+                Active::Issues,
                 self.tab(
                     Active::Issues,
                     "Issues".into(),
@@ -651,11 +664,12 @@ impl Workspace {
                     cx,
                 )
                 .into_any_element(),
-            );
+            ));
         }
         if self.welcome {
             tabs.clear();
         }
+        let tabs = self.tab_strip(tabs);
         self.title_bar(tabs, cx)
     }
 

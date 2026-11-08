@@ -15,7 +15,7 @@ use crate::{
     saved,
     workspace::{
         Workspace,
-        tests::{open_config, press},
+        tests::{drag_to, moves, open_config, press, release},
     },
 };
 
@@ -591,46 +591,6 @@ fn row(name: &str) -> gpui::Point<gpui::Pixels> {
 
 fn names(window: &TestAppWindow<Workspace>) -> Vec<String> {
     window.read(|w, _| w.projects.iter().map(|p| p.name.clone()).collect())
-}
-
-/// Presses at `from` and moves the pointer to `to` in `steps`, drawing after each, as a hand does: how long each of
-/// those frames took to draw.
-fn drag_to(
-    window: &mut TestAppWindow<Workspace>,
-    from: gpui::Point<gpui::Pixels>,
-    to: gpui::Point<gpui::Pixels>,
-    steps: usize,
-) -> Vec<Duration> {
-    window.simulate_mouse_down(from, MouseButton::Left);
-    window.draw();
-    moves(window, from, to, steps)
-}
-
-/// The pointer moved from `from` to `to` with the button down, in `steps`, drawing after each.
-fn moves(
-    window: &mut TestAppWindow<Workspace>,
-    from: gpui::Point<gpui::Pixels>,
-    to: gpui::Point<gpui::Pixels>,
-    steps: usize,
-) -> Vec<Duration> {
-    (1..=steps)
-        .map(|step| {
-            let t = step as f32 / steps as f32;
-            window.simulate_event(MouseMoveEvent {
-                position: point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t),
-                pressed_button: Some(MouseButton::Left),
-                modifiers: Modifiers::default(),
-            });
-            let start = Instant::now();
-            window.draw();
-            start.elapsed()
-        })
-        .collect()
-}
-
-fn release(window: &mut TestAppWindow<Workspace>, at: gpui::Point<gpui::Pixels>) {
-    window.simulate_mouse_up(at, MouseButton::Left);
-    window.draw();
 }
 
 /// The desktop's `dragSpace`: in the Manual sort a project's row follows the pointer, the others make room as it passes

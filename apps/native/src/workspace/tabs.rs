@@ -216,38 +216,49 @@ impl Workspace {
     }
 
     pub(super) fn move_tab(&mut self, tab: Active, right: bool, cx: &mut Context<Self>) {
-        let step = |index: usize| {
-            if right {
-                index + 1
-            } else {
-                index.wrapping_sub(1)
-            }
+        let index = match tab {
+            Active::Terminal(id) => self.terminals.iter().position(|tab| tab.id == id),
+            Active::Plugin(id) => self.plugin_tabs.iter().position(|tab| tab.id == id),
+            Active::Project | Active::Issues => None,
         };
-        match tab {
-            Active::Terminal(id) => {
-                let Some(index) = self.terminals.iter().position(|tab| tab.id == id) else {
-                    return;
-                };
-                let other = step(index);
-                if other >= self.terminals.len() {
-                    return;
+        let Some(index) = index else {
+            return;
+        };
+        let other = if right {
+            index + 1
+        } else {
+            index.wrapping_sub(1)
+        };
+        self.move_tab_to(tab, other, cx);
+    }
+
+    /// Puts `tab` at `index` among its own kind and saves, as Move Tab Left and Right and letting go of a dragged tab do.
+    pub(super) fn move_tab_to(&mut self, tab: Active, index: usize, cx: &mut Context<Self>) {
+        fn place<T>(list: &mut Vec<T>, from: Option<usize>, to: usize) -> bool {
+            match from {
+                Some(from) if from != to && to < list.len() => {
+                    let item = list.remove(from);
+                    list.insert(to, item);
+                    true
                 }
-                self.terminals.swap(index, other);
+                _ => false,
+            }
+        }
+        let moved = match tab {
+            Active::Terminal(id) => {
+                let from = self.terminals.iter().position(|tab| tab.id == id);
+                place(&mut self.terminals, from, index)
             }
             Active::Plugin(id) => {
-                let Some(index) = self.plugin_tabs.iter().position(|tab| tab.id == id) else {
-                    return;
-                };
-                let other = step(index);
-                if other >= self.plugin_tabs.len() {
-                    return;
-                }
-                self.plugin_tabs.swap(index, other);
+                let from = self.plugin_tabs.iter().position(|tab| tab.id == id);
+                place(&mut self.plugin_tabs, from, index)
             }
-            Active::Project | Active::Issues => return,
+            Active::Project | Active::Issues => false,
+        };
+        if moved {
+            self.save(cx);
+            cx.notify();
         }
-        self.save(cx);
-        cx.notify();
     }
 
     pub(super) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -478,12 +489,26 @@ impl Workspace {
                 })
             })
             .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
-            // Not a window drag.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, window, cx| {
+            // Over the tabs it passes, which don't take the pointer from it, as the sidebar's dragged row.
+            .when(self.dragged_left(active).is_some(), |tab| {
+                tab.cursor_grabbing().block_mouse_except_scroll()
+            })
+            // Not a window drag: a press that moves 5px drags the tab instead.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.press_tab(active, event.position, cx)
+                }),
+            )
+            .on_click(cx.listener(move |this, event, window, cx| {
+                if this.tab_drag_click(event) {
+                    return;
+                }
                 this.leave_loose(cx);
                 this.show(active, window, cx)
             }))
+            .children(ui::spot(|| format!("tab:{active:?}")))
             .child(glyph)
             .child(div().min_w_0().truncate().child(label))
             .children(splits)

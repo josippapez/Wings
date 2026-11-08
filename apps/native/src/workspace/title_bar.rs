@@ -108,6 +108,7 @@ impl Workspace {
             )
             // With no project there is nothing to open a tab in.
             .when(!self.welcome, |bar| bar.child(self.new_tab_buttons(cx)))
+            .children(self.tab_drag_listeners(cx))
             .into_any_element()
     }
 

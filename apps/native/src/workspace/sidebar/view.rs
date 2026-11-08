@@ -5,9 +5,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use gpui::{
-    AnyElement, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString, StyleRefinement,
-    canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, Axis, Context, DispatchPhase, Div, ElementId, FontWeight, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Orientation, Role, SharedString,
+    StyleRefinement, canvas, div, prelude::*, px, rgb, rgba,
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
@@ -21,13 +21,12 @@ use crate::{
 use crate::workspace::{
     Workspace,
     context_menu::MenuTarget,
+    drag_slot::Slot,
     project::{SIDEBAR_ACCENT, SIDEBAR_FOREGROUND},
 };
 
 use super::{
-    MIN_WIDTH,
-    drag::Slot,
-    now_ms,
+    MIN_WIDTH, now_ms,
     order::{self, Context as OrderBy, Ordered, Sort},
 };
 
@@ -517,7 +516,14 @@ impl Workspace {
             .into_any_element();
         // A project's row can be dragged up or down in the Manual sort, so where it is laid out is noted.
         if self.side.sort == Sort::Manual && !entry.child {
-            Slot::new(row, entry.path.clone(), self.side.rows.clone(), dragged).into_any_element()
+            Slot::new(
+                row,
+                entry.path.clone(),
+                self.side.rows.clone(),
+                Axis::Vertical,
+                dragged,
+            )
+            .into_any_element()
         } else {
             row
         }
