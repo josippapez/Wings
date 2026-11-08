@@ -203,6 +203,8 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
     until(&app, &mut window, "loading diff never opened", |w| {
         w.plugin_ui.diff.is_some()
     });
+    // It opens docked beside the terminal; the clicks below are where it is when it fills the window.
+    window.update(|w, window, cx| w.expand_diff(true, window, cx));
     assert!(window.read(|w, cx| {
         w.plugin_ui
             .diff
@@ -269,6 +271,244 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
         let viewer = w.plugin_ui.diff.as_ref().unwrap().0.read(cx);
         viewer.tree && viewer.wrap
     }));
+}
+
+/// A plugin that may open diffs and does nothing of its own, so a test opens one from the tab it wants.
+fn install_differ(data: &Data) {
+    data.install_script(
+        "differ",
+        json!({ "contributes": { "ui": ["diff"] } }),
+        "",
+        &[],
+        "differ-scope",
+    );
+}
+
+/// Opens a diff of two files from the tab on screen, as the plugin's `openDiff` does.
+fn open_diff(window: &mut TestAppWindow<Workspace>) {
+    let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two b/two\n--- a/two\n+++ b/two\n@@ -1 +1 @@\n-a\n+b\n";
+    window.update(|w, window, cx| {
+        let view = crate::diff::View {
+            id: "differ:1".into(),
+            plugin_id: "differ".into(),
+            title: "Changes".into(),
+            subtitle: String::new(),
+            cwd: String::new(),
+            refresh: false,
+            update: crate::diff::clean_update(&json!({ "patch": patch })).unwrap(),
+        };
+        w.open_diff_view(view, window, cx);
+    });
+    window.draw();
+}
+
+/// Where the diff was last drawn, inside its card's border when docked.
+fn diff_at() -> gpui::Bounds<gpui::Pixels> {
+    crate::ui::spot_at("diff").expect("the diff was drawn")
+}
+
+/// The right edge of the terminal of `pane`, as last drawn.
+fn terminal_right(window: &TestAppWindow<Workspace>, pane: usize) -> f32 {
+    window.read(|w, cx| {
+        let drawn = w.terminal(pane).unwrap().read(cx).drawn_at().unwrap();
+        drawn.right().as_f32()
+    })
+}
+
+/// The desktop's `diffDocked`: the diff opens beside the tab on screen, which gives it its room, and shows only while
+/// that tab does, kept while another is shown. Expand fills the window and Dock beside the tab goes back. Closing the
+/// tab closes the diff.
+#[test]
+fn a_diff_docks_beside_the_tab_it_opened_from_and_shows_only_on_that_tab() {
+    let data = Data::temp();
+    install_differ(&data);
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let full = terminal_right(&window, 0);
+    let first = window.read(|w, _| w.active());
+    open_diff(&mut window);
+    // In the 1000 window the tab keeps its 320 beside the 248 sidebar, and the dock has what's left, under its 620.
+    let width = 1000.0 - 248.0 - 320.0;
+    let docked = (1000.0 - width + 1.0, 1000.0 - 8.0 - 1.0);
+    let at = diff_at();
+    assert_eq!((at.left().as_f32(), at.right().as_f32()), docked);
+    assert_eq!(
+        full - terminal_right(&window, 0),
+        width,
+        "the tab gives the dock its room"
+    );
+    // The keys stay with the terminal: the dock is no dialog.
+    assert!(window.update(|w, window, cx| {
+        gpui::Focusable::focus_handle(&w.terminal(0).unwrap(), cx).is_focused(window)
+    }));
+
+    // On another tab it's out of sight but kept, and it's back with its tab.
+    press(&mut window, "t");
+    window.draw();
+    let second = window.read(|w, _| w.terminals[1].layout.panes()[0]);
+    assert_eq!(terminal_right(&window, second), full);
+    assert!(window.read(|w, _| w.plugin_ui.diff.is_some()));
+    window.update(|w, window, cx| w.show(first, window, cx));
+    window.draw();
+    assert_eq!(full - terminal_right(&window, 0), width);
+
+    // Expand fills the window, and Dock beside the tab goes back.
+    let expand = crate::ui::spot_at("diff-expand").unwrap().center();
+    window.simulate_click(expand, MouseButton::Left);
+    window.draw();
+    assert_eq!(
+        diff_at(),
+        gpui::Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(640.0)))
+    );
+    let dock = crate::ui::spot_at("diff-dock").unwrap().center();
+    window.simulate_click(dock, MouseButton::Left);
+    window.draw();
+    let at = diff_at();
+    assert_eq!((at.left().as_f32(), at.right().as_f32()), docked);
+
+    // Its file list hides, and stays hidden for the next diff.
+    let toggle = crate::ui::spot_at("diff-files-toggle").unwrap().center();
+    window.simulate_click(toggle, MouseButton::Left);
+    window.draw();
+    assert!(!window.read(|w, _| w.prefs.diff_dock_files));
+    assert_eq!(crate::ui::spot_at("diff-code").unwrap().left(), at.left());
+
+    // Closing the tab it docks beside closes it.
+    window.update(|w, window, cx| w.close_tab_of(first, window, cx));
+    window.draw();
+    assert!(window.read(|w, _| w.plugin_ui.diff.is_none()));
+}
+
+/// The dock's left edge drags within the desktop's `SIDES.diff`, leaving the tab its 320, and the width is written once
+/// the pointer is released and comes back on the next launch, as the sidebars' do.
+#[test]
+fn dragging_the_docked_diffs_edge_resizes_it_within_its_limits_and_saves_when_it_is_released() {
+    use super::diff::{INITIAL_WIDTH, MAX_WIDTH, MIN_WIDTH};
+    let data = Data::temp();
+    install_differ(&data);
+    let dir = crate::projects::test_dir("diff-resize");
+    let file = dir.join("workspace.json");
+    // Wide enough for the widest dock beside the sidebar and the tab's 320.
+    let wide = 2400.0;
+    let open = || {
+        let (app, mut window) = open_sized(Some(size(px(wide), px(640.0))), |config| {
+            config.plugins = Some(data.paths());
+            config.state = Some(file.clone());
+        });
+        window.draw();
+        open_diff(&mut window);
+        (app, window)
+    };
+    let width = |window: &TestAppWindow<Workspace>| window.read(|w, _| w.plugin_ui.diff_dock.width);
+    let saved = || crate::saved::load_settings(&file).diff_width;
+    // From the gap left of the dock drawn `drawn` wide, to `to`.
+    let drag = |window: &mut TestAppWindow<Workspace>, drawn: f32, to: f32| {
+        window.simulate_mouse_down(point(px(wide - drawn - 4.0), px(300.0)), MouseButton::Left);
+        window.draw();
+        window.simulate_event(gpui::MouseMoveEvent {
+            position: point(px(to), px(300.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+    };
+    let release = |window: &mut TestAppWindow<Workspace>, at: f32| {
+        window.simulate_mouse_up(point(px(at), px(300.0)), MouseButton::Left);
+        window.draw();
+    };
+
+    let (_app, mut window) = open();
+    assert_eq!(width(&window), INITIAL_WIDTH);
+    let before = saved();
+    // It follows the pointer by how far it moved, and nothing is written until the pointer is released.
+    let from = wide - INITIAL_WIDTH - 4.0;
+    drag(&mut window, INITIAL_WIDTH, from - 100.0);
+    assert_eq!((width(&window), saved()), (INITIAL_WIDTH + 100.0, before));
+    release(&mut window, from - 100.0);
+    assert_eq!(saved(), Some(INITIAL_WIDTH + 100.0));
+    let at = diff_at();
+    assert_eq!(at.left().as_f32(), wide - INITIAL_WIDTH - 100.0 + 1.0);
+
+    drag(&mut window, INITIAL_WIDTH + 100.0, 0.0);
+    release(&mut window, 0.0);
+    assert_eq!((width(&window), saved()), (MAX_WIDTH, Some(MAX_WIDTH)));
+    drag(&mut window, MAX_WIDTH, wide);
+    release(&mut window, wide);
+    assert_eq!((width(&window), saved()), (MIN_WIDTH, Some(MIN_WIDTH)));
+
+    // The next launch starts at the saved width, and a width outside the limits starts over.
+    drop((window, _app));
+    {
+        let (_app, window) = open();
+        assert_eq!(width(&window), MIN_WIDTH);
+    }
+    std::fs::write(&file, r#"{"version":1,"diff_width":20.0,"projects":{}}"#).unwrap();
+    let (_app, window) = open();
+    assert_eq!(width(&window), INITIAL_WIDTH);
+    drop((window, _app));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Dragging the dock's edge changes the size of the pane area on every frame of the drag, but the shell is given its
+/// new size once, when the panes hold still, as with the sidebars' edges.
+#[test]
+fn dragging_the_docked_diffs_edge_resizes_the_terminal_once_when_it_settles() {
+    let data = Data::temp();
+    install_differ(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let grid = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid())
+    };
+    // Real time for the shell's thread to take each size, fake time for the app's timers.
+    let settle = |window: &mut TestAppWindow<Workspace>| {
+        for _ in 0..15 {
+            app.advance_clock(Duration::from_millis(100));
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    open_diff(&mut window);
+    settle(&mut window);
+    let (before, start) = (grid(&window), terminal_right(&window, 0));
+    // The dock has the 432 the 1000 window leaves it, so it can only get narrower: the pointer goes right, from the
+    // gap left of the dock.
+    let mut x = 1000.0 - 432.0 - 4.0;
+    window.simulate_mouse_down(point(px(x), px(300.0)), MouseButton::Left);
+    let (mut grids, mut frames, mut drawn, mut slowest) =
+        (vec![before], 0, Duration::ZERO, Duration::ZERO);
+    // 30 frames of 16ms, the pointer 2 points further right each.
+    for _ in 0..30 {
+        x += 2.0;
+        window.simulate_event(gpui::MouseMoveEvent {
+            position: point(px(x), px(300.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+        app.advance_clock(Duration::from_millis(16));
+        app.run_until_parked();
+        let begun = Instant::now();
+        window.draw();
+        let took = begun.elapsed();
+        frames += 1;
+        drawn += took;
+        slowest = slowest.max(took);
+        grids.push(grid(&window));
+    }
+    window.simulate_mouse_up(point(px(x), px(300.0)), MouseButton::Left);
+    settle(&mut window);
+    grids.push(grid(&window));
+    grids.dedup();
+    let gained = terminal_right(&window, 0) - start;
+    eprintln!(
+        "[measure] docked diff drag: {frames} frames, {:.2} ms a frame on average, {:.2} ms at most, the panes gained {gained} points, grids {grids:?}",
+        drawn.as_secs_f64() * 1000.0 / frames as f64,
+        slowest.as_secs_f64() * 1000.0,
+    );
+    assert_eq!(gained, 60.0, "the panes follow the pointer");
+    assert_eq!(
+        grids.len(),
+        2,
+        "one resize of the shell, not one a frame: {grids:?}"
+    );
 }
 
 #[test]

@@ -190,6 +190,8 @@ impl Workspace {
             seen_plugins: self.prefs.seen_plugins.clone(),
             diff_wrap: Some(self.prefs.diff_wrap),
             diff_tree: Some(self.prefs.diff_tree),
+            diff_dock_files: Some(self.prefs.diff_dock_files),
+            diff_width: Some(self.plugin_ui.diff_dock.width),
             global_hotkey: Some(self.prefs.global_hotkey.clone()),
             terminal_server: self.prefs.terminal_server,
             right_width: Some(self.plugin_ui.right_size.width),

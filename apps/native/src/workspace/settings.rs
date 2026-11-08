@@ -101,6 +101,8 @@ pub(super) struct Prefs {
     pub(super) diff_wrap: bool,
     /// The diff viewer lists files as a folder tree.
     pub(super) diff_tree: bool,
+    /// The docked diff shows its file list.
+    pub(super) diff_dock_files: bool,
     /// The shortcut that brings Wings forward from any app.
     pub(super) global_hotkey: crate::saved::GlobalHotkey,
     /// "Keep terminals running when Wings quits", as saved: `None` until changed, which is on. What this app does now
@@ -121,6 +123,7 @@ impl Default for Prefs {
             seen_plugins: Vec::new(),
             diff_wrap: false,
             diff_tree: false,
+            diff_dock_files: true,
             global_hotkey: Default::default(),
             terminal_server: None,
         }

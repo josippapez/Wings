@@ -1,4 +1,4 @@
-//! A central diff overlay. Only viewport rows become GPUI elements.
+//! A plugin's diff, docked beside a tab or filling the window. Only viewport rows become GPUI elements.
 use super::{
     Update, View,
     patch::{DiffLine, DiffLineKind, DiffStatus},
@@ -25,6 +25,10 @@ pub enum Event {
         wrap: bool,
         tree: bool,
     },
+    /// Expand (true) or Dock beside the tab (false) was pressed.
+    Expand(bool),
+    /// The docked file list was shown or hidden, for the app to keep, as the desktop's `wings.diff.dockFiles`.
+    DockFiles(bool),
 }
 
 /// A code row's height, unwrapped.
@@ -37,8 +41,14 @@ pub struct Viewer {
     host: Arc<PluginHost>,
     selected: usize,
     rows: Vec<CodeRow>,
-    /// Side by side, else one column. The desktop's modal starts side by side.
-    split: bool,
+    /// Side by side, else one column, once chosen (`split`).
+    split_choice: Option<bool>,
+    /// Drawn beside a tab rather than filling the window.
+    docked: bool,
+    /// Filling the window, it has a tab to dock beside.
+    can_dock: bool,
+    /// Docked, the file list shows.
+    dock_files: bool,
     /// Long lines wrap; else they scroll sideways.
     pub(crate) wrap: bool,
     /// The file list is a folder tree, else a flat list.
@@ -109,7 +119,10 @@ impl Viewer {
             host,
             selected: 0,
             rows: Vec::new(),
-            split: true,
+            split_choice: None,
+            docked: false,
+            can_dock: false,
+            dock_files: true,
             wrap: false,
             tree: false,
             collapsed: HashSet::new(),
@@ -148,9 +161,37 @@ impl Viewer {
     }
 
     pub fn set_split(&mut self, split: bool, cx: &mut Context<Self>) {
-        self.split = split;
+        self.split_choice = Some(split);
         self.rebuild(cx);
         cx.notify();
+    }
+
+    /// Side by side until you pick, except docked: a dock is usually too narrow for two columns, as the desktop's
+    /// `splitChoice ?? !dock`.
+    pub fn split(&self) -> bool {
+        self.split_choice.unwrap_or(!self.docked)
+    }
+
+    /// Beside its tab (`docked`), or filling the window, where `can_dock` offers to go back beside the tab.
+    pub fn set_dock(&mut self, docked: bool, can_dock: bool, cx: &mut Context<Self>) {
+        let split = self.split();
+        self.docked = docked;
+        self.can_dock = can_dock;
+        if self.split() != split {
+            self.rebuild(cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether the docked file list shows, as last chosen.
+    pub fn set_dock_files(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.dock_files = shown;
+        cx.notify();
+    }
+
+    fn choose_dock_files(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.set_dock_files(shown, cx);
+        cx.emit(Event::DockFiles(shown));
     }
 
     fn set_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
@@ -250,7 +291,7 @@ impl Viewer {
         let Some(file) = diff.files.get(self.selected) else {
             return;
         };
-        self.rows = code_rows(&file.hunks, self.split);
+        self.rows = code_rows(&file.hunks, self.split());
         let focus = self.view.update.focus.as_ref().filter(|f| f.line.is_some());
         let target = focus.and_then(|focus| {
             self.rows.iter().position(|row| {
@@ -396,7 +437,7 @@ impl Viewer {
             };
             self.select_file(listed[next], cx);
         } else if self.code_focus.is_focused(window) {
-            if matches!(key.key.as_str(), "left" | "right") && self.split && !self.wrap {
+            if matches!(key.key.as_str(), "left" | "right") && self.split() && !self.wrap {
                 self.scroll_split(px(if key.key == "left" { 40.0 } else { -40.0 }), cx);
                 window.prevent_default();
                 cx.stop_propagation();
@@ -763,7 +804,7 @@ impl Viewer {
             )
             .track_scroll(&self.scroll)
             .h_full();
-            if self.split {
+            if self.split() {
                 // Each column clips its own lines, and Shift and the wheel move both sideways together.
                 div()
                     .id("diff-code-scroll")
@@ -811,33 +852,35 @@ impl Viewer {
             .flex_1()
             .min_h_0()
             .flex()
-            .child(
-                div()
-                    .id("diff-file-panel")
-                    // The desktop's `w-72` when the diff fills the window.
-                    .w(px(288.0))
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .border_r_1()
-                    .border_color(rgba(theme::BORDER))
-                    .child(self.list_header(cx))
-                    .child(
-                        div()
-                            .id("diff-file-list")
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .border_1()
-                            .border_color(rgba(0))
-                            .track_focus(&self.files_focus)
-                            .role(Role::ListBox)
-                            .aria_label("Changed files")
-                            .focus_visible(|style| style.border_color(rgb(theme::INFO)))
-                            .child(files),
-                    ),
-            )
+            .when(!self.docked || self.dock_files, |body| {
+                body.child(
+                    div()
+                        .id("diff-file-panel")
+                        // The desktop's `w-56` in the dock and `w-72` when the diff fills the window.
+                        .w(px(if self.docked { 224.0 } else { 288.0 }))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .border_r_1()
+                        .border_color(rgba(theme::BORDER))
+                        .child(self.list_header(cx))
+                        .child(
+                            div()
+                                .id("diff-file-list")
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .border_1()
+                                .border_color(rgba(0))
+                                .track_focus(&self.files_focus)
+                                .role(Role::ListBox)
+                                .aria_label("Changed files")
+                                .focus_visible(|style| style.border_color(rgb(theme::INFO)))
+                                .child(files),
+                        ),
+                )
+            })
             .child(
                 div()
                     .id("diff-code-panel")
@@ -853,6 +896,7 @@ impl Viewer {
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, window, cx| this.code_focus.focus(window, cx)),
                     )
+                    .children(ui::spot(|| "diff-code".into()))
                     .child(
                         div()
                             .h(px(32.0))
@@ -965,29 +1009,35 @@ impl Render for Viewer {
         } else {
             self.content(cx)
         };
+        let (docked, split) = (self.docked, self.split());
+        // Docked, the toggles show only their icons, as the desktop's.
+        let text = |label| (!docked).then_some(label);
         div()
             .id("native-diff")
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            // Docked, the dock's card is the background.
+            .when(!docked, |viewer| viewer.bg(rgb(theme::BACKGROUND)))
             .text_color(rgb(theme::FOREGROUND))
             .text_size(px(13.0))
-            .role(Role::Dialog)
+            // Only filling the window is it a dialog; in the dock it's a part of the window beside the tab.
+            .role(if docked { Role::Region } else { Role::Dialog })
             .aria_label(self.view.title.clone())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
-            // The desktop's header when the diff fills the window: `py-3 pr-3 pl-5`, a 15px title, and under it the
-            // subtitle, the number of files and the lines added and removed.
+            .children(ui::spot(|| "diff".into()))
+            // The desktop's header: `py-3 pr-3 pl-5` and a 15px title when the diff fills the window, `py-2 pr-2 pl-4`
+            // and 13px docked. Under the title, the subtitle, the number of files and the lines added and removed.
             .child(
                 div()
                     .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(4.0))
-                    .py(px(12.0))
-                    .pr(px(12.0))
-                    .pl(px(20.0))
+                    .py(px(if docked { 8.0 } else { 12.0 }))
+                    .pr(px(if docked { 8.0 } else { 12.0 }))
+                    .pl(px(if docked { 16.0 } else { 20.0 }))
                     .border_b_1()
                     .border_color(rgba(ui::HAIRLINE))
                     .child(
@@ -999,7 +1049,7 @@ impl Render for Viewer {
                             .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(15.0))
+                                    .text_size(px(if docked { 13.0 } else { 15.0 }))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(self.view.title.clone()),
@@ -1063,20 +1113,14 @@ impl Render for Viewer {
                         )
                     })
                     .child(toggle_group([
-                        toggle(
-                            "diff-split",
-                            Icon::Columns,
-                            "Split",
-                            Some("Split"),
-                            self.split,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.set_split(true, cx))),
+                        toggle("diff-split", Icon::Columns, "Split", text("Split"), split)
+                            .on_click(cx.listener(|this, _, _, cx| this.set_split(true, cx))),
                         toggle(
                             "diff-unified",
                             Icon::Rows3,
                             "Unified",
-                            Some("Unified"),
-                            !self.split,
+                            text("Unified"),
+                            !split,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.set_split(false, cx))),
                     ]))
@@ -1085,11 +1129,26 @@ impl Render for Viewer {
                             "diff-wrap",
                             Icon::TextWrap,
                             "Wrap long lines",
-                            Some("Wrap"),
+                            text("Wrap"),
                             self.wrap,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.set_wrap(!this.wrap, cx))),
                     )
+                    .when(docked, |bar| {
+                        bar.child(
+                            toggle(
+                                "diff-files-toggle",
+                                Icon::PanelLeft,
+                                "File list",
+                                None,
+                                self.dock_files,
+                            )
+                            .children(ui::spot(|| "diff-files-toggle".into()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.choose_dock_files(!this.dock_files, cx)
+                            })),
+                        )
+                    })
                     .child(
                         div()
                             .mx(px(4.0))
@@ -1097,6 +1156,32 @@ impl Render for Viewer {
                             .w(px(1.0))
                             .bg(rgba(ui::HAIRLINE)),
                     )
+                    .when(docked, |bar| {
+                        bar.child(
+                            ui::untipped_ghost_button(
+                                "diff-expand",
+                                "Expand",
+                                ui::ButtonSize::Sm,
+                                None,
+                                icon(Icon::Maximize, 16.0, theme::MUTED_FOREGROUND),
+                            )
+                            .tooltip(ui::tooltip("Fill the window", None))
+                            .children(ui::spot(|| "diff-expand".into()))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Expand(true)))),
+                        )
+                    })
+                    .when(!docked && self.can_dock, |bar| {
+                        bar.child(
+                            ui::icon_button(
+                                "diff-dock",
+                                Icon::Minimize,
+                                "Dock beside the tab",
+                                ui::ButtonSize::Sm,
+                            )
+                            .children(ui::spot(|| "diff-dock".into()))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Expand(false)))),
+                        )
+                    })
                     .child(
                         ui::icon_button("diff-close", Icon::X, "Close diff", ui::ButtonSize::Sm)
                             .track_focus(&self.close_focus)
@@ -1300,5 +1385,55 @@ mod layout_tests {
         window.draw();
         window.read(|v, _| assert_eq!(v.wrapped.item_count(), v.rows.len()));
         assert_eq!(*layouts.borrow(), [(false, true), (true, true)]);
+    }
+
+    /// The desktop's docked diff: one column until you pick, and a file list its toggle hides, which the app keeps, and
+    /// Expand. Filling the window it's side by side again, with Dock beside the tab when it has a tab to go back to.
+    #[test]
+    fn docked_it_starts_in_one_column_with_a_file_list_toggle_and_offers_to_fill_the_window() {
+        let patch = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n";
+        let (mut app, mut window, _) = open(patch);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let viewer = window.root();
+        let _subscription = app.update(|cx| {
+            cx.subscribe(&viewer, move |_, event: &Event, _| match event {
+                Event::Expand(full) => seen.borrow_mut().push(format!("expand {full}")),
+                Event::DockFiles(shown) => seen.borrow_mut().push(format!("files {shown}")),
+                _ => {}
+            })
+        });
+        let unified = [CodeRow::Line(0, 0), CodeRow::Line(0, 1)];
+        let spot = |name: &str| crate::ui::spot_at(name).unwrap_or_else(|| panic!("no {name}"));
+        let click = |window: &mut TestAppWindow<Viewer>, name: &str| {
+            window.simulate_click(spot(name).center(), gpui::MouseButton::Left);
+            window.draw();
+        };
+
+        window.update(|v, _, cx| v.set_dock(true, true, cx));
+        window.draw();
+        window.read(|v, _| assert_eq!(v.rows[1..], unified));
+        // The code starts after the dock's 224 file list until the toggle hides the list.
+        assert_eq!(spot("diff-code").left(), px(224.0));
+        click(&mut window, "diff-files-toggle");
+        assert_eq!(spot("diff-code").left(), px(0.0));
+        click(&mut window, "diff-expand");
+        assert_eq!(*events.borrow(), ["files false", "expand true"]);
+
+        // Filling the window it shows the list and goes side by side, and offers to dock again.
+        window.update(|v, _, cx| v.set_dock(false, true, cx));
+        window.draw();
+        window.read(|v, _| assert!(matches!(v.rows[1], CodeRow::Split { .. })));
+        assert_eq!(spot("diff-code").left(), px(288.0));
+        click(&mut window, "diff-dock");
+        assert_eq!(events.borrow().last().unwrap(), "expand false");
+
+        // A layout you chose stays wherever it shows.
+        window.update(|v, _, cx| {
+            v.set_split(false, cx);
+            v.set_dock(true, true, cx);
+            v.set_dock(false, true, cx);
+        });
+        window.read(|v, _| assert_eq!(v.rows[1..], unified));
     }
 }

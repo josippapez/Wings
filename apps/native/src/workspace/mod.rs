@@ -481,6 +481,7 @@ impl Workspace {
         this.sidebar = settings.sidebar_open.unwrap_or(true);
         this.start_sidebar(&settings, window, cx);
         this.plugin_ui.right_size = right_edge::Size::load(&settings);
+        this.plugin_ui.diff_dock = diff::Dock::load(&settings);
         let installed = |family: &String| cx.text_system().all_font_names().contains(family);
         let defaults = TerminalLook::default();
         // Only the desktop's choices, so a hand-edited file can't ask for a million lines.
@@ -536,6 +537,7 @@ impl Workspace {
             seen_plugins: settings.seen_plugins,
             diff_wrap: settings.diff_wrap == Some(true),
             diff_tree: settings.diff_tree == Some(true),
+            diff_dock_files: settings.diff_dock_files != Some(false),
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
             terminal_server: settings.terminal_server,
         };
@@ -622,7 +624,7 @@ impl Workspace {
     }
 
     /// The project bar and the active tab's content under it, drawn as a piece of its own (`parts`).
-    fn main_part(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn main_part(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let body: AnyElement = if self.welcome {
             self.welcome(cx)
         } else {
@@ -700,6 +702,7 @@ impl Workspace {
                 Active::Issues => page_card(self.issues.clone()),
             }
         };
+        let dock = self.diff_dock(window.viewport_size().width, cx);
         div()
             .size_full()
             .flex()
@@ -707,27 +710,36 @@ impl Workspace {
             .when(!self.welcome, |column| column.child(self.project_bar(cx)))
             .child(
                 div()
-                    .relative()
                     .flex_1()
                     .min_h_0()
-                    // The terminal filling the area stands in for the tab, so the tab is out of sight, not just under
-                    // it: laid out at its size, but not painted or clickable.
+                    .flex()
                     .child(
                         div()
-                            .size_full()
-                            .when(self.loose_page().is_some(), |tab| tab.invisible())
-                            .child(body),
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            // The terminal filling the area stands in for the tab, so the tab is out of sight, not just
+                            // under it: laid out at its size, but not painted or clickable.
+                            .child(
+                                div()
+                                    .size_full()
+                                    .when(self.loose_page().is_some(), |tab| tab.invisible())
+                                    .child(body),
+                            )
+                            // The terminals floating over the tab draw at this slot in the window's quick layer, over
+                            // the panes' terminals (`render`).
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full()
+                                    .child(ui::slot(QUICK, QUICK, None)),
+                            ),
                     )
-                    // The terminals floating over the tab draw at this slot in the window's quick layer, over the
-                    // panes' terminals (`render`).
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .child(ui::slot(QUICK, QUICK, None)),
-                    ),
+                    // Beside the tab, as the desktop's `diff` panel in the same group as its tabs.
+                    .children(dock),
             )
             .into_any_element()
     }
@@ -775,7 +787,10 @@ impl Render for Workspace {
         // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
         let place = self.place();
         self.nav.visit(place);
-        if let Some((viewer, _)) = &self.plugin_ui.diff {
+        self.close_diff_without_tab();
+        if self.diff_shown() == Some(diff::Shown::Full)
+            && let Some((viewer, _)) = &self.plugin_ui.diff
+        {
             return div().size_full().child(viewer.clone()).into_any_element();
         }
         // A click in a terminal focuses it directly, so the tab learns which pane has focus here.

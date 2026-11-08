@@ -220,6 +220,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("icons") {
         return icons(&mut cx, &config, &out);
     }
+    // `-- <out-dir> diff-dock` renders only a plugin's diff, docked beside its tab and filling the window.
+    if std::env::args().nth(2).as_deref() == Some("diff-dock") {
+        return diff_dock(&mut cx, &config, &out);
+    }
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
@@ -1097,6 +1101,46 @@ fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .unwrap();
         wait(cx, window, Duration::from_secs(1));
         save(cx, window, &name("block"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// A made-up plugin's diff of three files, opened from the terminal tab: docked beside it, filling the window, and docked
+/// again with its file list hidden.
+fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let patch = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,8 +1,10 @@\n use std::time::Duration;\n \n pub fn load() -> Config {\n-    let timeout = 10;\n+    // A slow network gets room to answer before the client gives up.\n+    let timeout = 30;\n+    validate(timeout);\n     Config {\n         timeout: Duration::from_secs(timeout),\n-        retries: 1,\n+        retries: 3,\n     }\n }\ndiff --git a/src/client/retry.rs b/src/client/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/client/retry.rs\n@@ -0,0 +1,4 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    200 * 2u64.pow(attempt)\n+}\n+\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,3 @@\n ## Configuration\n-The client waits 10 seconds.\n+The client waits 30 seconds and retries three times.\n \n";
+    let data = Data::temp();
+    data.install_script(
+        "differ",
+        serde_json::json!({ "name": "Changes", "contributes": { "ui": ["diff"] } }),
+        &format!(
+            "let opened = false; wings.onPanes(async (list) => {{ if (!list.length || opened) return; opened = true; await wings.openDiff({{ title: 'Fix the client timeout', subtitle: 'acme-web #42 · fix-timeout into main', patch: {} }}); }});",
+            serde_json::json!(patch)
+        ),
+        &[],
+        "differ-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("diff-{state}-{width}.png"));
+        wait(cx, window, Duration::from_millis(1500));
+        save(cx, window, &name("docked"));
+        click(cx, window, spot("diff-expand"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("expanded"));
+        click(cx, window, spot("diff-dock"));
+        wait(cx, window, Duration::from_millis(300));
+        click(cx, window, spot("diff-files-toggle"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("docked-no-files"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

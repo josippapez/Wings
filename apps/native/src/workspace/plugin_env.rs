@@ -686,6 +686,8 @@ pub(super) struct PluginUi {
         gpui::Entity<crate::diff::viewer::Viewer>,
         gpui::Subscription,
     )>,
+    /// Where the diff shows: beside the tab it opened from, or filling the window, and the dock's width.
+    pub(super) diff_dock: super::diff::Dock,
     pub(super) windows:
         HashMap<(String, String), gpui::WindowHandle<super::plugin_windows::PluginViewWindow>>,
     pub(super) windows_release: Option<gpui::Subscription>,

@@ -213,6 +213,12 @@ pub struct Settings {
     /// The diff viewer lists files as a folder tree, as the desktop's `wings.diff.tree`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_tree: Option<bool>,
+    /// The docked diff shows its file list, as the desktop's `wings.diff.dockFiles`. Absent is shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_dock_files: Option<bool>,
+    /// The docked diff's width in points, as last dragged, as the desktop's `widths.diff`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_width: Option<f32>,
     /// New terminals run in the terminal server, so they keep running when Wings quits or updates. Absent is on
     /// (`terminal_server::enabled`). The desktop has no such setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
