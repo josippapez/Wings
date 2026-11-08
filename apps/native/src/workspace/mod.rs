@@ -221,6 +221,8 @@ pub struct Workspace {
     exits: exits::Exits,
     /// What each pane's agent is doing, from the last detection, by pane.
     agents: HashMap<usize, Agent>,
+    /// The account each pane's Claude runs under, by name, when it isn't the default one.
+    agent_accounts: HashMap<usize, SharedString>,
     /// What each pane runs now, from the last detection.
     pane_info: HashMap<usize, PaneInfo>,
     /// The terminals agents opened with `open_pane`, and which float over their agent.
@@ -384,6 +386,7 @@ impl Workspace {
             side: Default::default(),
             exits: Default::default(),
             agents: HashMap::new(),
+            agent_accounts: HashMap::new(),
             pane_info: HashMap::new(),
             agent_terminals: Default::default(),
             window_active: window.is_window_active(),

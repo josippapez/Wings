@@ -7,8 +7,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Role, Window, div, prelude::*,
-    px, rgb, rgba,
+    AnyElement, Context, Div, FontWeight, MouseButton, MouseDownEvent, Role, SharedString, Window,
+    div, prelude::*, px, relative, rgb, rgba,
 };
 
 use crate::{
@@ -96,10 +96,15 @@ impl Workspace {
             .map_or_else(|| agent.space_id.clone(), |p| p.name.clone());
         let blocked = agent.state == AgentState::Blocked;
         let path = PathBuf::from(&agent.space_id);
+        let account = self.agent_accounts.get(&pane).cloned();
+        let label = match &account {
+            Some(account) => format!("{name}, {account} account, {project}, {}", status(agent)),
+            None => format!("{name}, {project}, {}", status(agent)),
+        };
         div()
             .id(("agent", pane))
             .role(Role::Button)
-            .aria_label(format!("{name}, {project}, {}", status(agent)))
+            .aria_label(label)
             .flex()
             .items_center()
             .gap(px(10.0))
@@ -146,10 +151,18 @@ impl Workspace {
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(name),
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(13.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(name),
+                            )
+                            .children(account.map(account_badge)),
                     )
                     .child(
                         div()
@@ -191,6 +204,19 @@ impl Workspace {
         }
         cx.notify();
     }
+}
+
+/// The Claude Code account a session runs under, after its name: a small quiet pill that never takes more than half the
+/// line, so the name keeps the rest.
+pub(super) fn account_badge(name: SharedString) -> Div {
+    crate::ui::badge(
+        crate::ui::Variant::Outline,
+        None,
+        true,
+        div().min_w_0().truncate().child(name),
+    )
+    .max_w(relative(0.5))
+    .text_color(rgb(theme::MUTED_FOREGROUND))
 }
 
 /// "needs you", "working 42s" or "done", as the desktop's agent rows say it.

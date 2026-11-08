@@ -3,7 +3,8 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
-use gpui::{App, Context, Task};
+use gpui::{App, Context, SharedString, Task};
+use wings_spaces::claude_accounts;
 
 use crate::{
     agents::{self, Agent, AgentKind, AgentState, PaneProbe, Scan, Watcher},
@@ -113,7 +114,7 @@ impl Workspace {
         (probes, focused)
     }
 
-    fn apply(&mut self, scan: Scan, cx: &mut Context<Self>) {
+    pub(super) fn apply(&mut self, scan: Scan, cx: &mut Context<Self>) {
         let by_pane = |id: &str| id.parse::<usize>().ok();
         let agents: HashMap<usize, Agent> = scan
             .agents
@@ -132,6 +133,14 @@ impl Workspace {
                     self.side.touch(std::path::Path::new(&agent.space_id));
                 }
             }
+            let default = self.config.agents.as_deref();
+            self.agent_accounts = agents
+                .iter()
+                .filter_map(|(pane, agent)| {
+                    let name = claude_accounts::label(agent.claude_dir.as_deref()?, default?)?;
+                    Some((*pane, SharedString::new(name)))
+                })
+                .collect();
             let before = std::mem::replace(&mut self.agents, agents);
             self.sync_sessions();
             self.inbox_agents(&before);

@@ -554,6 +554,7 @@ mod tests {
             direct: true,
             summary: None,
             weak_name: false,
+            claude_dir: None,
         }
     }
 

@@ -65,6 +65,9 @@ pub struct Agent {
     /// `name` came from the pane's terminal title, which says little: a generated name may replace it.
     #[serde(skip)]
     pub weak_name: bool,
+    /// The folder of the Claude Code account it runs under: the one whose `sessions/` has its session file.
+    #[serde(skip)]
+    pub claude_dir: Option<PathBuf>,
 }
 
 /// Claude Code's live registry entry, `~/.claude/sessions/<pid>.json`. Undocumented, so every field is optional.
@@ -221,9 +224,12 @@ impl Detector {
             if kind != AgentKind::Codex {
                 self.last_codex.remove(&pane.pane_id);
             }
+            let mut claude_dir = None;
             let (file, state) = match kind {
                 AgentKind::Claude => {
-                    let file = read_session_file(&self.sessions_dirs, pid.as_u32()).unwrap_or_default();
+                    let (file, dir) = read_session_file(&self.sessions_dirs, pid.as_u32()).unzip();
+                    let file = file.unwrap_or_default();
+                    claude_dir = dir;
                     let raw = file
                         .status
                         .as_deref()
@@ -315,6 +321,7 @@ impl Detector {
                 direct: direct.get(&pane.pane_id).copied().unwrap_or(false),
                 summary: None,
                 weak_name,
+                claude_dir,
             });
         }
         self.opencode.set_panes(opencode_panes);
@@ -457,9 +464,13 @@ fn is_agent(name: &OsStr, cmd: &[OsString]) -> Option<AgentKind> {
     }
 }
 
-/// The registry entry of a process, from the account folder it runs under: a pid is unique, so the first folder that has one.
-fn read_session_file(dirs: &[PathBuf], pid: u32) -> Option<SessionFile> {
-    dirs.iter().find_map(|dir| serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{pid}.json"))).ok()?).ok())
+/// The registry entry of a process, and the folder of the account it runs under, whose `sessions/` it is in: a pid is
+/// unique, so the first folder that has one.
+fn read_session_file(dirs: &[PathBuf], pid: u32) -> Option<(SessionFile, PathBuf)> {
+    dirs.iter().find_map(|dir| {
+        let file = serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{pid}.json"))).ok()?).ok()?;
+        Some((file, dir.parent()?.to_path_buf()))
+    })
 }
 
 /// `status` values documented for `claude agents --json`: busy, waiting, idle.
@@ -636,8 +647,9 @@ mod tests {
         fs::create_dir_all(&dirs[0]).unwrap();
         fs::create_dir_all(&dirs[1]).unwrap();
         fs::write(dirs[1].join("4242.json"), r#"{"sessionId":"abc","status":"busy"}"#).unwrap();
-        let file = read_session_file(&dirs, 4242).unwrap();
+        let (file, account) = read_session_file(&dirs, 4242).unwrap();
         assert_eq!((file.session_id.as_deref(), file.status.as_deref()), (Some("abc"), Some("busy")));
+        assert_eq!(account, root.join("work"), "the account it runs under");
         assert!(read_session_file(&dirs, 1).is_none());
         let _ = fs::remove_dir_all(&root);
     }
@@ -685,6 +697,7 @@ mod tests {
         let agents = scan.agents;
         assert_eq!(agents.len(), 1, "claude child not found");
         assert!(agents[0].direct, "claude is the shell's own child");
+        assert_eq!(agents[0].claude_dir, None, "no session file yet, so no account");
         let pid = agents[0].pid;
 
         fs::write(
@@ -694,6 +707,7 @@ mod tests {
         .unwrap();
         let agents = d.scan(std::slice::from_ref(&probe), None).agents;
         assert_eq!(agents[0].session_id.as_deref(), Some("abc"));
+        assert_eq!(agents[0].claude_dir.as_deref(), Some(tmp.as_path()), "the account whose session file it is");
         assert_eq!(agents[0].state, AgentState::Blocked);
         assert_eq!(agents[0].waiting_for.as_deref(), Some("permission prompt"));
         assert_eq!(agents[0].name.as_deref(), Some("Fix bug"));

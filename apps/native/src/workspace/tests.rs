@@ -1313,6 +1313,7 @@ fn an_agent_that_comes_to_need_you_or_finishes_goes_to_the_inbox_read_if_you_are
         direct: true,
         summary: None,
         weak_name: false,
+        claude_dir: None,
     };
     window.update(|w, _, _| {
         w.window_active = true;
@@ -1353,6 +1354,44 @@ fn an_agent_that_comes_to_need_you_or_finishes_goes_to_the_inbox_read_if_you_are
 }
 
 #[test]
+fn an_agents_row_shows_the_named_account_its_claude_runs_under_and_nothing_for_the_default() {
+    use crate::agents::{AgentKind, AgentState, Scan};
+    let (_app, mut window) = open();
+    let agent = |pane: usize, account: &str| crate::agents::Agent {
+        pane_id: pane.to_string(),
+        space_id: String::new(),
+        pid: 1,
+        kind: AgentKind::Claude,
+        session_id: None,
+        name: None,
+        state: AgentState::Working,
+        waiting_for: None,
+        args: Vec::new(),
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: None,
+        weak_name: false,
+        claude_dir: Some(account.into()),
+    };
+    window.update(|w, _, cx| {
+        w.config.agents = Some("/u/.claude".into());
+        let agents = vec![agent(0, "/u/.claude"), agent(1, "/u/.claude-work")];
+        w.apply(
+            Scan {
+                agents,
+                panes: HashMap::new(),
+            },
+            cx,
+        );
+        assert_eq!(
+            w.agent_accounts,
+            HashMap::from([(1, SharedString::from("work"))])
+        );
+    });
+}
+
+#[test]
 fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst() {
     use super::sound::{PLAYED, SoundId};
     use crate::agents::{AgentKind, AgentState};
@@ -1374,6 +1413,7 @@ fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst(
         direct: true,
         summary: None,
         weak_name: false,
+        claude_dir: None,
     };
     // Pane 1 has focus; pane 0 isn't the one you're looking at.
     let change = |w: &mut Workspace, pane: usize, from: AgentState, to: AgentState| {

@@ -176,10 +176,7 @@ impl Workspace {
             .as_deref()
             .map(|state| saved::load_history(state, &history))
             .unwrap_or_default();
-        let account = match &pick {
-            Some(pick) => wings_spaces::claude_accounts::pick_dir(pick).unwrap_or_default(),
-            None => self.spaces.claude_config_dir(&self.config.project),
-        };
+        let account = self.account_dir(pick.as_ref());
         super::claude::sync_account_settings(self.config.agents.clone(), account.clone(), cx);
         #[cfg(unix)]
         let served = self.open_in_server(&folder, &history, &mut output, &account, cx);
@@ -199,6 +196,18 @@ impl Workspace {
             view.update(cx, |view, cx| view.write_input(&line, cx));
         }
         self.insert_pane(id, view, history, pick, session, cx);
+    }
+
+    /// The folder for `CLAUDE_CONFIG_DIR` in a pane of the project on show that was asked for the account `pick`, else
+    /// the project's; `None` for the default account.
+    pub(super) fn account_dir(
+        &self,
+        pick: Option<&wings_spaces::claude_accounts::AccountPick>,
+    ) -> Option<PathBuf> {
+        match pick {
+            Some(pick) => wings_spaces::claude_accounts::pick_dir(pick).unwrap_or_default(),
+            None => self.spaces.claude_config_dir(&self.config.project),
+        }
     }
 
     /// Keeps `view` as the pane `id`, which closes when its shell exits.

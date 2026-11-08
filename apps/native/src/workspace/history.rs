@@ -55,6 +55,8 @@ pub(super) struct SessionRef {
     pub id: String,
     pub cwd: String,
     pub agent: Agent,
+    /// A Claude session's transcript, in the folder of the account it ran under.
+    pub transcript: Option<PathBuf>,
 }
 
 /// The history behind the sheet and the palette, kept between searches so each one reads only what was added.
@@ -115,6 +117,69 @@ impl Sessions {
         };
         wings_agents::history::call_tool(&self.history, &folders, name, arguments)
     }
+
+    /// The default account's folder, where a terminal with no account of its own runs Claude Code.
+    pub fn default_account(&self) -> Option<PathBuf> {
+        match &self.source {
+            Some(SessionSource::Accounts(default)) => Some(default.clone()),
+            Some(SessionSource::Folders(folders)) => folders.first().cloned(),
+            None => None,
+        }
+    }
+
+    /// The account a hit ran under, by name, when it isn't the default one.
+    fn account_label(&self, hit: &Hit) -> Option<SharedString> {
+        let account = account_of(hit.transcript.as_deref()?)?;
+        claude_accounts::label(account, &self.default_account()?).map(SharedString::new)
+    }
+}
+
+/// The account folder a transcript is in: `<account>/projects/<folder>/<id>.jsonl`.
+fn account_of(transcript: &Path) -> Option<&Path> {
+    transcript.parent()?.parent()?.parent()
+}
+
+/// Makes a Claude session resumable under the account in folder `target`. Claude Code looks for a session only in its
+/// own account's `projects/`, so a transcript from another account is copied into the same project folder there, with
+/// the folder beside it that holds its subagents and tool results. A transcript already there is kept: it may hold the
+/// session's continuation.
+pub(super) fn bring_transcript(transcript: &Path, target: &Path) -> std::io::Result<()> {
+    let (Some(account), Some(folder), Some(name), Some(id)) = (
+        account_of(transcript),
+        transcript.parent().and_then(Path::file_name),
+        transcript.file_name(),
+        transcript.file_stem(),
+    ) else {
+        return Ok(());
+    };
+    let into = target.join("projects").join(folder);
+    if account == target || into.join(name).exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&into)?;
+    let extras = transcript.with_file_name(id);
+    if extras.is_dir() {
+        copy_missing(&extras, &into.join(id))?;
+    }
+    // Written aside and renamed, so a copy cut short is never taken for the transcript, which is never overwritten.
+    let partial = into.join(format!(".{}.partial", name.to_string_lossy()));
+    std::fs::copy(transcript, &partial)?;
+    std::fs::rename(&partial, into.join(name))
+}
+
+/// Copies the files of folder `from` that `to` doesn't have yet.
+fn copy_missing(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let into = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_missing(&entry.path(), &into)?;
+        } else if !into.exists() {
+            std::fs::copy(entry.path(), &into)?;
+        }
+    }
+    Ok(())
 }
 
 /// The line that continues a session, without its Enter. `None` when `id` isn't one of the agent's: it gets typed into a
@@ -318,6 +383,8 @@ pub(super) struct Sheet {
     pub(super) branch: Option<String>,
     limit: usize,
     pub(super) results: Option<Results>,
+    /// The account each of `results.sessions` ran under, by name, when it isn't the default one.
+    pub(super) accounts: Vec<Option<SharedString>>,
     searching: bool,
     menu: Option<Menu>,
     /// The session whose resume command was copied a moment ago.
@@ -370,6 +437,7 @@ impl Workspace {
             branch: None,
             limit: PAGE,
             results: None,
+            accounts: Vec::new(),
             searching: false,
             menu: None,
             copied: None,
@@ -421,14 +489,23 @@ impl Workspace {
             if !query.trim().is_empty() {
                 cx.background_executor().timer(TYPING).await;
             }
-            let found = cx
+            let (found, accounts) = cx
                 .background_executor()
-                .spawn(async move { sessions.search(&query, &filter, limit) })
+                .spawn(async move {
+                    let found = sessions.search(&query, &filter, limit);
+                    let accounts = found
+                        .sessions
+                        .iter()
+                        .map(|hit| sessions.account_label(hit))
+                        .collect();
+                    (found, accounts)
+                })
                 .await;
             let loading = found.opencode_loading;
             this.update(cx, |this, cx| {
                 if let Some(sheet) = &mut this.sheet {
                     sheet.results = Some(found);
+                    sheet.accounts = accounts;
                     sheet.searching = false;
                     cx.notify();
                 }
@@ -468,6 +545,7 @@ impl Workspace {
             id: hit.id.clone(),
             cwd,
             agent: hit.agent,
+            transcript: hit.transcript.clone(),
         })
     }
 
@@ -511,7 +589,7 @@ impl Workspace {
         Ok((project, format!("{cd}{command}\r")))
     }
 
-    /// Opens a session in a new tab where it started (see `launch_plan`).
+    /// Opens a session in a new tab where it started (see `launch_plan`), under the account of the project there.
     pub(super) fn launch_session(
         &mut self,
         session: &SessionRef,
@@ -520,12 +598,30 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let (project, input) = self.launch_plan(session, fork)?;
+        self.bring_over(session, self.spaces.claude_config_dir(&project))?;
         self.switch_project(project, window, cx);
         self.new_terminal(window, cx);
         if let Some(pane) = self.focused_pane() {
             self.type_into(pane, &input, window, cx);
         }
         Ok(())
+    }
+
+    /// Copies a session's transcript into the account in folder `account`, `None` being the default one, when it ran
+    /// under another (see `bring_transcript`).
+    fn bring_over(&self, session: &SessionRef, account: Option<PathBuf>) -> Result<(), String> {
+        let (Some(transcript), Some(target)) = (
+            &session.transcript,
+            account.or_else(|| self.sessions.default_account()),
+        ) else {
+            return Ok(());
+        };
+        bring_transcript(transcript, &target).map_err(|error| {
+            format!(
+                "Its transcript couldn't be copied to the account in {}: {error}",
+                target.display()
+            )
+        })
     }
 
     /// Types `text` into a pane's shell, as the keys would.
@@ -583,8 +679,16 @@ impl Workspace {
         } else {
             format!("cd {} && ", shell_quote(&session.cwd))
         };
+        let account = self
+            .panes
+            .get(&pane)
+            .and_then(|p| p.claude_account.as_ref());
+        let brought = self.bring_over(session, self.account_dir(account));
         self.close_history(window, cx);
-        self.type_into(pane, &format!("{cd}{command}\r"), window, cx);
+        match brought {
+            Ok(()) => self.type_into(pane, &format!("{cd}{command}\r"), window, cx),
+            Err(error) => self.show_notice("Couldn't resume the session".into(), error, cx),
+        }
     }
 
     pub(super) fn copy_resume_command(&mut self, session: &SessionRef, cx: &mut Context<Self>) {
@@ -929,7 +1033,8 @@ impl Workspace {
             .enumerate()
             .map(|(at, hit)| {
                 let running = live.contains(&hit.id.as_str());
-                self.session_row(sheet, at, hit, now, words, running, cx)
+                let account = sheet.accounts.get(at).cloned().flatten();
+                self.session_row(sheet, at, hit, account, now, words, running, cx)
             })
             .collect();
         if results.total > results.sessions.len() {
@@ -976,14 +1081,15 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// One session: its agent and title, what matched, when and where it ran, and Resume and its menu, which show while
-    /// the pointer is over it or the menu is open.
+    /// One session: its agent and title, the account it ran under unless that's the default one, what matched, when and
+    /// where it ran, and Resume and its menu, which show while the pointer is over it or the menu is open.
     #[allow(clippy::too_many_arguments)]
     fn session_row(
         &self,
         sheet: &Sheet,
         at: usize,
         hit: &Hit,
+        account: Option<SharedString>,
         now: u64,
         words: &[String],
         running: bool,
@@ -1033,7 +1139,8 @@ impl Workspace {
                             .text_size(px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .child(agent_mark(hit.agent))
-                            .child(div().min_w_0().truncate().child(title)),
+                            .child(div().min_w_0().truncate().child(title))
+                            .children(account.map(super::agent_list::account_badge)),
                     )
                     .children(detail)
                     .child(
@@ -1502,6 +1609,7 @@ mod tests {
             matches,
             snippets: Vec::new(),
             name: None,
+            transcript: None,
         };
         let project = "/work/acme-web";
         let meta =

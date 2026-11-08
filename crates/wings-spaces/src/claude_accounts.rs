@@ -98,6 +98,15 @@ pub fn dirs_with_default(default: PathBuf) -> Vec<PathBuf> {
     dirs
 }
 
+/// What a session that ran under the account in folder `dir` shows of it: a named account's name, and nothing for the
+/// default account's folder `default` or a folder that isn't an account's.
+pub fn label<'a>(dir: &'a Path, default: &Path) -> Option<&'a str> {
+    if dir == default {
+        return None;
+    }
+    dir.file_name()?.to_str()?.strip_prefix(PREFIX).filter(|name| valid_name(name))
+}
+
 /// Each project with the account assigned to it. A name that isn't valid, from a spaces.json edited by hand, counts
 /// as none.
 fn assigned(spaces: &[Space]) -> impl Iterator<Item = (&str, &str)> + '_ {
@@ -639,6 +648,18 @@ mod tests {
         assert_eq!(dir(Some("work")), home().join(".claude-work"));
         assert_eq!(dir(None), claude_dir());
         assert_eq!(user_config(Some("work")), home().join(".claude-work").join(".claude.json"));
+    }
+
+    #[test]
+    fn a_session_shows_its_named_account_and_nothing_for_the_default_one() {
+        let default = Path::new("/u/.claude");
+        assert_eq!(label(Path::new("/u/.claude-work"), default), Some("work"));
+        assert_eq!(label(default, default), None);
+        // Wings may run under a named account's folder, which is then the default one.
+        assert_eq!(label(Path::new("/u/.claude-work"), Path::new("/u/.claude-work/")), None);
+        for other in ["/u/claude", "/u/.claude-", "/u/.claude-Work", "/"] {
+            assert_eq!(label(Path::new(other), default), None, "{other:?}");
+        }
     }
 
     #[test]

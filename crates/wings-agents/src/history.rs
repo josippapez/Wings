@@ -644,6 +644,9 @@ pub struct Hit {
     /// A name Wings generated, for a session with no `title`. See `ai.rs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A Claude session's transcript, `<account>/projects/<folder>/<id>.jsonl`, which says the account it ran under.
+    #[serde(skip)]
+    pub transcript: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -677,31 +680,31 @@ impl History {
         let opencode = self.opencode.lock().unwrap();
         let terms = terms(query);
         let project = filter.project.as_deref().map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty());
-        // Each session with the time it was last active.
-        let mut scope: Vec<(u64, &Session)> = index
-            .values()
-            .map(|t| (t.modified, &t.session))
-            .chain(opencode.sessions.values().map(|c| (c.updated, &c.session)))
-            .filter(|(_, s)| !s.messages.is_empty() && project.is_none_or(|p| s.in_project(p)))
+        // Each session with the time it was last active, and its transcript if it has one.
+        let mut scope: Vec<(u64, Option<&PathBuf>, &Session)> = index
+            .iter()
+            .map(|(path, t)| (t.modified, Some(path), &t.session))
+            .chain(opencode.sessions.values().map(|c| (c.updated, None, &c.session)))
+            .filter(|(_, _, s)| !s.messages.is_empty() && project.is_none_or(|p| s.in_project(p)))
             .collect();
-        scope.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        scope.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.id.cmp(&b.2.id)));
         let mut branches = Vec::new();
-        for (_, s) in &scope {
+        for (_, _, s) in &scope {
             for branch in s.branches.iter().rev() {
                 push_unique(&mut branches, branch.clone());
             }
         }
         branches.truncate(50);
-        let found: Vec<(u64, &Session)> = scope
+        let found: Vec<(u64, Option<&PathBuf>, &Session)> = scope
             .into_iter()
-            .filter(|(_, s)| filter.branch.as_ref().is_none_or(|b| s.branches.contains(b)))
-            .filter(|(modified, _)| filter.since_ms.is_none_or(|since| *modified >= since))
-            .filter(|(_, s)| s.matches(&terms))
+            .filter(|(_, _, s)| filter.branch.as_ref().is_none_or(|b| s.branches.contains(b)))
+            .filter(|(modified, _, _)| filter.since_ms.is_none_or(|since| *modified >= since))
+            .filter(|(_, _, s)| s.matches(&terms))
             .collect();
         let sessions = found
             .iter()
             .take(limit)
-            .map(|(modified, s)| {
+            .map(|(modified, transcript, s)| {
                 let (matches, snippets) = if terms.is_empty() { (0, Vec::new()) } else { s.snippets(&terms) };
                 Hit {
                     id: s.id.clone(),
@@ -716,6 +719,7 @@ impl History {
                     matches,
                     snippets,
                     name: None,
+                    transcript: transcript.cloned(),
                 }
             })
             .collect();
@@ -1135,6 +1139,19 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_hit_names_its_transcript_in_whichever_account_it_is() {
+        let (default, work) = (temp_claude_dir("account-default"), temp_claude_dir("account-work"));
+        let mine = transcript(&default, "/w/app", "a", &[user("/w/app", "main", "Fix the login")]);
+        let theirs = transcript(&work, "/w/app", "b", &[user("/w/app", "main", "Fix the logout")]);
+        let results = History::default().search(&[default.clone(), work.clone()], "", &Filter::default(), 10);
+        let mut found: Vec<(&str, Option<&Path>)> = results.sessions.iter().map(|h| (h.id.as_str(), h.transcript.as_deref())).collect();
+        found.sort();
+        assert_eq!(found, [("a", Some(mine.as_path())), ("b", Some(theirs.as_path()))]);
+        assert!(serde_json::to_value(&results).unwrap()["sessions"][0].get("transcript").is_none(), "the MCP tool's answer stays as it was");
+        let _ = (fs::remove_dir_all(&default), fs::remove_dir_all(&work));
+    }
+
+    #[test]
     fn a_phrase_never_matches_across_two_messages() {
         let dir = temp_claude_dir("phrase");
         transcript(&dir, "/p", "a", &[user("/p", "main", "ends with foo"), assistant("bar starts this")]);
@@ -1337,6 +1354,7 @@ mod tests {
         assert!(!all.opencode_loading);
         let ids: Vec<(&str, Agent)> = all.sessions.iter().map(|h| (h.id.as_str(), h.agent)).collect();
         assert_eq!(ids, [("a", Agent::Claude), ("ses_root1", Agent::OpenCode), ("ses_root2", Agent::OpenCode)], "child and empty sessions are left out");
+        assert!(all.sessions[1].transcript.is_none(), "OpenCode keeps its sessions in its service");
         let found = history.search(std::slice::from_ref(&dir), "MCP-CONFIG.json", &Filter::default(), 10);
         assert_eq!(found.sessions.len(), 1, "a system notice is not searched");
         let hit = &found.sessions[0];

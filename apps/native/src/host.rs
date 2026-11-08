@@ -114,7 +114,7 @@ impl Eq for TerminalServers {}
 pub enum SessionSource {
     /// Claude Code's folder and the folder of every other account beside it, and OpenCode's service.
     Accounts(PathBuf),
-    /// Only these Claude Code folders: made-up sessions in tests and screenshots.
+    /// Only these Claude Code folders, the default account's first: made-up sessions in tests and screenshots.
     Folders(Vec<PathBuf>),
 }
 

@@ -688,6 +688,7 @@ fn agent(pane: usize, state: crate::agents::AgentState) -> crate::agents::Agent 
         direct: true,
         summary: None,
         weak_name: false,
+        claude_dir: None,
     }
 }
 

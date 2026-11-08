@@ -128,6 +128,7 @@ fn session_entry(hit: &Hit) -> Option<Entry> {
             id: hit.id.clone(),
             cwd: cwd.clone(),
             agent: hit.agent,
+            transcript: hit.transcript.clone(),
         }),
     );
     let place = cwd.rsplit('/').next().map(str::to_owned);

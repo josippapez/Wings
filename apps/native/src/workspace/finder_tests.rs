@@ -32,14 +32,22 @@ fn folder(name: &str) -> PathBuf {
 
 /// A Claude Code folder holding `sessions`: id, folder they ran in, branch, first prompt and reply.
 fn made_up_claude(dir: &Path, sessions: &[(&str, &Path, &str, &str, &str)]) -> PathBuf {
-    let claude = dir.join("claude");
+    made_up_account(&dir.join("claude"), sessions)
+}
+
+/// The folder Claude Code keeps the transcripts of sessions in `cwd` in, under `projects/`.
+fn slug(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// `made_up_claude` in the account folder `claude`.
+fn made_up_account(claude: &Path, sessions: &[(&str, &Path, &str, &str, &str)]) -> PathBuf {
+    let claude = claude.to_path_buf();
     for (id, cwd, branch, prompt, reply) in sessions {
-        let name: String = cwd
-            .to_string_lossy()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let projects = claude.join("projects").join(name);
+        let projects = claude.join("projects").join(slug(cwd));
         std::fs::create_dir_all(&projects).unwrap();
         let user = serde_json::json!({ "type": "user", "cwd": cwd, "gitBranch": branch,
             "timestamp": "2026-10-01T10:00:00.000Z",
@@ -104,6 +112,7 @@ fn session(id: &str, cwd: &Path) -> SessionRef {
         id: id.into(),
         cwd: cwd.to_string_lossy().into_owned(),
         agent: wings_agents::history::Agent::Claude,
+        transcript: None,
     }
 }
 
@@ -457,6 +466,165 @@ fn picking_a_session_opens_it_in_a_new_tab_where_it_started_and_resume_here_type
     });
     assert!(window.read(|w, _| w.sheet.is_none()));
     echoes(&app, &window, &format!("claude --resume {DARK}"));
+}
+
+/// The default account's folder, and a named account's beside it holding `LOGIN`, with a subagent's transcript in the
+/// folder beside its own; `DARK` is the default account's. The window lists both accounts' sessions.
+fn two_accounts(name: &str) -> (TestApp, TestAppWindow<Workspace>, PathBuf, PathBuf, PathBuf) {
+    let project = folder(name);
+    let gone = project.join("g/s");
+    let accounts = folder(&format!("{name}-home"));
+    let (default, work) = (accounts.join(".claude"), accounts.join(".claude-work"));
+    made_up_account(
+        &default,
+        &[(DARK, &gone, "main", "Add dark mode", "Done with the toggle")],
+    );
+    made_up_account(
+        &work,
+        &[(
+            LOGIN,
+            &gone,
+            "main",
+            "Fix the login redirect",
+            "I updated the redirect handler",
+        )],
+    );
+    let extras = work.join("projects").join(slug(&gone)).join(LOGIN);
+    std::fs::create_dir_all(extras.join("subagents")).unwrap();
+    std::fs::write(extras.join("subagents/agent-1.jsonl"), "{}\n").unwrap();
+    let (app, window) = open_config(|config| {
+        config.project = project.clone();
+        config.sessions = Some(SessionSource::Folders(vec![default.clone(), work.clone()]));
+    });
+    (app, window, gone, default, work)
+}
+
+/// Opens the sheet over this project's sessions and waits for them: their sessions, and the account each shows.
+fn listed(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+) -> Vec<(SessionRef, Option<String>)> {
+    window.update(|w, window, cx| w.open_history(window, cx));
+    wait_for(
+        app,
+        window,
+        |w| w.sheet.as_ref().is_some_and(|s| s.results.is_some()),
+        "no results",
+    );
+    window.read(|w, _| {
+        let sheet = w.sheet.as_ref().unwrap();
+        let hits = &sheet.results.as_ref().unwrap().sessions;
+        hits.iter()
+            .zip(&sheet.accounts)
+            .map(|(hit, account)| {
+                let label = account.as_ref().map(ToString::to_string);
+                (w.session_of(hit).unwrap(), label)
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_session_shows_the_account_it_ran_under_unless_it_is_the_default_one() {
+    let (app, mut window, _, _, _) = two_accounts("label");
+    let mut accounts: Vec<(String, Option<String>)> = listed(&app, &mut window)
+        .into_iter()
+        .map(|(session, label)| (session.id, label))
+        .collect();
+    accounts.sort();
+    assert_eq!(
+        accounts,
+        [(LOGIN.into(), Some("work".into())), (DARK.into(), None)]
+    );
+}
+
+#[test]
+fn resuming_another_accounts_session_copies_its_transcript_into_the_terminals_account() {
+    let (app, mut window, gone, default, work) = two_accounts("bring");
+    let sessions = listed(&app, &mut window);
+    let login = sessions
+        .iter()
+        .find(|(s, _)| s.id == LOGIN)
+        .unwrap()
+        .0
+        .clone();
+    let (from, to) = (
+        work.join("projects").join(slug(&gone)),
+        default.join("projects").join(slug(&gone)),
+    );
+    // The project has no account of its own, so its terminals run the default one.
+    window.update(|w, window, cx| w.start_session(&login, false, window, cx));
+    let file = format!("{LOGIN}.jsonl");
+    assert_eq!(
+        std::fs::read(to.join(&file)).unwrap(),
+        std::fs::read(from.join(&file)).unwrap()
+    );
+    assert!(to.join(LOGIN).join("subagents/agent-1.jsonl").is_file());
+    assert!(from.join(&file).is_file(), "the original stays");
+    echoes(&app, &window, &format!("claude --resume {LOGIN}"));
+}
+
+#[test]
+fn a_transcript_already_in_the_terminals_account_is_kept() {
+    let (app, mut window, gone, default, _) = two_accounts("keep");
+    let sessions = listed(&app, &mut window);
+    let login = sessions
+        .iter()
+        .find(|(s, _)| s.id == LOGIN)
+        .unwrap()
+        .0
+        .clone();
+    // Resumed there before and carried on: the continuation is kept.
+    let there = default
+        .join("projects")
+        .join(slug(&gone))
+        .join(format!("{LOGIN}.jsonl"));
+    std::fs::write(&there, "carried on\n").unwrap();
+    window.update(|w, window, cx| {
+        let pane = w.focused_pane().unwrap();
+        w.pane_info.insert(
+            pane,
+            PaneInfo {
+                command: "zsh".into(),
+                cwd: None,
+                busy: false,
+            },
+        );
+        w.resume_here(&login, window, cx)
+    });
+    assert_eq!(std::fs::read_to_string(&there).unwrap(), "carried on\n");
+    echoes(&app, &window, &format!("claude --resume {LOGIN}"));
+}
+
+#[test]
+fn a_transcript_that_cant_be_copied_stops_the_resume_and_says_why() {
+    let (app, mut window, _, default, _) = two_accounts("fail");
+    let sessions = listed(&app, &mut window);
+    let login = sessions
+        .iter()
+        .find(|(s, _)| s.id == LOGIN)
+        .unwrap()
+        .0
+        .clone();
+    // The default account's `projects` is a file, so nothing can be copied into it.
+    std::fs::remove_dir_all(default.join("projects")).unwrap();
+    std::fs::write(default.join("projects"), "").unwrap();
+    let tabs = window.read(|w, _| w.terminals.len());
+    window.update(|w, window, cx| w.start_session(&login, true, window, cx));
+    assert_eq!(window.read(|w, _| w.terminals.len()), tabs, "no tab opened");
+    let notice = window.read(|w, _| {
+        w.plugin_ui
+            .notices
+            .last()
+            .map(|n| (n.title.to_string(), n.body.to_string()))
+    });
+    assert!(
+        notice
+            .as_ref()
+            .is_some_and(|(title, body)| title == "Couldn't fork the session"
+                && body.starts_with("Its transcript couldn't be copied")),
+        "{notice:?}"
+    );
 }
 
 #[test]

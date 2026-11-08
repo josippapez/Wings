@@ -105,6 +105,17 @@ fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: &Path) {
 }
 
 fn main() {
+    // `-- <out-dir> accounts` runs agents under a named account, whose folder is `~/.claude-<name>`: in a made-up home,
+    // never the user's.
+    if std::env::args().nth(2).as_deref() == Some("accounts") {
+        let home = std::env::temp_dir().join("wings-native-shot-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".claude-work/sessions")).expect("make a named account");
+        // zsh asks a new user to set it up when it finds no startup file.
+        std::fs::write(home.join(".zshrc"), "").expect("write an empty .zshrc");
+        // SAFETY: nothing else runs yet to read the environment.
+        unsafe { std::env::set_var("HOME", &home) };
+    }
     let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "shots".into()));
     std::fs::create_dir_all(&out).expect("create the output folder");
     // Made-up projects for the sidebar, never the user's own list.
@@ -263,6 +274,10 @@ fn main() {
     // `-- <out-dir> finder` renders only the command palette and the history sheet.
     if std::env::args().nth(2).as_deref() == Some("finder") {
         return finder(&mut cx, &config, &out);
+    }
+    // `-- <out-dir> accounts` renders only the sidebar's agents under the default account and a named one.
+    if std::env::args().nth(2).as_deref() == Some("accounts") {
+        return accounts(&mut cx, &config, &fake_claude, &out);
     }
     // `-- <out-dir> images` renders only a pane with a SIXEL and an iTerm2 inline image a program printed.
     if std::env::args().nth(2).as_deref() == Some("images") {
@@ -1065,10 +1080,16 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ),
     )
     .expect("write the made-up project list");
+    // The default account's folder, and two named accounts', whose sessions say so.
     let claude = dir.join("claude");
-    // Id, folder, branch, first prompt, reply, and how many minutes ago it was last active.
+    let (work, client) = (
+        dir.join(".claude-work"),
+        dir.join(".claude-client-acme-consulting-eu"),
+    );
+    // Account, id, folder, branch, first prompt, reply, and how many minutes ago it was last active.
     let sessions = [
         (
+            &claude,
             "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d",
             web.clone(),
             "main",
@@ -1077,6 +1098,7 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             5,
         ),
         (
+            &work,
             "1c9f8d2b-4e3a-4b6c-8d7e-8f9a0b1c2d3e",
             web.clone(),
             "fix-login",
@@ -1085,6 +1107,7 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             120,
         ),
         (
+            &work,
             "2d0a9e3c-5f4b-4c7d-9e8f-9a0b1c2d3e4f",
             api.clone(),
             "release-2",
@@ -1093,6 +1116,7 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             24 * 60,
         ),
         (
+            &client,
             "3e1b0f4d-6a5c-4d8e-8f9a-0b1c2d3e4f5a",
             web.join("packages/ui"),
             "main",
@@ -1101,6 +1125,7 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             3 * 24 * 60,
         ),
         (
+            &claude,
             "4f2c1a5e-7b6d-4e9f-9a0b-1c2d3e4f5a6b",
             web.clone(),
             "main",
@@ -1110,13 +1135,13 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ),
     ];
     let now = std::time::SystemTime::now();
-    for (id, cwd, branch, prompt, reply, minutes) in sessions {
+    for (account, id, cwd, branch, prompt, reply, minutes) in sessions {
         let named: String = cwd
             .to_string_lossy()
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect();
-        let folder = claude.join("projects").join(named);
+        let folder = account.join("projects").join(named);
         std::fs::create_dir_all(&folder).expect("make a transcript folder");
         let user = serde_json::json!({ "type": "user", "cwd": cwd, "gitBranch": branch,
             "timestamp": "2026-10-01T10:00:00.000Z", "message": { "role": "user", "content": prompt } });
@@ -1134,7 +1159,7 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     config.project = web.clone();
     config.projects = Some(dir.join("spaces.json"));
     config.agents = None;
-    config.sessions = Some(SessionSource::Folders(vec![claude]));
+    config.sessions = Some(SessionSource::Folders(vec![claude, work, client]));
     for width in [1000.0, 640.0] {
         let config = config.clone();
         let handle = cx
@@ -1194,6 +1219,98 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         save(cx, window, &name("history-empty"));
         cx.simulate_keystrokes(window, "escape");
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// Two agents in the sidebar, one under the default account and one under the named account `work` of the made-up home
+/// `main` sets, which its row names; then with the sidebar dragged to its narrowest.
+fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, out: &Path) {
+    let default = base.agents.clone().expect("the made-up default account");
+    let work = std::env::home_dir()
+        .expect("the made-up home")
+        .join(".claude-work");
+    let mut config = base.clone();
+    config.plugins = None;
+    config.sessions = None;
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("accounts-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(3));
+        // One agent in the first tab, one in a second; each a made-up `claude` told apart by how long it sleeps.
+        let agents = [
+            (
+                &default,
+                140,
+                r#"{"status":"busy","name":"Refactor the API client"}"#,
+            ),
+            (
+                &work,
+                141,
+                r#"{"status":"waiting","name":"Fix the login redirect after sign-in"}"#,
+            ),
+        ];
+        for (at, (_, seconds, _)) in agents.iter().enumerate() {
+            if at > 0 {
+                cx.simulate_keystrokes(window, "cmd-t");
+                wait(cx, window, Duration::from_secs(2));
+            }
+            cx.simulate_input(
+                window,
+                &format!("exec '{}' {seconds}", fake_claude.display()),
+            );
+            cx.simulate_keystrokes(window, "enter");
+        }
+        wait(cx, window, Duration::from_secs(1));
+        for (account, seconds, session) in agents {
+            let pids = std::process::Command::new("pgrep")
+                .args(["-f", &format!("{} {seconds}", fake_claude.display())])
+                .output()
+                .expect("run pgrep");
+            for pid in String::from_utf8_lossy(&pids.stdout).split_whitespace() {
+                std::fs::write(account.join(format!("sessions/{pid}.json")), session)
+                    .expect("write a session file");
+            }
+        }
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &name("sidebar"));
+        // The sidebar's edge, at its 248 wide start, dragged in past the narrowest.
+        cx.simulate_event(
+            window,
+            MouseDownEvent {
+                position: point(px(247.0), px(300.0)),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            },
+        );
+        for step in 1..=10 {
+            let x = 247.0 - (247.0 - 100.0) * step as f32 / 10.0;
+            mouse_move(cx, window, point(px(x), px(300.0)), true);
+            wait(cx, window, Duration::from_millis(20));
+        }
+        cx.simulate_event(
+            window,
+            gpui::MouseUpEvent {
+                position: point(px(100.0), px(300.0)),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            },
+        );
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("sidebar-narrow"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &fake_claude.display().to_string()])
+            .status();
         wait(cx, window, Duration::from_millis(300));
     }
 }

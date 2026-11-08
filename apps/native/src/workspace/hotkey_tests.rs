@@ -55,6 +55,7 @@ fn agent(pane: usize, project: &str, state: AgentState) -> Agent {
         direct: true,
         summary: None,
         weak_name: false,
+        claude_dir: None,
     }
 }
 
