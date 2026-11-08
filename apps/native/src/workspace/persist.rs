@@ -288,6 +288,7 @@ impl Workspace {
             diff_dock_files: Some(self.prefs.diff_dock_files),
             diff_width: Some(self.plugin_ui.diff_dock.width),
             pinned_buttons: Some(self.plugin_ui.pinned.clone()),
+            desktop_order: Some(true),
             global_hotkey: Some(self.prefs.global_hotkey.clone()),
             terminal_server: self.prefs.terminal_server,
             right_width: Some(self.plugin_ui.right_size.width),

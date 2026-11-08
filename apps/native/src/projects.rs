@@ -83,6 +83,11 @@ impl Projects {
         store.set_pinned(&id, pinned);
     }
 
+    /// Orders the list as the desktop showed it: its `spaceOrder`, by project id.
+    pub fn sort_by_order(&self, order: &[String]) {
+        self.store.lock().unwrap().sort_by_order(order);
+    }
+
     /// Moves the project in folder `project` to the place of the one in folder `slot`, as the desktop's `onMoveSpace`,
     /// and saves the list; its worktrees stay under it. The folder the app was opened in joins the list where it is
     /// shown, first, when it is one of the two.

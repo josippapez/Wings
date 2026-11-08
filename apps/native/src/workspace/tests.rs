@@ -1202,3 +1202,61 @@ fn the_desktops_pinned_plugin_buttons_carry_over_and_new_pins_are_saved() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The desktop showed the projects in its saved `spaceOrder`, not the list file's order. The replacement takes that
+/// order once, and after that keeps its own.
+#[test]
+fn the_projects_take_the_desktops_order_once() {
+    let dir = std::env::temp_dir().join(format!("wings-native-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (alpha, beta, gamma) = (dir.join("alpha"), dir.join("beta"), dir.join("gamma"));
+    for folder in [&alpha, &beta, &gamma] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    let id = |path: &std::path::Path| path.to_string_lossy().into_owned();
+    let list = dir.join("spaces.json");
+    let spaces = serde_json::json!([
+        { "id": id(&alpha), "name": "alpha", "path": alpha },
+        { "id": id(&beta), "name": "beta", "path": beta },
+        { "id": id(&gamma), "name": "gamma", "path": gamma },
+    ]);
+    std::fs::write(&list, serde_json::to_vec(&spaces).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("workspace.json"),
+        serde_json::to_vec(
+            &serde_json::json!({ "version": 1, "spaceOrder": [id(&gamma), id(&alpha), id(&beta)] }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let state = dir.join("native-workspace.json");
+    let names = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            w.projects
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    {
+        let (_app, mut window) = open_config(|config| {
+            config.project = alpha.clone();
+            config.projects = Some(list.clone());
+            config.state = Some(state.clone());
+        });
+        assert_eq!(names(&window), ["gamma", "alpha", "beta"]);
+        // Moved here afterwards: the desktop's order doesn't come back over it.
+        window.update(|w, _, cx| {
+            w.spaces.move_project(&id(&beta), &id(&gamma));
+            w.projects_changed(cx);
+            w.save(cx);
+        });
+    }
+    let (_app, window) = open_config(|config| {
+        config.project = alpha.clone();
+        config.projects = Some(list.clone());
+        config.state = Some(state.clone());
+    });
+    assert_eq!(names(&window), ["beta", "gamma", "alpha"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}

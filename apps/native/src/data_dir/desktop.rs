@@ -147,6 +147,9 @@ pub struct Workspace {
     pub notify_sound: Option<NotifySound>,
     #[serde(default)]
     pub pinned_buttons: Option<Vec<String>>,
+    /// The projects' order on screen, by id; the list file keeps them in the order they were added.
+    #[serde(default)]
+    pub space_order: Vec<String>,
     #[serde(default)]
     pub agents_run_commands: Option<bool>,
     #[serde(default)]

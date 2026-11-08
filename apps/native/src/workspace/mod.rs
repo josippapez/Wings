@@ -487,6 +487,15 @@ impl Workspace {
         this.start_sidebar(&settings, window, cx);
         this.plugin_ui.right_size = right_edge::Size::load(&settings);
         this.plugin_ui.diff_dock = diff::Dock::load(&settings);
+        // The desktop showed the projects in its own saved order, not the list's. Once, the list takes that order.
+        if settings.desktop_order.is_none()
+            && let Some(state) = this.config.state.as_deref()
+            && let Some(desktop) = crate::data_dir::desktop::read(&state.with_file_name("workspace.json"))
+            && !desktop.space_order.is_empty()
+        {
+            this.spaces.sort_by_order(&desktop.space_order);
+            this.projects_changed(cx);
+        }
         // A replacement that moved in before pins were read takes them from the desktop's file beside its own.
         this.plugin_ui.pinned = settings
             .pinned_buttons

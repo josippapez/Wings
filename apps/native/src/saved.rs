@@ -223,6 +223,10 @@ pub struct Settings {
     /// desktop's `pinnedButtons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_buttons: Option<Vec<String>>,
+    /// The projects were put in the desktop's order (its `spaceOrder`), which the desktop kept apart from the list, so it
+    /// happens once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_order: Option<bool>,
     /// New terminals run in the terminal server, so they keep running when Wings quits or updates. Absent is on
     /// (`terminal_server::enabled`). The desktop has no such setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]

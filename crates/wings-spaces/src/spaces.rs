@@ -102,6 +102,17 @@ impl SpaceStore {
         }
     }
 
+    /// Puts the spaces in `order`, by id, as the desktop's `sortByOrder`: the ones it doesn't name go last, in the order
+    /// they had. Saves only when that changed the list.
+    pub fn sort_by_order(&mut self, order: &[String]) {
+        let rank = |space: &Space| order.iter().position(|id| *id == space.id).unwrap_or(order.len());
+        let before: Vec<String> = self.spaces.iter().map(|s| s.id.clone()).collect();
+        self.spaces.sort_by_key(|space| rank(space));
+        if self.spaces.iter().map(|s| &s.id).ne(before.iter()) {
+            self.save();
+        }
+    }
+
     /// Moves the space `id` to the place of the space `slot`, as the desktop's `reorder`: just above it when it moves up,
     /// just below it when it moves down. A worktree is shown under its project wherever it sits in the list.
     pub fn reorder(&mut self, id: &str, slot: &str) {
