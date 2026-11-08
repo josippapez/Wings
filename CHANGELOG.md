@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.2 · 2026-11-08
+
+- **Updates install.** The installer took the new version's "ready" signal for a failure and put the old version back.
+- **Review comments in pull request diffs.** A diff with review comments opens, with each thread under its line and a reply box.
+- **Disk usage's list scrolls** when it holds more files than fit.
+- **A one-column diff scrolls down**, not sideways, with the mouse wheel.
+
 ## 0.2.1 · 2026-11-08
 
 - **Looks and works as the desktop app did.** The Issues and pull request pages, plugin settings, the project bar's plugin buttons and their menu, the translucent sidebar, and dialogs are back to the desktop's design.
