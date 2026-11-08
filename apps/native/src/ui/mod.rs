@@ -34,8 +34,9 @@ pub const HAIRLINE: u32 = 0xffffff12;
 const INPUT_BORDER: u32 = 0xffffff1a;
 /// The desktop dialog's `--popover`.
 pub const DIALOG: u32 = 0x201d23;
-/// The desktop's `bg-black/10` behind a dialog. Its `backdrop-blur-xs` has no GPUI counterpart.
-const BACKDROP: u32 = 0x0000001a;
+/// Behind a dialog. The desktop's is `bg-black/10` with `backdrop-blur-xs`, and the blur is what sets the dialog apart;
+/// GPUI can't blur what's behind an element, so at 10% the window behind read as not dimmed at all. 40% stands in.
+const BACKDROP: u32 = 0x00000066;
 /// `--input` at 30%, the fill of a field or a select, and at 50% when pointed at.
 const INPUT_FILL: u32 = 0xffffff08;
 const INPUT_FILL_HOVER: u32 = 0xffffff0d;
