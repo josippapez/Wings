@@ -12,6 +12,23 @@ use crate::{
 
 use super::{Active, TerminalTab, Workspace};
 
+/// What a project restored at launch behind the shown one (`restore_hidden`) still restores when it's first shown: the
+/// panes the terminal server wasn't running, each under the id its tab holds for it, and the project's pages.
+pub(super) struct Waiting {
+    pub(super) panes: Vec<WaitingPane>,
+    pub(super) project: SavedProject,
+    /// The tab of the last pane adopted from the server, which `enter_project` would have left on screen.
+    pub(super) adopted: Option<usize>,
+}
+
+pub(super) struct WaitingPane {
+    id: usize,
+    cwd: Option<std::path::PathBuf>,
+    history: Option<String>,
+    name: Option<gpui::SharedString>,
+    claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+}
+
 impl Workspace {
     /// Each restored pane starts a new shell in the folder its shell was last in.
     pub(super) fn restore(
@@ -21,20 +38,68 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         for tab in &project.tabs {
-            let layout = self.restore_layout(&tab.layout, cx);
-            let panes = layout.panes();
-            let focused = panes[tab.focused.min(panes.len() - 1)];
-            let zoomed = tab.zoomed.and_then(|index| panes.get(index).copied());
-            let id = self.next_tab;
-            self.next_tab += 1;
-            self.terminals.push(TerminalTab {
-                id,
-                layout,
-                focused,
-                zoomed,
-                focus: cx.focus_handle().tab_stop(true),
-            });
+            let tab = self.restore_tab(tab, None, cx);
+            self.terminals.push(tab);
         }
+        self.restore_pages(&project, window, cx);
+    }
+
+    /// Shows a project restored at launch behind another (`restore_hidden`) for the first time: the panes the server
+    /// wasn't running start, and its pages open, as entering it would have restored them.
+    pub(super) fn start_waiting(
+        &mut self,
+        waiting: Waiting,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for pane in waiting.panes {
+            self.open_pane_at(pane.id, pane.cwd, pane.history, pane.claude_account, cx);
+            if let Some(saved) = self.panes.get_mut(&pane.id) {
+                saved.name = pane.name;
+            }
+        }
+        let project = &waiting.project;
+        if project.tabs.is_empty() && project.plugin_tabs.is_empty() {
+            self.new_terminal(window, cx);
+        } else {
+            self.restore_pages(project, window, cx);
+        }
+        if let Some(tab) = waiting.adopted {
+            self.show(Active::Terminal(tab), window, cx);
+        }
+        self.open_tasks_board(cx);
+    }
+
+    /// A saved tab. With `waiting`, as for a project not on screen, a pane only attaches to the program the terminal
+    /// server runs for it, and the others wait there for the project to be shown; without, each starts now.
+    pub(super) fn restore_tab(
+        &mut self,
+        tab: &SavedTab,
+        mut waiting: Option<&mut Vec<WaitingPane>>,
+        cx: &mut Context<Self>,
+    ) -> TerminalTab {
+        let layout = self.restore_layout(&tab.layout, &mut waiting, cx);
+        let panes = layout.panes();
+        let focused = panes[tab.focused.min(panes.len() - 1)];
+        let zoomed = tab.zoomed.and_then(|index| panes.get(index).copied());
+        let id = self.next_tab;
+        self.next_tab += 1;
+        TerminalTab {
+            id,
+            layout,
+            focused,
+            zoomed,
+            focus: cx.focus_handle().tab_stop(true),
+        }
+    }
+
+    /// The project's plugin pages, then the tab it last showed.
+    fn restore_pages(
+        &mut self,
+        project: &SavedProject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let restored = self.restore_plugin_tabs(&project.plugin_tabs, cx);
         let terminal = project
             .active
@@ -51,7 +116,12 @@ impl Workspace {
         }
     }
 
-    fn restore_layout(&mut self, saved: &SavedLayout, cx: &mut Context<Self>) -> Layout {
+    fn restore_layout(
+        &mut self,
+        saved: &SavedLayout,
+        waiting: &mut Option<&mut Vec<WaitingPane>>,
+        cx: &mut Context<Self>,
+    ) -> Layout {
         match saved {
             SavedLayout::Pane {
                 cwd,
@@ -59,10 +129,35 @@ impl Workspace {
                 name,
                 claude_account,
             } => {
-                let pane =
-                    self.open_pane_as(cwd.clone(), history.clone(), claude_account.clone(), cx);
+                let name: Option<gpui::SharedString> =
+                    name.clone().filter(|name| !name.is_empty()).map(Into::into);
+                let pane = match waiting {
+                    None => {
+                        self.open_pane_as(cwd.clone(), history.clone(), claude_account.clone(), cx)
+                    }
+                    Some(waiting) => {
+                        #[cfg(unix)]
+                        let attached = history.as_deref().and_then(|history| {
+                            self.attach_hidden(history, claude_account.clone(), cx)
+                        });
+                        #[cfg(not(unix))]
+                        let attached = None;
+                        attached.unwrap_or_else(|| {
+                            let id = self.next_pane;
+                            self.next_pane += 1;
+                            waiting.push(WaitingPane {
+                                id,
+                                cwd: cwd.clone(),
+                                history: history.clone(),
+                                name: name.clone(),
+                                claude_account: claude_account.clone(),
+                            });
+                            id
+                        })
+                    }
+                };
                 if let Some(saved) = self.panes.get_mut(&pane) {
-                    saved.name = name.clone().filter(|name| !name.is_empty()).map(Into::into);
+                    saved.name = name;
                 }
                 Layout::Pane(pane)
             }
@@ -73,8 +168,8 @@ impl Workspace {
                         SavedDir::Column => Dir::Column,
                     },
                     ratio: 0.5,
-                    a: Box::new(self.restore_layout(a, cx)),
-                    b: Box::new(self.restore_layout(b, cx)),
+                    a: Box::new(self.restore_layout(a, waiting, cx)),
+                    b: Box::new(self.restore_layout(b, waiting, cx)),
                 };
                 // Through the same limits as a drag, in case the file was edited by hand.
                 layout.set_ratio(&[], *ratio);

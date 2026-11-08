@@ -455,6 +455,16 @@ impl Servers {
         Some(found.remove(at))
     }
 
+    /// `claim`, only while the pane's program still runs: a pane that ended is left for `claim`, which shows its output
+    /// above a new shell.
+    pub fn claim_running(&self, history_id: &str) -> Option<(PathBuf, PaneInfo)> {
+        let mut found = self.found.lock().unwrap();
+        let at = found
+            .iter()
+            .position(|(_, pane)| !pane.exited && pane.history_id.as_deref() == Some(history_id))?;
+        Some(found.remove(at))
+    }
+
     /// The history ids of the panes of project `space_id` still running that no saved pane names, and so no saved
     /// pane will claim: a pane started just before the app crashed, or closed in an app that ran without the server.
     pub fn orphans(&self, space_id: &str, saved: &[String]) -> Vec<String> {

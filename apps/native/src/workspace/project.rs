@@ -39,6 +39,11 @@ impl Workspace {
         #[cfg(unix)]
         self.adopt_orphans(window, cx);
         self.load_issues(cx);
+        self.open_tasks_board(cx);
+    }
+
+    /// The Issues plugin's board, as the Issues tab, when Issues is open and the board isn't yet.
+    pub(super) fn open_tasks_board(&mut self, cx: &mut Context<Self>) {
         if self.issues_open
             && self.has_tasks_board()
             && !self
@@ -47,6 +52,85 @@ impl Workspace {
                 .any(|tab| tab.plugin == "tasks" && tab.view == "board")
         {
             self.new_plugin_tab("tasks", "board", None, cx);
+        }
+    }
+
+    /// At launch, the other projects the terminal server still runs panes of, restored behind the shown one with those
+    /// panes attached, so their agents show in the sidebar before you open them, as the desktop restores every
+    /// project's tabs at launch. Their other panes start, and their pages open, when each is first shown
+    /// (`start_waiting`); a project with nothing running is restored then, as before.
+    #[cfg(unix)]
+    pub(super) fn restore_hidden(&mut self, cx: &mut Context<Self>) {
+        let Some(servers) = self.config.terminal_server.clone() else {
+            return;
+        };
+        let state = self.config.state.clone();
+        let mut saved = state
+            .as_deref()
+            .and_then(saved::read_all)
+            .map(|(_, projects)| projects)
+            .unwrap_or_default();
+        let saved_ids = state.as_deref().map(saved::history_ids).unwrap_or_default();
+        let hidden: Vec<PathBuf> = self
+            .projects
+            .iter()
+            .map(|project| project.path.clone())
+            .filter(|path| *path != self.config.project && !self.parked.contains_key(path))
+            .collect();
+        for path in hidden {
+            let key = path.to_string_lossy().into_owned();
+            let project = saved.remove(&key).unwrap_or_default();
+            let mut panes = Vec::new();
+            let mut terminals: Vec<super::TerminalTab> = project
+                .tabs
+                .iter()
+                .map(|tab| self.restore_tab(tab, Some(&mut panes), cx))
+                .collect();
+            let attached = terminals
+                .iter()
+                .flat_map(|tab| tab.layout.panes())
+                .any(|pane| self.panes.contains_key(&pane));
+            let mut adopted = None;
+            for history in servers.0.orphans(&key, &saved_ids) {
+                if let Some(pane) = self.attach_hidden(&history, None, cx) {
+                    let tab = self.pane_tab(pane, cx);
+                    adopted = Some(tab.id);
+                    terminals.push(tab);
+                }
+            }
+            if !attached && adopted.is_none() {
+                continue;
+            }
+            self.parked.insert(
+                path,
+                Parked {
+                    terminals,
+                    plugin_tabs: Vec::new(),
+                    project_page: None,
+                    issues_open: !project.issues_closed,
+                    // Decided when it's first shown, once its pages are open.
+                    active: super::Active::Issues,
+                    waiting: Some(super::persist::Waiting {
+                        panes,
+                        project,
+                        adopted,
+                    }),
+                },
+            );
+        }
+    }
+
+    /// A new tab of the one pane `pane`.
+    #[cfg(unix)]
+    fn pane_tab(&mut self, pane: usize, cx: &mut Context<Self>) -> super::TerminalTab {
+        let id = self.next_tab;
+        self.next_tab += 1;
+        super::TerminalTab {
+            id,
+            layout: crate::layout::Layout::Pane(pane),
+            focused: pane,
+            zoomed: None,
+            focus: cx.focus_handle().tab_stop(true),
         }
     }
 
@@ -76,15 +160,9 @@ impl Workspace {
             .unwrap_or_default();
         for history in servers.0.orphans(&self.project_key(), &saved) {
             let pane = self.open_pane(None, Some(history), cx);
-            let id = self.next_tab;
-            self.next_tab += 1;
-            self.terminals.push(super::TerminalTab {
-                id,
-                layout: crate::layout::Layout::Pane(pane),
-                focused: pane,
-                zoomed: None,
-                focus: cx.focus_handle().tab_stop(true),
-            });
+            let tab = self.pane_tab(pane, cx);
+            let id = tab.id;
+            self.terminals.push(tab);
             self.show(super::Active::Terminal(id), window, cx);
         }
     }
@@ -113,6 +191,7 @@ impl Workspace {
             project_page: self.project_page.take(),
             issues_open: self.issues_open,
             active: self.active,
+            waiting: None,
         };
         self.parked.insert(self.config.project.clone(), current);
         self.config.project = path.clone();
@@ -122,7 +201,10 @@ impl Workspace {
                 self.plugin_tabs = parked.plugin_tabs;
                 self.project_page = parked.project_page;
                 self.issues_open = parked.issues_open;
-                self.show(parked.active, window, cx);
+                match parked.waiting {
+                    Some(waiting) => self.start_waiting(waiting, window, cx),
+                    None => self.show(parked.active, window, cx),
+                }
                 self.load_issues(cx);
             }
             None => self.enter_project(window, cx),

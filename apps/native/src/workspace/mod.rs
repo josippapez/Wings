@@ -128,6 +128,8 @@ struct Parked {
     project_page: Option<Entity<project_page::ProjectPage>>,
     issues_open: bool,
     active: Active,
+    /// Restored at launch without being shown (`restore_hidden`): what it restores when it's first shown.
+    waiting: Option<persist::Waiting>,
 }
 
 /// A divider being dragged: which split, and where that split sits.
@@ -547,6 +549,8 @@ impl Workspace {
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);
         this.enter_project(window, cx);
+        #[cfg(unix)]
+        this.restore_hidden(cx);
         this.start_update_checks(window, cx);
         this.start_plugin_update_checks(window, cx);
         // The cached pieces need the workspace's entity, which exists once this returns (see `parts`).

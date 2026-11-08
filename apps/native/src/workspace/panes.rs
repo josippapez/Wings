@@ -140,9 +140,22 @@ impl Workspace {
         account: Option<wings_spaces::claude_accounts::AccountPick>,
         cx: &mut Context<Self>,
     ) -> usize {
-        let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
         let id = self.next_pane;
         self.next_pane += 1;
+        self.open_pane_at(id, cwd, history, account, cx);
+        id
+    }
+
+    /// `open_pane_as` under `id`, which a tab restored at launch already holds for the pane (`start_waiting`).
+    pub(super) fn open_pane_at(
+        &mut self,
+        id: usize,
+        cwd: Option<PathBuf>,
+        history: Option<String>,
+        account: Option<wings_spaces::claude_accounts::AccountPick>,
+        cx: &mut Context<Self>,
+    ) {
+        let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
         let folder = cwd
             .filter(|folder| folder.is_dir())
             .unwrap_or_else(|| self.config.project.clone());
@@ -173,6 +186,18 @@ impl Workspace {
             Some(view) => Ok(view),
             None => TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
         };
+        self.insert_pane(id, view, history, pick, cx);
+    }
+
+    /// Keeps `view` as the pane `id`, which closes when its shell exits.
+    fn insert_pane(
+        &mut self,
+        id: usize,
+        view: Result<Entity<TerminalView>, SharedString>,
+        history: String,
+        claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
+        cx: &mut Context<Self>,
+    ) {
         let exit = view
             .as_ref()
             .ok()
@@ -184,12 +209,35 @@ impl Workspace {
                 focus: cx.focus_handle(),
                 history,
                 name: None,
-                claude_account: pick,
+                claude_account,
                 renaming: None,
                 _exit: exit,
             },
         );
-        id
+    }
+
+    /// A pane of a project not on screen, attached hidden to the program the terminal server still runs for the saved
+    /// pane `history`, as a parked pane is. `None` when no server runs it or its program ended: that pane starts when
+    /// its project is shown, as the desktop starts a restored pane's shell the first time it's shown.
+    #[cfg(unix)]
+    pub(super) fn attach_hidden(
+        &mut self,
+        history: &str,
+        account: Option<wings_spaces::claude_accounts::AccountPick>,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let servers = self.config.terminal_server.as_ref()?.0.clone();
+        let (socket, pane) = servers.claim_running(history)?;
+        let view = TerminalView::attach_in_server(&socket, &pane, cx)
+            .map_err(|error| eprintln!("{error}"))
+            .ok()?;
+        // A new view is visible, and its model would make every screen for a window that never shows it.
+        view.update(cx, |view, cx| view.set_visible(false, cx));
+        let id = self.next_pane;
+        self.next_pane += 1;
+        let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
+        self.insert_pane(id, Ok(view), history.to_owned(), pick, cx);
+        Some(id)
     }
 
     /// Closes the pane or the sidebar terminal once its shell exits on its own, as the desktop's `onPaneExited`.

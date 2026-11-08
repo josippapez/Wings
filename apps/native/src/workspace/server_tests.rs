@@ -1,7 +1,11 @@
 //! Panes in the terminal server across app launches: reattached by their saved history id, and left alone by an app
 //! that runs without the server.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{TestApp, TestAppWindow};
 use wings_ptyd::host;
@@ -439,4 +443,238 @@ fn turned_off_in_settings_new_panes_run_in_the_app_and_the_servers_panes_come_ba
     );
     drop((window, app));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two projects, alpha and beta, a terminal server, and Claude Code's folder with a made-up `claude` (a renamed
+/// `sleep`), in their own folder.
+struct TwoProjects {
+    dir: PathBuf,
+    alpha: PathBuf,
+    beta: PathBuf,
+    claude: PathBuf,
+    fake_claude: PathBuf,
+    servers: PathBuf,
+    socket: PathBuf,
+}
+
+impl TwoProjects {
+    fn new(tag: &str) -> TwoProjects {
+        let dir = PathBuf::from("/tmp").join(format!("{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let (alpha, beta) = (dir.join("alpha"), dir.join("beta"));
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        let spaces = serde_json::json!([
+            { "id": "a", "name": "alpha", "path": alpha },
+            { "id": "b", "name": "beta", "path": beta },
+        ]);
+        std::fs::write(
+            dir.join("spaces.json"),
+            serde_json::to_vec(&spaces).unwrap(),
+        )
+        .unwrap();
+        let claude = dir.join("claude");
+        std::fs::create_dir_all(claude.join("sessions")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let fake_claude = dir.join("bin/claude");
+        std::os::unix::fs::symlink("/bin/sleep", &fake_claude).unwrap();
+        let servers = dir.join("srv");
+        std::fs::create_dir_all(&servers).unwrap();
+        let socket = server(&servers);
+        TwoProjects {
+            dir,
+            alpha,
+            beta,
+            claude,
+            fake_claude,
+            servers,
+            socket,
+        }
+    }
+
+    /// The app with alpha on screen, as it opens at launch.
+    fn launch(&self) -> (TestApp, TestAppWindow<Workspace>) {
+        let (alpha, dir, claude) = (self.alpha.clone(), self.dir.clone(), self.claude.clone());
+        let servers = TerminalServers(Arc::new(Servers::connect(&self.servers, None)));
+        open_config(move |config| {
+            config.project = alpha;
+            config.projects = Some(dir.join("spaces.json"));
+            config.state = Some(dir.join("workspace.json"));
+            config.agents = Some(claude);
+            config.terminal_server = Some(servers);
+        })
+    }
+
+    /// The panes the server runs for beta whose program hasn't ended, by shell.
+    fn beta_shells(&self) -> Vec<Option<u32>> {
+        let mut shells: Vec<_> = wings_ptyd::client::Control::connect(&self.socket)
+            .unwrap()
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|pane| !pane.exited && Path::new(&pane.space_id) == self.beta)
+            .map(|pane| pane.shell_pid)
+            .collect();
+        shells.sort();
+        shells
+    }
+
+    /// Ends every pane the server runs, which would otherwise outlive the test.
+    fn end(self) {
+        let mut control = wings_ptyd::client::Control::connect(&self.socket).unwrap();
+        for pane in control.list().unwrap() {
+            let _ = control.kill(pane.pane);
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn after_a_relaunch_an_agent_in_a_project_not_shown_is_in_the_agents_list() {
+    let projects = TwoProjects::new("wsa");
+    let (mut app, mut window) = projects.launch();
+    window.update(|w, window, cx| w.switch_project(projects.beta.clone(), window, cx));
+    let pane = window.read(|w, _| w.focused_pane().unwrap());
+    let run = format!("exec '{}' 60\r", projects.fake_claude.display());
+    window.update(|w, _, cx| {
+        w.terminal(pane)
+            .unwrap()
+            .update(cx, |view, cx| view.write_input(&run, cx))
+    });
+    wait_for(
+        &app,
+        &window,
+        |w| w.agents.contains_key(&pane),
+        "the agent was never detected",
+    );
+    let pid = window.read(|w, _| w.agents[&pane].pid);
+    window.update(|w, window, cx| w.switch_project(projects.alpha.clone(), window, cx));
+    quit(&mut app);
+    drop((window, app));
+
+    // Relaunched on alpha, beta's agent, still running in the server, is listed without opening beta.
+    let (app, window) = projects.launch();
+    wait_for(
+        &app,
+        &window,
+        |w| !w.project_agents(&projects.beta).is_empty(),
+        "beta's agent never showed in the sidebar",
+    );
+    window.read(|w, _| {
+        assert_eq!(w.project(), projects.alpha);
+        let beta = projects.beta.to_string_lossy();
+        let agents: Vec<_> = w.agents.values().filter(|a| a.space_id == beta).collect();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].pid, pid, "the agent the server kept running");
+    });
+    drop((window, app));
+    projects.end();
+}
+
+#[test]
+fn a_project_restored_behind_the_shown_one_shows_its_tabs_once_and_starts_only_its_ended_panes() {
+    use crate::workspace::Active;
+    let projects = TwoProjects::new("wsb");
+    let (mut app, mut window) = projects.launch();
+    window.update(|w, window, cx| {
+        w.switch_project(projects.beta.clone(), window, cx);
+        w.new_terminal(window, cx);
+        let first = w.terminals[0].id;
+        w.show(Active::Terminal(first), window, cx);
+    });
+    let (kept, ended) = window.read(|w, cx| {
+        let pane = |tab: usize| w.terminals[tab].focused;
+        (
+            w.terminal(pane(0)).unwrap().read(cx).process_id(),
+            w.panes[&pane(1)].history.clone(),
+        )
+    });
+    window.update(|w, window, cx| w.switch_project(projects.alpha.clone(), window, cx));
+    quit(&mut app);
+    drop((window, app));
+    // While the app was away, the second tab's shell ended, and an earlier app left one of beta's panes no tab saved.
+    let mut control = wings_ptyd::client::Control::connect(&projects.socket).unwrap();
+    let gone = control
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|pane| pane.history_id.as_deref() == Some(ended.as_str()))
+        .unwrap();
+    control.kill(gone.pane).unwrap();
+    let (orphan, _events) = wings_ptyd::client::Pane::spawn(
+        &projects.socket,
+        wings_ptyd::proto::Spawn {
+            space_id: projects.beta.to_string_lossy().into_owned(),
+            cwd: projects.beta.clone(),
+            cols: 80,
+            rows: 24,
+            history_id: Some("beta-orphan".into()),
+            env: std::env::vars().collect(),
+        },
+        b"",
+    )
+    .unwrap();
+    let orphan_shell = orphan.shell_pid();
+    orphan.detach();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while projects.beta_shells().len() != 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the ended shell still runs"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let (app, mut window) = projects.launch();
+    let mut running = vec![kept, orphan_shell];
+    running.sort();
+    assert_eq!(
+        projects.beta_shells(),
+        running,
+        "no shell starts for beta while it isn't shown"
+    );
+    let (waiting, adopted) = window.read(|w, cx| {
+        let parked = &w.parked[&projects.beta];
+        assert_eq!(parked.terminals.len(), 3, "its two tabs and the orphan's");
+        let shell = |tab: usize| {
+            w.terminal(parked.terminals[tab].focused)
+                .map(|view| view.read(cx).process_id())
+        };
+        assert_eq!(
+            shell(0),
+            Some(kept),
+            "attached to the shell the server kept"
+        );
+        assert_eq!(shell(1), None, "the ended pane waits to be shown");
+        assert_eq!(shell(2), Some(orphan_shell));
+        (parked.terminals[1].focused, parked.terminals[2].id)
+    });
+
+    // Shown, it has the same three tabs, and only the ended pane gets a new shell.
+    window.update(|w, window, cx| w.switch_project(projects.beta.clone(), window, cx));
+    let started = window.read(|w, cx| {
+        assert!(!w.parked.contains_key(&projects.beta));
+        assert_eq!(w.terminals.len(), 3);
+        assert_eq!(w.terminals[1].focused, waiting, "under the id its tab held");
+        assert_eq!(
+            w.active,
+            Active::Terminal(adopted),
+            "the orphan's tab, as entering shows it"
+        );
+        w.terminal(waiting).unwrap().read(cx).process_id()
+    });
+    let mut running = vec![kept, orphan_shell, started];
+    running.sort();
+    assert_eq!(projects.beta_shells(), running);
+    // Left and shown again, it is the same.
+    window.update(|w, window, cx| {
+        w.switch_project(projects.alpha.clone(), window, cx);
+        w.switch_project(projects.beta.clone(), window, cx);
+    });
+    window.read(|w, _| assert_eq!(w.terminals.len(), 3));
+    assert_eq!(projects.beta_shells(), running);
+    drop((window, app));
+    projects.end();
 }

@@ -1127,7 +1127,8 @@ impl Workspace {
         self.plugin_ui.watched_projects = paths;
     }
 
-    /// Every pane of every project, shown or not, with its project's folder, by pane id.
+    /// Every pane of every project, shown or not, with its project's folder, by pane id. Not one still waiting for its
+    /// project to be shown to start (`start_waiting`), which has no terminal yet.
     pub(super) fn pane_projects(&self) -> Vec<(usize, &std::path::Path)> {
         let shown = self.terminals.iter().map(|tab| (&self.config.project, tab));
         let parked = self
@@ -1142,6 +1143,7 @@ impl Workspace {
                     .into_iter()
                     .map(move |pane| (pane, path.as_path()))
             })
+            .filter(|(pane, _)| self.panes.contains_key(pane))
             .collect();
         panes.sort_unstable_by_key(|(pane, _)| *pane);
         panes
