@@ -1,11 +1,16 @@
-//! A plugin's diff, docked beside a tab or filling the window. Only viewport rows become GPUI elements.
+//! A plugin's diff, docked beside a tab or filling the window, with its review threads under their lines. Only viewport
+//! rows become GPUI elements.
+mod threads;
+
 use super::{
     Update, View,
+    comments::{self, Comment, Thread},
     patch::{DiffLine, DiffLineKind, DiffStatus},
-    rows::{CodeRow, ListRow, code_rows, file_path, list_rows},
+    rows::{CodeRow, ListRow, Notes, code_rows, file_path, list_rows, with_notes},
 };
 use crate::{
     icons::{Icon, icon},
+    markdown::{Block, Opener},
     page::plugin::PluginHost,
     text_field::{FieldEvent, TextField},
     theme, ui,
@@ -13,10 +18,16 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     KeyDownEvent, ListAlignment, ListOffset, ListState, Pixels, Role, ScrollEvent, ScrollStrategy,
-    SharedString, Stateful, Subscription, Task, UniformListScrollHandle, Window, div, list,
+    SharedString, Stateful, Subscription, Task, UniformListScrollHandle, Window, div, list, point,
     prelude::*, px, rgb, rgba, uniform_list,
 };
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 pub enum Event {
     Close,
@@ -58,9 +69,11 @@ pub struct Viewer {
     list_rows: Vec<ListRow>,
     filter: Entity<TextField>,
     _filter_events: Subscription,
-    /// Wrapped rows differ in height, so they go in a list that measures each.
+    /// Wrapped rows, and the rows of a file with threads under its lines, differ in height, so they go in a list that
+    /// measures each (`varied_rows`).
     wrapped: ListState,
-    /// How far unwrapped side-by-side code is scrolled sideways. Both columns move together.
+    /// How far unwrapped code is scrolled sideways when it doesn't scroll as one wide block: side by side, where both
+    /// columns move together, or in the list of `varied_rows`, where the threads stay put.
     split_x: Pixels,
     /// The longest line of the open file, in characters.
     widest: usize,
@@ -79,6 +92,25 @@ pub struct Viewer {
     refresh_error: Option<String>,
     refresh_task: Option<Task<()>>,
     timeout: Option<Task<()>>,
+    /// The threads of `view.update.comments`, oldest first.
+    threads: Vec<Thread>,
+    /// The threads with no line to sit on, newest first (`comments::discussion`).
+    discussion: Vec<usize>,
+    /// The discussion is open in place of a file: the desktop's `selected === null`.
+    discussion_open: bool,
+    discussion_list: ListState,
+    /// How many comments each file has, by its index.
+    file_comments: Vec<usize>,
+    /// The threads under the open file's lines, by `CodeRow::Notes`.
+    notes: Vec<Notes>,
+    /// The reply boxes open, by the id of their thread's first comment.
+    replies: HashMap<i64, threads::ReplyBox>,
+    /// Comment bodies as Markdown, by their place in the comments, parsed the first time they show.
+    bodies: RefCell<HashMap<usize, Rc<Vec<Block>>>>,
+    /// Hands a comment's link to the plugin's `openUrl` grant.
+    opener: Opener,
+    /// Why the last comment link didn't open.
+    link_error: Option<String>,
     #[cfg(feature = "test-support")]
     rendered_rows: std::cell::Cell<usize>,
 }
@@ -114,6 +146,10 @@ impl Viewer {
                 cx.notify();
             }
         });
+        let viewer = cx.entity().downgrade();
+        let opener: Opener = Rc::new(move |url, _, cx| {
+            let _ = viewer.update(cx, |this, cx| this.open_link(url.to_owned(), cx));
+        });
         let mut this = Self {
             view,
             host,
@@ -146,6 +182,16 @@ impl Viewer {
             refresh_error: None,
             refresh_task: None,
             timeout: None,
+            threads: Vec::new(),
+            discussion: Vec::new(),
+            discussion_open: false,
+            discussion_list: ListState::new(0, ListAlignment::Top, px(400.0)),
+            file_comments: Vec::new(),
+            notes: Vec::new(),
+            replies: HashMap::new(),
+            bodies: RefCell::default(),
+            opener,
+            link_error: None,
             #[cfg(feature = "test-support")]
             rendered_rows: std::cell::Cell::new(0),
         };
@@ -246,8 +292,12 @@ impl Viewer {
             .collect()
     }
 
+    /// What the plugin sent: a new patch starts the file again, at its focus or its top. Comments alone, or with the patch
+    /// already shown, as after a reply and on each of a live diff's loads, leave the code where it's scrolled to.
     pub fn update(&mut self, update: Update, cx: &mut Context<Self>) {
+        let mut rebuild = update.focus.is_some();
         if let Some(patch) = update.patch {
+            rebuild |= self.view.update.patch.as_ref() != Some(&patch);
             self.view.update.patch = Some(patch);
             self.view.update.error = None;
         }
@@ -257,13 +307,151 @@ impl Viewer {
         if let Some(focus) = update.focus {
             self.view.update.focus = Some(focus);
         }
-        self.rebuild(cx);
+        let comments = update.comments.is_some();
+        if let Some(list) = update.comments {
+            self.view.update.comments = Some(list);
+        }
+        if rebuild {
+            self.rebuild(cx);
+        } else if comments {
+            self.rethread();
+        }
         cx.notify();
+    }
+
+    /// The comments, or none.
+    fn comments(&self) -> &[Comment] {
+        self.view
+            .update
+            .comments
+            .as_deref()
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Groups the comments into threads, and counts each file's.
+    fn group_comments(&mut self) {
+        let comments = self
+            .view
+            .update
+            .comments
+            .as_deref()
+            .map_or(&[][..], Vec::as_slice);
+        self.threads = comments::threads(comments);
+        self.discussion = comments::discussion(comments, &self.threads);
+        // A reply posted in the discussion leaves it where it's scrolled to.
+        if self.discussion_list.item_count() != self.discussion.len() {
+            self.discussion_list.reset(self.discussion.len());
+        }
+        self.file_comments = self
+            .view
+            .update
+            .patch
+            .as_ref()
+            .map_or_else(Vec::new, |diff| {
+                diff.files
+                    .iter()
+                    .map(|file| comments::on_file(comments, &self.threads, file_path(file)))
+                    .collect()
+            });
+        self.bodies.borrow_mut().clear();
+        // A reply box whose thread is gone has nothing to answer.
+        let roots: HashSet<i64> = self.threads.iter().map(|t| comments[t.root].id).collect();
+        self.replies.retain(|id, _| roots.contains(id));
+        if self.discussion.is_empty() {
+            self.discussion_open = false;
+        }
+    }
+
+    /// The open file's rows with its threads under their lines.
+    fn place_notes(&mut self, rows: Vec<CodeRow>) {
+        let Some(file) = self
+            .view
+            .update
+            .patch
+            .as_ref()
+            .and_then(|diff| diff.files.get(self.selected))
+        else {
+            self.rows = rows;
+            self.notes.clear();
+            return;
+        };
+        let comments = self
+            .view
+            .update
+            .comments
+            .as_deref()
+            .map_or(&[][..], Vec::as_slice);
+        let on_lines = comments::on_lines(comments, &self.threads, file_path(file));
+        (self.rows, self.notes) = with_notes(rows, &file.hunks, &on_lines);
+    }
+
+    /// The comments changed and the patch didn't: the threads go under their lines again, and the code stays where it's
+    /// scrolled to, the thread at the top too.
+    fn rethread(&mut self) {
+        let (code, in_notes, offset) = self.top_row();
+        self.group_comments();
+        let rows = self
+            .rows
+            .iter()
+            .copied()
+            .filter(|row| !matches!(row, CodeRow::Notes(_)))
+            .collect();
+        self.place_notes(rows);
+        let at = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| !matches!(row, CodeRow::Notes(_)))
+            .nth(code)
+            .map_or(0, |(at, _)| at);
+        let at = if in_notes && matches!(self.rows.get(at + 1), Some(CodeRow::Notes(_))) {
+            at + 1
+        } else {
+            at
+        };
+        self.wrapped.reset(self.rows.len());
+        if self.varied_rows() {
+            self.wrapped.scroll_to(ListOffset {
+                item_ix: at,
+                offset_in_item: offset,
+            });
+        } else {
+            let handle = self.scroll.0.borrow().base_handle.clone();
+            let x = handle.offset().x;
+            handle.set_offset(point(x, -(px(at as f32 * ROW) + offset)));
+        }
+    }
+
+    /// The row at the top of the code, as the how-manyth row of code it is or follows, whether it's that row's threads,
+    /// and how far into it the code is scrolled.
+    fn top_row(&self) -> (usize, bool, Pixels) {
+        let (at, offset) = if self.varied_rows() {
+            let top = self.wrapped.logical_scroll_top();
+            (top.item_ix, top.offset_in_item)
+        } else {
+            let y = -self.scroll.0.borrow().base_handle.offset().y;
+            let at = (y / px(ROW)).floor().max(0.0) as usize;
+            (at, y - px(at as f32 * ROW))
+        };
+        let at = at.min(self.rows.len().saturating_sub(1));
+        let in_notes = matches!(self.rows.get(at), Some(CodeRow::Notes(_)));
+        let code = self.rows[..at]
+            .iter()
+            .filter(|row| !matches!(row, CodeRow::Notes(_)))
+            .count();
+        (code - usize::from(in_notes && code > 0), in_notes, offset)
+    }
+
+    /// Rows of different heights, in a list that measures each: wrapped lines, or threads under the lines.
+    fn varied_rows(&self) -> bool {
+        self.wrap || !self.notes.is_empty()
     }
 
     fn rebuild(&mut self, cx: &App) {
         self.rows.clear();
+        self.notes.clear();
         self.relist(cx);
+        self.group_comments();
         let Some(diff) = &self.view.update.patch else {
             return;
         };
@@ -286,12 +474,16 @@ impl Viewer {
             })
         {
             self.selected = index;
+            self.discussion_open = false;
         }
         self.selected = self.selected.min(diff.files.len().saturating_sub(1));
         let Some(file) = diff.files.get(self.selected) else {
             return;
         };
-        self.rows = code_rows(&file.hunks, self.split());
+        let rows = code_rows(&file.hunks, self.split());
+        self.place_notes(rows);
+        let diff = self.view.update.patch.as_ref().unwrap();
+        let file = &diff.files[self.selected];
         let focus = self.view.update.focus.as_ref().filter(|f| f.line.is_some());
         let target = focus.and_then(|focus| {
             self.rows.iter().position(|row| {
@@ -300,7 +492,7 @@ impl Viewer {
                     CodeRow::Split {
                         hunk, left, right, ..
                     } => (hunk, if focus.old { left } else { right }),
-                    CodeRow::Hunk(_) => return false,
+                    CodeRow::Hunk(_) | CodeRow::Notes(_) => return false,
                 };
                 l.is_some_and(|l| {
                     let line = &file.hunks[h].lines[l];
@@ -345,6 +537,7 @@ impl Viewer {
             .is_some_and(|diff| index < diff.files.len())
         {
             self.selected = index;
+            self.discussion_open = false;
             self.view.update.focus = None;
             self.rebuild(cx);
             self.horizontal.set_offset(gpui::point(px(0.0), px(0.0)));
@@ -363,6 +556,28 @@ impl Viewer {
     pub fn selected_file(&self) -> usize {
         self.selected
     }
+
+    /// Shows the discussion in place of a file: the comments on the whole change and on code that changed since.
+    pub fn open_discussion(&mut self, cx: &mut Context<Self>) {
+        if self.discussion.is_empty() {
+            return;
+        }
+        self.discussion_open = true;
+        // Chosen here, the plugin's focus no longer picks the file, as when a file is chosen.
+        self.view.update.focus = None;
+        self.discussion_list.reset(self.discussion.len());
+        cx.notify();
+    }
+
+    /// What the file list shows, in its order: the discussion (None) when there is one, then the files.
+    fn listed(&self) -> Vec<Option<usize>> {
+        (!self.discussion.is_empty())
+            .then_some(None)
+            .into_iter()
+            .chain(self.listed_files().into_iter().map(Some))
+            .collect()
+    }
+
     #[cfg(feature = "test-support")]
     pub fn rendered_code_rows(&self) -> usize {
         self.rendered_rows.get()
@@ -422,12 +637,13 @@ impl Viewer {
                 window.focus_next(cx);
             }
         } else if self.files_focus.is_focused(window) {
-            // Up and down go through the files the list shows, in its order.
-            let listed = self.listed_files();
+            // Up and down go through the discussion and the files the list shows, in its order.
+            let listed = self.listed();
             let Some(last) = listed.len().checked_sub(1) else {
                 return;
             };
-            let at = listed.iter().position(|index| *index == self.selected);
+            let open = (!self.discussion_open).then_some(self.selected);
+            let at = listed.iter().position(|entry| *entry == open);
             let next = match (key.key.as_str(), at) {
                 ("down", Some(at)) => (at + 1).min(last),
                 ("up", Some(at)) => at.saturating_sub(1),
@@ -435,15 +651,21 @@ impl Viewer {
                 ("up" | "end", _) => last,
                 _ => return,
             };
-            self.select_file(listed[next], cx);
+            match listed[next] {
+                Some(index) => self.select_file(index, cx),
+                None => self.open_discussion(cx),
+            }
         } else if self.code_focus.is_focused(window) {
-            if matches!(key.key.as_str(), "left" | "right") && self.split() && !self.wrap {
+            if matches!(key.key.as_str(), "left" | "right")
+                && !self.wrap
+                && (self.split() || self.varied_rows())
+            {
                 self.scroll_split(px(if key.key == "left" { 40.0 } else { -40.0 }), cx);
                 window.prevent_default();
                 cx.stop_propagation();
                 return;
             }
-            if self.wrap {
+            if self.varied_rows() {
                 let height = self.wrapped.viewport_bounds().size.height;
                 match key.key.as_str() {
                     "down" => self.wrapped.scroll_by(px(ROW)),
@@ -493,7 +715,7 @@ impl Viewer {
         window.prevent_default();
     }
 
-    fn code_row(&self, index: usize) -> AnyElement {
+    fn code_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(file) = self
             .view
             .update
@@ -530,12 +752,23 @@ impl Viewer {
             CodeRow::Line(h, l) => {
                 let line = &file.hunks[h].lines[l];
                 let (mark, color, bg) = colors(line.kind);
+                // In the list of `varied_rows` the text moves sideways on its own, under the line numbers.
+                let text = if self.varied_rows() && !self.wrap {
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .overflow_hidden()
+                        .child(self.code_text(line, self.split_x))
+                } else {
+                    self.code_text(line, px(0.0))
+                };
                 row.bg(rgba(bg))
                     .text_color(rgb(color))
                     .child(number(line.old_line))
                     .child(number(line.new_line))
                     .child(div().w(px(22.0)).flex_none().child(mark))
-                    .child(self.code_text(line, px(0.0)))
+                    .child(text)
                     .into_any_element()
             }
             CodeRow::Split { hunk, left, right } => {
@@ -545,6 +778,7 @@ impl Viewer {
                     .child(self.split_side(right.map(|l| &lines[l]), false))
                     .into_any_element()
             }
+            CodeRow::Notes(n) => self.notes_row(&self.notes[n], cx),
         }
     }
 
@@ -683,11 +917,12 @@ impl Viewer {
                     DiffStatus::Copied => ("C", theme::INFO),
                 };
                 let (added, removed) = self.counts.get(index).copied().unwrap_or_default();
+                let comments = self.file_comments.get(index).copied().unwrap_or_default();
                 let (folder, name) = match path.rsplit_once('/') {
                     Some((folder, name)) => (Some(folder.to_owned()), name.to_owned()),
                     None => (None, path.clone()),
                 };
-                let selected = index == self.selected;
+                let selected = index == self.selected && !self.discussion_open;
                 item(index.into())
                     .pl(px(match depth {
                         Some(depth) => 8.0 + *depth as f32 * 12.0 + 18.0,
@@ -726,6 +961,9 @@ impl Viewer {
                                 )
                             }),
                     )
+                    .when(comments > 0, |row| {
+                        row.child(comment_count(comments, 12.0).flex_none())
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -752,7 +990,7 @@ impl Viewer {
         let Some(diff) = &self.view.update.patch else {
             return self.message("Loading diff…", false);
         };
-        if diff.files.is_empty() {
+        if diff.files.is_empty() && self.discussion.is_empty() {
             return self.message("No changed files", false);
         }
         let files = uniform_list(
@@ -767,8 +1005,16 @@ impl Viewer {
         .track_scroll(&self.files_scroll)
         .flex_1()
         .min_h_0();
-        let file = &diff.files[self.selected];
-        let code = if self.rows.is_empty() {
+        let file = diff.files.get(self.selected);
+        let code = if self.discussion_open {
+            list(
+                self.discussion_list.clone(),
+                cx.processor(|this, index: usize, _, cx| this.discussion_item(index, cx)),
+            )
+            .flex_1()
+            .min_h_0()
+            .into_any_element()
+        } else if let Some(file) = file.filter(|_| self.rows.is_empty()) {
             let detail = if file.is_binary {
                 "Binary file changed. No text diff."
             } else if file.is_placeholder {
@@ -783,47 +1029,35 @@ impl Viewer {
                 }
             };
             self.message(detail, false)
-        } else if self.wrap {
-            list(
+        } else if file.is_none() {
+            self.message("No changed files", false)
+        } else if self.varied_rows() {
+            let rows = list(
                 self.wrapped.clone(),
-                cx.processor(|this, index: usize, _, _| this.code_row(index)),
-            )
-            .flex_1()
-            .min_h_0()
-            .into_any_element()
+                cx.processor(|this, index: usize, _, cx| this.code_row(index, cx)),
+            );
+            if self.wrap {
+                rows.flex_1().min_h_0().into_any_element()
+            } else {
+                self.sideways(rows.size_full(), cx)
+            }
         } else {
             let rows = uniform_list(
                 "diff-code",
                 self.rows.len(),
-                cx.processor(|this, range: std::ops::Range<usize>, _, _| {
+                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                     #[cfg(feature = "test-support")]
                     this.rendered_rows
                         .set(this.rendered_rows.get() + range.len());
-                    range.map(|index| this.code_row(index)).collect::<Vec<_>>()
+                    range
+                        .map(|index| this.code_row(index, cx))
+                        .collect::<Vec<_>>()
                 }),
             )
             .track_scroll(&self.scroll)
             .h_full();
             if self.split() {
-                // Each column clips its own lines, and Shift and the wheel move both sideways together.
-                div()
-                    .id("diff-code-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
-                        let delta = event.delta.pixel_delta(px(ROW));
-                        let by = if event.modifiers.shift {
-                            delta.y
-                        } else {
-                            delta.x
-                        };
-                        if by != px(0.0) {
-                            this.scroll_split(by, cx);
-                        }
-                    }))
-                    .child(rows.w_full())
-                    .into_any_element()
+                self.sideways(rows.w_full(), cx)
             } else {
                 div()
                     .id("diff-code-scroll")
@@ -836,18 +1070,18 @@ impl Viewer {
                     .into_any_element()
             }
         };
-        let path = file
-            .new_path
-            .as_ref()
-            .or(file.old_path.as_ref())
-            .cloned()
-            .unwrap_or_default();
-        let renamed = file
-            .old_path
-            .as_ref()
-            .filter(|old| file.new_path.as_ref().is_some_and(|new| new != *old))
-            .map(|old| format!("{old} → {path}"))
-            .unwrap_or(path);
+        let renamed = match file {
+            _ if self.discussion_open => "Discussion".to_owned(),
+            None => String::new(),
+            Some(file) => {
+                let path = file_path(file).to_owned();
+                file.old_path
+                    .as_ref()
+                    .filter(|old| file.new_path.as_ref().is_some_and(|new| new != *old))
+                    .map(|old| format!("{old} → {path}"))
+                    .unwrap_or(path)
+            }
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -877,6 +1111,9 @@ impl Viewer {
                                 .role(Role::ListBox)
                                 .aria_label("Changed files")
                                 .focus_visible(|style| style.border_color(rgb(theme::INFO)))
+                                .when(!self.discussion.is_empty(), |list| {
+                                    list.child(self.discussion_row(cx))
+                                })
                                 .child(files),
                         ),
                 )
@@ -913,6 +1150,29 @@ impl Viewer {
             .into_any_element()
     }
 
+    /// Code that scrolls sideways a line at a time rather than as one wide block: each column, or each line's text,
+    /// clips its own, and Shift and the wheel move them together.
+    fn sideways(&self, rows: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("diff-code-scroll")
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                let delta = event.delta.pixel_delta(px(ROW));
+                let by = if event.modifiers.shift {
+                    delta.y
+                } else {
+                    delta.x
+                };
+                if by != px(0.0) {
+                    this.scroll_split(by, cx);
+                }
+            }))
+            .child(rows)
+            .into_any_element()
+    }
+
     fn message(&self, text: &str, error: bool) -> AnyElement {
         div()
             .id("diff-message")
@@ -937,6 +1197,23 @@ fn colors(kind: DiffLineKind) -> (&'static str, u32, u32) {
         DiffLineKind::Deleted => ("-", theme::DANGER, 0xf2786a12),
         DiffLineKind::Context => (" ", theme::FOREGROUND, 0),
     }
+}
+
+/// The desktop's message icon and a number of comments, in the file list and the header. The header's longer text gives
+/// way first when the window is narrow.
+fn comment_count(count: impl std::fmt::Display, size: f32) -> Div {
+    div()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(if size < 14.0 { 2.0 } else { 4.0 }))
+        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .child(
+            div()
+                .flex_none()
+                .child(icon(Icon::MessageSquare, size, theme::MUTED_FOREGROUND)),
+        )
+        .child(div().min_w_0().truncate().child(count.to_string()))
 }
 
 /// A line number in the gutter.
@@ -1088,6 +1365,24 @@ impl Render for Viewer {
                                                     .text_color(rgb(theme::BLOCKED))
                                                     .child(format!("−{removed}")),
                                             )
+                                    })
+                                    .when(self.view.update.patch.is_some(), |line| {
+                                        let count = self.comments().len();
+                                        let outdated = comments::outdated(self.comments());
+                                        line.when(count > 0, |line| {
+                                            // Docked there's room only for the number.
+                                            line.child(comment_count(
+                                                match (docked, outdated) {
+                                                    (true, _) => count.to_string(),
+                                                    (false, 0) => format!("{count} comments"),
+                                                    (false, _) => format!(
+                                                        "{count} comments, {outdated} on code that changed since"
+                                                    ),
+                                                },
+                                                14.0,
+                                            )
+                                            .when(docked, |count| count.flex_none()))
+                                        })
                                     }),
                             ),
                     )
@@ -1188,6 +1483,17 @@ impl Render for Viewer {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
                     ),
             )
+            .when_some(self.link_error.clone(), |body, error| {
+                body.child(
+                    div()
+                        .id("diff-link-error")
+                        .px(px(16.0))
+                        .py(px(8.0))
+                        .role(Role::Alert)
+                        .text_color(rgb(theme::DANGER))
+                        .child(error),
+                )
+            })
             .when_some(self.refresh_error.clone(), |body, error| {
                 body.child(
                     div()
@@ -1435,5 +1741,179 @@ mod layout_tests {
             v.set_dock(false, true, cx);
         });
         window.read(|v, _| assert_eq!(v.rows[1..], unified));
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod comment_tests {
+    use super::*;
+    use crate::{diff, page::plugin::PluginConfig};
+    use gpui::{TestApp, TestAppWindow};
+    use serde_json::{Value, json};
+
+    fn open(payload: Value) -> (TestApp, TestAppWindow<Viewer>) {
+        let view = View {
+            id: "test:3".into(),
+            plugin_id: "test".into(),
+            title: "Pull request".into(),
+            subtitle: String::new(),
+            cwd: String::new(),
+            refresh: false,
+            update: diff::clean_update(&payload).unwrap(),
+        };
+        let host = Arc::new(PluginHost::new(PluginConfig {
+            id: "test".into(),
+            root: std::env::temp_dir(),
+            scope: "test".into(),
+        }));
+        let mut app = TestApp::new();
+        let window = app.open_window(move |_, cx| Viewer::new(view, host, cx));
+        (app, window)
+    }
+
+    fn comment(id: i64, reply_to: Option<i64>, path: Option<&str>, line: Option<usize>) -> Value {
+        json!({ "id": id, "replyTo": reply_to, "path": path, "line": line, "side": "additions", "author": "maria",
+            "body": format!("Comment {id}"), "createdAt": format!("2026-11-01T10:00:{id:02}Z"), "url": "", "canReply": reply_to.is_none() })
+    }
+
+    /// The desktop's threads: under the line they're on, after its number column, with their replies; the comments on
+    /// the whole change and on code that changed since in the discussion, which the file list opens.
+    #[test]
+    fn a_diff_with_comments_shows_each_thread_under_its_line() {
+        let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n";
+        let (_app, mut window) = open(
+            json!({ "patch": patch, "focus": { "path": "a.rs", "line": 2 }, "comments": [
+            comment(1, None, Some("a.rs"), Some(2)),
+            comment(2, Some(1), Some("a.rs"), Some(2)),
+            comment(3, None, None, None),
+            comment(4, None, Some("a.rs"), None),
+        ] }),
+        );
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        window.read(|v, _| {
+            assert_eq!(
+                v.rows,
+                [
+                    CodeRow::Hunk(0),
+                    CodeRow::Line(0, 0),
+                    CodeRow::Line(0, 1),
+                    CodeRow::Line(0, 2),
+                    CodeRow::Notes(0),
+                    CodeRow::Line(0, 3),
+                ]
+            );
+            let thread = &v.threads[v.notes[0].new[0]];
+            assert_eq!((v.comments()[thread.root].id, thread.replies.len()), (1, 1));
+            assert_eq!(
+                v.file_comments,
+                [3],
+                "the thread and its reply, and the one on changed code"
+            );
+            assert_eq!(
+                v.listed(),
+                [None, Some(0)],
+                "the discussion before the file"
+            );
+        });
+        // The card sits under the added line, the fourth row under the file's 32px name, past the 48px numbers. Its spot
+        // is inside its 1px border.
+        let code = crate::ui::spot_at("diff-code").unwrap();
+        let card = crate::ui::spot_at("diff-thread-1").unwrap();
+        assert_eq!(card.top(), code.top() + px(32.0 + 4.0 * ROW + 6.0 + 1.0));
+        assert_eq!(card.left(), code.left() + px(48.0 + 1.0));
+        // Side by side it's in the new side's column.
+        window.update(|v, _, cx| v.set_split(true, cx));
+        window.draw();
+        let card = crate::ui::spot_at("diff-thread-1").unwrap();
+        assert!(card.left() > code.left() + code.size.width / 2.0);
+
+        // The discussion opens from the file list and shows the other two, the newest first.
+        window.simulate_click(
+            crate::ui::spot_at("diff-discussion").unwrap().center(),
+            gpui::MouseButton::Left,
+        );
+        window.draw();
+        window.read(|v, _| {
+            assert!(v.discussion_open);
+            let roots: Vec<i64> = v
+                .discussion
+                .iter()
+                .map(|&t| v.comments()[v.threads[t].root].id)
+                .collect();
+            assert_eq!(roots, [4, 3]);
+        });
+        assert!(
+            crate::ui::spot_at("diff-thread-4").unwrap().top()
+                < crate::ui::spot_at("diff-thread-3").unwrap().top()
+        );
+        // It stays open when the layout changes: the plugin's focus picked the file only until something else was.
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.read(|v, _| assert!(v.discussion_open));
+        window.simulate_keystroke("down");
+        window.read(|v, _| assert!(!v.discussion_open && v.selected_file() == 0));
+    }
+
+    /// A reply comes back as `updateDiff` with the comments alone, or with the patch already shown on a live diff's next
+    /// load: the code stays where it's scrolled to, even when a file gets its first thread above.
+    #[test]
+    fn new_comments_leave_the_code_where_it_is_scrolled_to() {
+        let patch = format!(
+            "diff --git a/big b/big\nnew file mode 100644\n--- /dev/null\n+++ b/big\n@@ -0,0 +1,300 @@\n{}",
+            (1..=300)
+                .map(|n| format!("+line {n}\n"))
+                .collect::<String>()
+        );
+        let (_app, mut window) = open(json!({ "patch": patch }));
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        // Row 101 is line 101, three pixels scrolled into it.
+        window.update(|v, _, _| {
+            let handle = v.scroll.0.borrow().base_handle.clone();
+            handle.set_offset(point(px(0.0), -px(101.0 * ROW + 3.0)));
+        });
+        window.draw();
+        let update = |comments: Value, patch: Option<&str>| {
+            let mut payload = json!({ "comments": comments });
+            if let Some(patch) = patch {
+                payload["patch"] = json!(patch);
+            }
+            diff::clean_update(&payload).unwrap()
+        };
+        let patch_again = update(
+            json!([comment(1, None, Some("big"), Some(10))]),
+            Some(&patch),
+        );
+        window.update(|v, _, cx| v.update(patch_again, cx));
+        window.draw();
+        // A thread on line 10 now sits above: the same line is at the top, under the list's one more row.
+        window.read(|v, _| {
+            assert!(v.varied_rows());
+            let top = v.wrapped.logical_scroll_top();
+            assert_eq!((top.item_ix, top.offset_in_item), (102, px(3.0)));
+        });
+        // The reply arrives as comments alone; the thread at the top keeps its place.
+        window.update(|v, _, _| {
+            v.wrapped.scroll_to(ListOffset {
+                item_ix: 11,
+                offset_in_item: px(40.0),
+            })
+        });
+        window.draw();
+        let reply = update(
+            json!([
+                comment(1, None, Some("big"), Some(10)),
+                comment(2, Some(1), Some("big"), Some(10))
+            ]),
+            None,
+        );
+        window.update(|v, _, cx| v.update(reply, cx));
+        window.draw();
+        window.read(|v, _| {
+            assert_eq!(v.rows[11], CodeRow::Notes(0));
+            assert_eq!(v.threads[0].replies.len(), 1);
+            let top = v.wrapped.logical_scroll_top();
+            assert_eq!((top.item_ix, top.offset_in_item), (11, px(40.0)));
+        });
     }
 }

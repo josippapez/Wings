@@ -173,6 +173,33 @@ impl PluginHost {
                 .settle_action(token, Some("The plugin didn't respond".into()));
         }
     }
+
+    /// Hands a reply typed in the viewer `id` under the thread whose first comment is `reply_to` to the main frame's
+    /// `onReply`. `done` gets the plugin's error, or nothing once it has posted the reply.
+    pub fn send_reply(
+        &self,
+        id: &str,
+        reply_to: i64,
+        body: &str,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        let text = json!({ "diffId": id, "replyTo": reply_to, "body": body }).to_string();
+        self.send_action_message(Message::Reply, text, done);
+    }
+
+    /// Opens a link from a comment the plugin gave the viewer, if the plugin may open it, as its `openUrl` would.
+    pub fn open_url(&self, url: &str) -> Result<(), String> {
+        let Some(access) = &self.shared.access else {
+            return Err(format!(
+                "{} is turned off or not installed",
+                self.shared.config.id
+            ));
+        };
+        if !wings_plugins::fetch::may_open_url(&access.plugin, url) {
+            return Err(format!("{} may not open {url}", access.plugin.manifest.id));
+        }
+        access.env.open_url(url)
+    }
 }
 
 #[cfg(test)]
@@ -201,9 +228,44 @@ mod tests {
             rig.refused("await wings.openDiff({ title:'x', patch:'x'.repeat(8*1024*1024+1) });")
                 .contains("8")
         );
-        assert!(
-            rig.refused("await wings.openDiff({ title:'x', comments:[{}] });")
-                .contains("review comments")
+        assert_eq!(
+            rig.refused("await wings.openDiff({ title:'x', comments:'review' });"),
+            "comments must be a list"
+        );
+    }
+
+    /// The desktop's `sendReply`: a reply typed in the viewer reaches the main frame's `onReply` as `{ diffId, replyTo,
+    /// body }`, and the viewer hears when it's posted, or the error the handler threw.
+    #[test]
+    fn replies_reach_the_main_handler_and_its_errors_come_back() {
+        let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
+        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
+        rig.host.start_main("wings.onReply(async (reply) => { if (reply.body === 'fail') throw new Error('GitHub refused it'); wings.broadcast({ reply }); }); wings.openDiff({title:'PR', comments:[{ id: 7, replyTo: null, path: 'a', line: 1, canReply: true }]}).then(value=>wings.broadcast(value));", |_| {}).unwrap();
+        let id = reporter.report("viewer", |r| r["id"].is_string())["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let Seen::DiffOpen(view) = &rig.env.seen()[0] else {
+            panic!("missing viewer")
+        };
+        assert_eq!(view.update.comments.as_ref().unwrap()[0].id, 7);
+        let reply = |body: &str| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            rig.host.send_reply(&id, 7, body, move |result| {
+                let _ = tx.send(result);
+            });
+            rx.recv_timeout(WAIT).unwrap()
+        };
+        assert_eq!(reply("Thanks, fixed."), Ok(()));
+        reporter.report("reply heard", |r| {
+            r["reply"] == json!({ "diffId": id, "replyTo": 7, "body": "Thanks, fixed." })
+        });
+        assert_eq!(reply("fail"), Err("GitHub refused it".into()));
+        // A plugin without `onReply` says so.
+        rig.host.start_main("", |_| {}).unwrap();
+        assert_eq!(
+            reply("hello"),
+            Err("This plugin doesn't take replies".into())
         );
     }
 

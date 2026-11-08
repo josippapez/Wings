@@ -273,6 +273,67 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
     }));
 }
 
+/// The desktop's review threads: a plugin's diff with comments opens with them, and a reply typed under one reaches the
+/// plugin's `onReply`, whose error shows under the box with the text kept, and whose `updateDiff` adds the reply.
+#[test]
+fn a_reply_typed_under_a_review_comment_reaches_the_plugin() {
+    let data = Data::temp();
+    let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\n";
+    data.install_script("differ", json!({ "contributes": { "ui": ["diff"] } }), &format!(r#"
+        const comments = [{{ id: 1, replyTo: null, path: 'one', line: 1, side: 'additions', author: 'maria', body: 'Why new?', createdAt: '2026-11-01T10:00:00Z', url: '', canReply: true }}];
+        let started = false;
+        wings.onReply(async ({{ diffId, replyTo, body }}) => {{
+            if (body === 'fail') throw new Error('GitHub refused it');
+            await wings.storage.set('reply', {{ replyTo, body }});
+            comments.push({{ id: 2, replyTo, path: 'one', line: 1, side: 'additions', author: 'you', body, createdAt: '2026-11-01T11:00:00Z', url: '', canReply: false }});
+            await wings.updateDiff(diffId, {{ comments }});
+        }});
+        wings.onPanes(async list => {{ if (!list.length || started) return; started = true; await wings.openDiff({{ title: 'PR', patch: {}, comments }}); }});
+    "#, json!(patch)), &[], "diff-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(
+        &app,
+        &mut window,
+        "the diff with comments never opened",
+        |w| w.plugin_ui.diff.is_some(),
+    );
+    window.update(|w, window, cx| w.expand_diff(true, window, cx));
+    window.draw();
+    let viewer = window.read(|w, _| w.plugin_ui.diff.as_ref().unwrap().0.clone());
+    let reply = crate::ui::spot_at("diff-reply-1").expect("the thread's Reply button was drawn");
+    window.simulate_click(reply.center(), MouseButton::Left);
+    window.draw();
+    window.simulate_input("fail");
+    window.simulate_keystroke("cmd-enter");
+    until(&app, &mut window, "the plugin's error never showed", |_| {
+        app.read(|cx| viewer.read(cx).reply_error(1)).as_deref() == Some("GitHub refused it")
+    });
+    window.simulate_keystroke("cmd-a");
+    window.simulate_input("Thanks, fixed.");
+    window.simulate_keystroke("cmd-enter");
+    until(
+        &app,
+        &mut window,
+        "the reply never reached the plugin",
+        |_| {
+            data.saved("differ", "diff-scope", "reply")
+                == Some(json!({ "replyTo": 1, "body": "Thanks, fixed." }))
+        },
+    );
+    until(&app, &mut window, "the posted reply never showed", |_| {
+        app.read(|cx| {
+            let viewer = viewer.read(cx);
+            !viewer.reply_open(1)
+                && viewer
+                    .view
+                    .update
+                    .comments
+                    .as_ref()
+                    .is_some_and(|c| c.len() == 2)
+        })
+    });
+}
+
 /// A plugin that may open diffs and does nothing of its own, so a test opens one from the tab it wants.
 fn install_differ(data: &Data) {
     data.install_script(

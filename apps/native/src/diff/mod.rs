@@ -1,4 +1,5 @@
 //! The central plugin diff contract and parsed, browser-free patches.
+pub mod comments;
 pub mod patch;
 pub mod rows;
 #[cfg(feature = "ui")]
@@ -10,6 +11,8 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Update {
     pub patch: Option<Arc<patch::Diff>>,
+    /// The review comments, all of them. None keeps those shown, as an update after a reply sends only `comments`.
+    pub comments: Option<Arc<Vec<comments::Comment>>>,
     pub error: Option<String>,
     pub focus: Option<Focus>,
 }
@@ -46,13 +49,13 @@ pub fn text(value: Option<&Value>, max: usize) -> String {
 }
 
 pub fn clean_update(params: &Value) -> Result<Update, String> {
-    if params
-        .get("comments")
-        .and_then(Value::as_array)
-        .is_some_and(|comments| !comments.is_empty())
-    {
-        return Err("Native diffs don't support review comments yet".into());
-    }
+    // `null` clears them, as the desktop's `cleanComments` does with what isn't a list.
+    let comments = match params.get("comments") {
+        None => None,
+        Some(Value::Null) => Some(Arc::default()),
+        Some(Value::Array(list)) => Some(Arc::new(comments::clean(list))),
+        Some(_) => return Err("comments must be a list".into()),
+    };
     let patch = params
         .get("patch")
         .and_then(Value::as_str)
@@ -81,6 +84,7 @@ pub fn clean_update(params: &Value) -> Result<Update, String> {
     });
     Ok(Update {
         patch,
+        comments,
         error,
         focus,
     })
@@ -101,7 +105,25 @@ mod tests {
         );
         assert!(clean_update(&json!({ "patch": "not a patch" })).is_err());
         assert!(clean_update(&json!({ "patch": "x".repeat(patch::MAX_PATCH_BYTES + 1) })).is_err());
-        assert!(clean_update(&json!({ "comments": [{ "body": "review" }] })).is_err());
+        // Comments are bounded and kept, or left out when they aren't comments; anything but a list is refused.
+        let comments = clean_update(&json!({ "comments": [{ "id": 1, "path": "a", "line": 2, "body": "x".repeat(30_000) }, { "body": "no id" }] }))
+            .unwrap()
+            .comments
+            .unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body.len(), 20_000);
+        assert!(clean_update(&json!({})).unwrap().comments.is_none());
+        assert!(
+            clean_update(&json!({ "comments": null }))
+                .unwrap()
+                .comments
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            clean_update(&json!({ "comments": "review" })),
+            Err("comments must be a list".into())
+        );
         assert!(
             clean_update(&json!({ "focus": { "path": "" } }))
                 .unwrap()

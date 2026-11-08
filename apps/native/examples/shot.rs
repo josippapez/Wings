@@ -241,6 +241,11 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-dock") {
         return diff_dock(&mut cx, &config, &out);
     }
+    // `-- <out-dir> diff-comments` renders only a plugin's diff with review threads: under their lines docked and filling
+    // the window, a reply being written, and the discussion.
+    if std::env::args().nth(2).as_deref() == Some("diff-comments") {
+        return diff_comments(&mut cx, &config, &out);
+    }
     // `-- <out-dir> agent-terminals` renders only the terminals an agent opened: below it, floating over it, hidden,
     // to its right, and Settings, Agents.
     if std::env::args().nth(2).as_deref() == Some("agent-terminals") {
@@ -1371,15 +1376,17 @@ fn agent_terminals(
     }
 }
 
+/// The made-up pull request of `diff-dock` and `diff-comments`: three files.
+const DOCK_PATCH: &str = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,8 +1,10 @@\n use std::time::Duration;\n \n pub fn load() -> Config {\n-    let timeout = 10;\n+    // A slow network gets room to answer before the client gives up.\n+    let timeout = 30;\n+    validate(timeout);\n     Config {\n         timeout: Duration::from_secs(timeout),\n-        retries: 1,\n+        retries: 3,\n     }\n }\ndiff --git a/src/client/retry.rs b/src/client/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/client/retry.rs\n@@ -0,0 +1,4 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    200 * 2u64.pow(attempt)\n+}\n+\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,3 @@\n ## Configuration\n-The client waits 10 seconds.\n+The client waits 30 seconds and retries three times.\n \n";
+
 fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
-    let patch = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,8 +1,10 @@\n use std::time::Duration;\n \n pub fn load() -> Config {\n-    let timeout = 10;\n+    // A slow network gets room to answer before the client gives up.\n+    let timeout = 30;\n+    validate(timeout);\n     Config {\n         timeout: Duration::from_secs(timeout),\n-        retries: 1,\n+        retries: 3,\n     }\n }\ndiff --git a/src/client/retry.rs b/src/client/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/client/retry.rs\n@@ -0,0 +1,4 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    200 * 2u64.pow(attempt)\n+}\n+\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,3 @@\n ## Configuration\n-The client waits 10 seconds.\n+The client waits 30 seconds and retries three times.\n \n";
     let data = Data::temp();
     data.install_script(
         "differ",
         serde_json::json!({ "name": "Changes", "contributes": { "ui": ["diff"] } }),
         &format!(
             "let opened = false; wings.onPanes(async (list) => {{ if (!list.length || opened) return; opened = true; await wings.openDiff({{ title: 'Fix the client timeout', subtitle: 'acme-web #42 · fix-timeout into main', patch: {} }}); }});",
-            serde_json::json!(patch)
+            serde_json::json!(DOCK_PATCH)
         ),
         &[],
         "differ-scope",
@@ -1405,6 +1412,125 @@ fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         click(cx, window, spot("diff-files-toggle"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("docked-no-files"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// `diff-dock`'s pull request with made-up review threads: one on an added line with a reply, one on a removed line, one
+/// on code that changed since, and one on the whole pull request.
+fn diff_comments(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let at = |hours: i64| (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+    let comment = |id: i64,
+                   reply: Option<i64>,
+                   path: Option<&str>,
+                   line: Option<u32>,
+                   side: &str,
+                   author: &str,
+                   body: &str,
+                   hours: i64| {
+        serde_json::json!({ "id": id, "replyTo": reply, "path": path, "line": line, "side": side, "author": author, "body": body,
+            "createdAt": at(hours), "url": format!("https://github.com/acme/web/pull/42#discussion_r{id}"), "canReply": reply.is_none() })
+    };
+    let comments = serde_json::json!([
+        comment(
+            1,
+            None,
+            Some("src/config.rs"),
+            Some(5),
+            "additions",
+            "maria",
+            "Why 30? The load balancer drops idle connections after **25 s**, so the client would still see resets. See [the runbook](https://example.com/runbook).",
+            50
+        ),
+        comment(
+            2,
+            Some(1),
+            Some("src/config.rs"),
+            Some(5),
+            "additions",
+            "tom",
+            "Good catch, `20` it is. I'll change it.",
+            3
+        ),
+        comment(
+            3,
+            None,
+            Some("src/config.rs"),
+            Some(7),
+            "deletions",
+            "maria",
+            "Was one retry ever enough here?",
+            49
+        ),
+        comment(
+            4,
+            None,
+            Some("src/client/retry.rs"),
+            None,
+            "additions",
+            "lee",
+            "This doubles forever. Cap it at 30 s.",
+            30
+        ),
+        comment(
+            5,
+            None,
+            None,
+            None,
+            "additions",
+            "lee",
+            "Looks good once the timeout is settled. I ran it against staging.",
+            2
+        ),
+    ]);
+    let data = Data::temp();
+    data.install_script(
+        "differ",
+        serde_json::json!({ "name": "Changes", "contributes": { "ui": ["diff"] } }),
+        &format!(
+            "let opened = false; wings.onReply(async () => {{ throw new Error('GitHub refused the reply: you are not signed in.'); }}); wings.onPanes(async (list) => {{ if (!list.length || opened) return; opened = true; await wings.openDiff({{ title: 'Fix the client timeout', subtitle: 'acme-web #42 · fix-timeout into main', patch: {}, comments: {} }}); }});",
+            serde_json::json!(DOCK_PATCH),
+            comments
+        ),
+        &[],
+        "differ-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("diff-comments-{state}-{width}.png"));
+        wait(cx, window, Duration::from_millis(1500));
+        save(cx, window, &name("docked"));
+        // At 640 there's no room to dock, so it already fills the window, with no file list toggle.
+        let docks = width > 700.0;
+        if docks {
+            click(cx, window, spot("diff-files-toggle"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("docked-no-files"));
+        }
+        // A reply being written, which the plugin refuses.
+        click(cx, window, spot("diff-reply-1"));
+        cx.simulate_input(window, "20 s it is, thanks.");
+        wait(cx, window, Duration::from_millis(300));
+        click(cx, window, spot("diff-reply-send-1"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("reply"));
+        if docks {
+            click(cx, window, spot("diff-files-toggle"));
+            click(cx, window, spot("diff-expand"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("expanded"));
+        }
+        click(cx, window, spot("diff-discussion"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("discussion"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

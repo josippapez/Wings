@@ -104,6 +104,9 @@ pub enum Message {
     Git,
     DiffRefresh,
     DiffClosed,
+    /// A reply typed in the diff viewer: `id` names it for `Link::call("actionDone")`, the text is the JSON of
+    /// `{ diffId, replyTo, body }`.
+    Reply,
     /// The JSON of another plugin's event, `{ from, name, data }`, for `onEvent`.
     PluginEvent,
     /// The JSON `{ sectionId, sort }` of a sort picked in a project section's menu, for `onSectionSort`.
@@ -137,6 +140,7 @@ impl Message {
             Message::Git => "git",
             Message::DiffRefresh => "diffRefresh",
             Message::DiffClosed => "diffClosed",
+            Message::Reply => "reply",
             Message::PluginEvent => "pluginEvent",
             Message::SectionSort => "sectionSort",
             Message::Broadcast => "broadcast",

@@ -3,11 +3,11 @@
 //! bold, italic, strikethrough, code, links and bare URLs. Anything else is shown as the text it is. Images aren't drawn:
 //! one shows as its alt text in `[ ]`.
 
-use std::ops::Range;
+use std::{ops::Range, rc::Rc};
 
 use gpui::{
-    AnyElement, FontStyle, FontWeight, HighlightStyle, InteractiveText, SharedString,
-    StrikethroughStyle, StyledText, UnderlineStyle, div, hsla, prelude::*, px, rgb, rgba,
+    AnyElement, App, FontStyle, FontWeight, HighlightStyle, InteractiveText, SharedString,
+    StrikethroughStyle, StyledText, UnderlineStyle, Window, div, hsla, prelude::*, px, rgb, rgba,
 };
 
 use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme};
@@ -428,8 +428,17 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
 
 const CODE_BACKGROUND: u32 = 0xffffff14;
 
+/// What a click on a link does with its URL, when the text came from someone whose links are checked first, like a
+/// plugin's.
+pub type Opener = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
 /// Text with its marks, as a GPUI element. Links open in the browser when clicked.
 pub fn inline_element(id: impl Into<SharedString>, content: &Inline) -> AnyElement {
+    inline_with(id, content, None)
+}
+
+/// `inline_element`, its links handed to `open` when there is one.
+fn inline_with(id: impl Into<SharedString>, content: &Inline, open: Option<&Opener>) -> AnyElement {
     let id: SharedString = id.into();
     // The marks may overlap (bold inside a link), so cut the text where any of them starts or stops.
     let mut cuts: Vec<usize> = content
@@ -482,9 +491,13 @@ pub fn inline_element(id: impl Into<SharedString>, content: &Inline) -> AnyEleme
     }
     let ranges: Vec<Range<usize>> = content.links.iter().map(|(r, _)| r.clone()).collect();
     let urls: Vec<String> = content.links.iter().map(|(_, url)| url.clone()).collect();
+    let open = open.cloned();
     InteractiveText::new(gpui::ElementId::Name(id), styled)
-        .on_click(ranges, move |index, _, cx| {
+        .on_click(ranges, move |index, window, cx| {
             let url = &urls[index];
+            if let Some(open) = &open {
+                return open(url, window, cx);
+            }
             // Only addresses a browser or mail client should be handed; a note can hold any text.
             if ["http://", "https://", "mailto:"]
                 .iter()
@@ -498,6 +511,11 @@ pub fn inline_element(id: impl Into<SharedString>, content: &Inline) -> AnyEleme
 
 /// The blocks, one under the other.
 pub fn render(id: &str, blocks: &[Block]) -> AnyElement {
+    render_with(id, blocks, None)
+}
+
+/// `render`, its links handed to `open` when there is one.
+pub fn render_with(id: &str, blocks: &[Block], open: Option<&Opener>) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -509,12 +527,12 @@ pub fn render(id: &str, blocks: &[Block]) -> AnyElement {
             blocks
                 .iter()
                 .enumerate()
-                .map(|(i, b)| block(&format!("{id}-{i}"), b)),
+                .map(|(i, b)| block(&format!("{id}-{i}"), b, open)),
         )
         .into_any_element()
 }
 
-fn block(id: &str, b: &Block) -> AnyElement {
+fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
     match b {
         Block::Heading(level, text) => {
             let size = match level {
@@ -528,11 +546,11 @@ fn block(id: &str, b: &Block) -> AnyElement {
                 .text_size(px(size))
                 .line_height(px(size + 8.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(inline_element(id.to_owned(), text))
+                .child(inline_with(id.to_owned(), text, open))
                 .into_any_element()
         }
         Block::Paragraph(text) => div()
-            .child(inline_element(id.to_owned(), text))
+            .child(inline_with(id.to_owned(), text, open))
             .into_any_element(),
         Block::Code(code) => div()
             .px(px(12.0))
@@ -551,7 +569,7 @@ fn block(id: &str, b: &Block) -> AnyElement {
             .border_l_2()
             .border_color(rgba(theme::HAIRLINE_STRONG))
             .text_color(rgb(theme::MUTED_FOREGROUND))
-            .child(render(id, inner))
+            .child(render_with(id, inner, open))
             .into_any_element(),
         Block::Rule => div()
             .h(px(1.0))
@@ -579,12 +597,11 @@ fn block(id: &str, b: &Block) -> AnyElement {
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(mark),
                     )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .child(render(&format!("{id}-{n}"), item)),
-                    )
+                    .child(div().min_w_0().flex_1().child(render_with(
+                        &format!("{id}-{n}"),
+                        item,
+                        open,
+                    )))
             }))
             .into_any_element(),
         Block::Table { head, rows } => {
@@ -604,7 +621,7 @@ fn block(id: &str, b: &Block) -> AnyElement {
                             .min_w_0()
                             .px(px(10.0))
                             .py(px(6.0))
-                            .child(inline_element(format!("{id}-{r}-{c}"), cell))
+                            .child(inline_with(format!("{id}-{r}-{c}"), cell, open))
                     }))
             };
             div()

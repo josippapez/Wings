@@ -1,7 +1,7 @@
 //! What the diff viewer lists and draws, as the desktop's `diff-viewer.tsx` lays it out: the file list, flat or as a
 //! folder tree, and the code rows, in one column or side by side.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::patch::{DiffFile, DiffHunk, DiffLineKind};
 
@@ -120,7 +120,8 @@ fn join(path: &str, name: &str) -> String {
 }
 
 /// A row of code: a hunk's header, or a line by its hunk and index. Side by side, a row holds the old line on the left
-/// and the new one on the right; an unchanged line is on both.
+/// and the new one on the right; an unchanged line is on both. Under a line, the review threads on it (`Notes`, by its
+/// place in the list `with_notes` makes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeRow {
     Hunk(usize),
@@ -130,6 +131,61 @@ pub enum CodeRow {
         left: Option<usize>,
         right: Option<usize>,
     },
+    Notes(usize),
+}
+
+/// The threads under a line, on its old number and on its new one, by their places in the viewer's threads. In one
+/// column both sit under the line; side by side, each under its own side.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Notes {
+    pub old: Vec<usize>,
+    pub new: Vec<usize>,
+}
+
+/// `rows` with a `CodeRow::Notes` after each line that has threads in `on_lines` (by side, true for the old one, and
+/// line number), and what each of those holds. As pierre/diffs' `getAnnotations`: a line shows the threads on its old
+/// number and those on its new one. A thread on a line the diff doesn't show isn't placed.
+pub fn with_notes(
+    rows: Vec<CodeRow>,
+    hunks: &[DiffHunk],
+    on_lines: &HashMap<(bool, usize), Vec<usize>>,
+) -> (Vec<CodeRow>, Vec<Notes>) {
+    if on_lines.is_empty() {
+        return (rows, Vec::new());
+    }
+    let mut placed = Vec::with_capacity(rows.len());
+    let mut notes = Vec::new();
+    let threads = |old: bool, line: Option<usize>| {
+        line.and_then(|line| on_lines.get(&(old, line)))
+            .cloned()
+            .unwrap_or_default()
+    };
+    for row in rows {
+        placed.push(row);
+        let (old, new) = match row {
+            CodeRow::Hunk(_) | CodeRow::Notes(_) => continue,
+            CodeRow::Line(h, l) => {
+                let line = &hunks[h].lines[l];
+                (line.old_line, line.new_line)
+            }
+            CodeRow::Split { hunk, left, right } => {
+                let lines = &hunks[hunk].lines;
+                (
+                    left.and_then(|l| lines[l].old_line),
+                    right.and_then(|l| lines[l].new_line),
+                )
+            }
+        };
+        let here = Notes {
+            old: threads(true, old),
+            new: threads(false, new),
+        };
+        if !here.old.is_empty() || !here.new.is_empty() {
+            placed.push(CodeRow::Notes(notes.len()));
+            notes.push(here);
+        }
+    }
+    (placed, notes)
 }
 
 /// The code rows of one file. Side by side, each run of removed lines pairs with the added lines after it, row by row.
@@ -284,6 +340,51 @@ mod tests {
             ]
         );
         assert_eq!(code_rows(hunks, false).len(), 1 + hunks[0].lines.len());
+    }
+
+    #[test]
+    fn threads_sit_under_their_line_on_its_side() {
+        // Line 2 is unchanged, old 3 is removed and new 3 is added.
+        let patch =
+            "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n same\n same 2\n-old\n+new\n";
+        let diff = parse_patch(patch).unwrap();
+        let hunks = &diff.files[0].hunks;
+        // Thread 0 on the unchanged line's old number, 1 and 2 on its new one, 3 on the removed line, 4 on the added
+        // one, and 5 on a line the diff doesn't show.
+        let on_lines = HashMap::from([
+            ((true, 2), vec![0]),
+            ((false, 2), vec![1, 2]),
+            ((true, 3), vec![3]),
+            ((false, 3), vec![4]),
+            ((false, 40), vec![5]),
+        ]);
+        let notes = |old: &[usize], new: &[usize]| Notes {
+            old: old.to_vec(),
+            new: new.to_vec(),
+        };
+        let (rows, placed) = with_notes(code_rows(hunks, false), hunks, &on_lines);
+        assert_eq!(
+            rows,
+            [
+                CodeRow::Hunk(0),
+                CodeRow::Line(0, 0),
+                CodeRow::Line(0, 1),
+                CodeRow::Notes(0),
+                CodeRow::Line(0, 2),
+                CodeRow::Notes(1),
+                CodeRow::Line(0, 3),
+                CodeRow::Notes(2),
+            ]
+        );
+        assert_eq!(
+            placed,
+            [notes(&[0], &[1, 2]), notes(&[3], &[]), notes(&[], &[4])]
+        );
+        // Side by side the removed and the added line share a row, and so do their threads.
+        let (rows, placed) = with_notes(code_rows(hunks, true), hunks, &on_lines);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[5], CodeRow::Notes(1));
+        assert_eq!(placed, [notes(&[0], &[1, 2]), notes(&[3], &[4])]);
     }
 
     #[test]

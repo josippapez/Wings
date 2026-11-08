@@ -101,3 +101,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 [[example]]
 name = "bench_redraw"
 required-features = ["test-support"]
+
+[[example]]
+name = "bench_diff_scroll"
+required-features = ["test-support"]

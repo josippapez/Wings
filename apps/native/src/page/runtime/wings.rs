@@ -11,8 +11,8 @@
 //! `notify`, `transcript`, `onTranscript`, `agentActivity`, `onAgentActivity`, `statusline`, `onTool` and `callTool`, `onHook`, `closeView`, `project`, and
 //! `createWorktree`, `worktreeSetup` and `setWorktreeSetup`, `claudeAccounts`, `setClaudeAccount` and `shareClaudeSetup`,
 //! `setSidebarLabel`, `fetch`, `secrets`
-//! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`. `onReply` is accepted and never called: the
-//! native diff viewer has no reply box. `setProjectSection` is there so a plugin gets the host's refusal. `copyText` is
+//! and `post`, `sendToAgent`, `openSettings`, `emit` and `onEvent`, and `viewArgs`, and `onReply`, which hears what is typed in
+//! the diff viewer's reply boxes. `setProjectSection` is there so a plugin gets the host's refusal. `copyText` is
 //! the native app's own, for `wings-plugin-ui/native`'s `copyText`: a desktop frame has the browser's clipboard instead.
 //! Each call is a promise the host answers through `Link::call`, when it likes and from any thread, which comes back as a
 //! message to this frame's loop. Nothing else
@@ -74,6 +74,7 @@ const SETUP: &str = r#"
         const none = () => {};
         const listeners = { broadcast: [], panes: [], transcript: [], agentActivity: [], action: [], projects: [], focus: [], git: [], diffClosed: [], pluginEvent: [], sectionSort: [] };
         let diffRefreshHandler = null;
+        let replyHandler = null;
         let projects = null, focused = native.focused, focusKnown = false;
         const tools = new Map();
         const hooks = new Map();
@@ -218,6 +219,17 @@ const SETUP: &str = r#"
                 case 'diffClosed': hear(listeners.diffClosed, JSON.parse(text)); break;
                 case 'pluginEvent': hear(listeners.pluginEvent, JSON.parse(text)); break;
                 case 'sectionSort': hear(listeners.sectionSort, JSON.parse(text)); break;
+                // The viewer keeps the reply box busy until this settles, and shows the error if it throws.
+                case 'reply': {
+                    Promise.resolve().then(() => {
+                        if (!replyHandler) throw new Error("This plugin doesn't take replies");
+                        return replyHandler(JSON.parse(text));
+                    }).then(
+                        () => call('actionDone', { token: id, error: null }),
+                        error => call('actionDone', { token: id, error: String(error?.message ?? error) })
+                    ).catch(none);
+                    break;
+                }
                 case 'diffRefresh': {
                     Promise.resolve().then(() => diffRefreshHandler?.(JSON.parse(text))).then(
                         () => call('actionDone', { token: id, error: null }),
@@ -317,7 +329,7 @@ const SETUP: &str = r#"
             updateDiff: (id, update) => call('updateDiff', { id, ...update }),
             onDiffRefresh: (handler) => void (diffRefreshHandler = handler),
             onDiffClosed: (listener) => subscribe(listeners.diffClosed, listener),
-            onReply: () => {},
+            onReply: (handler) => void (replyHandler = handler),
             // Every terminal pane, on every change, and once more for a listener that comes after the first list.
             onPanes: (listener) => {
                 const off = subscribe(listeners.panes, listener);

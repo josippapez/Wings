@@ -552,6 +552,17 @@ impl PluginHost {
         action_id: &str,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) {
+        let text = serde_json::json!({ "paneId": pane_id, "actionId": action_id }).to_string();
+        self.send_action_message(Message::Action, text, done);
+    }
+
+    /// Sends the main frame `message`, which it answers with `actionDone`, and calls `done` with the answer.
+    fn send_action_message(
+        &self,
+        message: Message,
+        text: String,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
         let main = self
             .shared
             .frames
@@ -573,8 +584,7 @@ impl PluginHost {
             actions.waiting.insert(token, Box::new(done));
             token
         };
-        let text = serde_json::json!({ "paneId": pane_id, "actionId": action_id }).to_string();
-        if main.send(Message::Action, token, text) != Delivery::Queued {
+        if main.send(message, token, text) != Delivery::Queued {
             self.shared
                 .settle_action(token, Some("The plugin didn't respond".into()));
         }
