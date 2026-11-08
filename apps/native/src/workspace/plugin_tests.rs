@@ -1804,6 +1804,149 @@ fn settings_shows_a_plugins_own_icon_on_its_row() {
     assert_eq!(tile.size, size(px(16.0), px(16.0)));
 }
 
+/// A settings page that counts its loads in the plugin's storage, and keeps whether it is focused there.
+const SETTINGS_PAGE: &str = r#"
+wings.storage.get('loads').then((n) => wings.storage.set('loads', (n ?? 0) + 1));
+wings.onFocus(({ focused }) => wings.storage.set('focused', focused));
+wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'Tuner options' }] }));
+"#;
+
+/// "Plugin tuner", with `main` and a settings page.
+fn install_tuner(data: &Data, main: &str) {
+    data.install_script(
+        "tuner",
+        json!({ "contributes": { "settings": { "page": "dist/settings.html" } } }),
+        main,
+        &[("settings", SETTINGS_PAGE)],
+        "tuner-scope",
+    );
+}
+
+/// Clicks the middle of the element last drawn as `name` (`ui::spot`).
+fn click_spot(window: &mut TestAppWindow<Workspace>, name: &str) {
+    window.draw();
+    let at = crate::ui::spot_at(name)
+        .unwrap_or_else(|| panic!("{name} wasn't drawn"))
+        .center();
+    window.simulate_click(at, MouseButton::Left);
+}
+
+/// As on the desktop, a plugin's row under Plugin settings shows its page in Settings rather than in a window of its
+/// own, and the page's frame runs only while that section shows.
+#[test]
+fn a_plugins_settings_page_shows_in_settings_and_stops_when_left() {
+    let data = Data::temp();
+    install_tuner(&data, "");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|_, window, _| window.activate_window());
+    let frames = |w: &Workspace| w.plugins[0].host.frames();
+    let loads = || data.saved("tuner", "tuner-scope", "loads");
+    assert_eq!(window.read(|w, _| frames(w)), 1, "only its main runs");
+    press(&mut window, ",");
+    click_spot(&mut window, "settings-nav:Plugin tuner");
+    until(&app, &mut window, "the page never showed, focused", |_| {
+        data.saved("tuner", "tuner-scope", "focused") == Some(json!(true))
+    });
+    assert_eq!(app.windows().len(), 1, "no window of its own");
+    assert!(window.read(|w, _| w.plugin_ui.windows.is_empty()));
+    assert_eq!(
+        window
+            .read(|w, _| w.settings_plugin().map(str::to_owned))
+            .as_deref(),
+        Some("tuner")
+    );
+    assert_eq!(window.read(|w, _| frames(w)), 2);
+    assert_eq!(loads(), Some(json!(1)));
+    // Its row again keeps the page it shows.
+    let page = |w: &Workspace| match &w.settings.as_ref().unwrap().section {
+        super::settings::Section::Plugin(settings) => Some(settings.page.entity_id()),
+        _ => None,
+    };
+    let shown = window.read(|w, _| page(w));
+    click_spot(&mut window, "settings-nav:Plugin tuner");
+    assert_eq!(window.read(|w, _| page(w)), shown);
+
+    click_spot(&mut window, "settings-nav:Text");
+    until(
+        &app,
+        &mut window,
+        "the page's frame outlived its section",
+        |w| frames(w) == 1,
+    );
+    // Shown again it loads again, and closing Settings stops it once Settings has gone out.
+    click_spot(&mut window, "settings-nav:Plugin tuner");
+    until(&app, &mut window, "the page didn't load again", |_| {
+        loads() == Some(json!(2))
+    });
+    window.simulate_keystroke("escape");
+    assert!(window.read(|w, _| w.settings.is_none()));
+    app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+    until(
+        &app,
+        &mut window,
+        "the page's frame outlived Settings",
+        |w| frames(w) == 1,
+    );
+    assert_eq!(app.windows().len(), 1);
+}
+
+/// `wings.openSettings` opens Settings on the plugin's own section, as the desktop's does, rather than a window.
+#[test]
+fn open_settings_from_a_plugin_shows_its_section_in_settings() {
+    let data = Data::temp();
+    install_tuner(&data, "wings.onAction(() => wings.openSettings());");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|_, window, _| window.activate_window());
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "settings", |_| {});
+    until(&app, &mut window, "Settings never opened", |w| {
+        w.settings.is_some()
+    });
+    assert_eq!(
+        window
+            .read(|w, _| w.settings_plugin().map(str::to_owned))
+            .as_deref(),
+        Some("tuner")
+    );
+    until(&app, &mut window, "the page never showed, focused", |_| {
+        data.saved("tuner", "tuner-scope", "focused") == Some(json!(true))
+    });
+    assert_eq!(app.windows().len(), 1, "no window of its own");
+}
+
+/// Restarted while its page shows, as an update does, the plugin's settings page loads again from the new run, as the
+/// desktop's remounts; stopped, Settings shows Plugins instead.
+#[test]
+fn a_shown_settings_page_loads_again_when_its_plugin_restarts() {
+    let data = Data::temp();
+    install_tuner(&data, "");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| w.open_plugin_settings("tuner", window, cx));
+    until(&app, &mut window, "the page never loaded", |_| {
+        data.saved("tuner", "tuner-scope", "loads") == Some(json!(1))
+    });
+    window.update(|w, window, cx| w.restart_plugin("tuner", window, cx));
+    until(&app, &mut window, "the page didn't load again", |_| {
+        data.saved("tuner", "tuner-scope", "loads") == Some(json!(2))
+    });
+    assert_eq!(
+        window
+            .read(|w, _| w.settings_plugin().map(str::to_owned))
+            .as_deref(),
+        Some("tuner")
+    );
+    assert_eq!(window.read(|w, _| w.plugins[0].host.frames()), 2);
+    // Turned off, Settings shows Plugins instead.
+    window.update(|w, window, cx| {
+        w.set_plugin_enabled("tuner", false, None, window, cx)
+            .unwrap();
+    });
+    assert!(
+        window
+            .read(|w, _| w.settings.as_ref().unwrap().section == super::settings::Section::Plugins)
+    );
+}
+
 /// As in the desktop, a plugin's pages open from the + menu and the project's sections, not from a list in the sidebar.
 #[test]
 fn the_sidebar_lists_no_plugin_pages() {

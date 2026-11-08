@@ -312,6 +312,7 @@ impl Workspace {
     /// Stops the plugin if it runs, then starts what the store says may run of it now, and tells Claude Code's sessions
     /// its tools may have changed.
     pub(super) fn restart_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let settings_shown = self.settings_plugin() == Some(id);
         let had_blocks = self.stop_plugin(id, window, cx);
         let started = match (&self.config.plugins, &self.plugin_env.store) {
             (Some(paths), Some(store)) => {
@@ -331,6 +332,10 @@ impl Workspace {
         self.plugins.extend(started);
         self.plugins
             .sort_by_key(|installed| installed.name.to_lowercase());
+        // Its settings page loads again, as the desktop's does when the plugin restarts.
+        if settings_shown && let Some(section) = self.plugin_settings_page(id, cx) {
+            self.set_settings_section(section, cx);
+        }
         self.after_plugins_changed(had_blocks || has_blocks, cx);
     }
 
@@ -361,6 +366,10 @@ impl Workspace {
             self.right = None;
         }
         self.sidebar_pages.retain(|(plugin, _), _| plugin != id);
+        // Settings shows Plugins instead of its page, as the desktop's does for a plugin that isn't on.
+        if self.settings_plugin() == Some(id) {
+            self.set_settings_section(Section::Plugins, cx);
+        }
         let windows: Vec<_> = self
             .plugin_ui
             .windows

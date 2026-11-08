@@ -77,28 +77,6 @@ impl Workspace {
         self.show_plugin_window(key, plugin, &source, title, (width, height), cx)
     }
 
-    /// Shows the plugin's settings page, which `wings.openSettings` asks for, in a window of its own.
-    pub(super) fn open_plugin_settings(&mut self, plugin: &str, cx: &mut Context<Self>) {
-        let key = (plugin.to_owned(), "settings".to_owned());
-        if let Some(handle) = self.plugin_ui.windows.get(&key)
-            && handle
-                .update(cx, |_, window, _| window.activate_window())
-                .is_ok()
-        {
-            return;
-        }
-        let Some(page) = self
-            .plugins
-            .iter()
-            .find(|installed| installed.id == plugin)
-            .and_then(|installed| installed.settings.as_ref())
-        else {
-            return;
-        };
-        let (source, title) = (page.source.clone(), page.title.clone());
-        let _ = self.show_plugin_window(key, plugin, &source, title, (640, 760), cx);
-    }
-
     fn show_plugin_window(
         &mut self,
         key: (String, String),

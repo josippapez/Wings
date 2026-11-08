@@ -3,12 +3,13 @@
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Role,
-    SharedString, Subscription, Window, div, prelude::*, px, rgb, rgba,
+    SharedString, StyleRefinement, Subscription, Window, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
     icons::{Icon, icon},
     installed::WINGS_VERSION,
+    page::PageView,
     terminal_view::{
         CONTRASTS, CURSOR_STYLES, DEFAULT_FONT_FAMILY, INACTIVE_CURSORS, LINE_HEIGHTS,
         OPTION_AS_META, SCROLLBACKS, TerminalLook, look,
@@ -23,7 +24,7 @@ use super::{
     sound::{self, SoundId, SoundSettings},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Section {
     General,
     Text,
@@ -34,6 +35,18 @@ pub(super) enum Section {
     Agents,
     Notifications,
     Plugins,
+    /// A plugin's own settings page, the desktop's `plugin:<id>` section.
+    Plugin(PluginSettings),
+}
+
+/// A plugin's settings page shown in Settings. Its frame runs while the section shows: choosing another section or
+/// closing Settings drops it, which stops the frame, as closing a plugin's tab does.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PluginSettings {
+    pub(super) plugin: String,
+    /// "<name> settings", the page's name for assistive tech, as the desktop's frame has it for its `title`.
+    title: SharedString,
+    pub(super) page: Entity<PageView>,
 }
 
 impl Section {
@@ -49,7 +62,7 @@ impl Section {
         Section::Plugins,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(&self) -> &'static str {
         match self {
             Section::General => "General",
             Section::Text => "Text",
@@ -60,10 +73,11 @@ impl Section {
             Section::Agents => "Agents",
             Section::Notifications => "Notifications",
             Section::Plugins => "Plugins",
+            Section::Plugin(_) => "Plugin settings",
         }
     }
 
-    fn icon(self) -> Icon {
+    fn icon(&self) -> Icon {
         match self {
             Section::General => Icon::SlidersHorizontal,
             Section::Text => Icon::Type,
@@ -73,7 +87,15 @@ impl Section {
             Section::Editor => Icon::Code,
             Section::Agents => Icon::Bot,
             Section::Notifications => Icon::Bell,
-            Section::Plugins => Icon::Puzzle,
+            Section::Plugins | Section::Plugin(_) => Icon::Puzzle,
+        }
+    }
+
+    /// The plugin whose settings page this is.
+    pub(super) fn plugin(&self) -> Option<&str> {
+        match self {
+            Section::Plugin(settings) => Some(&settings.plugin),
+            _ => None,
         }
     }
 }
@@ -206,6 +228,70 @@ impl Workspace {
             recording: None,
         });
         cx.notify();
+    }
+
+    /// Shows `section` in Settings, which is open.
+    pub(super) fn set_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        let agents = section == Section::Agents;
+        if let Some(dialog) = &mut self.settings {
+            dialog.section = section;
+            dialog.menu = None;
+            dialog.recording = None;
+        }
+        // Claude Code's state is read each time the section opens, as the desktop's does.
+        if agents {
+            self.load_claude_status(cx);
+            self.load_opencode_status(cx);
+            self.load_harnesses(cx);
+        }
+        cx.notify();
+    }
+
+    /// The plugin whose settings page Settings shows.
+    pub(super) fn settings_plugin(&self) -> Option<&str> {
+        self.settings.as_ref()?.section.plugin()
+    }
+
+    /// Opens Settings on the plugin's settings page, as its row under Plugin settings and `wings.openSettings` do on the
+    /// desktop. A plugin that doesn't run here or has no native settings page opens Plugins, as the desktop shows Plugins
+    /// for a plugin that has none.
+    pub(super) fn open_plugin_settings(
+        &mut self,
+        plugin: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings(window, cx);
+        if self.settings_plugin() == Some(plugin) {
+            return;
+        }
+        let section = self
+            .plugin_settings_page(plugin, cx)
+            .unwrap_or(Section::Plugins);
+        self.set_settings_section(section, cx);
+    }
+
+    /// The plugin's settings page as a section, its frame started.
+    pub(super) fn plugin_settings_page(
+        &self,
+        plugin: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Section> {
+        let installed = self
+            .plugins
+            .iter()
+            .find(|installed| installed.id == plugin)?;
+        let settings = installed.settings.as_ref()?;
+        let (source, title) = (settings.source.clone(), settings.title.clone());
+        let host = installed.host.clone();
+        // On the dialog's own ground, as the desktop's frame is transparent there.
+        let page = cx.new(|cx| PageView::in_plugin_popover(&host, &source, cx));
+        page.read(cx).set_visible(true);
+        Some(Section::Plugin(PluginSettings {
+            plugin: plugin.to_owned(),
+            title: title.into(),
+            page,
+        }))
     }
 
     /// Keeps what was typed in the font field, then gives the keys back to the terminal.
@@ -499,7 +585,7 @@ impl Workspace {
         true
     }
 
-    fn section_cards(&self, section: Section, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+    fn section_cards(&self, section: &Section, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
         let current = look(cx);
         match section {
             Section::General => {
@@ -789,7 +875,7 @@ impl Workspace {
             }
             Section::Agents => self.agents_cards(cx),
             Section::Notifications => self.notification_cards(cx),
-            Section::Plugins => Vec::new(),
+            Section::Plugins | Section::Plugin(_) => Vec::new(),
         }
     }
 
@@ -1102,32 +1188,19 @@ impl Workspace {
 
     pub(super) fn settings_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.settings.as_ref()?;
-        let section = dialog.section;
-        let nav = Section::ALL.map(|section| {
-            let selected = dialog.section == section;
+        let section = &dialog.section;
+        let nav = Section::ALL.map(|item| {
             nav_item(
-                SharedString::from(format!("settings-{}", section.label())),
-                section.label(),
-                section.icon(),
-                selected,
+                SharedString::from(format!("settings-{}", item.label())),
+                item.label(),
+                item.icon(),
+                *section == item,
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(dialog) = &mut this.settings {
-                    dialog.section = section;
-                    dialog.menu = None;
-                    dialog.recording = None;
-                }
-                // Claude Code's state is read each time the section opens, as the desktop's does.
-                if section == Section::Agents {
-                    this.load_claude_status(cx);
-                    this.load_opencode_status(cx);
-                    this.load_harnesses(cx);
-                }
-                cx.notify();
-            }))
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.set_settings_section(item.clone(), cx)),
+            )
         });
-        // Plugins that are on and have a settings page, by name. Each opens its page in a window, as
-        // `wings.openSettings` does.
+        // Plugins that are on and have a settings page, by name. Each shows its page here, in the dialog.
         let mut plugin_settings: Vec<_> = self
             .plugins
             .iter()
@@ -1140,9 +1213,11 @@ impl Workspace {
                 SharedString::from(format!("plugin-settings-{id}")),
                 name,
                 Icon::Puzzle,
-                false,
+                section.plugin() == Some(id.as_str()),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.open_plugin_settings(&id, cx)))
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.open_plugin_settings(&id, window, cx)),
+            )
         });
         let plugin_nav: Vec<_> = plugin_nav.collect();
         let content = div()
@@ -1151,21 +1226,37 @@ impl Workspace {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(12.0))
-            .p(px(24.0))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(section.label()),
-            )
-            .map(|content| {
-                if section == Section::Plugins {
-                    content.child(self.plugins_section(cx))
-                } else {
-                    content.children(self.section_cards(section, cx).into_iter().map(ui::card))
-                }
+            .map(|content| match section {
+                // The desktop's `TabsContent className="min-h-0 flex-1"`: the page fills the area and pads and
+                // scrolls itself. Kept as last drawn until the page changes, as a plugin tab is.
+                Section::Plugin(settings) => content
+                    .min_h_0()
+                    .role(Role::Group)
+                    .aria_label(settings.title.clone())
+                    .child(
+                        settings
+                            .page
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                _ => content
+                    .gap(px(12.0))
+                    .p(px(24.0))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .text_size(px(15.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(section.label()),
+                    )
+                    .map(|content| {
+                        if *section == Section::Plugins {
+                            content.child(self.plugins_section(cx))
+                        } else {
+                            content
+                                .children(self.section_cards(section, cx).into_iter().map(ui::card))
+                        }
+                    }),
             });
         // The desktop's `nav w-52 gap-3 p-3 pt-4 bg-black/15`: the title, the sections, then the version at the foot.
         let sidebar = div()
@@ -1307,6 +1398,8 @@ fn nav_item(
                 .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
         })
         .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
+        .children(ui::spot(|| format!("settings-nav:{label}")))
+        .relative()
         .child(div().min_w_0().truncate().child(label))
 }
 

@@ -842,7 +842,7 @@ impl Workspace {
             UiEvent::SendToAgent { pane, text, reply } => {
                 self.send_to_agent(&pane, &text, reply, cx)
             }
-            UiEvent::OpenSettings { plugin } => self.open_plugin_settings(&plugin, cx),
+            UiEvent::OpenSettings { plugin } => self.open_plugin_settings(&plugin, window, cx),
             UiEvent::Badge {
                 plugin,
                 pane,

@@ -241,6 +241,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-dock") {
         return diff_dock(&mut cx, &config, &out);
     }
+    // `-- <out-dir> plugin-settings` renders only Settings showing plugins' own settings pages.
+    if std::env::args().nth(2).as_deref() == Some("plugin-settings") {
+        return plugin_settings(&mut cx, &config, &out);
+    }
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
@@ -1132,6 +1136,63 @@ fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         wait(cx, window, Duration::from_secs(1));
         save(cx, window, &name("block"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// Settings on the Issues and PR tracker settings pages, each picked from its row under Plugin settings. The pages are
+/// the plugins' built native ones, over a made-up data folder.
+fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    let settings = serde_json::json!({ "settings": { "page": "dist/settings.html" } });
+    data.install_script(
+        "issues",
+        serde_json::json!({ "name": "Issues", "contributes": settings }),
+        "",
+        &[(
+            "settings",
+            include_str!("../../../plugins/tasks/dist/native/settings.js"),
+        )],
+        "shot",
+    );
+    let pr: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../plugins/pr-tracker/wings-plugin.json"
+    ))
+    .expect("read PR tracker's manifest");
+    data.install_script(
+        "pr-tracker",
+        serde_json::json!({ "name": "PR tracker", "permissions": { "secrets": pr["permissions"]["secrets"] },
+                            "contributes": settings }),
+        "",
+        &[(
+            "settings",
+            include_str!("../../../plugins/pr-tracker/dist/native/settings.js"),
+        )],
+        "shot",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("settings-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        cx.simulate_keystrokes(window, "cmd-,");
+        wait(cx, window, Duration::from_millis(300));
+        for (state, row) in [
+            ("plugin-issues", "Issues"),
+            ("plugin-pr-tracker", "PR tracker"),
+        ] {
+            click(cx, window, spot(&format!("settings-nav:{row}")));
+            wait(cx, window, Duration::from_millis(800));
+            save(cx, window, &name(state));
+        }
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
     }
 }
 
