@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.4 · 2026-11-08
+
+- **See which Claude account a session uses.** Past sessions and the sidebar's Agents list show the account name next to a session from a named account.
+- **Resume a session from another account.** Resuming or forking a session in a terminal on a different account copies it over first, so Claude Code finds it. Past sessions still lists it once.
+
 ## 0.2.3 · 2026-11-08
 
 - **Tabs reorder by dragging** along the title bar, and keep their order after a restart.
