@@ -1105,3 +1105,44 @@ fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
         assert_eq!(baseline_drops(&center, cx), None);
     });
 }
+
+/// Forty buttons in the start pane of a split on a page that fills its frame, Disk usage's list of files.
+const SPLIT_LIST: &str = r#"
+let hit = -1;
+function render(){
+const rows = Array.from({length:40}, (_,i)=>({id:10+i,type:'Button',props:{onClick:(10+i)+':click'},children:[{id:100+i,type:'#text',text:'Row '+i}]}));
+wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Split',props:{defaultSize:200},children:[
+{id:2,type:'Slot',props:{name:'start'},children:[{id:3,type:'Stack',props:{grow:true},children:rows}]},
+{id:4,type:'Slot',props:{name:'end'},children:[{id:5,type:'Text',children:[{id:6,type:'#text',text:'Hit '+hit}]}]}]}]}));}
+globalThis.__wingsEvent=(handler)=>{hit=parseInt(handler)-10;render();return true;};render();
+"#;
+
+/// As the desktop's split panes do, a pane taller than the frame scrolls: the wheel brings later rows up to click.
+#[test]
+fn a_split_pane_longer_than_its_frame_scrolls() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |_, cx| PageView::new(SPLIT_LIST, cx),
+    );
+    settle(&app, &mut window, shows("Hit -1"));
+    window.simulate_event(gpui::ScrollEvent {
+        position: point(px(60.0), px(150.0)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-2000.0))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
+    app.run_until_parked();
+    window.draw();
+    window.simulate_click(point(px(60.0), px(280.0)), MouseButton::Left);
+    thread::sleep(Duration::from_millis(100));
+    app.run_until_parked();
+    window.draw();
+    settle(&app, &mut window, shows("Hit 39"));
+}

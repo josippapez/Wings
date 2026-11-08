@@ -1089,6 +1089,8 @@ impl PageView {
                 })
                 .children(self.nodes(&bar.children, cx))
                 .into_any_element(),
+            // Each pane scrolls on its own, as plugin-ui.css's `.w-split-pane { overflow: auto }`: Disk usage's list of
+            // files ran past the bottom of its tab.
             Node::Split(split) => div()
                 .flex_1()
                 .min_h_0()
@@ -1096,6 +1098,8 @@ impl PageView {
                 .flex()
                 .child(
                     div()
+                        .id(ElementId::NamedInteger("page-split-start".into(), split.id))
+                        .overflow_y_scroll()
                         .w(px(split.size))
                         .max_w(relative(0.5))
                         .flex_none()
@@ -1108,6 +1112,8 @@ impl PageView {
                 )
                 .child(
                     div()
+                        .id(ElementId::NamedInteger("page-split-end".into(), split.id))
+                        .overflow_y_scroll()
                         .flex_1()
                         .min_w_0()
                         .min_h_0()
