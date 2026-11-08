@@ -153,6 +153,27 @@ fn running(pid: u32) -> bool {
 }
 
 #[test]
+fn a_terminals_output_draws_neither_the_main_column_nor_the_other_terminal_again() {
+    let (_app, mut window) = open();
+    press(&mut window, "d");
+    window.draw();
+    let (busy, other) = window.read(|w, _| (w.terminal(0).unwrap(), w.terminal(1).unwrap()));
+    let drawn = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let main = w.parts.as_ref().expect("the pieces").main.read(cx).drawn;
+            (main, busy.read(cx).drawn(), other.read(cx).drawn())
+        })
+    };
+    let before = drawn(&window);
+    window.update(|_, _, cx| busy.update(cx, |_, cx| cx.notify()));
+    window.draw();
+    let (main, busy_drawn, other_drawn) = drawn(&window);
+    assert_eq!(busy_drawn, before.1 + 1, "the busy terminal");
+    assert_eq!(main, before.0, "the main column kept its drawing");
+    assert_eq!(other_drawn, before.2, "the other terminal kept its drawing");
+}
+
+#[test]
 fn splits_move_focus_by_position_and_closing_a_pane_ends_its_shell() {
     let (app, mut window) = open();
     assert_eq!(panes(&window), (vec![0], 0));

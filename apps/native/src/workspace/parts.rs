@@ -18,6 +18,9 @@ pub(super) struct Part {
     name: &'static str,
     draw: Draw,
     _changes: Subscription,
+    /// How many times it drew itself, for tests of what draws again.
+    #[cfg(test)]
+    pub(super) drawn: usize,
 }
 
 impl Part {
@@ -33,12 +36,18 @@ impl Part {
             draw,
             // Anything that changes the workspace draws it again; a terminal or a page changing on its own doesn't.
             _changes: cx.observe(workspace, |_, _, cx| cx.notify()),
+            #[cfg(test)]
+            drawn: 0,
         })
     }
 }
 
 impl Render for Part {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.drawn += 1;
+        }
         let draw = self.draw;
         let id = window.window_handle().window_id();
         crate::ui::drawing_piece(self.name, id, || {

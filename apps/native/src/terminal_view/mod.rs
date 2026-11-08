@@ -198,6 +198,9 @@ pub struct TerminalView {
     cursor_lit: bool,
     /// The images the last frame drew, whose textures go when they're no longer on screen.
     painted_images: Vec<Arc<gpui::RenderImage>>,
+    /// How many times it drew itself, for tests of what draws again.
+    #[cfg(test)]
+    drawn: usize,
     _release: Subscription,
 }
 
@@ -366,6 +369,8 @@ impl TerminalView {
             cursor_lit: true,
             painted_images: Vec::new(),
             _release: release,
+            #[cfg(test)]
+            drawn: 0,
         };
         view.show(latest.lock().unwrap().clone());
         view
@@ -472,6 +477,12 @@ impl TerminalView {
     #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    /// How many times it drew itself, for tests of what draws again.
+    #[cfg(test)]
+    pub(crate) fn drawn(&self) -> usize {
+        self.drawn
     }
 
     /// Where it was last drawn, for tests of what moves it.

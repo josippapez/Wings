@@ -9,11 +9,12 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, ContentMask, Element, EntityId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, PathBuilder, Pixels, SharedString, Window, WindowId, canvas, div, point,
-    prelude::*, px, rgb, rgba,
+    AnyElement, App, Bounds, Element, EntityId, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, PathBuilder, Pixels, SharedString, Window, canvas, div, point, prelude::*, px, rgb,
+    rgba,
 };
 
+use super::slots;
 use crate::{agents::AgentState, theme};
 
 /// A faint ring with its top quarter in full color, turned by `angle`, like the desktop's
@@ -143,87 +144,23 @@ fn turn(window: &mut Window, cx: &mut App) -> f32 {
     elapsed.as_secs_f32().fract()
 }
 
-/// Spinners over a piece of the window that keeps its last drawing (`workspace::parts`). The piece leaves a slot where
-/// each goes (`spinner_slot`) and the window's `spinner_layer` turns them, so a step redraws the layer, not the piece.
-#[derive(Default)]
-struct Slots {
-    /// The window's draws so far, counted by its `spinner_layer`.
-    frame: HashMap<WindowId, u64>,
-    /// The draw each piece of a window last drew itself in.
-    drawn: HashMap<(WindowId, &'static str), u64>,
-    /// Each slot's place and what clips it, by window, piece and name, with the draw that left it there.
-    slots: HashMap<(WindowId, &'static str, SharedString), Slot>,
-    /// The piece being drawn, whose the slots made now are.
-    current: Option<&'static str>,
-}
-
-/// A slot's place, what clips it there, and the draw that left it.
-type Slot = (Bounds<Pixels>, ContentMask<Pixels>, u64);
-
-/// The piece the window's own drawing is, outside any `drawing_piece`.
-const WINDOW: &str = "window";
-
-thread_local! {
-    static SLOTS: RefCell<Slots> = RefCell::default();
-}
-
-/// Runs `draw`, the drawing of the piece `piece` of the window `id`, so the slots it leaves are its own.
-pub fn drawing_piece<R>(piece: &'static str, id: WindowId, draw: impl FnOnce() -> R) -> R {
-    let outer = SLOTS.with_borrow_mut(|slots| {
-        let frame = slots.frame.get(&id).copied().unwrap_or_default();
-        slots.drawn.insert((id, piece), frame);
-        slots.current.replace(piece)
-    });
-    let drawn = draw();
-    SLOTS.with_borrow_mut(|slots| slots.current = outer);
-    drawn
-}
-
-/// Where the spinner named `name` goes, in a piece drawn with `drawing_piece`: `spinner_layer` turns it there.
+/// Where the spinner named `name` goes, in a piece drawn with `drawing_piece`: `spinner_layer` turns it there, so a step
+/// redraws the layer, not the piece.
 pub fn spinner_slot(name: impl Into<SharedString>) -> impl IntoElement {
-    let piece = SLOTS.with_borrow(|slots| slots.current).unwrap_or(WINDOW);
-    let name = name.into();
-    canvas(
-        move |bounds, window, _| {
-            let id = window.window_handle().window_id();
-            let mask = window.content_mask();
-            SLOTS.with_borrow_mut(|slots| {
-                let frame = slots.frame.get(&id).copied().unwrap_or_default();
-                slots.slots.insert((id, piece, name), (bounds, mask, frame));
-            });
-        },
-        |_, _, _, _| {},
-    )
-    .size_full()
+    slots::slot(SPINNERS, name, None)
 }
+
+/// The layer the spinners in slots turn in.
+const SPINNERS: &str = "spinners";
 
 /// The window's spinners in slots, drawn over everything before it in the window. Draw it once in each draw of the
-/// window, after the pieces with slots.
+/// window, after the pieces with slots; it also starts the window's draw for the other slot layers (`slots`).
 pub fn spinner_layer(window: &Window) -> impl IntoElement {
     let id = window.window_handle().window_id();
-    SLOTS.with_borrow_mut(|slots| {
-        let frame = slots.frame.entry(id).or_default();
-        *frame += 1;
-        let frame = *frame;
-        slots.drawn.insert((id, WINDOW), frame);
-    });
-    // The slots still there: left in the draw their piece last drew itself in.
-    let shown = move || {
-        SLOTS.with_borrow_mut(|slots| {
-            let Slots { drawn, slots, .. } = slots;
-            slots.retain(|(window, piece, _), (_, _, frame)| {
-                *window != id || drawn.get(&(*window, *piece)) == Some(frame)
-            });
-            slots
-                .iter()
-                .filter(|((window, _, _), _)| *window == id)
-                .map(|(_, (bounds, mask, _))| (*bounds, *mask))
-                .collect::<Vec<_>>()
-        })
-    };
+    slots::start_draw(id);
     canvas(
         move |_, window, cx| {
-            let shown = shown();
+            let shown = slots::shown(id, SPINNERS);
             let turn = if shown.is_empty() {
                 0.0
             } else {
@@ -232,9 +169,10 @@ pub fn spinner_layer(window: &Window) -> impl IntoElement {
             (shown, turn)
         },
         |_, (shown, turn), window, _| {
-            for (bounds, mask) in shown {
-                window
-                    .with_content_mask(Some(mask), |window| paint_ring(bounds, turn * TAU, window));
+            for (_, slot) in shown {
+                window.with_content_mask(Some(slot.mask), |window| {
+                    paint_ring(slot.bounds, turn * TAU, window)
+                });
             }
         },
     )
@@ -346,7 +284,7 @@ mod tests {
     impl Render for Piece {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.0.set(self.0.get() + 1);
-            drawing_piece("piece", window.window_handle().window_id(), || {
+            slots::drawing_piece("piece", window.window_handle().window_id(), || {
                 div().child(status_dot_slot(AgentState::Working, "agent"))
             })
         }

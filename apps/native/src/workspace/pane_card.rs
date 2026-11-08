@@ -1,8 +1,11 @@
 //! A tab's panes as cards: the split layout with its dividers, each pane's header and buttons.
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    AnyElement, BoxShadow, Context, MouseButton, MouseDownEvent, Orientation, Role, SharedString,
-    StyleRefinement, Window, div, hsla, point, prelude::*, px, relative, rgb, rgba,
+    AnyElement, BorderStyle, Bounds, BoxShadow, Context, Corners, Edges, Hsla, MouseButton,
+    MouseDownEvent, Orientation, Pixels, Role, SharedString, Window, canvas, div, hsla, point,
+    prelude::*, px, quad, relative, rgb, rgba,
 };
 
 use crate::{
@@ -16,6 +19,16 @@ use super::{HAIRLINE, Workspace, context_menu::MenuTarget, shortcut_label};
 
 /// A divider's line while the pointer is on it (`bg-white/25`).
 const DIVIDER_HOVER: u32 = 0xffffff40;
+/// A pane card's corners.
+const CARD_RADIUS: f32 = 14.0;
+
+/// The layer of the window that draws the panes' terminals, over their cards (`ui::slot_layer`).
+pub(super) const TERMINALS: &str = "terminals";
+
+/// The name of a pane's slot in the terminal layer.
+pub(super) fn terminal_slot(pane: usize) -> SharedString {
+    format!("pane-{pane}").into()
+}
 
 impl Workspace {
     pub(super) fn layout_element(
@@ -115,12 +128,31 @@ impl Workspace {
             .and_then(|pane| pane.renaming.as_ref())
             .map(|(field, _)| field.clone());
         let group = SharedString::from(format!("pane-{pane}"));
+        let border: Hsla = rgba(if focused {
+            theme::HAIRLINE_STRONG
+        } else {
+            HAIRLINE
+        })
+        .into();
+        // Where the card is, for its border over the terminal.
+        let card = Rc::new(Cell::new(None));
         let body = match self.panes.get(&pane).map(|p| (&p.view, &p.focus)) {
-            // Redrawn only when its own output changes, not whenever another pane does.
-            Some((Ok(view), _)) => view
-                .clone()
-                .cached(StyleRefinement::default().size_full())
-                .into_any_element(),
+            // The terminal draws in the window's terminal layer at this slot, so its output draws neither the main
+            // column again nor the other terminals in it (`Workspace::render`). As a child of the card would, it has
+            // the card's border over it, where its corners curve over the terminal.
+            Some((Ok(_), _)) => {
+                let card = card.clone();
+                ui::slot(
+                    TERMINALS,
+                    terminal_slot(pane),
+                    Some(Rc::new(move |window: &mut Window| {
+                        if let Some(card) = card.get() {
+                            paint_card_border(card, border, window);
+                        }
+                    })),
+                )
+                .into_any_element()
+            }
             Some((Err(error), focus)) => div()
                 .track_focus(focus)
                 .p(px(24.0))
@@ -257,6 +289,15 @@ impl Workspace {
                         |this, pane, window, cx| this.close_pane(pane, window, cx),
                     )),
             );
+        let place = canvas(
+            // Inside the border, which is a pixel wide.
+            move |inside, _, _| card.set(Some(inside.dilate(px(1.0)))),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         div()
             .id(SharedString::from(format!("pane-{pane}")))
             .group(group)
@@ -268,13 +309,9 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .rounded(px(14.0))
+            .rounded(px(CARD_RADIUS))
             .border_1()
-            .border_color(rgba(if focused {
-                theme::HAIRLINE_STRONG
-            } else {
-                HAIRLINE
-            }))
+            .border_color(border)
             .bg(rgb(theme::SURFACE))
             .when(focused, |card| {
                 card.shadow(vec![
@@ -294,11 +331,26 @@ impl Workspace {
                     },
                 ])
             })
+            .child(place)
             .child(header)
             .child(div().flex().flex_1().min_h_0().child(body))
             .children(strip)
             .into_any_element()
     }
+}
+
+/// A card's border as the card draws it (gpui's `Style::paint`), for drawing it again over what a layer draws in it.
+fn paint_card_border(card: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+    let mut background = color;
+    background.a = 0.0;
+    window.paint_quad(quad(
+        card,
+        Corners::all(px(CARD_RADIUS)).clamp_radii_for_quad_size(card.size),
+        background,
+        Edges::all(px(1.0)),
+        color,
+        BorderStyle::default(),
+    ));
 }
 
 /// A pane header's button: the desktop's `IconButton`, 28px with a 16px icon, aimed at this pane.

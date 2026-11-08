@@ -93,7 +93,7 @@ use crate::{
 };
 
 /// Around panes that don't have focus.
-use crate::ui::HAIRLINE;
+use crate::ui::{self, HAIRLINE};
 
 struct Pane {
     /// A shell that couldn't start keeps its pane, showing why, until it's closed.
@@ -704,11 +704,50 @@ impl Workspace {
                             .when(self.loose_page().is_some(), |tab| tab.invisible())
                             .child(body),
                     )
-                    .children(self.quick_layer(cx)),
+                    // The terminals floating over the tab draw at this slot in the window's quick layer, over the
+                    // panes' terminals (`render`).
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .child(ui::slot(QUICK, QUICK, None)),
+                    ),
             )
             .into_any_element()
     }
+
+    /// The terminals of the tab on screen, each at the slot its pane's card leaves in the main column
+    /// (`pane_card::TERMINALS`). Each is drawn again only when it changes, which no longer draws the main column again.
+    /// None while a terminal fills the area in place of the tab, as the tab isn't painted then.
+    fn tab_terminals(&self) -> Vec<(SharedString, AnyElement)> {
+        let Active::Terminal(id) = self.active else {
+            return Vec::new();
+        };
+        let Some(tab) = self.terminals.iter().find(|tab| tab.id == id) else {
+            return Vec::new();
+        };
+        if self.welcome || self.loose_page().is_some() {
+            return Vec::new();
+        }
+        tab.layout
+            .panes()
+            .into_iter()
+            .filter_map(|pane| {
+                let view = self.panes.get(&pane)?.view.as_ref().ok()?;
+                let terminal = view
+                    .clone()
+                    .cached(StyleRefinement::default().size_full())
+                    .into_any_element();
+                Some((pane_card::terminal_slot(pane), terminal))
+            })
+            .collect()
+    }
 }
+
+/// The layer of the window that draws the terminals floating over the tab, and its one slot.
+const QUICK: &str = "quick";
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -931,6 +970,18 @@ impl Render for Workspace {
                     .relative()
                     .children(sidebar)
                     .child(main)
+                    // Over the main column, as if in it: what draws over the terminals in it follows.
+                    .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals()))
+                    .child(ui::slot_layer(
+                        QUICK,
+                        self.quick_layer(cx)
+                            .map(|quick| {
+                                let area = div().relative().size_full().child(quick);
+                                (QUICK.into(), area.into_any_element())
+                            })
+                            .into_iter()
+                            .collect(),
+                    ))
                     .children(right)
                     .children(self.sidebar_peek(cx)),
             )

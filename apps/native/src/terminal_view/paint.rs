@@ -428,6 +428,10 @@ struct PaintData {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.drawn += 1;
+        }
         if self.autofocus && self.visible {
             self.focus.focus(window, cx);
             self.autofocus = false;
