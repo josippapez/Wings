@@ -273,3 +273,43 @@ fn dragging_a_floating_agent_terminal_resizes_its_shell_once_when_it_settles() {
     assert_eq!(end.size, start.size);
     assert_eq!(grids.len(), 1, "moving it resized the shell: {grids:?}");
 }
+
+/// The scan that marks a terminal idle is up to half a second old. A program started since holds the terminal, so the
+/// agent's command gets a terminal of its own rather than being typed into that program.
+#[test]
+fn a_command_is_not_typed_into_a_program_started_since_the_terminal_was_seen_idle() {
+    let (app, mut window) = open();
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agents_run_commands = true, cx));
+    open_from(&mut window, 0, "true");
+    window.update(|w, _, cx| {
+        w.terminal(1)
+            .unwrap()
+            .update(cx, |view, cx| view.write_input("sleep 30\r", cx));
+    });
+    let held = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let view = w.terminal(1).unwrap().read(cx);
+            view.foreground_pid().is_some() && view.foreground_pid() != view.process_id()
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !held(&window) {
+        assert!(Instant::now() < deadline, "sleep never took the terminal");
+        app.advance_clock(Duration::from_millis(100));
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The last scan still says it sits at its prompt.
+    window.update(|w, _, _| {
+        w.pane_info.insert(
+            1,
+            PaneInfo {
+                command: "zsh".into(),
+                cwd: Some("/".into()),
+                busy: false,
+            },
+        );
+    });
+    let next = open_from(&mut window, 0, "echo next");
+    assert_eq!((next.pane_id.as_str(), next.reused), ("2", false));
+}

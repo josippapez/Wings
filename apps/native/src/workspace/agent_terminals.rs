@@ -303,6 +303,7 @@ impl Workspace {
         project: &Path,
         cwd: Option<&str>,
         owner: Option<usize>,
+        cx: &gpui::App,
     ) -> Option<usize> {
         let mut idle: Vec<(usize, &Opened)> = self
             .agent_terminals
@@ -314,6 +315,12 @@ impl Workspace {
                     && self.panes.contains_key(pane)
                     && self.pane_info.get(pane).is_some_and(|info| !info.busy)
                     && !self.agents.contains_key(pane)
+                    // The scan above is up to half a second old: the shell itself has to have the terminal now, or
+                    // the command would be typed into whatever was just started there.
+                    && self.panes.get(pane).and_then(|p| p.view.as_ref().ok()).is_some_and(|view| {
+                        let view = view.read(cx);
+                        view.foreground_pid().is_some() && view.foreground_pid() == view.process_id()
+                    })
             })
             .map(|(pane, at)| (*pane, at))
             .collect();
@@ -334,7 +341,7 @@ impl Workspace {
         input: &str,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let pane = self.idle_agent_terminal(project, cwd.as_deref(), owner)?;
+        let pane = self.idle_agent_terminal(project, cwd.as_deref(), owner, cx)?;
         let dir = cwd
             .clone()
             .unwrap_or_else(|| project.to_string_lossy().into_owned());
