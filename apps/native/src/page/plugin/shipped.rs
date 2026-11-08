@@ -1310,14 +1310,19 @@ fn tasks_issue_tab_saves_a_title_edited_in_place() {
         super::StatePlace::Tab,
         None,
     );
+    // The title's own Edit, as the native page has one beside it.
+    fn edit_title(nodes: &[Node]) -> Option<String> {
+        nodes.iter().find_map(|node| match node {
+            Node::Button(button) if button.label.as_deref() == Some("Edit the title") => {
+                button.on_click.clone()
+            }
+            other => other.parts().into_iter().find_map(edit_title),
+        })
+    }
     let issue = tree(&events, "the issue", |tree| {
-        let mut title = Vec::new();
-        buttons_named(&tree.children, "Fix the login redirect", &mut title);
-        !title.is_empty()
+        tree.text().contains("Fix the login redirect") && edit_title(&tree.children).is_some()
     });
-    let mut title = Vec::new();
-    buttons_named(&issue.children, "Fix the login redirect", &mut title);
-    assert!(page.dispatch(&title[0], None));
+    assert!(page.dispatch(&edit_title(&issue.children).unwrap(), None));
     fn title_input(nodes: &[Node]) -> Option<(Option<String>, Option<String>)> {
         nodes.iter().find_map(|node| match node {
             Node::Input(input) if input.label == "Title" => {
@@ -1348,8 +1353,6 @@ fn tasks_issue_tab_saves_a_title_edited_in_place() {
         Some(&json!({ "type": "keydown", "key": "Enter" }))
     ));
     tree(&events, "the saved title", |tree| {
-        let mut saved = Vec::new();
-        buttons_named(&tree.children, "Fix the sign-in redirect", &mut saved);
-        !saved.is_empty()
+        tree.text().contains("Fix the sign-in redirect") && title_input(&tree.children).is_none()
     });
 }

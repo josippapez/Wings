@@ -394,9 +394,13 @@ fn main() {
         cx.simulate_keystrokes(window, "escape cmd-4");
         wait(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("issues"));
-        // The fixture plugin's page from the sidebar's Plugins list (above Settings in the 640 high window), before and after a
-        // click on its button, which asks the plugin's main to add one.
-        click(&mut cx, window, point(px(60.0), px(580.0)));
+        // The fixture plugin's page, opened from the palette, before and after a click on its button, which asks the
+        // plugin's main to add one.
+        cx.simulate_keystrokes(window, "cmd-k");
+        wait(&mut cx, window, Duration::from_millis(200));
+        cx.simulate_input(window, "New tab: Fixture");
+        wait(&mut cx, window, Duration::from_millis(200));
+        cx.simulate_keystrokes(window, "enter");
         wait(&mut cx, window, Duration::from_millis(800));
         save(&mut cx, window, &name("plugin-tab"));
         // Right of the 248 wide sidebar, under the title bar, project bar, the page's toolbar and its padding.

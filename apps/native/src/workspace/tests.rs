@@ -817,9 +817,12 @@ fn settings_open_with_the_shortcut_and_change_every_terminal() {
     assert!(window.read(|w, _| w.settings.is_none()));
 }
 
-/// The sidebar's Plugins row for the only page, in a 1000 x 640 window: the settings row (28px, 4px above it and 8px
-/// under it) is last, and above it the section's 8px of padding under the 24px row.
-const PLUGIN_ROW: (f32, f32) = (60.0, 640.0 - 8.0 - 28.0 - 4.0 - 8.0 - 12.0);
+/// Opens the fixture page as its entry in the + menu does.
+fn open_fixture_page(window: &mut TestAppWindow<Workspace>) {
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("demo", "fixture", None, window, cx));
+    });
+}
 /// Where the fixture page's button is in that window: 248px of sidebar and the card's 8px gutter and border, then below
 /// the 40px title bar, the 36px project bar and the card's border, the page's 44px toolbar and 14px of padding.
 const PAGE_BUTTON: (f32, f32) = (248.0 + 9.0 + 22.0, 40.0 + 36.0 + 1.0 + 44.0 + 14.0 + 16.0);
@@ -870,7 +873,7 @@ fn frames(window: &TestAppWindow<Workspace>) -> usize {
 }
 
 #[test]
-fn a_plugin_page_opens_from_the_sidebar_works_with_its_main_and_stops_when_its_tab_closes() {
+fn a_plugin_page_opens_as_a_tab_works_with_its_main_and_stops_when_its_tab_closes() {
     use Active::{Issues, Plugin, Terminal};
     let data = Data::temp();
     install_demo(&data, true);
@@ -883,7 +886,7 @@ fn a_plugin_page_opens_from_the_sidebar_works_with_its_main_and_stops_when_its_t
     assert_eq!(frames(&window), 1);
     assert_eq!(state(&window), (vec![Terminal(0), Issues], Terminal(0)));
 
-    window.simulate_click(point(px(PLUGIN_ROW.0), px(PLUGIN_ROW.1)), MouseButton::Left);
+    open_fixture_page(&mut window);
     assert_eq!(
         state(&window),
         (vec![Terminal(0), Plugin(1), Issues], Plugin(1))
@@ -908,7 +911,7 @@ fn a_plugin_page_opens_from_the_sidebar_works_with_its_main_and_stops_when_its_t
 
     // The same page again shows its tab, and the tab strip cycles through it.
     window.draw();
-    window.simulate_click(point(px(PLUGIN_ROW.0), px(PLUGIN_ROW.1)), MouseButton::Left);
+    open_fixture_page(&mut window);
     assert_eq!(window.read(|w, _| w.plugin_tabs.len()), 1);
     press(&mut window, "]");
     assert_eq!(state(&window).1, Issues);
@@ -933,7 +936,7 @@ fn plugin_pages_come_back_after_a_relaunch_unless_their_plugin_is_off() {
     install_demo(&data, true);
     {
         let (_app, mut window) = open_with_plugin(&data, Some(file.clone()));
-        window.simulate_click(point(px(PLUGIN_ROW.0), px(PLUGIN_ROW.1)), MouseButton::Left);
+        open_fixture_page(&mut window);
         press(&mut window, "t");
         press(&mut window, "3");
         assert_eq!(
