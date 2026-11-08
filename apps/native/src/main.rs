@@ -142,9 +142,9 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// The desktop's window effect (`underWindowBackground`, following the window's active state): AppKit's vibrancy with
-/// its own dark tint, under the 58% glass. GPUI's blur strips that tint, which left a light window behind showing
-/// through grey unless the glass was nearly opaque.
+/// AppKit's vibrancy under the 58% glass, following the window's active state: the sidebar material, lighter than the
+/// desktop's `underWindowBackground`, whose dark tint left the sidebar looking solid. GPUI's own blur strips the
+/// material's tint, which let a light window behind show through grey unless the glass was nearly opaque.
 #[cfg(target_os = "macos")]
 fn under_window_vibrancy(window: &gpui::Window) {
     use objc2::MainThreadMarker;
@@ -169,7 +169,7 @@ fn under_window_vibrancy(window: &gpui::Window) {
         return;
     };
     let effect = NSVisualEffectView::initWithFrame(mtm.alloc(), content.bounds());
-    effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+    effect.setMaterial(NSVisualEffectMaterial::Sidebar);
     effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     effect.setState(NSVisualEffectState::FollowsWindowActiveState);
     effect.setAutoresizingMask(
