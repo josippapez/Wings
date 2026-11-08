@@ -319,6 +319,12 @@ impl Workspace {
             }
             async {}
         });
+        // Closing the window quits, as Cmd+Q does, with the window still open: closed first, it would drop its
+        // terminals, which ends their programs, before the quit that leaves the terminal server's panes running.
+        window.on_window_should_close(cx, |_, cx| {
+            cx.quit();
+            false
+        });
         let issues = cx.new(IssuesView::new);
         cx.subscribe(&issues, |this, _, event: &IssuesEvent, cx| match event {
             IssuesEvent::Refresh => this.load(Some(plugin::Action::Refresh), cx),
@@ -994,7 +1000,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| {
                 this.set_font_size(DEFAULT_FONT_SIZE, cx)
             }))
-            .on_action(|_: &CloseWindow, window, _| window.remove_window())
+            .on_action(|_: &CloseWindow, _, cx| cx.quit())
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())

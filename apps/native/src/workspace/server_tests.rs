@@ -923,3 +923,50 @@ fn after_a_relaunch_a_pane_whose_agent_still_runs_is_attached_and_given_nothing_
     assert_eq!(saved_session(&projects), None);
     projects.end();
 }
+
+#[test]
+fn closing_the_window_quits_so_its_panes_run_on_in_the_server_for_the_next_launch() {
+    let dir = PathBuf::from("/tmp").join(format!("wsw-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let servers = dir.join("srv");
+    std::fs::create_dir_all(&servers).unwrap();
+    let state = dir.join("workspace.json");
+    let socket = server(&servers);
+    let listed = || {
+        wings_ptyd::client::Control::connect(&socket)
+            .unwrap()
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|pane| (pane.shell_pid, pane.exited))
+            .collect::<Vec<_>>()
+    };
+
+    let (mut app, mut window) = launch(&state, Some(&servers));
+    type_line(&app, &mut window, "echo fi''rst", "first");
+    let kept = shell(&window);
+    // File > Close Window, as the menu sends it.
+    window.draw();
+    window
+        .update(|_, window, cx| window.dispatch_action(Box::new(crate::actions::CloseWindow), cx));
+    let open = app.windows().len();
+    // What the platform does once the app asks to quit; the test platform's quit does nothing.
+    quit(&mut app);
+    drop((window, app));
+    assert_eq!(
+        listed(),
+        [(Some(kept), false)],
+        "the pane runs on in the server"
+    );
+    assert_eq!(open, 1, "the quit closes the window, as on Cmd+Q");
+
+    let (app, mut window) = launch(&state, Some(&servers));
+    assert_eq!(shell(&window), kept, "the next launch attaches to it again");
+    type_line(&app, &mut window, "echo ag''ain", "again");
+    window.update(|w, window, cx| w.close_pane(0, window, cx));
+    wait_until(&app, "the closed pane still runs in the server", || {
+        listed().is_empty()
+    });
+    drop((window, app));
+    let _ = std::fs::remove_dir_all(&dir);
+}
