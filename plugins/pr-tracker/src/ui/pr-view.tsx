@@ -3,7 +3,7 @@
 
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Card, Chip, CodeBlock, Confirm, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Notice, Page, Row, Skeleton, Skeletons, Stack, Summary, SummaryChip, Svg, Tabs, Text, Textarea, Time, Timeline, Title, Toolbar, type CodeLine } from "wings-plugin-ui";
-import { AZURE_VOTES, type AzureVote } from "../lib/vote";
+import { AZURE_VOTES, reviewable, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
 import { dayTime, timelineOf, type Push } from "../lib/pushes";
@@ -68,7 +68,7 @@ export function PrView(props: PrViewProps) {
   const [pending, setPending] = useState<{ label: string; run: () => Promise<void> } | null>(null);
   const [approving, setApproving] = useState(false);
   const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
-  const open = st ? !["Merged", "Closed"].includes(st.label) : false;
+  const open = reviewable(st);
   const ref = `${args.repo} ${refOf(args)}`;
 
   const confirm = pending ? (

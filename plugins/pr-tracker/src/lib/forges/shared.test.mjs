@@ -29,12 +29,13 @@ test("the label of a PR is the first thing that is true, from merged down to app
   assert.equal(label({}), "In review");
 });
 
-test("a provider can word closed and changes its own way, and what an open PR with nothing to say is called", () => {
-  assert.deepEqual(labelOf({ checks: idle, closed: true }, { closed: "Abandoned" }), ["Abandoned", "neutral", "pr-closed"]);
-  assert.deepEqual(labelOf({ checks: idle, changes: true }, { changes: "Waiting for author" }), ["Waiting for author", "danger", "pr-open"]);
-  assert.deepEqual(labelOf({ checks: idle }, { rest: "Open" }), ["Open", "info", "pr-open"]);
-  assert.deepEqual(labelOf({ checks: idle, reviewing: true }, { rest: "Open" }), ["In review", "info", "pr-open"]);
-  assert.deepEqual(labelOf({ checks: idle, merged: true }), ["Merged", "merged", "pr-merged"]);
+test("a provider can word closed and changes its own way, and what an open PR with nothing to say is called; the state says open, merged or closed whatever the word", () => {
+  assert.deepEqual(labelOf({ checks: idle, closed: true }, { closed: "Abandoned" }), ["Abandoned", "neutral", "pr-closed", "closed"]);
+  assert.deepEqual(labelOf({ checks: idle, changes: true }, { changes: "Waiting for author" }), ["Waiting for author", "danger", "pr-open", "open"]);
+  assert.deepEqual(labelOf({ checks: idle }, { rest: "Open" }), ["Open", "info", "pr-open", "open"]);
+  assert.deepEqual(labelOf({ checks: idle, reviewing: true }, { rest: "Open" }), ["In review", "info", "pr-open", "open"]);
+  assert.deepEqual(labelOf({ checks: idle, merged: true }), ["Merged", "merged", "pr-merged", "merged"]);
+  assert.equal(labelOf({ checks: idle, merged: true, closed: true })[3], "merged");
 });
 
 test("a ladder of its own keeps the first step that holds, and the icon open unless a step names one", () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AZURE_VOTES, voteArgs } from "./vote.ts";
+import { azureStatus } from "./forges/azure.ts";
+import { AZURE_VOTES, reviewable, voteArgs } from "./vote.ts";
 
 test("builds the set-vote command for each vote Azure offers", () => {
   for (const vote of Object.keys(AZURE_VOTES)) {
@@ -15,4 +16,13 @@ test("refuses a PR id, organization or vote that isn't what the tracker parsed",
     assert.throws(() => voteArgs(1, org, "approve"), /organization/, org);
   }
   for (const vote of ["APPROVE", "10", "--vote", "@file", "constructor", "__proto__", ""]) assert.throws(() => voteArgs(1, "https://dev.azure.com/acme", vote), /vote/, vote);
+});
+
+test("Approve and the Vote menu are only for an open PR: an abandoned Azure DevOps PR gets neither", () => {
+  const none = { passed: 0, failed: 0, running: 0 };
+  const azure = (status) => azureStatus({ pullRequestId: 7, status, title: "Retry the sync", reviewers: [], creationDate: "2026-10-01T09:00:00Z" }, none);
+  assert.equal(reviewable(azure("active")), true);
+  assert.equal(reviewable(azure("abandoned")), false);
+  assert.equal(reviewable(azure("completed")), false);
+  assert.equal(reviewable(undefined), false);
 });

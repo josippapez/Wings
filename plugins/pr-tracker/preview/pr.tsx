@@ -1,6 +1,6 @@
 // The PR tab: a pull request on each of its tabs (through main's queries, or the view alone), a long conversation, an Azure
-// DevOps one with its pushes, while it loads, when it can't be read, a host that needs signing in, and the project's list a
-// tab with no pull request starts on.
+// DevOps one with its pushes and one that was abandoned, while it loads, when it can't be read, a host that needs signing
+// in, and the project's list a tab with no pull request starts on.
 import type { PrValue, PullsAnswer } from "../src/lib/messages";
 import type { Comment, PrArgs } from "../src/lib/types";
 import { PrView } from "../src/ui/pr-view";
@@ -45,6 +45,8 @@ export const states = {
   "page-azure-loaded": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments, "pr-pushes": pushes }, answers: { "pr-snippet": ({ root, now }: { root: Comment; now?: boolean }) => props.onSnippet!(root, Boolean(now)) } },
   // A thread written on push 1 of 2: "As of push 1" over its code, and a button to see where the lines sit now.
   "page-azure-older": { args: azure, queries: { pr: value({ approve: false, vote: true, snippet: true }), "pr-comments": comments.map((c) => (c.id === 5 ? { ...c, range: { ...c.range!, iteration: 1 } } : c)), "pr-pushes": pushes }, answers: { "pr-snippet": ({ root, now }: { root: Comment; now?: boolean }) => props.onSnippet!(root, Boolean(now)) } },
+  // An Azure DevOps one that was abandoned: closed, so it offers no Vote menu.
+  "page-azure-abandoned": { args: azure, queries: { pr: { ...value({ approve: false, vote: true, snippet: true }), overview: { ...overview, status: { ...overview.status, label: "Abandoned", tone: "neutral", icon: "pr-closed", state: "closed" } } }, "pr-comments": comments, "pr-pushes": pushes } },
   // Opened from the project's list: a breadcrumb back in the toolbar.
   picked: { element: <PrView {...props} onBack={back} /> },
   // Opened straight on a pull request: no breadcrumb.

@@ -220,7 +220,7 @@ export function githubStatusOf(pr: GhPr): Status {
   const items = (pr.statusCheckRollup ?? []).map((c, i) => ghItem(c, hostOf(pr.url), i));
   const results = items.map((c): Result => (c.state === "failed" ? "failed" : c.state === "running" || c.state === "queued" ? "running" : "passed"));
   const checks = counts(results);
-  const [label, tone, icon] = labelOf(
+  const [label, tone, icon, state] = labelOf(
     {
       merged: pr.state === "MERGED",
       closed: pr.state === "CLOSED",
@@ -236,7 +236,7 @@ export function githubStatusOf(pr: GhPr): Status {
   return {
     key: pr.updatedAt,
     title: pr.title,
-    label, tone, icon, checks,
+    label, tone, icon, state, checks,
     review: REVIEWS[pr.reviewDecision] ?? "No review yet",
     // A GitHub Actions job on the PR's own host has a log; other apps' checks only link to their own page.
     failing: failingOf(items),

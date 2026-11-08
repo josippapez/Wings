@@ -130,7 +130,7 @@ export function glStatusOf(mr: GlMr, approvals: GlApprovals | null, jobs: GlJob[
     .filter((_, i) => results[i] === "failed")
     .map((j): Failing => ({ id: j.id, name: j.name, job: j.id, project, url: j.web_url, summary: j.status === "canceled" ? "Canceled" : null }));
   const merge = mr.detailed_merge_status;
-  const [label, tone, icon] = labelOf({
+  const [label, tone, icon, state] = labelOf({
     merged: mr.state === "merged",
     closed: mr.state === "closed" || mr.state === "locked",
     draft: mr.draft,
@@ -147,7 +147,7 @@ export function glStatusOf(mr: GlMr, approvals: GlApprovals | null, jobs: GlJob[
     // A new push changes the head commit, which is what invalidates the cached diff.
     key: mr.sha,
     title: mr.title,
-    label, tone, icon, checks, review, failing,
+    label, tone, icon, state, checks, review, failing,
     // Manual jobs are listed, though they don't count.
     items: jobs.map((j) => glItem(j, project)),
     changes: mr.changes_count ? `${mr.changes_count} files` : null,
@@ -172,6 +172,8 @@ export function glListStatus(mr: GlMr): Status {
     key: mr.sha,
     title: mr.title,
     label, tone, icon,
+    // The list asks for open MRs only.
+    state: "open",
     checks: { passed: 0, failed: 0, running: 0 },
     review: "",
     failing: [],

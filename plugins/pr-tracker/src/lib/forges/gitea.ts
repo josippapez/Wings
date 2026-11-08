@@ -109,12 +109,12 @@ export function gtStatusOf(pr: GtPr, statuses: GtCommitStatus[], reviews: GtRevi
   const verdicts = [...latest.values()];
   const approved = verdicts.filter((v) => v === "APPROVED").length;
   const changes = verdicts.includes("REQUEST_CHANGES");
-  const [label, tone, icon] = labelOf({ merged: pr.merged, closed: pr.state === "closed", draft: pr.draft, conflicts: pr.mergeable === false, checks, changes, approved: approved > 0 });
+  const [label, tone, icon, state] = labelOf({ merged: pr.merged, closed: pr.state === "closed", draft: pr.draft, conflicts: pr.mergeable === false, checks, changes, approved: approved > 0 });
   const files = pr.changed_files;
   return {
     key: pr.head.sha,
     title: pr.title,
-    label, tone, icon, checks, failing,
+    label, tone, icon, state, checks, failing,
     items: statuses.map(gtItem),
     review: changes ? "Changes requested" : approved ? `${approved} approved` : "No approvals yet",
     changes: files === undefined ? null : `+${pr.additions ?? 0} −${pr.deletions ?? 0} in ${files} files`,

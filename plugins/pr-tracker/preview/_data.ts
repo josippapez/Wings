@@ -47,6 +47,7 @@ const delay = Math.min(base * 2 ** attempt, 30_000) * (0.5 + Math.random() / 2);
     key: "abc1234",
     title: args.title,
     label: "Open",
+    state: "open",
     tone: "success",
     icon: "pr-open",
     checks: { passed: 7, failed: 1, running: 2 },

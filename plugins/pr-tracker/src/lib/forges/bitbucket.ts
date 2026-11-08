@@ -107,12 +107,12 @@ function bbReviews(pr: BbPr) {
 export function bbStatusOf(pr: BbPr, statuses: BbStatus[]): Status {
   const { checks, failing } = bbResults(statuses);
   const { approved, changes } = bbReviews(pr);
-  const [label, tone, icon] = labelOf({ merged: pr.state === "MERGED", closed: pr.state === "DECLINED" || pr.state === "SUPERSEDED", draft: pr.draft, checks, changes, approved: approved > 0 });
+  const [label, tone, icon, state] = labelOf({ merged: pr.state === "MERGED", closed: pr.state === "DECLINED" || pr.state === "SUPERSEDED", draft: pr.draft, checks, changes, approved: approved > 0 });
   return {
     // A new push changes the source commit, which is what invalidates the cached diff.
     key: pr.source.commit?.hash ?? pr.updated_on,
     title: pr.title,
-    label, tone, icon, checks, failing,
+    label, tone, icon, state, checks, failing,
     items: statuses.map(bbItem),
     review: changes ? "Changes requested" : approved ? `${approved} approved` : "No approvals yet",
     changes: null,

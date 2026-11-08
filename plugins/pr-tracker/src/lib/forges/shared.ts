@@ -1,7 +1,7 @@
 // What every forge's mappers share: the label a PR gets, which PR a branch has, a second page, and a failure with no
 // log. No `wings`, no I/O, so node tests drive it.
 import { CliError } from "wings-plugin-sdk/cli";
-import type { Counts, FailureDetail, Failing, Icon, Link, Result } from "../types";
+import type { Counts, FailureDetail, Failing, Icon, Link, PrState, Result } from "../types";
 
 export function counts(results: Result[]): Counts {
   const c: Counts = { passed: 0, failed: 0, running: 0 };
@@ -41,9 +41,9 @@ interface Words {
   rest?: string;
 }
 
-/** The label, tone and icon every forge's PR goes through, in the order they apply; what is true first wins. */
-export function labelOf(f: Facts, words: Words = {}): [string, Tone, Icon] {
-  return ladder(
+/** The label, tone and icon every forge's PR goes through, in the order they apply; what is true first wins. Then its state. */
+export function labelOf(f: Facts, words: Words = {}): [string, Tone, Icon, PrState] {
+  const [label, tone, icon] = ladder(
     [
       [f.merged, "Merged", "merged", "pr-merged"],
       [f.closed, words.closed ?? "Closed", "neutral", "pr-closed"],
@@ -59,6 +59,7 @@ export function labelOf(f: Facts, words: Words = {}): [string, Tone, Icon] {
     ],
     words.rest,
   );
+  return [label, tone, icon, f.merged ? "merged" : f.closed ? "closed" : "open"];
 }
 
 /** Whether a login or name from a list is the user's, which providers spell with any case. */

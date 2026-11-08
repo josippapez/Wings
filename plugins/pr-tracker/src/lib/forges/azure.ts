@@ -113,7 +113,7 @@ const short = (ref: string | undefined) => (ref ?? "").replace(/^refs\/heads\//,
 /** Azure status from the PR plus its policy checks. Reviewer votes: 10 approved, 5 approved with suggestions, -5 waiting for author, -10 rejected. */
 export function azureStatus(pr: AzurePr, checks: Counts) {
   const votes = (pr.reviewers ?? []).map((r) => r.vote);
-  const [label, tone, icon] = labelOf(
+  const [label, tone, icon, state] = labelOf(
     { merged: pr.status === "completed", closed: pr.status === "abandoned", draft: pr.isDraft, conflicts: pr.mergeStatus === "conflicts", rejected: votes.includes(-10), checks, changes: votes.includes(-5), approved: votes.some((v) => v > 0) },
     { closed: "Abandoned", changes: "Waiting for author" },
   );
@@ -125,7 +125,7 @@ export function azureStatus(pr: AzurePr, checks: Counts) {
     // A new push changes the source commit, which is what invalidates the cached diff.
     key: pr.lastMergeSourceCommit?.commitId ?? pr.creationDate,
     title: pr.title,
-    label, tone, icon, checks, review,
+    label, tone, icon, state, checks, review,
     changes: null,
     branch: `${short(pr.sourceRefName)} → ${short(pr.targetRefName)}`,
     updated: pr.closedDate ?? pr.creationDate,

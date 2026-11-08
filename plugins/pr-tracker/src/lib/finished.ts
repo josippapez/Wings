@@ -2,7 +2,7 @@
 // lists open PRs, so a merge shows up as a disappearance and the final state is asked for once. No `wings`, no I/O, so
 // node tests drive it.
 
-import type { Link, ListedPr } from "./types";
+import type { Link, ListedPr, Status } from "./types";
 
 /** An open PR as the last list had it, with what is needed to look it up and tell Issues about it. */
 export interface Tracked {
@@ -41,9 +41,9 @@ export function settle(before: ReadonlyMap<string, Tracked> | undefined, items: 
   return { next, gone };
 }
 
-/** The state a status icon says a PR is in, or null for one that is still open. */
-export function finalState(icon: string): PrStateEvent["state"] | null {
-  return icon === "pr-merged" ? "merged" : icon === "pr-closed" ? "closed" : null;
+/** How a PR ended, or null for one that is still open. */
+export function finalState(status: Pick<Status, "state">): PrStateEvent["state"] | null {
+  return status.state === "open" ? null : status.state;
 }
 
 export function eventFor(t: Tracked, state: PrStateEvent["state"]): PrStateEvent {

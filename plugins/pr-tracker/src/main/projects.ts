@@ -191,7 +191,7 @@ async function announceFinished(project: WingsProject, repo: string, items: List
       const forge = forgeOf(t.link);
       const link = await forge.linkOf(argsOf(t.link, t.title, t.cwd));
       const st = await forge.status(link);
-      const final = finalState(st.icon);
+      const final = finalState(st);
       if (final) await wings.emit("pr-state", eventFor(t, final));
     } catch (error) {
       console.error(error);

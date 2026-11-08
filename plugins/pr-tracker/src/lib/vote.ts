@@ -1,5 +1,7 @@
 /** Azure DevOps votes through `az repos pr set-vote`. No `wings`, no I/O, so node tests drive it. */
 
+import type { Status } from "./types";
+
 /** The votes `az repos pr set-vote --vote` takes, as Azure's own UI words them. */
 export const AZURE_VOTES = {
   approve: "Approve",
@@ -21,3 +23,6 @@ export function voteArgs(number: number, org: string, vote: string): string[] {
   if (!Object.hasOwn(AZURE_VOTES, vote)) throw new Error(`Not an Azure DevOps vote: ${vote}`);
   return ["repos", "pr", "set-vote", "--id", String(number), "--vote", vote, "--organization", org, "-o", "json"];
 }
+
+/** Whether the PR tab offers Approve and the Vote menu: only while the PR is open, whatever its forge calls a closed one. */
+export const reviewable = (status: Pick<Status, "state"> | undefined): boolean => status?.state === "open";

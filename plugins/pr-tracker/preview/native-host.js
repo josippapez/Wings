@@ -4,7 +4,7 @@ const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
 const url = "https://github.com/acme/web/pull/482";
 const args = { provider: "github", url, number: 482, repo: "acme/web", title: "Add retry with backoff to the sync client", cwd: "__ROOT__" };
 const status = {
-  key: "abc1234", title: args.title, label: "Open", tone: "success", icon: "pr-open", changes: "+212 -48 in 9 files",
+  key: "abc1234", title: args.title, label: "Open", state: "open", tone: "success", icon: "pr-open", changes: "+212 -48 in 9 files",
   checks: { passed: 1, failed: 1, running: 1 }, review: "1 approved, changes requested", failing: [],
   branch: "ada/sync-retry → main", updated: ago(35), merge: "Squash",
   items: [

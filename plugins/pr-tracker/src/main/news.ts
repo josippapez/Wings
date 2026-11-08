@@ -3,6 +3,7 @@
  * pane, every 2 minutes, in the background too: the forge can't call a local app, so the news has to be asked for.
  */
 import { mapLimit } from "wings-plugin-sdk/async";
+import { finalState } from "../lib/finished";
 import { forgeFor, forgeOf, isKnown } from "../lib/forges/registry";
 import { commentsDue, diffNews, FORGET_MS, hasNews, failuresOf, messageFor, settled, tellAgents, underCap, type PrNews } from "../lib/news";
 import type { Link, Status } from "../lib/types";
@@ -55,7 +56,7 @@ async function look(url: string, { link, panes }: { link: Link; panes: WingsPane
   const entry = status.get(url);
   if (!entry || entry.error !== undefined) return;
   const st = entry as Status;
-  if (st.icon === "pr-merged" || st.icon === "pr-closed") return;
+  if (finalState(st)) return;
   const now = Date.now();
   const prev = memory[url];
   const known = prev && now - prev.watched <= FORGET_MS ? prev : undefined;

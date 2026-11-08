@@ -28,6 +28,12 @@ test("Azure status words its own states: abandoned, rejected and waiting for the
   assert.deepEqual([azureStatus(pr({ status: "abandoned" }), none).tone, azureStatus(pr({ status: "abandoned" }), none).icon], ["neutral", "pr-closed"]);
 });
 
+test("an abandoned Azure DevOps PR is closed though its label says Abandoned, and a completed one merged", () => {
+  assert.equal(azureStatus(pr({ status: "abandoned" }), none).state, "closed");
+  assert.equal(azureStatus(pr({ status: "completed" }), none).state, "merged");
+  assert.equal(azureStatus(pr({ status: "active", isDraft: true }), none).state, "open");
+});
+
 test("Azure status: the review text counts votes, and the key, branches and commits come from the PR", () => {
   const st = azureStatus(pr({ reviewers: [{ vote: 10 }, { vote: 5 }, { vote: -5 }, { vote: -10 }, { vote: 0 }] }), none);
   assert.equal(st.review, "2 approved, 1 waiting for author, 1 rejected");

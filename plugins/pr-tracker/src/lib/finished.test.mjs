@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { eventFor, finalState, retry, settle } from "./finished.ts";
+import { azureStatus } from "./forges/azure.ts";
 
 const where = { projectId: "p1", cwd: "/repo" };
 const item = (n, head = `feature/${n}`) => ({ link: { provider: "github", url: `https://github.com/acme/web/pull/${n}`, number: n, repo: "acme/web" }, title: `PR ${n}`, head });
@@ -19,10 +20,12 @@ test("a PR missing from the new list is gone, with its source branch", () => {
   assert.deepEqual(eventFor(second.gone[0], "merged"), { url: "https://github.com/acme/web/pull/1", state: "merged", sourceBranch: "feature/1", repo: "acme/web", provider: "github", number: 1, projectId: "p1" });
 });
 
-test("finalState reads merged and closed, and says nothing for an open PR", () => {
-  assert.equal(finalState("pr-merged"), "merged");
-  assert.equal(finalState("pr-closed"), "closed");
-  assert.equal(finalState("pr-open"), null);
+test("finalState reads merged and closed from the status's state, an abandoned Azure DevOps PR as closed, and says nothing for an open PR", () => {
+  const none = { passed: 0, failed: 0, running: 0 };
+  const azure = (status) => azureStatus({ pullRequestId: 7, status, title: "Retry the sync", reviewers: [], creationDate: "2026-10-01T09:00:00Z" }, none);
+  assert.equal(finalState(azure("completed")), "merged");
+  assert.equal(finalState(azure("abandoned")), "closed");
+  assert.equal(finalState(azure("active")), null);
 });
 
 test("a failed lookup is kept for the next check, three tries in all", () => {

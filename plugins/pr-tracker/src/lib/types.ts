@@ -177,11 +177,16 @@ export interface PrArgs {
 }
 
 /** Normalized status of a PR. */
+/** Whether a PR is still open, or how it ended. */
+export type PrState = "open" | "merged" | "closed";
+
 export interface Status {
   error?: undefined;
   key: string;
   title: string;
   label: string;
+  /** What the tracker decides by, never the label: a forge words a closed PR its own way, like Azure DevOps's "Abandoned". */
+  state: PrState;
   tone: Tone;
   icon: Icon;
   checks: Counts;
