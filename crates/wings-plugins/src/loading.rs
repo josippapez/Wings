@@ -14,8 +14,8 @@ use crate::{
     fetch::{fetch_prefix_ok, fetch_rule, open_url_prefix_ok, valid_secret_name},
     log_line,
     manifest::{
-        Manifest, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS, POPOVER_HEIGHT, POPOVER_WIDTH, UI_KINDS,
-        VIEW_PLACES,
+        Contributes, Manifest, Permissions, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS, POPOVER_HEIGHT,
+        POPOVER_WIDTH, UI_KINDS, VIEW_PLACES,
     },
     panes::plain_word,
     post::post_entry,
@@ -131,61 +131,80 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         });
     }
     resolve(dir, &manifest.main).ok_or("main is outside the plugin folder")?;
-    if let Some(kind) = manifest.contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
+    check_contributes(dir, &manifest.contributes)?;
+    check_permissions(&manifest.permissions)?;
+    // After the permissions, so a manifest with both wrong reports the permission.
+    for panel in &manifest.contributes.panels {
+        check_entry("panel", &panel.id, &panel.title, &panel.icon, false)?;
+        if !panel.url.starts_with("https://") || url::Url::parse(&panel.url).is_err() {
+            return Err(format!("panel url {:?} must be an https URL", panel.url));
+        }
+    }
+    let icon_svg = manifest.icon.as_deref().map(|icon| load_icon(dir, icon)).transpose()?;
+    Ok(Plugin { manifest, dir: dir.to_path_buf(), icon_svg })
+}
+
+/// A sidebar's, view's, project section's, block's or panel's id, title and icon, all checked the same way.
+fn check_entry(kind: &str, id: &str, title: &str, icon: &str, used_twice: bool) -> Result<(), String> {
+    if !valid_id(id) || title.is_empty() || title.len() > 40 {
+        return Err(format!("{kind} {id:?} needs an id like a plugin id and a title up to 40 characters"));
+    }
+    if used_twice {
+        return Err(format!("{kind} id {id:?} is used twice"));
+    }
+    if !icon.is_empty() && !PANEL_ICONS.iter().any(|i| i == icon) {
+        return Err(format!("{kind} icon {icon:?} must be one of {:?}, or left out to use the plugin icon", PANEL_ICONS.as_slice()));
+    }
+    Ok(())
+}
+
+fn check_page(dir: &Path, kind: &str, page: &str) -> Result<(), String> {
+    resolve(dir, page).map(drop).ok_or_else(|| format!("{kind} page {page:?} isn't in the plugin folder"))
+}
+
+/// Everything in `contributes` but its panels' entries, which `load` checks after the permissions.
+fn check_contributes(dir: &Path, contributes: &Contributes) -> Result<(), String> {
+    if let Some(kind) = contributes.ui.iter().find(|k| !UI_KINDS.contains(&k.as_str())) {
         return Err(format!("unknown ui {kind:?}, expected one of {UI_KINDS:?}"));
     }
-    if let Some(event) = manifest.contributes.hooks.iter().find(|e| !HOOK_EVENTS.contains(&e.as_str())) {
+    if let Some(event) = contributes.hooks.iter().find(|e| !HOOK_EVENTS.contains(&e.as_str())) {
         return Err(format!("unknown hook {event:?}, expected one of {HOOK_EVENTS:?}"));
     }
     // Up to 60 so `<plugin id>__<tool>` stays within MCP's 128 characters.
     let tool_name = |n: &str| !n.is_empty() && n.len() <= 60 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
-    if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| !tool_name(&t.name)) {
+    if let Some(tool) = contributes.mcp_tools.iter().find(|t| !tool_name(&t.name)) {
         return Err(format!("MCP tool name {:?} must be up to 60 lowercase letters, digits and _", tool.name));
     }
-    if let Some(tool) = manifest.contributes.mcp_tools.iter().find(|t| t.input_schema.get("type").and_then(Value::as_str) != Some("object")) {
+    if let Some(tool) = contributes.mcp_tools.iter().find(|t| t.input_schema.get("type").and_then(Value::as_str) != Some("object")) {
         return Err(format!("MCP tool {:?} needs an inputSchema with \"type\": \"object\"", tool.name));
     }
-    if manifest.contributes.mcp_instructions.chars().count() > MAX_MCP_INSTRUCTIONS {
+    if contributes.mcp_instructions.chars().count() > MAX_MCP_INSTRUCTIONS {
         return Err(format!("mcpInstructions is up to {MAX_MCP_INSTRUCTIONS} characters"));
     }
-    if manifest.contributes.panels.len() > 3 {
+    if contributes.panels.len() > 3 {
         return Err("at most 3 panels".into());
     }
-    if manifest.contributes.sidebars.len() > 3 {
+    if contributes.sidebars.len() > 3 {
         return Err("at most 3 sidebars".into());
     }
-    for sidebar in &manifest.contributes.sidebars {
-        if !valid_id(&sidebar.id) || sidebar.title.is_empty() || sidebar.title.len() > 40 {
-            return Err(format!("sidebar {:?} needs an id like a plugin id and a title up to 40 characters", sidebar.id));
-        }
-        if !sidebar.icon.is_empty() && !PANEL_ICONS.contains(&sidebar.icon) {
-            return Err(format!("sidebar icon {:?} must be one of {:?}, or left out to use the plugin icon", sidebar.icon, PANEL_ICONS.as_slice()));
-        }
-        resolve(dir, &sidebar.page).ok_or_else(|| format!("sidebar page {:?} isn't in the plugin folder", sidebar.page))?;
+    for sidebar in &contributes.sidebars {
+        check_entry("sidebar", &sidebar.id, &sidebar.title, &sidebar.icon, false)?;
+        check_page(dir, "sidebar", &sidebar.page)?;
         if let Some(popover) = &sidebar.popover {
             let ((w0, w1), (h0, h1)) = (POPOVER_WIDTH, POPOVER_HEIGHT);
             if !(w0..=w1).contains(&popover.width) || !(h0..=h1).contains(&popover.height) {
                 return Err(format!("sidebar {:?} popover must be {w0} to {w1} wide and {h0} to {h1} high", sidebar.id));
             }
-            resolve(dir, &popover.page).ok_or_else(|| format!("popover page {:?} isn't in the plugin folder", popover.page))?;
+            check_page(dir, "popover", &popover.page)?;
         }
     }
-    if manifest.contributes.views.len() > 3 {
+    if contributes.views.len() > 3 {
         return Err("at most 3 views".into());
     }
-    for view in &manifest.contributes.views {
-        if !valid_id(&view.id) || view.title.is_empty() || view.title.len() > 40 {
-            return Err(format!("view {:?} needs an id like a plugin id and a title up to 40 characters", view.id));
-        }
+    for view in &contributes.views {
         // Sidebars and views share title bar buttons, `setSidebarLabel` and `openView`, so they share ids too.
-        let uses =
-            manifest.contributes.sidebars.iter().filter(|s| s.id == view.id).count() + manifest.contributes.views.iter().filter(|v| v.id == view.id).count();
-        if uses > 1 {
-            return Err(format!("view id {:?} is used twice", view.id));
-        }
-        if !view.icon.is_empty() && !PANEL_ICONS.contains(&view.icon) {
-            return Err(format!("view icon {:?} must be one of {:?}, or left out to use the plugin icon", view.icon, PANEL_ICONS.as_slice()));
-        }
+        let uses = contributes.sidebars.iter().filter(|s| s.id == view.id).count() + contributes.views.iter().filter(|v| v.id == view.id).count();
+        check_entry("view", &view.id, &view.title, &view.icon, uses > 1)?;
         let unique = view.opens.iter().enumerate().all(|(i, o)| !view.opens[..i].contains(o));
         if view.opens.is_empty() || !unique || view.opens.iter().any(|o| !VIEW_PLACES.contains(&o.as_str())) {
             return Err(format!("view {:?} opens must list some of {VIEW_PLACES:?}, each once", view.id));
@@ -193,22 +212,15 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         if (view.new_tab || view.multiple || view.no_project) && !view.opens.iter().any(|o| o == "tab") {
             return Err(format!("view {:?} sets newTab, multiple or noProject, which need \"tab\" in opens", view.id));
         }
-        resolve(dir, &view.page).ok_or_else(|| format!("view page {:?} isn't in the plugin folder", view.page))?;
+        check_page(dir, "view", &view.page)?;
     }
-    if manifest.contributes.project_sections.len() > 8 {
+    if contributes.project_sections.len() > 8 {
         return Err("at most 8 project sections".into());
     }
-    for (i, section) in manifest.contributes.project_sections.iter().enumerate() {
-        if !valid_id(&section.id) || section.title.is_empty() || section.title.len() > 40 {
-            return Err(format!("project section {:?} needs an id like a plugin id and a title up to 40 characters", section.id));
-        }
-        if manifest.contributes.project_sections[..i].iter().any(|s| s.id == section.id) {
-            return Err(format!("project section id {:?} is used twice", section.id));
-        }
-        if !section.icon.is_empty() && !PANEL_ICONS.contains(&section.icon) {
-            return Err(format!("project section icon {:?} must be one of {:?}, or left out to use the plugin icon", section.icon, PANEL_ICONS.as_slice()));
-        }
-        if !section.all.is_empty() && !manifest.contributes.views.iter().any(|v| v.id == section.all && v.opens.iter().any(|o| o == "tab")) {
+    for (i, section) in contributes.project_sections.iter().enumerate() {
+        let used_twice = contributes.project_sections[..i].iter().any(|s| s.id == section.id);
+        check_entry("project section", &section.id, &section.title, &section.icon, used_twice)?;
+        if !section.all.is_empty() && !contributes.views.iter().any(|v| v.id == section.all && v.opens.iter().any(|o| o == "tab")) {
             return Err(format!("project section {:?} names {:?} as its all view, which isn't one of the views that open as a tab", section.id, section.all));
         }
         let sort_ok =
@@ -217,39 +229,36 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
             return Err(format!("project section {:?} sorts: at most 8, each with its own id like a plugin id and a label up to 40 characters", section.id));
         }
     }
-    if manifest.contributes.blocks.len() > MAX_BLOCKS {
+    if contributes.blocks.len() > MAX_BLOCKS {
         return Err(format!("at most {MAX_BLOCKS} blocks"));
     }
-    for (i, block) in manifest.contributes.blocks.iter().enumerate() {
-        if !valid_id(&block.id) || block.title.is_empty() || block.title.len() > 40 {
-            return Err(format!("block {:?} needs an id like a plugin id and a title up to 40 characters", block.id));
-        }
-        if manifest.contributes.blocks[..i].iter().any(|b| b.id == block.id) {
-            return Err(format!("block id {:?} is used twice", block.id));
-        }
-        if !block.icon.is_empty() && !PANEL_ICONS.contains(&block.icon) {
-            return Err(format!("block icon {:?} must be one of {:?}, or left out to use the plugin icon", block.icon, PANEL_ICONS.as_slice()));
-        }
+    for (i, block) in contributes.blocks.iter().enumerate() {
+        let used_twice = contributes.blocks[..i].iter().any(|b| b.id == block.id);
+        check_entry("block", &block.id, &block.title, &block.icon, used_twice)?;
         let (lo, hi) = BLOCK_MIN_HEIGHT;
         if block.min_height.is_some_and(|h| !(lo..=hi).contains(&h)) {
             return Err(format!("block {:?} minHeight must be {lo} to {hi}", block.id));
         }
-        resolve(dir, &block.page).ok_or_else(|| format!("block page {:?} isn't in the plugin folder", block.page))?;
+        check_page(dir, "block", &block.page)?;
     }
-    if let Some(settings) = &manifest.contributes.settings {
-        resolve(dir, &settings.page).ok_or_else(|| format!("settings page {:?} isn't in the plugin folder", settings.page))?;
+    if let Some(settings) = &contributes.settings {
+        check_page(dir, "settings", &settings.page)?;
     }
-    if let Some(entry) = manifest.permissions.open_url.iter().find(|e| !open_url_prefix_ok(e)) {
+    Ok(())
+}
+
+fn check_permissions(permissions: &Permissions) -> Result<(), String> {
+    if let Some(entry) = permissions.open_url.iter().find(|e| !open_url_prefix_ok(e)) {
         return Err(format!(
             "openUrl entry {entry:?} must be https:// for any page, an https URL with a path like https://example.com/, or http://localhost: for this computer"
         ));
     }
-    if let Some(entry) = manifest.permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
+    if let Some(entry) = permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
         return Err(format!(
             "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
         ));
     }
-    if let Some((name, prefix)) = manifest.permissions.secrets.iter().find(|(name, prefix)| !valid_secret_name(name) || !fetch_prefix_ok(prefix)) {
+    if let Some((name, prefix)) = permissions.secrets.iter().find(|(name, prefix)| !valid_secret_name(name) || !fetch_prefix_ok(prefix)) {
         return Err(format!(
             "secret {name:?} needs a name of letters, digits, - and _, and the https URL prefix it's sent to, like https://api.example.com/, not {prefix:?}"
         ));
@@ -258,30 +267,18 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
         let (_, flags) = exec_entry(e);
         e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && f.iter().all(|w| w.starts_with('-')))
     };
-    if let Some(entry) = manifest.permissions.exec.iter().find(|e| !flags_ok(e)) {
+    if let Some(entry) = permissions.exec.iter().find(|e| !flags_ok(e)) {
         return Err(format!(
             "exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state], or [] for none"
         ));
     }
-    if let Some(entry) = manifest.permissions.post.iter().find(|e| post_entry(e).is_none()) {
+    if let Some(entry) = permissions.post.iter().find(|e| post_entry(e).is_none()) {
         return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));
     }
-    if let Some(entry) = manifest.permissions.panes.iter().flatten().find(|e| e.trim().is_empty() || !e.split_ascii_whitespace().all(plain_word)) {
+    if let Some(entry) = permissions.panes.iter().flatten().find(|e| e.trim().is_empty() || !e.split_ascii_whitespace().all(plain_word)) {
         return Err(format!("panes entry {entry:?} must be a program and its arguments, using only letters, digits and -_./:=@%+,"));
     }
-    for panel in &manifest.contributes.panels {
-        if !valid_id(&panel.id) || panel.title.is_empty() || panel.title.len() > 40 {
-            return Err(format!("panel {:?} needs an id like a plugin id and a title up to 40 characters", panel.id));
-        }
-        if !panel.icon.is_empty() && !PANEL_ICONS.contains(&panel.icon) {
-            return Err(format!("panel icon {:?} must be one of {:?}, or left out to use the plugin icon", panel.icon, PANEL_ICONS.as_slice()));
-        }
-        if !panel.url.starts_with("https://") || url::Url::parse(&panel.url).is_err() {
-            return Err(format!("panel url {:?} must be an https URL", panel.url));
-        }
-    }
-    let icon_svg = manifest.icon.as_deref().map(|icon| load_icon(dir, icon)).transpose()?;
-    Ok(Plugin { manifest, dir: dir.to_path_buf(), icon_svg })
+    Ok(())
 }
 
 /// A file inside the plugin folder; `None` if the path escapes it (`..`, symlinks out).
