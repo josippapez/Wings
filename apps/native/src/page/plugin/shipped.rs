@@ -1258,6 +1258,33 @@ fn tasks_board_adds_an_issue_through_its_main() {
     assert!(board.text().contains("1 to do"), "{}", board.text());
 }
 
+/// Typing in the board's search narrows it to the issues that match.
+#[test]
+fn tasks_board_search_narrows_the_issues_as_you_type() {
+    let rig = tasks_rig();
+    let (page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "board.js"),
+        None,
+        super::StatePlace::Tab,
+        None,
+    );
+    add_issue(&page, &events, "Fix the login redirect");
+    let board = add_issue(&page, &events, "Upgrade the date picker");
+    fn search(nodes: &[Node]) -> Option<String> {
+        nodes.iter().find_map(|node| match node {
+            Node::SearchField(field) if field.label == "Search issues" => field.on_input.clone(),
+            other => other.parts().into_iter().find_map(search),
+        })
+    }
+    let typed = search(&board.children).expect("the search field takes typing");
+    assert!(page.dispatch(&typed, Some(&json!({ "value": "login" }))));
+    tree(&events, "the searched board", |tree| {
+        let text = tree.text();
+        text.contains("Fix the login redirect") && !text.contains("Upgrade the date picker")
+    });
+}
+
 #[test]
 fn tasks_list_starts_with_the_groups_its_tab_saved_as_folded_and_saves_an_unfold() {
     let rig = tasks_rig();

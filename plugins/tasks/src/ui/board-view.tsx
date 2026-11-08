@@ -93,7 +93,8 @@ export function BoardView({ project, issues: all, error, showCanceled, onShowCan
           {all ? (
             <>
               <StatusSummary issues={all} />
-              <SearchField className="tk-search" label="Search issues" placeholder="Search issues" value={query} onChange={(e) => onQuery(e.target.value)} />
+              {/* The native app's search field sends each change as onInput. */}
+              <SearchField className="tk-search" label="Search issues" placeholder="Search issues" value={query} onChange={(e) => onQuery(e.target.value)} {...(WINGS_NATIVE && { onInput: (e: { currentTarget: { value: string } }) => onQuery(e.currentTarget.value) })} />
               {/* Together, so they go onto the second line as one, as the desktop's narrow toolbar wraps them. */}
               {WINGS_NATIVE ? <Row gap="m" wrap>{views}</Row> : views}
             </>
