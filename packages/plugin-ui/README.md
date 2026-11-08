@@ -179,7 +179,7 @@ above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `L
 `Gauge`, `List`, `ListItem`, `Disclosure` and `Select`, and for forms `Field`, `FieldGroup`, `TextInput`, `Textarea`,
 `Chip`, `Combobox` (its matches are chips under the field), `Menu` (its items show under the button), `Icon`, `Svg`,
 `Properties`, `Stats` and `Time`, and for a pull request's page `Title`, `Avatar`, `Skeleton`, `Skeletons`, `Summary`,
-`SummaryChip`, `Tabs` (drawn as `Chips`), `Timeline`, `ListDetail`, `Markdown` (the same parser as the web one: bold, code
+`SummaryChip`, `Tabs` (drawn as `Chips`, or underlined for the `line` variant), `Timeline`, `ListDetail`, `Markdown` (the same parser as the web one: bold, code
 and links are spans of their line, and an image shows as its alt text), `CodeBlock` (no colours by language),
 `ProjectGate` and `languageOf`, with the `useAction`, `useProject`, `useViewArgs`, `useTabState` and `useBlockState` hooks
 (the last two keep the state while the page is open, not across restarts). A `Text` inside a `Text` is a span with its own tone, weight, `mono`

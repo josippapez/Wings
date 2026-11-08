@@ -212,7 +212,7 @@ export function Timeline(props: { label?: string; children?: ReactNode }): React
 export function TimelineCard(props: { author: string; at?: string; tag?: ReactNode; actions?: ReactNode; children?: ReactNode }): ReactElement;
 /** A quiet one-line entry of a `Timeline`: a small avatar, the author in bold, `children`, then the time. */
 export function TimelineNote(props: { author: string; at?: string; children?: ReactNode }): ReactElement;
-/** Tabs that pick one of `items` over the panel they show, `children`. They are drawn as `Chips`. */
+/** Tabs that pick one of `items` over the panel they show, `children`. They are drawn as `Chips`, or for the "line" variant as labels with a line under the picked one. */
 export function Tabs<V extends string>(props: { label: string; items: { value: V; label: string; disabled?: boolean }[]; value: V; onChange: (value: V) => void; variant?: "default" | "line"; children?: ReactNode }): ReactElement;
 /** A `list` pane and a `detail` pane side by side; `empty` shows in place of a missing `detail`. */
 export function ListDetail(props: { list: ReactNode; detail?: ReactNode; empty?: ReactNode; listWidth?: number; listLabel?: string; detailLabel?: string; onBack?: () => void; backLabel?: string }): ReactElement;

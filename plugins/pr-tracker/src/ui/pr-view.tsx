@@ -2,7 +2,7 @@
 // rendered with made-up data. pr.tsx owns the loading and the requests.
 
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Avatar, Badge, Button, Card, Chip, CodeBlock, Confirm, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Notice, Page, Row, Skeleton, Skeletons, Stack, Summary, SummaryChip, Tabs, Text, Textarea, Time, Timeline, Title, Toolbar, type CodeLine } from "wings-plugin-ui";
+import { Avatar, Badge, Button, Card, Chip, CodeBlock, Confirm, copyText, Empty, Heading, languageOf, ListButton, Markdown, Menu, Notice, Page, Row, Skeleton, Skeletons, Stack, Summary, SummaryChip, Svg, Tabs, Text, Textarea, Time, Timeline, Title, Toolbar, type CodeLine } from "wings-plugin-ui";
 import { AZURE_VOTES, type AzureVote } from "../lib/vote";
 import { PROVIDERS, refOf } from "../lib/providers";
 import { focusOf, isAutomated, kindOf, oneLine, threadsOf, type Kind, type Thread } from "../lib/threads";
@@ -11,6 +11,7 @@ import type { Problem } from "../lib/messages";
 import { snippetSpan, type SnippetLine } from "../lib/snippet";
 import type { Comment, FailureDetail, Failing, Overview, PrArgs, Reviewer, Run, RunRef, RunStep, Status } from "../lib/types";
 import { ChecksView } from "./checks-view";
+import { LargeText, Tag } from "./parts";
 
 const BADGE_TONE = { neutral: undefined, info: "info", success: "success", warning: "warn", danger: "danger", merged: "info" } as const;
 const VOTE_WORD: Record<Reviewer["vote"], string> = { approved: "approved", changes: "requested changes", waiting: "is waiting for the author", none: "has not voted" };
@@ -140,18 +141,27 @@ export function PrView(props: PrViewProps) {
     <Page toolbar={toolbar} className="pr-page" data-testid="pr-page">
       <Stack gap="l" maxWidth={860} className="pr-wrap">
         <Stack as="header" gap="m" className="pr-header">
-          <Title className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
-            {st?.title ?? args.title}
-            <Text tone="muted" className="pr-number"> {refOf(args)}</Text>
-          </Title>
-          <Row gap="m" wrap className="pr-meta">
+          {WINGS_NATIVE ? (
+            // pr.css's 20px title, with its number after it, muted and not bold.
+            <Row gap="m" align="baseline">
+              <LargeText size="large" weight="strong">{st?.title ?? args.title}</LargeText>
+              <LargeText size="large" tone="muted">{refOf(args)}</LargeText>
+            </Row>
+          ) : (
+            <Title className="pr-title" title={st?.title ?? args.title} data-testid="pr-title">
+              {st?.title ?? args.title}
+              <Text tone="muted" className="pr-number"> {refOf(args)}</Text>
+            </Title>
+          )}
+          {/* pr.css sets the row's text at 12px, 12px apart. */}
+          <Row gap={WINGS_NATIVE ? "l" : "m"} wrap className="pr-meta">
             {st ? <Badge tone={BADGE_TONE[st.tone]} data-testid="pr-state">{st.label}</Badge> : null}
             {st?.branch ? <Branch branch={st.branch} /> : null}
             {overview ? (
               <Row gap="s" className="pr-author">
                 <Avatar name={overview.author} size="small" />
-                <Text weight="strong">{overview.author}</Text>
-                {overview.createdAt ? <Text tone="muted"><Time iso={overview.createdAt} prefix="opened " /></Text> : null}
+                <Text weight="strong" size={WINGS_NATIVE ? "small" : undefined}>{overview.author}</Text>
+                {overview.createdAt ? <Text tone="muted" size={WINGS_NATIVE ? "small" : undefined}><Time iso={overview.createdAt} prefix="opened " /></Text> : null}
               </Row>
             ) : null}
             {st?.updated ? <Text tone="muted" size="small"><Time iso={st.updated} prefix="updated " /></Text> : null}
@@ -259,13 +269,32 @@ function ReviewChip({ overview }: { overview: Overview }) {
       {reviewers.length ? (
         <Row gap="s" className="pr-reviewers">
           {reviewers.map((r) => (
-            <Row key={r.name} className="pr-reviewer" data-vote={r.vote} role="img" aria-label={`${r.name} ${VOTE_WORD[r.vote]}`} title={`${r.name} ${VOTE_WORD[r.vote]}`}>
+            <Row key={r.name} gap={WINGS_NATIVE ? "none" : undefined} className="pr-reviewer" data-vote={r.vote} role="img" aria-label={`${r.name} ${VOTE_WORD[r.vote]}`} title={`${r.name} ${VOTE_WORD[r.vote]}`}>
               <Avatar name={r.name} size="small" />
+              {WINGS_NATIVE && r.vote !== "none" ? <VoteMark vote={r.vote} label={`${r.name} ${VOTE_WORD[r.vote]}`} /> : null}
             </Row>
           ))}
         </Row>
       ) : null}
     </SummaryChip>
+  );
+}
+
+/** A disc with a check, or an exclamation mark, cut out of it: in one colour, as the app draws, it shows the chip through. */
+const VOTE_SHAPE = {
+  approved: "M3.1 4.7 4.3 5.95 6.88 2.94 7.92 3.86 4.3 7.85 2.1 5.7Z",
+  changes: "M4.3 2h1.4v4.2H4.3ZM4.3 7.1h1.4v1.4H4.3Z",
+};
+
+/**
+ * pr.css's vote mark: a 10px disc on the reviewer's avatar, green with a check for an approval, red with "!" for changes
+ * asked or waiting. The native app can't lay it over the avatar, so it's beside it, named as the desktop's avatar is.
+ */
+function VoteMark({ vote, label }: { vote: Exclude<Reviewer["vote"], "none">; label: string }) {
+  return (
+    <Svg viewBox="0 0 10 10" size={10} tone={vote === "approved" ? "success" : "danger"} label={label}>
+      <path d={`M5 0a5 5 0 1 1 0 10A5 5 0 0 1 5 0Z${VOTE_SHAPE[vote === "approved" ? "approved" : "changes"]}`} fill="currentColor" fillRule="evenodd" />
+    </Svg>
   );
 }
 
@@ -361,13 +390,26 @@ function PushCard({ push, onCommit }: { push: Push; onCommit?: (commit: { sha: s
   const [all, setAll] = useState(false);
   const shown = all ? push.commits : push.commits.slice(0, COMMITS_SHOWN);
   const count = `${push.commits.length}${push.more ? "+" : ""}`;
+  const did = `${push.created ? "opened the pull request with" : "pushed"} ${count} ${push.commits.length === 1 && !push.more ? "commit" : "commits"}`;
   return (
     <Row as="li" gap="m" align="start" className="pr-push" data-testid="pr-push">
-      <Text mono size="tiny" tone="muted" className="pr-iteration" title={`Update ${push.id}`}>{push.id}</Text>
+      {/* pr.css boxes the push's number, and sets the push in 12px muted text with the author in the text colour. */}
+      {WINGS_NATIVE ? (
+        <Badge variant="outline" size="sm"><Text mono tone="muted">{push.id}</Text></Badge>
+      ) : (
+        <Text mono size="tiny" tone="muted" className="pr-iteration" title={`Update ${push.id}`}>{push.id}</Text>
+      )}
       <Stack gap="s" grow className="pr-push-body">
         <Row gap="s" wrap className="pr-push-head">
           <Avatar name={push.author} size="small" />
-          <Text><Text weight="strong">{push.author}</Text>{` ${push.created ? "opened the pull request with" : "pushed"} ${count} ${push.commits.length === 1 && !push.more ? "commit" : "commits"}`}</Text>
+          {WINGS_NATIVE ? (
+            <>
+              <Text size="small" weight="strong">{push.author}</Text>
+              <Text size="small" tone="muted">{did}</Text>
+            </>
+          ) : (
+            <Text><Text weight="strong">{push.author}</Text>{` ${did}`}</Text>
+          )}
           <Text tone="muted" size="small"><Time iso={push.at} /></Text>
         </Row>
         <Stack as="ul" gap="xs" className="pr-commits" aria-label={`Commits in update ${push.id}`}>
@@ -394,7 +436,7 @@ function PushCard({ push, onCommit }: { push: Push; onCommit?: (commit: { sha: s
 function CommitLine({ c }: { c: Push["commits"][number] }) {
   return (
     <>
-      <Text truncate grow className="pr-commit-msg" title={c.message}>{c.message || "No message"}</Text>
+      <Text truncate grow size={WINGS_NATIVE ? "small" : undefined} className="pr-commit-msg" title={c.message}>{c.message || "No message"}</Text>
       <Row gap="s" className="pr-commit-meta">
         <Text mono size="tiny">{c.sha.slice(0, 7)}</Text>
         <Text size="tiny" tone="muted">{c.author}</Text>
@@ -409,13 +451,14 @@ function CommentHead({ author, iso, suffix, isAuthor, bot, children }: { author:
     <Row gap="s" wrap className="pr-comment-head">
       <Avatar name={author} />
       <Text weight="strong" className="pr-comment-author">{author}</Text>
-      {isAuthor ? <Badge size="sm" variant="outline" className="pr-tag">Author</Badge> : null}
-      {bot ? <Badge size="sm" variant="outline" className="pr-tag">Bot</Badge> : null}
+      {isAuthor ? <Tag>Author</Tag> : null}
+      {bot ? <Tag>Bot</Tag> : null}
       <Text tone="muted" size="small">
         {suffix ? `${suffix} ` : null}
         {iso ? <Time iso={iso} /> : null}
       </Text>
-      {children ? <Row gap="s" className="pr-comment-head-end">{children}</Row> : null}
+      {/* pr.css pushes these to the row's end. */}
+      {children ? <Row gap="s" grow={WINGS_NATIVE} justify={WINGS_NATIVE ? "end" : undefined} className="pr-comment-head-end">{children}</Row> : null}
     </Row>
   );
 }

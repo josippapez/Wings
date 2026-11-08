@@ -1065,6 +1065,84 @@ fn pr_tracker_tab_opened_with_args_shows_that_pull_request_and_its_checks() {
     }
 }
 
+/// The Checks tab of the fixture's Azure DevOps pull request draws each check's mark as the desktop's: a red cross for
+/// a failed one, an amber dot for one running, a ring for one queued. They were text glyphs, drawn thin. Every row
+/// keeps an Open slot as wide as the button, so the times end in one column whether or not a row has a link.
+#[test]
+fn pr_tracker_checks_draw_each_checks_mark_and_line_their_times_up() {
+    let rig = pr_rig();
+    let args = json!({
+        "provider": "azure", "url": "https://dev.azure.com/acme/Web/_git/web/pullrequest/482", "number": 482,
+        "repo": "Web/web", "title": "Add retry with backoff to the sync client", "cwd": PR_PROJECT,
+        "remote": { "kind": "azure", "org": "https://dev.azure.com/acme", "project": "Web", "repo": "web" },
+    });
+    let (sent, events) = mpsc::channel();
+    let page = rig
+        .host
+        .open_hidden_page_with_args(&native("pr-tracker", "pr.js"), Some(&args), move |event| {
+            let _ = sent.send(event);
+        })
+        .unwrap();
+    page.set_visible(true);
+    let pull = tree(&events, "the pull request", |tree| {
+        tree.text().contains("Conversation")
+    });
+    let tabs = chips_named(&pull.children, "Pull request").expect("the tabs");
+    assert!(page.dispatch(&tabs, Some(&json!({ "value": "checks" }))));
+    let checks = tree(&events, "the checks", |tree| {
+        tree.text().contains("web-storybook")
+    });
+    fn marks<'a>(nodes: &'a [Node], found: &mut Vec<&'a crate::page::tree::Svg>) {
+        for node in nodes {
+            match node {
+                Node::Svg(mark)
+                    if matches!(
+                        mark.label.as_deref(),
+                        Some("Failed" | "Running" | "Queued" | "Passed" | "Not run")
+                    ) =>
+                {
+                    found.push(mark)
+                }
+                other => other
+                    .parts()
+                    .into_iter()
+                    .for_each(|part| marks(part, found)),
+            }
+        }
+    }
+    let mut found = Vec::new();
+    marks(&checks.children, &mut found);
+    let shown: Vec<_> = found
+        .iter()
+        .map(|mark| (mark.label.as_deref().unwrap(), mark.tone))
+        .collect();
+    use crate::page::tree::Tone;
+    // The open groups: the failed build, then what's running before what's queued.
+    assert_eq!(
+        shown,
+        [
+            ("Failed", Some(Tone::Danger)),
+            ("Running", Some(Tone::Warn)),
+            ("Running", Some(Tone::Warn)),
+            ("Queued", Some(Tone::Muted)),
+            ("Queued", Some(Tone::Muted)),
+            ("Queued", Some(Tone::Muted)),
+        ]
+    );
+    assert!(
+        found[0]
+            .markup
+            .contains(r#"<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>"#),
+        "{}",
+        found[0].markup
+    );
+    let slots = count_nodes(
+        &checks.children,
+        &|node| matches!(node, Node::Stack(slot) if slot.width == Some(52.0)),
+    );
+    assert_eq!(slots, found.len());
+}
+
 #[test]
 fn pr_tracker_main_starts_in_the_native_host_and_its_settings_page_renders() {
     let mut plugin = load("pr-tracker");

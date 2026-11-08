@@ -2,14 +2,11 @@
 // failed check's log is asked for (`onLoadFailure`) only when the row is opened, and shown as plain text.
 
 import { useMemo, useRef, useState } from "react";
-import { ago, Badge, Button, CodeBlock, ListButton, Notice, Row, Stack, Text, useAction } from "wings-plugin-ui";
+import { ago, Badge, Bar, Button, CodeBlock, ListButton, Notice, Row, Stack, Svg, Text, useAction } from "wings-plugin-ui";
 import { groupChecks, durationText, hasLog, logTail, withUnresolved, type Group, type GroupId } from "../lib/checklist";
-import type { CheckItem, CheckState, FailureDetail, Failing, Run, RunRef, RunStep, Status } from "../lib/types";
+import type { CheckItem, FailureDetail, Failing, Run, RunRef, RunStep, Status } from "../lib/types";
+import { Column, StateMark, Tag } from "./parts";
 import { RunView } from "./run-view";
-
-const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };
-const STATE_MARK: Record<CheckState, string> = { failed: "✕", running: "●", queued: "○", passed: "✓", skipped: "–" };
-const STATE_TONE = { failed: "danger", running: "warn", queued: "muted", passed: "success", skipped: "muted" } as const;
 
 interface ChecksViewProps {
   status: Status;
@@ -85,7 +82,12 @@ function GroupSection({ group, open, onToggle, loadKey, loads, onAsk, canLoad, o
       <ListButton className="pr-check-group-head" aria-expanded={open} aria-controls={open ? listId : undefined} onClick={onToggle} data-testid={`pr-checks-${group.id}-toggle`}>
         {WINGS_NATIVE ? null : <Text aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾</Text>}
         <Text weight="strong">{group.label}</Text>
-        <Text tone="muted" className="pr-check-count">{group.items.length}</Text>
+        {/* pr.css's count is a muted pill. */}
+        {WINGS_NATIVE ? (
+          <Badge variant="secondary" size="sm"><Text tone="muted">{group.items.length}</Text></Badge>
+        ) : (
+          <Text tone="muted" className="pr-check-count">{group.items.length}</Text>
+        )}
       </ListButton>
       {open ? (
         <Stack as="ul" id={listId} gap="xs" className="pr-check-list" aria-label={`${group.label} checks`}>
@@ -103,24 +105,57 @@ function CheckRow({ item: c, load, onAsk, canLoad, onOpenRun }: { item: CheckIte
   const opening = useAction();
   const expandable = !onOpenRun && canLoad && c.state === "failed" && hasLog(c.failing);
   const url = c.url?.startsWith("https://") ? c.url : null;
-  const time = c.at ? ago(c.at) : "";
+  const at = c.at ? ago(c.at) : "";
   const took = durationText(c.seconds);
   const detailId = `pr-check-detail-${c.id.replace(/[^\w-]/g, "_")}`;
   const main = (
     <>
-      <Text tone={STATE_TONE[c.state]} className="pr-check-mark" data-state={c.state} role="img" aria-label={STATE_WORD[c.state]}>{STATE_MARK[c.state]}</Text>
+      <StateMark state={c.state} />
       <Stack gap="xs" grow className="pr-check-text">
         <Row gap="s" wrap className="pr-check-line">
           <Text weight="medium" className="pr-check-name">{c.name}</Text>
-          {c.required === true ? <Badge size="sm" variant="outline" className="pr-tag" data-tone="required">Required</Badge> : c.required === false ? <Badge size="sm" variant="outline" className="pr-tag">Optional</Badge> : null}
+          {c.required === true ? <Tag required>Required</Tag> : c.required === false ? <Tag>Optional</Tag> : null}
           {c.kind && c.kind !== c.name ? <Text tone="muted" size="tiny">{c.kind}</Text> : null}
         </Row>
         {c.note ? <Text tone={c.state === "failed" ? "danger" : "muted"} size="small" className="pr-check-note">{c.note}</Text> : null}
       </Stack>
       {expandable && !WINGS_NATIVE ? <Text aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾</Text> : null}
-      {onOpenRun ? <Text aria-hidden="true" className="pr-check-go">›</Text> : null}
+      {onOpenRun ? <Go /> : null}
     </>
   );
+  const time = at || took ? (
+    <Text tone="muted" size="small" className="pr-check-time" title={c.at ? new Date(c.at).toLocaleString() : undefined}>
+      {[at, took].filter(Boolean).join(" · ")}
+    </Text>
+  ) : null;
+  const go = url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void opening.run(() => wings.openUrl(url))}>Open</Button> : null;
+  const toggle = () => {
+    setOpen((o) => !o);
+    if (!open) onAsk(c);
+  };
+  if (WINGS_NATIVE) {
+    // pr.css's row: a hairline over it, the mark, name and note at the top of their lines, then the time, then a slot
+    // as wide as an Open button so every row's time ends in one place. A row that's no button is padded as a button's
+    // 6px and edge are, so its mark sits under the others.
+    const line = <Row gap="m" align="start" grow>{main}</Row>;
+    return (
+      <Bar edge="top" gap="xs">
+        <Row gap="m">
+          {onOpenRun ? (
+            <ListButton aria-label={`${c.name}: see its jobs, steps and logs`} onClick={() => onOpenRun(c.id)}>{line}</ListButton>
+          ) : expandable ? (
+            <ListButton aria-expanded={open} onClick={toggle}>{line}</ListButton>
+          ) : (
+            <Row gap="none" grow><Column width={7} />{line}<Column width={7} /></Row>
+          )}
+          {time}
+          <Column width={52}><Row justify="end">{go}</Row></Column>
+        </Row>
+        {opening.error ? <Notice tone="danger">{opening.error}</Notice> : null}
+        {open ? <FailureBody id={detailId} load={load} /> : null}
+      </Bar>
+    );
+  }
   return (
     <Stack as="li" gap="xs" className="pr-check" data-state={c.state} data-testid="pr-check">
       <Row gap="s" className="pr-check-row">
@@ -129,31 +164,31 @@ function CheckRow({ item: c, load, onAsk, canLoad, onOpenRun }: { item: CheckIte
             {main}
           </ListButton>
         ) : expandable ? (
-          <ListButton
-            className="pr-check-main"
-            aria-expanded={open}
-            aria-controls={open ? detailId : undefined}
-            onClick={() => {
-              setOpen((o) => !o);
-              if (!open) onAsk(c);
-            }}
-          >
+          <ListButton className="pr-check-main" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={toggle}>
             {main}
           </ListButton>
         ) : (
           <Row gap="s" grow className="pr-check-main">{main}</Row>
         )}
-        {time || took ? (
-          <Text tone="muted" size="small" className="pr-check-time" title={c.at ? new Date(c.at).toLocaleString() : undefined}>
-            {[time, took].filter(Boolean).join(" · ")}
-          </Text>
-        ) : null}
-        <Row className="pr-check-open">{url ? <Button size="sm" variant="ghost" aria-label={`Open ${c.name}`} onClick={() => void opening.run(() => wings.openUrl(url))}>Open</Button> : null}</Row>
+        {time}
+        <Row className="pr-check-open">{go}</Row>
       </Row>
       {opening.error ? <Notice tone="danger">{opening.error}</Notice> : null}
       {open ? <FailureBody id={detailId} load={load} /> : null}
     </Stack>
   );
+}
+
+/** The "›" at the end of a check that opens its run, as large as pr.css's 16px one. */
+function Go() {
+  if (WINGS_NATIVE) {
+    return (
+      <Svg viewBox="0 0 16 16" size={16} tone="muted" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6.5 4.5 10 8l-3.5 3.5" />
+      </Svg>
+    );
+  }
+  return <Text aria-hidden="true" className="pr-check-go">›</Text>;
 }
 
 function FailureBody({ id, load }: { id: string; load: Load | undefined }) {

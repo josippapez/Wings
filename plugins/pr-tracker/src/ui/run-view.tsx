@@ -6,11 +6,9 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Button, List, ListButton, ListDetail, ListItem, Loading, Notice, Row, Stack, Text, useAction } from "wings-plugin-ui";
 import { durationText } from "../lib/checklist";
 import { parseLog, pickStep, type LogEntry, type LogLine, type Span, type Tone } from "../lib/runlog";
-import type { CheckItem, CheckState, Run, RunStep } from "../lib/types";
+import type { CheckItem, Run, RunStep } from "../lib/types";
+import { StateMark } from "./parts";
 
-const STATE_WORD: Record<CheckState, string> = { failed: "Failed", running: "Running", queued: "Queued", passed: "Passed", skipped: "Not run" };
-const STATE_MARK: Record<CheckState, string> = { failed: "✕", running: "●", queued: "○", passed: "✓", skipped: "–" };
-const STATE_TONE = { failed: "danger", running: "warn", queued: "muted", passed: "success", skipped: "muted" } as const;
 /** A long log draws its end, where the error is, and the rest on request. The native app draws a page of at most 5,000 nodes, so it shows fewer lines and has no rest. */
 const SHOWN_LINES = WINGS_NATIVE ? 500 : 2_000;
 
@@ -64,7 +62,7 @@ export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunView
     <Stack gap="m" className="pr-run" data-testid="pr-run-view">
       <Row gap="s" className="pr-run-head">
         <Button variant="ghost" size="sm" onClick={onBack}>← Checks</Button>
-        <Text tone={STATE_TONE[item.state]} className="pr-check-mark" data-state={item.state} role="img" aria-label={STATE_WORD[item.state]}>{STATE_MARK[item.state]}</Text>
+        <StateMark state={item.state} />
         <Text weight="strong" truncate className="pr-run-name">{item.name}</Text>
         {durationText(item.seconds) ? <Text tone="muted" size="small">{durationText(item.seconds)}</Text> : null}
         <Row gap="s" grow justify="end" className="pr-run-actions">
@@ -116,7 +114,7 @@ function Steps({ run, current, onPick }: { run: Run; current: string | null; onP
             {heading ? <Text tone="muted" size="tiny" className="pr-run-stage">{heading}</Text> : null}
             <Stack as="section" gap="xs" className="pr-run-job" aria-label={j.name}>
               <Row gap="s" className="pr-run-job-head">
-                <Text tone={STATE_TONE[j.state]} className="pr-check-mark" data-state={j.state} role="img" aria-label={STATE_WORD[j.state]}>{STATE_MARK[j.state]}</Text>
+                <StateMark state={j.state} />
                 <Text weight="strong" grow>{j.name}</Text>
                 <Text tone="muted" size="tiny" className="pr-run-took">{durationText(j.seconds)}</Text>
               </Row>
@@ -125,7 +123,7 @@ function Steps({ run, current, onPick }: { run: Run; current: string | null; onP
                   {j.steps.map((s) => (
                     <ListItem key={s.id}>
                       <ListButton className="pr-run-step" aria-current={s.id === current ? "true" : undefined} disabled={!s.log} onClick={() => onPick(s.id)}>
-                        <Text tone={STATE_TONE[s.state]} className="pr-check-mark" data-state={s.state} role="img" aria-label={STATE_WORD[s.state]}>{STATE_MARK[s.state]}</Text>
+                        <StateMark state={s.state} />
                         <Text grow truncate weight={s.id === current ? "strong" : undefined} className="pr-run-step-name">{s.name}</Text>
                         <Text tone="muted" size="tiny" className="pr-run-took">{durationText(s.seconds)}</Text>
                       </ListButton>

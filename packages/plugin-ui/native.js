@@ -490,9 +490,9 @@ export function Skeletons({ label, children }) {
 export function Summary({ children }) {
   return h(Row, { gap: "m", wrap: true }, children);
 }
-/** One fact in a `Summary`: a button when it has `onClick`, a badge otherwise. */
+/** One fact in a `Summary`: a badge, which is a button when it has `onClick`, as plugin-ui.css draws both as one pill. */
 export function SummaryChip({ tone, onClick, children }) {
-  return onClick ? h(Button, { variant: "outline", onClick }, tone ? h(Text, { tone }, children) : children) : h(Badge, { variant: "outline", tone }, children);
+  return h("Badge", { variant: "outline", ...pick({ tone, onClick }, ["tone", "onClick"]) }, children);
 }
 /** A conversation or an activity feed. */
 export function Timeline({ children }) {
@@ -510,9 +510,9 @@ export function TimelineNote({ author, at, children }) {
   return h(Row, { gap: "s", wrap: true }, h(Avatar, { name: author, size: "small" }), h(Text, { weight: "strong" }, author),
     h(Text, { tone: "muted" }, children), at ? h(Text, { tone: "muted", size: "small" }, h(Time, { iso: at })) : null);
 }
-/** Tabs that pick one of `items` over the panel they show, `children`: the chips of `Chips`. */
-export function Tabs({ label, items, value, onChange, children }) {
-  return h(Stack, { gap: "m" }, h(Chips, { label, options: items, value, onChange }), children);
+/** Tabs that pick one of `items` over the panel they show, `children`: the chips of `Chips`, or for the "line" variant labels with a line under the picked one. */
+export function Tabs({ label, items, value, onChange, variant, children }) {
+  return h(Stack, { gap: "m" }, h("Chips", { label, options: items, value, onChange: (event) => onChange(event.value), ...(variant === "line" && { line: true }) }), children);
 }
 /** A `list` pane and a `detail` pane side by side. */
 export function ListDetail({ list, detail, empty, listWidth = 280 }) {
@@ -549,7 +549,9 @@ function mdBlocks(blocks) {
       case "details":
         return h(Disclosure, { key: i, summary: mdSpans(b.summary) }, mdBlocks(b.blocks));
       case "heading":
-        return h(Text, { key: i, weight: "strong", size: b.level <= 2 ? "large" : undefined }, mdSpans(b.text));
+        // plugin-ui.css's `.w-md-heading`: 15px and 14px for the first two levels, 13px under them, as a comment's
+        // text is. The 14px "field" size is the nearest the app has.
+        return h(Text, { key: i, weight: "strong", size: b.level <= 2 ? "field" : undefined }, mdSpans(b.text));
       case "list":
         return h(
           Stack,

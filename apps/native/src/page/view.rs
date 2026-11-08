@@ -976,13 +976,33 @@ impl PageView {
                     .into_any_element(),
             ])
             .into_any_element(),
-            Node::Badge(badge) => ui::badge(
-                variant(badge.variant),
-                badge.tone.map(tone_color),
-                badge.small,
-                self.contents(&badge.children, 4.0, cx),
-            )
-            .into_any_element(),
+            Node::Badge(badge) => {
+                let pill = ui::badge(
+                    variant(badge.variant),
+                    badge.tone.map(tone_color),
+                    badge.small,
+                    self.contents(&badge.children, 4.0, cx),
+                );
+                let Some(handler) = badge.on_click.clone() else {
+                    return pill.into_any_element();
+                };
+                // A summary chip that opens something, like a pull request's checks: the same pill, a button that
+                // lights up under the pointer, as plugin-ui.css's `button.w-summary-chip` does. GPUI clicks a focused
+                // one on Enter and Space.
+                pill.id(ElementId::NamedInteger("page-badge".into(), badge.id))
+                    .role(Role::Button)
+                    .aria_label(plain_text(&badge.children))
+                    .focusable()
+                    .tab_stop(true)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        cx.stop_propagation();
+                        view.act(&handler, None);
+                    }))
+                    .into_any_element()
+            }
             Node::Empty(empty) => div()
                 .w_full()
                 .flex()
@@ -1181,16 +1201,16 @@ impl PageView {
                         let disabled = option.disabled;
                         let keyboard_focus = focus.clone();
                         let click_focus = focus.get(&value).cloned();
-                        ui::chip(
-                            ElementId::NamedInteger(
-                                format!("page-chips-{}", select.id).into(),
-                                index as u64,
-                            ),
-                            option.label.clone(),
-                            selected,
-                            option.disabled,
-                            option.label.clone(),
-                        )
+                        let id = ElementId::NamedInteger(
+                            format!("page-chips-{}", select.id).into(),
+                            index as u64,
+                        );
+                        let label = SharedString::from(option.label.clone());
+                        if select.line {
+                            line_tab(id, label, selected, disabled)
+                        } else {
+                            ui::chip(id, label.clone(), selected, disabled, label)
+                        }
                         .when_some(focus.get(&value), |button, focus| button.track_focus(focus))
                         .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
                             let at = next
@@ -1234,8 +1254,10 @@ impl PageView {
                     .aria_label(select.label.clone())
                     .flex()
                     .flex_wrap()
-                    // plugin-ui.css's `.w-chips`.
-                    .gap(px(8.0))
+                    // plugin-ui.css's `.w-chips`, and `.w-tabs[data-variant="line"]`, which starts its first label at
+                    // the content's edge, not its tab's padding and edge in from it.
+                    .gap(px(if select.line { 4.0 } else { 8.0 }))
+                    .when(select.line, |tabs| tabs.ml(px(-7.0)))
                     .children(options)
                     .into_any_element()
             }
@@ -1922,6 +1944,58 @@ fn send_shortcut(
     window.prevent_default();
     cx.stop_propagation();
     true
+}
+
+/// plugin-ui.css's tab of `.w-tabs[data-variant="line"]`: its label at 14px, muted until it's picked, with a 2px line
+/// in the text colour under the picked one, and no fill.
+fn line_tab(
+    id: ElementId,
+    label: SharedString,
+    selected: bool,
+    disabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .aria_toggled(if selected {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(rgba(0))
+        .text_size(px(14.0))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .text_color(rgb(if selected {
+            theme::FOREGROUND
+        } else {
+            theme::MUTED_FOREGROUND
+        }))
+        .child(div().px(px(6.0)).pt(px(2.0)).child(label))
+        .child(
+            div()
+                .h(px(2.0))
+                .when(selected, |line| line.bg(rgb(theme::FOREGROUND))),
+        )
+        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .when(disabled, |tab| {
+            tab.opacity(0.5).a11y_synthetic_children(|builder| {
+                builder.parent_node().set_disabled();
+            })
+        })
+        .when(!disabled, |tab| {
+            tab.focusable()
+                .tab_stop(true)
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+        })
 }
 
 fn gap(gap: Gap) -> f32 {

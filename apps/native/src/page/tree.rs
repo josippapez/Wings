@@ -290,6 +290,8 @@ pub struct Badge {
     pub variant: Variant,
     pub tone: Option<Tone>,
     pub small: bool,
+    /// A badge that's a button, as a `SummaryChip` with an `onClick` is: plugin-ui.css draws it as the same pill.
+    pub on_click: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -473,6 +475,8 @@ pub struct Select {
     pub value: Option<String>,
     /// What to send back to the page, with the value picked. A select with none can still be opened.
     pub on_change: Option<String>,
+    /// Chips drawn as `Tabs` of the "line" variant are: labels with a line under the picked one.
+    pub line: bool,
 }
 
 /// wings-plugin-ui/native's `Combobox`, which has no node of its own: the page sends a stack of its field and, under
@@ -973,6 +977,7 @@ impl Walk {
                 variant: choice(&props, "variant"),
                 tone,
                 small: str_prop(&props, "size") == Some("sm"),
+                on_click: handler("onClick"),
                 children: parts(children),
             }),
             "Empty" => {
@@ -1173,6 +1178,7 @@ impl Walk {
                     on_change: str_prop(&props, "onChange")
                         .filter(|handler| valid_handler(handler))
                         .map(str::to_owned),
+                    line: kind == "Chips" && on("line"),
                 };
                 if kind == "Chips" {
                     Node::Chips(select)
@@ -1668,6 +1674,19 @@ mod tests {
             ]
         );
         assert_eq!((select.current(), select.shown()), (Some("b"), "Beta"));
+    }
+
+    /// Tabs of the "line" variant are chips the app underlines; a select has no such look.
+    #[test]
+    fn chips_can_be_line_tabs_and_a_select_cannot() {
+        let props = json!({"label":"Pull request","line":true,"options":[{"value":"a"}]});
+        let Node::Chips(tabs) =
+            parse_one(json!({"id":1,"type":"Chips","props":props,"children":[]}))
+        else {
+            panic!("chips")
+        };
+        assert!(tabs.line);
+        assert!(!select(props).line);
     }
 
     #[test]

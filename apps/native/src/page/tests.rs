@@ -669,6 +669,47 @@ fn pressed_at(app: &TestApp, window: &mut View, at: (f32, f32), heard: &'static 
     window.read(|view, _| view.text().contains(heard))
 }
 
+/// A pull request's summary chip that shows its checks: an outlined pill with a click.
+const SUMMARY_CHIP: &str = r#"
+let heard = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Badge',props:{variant:'outline',tone:'danger',onClick:'1:click'},children:[{id:2,type:'#text',text:'1 failed ›'}]},
+{id:3,type:'Text',children:[{id:4,type:'#text',text:'Heard '+heard+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{heard++;render();return true;};render();
+"#;
+
+#[test]
+fn a_badge_with_a_click_is_a_button_for_the_keyboard_and_the_pointer() {
+    let (app, mut window) = open_narrow(SUMMARY_CHIP, 300.0);
+    settle(&app, &mut window, shows("Heard 0."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Heard 1."));
+    // On the pill, under the page's 14pt of padding.
+    assert!(pressed_at(&app, &mut window, (30.0, 24.0), "Heard 2."));
+}
+
+/// A pull request's tabs, of the "line" variant.
+const LINE_TABS: &str = r#"
+let picked = 'a';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Chips',props:{label:'Pull request',line:true,value:picked,options:[{value:'a',label:'Overview'},{value:'b',label:'Checks'}],onChange:'1:change'}},
+{id:2,type:'Text',children:[{id:3,type:'#text',text:'Picked '+picked+'.'}]}]}));}
+globalThis.__wingsEvent=(_,json)=>{picked=JSON.parse(json).value;render();return true;};render();
+"#;
+
+#[test]
+fn line_tabs_are_picked_with_the_arrow_keys_and_a_click() {
+    let (app, mut window) = open_narrow(LINE_TABS, 300.0);
+    settle(&app, &mut window, shows("Picked a."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    key(&mut window, "right");
+    settle(&app, &mut window, shows("Picked b."));
+    assert!(pressed_at(&app, &mut window, (30.0, 26.0), "Picked a."));
+}
+
 /// A chip whose label is longer than its line, as a Cyclops task suggested under its field.
 const LONG_CHIP: &str = r#"
 let pressed = 0;

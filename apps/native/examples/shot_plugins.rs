@@ -954,7 +954,8 @@ type View<'a> = (
 );
 
 /// PR tracker's built pages over a fixture main (`plugins/pr-tracker/preview/native-host.js`): the project's list, a pull
-/// request opened from it with its description and conversation, its Checks tab, a check's run, and the settings.
+/// request opened from it with its description and conversation, its Checks and Files tabs, a check's run, the same pull
+/// request on Azure DevOps with its pushes and its policies as checks, and the settings.
 fn pr_tracker(out: PathBuf) {
     let project = out.join("fixture-project");
     std::fs::create_dir_all(&project).unwrap();
@@ -1002,11 +1003,25 @@ fn pr_tracker(out: PathBuf) {
         "provider": "github", "url": "https://github.com/acme/web/pull/482", "number": 482,
         "repo": "acme/web", "title": "Add retry with backoff to the sync client", "cwd": id,
     });
+    let azure = json!({
+        "provider": "azure", "url": "https://dev.azure.com/acme/Web/_git/web/pullrequest/482", "number": 482,
+        "repo": "Web/web", "title": "Add retry with backoff to the sync client", "cwd": id,
+        "remote": { "kind": "azure", "org": "https://dev.azure.com/acme", "project": "Web", "repo": "web" },
+    });
     // The page, what it opens with, what to press to reach each view, and a text it shows.
-    let views: [View; 5] = [
+    let views: [View; 8] = [
         ("list", tab, None, &[], "Migrate the settings page"),
         ("pull", tab, Some(&args), &[], "Conversation"),
         ("checks", tab, Some(&args), &["Checks"], "Unit tests"),
+        ("files", tab, Some(&args), &["Files"], "diff viewer"),
+        ("azure", tab, Some(&azure), &[], "Conversation"),
+        (
+            "azure-checks",
+            tab,
+            Some(&azure),
+            &["Checks"],
+            "web-storybook",
+        ),
         (
             "run",
             tab,
@@ -1062,7 +1077,14 @@ fn pr_tracker(out: PathBuf) {
                     })
                     .unwrap();
                 assert!(pressed, "nothing to press for {label}");
-                until(&mut cx, if step == 0 { "Unit tests" } else { expected });
+                until(
+                    &mut cx,
+                    if step + 1 == presses.len() {
+                        expected
+                    } else {
+                        "Unit tests"
+                    },
+                );
             }
             wait(&mut cx, window, Duration::from_millis(300));
             save(

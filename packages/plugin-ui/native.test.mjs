@@ -347,14 +347,23 @@ test("pull request pages: avatars, skeletons, summary chips, tabs and a list bes
     h(ListDetail, { list: h(Text, null, "Steps"), detail: h(Text, null, "Log"), listWidth: 300 })));
   assert.deepEqual(find(last(), "Avatar").props, { name: "Ada Lovelace", size: "small" });
   assert.deepEqual(all(last(), "Skeleton").map((skeleton) => skeleton.props), [{ width: "40%", height: 14 }, { height: 90 }]);
-  assert.equal(find(find(last(), "Row"), "Badge").props.variant, "outline");
-  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  // Both chips are the same outlined pill in their tone, and the one with a click is a button.
+  const [fact, checks] = all(find(last(), "Row"), "Badge");
+  assert.deepEqual([fact.props, checks.props.tone], [{ variant: "outline", tone: "success" }, "danger"]);
+  assert.equal(all(last(), "Button").length, 0);
+  globalThis.__wingsEvent(checks.props.onClick, "");
   globalThis.__wingsEvent(find(last(), "Chips").props.onChange, '{"value":"b"}');
   assert.deepEqual(picks, ["checks", "b"]);
+  assert.equal(find(last(), "Chips").props.line, undefined);
   assert.equal(text(last()).includes("Panel"), true);
   const [, pane] = all(last(), "Stack").filter((stack) => stack.props.width === 300 || stack.props.grow);
   assert.equal(text(pane), "Log");
   assert.equal(all(last(), "Stack").some((stack) => stack.props.width === 300), true);
+});
+
+test("line tabs tell the app to draw a line under the picked one", () => {
+  mount(h(Tabs, { label: "Pull request", variant: "line", items: [{ value: "a", label: "Overview" }], value: "a", onChange: () => {} }, h(Text, null, "Panel")));
+  assert.equal(find(last(), "Chips").props.line, true);
 });
 
 test("Markdown draws headings, lists, code, tables and folds, with bold, code and links as spans of their line", () => {
@@ -371,6 +380,8 @@ test("Markdown draws headings, lists, code, tables and folds, with bold, code an
   assert.equal(text(body).includes("const a = 1;"), true);
   assert.equal(find(body, "Disclosure") !== undefined, true);
   assert.deepEqual(all(body, "Text").filter((node) => ["A", "B", "1", "2"].includes(text(node))).map(text), ["A", "B", "1", "2"]);
+  // A top heading is 14px, as plugin-ui.css's are, not the app's 20px page title.
+  assert.deepEqual(all(body, "Text").find((node) => text(node) === "Title").props, { weight: "strong", size: "field" });
 });
 
 test("Markdown list markers stay at the first line of wrapped bullet, ordered, task and nested items", () => {
