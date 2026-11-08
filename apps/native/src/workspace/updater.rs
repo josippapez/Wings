@@ -2,7 +2,7 @@
 //! states its toasts show (`apps/desktop/src/lib/updater.ts`), and its retained, infrequent background work.
 use super::Workspace;
 use crate::{
-    icons::Icon,
+    icons::{Icon, icon},
     theme,
     ui::{self, ButtonSize, Variant, motion},
     updater::{self, Available, Prepared},
@@ -367,6 +367,72 @@ mod tests {
         assert_eq!((last.0, last.1), (main, sidebar));
     }
 
+    /// As the desktop's `checkForUpdate`: an automatic check's find sounds, shows its toast and the sidebar's row, and
+    /// leaves the dialog closed; the row opens it.
+    #[test]
+    fn an_automatic_find_shows_the_toast_and_the_sidebar_row_and_not_the_dialog() {
+        use crate::workspace::sound::PLAYED;
+        let (_app, mut window) = open_config(|_| {});
+        PLAYED.with(|played| played.borrow_mut().clear());
+        window.update(|w, window, cx| w.checked(false, Ok(Some(sample())), window, cx));
+        window.draw();
+        assert!(!window.read(|w, _| w.updates.open));
+        assert_eq!(PLAYED.with(|played| played.borrow().len()), 1);
+        assert!(
+            crate::ui::spot_at("update-whats-new").is_some(),
+            "the toast"
+        );
+        let row = crate::ui::spot_at("update-app").expect("the sidebar's row");
+        window.simulate_click(row.center(), gpui::MouseButton::Left);
+        assert!(window.read(|w, _| w.updates.open));
+        assert!(window.read(|w, _| matches!(w.updates.state, State::Available(_))));
+    }
+
+    #[test]
+    fn a_manual_find_opens_the_dialog_without_a_toast() {
+        let (_app, mut window) = open_config(|_| {});
+        window.update(|w, window, cx| w.checked(true, Ok(Some(sample())), window, cx));
+        window.draw();
+        window.read(|w, _| {
+            assert!(w.updates.open);
+            assert!(!w.updates.toast);
+        });
+    }
+
+    /// The toast's What's new opens the dialog, and its Install and restart starts the download there.
+    #[test]
+    fn the_toast_opens_the_dialog_or_installs() {
+        let (app, mut window) = open_config(|_| {});
+        window.update(|w, window, cx| w.checked(false, Ok(Some(sample())), window, cx));
+        window.draw();
+        let whats_new = crate::ui::spot_at("update-whats-new").unwrap();
+        window.simulate_click(whats_new.center(), gpui::MouseButton::Left);
+        window.read(|w, _| assert!(w.updates.open && !w.updates.toast));
+        window.update(|w, window, cx| {
+            w.close_updates(window, cx);
+            w.updates.toast = true;
+            cx.notify();
+        });
+        // The closing dialog covers the toast until it has gone.
+        app.advance_clock(Duration::from_secs(1));
+        app.run_until_parked();
+        window.draw();
+        let install = crate::ui::spot_at("update-install").unwrap();
+        window.simulate_click(install.center(), gpui::MouseButton::Left);
+        window.read(|w, _| {
+            assert!(w.updates.open && !w.updates.toast);
+            // A test build is no app bundle, so the download it started already failed.
+            assert!(matches!(
+                w.updates.state,
+                State::Downloading(_)
+                    | State::Error {
+                        title: INSTALL_FAILED,
+                        ..
+                    }
+            ));
+        });
+    }
+
     /// A download GitHub refused (a 504 right after a release) is tried again from Retry without a new check.
     #[test]
     fn retry_after_a_failed_download_downloads_again() {
@@ -403,6 +469,8 @@ pub(super) struct Updates {
     progress: Option<Task<()>>,
     timer: Option<Task<()>>,
     busy: Entity<Busy>,
+    /// The desktop's "Wings X is available" toast, shown when an automatic check finds an update.
+    toast: bool,
 }
 impl Updates {
     /// Made with the workspace, before its first draw: GPUI only draws a view again on its own if it's older than the
@@ -424,6 +492,23 @@ impl Updates {
                 #[cfg(test)]
                 steps: 0,
             }),
+            toast: false,
+        }
+    }
+
+    /// The update a check found and that isn't installed yet, as the desktop's `availableUpdate`: the sidebar offers it.
+    fn pending(&self) -> Option<&Available> {
+        match &self.state {
+            State::Available(update)
+            | State::Downloading(update)
+            | State::Installing(update)
+            | State::Error {
+                retry: Some(update),
+                ..
+            } => Some(update),
+            State::Idle | State::Checking | State::Current | State::Error { retry: None, .. } => {
+                None
+            }
         }
     }
 
@@ -549,6 +634,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if manual {
+            // The desktop's manual check replaces the toast with its own.
+            self.updates.toast = false;
             self.show_updates(window, cx);
         }
         if self.updates.busy() || matches!(self.updates.state, State::Available(_)) {
@@ -564,21 +651,147 @@ impl Workspace {
         self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.updates.state = match result {
-                    Ok(Some(update)) => {
-                        this.show_updates(window, cx);
-                        State::Available(update)
-                    }
-                    Ok(None) => State::Current,
-                    Err(message) => State::Error {
-                        title: CHECK_FAILED,
-                        message,
-                        retry: None,
-                    },
-                };
-                cx.notify();
+                this.checked(manual, result, window, cx)
             });
         }));
+    }
+
+    /// What a check found, as the desktop's `checkForUpdate`: the update you asked for opens its dialog, and one an
+    /// automatic check found sounds and shows its toast, with the sidebar's row to come back to it.
+    fn checked(
+        &mut self,
+        manual: bool,
+        result: updater::Result<Option<Available>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.updates.state = match result {
+            Ok(Some(update)) => {
+                if manual {
+                    self.show_updates(window, cx);
+                } else {
+                    self.notification_sound(false);
+                    self.updates.toast = true;
+                }
+                State::Available(update)
+            }
+            Ok(None) => State::Current,
+            Err(message) => State::Error {
+                title: CHECK_FAILED,
+                message,
+                retry: None,
+            },
+        };
+        cx.notify();
+    }
+
+    /// The desktop's "Update to Wings X" row above Settings, while an update waits: it opens the dialog.
+    pub(in crate::workspace) fn update_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let update = self.updates.pending()?;
+        Some(
+            super::sidebar::nav_row_with(
+                "update-app",
+                icon(Icon::CircleArrowUp, 16.0, theme::DONE),
+                format!(
+                    "Update to {} {}",
+                    crate::data_dir::APP_NAME,
+                    update.release.version
+                ),
+                super::sidebar::Look::Plain,
+            )
+            .text_color(rgb(theme::FOREGROUND))
+            .tooltip(ui::tooltip("See what's new and install it", None))
+            .children(ui::spot(|| "update-app".into()))
+            .on_click(cx.listener(|this, _, window, cx| this.show_updates(window, cx)))
+            .into_any_element(),
+        )
+    }
+
+    /// The desktop's update toast, at the bottom of the notices: the release's first line of notes, What's new to open
+    /// the dialog and Install and restart to install it there.
+    pub(super) fn update_toast(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let update = self.updates.pending().filter(|_| self.updates.toast)?;
+        let notes = update
+            .release
+            .notes
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let button = |id: &'static str, label: &'static str, variant: Variant| {
+            ui::button(id, label, variant, false, label).children(ui::spot(move || id.into()))
+        };
+        Some(
+            div()
+                .id("update-toast")
+                .role(gpui::Role::Alert)
+                .aria_label(format!(
+                    "{} {} is available",
+                    crate::data_dir::APP_NAME,
+                    update.release.version
+                ))
+                .relative()
+                .p(px(12.0))
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(rgba(ui::HAIRLINE))
+                .bg(rgba(theme::POPOVER))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .pr(px(20.0))
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format!(
+                            "{} {} is available",
+                            crate::data_dir::APP_NAME,
+                            update.release.version
+                        )),
+                )
+                .when(!notes.is_empty(), |card| {
+                    card.child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(notes),
+                    )
+                })
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            button("update-whats-new", "What's new", Variant::Ghost).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.updates.toast = false;
+                                    this.show_updates(window, cx);
+                                }),
+                            ),
+                        )
+                        .child(
+                            button("update-install", "Install and restart", Variant::Default)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.updates.toast = false;
+                                    this.show_updates(window, cx);
+                                    this.update_action(window, cx);
+                                })),
+                        ),
+                )
+                // Sonner's close button.
+                .child(
+                    div().absolute().top(px(6.0)).right(px(6.0)).child(
+                        ui::icon_button("update-toast-close", Icon::X, "Close", ButtonSize::Tiny)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.updates.toast = false;
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The footer's main button: installs an update, tries a failed one again, or checks again.
@@ -886,6 +1099,13 @@ impl Workspace {
              a spinner while it checks.",
         );
         let total = update.release.size;
+        if state == "found" {
+            // An automatic check's find, without its sound.
+            self.updates.state = State::Available(update);
+            self.updates.toast = true;
+            cx.notify();
+            return;
+        }
         let (state, activity) = match state {
             "checking" => (
                 State::Checking,

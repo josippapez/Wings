@@ -214,6 +214,32 @@ fn main() {
         }
         return;
     }
+    // `-- <out-dir> sidebar-update` renders only an update an automatic check found: its row above Settings and its
+    // toast.
+    if std::env::args().nth(2).as_deref() == Some("sidebar-update") {
+        for width in [1000.0, 640.0] {
+            let config = config.clone();
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                    cx.new(|cx| Workspace::new(config, window, cx))
+                })
+                .expect("open sidebar update fixture");
+            let window: AnyWindowHandle = handle.into();
+            handle
+                .update(&mut cx, |workspace, window, cx| {
+                    workspace.sample_update("found", window, cx)
+                })
+                .unwrap();
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(
+                &mut cx,
+                window,
+                &out.join(format!("sidebar-update-{width}.png")),
+            );
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+        return;
+    }
     // `-- <out-dir> sidebar` renders only the sidebar's states.
     if std::env::args().nth(2).as_deref() == Some("sidebar") {
         return sidebar(&mut cx, &config, &out);

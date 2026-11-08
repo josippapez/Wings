@@ -116,6 +116,7 @@ impl Workspace {
                     .mx(px(8.0))
                     .mt(px(4.0))
                     .mb(px(8.0))
+                    .children(self.update_row(cx))
                     .child(self.settings_row(cx)),
             )
             .children(self.drag_listeners(cx))

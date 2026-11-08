@@ -1187,7 +1187,11 @@ impl Workspace {
 
     /// Notifications the system couldn't show, at the bottom right. A click puts one away.
     pub(super) fn notices_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.plugin_ui.notices.is_empty() && self.manage.announcements.is_empty() {
+        let update = self.update_toast(cx);
+        if update.is_none()
+            && self.plugin_ui.notices.is_empty()
+            && self.manage.announcements.is_empty()
+        {
             return None;
         }
         Some(
@@ -1202,6 +1206,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
+                .children(update)
                 .children(self.plugin_update_notices(cx))
                 .children(self.plugin_ui.notices.iter().map(|notice| {
                     let id = notice.id;

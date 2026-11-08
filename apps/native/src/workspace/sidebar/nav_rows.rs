@@ -35,6 +35,16 @@ pub(in crate::workspace) fn nav_row(
     label: impl Into<SharedString>,
     look: Look,
 ) -> Stateful<Div> {
+    nav_row_with(id, icon(glyph, 16.0, theme::MUTED_FOREGROUND), label, look)
+}
+
+/// `nav_row` with an icon of its own colour, as the desktop's update row passes its `CircleArrowUpIcon`.
+pub(in crate::workspace) fn nav_row_with(
+    id: impl Into<ElementId>,
+    glyph: impl IntoElement,
+    label: impl Into<SharedString>,
+    look: Look,
+) -> Stateful<Div> {
     let label = label.into();
     let row = div()
         .id(id)
@@ -51,7 +61,7 @@ pub(in crate::workspace) fn nav_row(
         .text_size(px(13.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED_FOREGROUND))
-        .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
+        .child(glyph)
         .child(div().flex_1().min_w_0().truncate().child(label));
     match look {
         Look::Plain => row.cursor_pointer().hover(|style| {

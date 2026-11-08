@@ -4,7 +4,7 @@
 mod drag;
 mod git;
 mod nav_rows;
-pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, row_hint};
+pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, nav_row_with, row_hint};
 mod order;
 mod peek;
 #[cfg(all(test, feature = "test-support"))]
