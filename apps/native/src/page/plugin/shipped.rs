@@ -1398,6 +1398,73 @@ fn tasks_list_starts_with_the_groups_its_tab_saved_as_folded_and_saves_an_unfold
     assert_eq!(saved.lock().unwrap().last(), Some(&json!({ "folded": [] })));
 }
 
+/// The buttons named "Edit the title".
+fn title_buttons(nodes: &[Node]) -> Vec<&crate::page::tree::Button> {
+    let mut found = Vec::new();
+    for node in nodes {
+        match node {
+            Node::Button(button) if button.label.as_deref() == Some("Edit the title") => {
+                found.push(button)
+            }
+            other => {
+                for part in other.parts() {
+                    found.extend(title_buttons(part));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The Issue tab's title is a button that wraps it and opens the title's field on a click or F2, as the desktop's is.
+/// The native page had its own Edit after the title, right over the description's Edit.
+#[test]
+fn tasks_issue_tab_edits_the_title_from_a_click_on_it_with_no_edit_beside_it() {
+    let rig = tasks_rig();
+    {
+        let (page, events, _saved) = open_with_state(
+            &rig.host,
+            &native("tasks", "board.js"),
+            None,
+            super::StatePlace::Tab,
+            None,
+        );
+        add_issue(&page, &events, "Fix the login redirect");
+    }
+    let args = json!({ "key": "WEB-1", "projectId": "/work/web" });
+    let (page, events, _saved) = open_with_state(
+        &rig.host,
+        &native("tasks", "issue.js"),
+        Some(&args),
+        super::StatePlace::Tab,
+        None,
+    );
+    let issue = tree(&events, "the issue", |tree| {
+        tree.text().contains("Fix the login redirect") && !title_buttons(&tree.children).is_empty()
+    });
+    // One button edits the title, and it is the title, in a ghost button that wraps it.
+    let buttons = title_buttons(&issue.children);
+    assert_eq!(buttons.len(), 1);
+    let title = buttons[0];
+    assert_eq!(plain_text(&title.children), "Fix the login redirect");
+    assert!(title.wrap);
+    assert_eq!(title.variant, crate::page::tree::Variant::Ghost);
+    fn title_field(nodes: &[Node]) -> bool {
+        nodes.iter().any(|node| match node {
+            Node::Input(input) => input.label == "Title",
+            other => other.parts().into_iter().any(title_field),
+        })
+    }
+    // F2 on it opens the field, as a click does in tasks_issue_tab_saves_a_title_edited_in_place.
+    assert!(page.dispatch(
+        title.on_key_down.as_ref().unwrap(),
+        Some(&json!({ "type": "keydown", "key": "F2" }))
+    ));
+    tree(&events, "the title field", |tree| {
+        title_field(&tree.children)
+    });
+}
+
 #[test]
 fn tasks_issue_tab_saves_a_title_edited_in_place() {
     let rig = tasks_rig();
@@ -1419,19 +1486,13 @@ fn tasks_issue_tab_saves_a_title_edited_in_place() {
         super::StatePlace::Tab,
         None,
     );
-    // The title's own Edit, as the native page has one beside it.
-    fn edit_title(nodes: &[Node]) -> Option<String> {
-        nodes.iter().find_map(|node| match node {
-            Node::Button(button) if button.label.as_deref() == Some("Edit the title") => {
-                button.on_click.clone()
-            }
-            other => other.parts().into_iter().find_map(edit_title),
-        })
-    }
+    // The title is the button that edits it, as on the desktop.
     let issue = tree(&events, "the issue", |tree| {
-        tree.text().contains("Fix the login redirect") && edit_title(&tree.children).is_some()
+        title_buttons(&tree.children).len() == 1
     });
-    assert!(page.dispatch(&edit_title(&issue.children).unwrap(), None));
+    let title = title_buttons(&issue.children)[0];
+    assert_eq!(plain_text(&title.children), "Fix the login redirect");
+    assert!(page.dispatch(title.on_click.as_ref().unwrap(), None));
     fn title_input(nodes: &[Node]) -> Option<(Option<String>, Option<String>)> {
         nodes.iter().find_map(|node| match node {
             Node::Input(input) if input.label == "Title" => {

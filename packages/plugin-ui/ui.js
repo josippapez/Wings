@@ -673,9 +673,9 @@ export function Empty({ title, description, children, className, ...rest }) {
 /**
  * A button on Base UI's Button. `variant` is default (filled), secondary, outline, ghost, destructive or link; `size`
  * default, xs, sm, lg, icon, icon-xs, icon-sm or icon-lg, like shadcn/ui's. `busy` shows a spinner and ignores clicks while the
- * button keeps the keyboard focus.
+ * button keeps the keyboard focus. `wrap` lets its text wrap and the button grow to hold the lines.
  */
-export function Button({ variant = "default", size = "default", busy, disabled, type = "button", children, className, ...rest }) {
+export function Button({ variant = "default", size = "default", busy, wrap, disabled, type = "button", children, className, ...rest }) {
   return h(
     BaseButton,
     {
@@ -684,6 +684,7 @@ export function Button({ variant = "default", size = "default", busy, disabled, 
       className: cx("w-button", className),
       "data-variant": variant,
       "data-size": size,
+      "data-wrap": flag(wrap),
       // Busy, not disabled: a disabled button would drop the keyboard focus on the page. Base UI's disabled button that
       // stays focusable is aria-disabled and ignores clicks.
       disabled: busy || disabled,

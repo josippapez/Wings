@@ -247,6 +247,9 @@ pub struct Button {
     pub disabled: bool,
     /// The name a screen reader says, when it isn't the button's text (an icon button's).
     pub label: Option<String>,
+    /// Its text wraps onto the lines it needs, from its start, and it's as tall as they are: an issue's title that is
+    /// a button, as plugin-ui.css's `.w-button[data-wrap]`.
+    pub wrap: bool,
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub on_key_down: Option<String>,
@@ -934,6 +937,7 @@ impl Walk {
                     pressed: on("pressed"),
                     disabled,
                     label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
+                    wrap: on("wrap"),
                     on_click: str_prop(&props, "onClick")
                         .filter(|handler| !disabled && valid_handler(handler))
                         .map(str::to_owned),
@@ -1156,6 +1160,7 @@ impl Walk {
                     pressed: false,
                     disabled: on("disabled"),
                     label: None,
+                    wrap: false,
                     on_click: str_prop(&props, "onClick")
                         .filter(|s| !on("disabled") && valid_handler(s))
                         .map(str::to_owned),

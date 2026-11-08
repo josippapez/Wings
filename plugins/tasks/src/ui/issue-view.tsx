@@ -51,9 +51,10 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
       {editing ? (
         <InlineInput label="Title" className="tk-title-input" value={issue.title} maxLength={LIMITS.title} required onSave={(title) => apply({ kind: "update", key: issue.key, title })} onDone={() => setEditing(false)} />
       ) : WINGS_NATIVE ? (
-        // The native app's buttons are one 14px line, so the title is large text that wraps, with its own Edit at the
-        // row's end.
-        <NativeHeading size="large" weight="strong">{issue.title}</NativeHeading>
+        // The native app's buttons are one 14px line; `wrap` lets this one hold the large title on the lines it takes.
+        <Button variant="ghost" wrap aria-label="Edit the title" onClick={() => setEditing(true)} onKeyDown={(e) => { if (e.key === "F2") setEditing(true); }}>
+          <NativeHeading size="large" weight="strong">{issue.title}</NativeHeading>
+        </Button>
       ) : (
         <Title as="h1" className="tk-title">
           <Button variant="ghost" className="tk-title-button" title="Edit the title" onClick={() => setEditing(true)} onKeyDown={(e) => { if (e.key === "F2") setEditing(true); }}>
@@ -62,7 +63,6 @@ function IssueTitle({ issue, apply }: { issue: Issue; apply: Apply }) {
         </Title>
       )}
       <Text as="span" mono tone="muted" size="small" className="tk-title-key">{issue.key}</Text>
-      {WINGS_NATIVE && !editing ? <Button variant="ghost" size="xs" aria-label="Edit the title" onClick={() => setEditing(true)}>Edit</Button> : null}
     </Box>
   );
 }

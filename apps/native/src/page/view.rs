@@ -673,6 +673,88 @@ impl PageView {
         }
     }
 
+    /// A `Button`, or a chip. In a baseline row it starts `drop` points down, as a text there does.
+    fn button(&self, button: &tree::Button, drop: f32, cx: &mut Context<Self>) -> AnyElement {
+        let id = ElementId::NamedInteger("page-button".into(), button.id);
+        let label = button
+            .label
+            .clone()
+            .unwrap_or_else(|| plain_text(&button.children));
+        // plugin-ui.css's gap between a button's parts: 6px, and 4px for a chip and a small button.
+        let between =
+            if button.chip || matches!(button.size, tree::ButtonSize::Xs | tree::ButtonSize::Sm) {
+                4.0
+            } else {
+                6.0
+            };
+        let content = if button.wrap
+            && !button
+                .children
+                .iter()
+                .all(|node| matches!(node, Node::Str { .. }))
+        {
+            // Each text never narrower than its longest word, as in a baseline row: GPUI took a title's narrowest as
+            // its whole line. The box round them sets no least width of its own, or it would be the whole line's and
+            // the title would run on past the row instead of wrapping.
+            div()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(between))
+                .children(button.children.iter().map(|node| match node {
+                    Node::Text(text) => self.text_element(text, Some(0.0), cx),
+                    node => self.node(node, cx),
+                }))
+                .into_any_element()
+        } else {
+            self.contents(&button.children, between, cx)
+        };
+        let element = if button.chip {
+            ui::chip(id, label, button.pressed, button.disabled, content)
+        } else {
+            sized(
+                ui::button(id, label, variant(button.variant), button.disabled, content),
+                button.size,
+            )
+        };
+        let element = element
+            // A button that holds a text cut short narrows to fit its row and cuts that text, as each desktop page
+            // with one makes it do in its own CSS (Issues' linked issues and parent lanes, Disk usage's folders): an
+            // issue linked by a long title ran past the properties column and the window's edge.
+            .when(
+                button
+                    .children
+                    .iter()
+                    .any(|node| matches!(node, Node::Text(text) if text.truncate)),
+                |el| el.flex_shrink_1().min_w_0(),
+            )
+            .when(button.wrap, |el| {
+                el.flex_shrink_1()
+                    .min_w_0()
+                    .h_auto()
+                    .py(px(WRAPPED_PADDING))
+                    .justify_start()
+                    .whitespace_normal()
+            })
+            .when(drop > 0.0, |el| el.mt(px(drop)));
+        let key_handler = button.on_key_down.clone();
+        let element =
+            element.on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                if let Some(handler) = &key_handler {
+                    send_shortcut(view, handler, event, window, cx);
+                }
+            }));
+        match button.on_click.clone() {
+            Some(handler) => element
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    cx.stop_propagation();
+                    view.act(&handler, None);
+                }))
+                .into_any_element(),
+            None => element.into_any_element(),
+        }
+    }
+
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Str { text, .. } => div().child(text.clone()).into_any_element(),
@@ -791,6 +873,7 @@ impl PageView {
                         .zip(drops)
                         .map(|(node, drop)| match node {
                             Node::Text(text) => self.text_element(text, Some(drop), cx),
+                            Node::Button(button) => self.button(button, drop, cx),
                             other => self.node(other, cx),
                         })
                         .collect(),
@@ -798,47 +881,7 @@ impl PageView {
                 })
                 .into_any_element(),
             Node::Text(text) => self.text_element(text, None, cx),
-            Node::Button(button) => {
-                let id = ElementId::NamedInteger("page-button".into(), button.id);
-                let label = button
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| plain_text(&button.children));
-                // plugin-ui.css's gap between a button's parts: 6px, and 4px for a chip and a small button.
-                let between = if button.chip
-                    || matches!(button.size, tree::ButtonSize::Xs | tree::ButtonSize::Sm)
-                {
-                    4.0
-                } else {
-                    6.0
-                };
-                let content = self.contents(&button.children, between, cx);
-                let element = if button.chip {
-                    ui::chip(id, label, button.pressed, button.disabled, content)
-                } else {
-                    sized(
-                        ui::button(id, label, variant(button.variant), button.disabled, content),
-                        button.size,
-                    )
-                };
-                let key_handler = button.on_key_down.clone();
-                let element = element.on_key_down(cx.listener(
-                    move |view, event: &KeyDownEvent, window, cx| {
-                        if let Some(handler) = &key_handler {
-                            send_shortcut(view, handler, event, window, cx);
-                        }
-                    },
-                ));
-                match button.on_click.clone() {
-                    Some(handler) => element
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            cx.stop_propagation();
-                            view.act(&handler, None);
-                        }))
-                        .into_any_element(),
-                    None => element.into_any_element(),
-                }
-            }
+            Node::Button(button) => self.button(button, 0.0, cx),
             Node::Notice(notice) => div()
                 .id(ElementId::NamedInteger("page-notice".into(), notice.id))
                 .role(if matches!(notice.tone, Some(Tone::Warn | Tone::Danger)) {
@@ -1943,6 +1986,8 @@ fn send_shortcut(
         "left" if event.keystroke.modifiers.alt => "ArrowLeft",
         "right" if event.keystroke.modifiers.alt => "ArrowRight",
         "delete" | "backspace" => "Delete",
+        // An issue's title edits on F2, as a name does in Finder.
+        "f2" => "F2",
         _ => return false,
     };
     let modifiers = event.keystroke.modifiers;
@@ -2036,7 +2081,8 @@ fn page_font(weight: FontWeight, mono: bool, cx: &gpui::App) -> gpui::FontId {
 /// How far down each text of a baseline row of texts starts its first line, so that their baselines meet, as CSS lines
 /// them up; `None` for any other row. Their lines are the tallest's, but for the sizes that set their own, and GPUI sets
 /// a line's text in its middle with the baseline `(ascent - descent) / 2` under it, so a smaller text's baseline sat
-/// higher than a larger one's: an issue's key three points over its title's.
+/// higher than a larger one's: an issue's key three points over its title's. A `wrap` button of one text is that text,
+/// inside the button's border and padding.
 pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>> {
     let line = line_height(&row.children).filter(|_| row.align == Align::Baseline)?;
     let system = cx.text_system();
@@ -2044,7 +2090,9 @@ pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>
         .children
         .iter()
         .map(|node| {
-            let Node::Text(text) = node else { return 0.0 };
+            let Some((text, top)) = row_text(node) else {
+                return 0.0;
+            };
             let (size, line) = match text.size {
                 TextSize::Normal => (13.0, line),
                 TextSize::Small => (12.0, line),
@@ -2063,7 +2111,7 @@ pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>
                 system.ascent(font, px(size)),
                 system.descent(font, px(size)),
             );
-            line / 2.0 + (ascent + descent).as_f32() / 2.0
+            top + line / 2.0 + (ascent + descent).as_f32() / 2.0
         })
         .collect();
     let lowest = baselines.iter().copied().fold(0.0, f32::max);
@@ -2075,11 +2123,11 @@ pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>
     )
 }
 
-/// The height of the tallest line of `nodes`, when they are all texts: a text's lines are 1.45 of its size, the page's
-/// line height, but for the sizes that set their own.
+/// The height of the tallest line of `nodes`, when they are all texts (`row_text`): a text's lines are 1.45 of its size,
+/// the page's line height, but for the sizes that set their own.
 fn line_height(nodes: &[Node]) -> Option<f32> {
     nodes.iter().try_fold(None::<f32>, |tallest, node| {
-        let Node::Text(text) = node else { return None };
+        let (text, _) = row_text(node)?;
         let height = match text.size {
             TextSize::Normal => 13.0 * 1.45,
             TextSize::Small => 12.0 * 1.45,
@@ -2089,6 +2137,22 @@ fn line_height(nodes: &[Node]) -> Option<f32> {
         };
         Some(Some(tallest.map_or(height, |tallest| tallest.max(height))))
     })?
+}
+
+/// The padding over and under a `wrap` button's text, as plugin-ui.css's `.w-button[data-wrap]`.
+const WRAPPED_PADDING: f32 = 2.0;
+
+/// The text a baseline row lines `node` up by, and how far into `node` its top is: a text's own, or the one text of a
+/// `wrap` button, under the button's 1pt border and its padding.
+fn row_text(node: &Node) -> Option<(&tree::Text, f32)> {
+    match node {
+        Node::Text(text) => Some((text, 0.0)),
+        Node::Button(button) if button.wrap => match button.children.as_slice() {
+            [Node::Text(text)] => Some((text, 1.0 + WRAPPED_PADDING)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn tone_color(tone: Tone) -> u32 {

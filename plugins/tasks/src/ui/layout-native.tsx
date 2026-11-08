@@ -1,4 +1,4 @@
-import { Children, type ComponentProps, type ReactElement, type ReactNode } from "react";
+import { Children, isValidElement, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { Card, Row, Stack, Text } from "wings-plugin-ui";
 
 /** The native Stack, which also takes a fixed `width` in px (wings-plugin-ui/native.js). */
@@ -56,14 +56,15 @@ export function Layout({ tag, className = "", children }: { tag: string; classNa
   }
   if (classes.includes("tk-props")) return <Column gap="l" width={240}>{children}</Column>;
   // tasks.css's title row: the type icon centred on the title, and the key right after the title on its baseline. The
-  // native Edit goes at the row's end.
+  // title's button has its own padding round the text, so it goes right after the icon and the key 8px after it: the
+  // text sits 11px from the icon and 19px from the key, as the desktop's button pulled 8px over the row's gap puts it.
   if (classes.includes("tk-title-row")) {
-    const [icon, title, key, ...edit] = Children.toArray(children);
+    const [icon, title, key] = Children.toArray(children);
+    const button = isValidElement<{ wrap?: boolean }>(title) && title.props.wrap === true;
     return (
-      <Row gap="m">
+      <Row gap={button ? "none" : "m"}>
         {icon}
-        <Row gap="l" align="baseline" grow>{title}{key}</Row>
-        {edit}
+        <Row gap={button ? "m" : "l"} align="baseline" grow>{title}{key}</Row>
       </Row>
     );
   }

@@ -301,9 +301,10 @@ export type ButtonSize = "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "
 /**
  * A button on Base UI's Button, `type="button"` unless you say otherwise. `variant` "default" is the filled one.
  * `busy` shows a spinner and ignores clicks while it keeps the keyboard focus, unlike `disabled`: it's `aria-busy`
- * and `aria-disabled`.
+ * and `aria-disabled`. `wrap` lets its text wrap onto the lines it needs, from its start, and makes it as tall as they
+ * are, like a title that is a button.
  */
-export function Button(props: Props<"button"> & { variant?: ButtonVariant; size?: ButtonSize; busy?: boolean }): ReactElement;
+export function Button(props: Props<"button"> & { variant?: ButtonVariant; size?: ButtonSize; busy?: boolean; wrap?: boolean }): ReactElement;
 /** A small quiet button. With `pressed` it's a toggle. */
 export function Chip(props: Props<"button"> & { pressed?: boolean }): ReactElement;
 export interface Option<V extends string> {

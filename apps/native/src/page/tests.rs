@@ -1074,6 +1074,61 @@ fn a_title_in_a_baseline_row_wraps_and_keeps_its_key_beside_it() {
     assert!(pressed_at(&app, &mut window, (266.0, 27.0), "Heard 1."));
 }
 
+/// Issues' title as the native page draws it: a ghost button that wraps the large title, then the key, which can be
+/// pressed here. The page hears the title's click and the F2 sent to it.
+const WRAPPED_TITLE: &str = r#"
+let edited = 0, keyed = 0, f2 = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
+{id:2,type:'Button',props:{variant:'ghost',wrap:true,label:'Edit the title',onClick:'2:click',onKeyDown:'2:key'},children:[
+{id:3,type:'Text',props:{size:'large',weight:'strong'},children:[{id:4,type:'#text',text:'Backfill order totals for rows created before the currency column existed'}]}]},
+{id:5,type:'Text',props:{size:'small',mono:true,onClick:'5:click'},children:[{id:6,type:'#text',text:'WEB-3'}]}]},
+{id:7,type:'Text',children:[{id:8,type:'#text',text:'Edited '+edited+', keyed '+keyed+', F2 '+f2+'.'}]}]}));}
+globalThis.__wingsEvent=(handler,json)=>{if(handler==='2:click')edited++;else if(handler==='5:click')keyed++;else if(JSON.parse(json).key==='F2')f2++;render();return true;};render();
+"#;
+
+#[test]
+fn a_wrap_button_is_as_tall_as_its_lines_keeps_the_key_beside_it_and_hears_f2() {
+    let (app, mut window) = open_narrow(WRAPPED_TITLE, 300.0);
+    settle(&app, &mut window, shows("Edited 0, keyed 0, F2 0."));
+    // The title's third line, 26pt lines under the button's 3pt of border and padding, is the button: it was one 32pt
+    // line that ran on past the frame, pushing the key out of it.
+    assert!(pressed_at(&app, &mut window, (40.0, 82.0), "Edited 1,"));
+    // The key, on the title's first line at the frame's right.
+    assert!(pressed_at(&app, &mut window, (268.0, 30.0), "keyed 1,"));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    key(&mut window, "f2");
+    settle(&app, &mut window, shows("F2 1."));
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Edited 2,"));
+}
+
+/// Issues' linked issue as the native page draws it: an outlined chip of a dot, the key and a title cut short, with an
+/// × beside it.
+const LINKED_ISSUE: &str = r#"
+let opened = 0, removed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'s'},children:[
+{id:2,type:'Button',props:{variant:'outline',size:'xs',onClick:'2:click'},children:[
+{id:3,type:'Dot',props:{tone:'info'}},
+{id:4,type:'Text',props:{tone:'muted',size:'tiny',mono:true},children:[{id:5,type:'#text',text:'WEB-8'}]},
+{id:6,type:'Text',props:{grow:true,truncate:true},children:[{id:7,type:'#text',text:'Order history landing page: tabs, design alignment, page and tab events'}]}]},
+{id:8,type:'Button',props:{variant:'ghost',size:'icon-xs',label:'Remove WEB-8',onClick:'8:click'},children:[{id:9,type:'#text',text:'×'}]}]},
+{id:10,type:'Text',children:[{id:11,type:'#text',text:'Opened '+opened+', removed '+removed+'.'}]}]}));}
+globalThis.__wingsEvent=(handler)=>{if(handler==='8:click')removed++;else opened++;render();return true;};render();
+"#;
+
+#[test]
+fn a_button_with_a_truncated_text_narrows_to_its_row_and_leaves_room_for_the_rest() {
+    let (app, mut window) = open_narrow(LINKED_ISSUE, 300.0);
+    settle(&app, &mut window, shows("Opened 0, removed 0."));
+    // The × is the row's last 24pt, inside the page's 14pt of padding: the chip kept the whole title's width and ran past
+    // the frame's edge, taking the × with it.
+    assert!(pressed_at(&app, &mut window, (274.0, 26.0), "removed 1."));
+    assert!(pressed_at(&app, &mut window, (40.0, 26.0), "Opened 1,"));
+}
+
 #[test]
 fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
     let row = |texts: &str| {
@@ -1103,6 +1158,14 @@ fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
         let mut center = row(&format!("{title},{key}"));
         center.align = crate::page::tree::Align::Center;
         assert_eq!(baseline_drops(&center, cx), None);
+        // A title that is a `wrap` button lines up as its text, which is 3pt into it, under its border and padding: the
+        // key beside it starts that much lower again.
+        let button = format!(
+            r##"{{"id":8,"type":"Button","props":{{"wrap":true,"variant":"ghost"}},"children":[{title}]}}"##
+        );
+        let wrapped = baseline_drops(&row(&format!("{button},{key}")), cx).unwrap();
+        assert_eq!(wrapped[0], 0.0);
+        assert!((wrapped[1] - drops[1] - 3.0).abs() < 0.01, "{wrapped:?}");
     });
 }
 

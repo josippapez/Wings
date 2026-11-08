@@ -1243,6 +1243,17 @@ h3.w-heading {
   width: 36px;
   height: 36px;
 }
+/* A button whose text wraps onto the lines it needs, from its start, as tall as they are: a title that is a button. A
+   word longer than its line breaks; a button never gets narrower than its longest word. */
+.w-button[data-wrap] {
+  flex-shrink: 1;
+  justify-content: flex-start;
+  height: auto;
+  padding-block: 2px;
+  white-space: normal;
+  overflow-wrap: break-word;
+  text-align: left;
+}
 .w-button:active {
   transform: none;
 }

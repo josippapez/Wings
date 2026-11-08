@@ -183,7 +183,7 @@ export function Text(props) {
 export function Button(props) {
   const { busy } = props;
   const label = props["aria-label"];
-  return h("Button", { ...pick(props, ["variant", "size", "chip", "pressed", "onClick", "onKeyDown", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
+  return h("Button", { ...pick(props, ["variant", "size", "chip", "pressed", "wrap", "onClick", "onKeyDown", "disabled"]), ...(label && { label }), ...(busy && { disabled: true }) }, busy ? h(Spinner, null) : null, props.children);
 }
 /** A small quiet button; with `pressed` it is on or off, drawn as a chip of `Chips` is. */
 export function Chip({ pressed, onClick, disabled, children, ...rest }) {

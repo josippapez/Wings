@@ -136,7 +136,7 @@ function Opened({ name }: { name: string }) {
 | `Avatar` | `name`, `size` (`small`, `large`), `label` | A round avatar with the initials of a name on a colour that depends only on the name. Decoration next to the name; with a `label` it's announced |
 | `Badge` | `variant` (`default`, `secondary`, `destructive`, `outline`, `ghost`, `link`), `tone` (`info`, `success`, `warn`, `danger`), `size` (`sm`: 18px, for a list row) | A small label, like a command or a branch name, drawn as the app's Badge. `tone` is Wings' own: a colour that says something |
 | `Loading`, `Empty` | `Empty`: `title`, `description` | Before the first data (a spinner and the text), and nothing to show |
-| `Button` | `variant` (`default`, `secondary`, `outline`, `ghost`, `destructive`, `link`), `size` (`default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`), `busy` | A button, `type="button"`; `default` is the filled one. `busy` shows a spinner and ignores clicks, keeping focus |
+| `Button` | `variant` (`default`, `secondary`, `outline`, `ghost`, `destructive`, `link`), `size` (`default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`), `busy`, `wrap` | A button, `type="button"`; `default` is the filled one. `busy` shows a spinner and ignores clicks, keeping focus. `wrap` lets its text wrap onto the lines it needs and the button grow to hold them, like a title that is a button |
 | `Chip`, `Chips` | `pressed`; `Chips`: `label`, `options`, `value`, `onChange` | A small quiet button, and a group of them that picks one, with `aria-pressed`, wrapping onto more lines when narrow. An option's other props, like `id`, go to its chip |
 | `Tabs` | `label`, `items` (`value`, `label`, `title`, `disabled`), `value`, `onChange`, `variant` (`default`, a pill in a tray; `line`, an underline), `children` | Tabs with arrow keys, Home and End, over their panel |
 | `Field` | `label`, `hint`, `error`, `id`, `inline` | A labelled field that names and describes the one input in it (a second input goes beside it: Base UI gives every input in a Field the first one's id). `id` becomes the input's, for a page that puts focus back by id; `inline` puts the label beside it |
@@ -250,7 +250,7 @@ rather than styles.
 `w-gauge-note`, `w-meter` with `data-tone`, `w-meter-fill`; `w-stats`, `w-stat-label`, `w-stat-value`;
 `w-props`, `w-prop`, `w-prop-label`, `w-prop-value`; `w-list` with `data-density`, `w-list-item`,
 `w-list-button` with `data-align`; `w-dot` with `data-tone` or `data-color`; `w-avatar` with `data-size` and `--w-hue`; `w-badge` with `data-variant` and `data-tone`; `w-spinner` with `data-size`;
-`w-loading`, `w-empty`, `w-empty-detail`; `w-button` with `data-variant`, `data-size`, `aria-disabled`; `w-chips`, `w-chip`;
+`w-loading`, `w-empty`, `w-empty-detail`; `w-button` with `data-variant`, `data-size`, `data-wrap`, `aria-disabled`; `w-chips`, `w-chip`;
 `w-tabs` with `data-variant`, `w-tab`; `w-field` with `data-layout`, `w-field-row`, `w-field-label`, `w-field-hint`,
 `w-field-group`, `w-input`, `w-search`, `w-select`, `w-check`; `w-combobox`, `w-listbox`, `w-option`,
 `w-option-label`, `w-option-detail`, `w-option-empty`; `w-menu-root`, `w-menu` with `data-align`, `w-menu-item`

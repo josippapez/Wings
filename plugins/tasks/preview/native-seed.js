@@ -30,6 +30,8 @@ const issues = [
     parent: "WEB-10",
     priority: "urgent",
     description: "## Goal\nShow the buyer what they are about to pay for in one place, right above the pay button.\n\n## Scope\n- One card built from `useCart()`, no new data fetching\n- Rounding happens once, on the sum\n\n## Done when\n- [x] The card shows items, shipping, tax and total\n- [ ] An empty cart hides the card",
+    related: ["WEB-8"],
+    blockedBy: ["WEB-3"],
     links: { branch: "feature/checkout-summary", pr: "https://example.com/acme/web/pull/412", commits: ["3fa91c2", "8b27de0"] },
     sessions: [{ ...agent, seen: ago(3) }],
     log: [
@@ -41,6 +43,7 @@ const issues = [
   }),
   issue("WEB-5", "Rename the cart store to match the checkout naming", "done", "task", 60),
   issue("WEB-7", "Hide the summary card for an empty cart", "todo", "task", 20, { parent: "WEB-4", priority: "low" }),
+  issue("WEB-8", "Order history landing page: tabs, design alignment, page and tab events", "todo", "feature", 18, { parent: "WEB-10" }),
   issue("WEB-6", "Upgrade the date picker", "done", "task", 70, { parent: "WEB-10" }),
   issue("WEB-10", "Checkout redesign", "in_progress", "epic", 80, { description: "The checkout pages on the new design system." }),
 ];

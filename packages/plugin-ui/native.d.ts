@@ -12,7 +12,7 @@ export interface NativeEvent {
   stopPropagation(): void;
 }
 
-/** A key pressed on a button, a row or a field. The app sends only the keys a page acts on: Enter and Escape in a field, Delete and Alt+Left or Alt+Right on a button or row. */
+/** A key pressed on a button, a row or a field. The app sends only the keys a page acts on: Enter and Escape in a field, Delete, F2 and Alt+Left or Alt+Right on a button or row. */
 export interface NativeKeyEvent {
   type: "keydown";
   key: string;
@@ -54,8 +54,13 @@ export function Text(props: {
   onClick?: (event: NativeEvent) => void;
   children?: ReactNode;
 }): ReactElement;
-/** A button. `variant` "default" is the filled one. `busy` shows a spinner and ignores clicks. An `aria-label` names a button that holds only an icon. */
-export function Button(props: { variant?: ButtonVariant; size?: "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg"; onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
+/**
+ * A button. `variant` "default" is the filled one. `busy` shows a spinner and ignores clicks. An `aria-label` names a
+ * button that holds only an icon. `wrap` lets its text wrap onto the lines it needs, from its start, and makes it as
+ * tall as they are, like a title that is a button; a `Text` in it keeps its size. A `Text` with `truncate` in a button
+ * lets the button narrow to fit its row and is cut with an ellipsis, as a desktop page's own CSS has such a button do.
+ */
+export function Button(props: { variant?: ButtonVariant; size?: "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg"; wrap?: boolean; onClick?: (event: NativeEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; disabled?: boolean; busy?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A small quiet button. With `pressed` it's a toggle. */
 export function Chip(props: { pressed?: boolean; onClick?: (event: NativeEvent) => void; disabled?: boolean; "aria-label"?: string; children?: ReactNode }): ReactElement;
 /** A short message in a tinted box. */

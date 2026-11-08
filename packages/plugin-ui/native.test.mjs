@@ -199,6 +199,13 @@ test("a password input says so, and other input types are plain text", () => {
   assert.equal("type" in start.props, false);
 });
 
+test("a button with wrap tells the app so, and one without doesn't", () => {
+  mount(h(Page, null, h(Button, { variant: "ghost", wrap: true }, h(Text, null, "A long title")), h(Button, null, "Go")));
+  const [wrapped, plain] = all(last(), "Button");
+  assert.equal(wrapped.props.wrap, true);
+  assert.equal("wrap" in plain.props, false);
+});
+
 test("a busy button ignores clicks and shows a spinner, an icon button is named by its aria-label, and the small parts render as text", () => {
   mount(h(Page, null,
     h(Button, { busy: true, onClick: () => {} }, "Start"),

@@ -68,6 +68,11 @@ test("Button takes shadcn/ui's variants and sizes, and is the default one withou
   assert.equal(attr(html(h(Button, null, "Go")), "size"), "default");
 });
 
+test("a Button with wrap says so, for plugin-ui.css to let its text wrap", () => {
+  assert.equal(attr(html(h(Button, { wrap: true }, "Go")), "wrap"), "");
+  assert.equal(attr(html(h(Button, null, "Go")), "wrap"), null);
+});
+
 test("Button is a button that doesn't submit a form unless you say so", () => {
   assert.match(html(h(Button, null, "Go")), /<button[^>]*type="button"/);
   assert.match(html(h(Button, { type: "submit" }, "Go")), /<button[^>]*type="submit"/);
