@@ -1812,7 +1812,7 @@ wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 
 "#;
 
 /// "Plugin tuner", with `main` and a settings page.
-fn install_tuner(data: &Data, main: &str) {
+pub(super) fn install_tuner(data: &Data, main: &str) {
     data.install_script(
         "tuner",
         json!({ "contributes": { "settings": { "page": "dist/settings.html" } } }),
@@ -1823,7 +1823,7 @@ fn install_tuner(data: &Data, main: &str) {
 }
 
 /// Clicks the middle of the element last drawn as `name` (`ui::spot`).
-fn click_spot(window: &mut TestAppWindow<Workspace>, name: &str) {
+pub(super) fn click_spot(window: &mut TestAppWindow<Workspace>, name: &str) {
     window.draw();
     let at = crate::ui::spot_at(name)
         .unwrap_or_else(|| panic!("{name} wasn't drawn"))

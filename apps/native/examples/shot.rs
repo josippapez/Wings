@@ -241,7 +241,7 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-dock") {
         return diff_dock(&mut cx, &config, &out);
     }
-    // `-- <out-dir> plugin-settings` renders only Settings showing plugins' own settings pages.
+    // `-- <out-dir> plugin-settings` renders only Settings showing plugins' own settings pages, and Plugins beside them.
     if std::env::args().nth(2).as_deref() == Some("plugin-settings") {
         return plugin_settings(&mut cx, &config, &out);
     }
@@ -1139,8 +1139,8 @@ fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     }
 }
 
-/// Settings on the Issues and PR tracker settings pages, each picked from its row under Plugin settings. The pages are
-/// the plugins' built native ones, over a made-up data folder.
+/// Settings on the Issues and PR tracker settings pages, each picked from its row under Plugin settings, then Plugins
+/// at its larger size, halfway there and done. The pages are the plugins' built native ones, over a made-up data folder.
 fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let data = Data::temp();
     let settings = serde_json::json!({ "settings": { "page": "dist/settings.html" } });
@@ -1191,6 +1191,32 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             wait(cx, window, Duration::from_millis(800));
             save(cx, window, &name(state));
         }
+        // The resize draws a frame every 16ms for its 200ms: the median of what each takes, against frames with nothing
+        // changed.
+        let frames = |cx: &mut VisualTestAppContext, count: usize, step: Duration| {
+            let mut took: Vec<Duration> = (0..count)
+                .map(|_| {
+                    cx.advance_clock(step);
+                    let started = Instant::now();
+                    let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+                    started.elapsed()
+                })
+                .collect();
+            took.sort();
+            took[count / 2]
+        };
+        let still = frames(cx, 12, Duration::ZERO);
+        click(cx, window, spot("settings-nav:Plugins"));
+        let first = frames(cx, 6, Duration::from_millis(16));
+        save(cx, window, &name("plugins-resizing"));
+        let second = frames(cx, 6, Duration::from_millis(16));
+        let settled = frames(cx, 12, Duration::ZERO);
+        println!(
+            "Settings at {width}: a frame with nothing changed {still:?}, resizing to Plugins {first:?} in its first \
+             half and {second:?} in its second, on Plugins once resized {settled:?}"
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("plugins-large"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }

@@ -109,6 +109,60 @@ fn the_new_settings_are_saved_and_come_back() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Settings is the desktop dialog's size: 820 x 600, and 1100 x 760 on Plugins, each within 32px of the window's edges.
+/// Changing between the two sizes takes the desktop's 200ms. A plugin's own page keeps the smaller size, as there.
+#[test]
+fn settings_is_the_desktops_size_for_each_section() {
+    use super::plugin_tests::{click_spot, install_tuner};
+    let data = Data::temp();
+    install_tuner(&data, "");
+    let (app, mut window) = super::tests::open_sized(
+        Some(gpui::size(gpui::px(1280.0), gpui::px(900.0))),
+        |config| config.plugins = Some(data.paths()),
+    );
+    let drawn = |window: &mut TestAppWindow<Workspace>| {
+        window.draw();
+        let bounds = crate::ui::spot_at("settings-dialog").expect("Settings is drawn");
+        // The spot fills the panel inside its 1px border.
+        (
+            bounds.size.width.as_f32() + 2.0,
+            bounds.size.height.as_f32() + 2.0,
+        )
+    };
+    let wait = |window: &mut TestAppWindow<Workspace>, time| {
+        app.advance_clock(time);
+        app.run_until_parked();
+        window.draw();
+    };
+    press(&mut window, ",");
+    assert_eq!(drawn(&mut window), (820.0, 600.0));
+
+    click_spot(&mut window, "settings-nav:Plugins");
+    wait(&mut window, settings::RESIZE / 2);
+    let (width, height) = drawn(&mut window);
+    assert!(
+        820.0 < width && width < 1100.0 && 600.0 < height && height < 760.0,
+        "on its way: {width} x {height}"
+    );
+    wait(&mut window, settings::RESIZE);
+    assert_eq!(drawn(&mut window), (1100.0, 760.0));
+
+    click_spot(&mut window, "settings-nav:Plugin tuner");
+    wait(&mut window, settings::RESIZE * 2);
+    assert_eq!(drawn(&mut window), (820.0, 600.0));
+
+    // In a smaller window, 32px clear of each edge.
+    window.simulate_resize(gpui::size(gpui::px(1000.0), gpui::px(640.0)));
+    // The test window takes the new size without telling the window, which reads it again here.
+    window.update(|_, window, cx| window.bounds_changed(cx));
+    click_spot(&mut window, "settings-nav:Plugins");
+    wait(&mut window, settings::RESIZE * 2);
+    assert_eq!(drawn(&mut window), (936.0, 576.0));
+    click_spot(&mut window, "settings-nav:General");
+    wait(&mut window, settings::RESIZE * 2);
+    assert_eq!(drawn(&mut window), (820.0, 576.0));
+}
+
 #[test]
 fn the_plugins_section_lists_the_plugins_and_writes_plugins_json_only_for_a_change() {
     let data = Data::temp();

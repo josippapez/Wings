@@ -1,6 +1,8 @@
 //! The Settings dialog, laid out like the desktop's: sections on the left, and each setting a row
 //! with what it does and its control. It lists only the settings the native app honours.
 
+use std::{cell::Cell, time::Duration};
+
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels, Role,
     SharedString, StyleRefinement, Subscription, Window, div, prelude::*, px, rgb, rgba,
@@ -48,6 +50,14 @@ pub(super) struct PluginSettings {
     title: SharedString,
     pub(super) page: Entity<PageView>,
 }
+
+/// The desktop dialog's sizes: `w-[min(820px,calc(100%-4rem))] h-[min(600px,…)]`, and 1100 x 760 for Plugins, which has
+/// a list and a details pane side by side. A plugin's own page keeps the smaller one, as there.
+const SIZE: (f32, f32) = (820.0, 600.0);
+const LARGE_SIZE: (f32, f32) = (1100.0, 760.0);
+/// The desktop's `transition-[width,height] duration-200 ease-out` between the two.
+pub(super) const RESIZE: Duration = Duration::from_millis(200);
+const EASE_OUT: (f32, f32, f32, f32) = (0.0, 0.0, 0.2, 1.0);
 
 impl Section {
     const ALL: [Section; 9] = [
@@ -165,6 +175,9 @@ pub(super) struct SettingsDialog {
     _link_events: Subscription,
     /// Takes the next key press as the global shortcut, while its button waits for one.
     pub(super) recording: Option<Subscription>,
+    /// How far the dialog is from its size to its larger size, 0 to 1, on its way when the section changed between
+    /// them. Unset until it is first drawn, which draws it at its section's size from the start.
+    large: Cell<Option<motion::Transition>>,
 }
 
 /// What choosing a select's item does.
@@ -226,6 +239,7 @@ impl Workspace {
             link,
             _link_events: link_events,
             recording: None,
+            large: Cell::new(None),
         });
         cx.notify();
     }
@@ -1186,7 +1200,11 @@ impl Workspace {
             .into_any_element()
     }
 
-    pub(super) fn settings_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn settings_dialog(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let dialog = self.settings.as_ref()?;
         let section = &dialog.section;
         let nav = Section::ALL.map(|item| {
@@ -1312,10 +1330,11 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED_FOREGROUND))
                     .child(format!("Wings {WINGS_VERSION}")),
             );
-        let (backdrop, panel) = ui::dialog("settings", "Settings", &dialog.focus, 820.0, 600.0);
+        let (width, height) = dialog.size(*section == Section::Plugins, window, cx);
+        let (backdrop, panel) = ui::dialog("settings", "Settings", &dialog.focus, width, height);
         Some(
             backdrop
-                // `w-[min(820px,calc(100%-4rem))]` and the same for its height: 32px clear of each edge.
+                // `calc(100%-4rem)`: 32px clear of each edge.
                 .p(px(32.0))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -1330,6 +1349,7 @@ impl Workspace {
                                 this.close_settings(window, cx);
                             }
                         }))
+                        .children(ui::spot(|| "settings-dialog".into()))
                         .child(sidebar)
                         .child(content)
                         .child(
@@ -1361,6 +1381,40 @@ impl Workspace {
         .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx)))
         .child(super::sidebar::row_hint(shortcut_label(",", false)))
         .into_any_element()
+    }
+}
+
+impl SettingsDialog {
+    /// Its width and height now: its section's size, at most the window's less 32px on each side, as the desktop's
+    /// `min(…, calc(100%-4rem))`. For `RESIZE` after the section changes between the two sizes it is on its way, as
+    /// the desktop's transition interpolates those `min`s.
+    fn size(&self, large: bool, window: &Window, cx: &gpui::App) -> (f32, f32) {
+        let now = cx.background_executor().now();
+        let to = if large { 1.0 } else { 0.0 };
+        let transition = match self.large.get() {
+            Some(transition) if transition.target() == to => transition,
+            Some(transition) => transition.retarget(to, RESIZE, EASE_OUT, now),
+            None => motion::Transition::at(to, now),
+        };
+        self.large.set(Some(transition));
+        let mut share = transition.value(now);
+        if (share - to).abs() < 1e-4 {
+            share = to;
+        } else {
+            window.request_animation_frame();
+        }
+        let room = window.viewport_size();
+        let side = |small: f32, big: f32, room: Pixels| {
+            let (small, big) = (
+                small.min(room.as_f32() - 64.0),
+                big.min(room.as_f32() - 64.0),
+            );
+            small + (big - small) * share
+        };
+        (
+            side(SIZE.0, LARGE_SIZE.0, room.width),
+            side(SIZE.1, LARGE_SIZE.1, room.height),
+        )
     }
 }
 

@@ -243,7 +243,7 @@ impl Workspace {
         let settings = self.layer(
             "settings",
             |this| &mut this.settings,
-            Self::settings_dialog,
+            |this, cx| this.settings_dialog(window, cx),
             cx,
         );
         let review = self.queued(
