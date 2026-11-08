@@ -1,7 +1,7 @@
 // The operations a page or a tool asks for, applied to a store: `applyOp` gives the changed copy, or throws an Error that says
 // what was wrong. Nothing is saved here.
 
-import { hasContent, isPriority, isStatus, isType, LIMITS, normalizeKey, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPES, type Actor, type Issue, type LogEntry, type Op, type Relations, type Store } from "./domain";
+import { checkEnum, hasContent, LIMITS, normalizeKey, PRIORITIES, PRIORITY_LABEL, STATUS_LABEL, STATUSES, TYPES, type Actor, type Issue, type LogEntry, type Op, type Relations, type Store } from "./domain";
 import { upsertFiles } from "./files";
 import { append, appendLoose, touch } from "./log";
 import { descendantsOf, relate } from "./relations";
@@ -25,23 +25,19 @@ function applyLinks(next: Issue, op: Extract<Op, { kind: "update" }>, by: Actor,
   const entries: LogEntry[] = [];
   const line = (t: string) => entries.push({ at: now, by, kind: "link", text: t });
   const links = { ...next.links };
+  /** Sets the branch or the PR to `value`, or clears it for "", and logs it as `label` when that changes it. */
+  const setLink = (field: "branch" | "pr", value: string, label: string) => {
+    if (value === (links[field] ?? "")) return;
+    if (value) links[field] = value;
+    else delete links[field];
+    line(value ? `${label}: ${value}` : `${label} removed`);
+  };
   if (op.branch !== undefined) {
     const branch = text(op.branch, "branch", LIMITS.branch);
     if (/\s/.test(branch)) throw new Error("branch can't contain spaces.");
-    if (branch !== (links.branch ?? "")) {
-      if (branch) links.branch = branch;
-      else delete links.branch;
-      line(branch ? `Branch: ${branch}` : "Branch removed");
-    }
+    setLink("branch", branch, "Branch");
   }
-  if (op.pr !== undefined) {
-    const pr = checkPr(op.pr);
-    if (pr !== (links.pr ?? "")) {
-      if (pr) links.pr = pr;
-      else delete links.pr;
-      line(pr ? `PR: ${pr}` : "PR removed");
-    }
-  }
+  if (op.pr !== undefined) setLink("pr", checkPr(op.pr), "PR");
   if (op.commit !== undefined) {
     const commit = text(op.commit, "commit", LIMITS.commit).toLowerCase();
     if (!SHA.test(commit)) throw new Error("commit must be a git commit hash of 7 to 40 hex digits.");
@@ -67,61 +63,75 @@ export interface Applied {
 /** Whether an op carries a link or type change, so the cheap path can skip copying every issue. */
 const hasRelations = (op: Relations): boolean => [op.type, op.parent, op.relatedAdd, op.relatedRemove, op.blockedByAdd, op.blockedByRemove].some((v) => v !== undefined);
 
+/**
+ * The store's issues with the type and link changes of `op` made to `issue` and to the issues they touch, or null when
+ * it changes none. The other issues are copies too, so a failure half way leaves the store as it was.
+ */
+function withRelations(store: Store, issue: Issue, op: Relations, by: Actor, now: number): Issue[] | null {
+  if (!hasRelations(op)) return null;
+  const map = new Map(store.issues.map((i) => [i.key, { ...i }]));
+  map.set(issue.key, issue);
+  return relate(map, issue, op, by, now) ? store.issues.map((i) => map.get(i.key)!) : null;
+}
+
 /** `store` with `op` applied by `by`, as a new store. Throws an Error that says what was wrong. */
 export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now()): Applied {
-  if (op.kind === "create") {
-    const title = text(op.title, "title", LIMITS.title);
-    if (!title) throw new Error("title is required.");
-    const description = op.description === undefined ? "" : text(op.description, "description", LIMITS.description);
-    if (op.status !== undefined && !isStatus(op.status)) throw new Error(`status must be one of ${STATUSES.join(", ")}.`);
-    if (op.type !== undefined && !isType(op.type)) throw new Error(`type must be one of ${TYPES.join(", ")}.`);
-    if (op.priority !== undefined && !isPriority(op.priority)) throw new Error(`priority must be one of ${PRIORITIES.join(", ")}.`);
-    if (store.issues.length >= LIMITS.issues) throw new Error(`A project holds up to ${LIMITS.issues} issues. Remove one first.`);
-    const issue: Issue = { key: `${store.prefix}-${store.next}`, title, status: op.status ?? "todo", type: op.type ?? "task", sessions: [], log: [{ at: now, by, kind: "created", text: "Created" }], createdAt: now, updatedAt: now };
-    if (hasContent(description)) issue.description = description;
-    if (op.priority && op.priority !== "none") issue.priority = op.priority;
-    touch(issue, by, now);
-    if (op.branch !== undefined) append(issue, applyLinks(issue, { kind: "update", key: issue.key, branch: op.branch }, by, now));
-    let issues = store.issues;
-    if (hasRelations({ ...op, type: undefined })) {
-      const map = new Map(store.issues.map((i) => [i.key, { ...i }]));
-      map.set(issue.key, issue);
-      relate(map, issue, { ...op, type: undefined }, by, now);
-      issues = store.issues.map((i) => map.get(i.key)!);
-    }
-    return { store: { ...store, next: store.next + 1, issues: [...issues, issue] }, issue, changed: true };
-  }
-
+  if (op.kind === "create") return createIssue(store, op, by, now);
   const wanted = normalizeKey(op.key);
   const index = store.issues.findIndex((i) => i.key === wanted);
   if (index < 0) throw new Error(`No issue ${wanted} in this project. Use list to see the keys.`);
-  const current = store.issues[index];
-  if (op.kind === "remove") {
-    // Whatever pointed at it lets go, and says why in its log. The counter stays where it is, so the key is never handed out again.
-    const gone = new Set([wanted, ...(op.children === true ? descendantsOf(store.issues, wanted).map((i) => i.key) : [])]);
-    const issues = store.issues
-      .filter((i) => !gone.has(i.key))
-      .map((i) => {
-        const notes: string[] = [];
-        let next = i;
-        const edit = () => (next === i ? (next = { ...i }) : next);
-        if (i.parent && gone.has(i.parent)) (notes.push(`Parent ${i.parent} was deleted`), delete edit().parent);
-        for (const [field, note] of [["related", "unlinked (related)"], ["blockedBy", "no longer blocking"]] as const) {
-          const hit = i[field]?.filter((k) => gone.has(k));
-          if (!hit?.length) continue;
-          const rest = i[field]!.filter((k) => !gone.has(k));
-          if (rest.length) edit()[field] = rest;
-          else delete edit()[field];
-          for (const k of hit) notes.push(`${k} was deleted: ${note}`);
-        }
-        if (next === i) return i;
-        appendLoose(next, notes.map((t) => ({ at: now, by, kind: "link" as const, text: t })));
-        next.updatedAt = now;
-        return next;
-      });
-    return { store: { ...store, issues }, issue: current, changed: true };
-  }
+  if (op.kind === "remove") return removeIssue(store, index, op, by, now);
+  return updateIssue(store, index, op, by, now);
+}
 
+function createIssue(store: Store, op: Extract<Op, { kind: "create" }>, by: Actor, now: number): Applied {
+  const title = text(op.title, "title", LIMITS.title);
+  if (!title) throw new Error("title is required.");
+  const description = op.description === undefined ? "" : text(op.description, "description", LIMITS.description);
+  if (op.status !== undefined) checkEnum(op.status, STATUSES, "status");
+  if (op.type !== undefined) checkEnum(op.type, TYPES, "type");
+  if (op.priority !== undefined) checkEnum(op.priority, PRIORITIES, "priority");
+  if (store.issues.length >= LIMITS.issues) throw new Error(`A project holds up to ${LIMITS.issues} issues. Remove one first.`);
+  const issue: Issue = { key: `${store.prefix}-${store.next}`, title, status: op.status ?? "todo", type: op.type ?? "task", sessions: [], log: [{ at: now, by, kind: "created", text: "Created" }], createdAt: now, updatedAt: now };
+  if (hasContent(description)) issue.description = description;
+  if (op.priority && op.priority !== "none") issue.priority = op.priority;
+  touch(issue, by, now);
+  if (op.branch !== undefined) append(issue, applyLinks(issue, { kind: "update", key: issue.key, branch: op.branch }, by, now));
+  // Its type is set already: only its links go through `relate`.
+  const issues = withRelations(store, issue, { ...op, type: undefined }, by, now) ?? store.issues;
+  return { store: { ...store, next: store.next + 1, issues: [...issues, issue] }, issue, changed: true };
+}
+
+function removeIssue(store: Store, index: number, op: Extract<Op, { kind: "remove" }>, by: Actor, now: number): Applied {
+  const current = store.issues[index];
+  // Whatever pointed at it lets go, and says why in its log. The counter stays where it is, so the key is never handed out again.
+  const gone = new Set([current.key, ...(op.children === true ? descendantsOf(store.issues, current.key).map((i) => i.key) : [])]);
+  const issues = store.issues
+    .filter((i) => !gone.has(i.key))
+    .map((i) => {
+      const notes: string[] = [];
+      let next = i;
+      const edit = () => (next === i ? (next = { ...i }) : next);
+      if (i.parent && gone.has(i.parent)) (notes.push(`Parent ${i.parent} was deleted`), delete edit().parent);
+      for (const [field, note] of [["related", "unlinked (related)"], ["blockedBy", "no longer blocking"]] as const) {
+        const hit = i[field]?.filter((k) => gone.has(k));
+        if (!hit?.length) continue;
+        const rest = i[field]!.filter((k) => !gone.has(k));
+        if (rest.length) edit()[field] = rest;
+        else delete edit()[field];
+        for (const k of hit) notes.push(`${k} was deleted: ${note}`);
+      }
+      if (next === i) return i;
+      appendLoose(next, notes.map((t) => ({ at: now, by, kind: "link" as const, text: t })));
+      next.updatedAt = now;
+      return next;
+    });
+  return { store: { ...store, issues }, issue: current, changed: true };
+}
+
+/** `store` with a note, the files a journal reported, or an update's changes made to the issue at `index`. */
+function updateIssue(store: Store, index: number, op: Extract<Op, { kind: "files" | "note" | "update" }>, by: Actor, now: number): Applied {
+  const current = store.issues[index];
   const next: Issue = { ...current };
   let entries: LogEntry[] = [];
   let changed = false;
@@ -151,7 +161,7 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
       }
     }
     if (op.status !== undefined) {
-      if (!isStatus(op.status)) throw new Error(`status must be one of ${STATUSES.join(", ")}.`);
+      checkEnum(op.status, STATUSES, "status");
       if (op.status !== next.status) {
         entries.push({ at: now, by, kind: "status", text: `${STATUS_LABEL[next.status]} → ${STATUS_LABEL[op.status]}` });
         next.status = op.status;
@@ -159,7 +169,7 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
       }
     }
     if (op.priority !== undefined) {
-      if (!isPriority(op.priority)) throw new Error(`priority must be one of ${PRIORITIES.join(", ")}.`);
+      checkEnum(op.priority, PRIORITIES, "priority");
       if (op.priority !== (next.priority ?? "none")) {
         entries.push({ at: now, by, kind: "priority", text: `Priority: ${PRIORITY_LABEL[next.priority ?? "none"]} → ${PRIORITY_LABEL[op.priority]}` });
         if (op.priority === "none") delete next.priority;
@@ -170,15 +180,8 @@ export function applyOp(store: Store, op: Op, by: Actor = "you", now = Date.now(
     const linkEntries = applyLinks(next, op, by, now);
     entries.push(...linkEntries);
     if (linkEntries.length) changed = true;
-    if (hasRelations(op)) {
-      // The other issues are copies too, so a failure half way leaves the store as it was.
-      const map = new Map(store.issues.map((i) => [i.key, { ...i }]));
-      map.set(next.key, next);
-      if (relate(map, next, op, by, now)) {
-        changed = true;
-        others = store.issues.map((i) => map.get(i.key)!);
-      }
-    }
+    others = withRelations(store, next, op, by, now);
+    if (others) changed = true;
   }
   if (!changed) return { store, issue: current, changed: false };
   append(next, entries);

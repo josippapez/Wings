@@ -138,6 +138,11 @@ export const hasContent = (description: string | undefined): boolean => visibleD
 export const isType = (v: unknown): v is IssueType => typeof v === "string" && (TYPES as string[]).includes(v);
 export const isPriority = (v: unknown): v is Priority => typeof v === "string" && (PRIORITIES as string[]).includes(v);
 export const isStatus = (v: unknown): v is Status => typeof v === "string" && (STATUSES as string[]).includes(v);
+/** Throws unless `value` is one of `list`, saying which `field` takes what. */
+export function checkEnum<T extends string>(value: unknown, list: readonly T[], field: string): asserts value is T {
+  const options: readonly string[] = list;
+  if (typeof value !== "string" || !options.includes(value)) throw new Error(`${field} must be one of ${list.join(", ")}.`);
+}
 
 // ---------- keys ----------
 

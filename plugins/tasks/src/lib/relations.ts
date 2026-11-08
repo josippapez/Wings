@@ -1,6 +1,6 @@
 // How issues relate: parents and children, related and blocking links. The queries read them, `relate` changes them.
 
-import { canParent, isType, KEY_PATTERN, keyNumber, MAX_LINKS, normalizeKey, TYPE_LABEL, TYPES, type Actor, type Issue, type LogKind, type Relations } from "./domain";
+import { canParent, checkEnum, KEY_PATTERN, keyNumber, MAX_LINKS, normalizeKey, TYPE_LABEL, TYPES, type Actor, type Issue, type LogKind, type Relations } from "./domain";
 import { append } from "./log";
 
 function keyList(value: unknown, field: string): string[] {
@@ -66,7 +66,7 @@ export function relate(map: Map<string, Issue>, self: Issue, op: Relations, by: 
   };
 
   if (op.type !== undefined) {
-    if (!isType(op.type)) throw new Error(`type must be one of ${TYPES.join(", ")}.`);
+    checkEnum(op.type, TYPES, "type");
     if (op.type !== self.type) {
       if (!canParent(op.type) && [...map.values()].some((i) => i.parent === self.key)) throw new Error(`${self.key} has child issues, so it has to stay an epic or a feature. Move them to another parent first.`);
       log(self, "type", `Type: ${TYPE_LABEL[self.type]} → ${TYPE_LABEL[op.type]}`);
