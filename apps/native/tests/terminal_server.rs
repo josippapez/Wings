@@ -954,3 +954,211 @@ mod bench {
         }
     }
 }
+
+/// `spawn_request` with a plain `/bin/sh`, so nothing a login shell's setup starts (prompt helpers) runs beside it.
+fn plain_shell(history_id: &str) -> Spawn {
+    let mut request = spawn_request(history_id);
+    request.env.retain(|(key, _)| key != "SHELL");
+    request.env.push(("SHELL".into(), "/bin/sh".into()));
+    request
+}
+
+/// A pane in `socket` whose shell has started and printed `ready`.
+fn ready_pane(socket: &Path, history_id: &str) -> Pane {
+    let (pane, mut events) = Pane::spawn(socket, plain_shell(history_id), b"").unwrap();
+    pane.write(b"echo re''ady\r").unwrap();
+    wait_for(&pane, &mut events, "ready");
+    pane
+}
+
+/// Starts `command` in the pane and waits until it runs in front of the shell.
+fn run_in(socket: &Path, pane: &Pane, command: &str) {
+    pane.write(format!("{command}\r").as_bytes()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = Control::connect(socket)
+            .unwrap()
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|info| info.pane == pane.number())
+            .unwrap();
+        if !terminal_server::idle_shell(&info) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{command:?} never ran");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The history ids of the panes running at `socket`.
+fn running_at(socket: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = Control::connect(socket)
+        .map(|mut control| control.list().unwrap_or_default())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|pane| !pane.exited)
+        .filter_map(|pane| pane.history_id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn gone(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid as i32, 0) } == 0 {
+        assert!(Instant::now() < deadline, "{pid} is still running");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_shell_at_its_prompt_is_idle_but_not_with_a_program_or_a_background_job() {
+    let folder = Folder::new("idle");
+    let servers = Servers::connect(&folder.0, Some(&Start::Child(BIN.into())));
+    let socket = servers.current().unwrap();
+    let idle = ready_pane(&socket, "h-idle");
+    let program = ready_pane(&socket, "h-program");
+    run_in(&socket, &program, "sleep 60");
+    let job = ready_pane(&socket, "h-job");
+    job.write(b"sleep 60 & echo bac''kground\r").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let listed = Control::connect(&socket).unwrap().list().unwrap();
+    let idle_of = |pane: &Pane| {
+        terminal_server::idle_shell(
+            listed
+                .iter()
+                .find(|info| info.pane == pane.number())
+                .unwrap(),
+        )
+    };
+    assert!(idle_of(&idle));
+    assert!(!idle_of(&program), "a program runs in front");
+    assert!(!idle_of(&job), "a job runs in the background");
+}
+
+#[test]
+fn at_launch_an_older_servers_idle_shells_no_saved_pane_names_end_and_busy_ones_stay() {
+    let folder = Folder::new("tidy-some");
+    let start = Start::Child(BIN.into());
+    let old = Servers::connect(&folder.0, Some(&start)).current().unwrap();
+    let _saved = ready_pane(&old, "h-saved");
+    let _lost = ready_pane(&old, "h-lost");
+    let busy = ready_pane(&old, "h-busy");
+    run_in(&old, &busy, "sleep 60");
+    let _unsaved_busy = {
+        let pane = ready_pane(&old, "h-unsaved-busy");
+        run_in(&old, &pane, "sleep 60");
+        pane
+    };
+
+    let newer = Servers::connect_as(&folder.0, Some(&start), SERVER_VERSION + 1);
+    newer.tidy_older(&["h-saved".into(), "h-busy".into()]);
+    assert_eq!(
+        running_at(&old),
+        ["h-busy", "h-saved", "h-unsaved-busy"],
+        "only the idle shell no saved pane names ended"
+    );
+    assert!(newer.claim("h-lost").is_none());
+    assert!(
+        newer.claim_running("h-saved").is_some(),
+        "the saved idle shell is still attached, as a program still runs beside it"
+    );
+}
+
+#[test]
+fn at_launch_an_older_server_running_only_idle_shells_ends_them_and_exits() {
+    let folder = Folder::new("tidy-all");
+    let start = Start::Child(BIN.into());
+    let old = Servers::connect(&folder.0, Some(&start)).current().unwrap();
+    let saved = ready_pane(&old, "h-saved");
+    saved.write(b"echo ke''pt\r").unwrap();
+    let other = ready_pane(&old, "h-other");
+    std::thread::sleep(Duration::from_millis(300));
+    // The app that ran them quit.
+    saved.detach();
+    other.detach();
+    let old_pid = server_pid(&old);
+
+    let newer = Servers::connect_as(&folder.0, Some(&start), SERVER_VERSION + 1);
+    newer.tidy_older(&["h-saved".into()]);
+    assert!(
+        newer.claim("h-saved").is_none(),
+        "it starts in the new server"
+    );
+    let kept = newer.claim_retired("h-saved").expect("what it printed");
+    assert!(String::from_utf8_lossy(&kept).contains("kept"));
+    assert!(newer.claim_retired("h-saved").is_none(), "taken once");
+    gone(old_pid);
+    assert!(!old.exists());
+}
+
+#[test]
+fn settings_lists_each_server_and_stops_an_older_one_with_its_terminals() {
+    let folder = Folder::new("stop");
+    let start = Start::Child(BIN.into());
+    let old = Servers::connect(&folder.0, Some(&start)).current().unwrap();
+    let busy = ready_pane(&old, "h-busy");
+    run_in(&old, &busy, "sleep 60");
+    let shell = busy.shell_pid().unwrap();
+    let old_pid = server_pid(&old);
+
+    let newer = Servers::connect_as(&folder.0, Some(&start), SERVER_VERSION + 1);
+    let current = newer.current().unwrap();
+    let _new = ready_pane(&current, "h-new");
+    let listed: Vec<_> = newer
+        .running()
+        .into_iter()
+        .map(|server| (server.version, server.socket, server.panes.len()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (SERVER_VERSION + 1, current.clone(), 1),
+            (SERVER_VERSION, old.clone(), 1)
+        ]
+    );
+    assert!(newer.is_older(&old) && !newer.is_older(&current));
+
+    assert!(
+        newer.stop(&current).is_err(),
+        "the current server isn't stopped"
+    );
+    newer.stop(&old).unwrap();
+    // The pane that showed it closes once its terminal ends.
+    busy.detach();
+    gone(shell);
+    gone(old_pid);
+    assert!(newer.claim("h-busy").is_none());
+    assert_eq!(running_at(&current), ["h-new"]);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_server_started_without_launchd_is_told_apart() {
+    let folder = Folder::new("marker");
+    std::fs::create_dir_all(&folder.0).unwrap();
+    let program = terminal_server::install(&bundle(&folder, "app", "1"), &folder.0).unwrap();
+    let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
+    let log = folder.0.join(format!("v{SERVER_VERSION}.log"));
+    terminal_server::start_detached(serve(&program, &socket), &log, |_, _| {
+        Err(std::io::Error::other("bootstrap refused"))
+    })
+    .unwrap();
+    answers(&socket);
+    assert!(terminal_server::started_directly(&socket));
+
+    let launched = Folder::new("marker-launchd");
+    std::fs::create_dir_all(&launched.0).unwrap();
+    let program = terminal_server::install(&bundle(&launched, "app", "1"), &launched.0).unwrap();
+    let socket = terminal_server::socket(&launched.0, SERVER_VERSION);
+    let log = launched.0.join(format!("v{SERVER_VERSION}.log"));
+    // A marker an earlier server left names another process.
+    std::fs::write(log.with_extension("direct"), "1").unwrap();
+    terminal_server::start_detached(serve(&program, &socket), &log, |cmd, log| {
+        wings_ptyd::launchd::spawn_without_launchd(cmd, log, Path::new("/tmp"))
+    })
+    .unwrap();
+    answers(&socket);
+    assert!(!terminal_server::started_directly(&socket));
+}

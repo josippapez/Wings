@@ -203,6 +203,8 @@ fn main() {
                 "checking",
                 "current",
                 "available",
+                "server-note",
+                "server-note-direct",
                 "no-notes",
                 "downloading",
                 "verifying",
@@ -282,6 +284,11 @@ fn main() {
     // `-- <out-dir> disk-access` renders only the dialog that asks to turn on other apps' data, and its row in Settings.
     if std::env::args().nth(2).as_deref() == Some("disk-access") {
         return disk_access(&mut cx, &config, &fake, &out);
+    }
+    // `-- <out-dir> older-servers` renders only a pane on a terminal server from before an update, the servers in
+    // Settings, General, and the dialog that stops the older one.
+    if std::env::args().nth(2).as_deref() == Some("older-servers") {
+        return older_servers(&mut cx, &config, &fake, &out);
     }
     // `-- <out-dir> restored` renders only the Agents list after a restart: a live agent, one restored in a project not
     // opened yet, and one in a pane waiting for its drive to mount, with that pane.
@@ -1374,6 +1381,102 @@ fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &
         );
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// A server from before an update, still running a program in a pane of the project and one no pane shows, beside the
+/// current server: in-process servers in a temp folder, which end with the renders.
+fn older_servers(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &Path) {
+    use wings_native::{
+        host::TerminalServers,
+        terminal_server::{self, Servers},
+    };
+    use wings_ptyd::{SERVER_VERSION, client::Pane, host, proto::Spawn};
+    for width in [1000.0, 640.0] {
+        // The app drains the older server and closing the window ends its panes, so each width has servers of its own.
+        let folder = PathBuf::from("/tmp").join(format!("wshot-{}-{width}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("make a server folder");
+        for version in [SERVER_VERSION, SERVER_VERSION + 1] {
+            let socket = terminal_server::socket(&folder, version);
+            let listener = host::bind(&socket).expect("bind a server");
+            let config = host::Config {
+                version,
+                ..host::Config::default()
+            };
+            thread::spawn(move || host::serve(listener, &socket, config));
+        }
+        let older = terminal_server::socket(&folder, SERVER_VERSION);
+        for (space, history) in [
+            (base.project.to_string_lossy().into_owned(), "shot-older"),
+            ("/elsewhere".to_owned(), "shot-hidden"),
+        ] {
+            let spawn = Spawn {
+                space_id: space,
+                cwd: fake.to_owned(),
+                cols: 80,
+                rows: 24,
+                history_id: Some(history.into()),
+                env: std::env::vars().collect(),
+            };
+            let (pane, _events) =
+                Pane::spawn(&older, spawn, b"").expect("a pane on the older server");
+            // A program runs, so nothing moves it to the current server.
+            pane.write(b"sleep 600\r").unwrap();
+            pane.detach();
+        }
+        thread::sleep(Duration::from_millis(500));
+        let servers = Servers::connect_as(&folder, None, SERVER_VERSION + 1);
+        let mut config = base.clone();
+        config.plugins = None;
+        config.sessions = None;
+        config.terminal_server = Some(TerminalServers(std::sync::Arc::new(servers)));
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(2));
+        save(
+            cx,
+            window,
+            &out.join(format!("older-servers-pane-{width}.png")),
+        );
+        cx.simulate_keystrokes(window, "cmd-,");
+        wait(cx, window, Duration::from_millis(600));
+        // Settings, General, the first section.
+        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
+        click(cx, window, point(px(left + 70.0), px(150.0)));
+        wait(cx, window, Duration::from_millis(300));
+        // Down to the terminal server's rows, at the end of the section.
+        cx.simulate_event(
+            window,
+            gpui::ScrollEvent {
+                position: point(px(width - 120.0), px(400.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-3000.0))),
+                ..Default::default()
+            },
+        );
+        wait(cx, window, Duration::from_millis(300));
+        save(
+            cx,
+            window,
+            &out.join(format!("older-servers-settings-{width}.png")),
+        );
+        handle
+            .update(cx, |w, window, cx| w.sample_stop_server(window, cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(400));
+        save(
+            cx,
+            window,
+            &out.join(format!("older-servers-stop-{width}.png")),
+        );
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        wait(cx, window, Duration::from_millis(300));
+        terminal_server::end_all(&folder);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
 

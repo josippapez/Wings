@@ -12,13 +12,16 @@ const LOCAL_ONLY = "#!/bin/sh\nprintf '%s\\n' '1) ABC \"Wings Local Signing\"'\n
 
 function fixture({ arch = "arm64", os = "Darwin", version = "0.1.0", security = LOCAL_ONLY } = {}) {
   const root = mkdtempSync(join(tmpdir(), "wings-native-package-"));
-  const native = join(root, "native");
+  // As in the repo: apps/native beside apps/desktop, and the terminal server's crate in crates/.
+  const native = join(root, "apps", "native");
   const bin = join(root, "bin");
   mkdirSync(join(native, "scripts"), { recursive: true });
-  mkdirSync(join(root, "desktop", "src-tauri", "icons"), { recursive: true });
+  mkdirSync(join(root, "apps", "desktop", "src-tauri", "icons"), { recursive: true });
+  mkdirSync(join(root, "crates", "wings-ptyd", "src"), { recursive: true });
+  writeFileSync(join(root, "crates", "wings-ptyd", "src", "lib.rs"), "pub const SERVER_VERSION: u32 = 6;\n");
   mkdirSync(bin);
   writeFileSync(join(native, "Cargo.toml"), `[package]\nname = "wings-native"\nversion = "${version}"\n`);
-  writeFileSync(join(root, "desktop", "src-tauri", "icons", "icon.icns"), "icon");
+  writeFileSync(join(root, "apps", "desktop", "src-tauri", "icons", "icon.icns"), "icon");
   writeFileSync(join(root, "test-updater.key"), "test only");
   for (const script of ["build-mac-app.sh", "install-mac-app.sh", "package-mac-app.sh"]) {
     cpSync(join(scripts, script), join(native, "scripts", script));
@@ -174,6 +177,21 @@ test("rejects non-macOS hosts before building", (t) => {
   assert.equal(existsSync(join(setup.native, "target/release")), false);
 });
 
+test("a second signed feed adds the terminal server's version, and the first stays as apps up to 0.2.10 read it", (t) => {
+  const setup = fixture({ version: "0.2.7" });
+  t.after(() => rmSync(setup.root, { recursive: true, force: true }));
+  const result = run(setup);
+  assert.equal(result.status, 0, result.stderr);
+  const output = join(setup.native, "target/release/bundle/macos/darwin-aarch64");
+  const first = JSON.parse(readFileSync(join(output, "native-latest-darwin-aarch64.json"), "utf8"));
+  const second = JSON.parse(readFileSync(join(output, "native-latest-darwin-aarch64.v2.json"), "utf8"));
+  // Those apps refuse a feed with a field they don't know.
+  assert.equal("server_version" in first, false);
+  assert.deepEqual(second, { ...first, server_version: 6 });
+  assert.equal(readFileSync(join(output, "native-latest-darwin-aarch64.v2.json.sig"), "utf8"), "test-signature");
+  assert.match(result.stdout, /native-latest-darwin-aarch64\.v2\.json/);
+});
+
 test("the installer reuses the native bundle build", () => {
   assert.match(readFileSync(join(scripts, "install-mac-app.sh"), "utf8"), /sh scripts\/build-mac-app\.sh/);
 });
@@ -201,15 +219,17 @@ test("a signing failure leaves no feed or partial signature", (t) => {
   assert.equal(result.status, 82);
   assert.match(result.stderr, /test signing failure/);
   const output = join(setup.native, "target/release/bundle/macos/darwin-aarch64");
-  for (const suffix of ["", ".sig", ".pending", ".pending.sig"]) {
-    assert.equal(existsSync(join(output, `native-latest-darwin-aarch64.json${suffix}`)), false);
+  for (const feed of ["native-latest-darwin-aarch64.json", "native-latest-darwin-aarch64.v2.json"]) {
+    for (const suffix of ["", ".sig", ".pending", ".pending.sig"]) {
+      assert.equal(existsSync(join(output, `${feed}${suffix}`)), false);
+    }
   }
 });
 
 test("WINGS_SWITCH=1 packages Wings.app under the desktop's id and version, with a latest.json for the desktop's updater", (t) => {
   const setup = fixture({ version: "0.1.0" });
   t.after(() => rmSync(setup.root, { recursive: true, force: true }));
-  writeFileSync(join(setup.root, "desktop", "src-tauri", "Cargo.toml"), `[package]\nname = "wings"\nversion = "0.2.0"\n`);
+  writeFileSync(join(setup.root, "apps", "desktop", "src-tauri", "Cargo.toml"), `[package]\nname = "wings"\nversion = "0.2.0"\n`);
   const result = run(setup, { WINGS_SWITCH: "1" });
   assert.equal(result.status, 0, result.stderr);
 

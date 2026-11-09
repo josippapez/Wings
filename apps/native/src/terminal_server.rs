@@ -18,8 +18,10 @@
 //!
 //! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket per version. One older than
 //! the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have ended, while
-//! new panes go to the app's version. Nothing kills a pane on an upgrade. A copy the app replaced is put aside, and
-//! deleted once no server runs from it (`remove_old_copies`).
+//! new panes go to the app's version. Nothing kills a pane that runs a program on an upgrade: only idle shells on an
+//! older server end at launch (`Servers::tidy_older`), and the app moves its panes off one once nothing else runs
+//! there (`workspace/older_servers.rs`). A copy the app replaced is put aside, and deleted once no server runs from it
+//! (`remove_old_copies`).
 //!
 //! When no server answers, or the server is turned off, the app runs new panes in its own process, and saves them under
 //! the same history ids. Panes a server still runs are attached either way, and keep running until they're closed.
@@ -157,6 +159,8 @@ impl Start {
     fn run(&self, dir: &Path, version: u32) -> io::Result<()> {
         let socket = socket(dir, version);
         let log = dir.join(format!("v{version}.log"));
+        // A marker from a server that ran here before says nothing about this one.
+        let _ = fs::remove_file(direct_marker(&log));
         match self {
             Start::Child(bin) => {
                 let mut child = Command::new(bin)
@@ -166,8 +170,15 @@ impl Start {
                     .args(play_version(version))
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(fs::OpenOptions::new().create(true).append(true).open(log)?)
+                    .stderr(
+                        fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&log)?,
+                    )
                     .spawn()?;
+                // A child of the app, it may end with it.
+                fs::write(direct_marker(&log), child.id().to_string())?;
                 // Reaped once it exits (drained or idle), so it doesn't linger as a zombie of the app.
                 thread::spawn(move || child.wait());
                 Ok(())
@@ -245,9 +256,93 @@ fn start_in_own_session(mut cmd: Command, log: &Path) -> io::Result<()> {
         });
     }
     let mut child = cmd.spawn()?;
+    // Its pid stays the same when it execs itself to disclaim (`wings_ptyd::responsibility`).
+    fs::write(direct_marker(log), child.id().to_string())?;
     // Reaped if it exits while the app runs, so it doesn't linger as a zombie of the app.
     thread::spawn(move || child.wait());
     Ok(())
+}
+
+/// The file a server started without launchd leaves beside its `log`, holding its process id, so an app can tell
+/// it may end with the app that started it (`started_directly`).
+fn direct_marker(log: &Path) -> PathBuf {
+    log.with_extension("direct")
+}
+
+/// Whether the server at `socket` was started without launchd, as a child of an app or in a session of its own, so it
+/// may end when that app quits. Told by the marker its start left (`direct_marker`), when it names this server.
+pub fn started_directly(socket: &Path) -> bool {
+    let Some(pid) = fs::read_to_string(direct_marker(socket))
+        .ok()
+        .and_then(|pid| pid.trim().parse::<u32>().ok())
+    else {
+        return false;
+    };
+    #[cfg(target_os = "macos")]
+    return Control::connect(socket)
+        .and_then(|control| control.server_pid())
+        .is_ok_and(|running| running == pid);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// The server version a socket is for, from its name, `v<version>.sock` (`socket`).
+pub fn socket_version(socket: &Path) -> Option<u32> {
+    socket
+        .file_name()?
+        .to_str()?
+        .strip_prefix('v')?
+        .strip_suffix(".sock")?
+        .parse()
+        .ok()
+}
+
+/// Whether the pane's shell sits at its prompt with nothing running: no program in front, and no job sent to the
+/// background. Anything that can't be told counts as running.
+pub fn idle_shell(pane: &PaneInfo) -> bool {
+    !pane.exited
+        && pane.shell_pid.is_some()
+        && pane.fg == pane.shell_pid
+        && pane.shell_pid.is_some_and(|shell| !has_jobs(shell))
+}
+
+/// Whether the shell `pid` has a child in a process group other than its own: a job it sent to the background. What its
+/// prompt runs stays in its own group and comes and goes as the prompt draws, so it doesn't count.
+#[cfg(target_os = "macos")]
+fn has_jobs(pid: u32) -> bool {
+    let mut pids = [0 as libc::pid_t; 64];
+    let size = std::mem::size_of_val(&pids) as libc::c_int;
+    let got =
+        unsafe { libc::proc_listchildpids(pid as libc::pid_t, pids.as_mut_ptr().cast(), size) };
+    if got < 0 {
+        return true;
+    }
+    pids.iter()
+        .take(got as usize)
+        .filter(|&&child| child > 0)
+        .any(|&child| {
+            let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+            let read = unsafe {
+                libc::proc_pidinfo(
+                    child,
+                    libc::PROC_PIDTBSDINFO,
+                    0,
+                    (&raw mut info).cast(),
+                    size,
+                )
+            };
+            // A child that ended meanwhile can't be read, and is no job.
+            read == size && info.pbi_pgid != pid
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_jobs(_: u32) -> bool {
+    true
 }
 
 /// The file the server answering `control` runs from. `None` when it can't be told.
@@ -380,6 +475,9 @@ pub struct Servers {
     /// New panes start in a server. Off, they run in the app, and the panes servers already run are still attached.
     on: AtomicBool,
     found: Mutex<Vec<(PathBuf, PaneInfo)>>,
+    /// What the saved panes whose idle shells an older server ran printed, by history id, once `tidy_older` ended
+    /// them: each pane starts again in the current server below it.
+    retired: Mutex<Vec<(String, Vec<u8>)>>,
     /// The folder, the app's server version and how a server starts, to start another when the current one is gone.
     dir: PathBuf,
     version: u32,
@@ -419,6 +517,7 @@ impl Servers {
                 current: Mutex::new(None),
                 on: AtomicBool::new(on),
                 found: Mutex::new(found),
+                retired: Mutex::default(),
                 dir: dir.to_owned(),
                 version,
                 start: start.cloned(),
@@ -473,6 +572,7 @@ impl Servers {
             current: Mutex::new(current.map(|(_, path)| path)),
             on: AtomicBool::new(on),
             found: Mutex::new(found),
+            retired: Mutex::default(),
             dir: dir.to_owned(),
             version: ours,
             start: start.cloned(),
@@ -580,6 +680,117 @@ impl Servers {
         Some(found.remove(at))
     }
 
+    /// The output `tidy_older` kept of the saved pane `history`, once, for its new shell.
+    pub fn claim_retired(&self, history_id: &str) -> Option<Vec<u8>> {
+        let mut retired = self.retired.lock().unwrap();
+        let at = retired.iter().position(|(id, _)| id == history_id)?;
+        Some(retired.remove(at).1)
+    }
+
+    /// Whether the server at `socket` is older than this app's: one told to drain.
+    pub fn is_older(&self, socket: &Path) -> bool {
+        socket_version(socket).is_some_and(|version| version < self.version)
+    }
+
+    /// Every server that answers in the folder, newest first, with the panes whose programs still run.
+    pub fn running(&self) -> Vec<Running> {
+        let mut running: Vec<Running> = fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let socket = entry.path();
+                socket_version(&socket)?;
+                let mut control = Control::connect(&socket).ok()?;
+                let version = control.welcome().server_version;
+                let panes = control
+                    .list()
+                    .ok()?
+                    .into_iter()
+                    .filter(|pane| !pane.exited)
+                    .collect();
+                Some(Running {
+                    socket,
+                    version,
+                    panes,
+                })
+            })
+            .collect();
+        running.sort_by_key(|server| std::cmp::Reverse(server.version));
+        running
+    }
+
+    /// Ends an older server and every pane it runs (`end`). The current one is never stopped this way.
+    pub fn stop(&self, socket: &Path) -> io::Result<()> {
+        if !self.is_older(socket) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "only an older terminal server can be stopped",
+            ));
+        }
+        end(socket)?;
+        self.found.lock().unwrap().retain(|(at, _)| at != socket);
+        Ok(())
+    }
+
+    /// At launch, before any pane claims its own: ends what older servers run that nobody would miss, so they drain
+    /// and exit. An idle shell (`idle_shell`) no saved pane in `saved` names ends. When every pane an older server
+    /// runs is an idle shell, they all end, and the saved panes among them start again in the current server, below
+    /// what they printed (`claim_retired`). A pane that runs a program is never ended. Nothing ends without a current
+    /// server to start them in.
+    pub fn tidy_older(&self, saved: &[String]) {
+        if self.current().is_none() {
+            return;
+        }
+        let mut found = self.found.lock().unwrap();
+        let mut older: Vec<PathBuf> = found
+            .iter()
+            .map(|(socket, _)| socket.clone())
+            .filter(|socket| self.is_older(socket))
+            .collect();
+        older.sort();
+        older.dedup();
+        for socket in older {
+            let running: Vec<&PaneInfo> = found
+                .iter()
+                .filter(|(at, pane)| *at == socket && !pane.exited)
+                .map(|(_, pane)| pane)
+                .collect();
+            let all_idle = running.iter().all(|pane| idle_shell(pane));
+            let ending: Vec<PaneInfo> = running
+                .into_iter()
+                .filter(|pane| idle_shell(pane))
+                .filter(|pane| {
+                    all_idle
+                        || !pane
+                            .history_id
+                            .as_ref()
+                            .is_some_and(|id| saved.contains(id))
+                })
+                .cloned()
+                .collect();
+            if ending.is_empty() {
+                continue;
+            }
+            let Ok(mut control) = Control::connect(&socket) else {
+                continue;
+            };
+            for pane in &ending {
+                let kept = pane
+                    .history_id
+                    .as_ref()
+                    .filter(|id| saved.contains(id))
+                    .map(|id| (id.clone(), control.read(pane.pane).unwrap_or_default()));
+                if let Err(error) = control.kill(pane.pane) {
+                    eprintln!("Couldn't end an idle terminal on an older terminal server: {error}");
+                    continue;
+                }
+                self.retired.lock().unwrap().extend(kept);
+                found.retain(|(at, other)| !(*at == socket && other.pane == pane.pane));
+            }
+        }
+    }
+
     /// The history ids of the panes of project `space_id` still running that no saved pane names, and so no saved
     /// pane will claim: a pane started just before the app crashed, or closed in an app that ran without the server.
     pub fn orphans(&self, space_id: &str, saved: &[String]) -> Vec<String> {
@@ -615,21 +826,33 @@ pub fn end_all(dir: &Path) {
         if !(name.starts_with('v') && name.ends_with(".sock")) {
             continue;
         }
-        let Ok(mut control) = Control::connect(&entry.path()) else {
-            continue;
-        };
-        // Drained first, so it starts no pane while this ends the others, and exits once it has none.
-        let ended = control
-            .drain()
-            .and_then(|()| control.list())
-            .and_then(|panes| panes.iter().try_for_each(|pane| control.kill(pane.pane)));
-        if let Err(error) = ended {
+        if let Err(error) = end(&entry.path()) {
             eprintln!(
                 "Couldn't end the terminal server at {}: {error}",
                 entry.path().display()
             );
         }
     }
+}
+
+/// Ends the server at `socket` and every pane it runs. It exits once its panes have ended.
+pub fn end(socket: &Path) -> io::Result<()> {
+    let mut control = Control::connect(socket)?;
+    // Drained first, so it starts no pane while this ends the others, and exits once it has none.
+    control.drain()?;
+    for pane in control.list()? {
+        control.kill(pane.pane)?;
+    }
+    Ok(())
+}
+
+/// A server that answers in the app's folder, as Settings lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Running {
+    pub socket: PathBuf,
+    pub version: u32,
+    /// The panes whose programs still run.
+    pub panes: Vec<PaneInfo>,
 }
 
 /// Ends a pane's program in its server. The pane is already gone from the app.

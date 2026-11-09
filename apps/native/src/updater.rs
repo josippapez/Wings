@@ -123,7 +123,14 @@ pub struct Release {
     pub sha256: String,
     #[serde(default)]
     pub notes: String,
+    /// The terminal server the release brings (`wings_ptyd::SERVER_VERSION`). Only the second feed (`FEED_V2`) has
+    /// it: apps up to 0.2.10 refuse a feed with a field they don't know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<u32>,
 }
+
+/// The second feed's name after the platform: the first feed with the fields newer apps read too.
+const FEED_V2: &str = ".v2";
 
 impl Release {
     fn validate(&self, current: &str, arch: &str) -> Result<bool> {
@@ -181,6 +188,7 @@ impl Available {
                 size: 13_529_763,
                 sha256: "0".repeat(64),
                 notes: notes.into(),
+                server_version: None,
             },
             manifest: Vec::new(),
             signature: Vec::new(),
@@ -411,7 +419,6 @@ fn check_with(
     current: &str,
     arch: &str,
 ) -> Result<Option<Available>> {
-    let name = format!("{}-{arch}.json", APP.feed);
     let fetch = |name: &str, max: u64| -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         download(transport, None, name, max, &mut bytes)?;
@@ -419,13 +426,18 @@ fn check_with(
     };
     // The feed and its signature are asked for together, so a check waits for one trip through GitHub's redirects, as
     // the desktop's single `latest.json` does, not two in a row.
-    let signature_name = format!("{name}.sig");
-    let (manifest, signature) = std::thread::scope(|scope| {
-        let signature = scope.spawn(|| fetch(&signature_name, 4096));
-        let manifest = fetch(&name, MAX_META);
-        (manifest, signature.join().unwrap())
-    });
-    let (manifest, signature) = (manifest?, signature?);
+    let feed = |name: String| -> Result<(Vec<u8>, Vec<u8>)> {
+        let signature_name = format!("{name}.sig");
+        let (manifest, signature) = std::thread::scope(|scope| {
+            let signature = scope.spawn(|| fetch(&signature_name, 4096));
+            let manifest = fetch(&name, MAX_META);
+            (manifest, signature.join().unwrap())
+        });
+        Ok((manifest?, signature?))
+    };
+    // A release from before the second feed has only the first.
+    let (manifest, signature) = feed(format!("{}-{arch}{FEED_V2}.json", APP.feed))
+        .or_else(|_| feed(format!("{}-{arch}.json", APP.feed)))?;
     authenticate(&manifest, &signature, key)?;
     let release: Release = serde_json::from_slice(&manifest).map_err(err)?;
     if !release.validate(current, arch)? {

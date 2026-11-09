@@ -72,8 +72,8 @@ Run these from Terminal.app, not from a pane in Wings: quitting Wings ends the s
 
 ## Shipping it through the desktop's updater
 
-1. From `apps/native`: `WINGS_SWITCH=1 sh scripts/package-mac-app.sh "Wings is now native"`. In `target/release/bundle/macos/darwin-<arch>/` it writes `Wings-<version>-darwin-<arch>.app.tar.gz` and its `.sig`, `wings-latest-darwin-<arch>.json` and its `.sig`, and `latest.json`.
-2. Publish all five in a release tagged `v<version>` in `josippapez/Wings`, and make it the latest release.
+1. From `apps/native`: `WINGS_SWITCH=1 sh scripts/package-mac-app.sh "Wings is now native"`. In `target/release/bundle/macos/darwin-<arch>/` it writes `Wings-<version>-darwin-<arch>.app.tar.gz` and its `.sig`, `wings-latest-darwin-<arch>.json` and its `.sig`, `wings-latest-darwin-<arch>.v2.json` (with the terminal server's `server_version`) and its `.sig`, and `latest.json`.
+2. Publish all seven in a release tagged `v<version>` in `josippapez/Wings`, and make it the latest release.
 3. A desktop install finds `latest.json`, verifies the archive with the same updater key, and swaps the bundle in the archive in place of its own `Wings.app` (Tauri's updater skips the archive's top folder). Its restart reads the new `Info.plist` and starts `CFBundleExecutable`, `wings-native`. From then on the replacement's own updater checks `wings-latest-darwin-<arch>.json`.
    The desktop has no terminal server, so its terminals end at this restart as on any desktop update. The replacement starts its server on its first launch, and from then on its own updater's restarts keep terminals running (see [releasing.md](releasing.md)).
 4. Later releases are made the same way. Keep publishing `latest.json` for desktops that haven't updated yet. Don't make a side-by-side `native-v*` release the latest one while desktops may still update, since it has no `latest.json`.

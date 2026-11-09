@@ -283,6 +283,15 @@ impl Workspace {
             Self::remove_dialog,
             cx,
         );
+        #[cfg(unix)]
+        let stop_server = self.layer(
+            "stop-server",
+            |this| &mut this.older.stopping,
+            Self::stop_server_dialog,
+            cx,
+        );
+        #[cfg(not(unix))]
+        let stop_server = None;
         let inbox = self.layer("inbox", |this| &mut this.inbox.open, Self::inbox_layer, cx);
         let menu = self.layer("menu", |this| &mut this.menu, Self::menu_layer, cx);
         let update = self.update_layer(cx);
@@ -295,6 +304,7 @@ impl Workspace {
             sheet.map(|(sheet, phase)| motion::sheet_layer(phase, sheet)),
             dialog("palette", palette),
             dialog("remove", remove),
+            dialog("stop-server", stop_server),
             inbox.map(|(inbox, phase)| {
                 motion::popup_layer("inbox", motion::From::Left, phase, inbox)
             }),

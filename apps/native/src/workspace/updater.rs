@@ -13,13 +13,31 @@ use gpui::{
 };
 use std::time::Duration;
 
-fn restart_warning(server_configured: bool) -> &'static str {
-    if server_configured {
+/// What restarting does to open terminals. A server started without launchd (`direct`) may end with the app, and its
+/// terminals with it.
+fn restart_warning(server_configured: bool, direct: bool) -> &'static str {
+    if direct {
+        "The terminal server was started without launchd, so open terminals and their agents may stop when Wings \
+         restarts. Save your work before installing."
+    } else if server_configured {
         "Terminals running in the background keep going. Others, and their agents, may stop. Save your work before \
          installing."
     } else {
         "Restarting may stop running terminals and agents. Save your work before installing."
     }
+}
+
+/// What the dialog says about open terminals when the update brings a terminal server newer than the one running
+/// (`brings` and `running`, the server versions), and `None` when it doesn't or the feed doesn't say. Nothing for a
+/// server started without launchd (`direct`), whose terminals `restart_warning` already says may stop.
+fn server_note(brings: Option<u32>, running: Option<u32>, direct: bool) -> Option<&'static str> {
+    if direct || brings? <= running? {
+        return None;
+    }
+    Some(
+        "Open terminals stay on the current terminal server and move to the new one once they're all idle, which \
+         gives them its permissions.",
+    )
 }
 
 /// How often the download's bar moves on at most. A download arrives in thousands of small pieces; each step draws the
@@ -182,9 +200,40 @@ mod tests {
 
     #[test]
     fn a_configured_server_does_not_promise_that_fallback_panes_survive() {
-        assert!(restart_warning(true).contains("Others, and their agents, may stop"));
-        assert!(restart_warning(true).contains("may stop"));
-        assert!(restart_warning(false).contains("may stop running terminals"));
+        assert!(restart_warning(true, false).contains("Others, and their agents, may stop"));
+        assert!(restart_warning(true, false).contains("may stop"));
+        assert!(restart_warning(false, false).contains("may stop running terminals"));
+        // A server started without launchd may end with the app: nothing promises its terminals keep going.
+        let direct = restart_warning(true, true);
+        assert!(direct.contains("may stop when Wings"), "{direct}");
+        assert!(!direct.contains("keep going"), "{direct}");
+    }
+
+    #[test]
+    fn the_terminal_note_shows_only_for_a_newer_server() {
+        assert_eq!(
+            server_note(None, Some(6), false),
+            None,
+            "a feed that doesn't say"
+        );
+        assert_eq!(
+            server_note(Some(6), Some(6), false),
+            None,
+            "the same server"
+        );
+        assert_eq!(server_note(Some(5), Some(6), false), None, "an older one");
+        assert_eq!(server_note(Some(7), None, false), None, "no server running");
+        let note = server_note(Some(7), Some(6), false).unwrap();
+        assert!(
+            note.contains("stay on the current terminal server"),
+            "{note}"
+        );
+        assert!(note.contains("its permissions"), "{note}");
+        assert_eq!(
+            server_note(Some(7), Some(6), true),
+            None,
+            "the restart warning says it for a server started without launchd"
+        );
     }
 
     #[test]
@@ -471,6 +520,9 @@ pub(super) struct Updates {
     busy: Entity<Busy>,
     /// The desktop's "Wings X is available" toast, shown when an automatic check finds an update.
     toast: bool,
+    /// The running terminal server's version, and whether it was started without launchd, as found when the dialog
+    /// last opened (`server_note`).
+    server: Option<(u32, bool)>,
 }
 impl Updates {
     /// Made with the workspace, before its first draw: GPUI only draws a view again on its own if it's older than the
@@ -493,6 +545,7 @@ impl Updates {
                 steps: 0,
             }),
             toast: false,
+            server: None,
         }
     }
 
@@ -601,6 +654,14 @@ impl Workspace {
     }
 
     fn show_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(unix)]
+        {
+            self.updates.server = self.config.terminal_server.as_ref().and_then(|servers| {
+                let current = servers.0.current()?;
+                let version = crate::terminal_server::socket_version(&current)?;
+                Some((version, crate::terminal_server::started_directly(&current)))
+            });
+        }
         if !self.updates.open {
             self.updates.previous = window.focused(cx);
             self.updates.open = true;
@@ -964,20 +1025,38 @@ impl Workspace {
         let server_configured = false;
         let content = self.updates.content();
         let body: Option<AnyElement> = match &self.updates.state {
-            State::Available(update) => Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.0))
-                    .child(Self::update_notes(update))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(restart_warning(server_configured)),
-                    )
-                    .into_any_element(),
-            ),
+            State::Available(update) => {
+                let note = server_note(
+                    update.release.server_version,
+                    self.updates.server.map(|(version, _)| version),
+                    self.updates.server.is_some_and(|(_, direct)| direct),
+                );
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .child(Self::update_notes(update))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .child(restart_warning(
+                                    server_configured,
+                                    self.updates.server.is_some_and(|(_, direct)| direct),
+                                )),
+                        )
+                        .when_some(note, |body, note| {
+                            body.child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .child(note),
+                            )
+                        })
+                        .into_any_element(),
+                )
+            }
             State::Idle | State::Checking | State::Downloading(_) | State::Installing(_) => {
                 Some(self.updates.busy.clone().into_any_element())
             }
@@ -1099,6 +1178,7 @@ impl Workspace {
             cx.notify();
             return;
         }
+        let sample = state;
         let (state, activity) = match state {
             "checking" => (
                 State::Checking,
@@ -1106,6 +1186,11 @@ impl Workspace {
             ),
             "current" => (State::Current, None),
             "available" => (State::Available(update), None),
+            "server-note" | "server-note-direct" => {
+                let mut update = update;
+                update.release.server_version = Some(wings_ptyd::SERVER_VERSION + 1);
+                (State::Available(update), None)
+            }
             "no-notes" => (State::Available(Available::sample("0.3.0", "")), None),
             "downloading" => (
                 State::Downloading(update),
@@ -1142,5 +1227,11 @@ impl Workspace {
             self.set_activity(activity, cx);
         }
         self.show_updates(window, cx);
+        // A server running now, older than the release's, started with launchd or without.
+        self.updates.server = None;
+        if sample == "server-note" || sample == "server-note-direct" {
+            self.updates.server =
+                Some((wings_ptyd::SERVER_VERSION, sample == "server-note-direct"));
+        }
     }
 }

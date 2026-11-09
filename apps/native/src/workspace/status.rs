@@ -145,6 +145,9 @@ impl Workspace {
             self.sync_sessions();
             self.inbox_agents(&before);
             self.pane_info = info;
+            // A program or agent that ended on an older server may let what runs there move to the current one.
+            #[cfg(unix)]
+            self.tidy_older_servers(cx);
             cx.notify();
         }
     }

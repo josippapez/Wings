@@ -21,10 +21,19 @@ use crate::{
 
 /// A server in its own folder, on this test's thread pool, as the app would find one already running.
 fn server(dir: &std::path::Path) -> PathBuf {
-    let socket = terminal_server::socket(dir, wings_ptyd::SERVER_VERSION);
+    server_at(dir, wings_ptyd::SERVER_VERSION)
+}
+
+/// `server`, saying it's `version`.
+fn server_at(dir: &std::path::Path, version: u32) -> PathBuf {
+    let socket = terminal_server::socket(dir, version);
     let listener = host::bind(&socket).unwrap();
     let serving = socket.clone();
-    std::thread::spawn(move || host::serve(listener, &serving, host::Config::default()));
+    let config = host::Config {
+        version,
+        ..host::Config::default()
+    };
+    std::thread::spawn(move || host::serve(listener, &serving, config));
     socket
 }
 
@@ -496,8 +505,20 @@ impl TwoProjects {
 
     /// The app with alpha on screen, as it opens at launch.
     fn launch(&self) -> (TestApp, TestAppWindow<Workspace>) {
+        self.launch_with(Servers::connect(&self.servers, None))
+    }
+
+    /// `launch` after an update that brought the next server version: the one from `new` is older, and drains.
+    fn launch_updated(&self) -> (TestApp, TestAppWindow<Workspace>, PathBuf) {
+        let newer = server_at(&self.servers, wings_ptyd::SERVER_VERSION + 1);
+        let servers = Servers::connect_as(&self.servers, None, wings_ptyd::SERVER_VERSION + 1);
+        let (app, window) = self.launch_with(servers);
+        (app, window, newer)
+    }
+
+    fn launch_with(&self, servers: Servers) -> (TestApp, TestAppWindow<Workspace>) {
         let (alpha, dir, claude) = (self.alpha.clone(), self.dir.clone(), self.claude.clone());
-        let servers = TerminalServers(Arc::new(Servers::connect(&self.servers, None)));
+        let servers = TerminalServers(Arc::new(servers));
         open_config(move |config| {
             config.project = alpha;
             config.projects = Some(dir.join("spaces.json"));
@@ -523,10 +544,7 @@ impl TwoProjects {
 
     /// Ends every pane the server runs, which would otherwise outlive the test.
     fn end(self) {
-        let mut control = wings_ptyd::client::Control::connect(&self.socket).unwrap();
-        for pane in control.list().unwrap() {
-            let _ = control.kill(pane.pane);
-        }
+        end_at(&self.socket);
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -712,13 +730,23 @@ fn start_agent(
     app: &TestApp,
     window: &mut TestAppWindow<Workspace>,
 ) -> (usize, u32) {
+    start_agent_running(projects, app, window, "sleep 60; true")
+}
+
+/// `start_agent`, its made-up `claude` running `script`.
+fn start_agent_running(
+    projects: &TwoProjects,
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    script: &str,
+) -> (usize, u32) {
     std::fs::create_dir_all(sub(projects)).unwrap();
     let claude = projects.dir.join("agent/claude");
     std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink("/bin/bash", &claude).unwrap();
     let pane = window.read(|w, _| w.focused_pane().unwrap());
     let run = format!(
-        "cd '{}' && '{}' -c 'sleep 60; true' {}\r",
+        "cd '{}' && '{}' -c '{script}' {}\r",
         sub(projects).display(),
         claude.display(),
         FLAGS.join(" ")
@@ -1112,4 +1140,285 @@ fn closing_the_window_quits_so_its_panes_run_on_in_the_server_for_the_next_launc
     });
     drop((window, app));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The socket and number of the pane's terminal in its server.
+fn served_at(window: &TestAppWindow<Workspace>, pane: usize) -> Option<(PathBuf, u32)> {
+    window.read(|w, cx| {
+        w.terminal(pane)?
+            .read(cx)
+            .server()
+            .map(|(socket, number)| (socket.to_owned(), number))
+    })
+}
+
+#[test]
+fn an_idle_shell_on_an_older_server_moves_to_the_current_one_in_the_same_pane_with_its_output() {
+    let projects = TwoProjects::new("wsmv");
+    let (mut app, mut window) = projects.launch();
+    let pane = window.read(|w, _| w.focused_pane().unwrap());
+    window.update(|w, _, cx| {
+        w.terminal(pane)
+            .unwrap()
+            .update(cx, |view, cx| view.write_input("echo fi''rst\r", cx))
+    });
+    let shows = |window: &TestAppWindow<Workspace>, text: &str| {
+        window.read(|w, cx| {
+            String::from_utf8_lossy(&w.terminal(pane).unwrap().read(cx).recent_output())
+                .contains(text)
+        })
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !shows(&window, "first") {
+        assert!(std::time::Instant::now() < deadline, "it never printed");
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let history = window.read(|w, _| w.panes[&pane].history.clone());
+    quit(&mut app);
+    drop((window, app));
+
+    let (app, mut window, newer) = projects.launch_updated();
+    assert_eq!(
+        served_at(&window, pane).map(|(socket, _)| socket),
+        Some(projects.socket.clone())
+    );
+    window.read(|w, cx| {
+        assert!(w.on_older_server(pane, cx));
+        assert!(
+            w.older_server_marker(pane, cx).is_some(),
+            "its header says so"
+        );
+    });
+    window.draw();
+
+    let on_older = |window: &TestAppWindow<Workspace>| {
+        served_at(window, pane).map(|(socket, _)| socket) == Some(projects.socket.clone())
+    };
+    // It has the keys: it stays.
+    window.update(|w, _, cx| w.tidy_older_servers(cx));
+    assert!(on_older(&window), "the focused pane isn't touched");
+    // Another tab in front, but you typed in it and didn't send it: it stays.
+    window.update(|w, window, cx| {
+        w.new_terminal(window, cx);
+        w.terminal(pane).unwrap().update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "draft", window, cx)
+        });
+        w.tidy_older_servers(cx);
+    });
+    assert!(on_older(&window), "a pane with a draft isn't touched");
+    // The draft cleared, nothing else runs on the older server, and you're not in the pane: it moves.
+    window.update(|w, window, cx| {
+        w.terminal(pane).unwrap().update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "\u{3}", window, cx)
+        });
+        w.tidy_older_servers(cx);
+    });
+    let (socket, _) = served_at(&window, pane).expect("still in a server");
+    assert_eq!(socket, newer, "on the current server");
+    window.read(|w, cx| {
+        assert!(!w.on_older_server(pane, cx));
+        assert!(w.older_server_marker(pane, cx).is_none());
+        assert_eq!(w.panes[&pane].history, history, "the same pane");
+    });
+    assert!(
+        shows(&window, "first"),
+        "with what it printed above the new shell"
+    );
+    wait_served(&projects.socket, &history, None);
+    wait_served(&newer, &history, Some(false));
+    drop((window, app));
+    end_at(&newer);
+    projects.end();
+}
+
+#[test]
+fn a_pane_running_a_program_keeps_the_older_server_and_its_neighbours_wait() {
+    let projects = TwoProjects::new("wsbz");
+    let (mut app, mut window) = projects.launch();
+    let pane = window.read(|w, _| w.focused_pane().unwrap());
+    window.update(|w, window, cx| w.split(crate::layout::Dir::Row, window, cx));
+    let busy = window.read(|w, _| w.focused_pane().unwrap());
+    run_in(&app, &mut window, busy, &projects.socket, "sleep 60");
+    quit(&mut app);
+    drop((window, app));
+
+    let (app, mut window, newer) = projects.launch_updated();
+    // Another tab in front, so the pane isn't the one with the keys.
+    window.update(|w, window, cx| {
+        w.new_terminal(window, cx);
+        w.tidy_older_servers(cx);
+    });
+    for pane in [pane, busy] {
+        assert_eq!(
+            served_at(&window, pane).map(|(socket, _)| socket),
+            Some(projects.socket.clone()),
+            "nothing moves while a program runs on the older server"
+        );
+    }
+    drop((window, app));
+    end_at(&newer);
+    projects.end();
+}
+
+#[test]
+fn an_idle_agent_on_an_older_server_exits_and_resumes_its_session_on_the_current_one() {
+    let projects = TwoProjects::new("wsag");
+    let (mut app, mut window) = projects.launch();
+    // A made-up agent that ends when it reads `/exit`, as Claude Code does.
+    let (pane, pid) = start_agent_running(&projects, &app, &mut window, "read line; true");
+    std::fs::write(
+        projects.claude.join(format!("sessions/{pid}.json")),
+        format!(r#"{{"sessionId":"{SESSION}","status":"idle"}}"#),
+    )
+    .unwrap();
+    quit(&mut app);
+    drop((window, app));
+
+    let (app, mut window, newer) = projects.launch_updated();
+    // Another tab in front, so the pane isn't the one with the keys.
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    wait_for(
+        &app,
+        &window,
+        |w| w.agents.get(&pane).is_some_and(|agent| agent.direct),
+        "the agent on the older server was never detected",
+    );
+    wait_for(
+        &app,
+        &window,
+        |w| w.older.exiting.contains_key(&pane) || !w.agents.contains_key(&pane),
+        "the idle agent was never told to exit",
+    );
+    wait_for(
+        &app,
+        &window,
+        |_| served_at(&window, pane).is_some_and(|(socket, _)| socket == newer),
+        "the pane never moved to the current server",
+    );
+    window.read(|w, cx| {
+        assert_eq!(
+            w.terminal(pane).unwrap().read(cx).written(),
+            [resume_line()],
+            "its session resumes in the new shell"
+        );
+        assert_eq!(w.panes[&pane].session, Some(agent_session()));
+    });
+    assert!(
+        unsafe { libc::kill(pid as i32, 0) } != 0,
+        "the agent ended on its own, not killed while working"
+    );
+    drop((window, app));
+    end_at(&newer);
+    projects.end();
+}
+
+#[test]
+fn settings_lists_the_servers_and_stops_an_older_one_after_asking() {
+    let projects = TwoProjects::new("wsst");
+    let (mut app, mut window) = projects.launch();
+    let pane = window.read(|w, _| w.focused_pane().unwrap());
+    run_in(&app, &mut window, pane, &projects.socket, "sleep 60");
+    quit(&mut app);
+    drop((window, app));
+
+    let (app, mut window, newer) = projects.launch_updated();
+    window.update(|w, window, cx| w.open_settings(window, cx));
+    let rows = window.read(|w, _| w.older.list.clone());
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.version, row.current, row.running, row.shown))
+            .collect::<Vec<_>>(),
+        [
+            (wings_ptyd::SERVER_VERSION + 1, true, 0, 0),
+            (wings_ptyd::SERVER_VERSION, false, 1, 1)
+        ]
+    );
+    window.draw();
+    window.update(|w, window, cx| {
+        let focus = cx.focus_handle();
+        w.older.stopping = Some((projects.socket.clone(), focus));
+        w.stop_server_dialog(cx).expect("it asks first");
+        w.stop_server(window, cx);
+    });
+    wait_for(
+        &app,
+        &window,
+        |w| !w.panes.contains_key(&pane),
+        "the pane on the stopped server never closed",
+    );
+    window.update(|w, _, cx| w.refresh_servers(cx));
+    window.read(|w, _| {
+        assert!(w.older.stopping.is_none());
+        assert!(
+            w.older.list.iter().all(|row| row.current),
+            "{:?}",
+            w.older.list
+        );
+    });
+    drop((window, app));
+    end_at(&newer);
+    projects.end();
+}
+
+/// Runs `command` in the pane once its shell takes input, and waits until it runs in front of the shell in the server
+/// at `socket`. Typed before the shell is ready, a line can be lost.
+fn run_in(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    pane: usize,
+    socket: &Path,
+    command: &str,
+) {
+    let write = |window: &mut TestAppWindow<Workspace>, text: String| {
+        window.update(|w, _, cx| {
+            w.terminal(pane)
+                .unwrap()
+                .update(cx, |view, cx| view.write_input(&text, cx))
+        })
+    };
+    write(window, "echo re''ady\r".into());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !window.read(|w, cx| {
+        String::from_utf8_lossy(&w.terminal(pane).unwrap().read(cx).recent_output())
+            .contains("ready")
+    }) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shell never took input"
+        );
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    write(window, format!("{command}\r"));
+    let history = window.read(|w, _| w.panes[&pane].history.clone());
+    loop {
+        let running = wings_ptyd::client::Control::connect(socket)
+            .unwrap()
+            .list()
+            .unwrap()
+            .into_iter()
+            .any(|info| {
+                info.history_id.as_deref() == Some(history.as_str())
+                    && !terminal_server::idle_shell(&info)
+            });
+        if running {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{command:?} never ran"
+        );
+        app.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Ends every pane the server at `socket` runs.
+fn end_at(socket: &Path) {
+    if let Ok(mut control) = wings_ptyd::client::Control::connect(socket) {
+        for pane in control.list().unwrap_or_default() {
+            let _ = control.kill(pane.pane);
+        }
+    }
 }

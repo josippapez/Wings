@@ -206,6 +206,8 @@ pub struct TerminalView {
     /// What Wings typed into it (`write_input`), for tests of what a pane is given.
     #[cfg(test)]
     written: Vec<String>,
+    /// The terminal server's socket and its number for the pane, when it runs in one.
+    server: Option<(PathBuf, u32)>,
     _release: Subscription,
 }
 
@@ -281,8 +283,12 @@ impl TerminalView {
         let (pane, events) = wings_ptyd::client::Pane::spawn(socket, spawn, &kept)
             .map_err(|error| format!("The terminal server couldn't start a shell: {error}"))?;
         let options = Options::of(&look(cx));
+        let server = Some((socket.to_owned(), pane.number()));
         let (runtime, latest, updates) = start_remote(pane, events, (80, 24), history, options)?;
-        Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
+        Ok(cx.new(|cx| Self {
+            server,
+            ..Self::new(runtime, latest, updates, cx)
+        }))
     }
 
     /// Attaches to a pane the terminal server at `socket` kept running, which shows what it printed meanwhile.
@@ -299,8 +305,12 @@ impl TerminalView {
             size => size,
         };
         let options = Options::of(&look(cx));
+        let server = Some((socket.to_owned(), pane.number()));
         let (runtime, latest, updates) = start_remote(pane, events, size, Vec::new(), options)?;
-        Ok(cx.new(|cx| Self::new(runtime, latest, updates, cx)))
+        Ok(cx.new(|cx| Self {
+            server,
+            ..Self::new(runtime, latest, updates, cx)
+        }))
     }
 
     fn new(
@@ -375,6 +385,7 @@ impl TerminalView {
             cursor_lit: true,
             painted_images: Vec::new(),
             _release: release,
+            server: None,
             #[cfg(test)]
             drawn: 0,
             #[cfg(test)]
@@ -508,6 +519,13 @@ impl TerminalView {
     #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn drawn_at(&self) -> Option<Bounds<Pixels>> {
         self.bounds
+    }
+
+    /// The terminal server's socket and its number for the pane, when it runs in one.
+    pub fn server(&self) -> Option<(&std::path::Path, u32)> {
+        self.server
+            .as_ref()
+            .map(|(socket, number)| (socket.as_path(), *number))
     }
 
     /// The program in front, which agent detection reads first.

@@ -74,6 +74,8 @@ fn run() -> Result<(), String> {
         } else {
             Servers::connect_off(&dir(data), start.as_ref())
         };
+        // Older servers' idle shells no pane would miss end now, so those servers can drain and exit.
+        servers.tidy_older(&saved::history_ids(state));
         config.terminal_server = Some(TerminalServers(std::sync::Arc::new(servers)));
     }
     // The first run starts the native project list as a copy of the desktop's.

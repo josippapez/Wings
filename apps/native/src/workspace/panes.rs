@@ -401,6 +401,9 @@ impl Workspace {
                 }
                 terminal_server::kill(&socket, pane.pane);
             }
+        } else if let Some(kept) = servers.claim_retired(history) {
+            // Its idle shell on an older server ended at launch: the new one starts below what it printed.
+            *output = kept;
         }
         let space = self.project_key();
         self.open_new_in_server(&space, history, folder, output, account, cx)
@@ -473,6 +476,8 @@ impl Workspace {
         else {
             return;
         };
+        #[cfg(unix)]
+        let older = self.on_older_server(pane, cx);
         self.panes.remove(&pane);
         let tab = &mut self.terminals[index];
         if tab.zoomed == Some(pane) {
@@ -491,6 +496,11 @@ impl Workspace {
                 }
             }
             None => self.close_tab(index, window, cx),
+        }
+        // What's left on its older server may now be able to move.
+        #[cfg(unix)]
+        if older {
+            self.tidy_older_servers(cx);
         }
         cx.notify();
     }

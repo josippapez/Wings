@@ -222,6 +222,10 @@ impl Workspace {
         };
         let badges = self.badge_pills(pane, cx);
         let opened_by = self.opened_by_pill(pane, cx);
+        #[cfg(unix)]
+        let older_server = self.older_server_marker(pane, cx);
+        #[cfg(not(unix))]
+        let older_server: Option<AnyElement> = None;
         let opened_terminals = self.agent_terminals_button(pane, zoomed, cx);
         let opened_buttons = self.opened_buttons(pane, cx);
         let strip = self.status_strip(pane, cx);
@@ -294,6 +298,7 @@ impl Workspace {
                 )
             })
             .children(opened_by)
+            .children(older_server)
             .children(opened_terminals)
             .child(div().flex_1())
             .children(badges)

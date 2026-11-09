@@ -30,6 +30,8 @@ mod manage_tests;
 mod nav;
 #[cfg(all(test, feature = "test-support"))]
 mod nav_tests;
+#[cfg(unix)]
+mod older_servers;
 mod opencode;
 mod palette;
 mod pane_card;
@@ -279,6 +281,9 @@ pub struct Workspace {
     watching_mounts: bool,
     /// Whether the terminals can read other apps' data, and the dialog that asks for it.
     disk_access: disk_access::DiskAccess,
+    /// Settings' list of terminal servers, its Stop dialog, and the panes moving off an older server.
+    #[cfg(unix)]
+    older: older_servers::OlderServers,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -426,6 +431,8 @@ impl Workspace {
             worktree_setup: None,
             watching_mounts: false,
             disk_access: Default::default(),
+            #[cfg(unix)]
+            older: Default::default(),
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {

@@ -28,15 +28,17 @@ The app is signed with the self-signed "Wings Local Signing" certificate, not an
 
 This is separate from the desktop updater. Bump `apps/native/Cargo.toml` to a newer stable semantic version. From `apps/native`, run `sh scripts/package-mac-app.sh "Release notes"`. It requires the same updater private key as the desktop (override its path with `WINGS_UPDATER_KEY`). No private key is embedded in the app. The script builds but never installs, quits an app, or publishes.
 
-Under `target/release/bundle/macos/darwin-<architecture>/`, publish these three assets yourself to a release tagged `native-v<version>` in `josippapez/Wings`:
+Under `target/release/bundle/macos/darwin-<architecture>/`, publish these five assets yourself to a release tagged `native-v<version>` in `josippapez/Wings`:
 
 - `Wings-native-<version>-darwin-<architecture>.app.tar.gz`
 - `native-latest-darwin-<architecture>.json`
 - `native-latest-darwin-<architecture>.json.sig`
+- `native-latest-darwin-<architecture>.v2.json`
+- `native-latest-darwin-<architecture>.v2.json.sig`
 
 Make it the latest release. Include both architecture feeds when shipping both architectures. A later desktop-only latest release without these assets makes native checks report an error until a latest release includes them again.
 
-The app fetches `https://github.com/josippapez/Wings/releases/latest/download/native-latest-darwin-<architecture>.json` and `.json.sig` over HTTPS. The `.sig` is the Tauri CLI's base64-wrapped minisign signature over the **exact complete JSON bytes**, including the final newline. The signed object has `bundle_identifier` (`dev.wings.native`), native `version`, `platform` (`darwin-aarch64` or `darwin-x86_64`), `artifact` (the basename above), compressed `size` in bytes, lowercase hexadecimal `sha256`, and `notes`. No URLs, destinations or commands come from the feed. Archives are fetched only from `https://github.com/josippapez/Wings/releases/download/native-v<version>/<artifact>`.
+The app fetches `https://github.com/josippapez/Wings/releases/latest/download/native-latest-darwin-<architecture>.json` and `.json.sig` over HTTPS. The `.sig` is the Tauri CLI's base64-wrapped minisign signature over the **exact complete JSON bytes**, including the final newline. The signed object has `bundle_identifier` (`dev.wings.native`), native `version`, `platform` (`darwin-aarch64` or `darwin-x86_64`), `artifact` (the basename above), compressed `size` in bytes, lowercase hexadecimal `sha256`, and `notes`. The `.v2.json` feed is the same object plus `server_version`, the terminal server the release brings (`SERVER_VERSION` in `crates/wings-ptyd/src/lib.rs`), which the update dialog compares with the running server's to say what happens to open terminals. It is a second file because apps up to 0.2.10 refuse a feed with a field they don't know; newer apps read it first and fall back to the first feed when a release lacks it. No URLs, destinations or commands come from the feed. Archives are fetched only from `https://github.com/josippapez/Wings/releases/download/native-v<version>/<artifact>`.
 
 The app authenticates before parsing, rejects older/current releases and wrong product/architecture, verifies archive size and SHA-256 before extraction, refuses links and unsafe tar paths, checks the plist and required executables, and runs macOS code-signature verification. Signing failures leave no publishable feed. Native metadata and artifacts never reuse desktop `latest.json` or `Wings.app.tar.gz`.
 

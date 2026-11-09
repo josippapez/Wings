@@ -233,6 +233,9 @@ impl Workspace {
         }
         // Its row says whether the terminals can read other apps' data now, which may have changed in System Settings.
         self.check_disk_access(cx);
+        // Its rows list the terminal servers running now.
+        #[cfg(unix)]
+        self.refresh_servers(cx);
         let family = cx.new(|cx| {
             let mut field = TextField::new(
                 Role::TextInput,
@@ -740,6 +743,8 @@ impl Workspace {
                 cx,
             )];
             card.extend(self.disk_access_row(cx));
+            #[cfg(unix)]
+            card.extend(self.server_rows(cx));
             cards.push(card);
         }
         cards

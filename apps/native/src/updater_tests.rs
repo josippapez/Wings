@@ -109,6 +109,7 @@ fn fixture(archive: Vec<u8>, change: impl FnOnce(&mut Release)) -> Fixture {
         size: archive.len() as u64,
         sha256: format!("{:x}", Sha256::digest(&archive)),
         notes: "Test notes".into(),
+        server_version: None,
     };
     change(&mut release);
     let manifest = serde_json::to_vec(&release).unwrap();
@@ -825,5 +826,94 @@ fn a_file_the_api_lists_outside_this_repo_is_not_downloaded() {
             .asked()
             .iter()
             .any(|(url, _)| url.contains("someone"))
+    );
+}
+
+/// Serves the first feed always, and the second only when it has one, each with its own signature.
+struct TwoFeeds {
+    first: Fixture,
+    second: Option<(Vec<u8>, Vec<u8>)>,
+    asked: Mutex<Vec<String>>,
+}
+impl Transport for TwoFeeds {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused> {
+        self.asked.lock().unwrap().push(url.to_owned());
+        if url.contains(FEED_V2) {
+            let Some((manifest, signature)) = &self.second else {
+                return Err(status_error(404).into());
+            };
+            let bytes = if url.ends_with(".sig") {
+                signature
+            } else {
+                manifest
+            };
+            return output.write_all(bytes).map_err(|e| err(e).into());
+        }
+        self.first.get(url, accept, max, output)
+    }
+}
+
+#[test]
+fn the_second_feed_says_which_terminal_server_the_release_brings() {
+    let first = fixture(archive("0.2.0", None, None), |_| {});
+    let mut release: Release = serde_json::from_slice(&first.manifest).unwrap();
+    release.server_version = Some(7);
+    let manifest = serde_json::to_vec(&release).unwrap();
+    let (key, signature) = signed(&manifest, 1);
+    assert_eq!(key, first.key, "the same signing key");
+    let feeds = TwoFeeds {
+        first,
+        second: Some((manifest, signature)),
+        asked: Mutex::new(Vec::new()),
+    };
+    let available = check_with(&feeds, &key, "0.1.0", platform())
+        .unwrap()
+        .unwrap();
+    assert_eq!(available.release.server_version, Some(7));
+    assert!(
+        feeds
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|url| url.contains(FEED_V2)),
+        "the first feed isn't asked for"
+    );
+}
+
+#[test]
+fn a_release_with_only_the_first_feed_brings_no_server_version() {
+    let first = fixture(archive("0.2.0", None, None), |_| {});
+    let key = first.key.clone();
+    let feeds = TwoFeeds {
+        first,
+        second: None,
+        asked: Mutex::new(Vec::new()),
+    };
+    let available = check_with(&feeds, &key, "0.1.0", platform())
+        .unwrap()
+        .unwrap();
+    assert_eq!(available.release.server_version, None);
+}
+
+#[test]
+fn the_first_feed_stays_readable_by_apps_that_refuse_unknown_fields() {
+    // The first feed is what apps up to 0.2.10 read: without the server's version, it parses as theirs did.
+    let release: Release =
+        serde_json::from_slice(&fixture(archive("0.2.0", None, None), |_| {}).manifest).unwrap();
+    let json = serde_json::to_value(&release).unwrap();
+    assert!(json.get("server_version").is_none());
+    let newer: std::result::Result<Release, _> = serde_json::from_str(
+        r#"{"bundle_identifier":"x","version":"1.0.0","platform":"p","artifact":"a","size":1,"sha256":"s","later":1}"#,
+    );
+    assert!(
+        newer.is_err(),
+        "a field it doesn't know is refused, as 0.2.10 refuses server_version"
     );
 }
