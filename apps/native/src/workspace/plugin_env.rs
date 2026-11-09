@@ -1118,6 +1118,9 @@ impl Workspace {
             installed
                 .host
                 .publish_projects(published_projects(&self.projects));
+            installed
+                .host
+                .publish_project(Some(self.config.project.as_path()));
             installed.host.publish_focus(self.window_active);
         }
         let paths = self.plugin_env.projects();

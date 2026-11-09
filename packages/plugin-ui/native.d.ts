@@ -229,7 +229,7 @@ export function CodeBlock(props: { code?: string; lines?: CodeLine[]; lang?: str
 /** How long ago `iso` was (after `prefix`), as text. Renders nothing when `iso` isn't a date. */
 export function Time(props: { iso: string; prefix?: string; now?: number }): ReactElement | null;
 
-/** The project the page is about: `undefined` until the app says, then the project, or `null` when none is open. Read once. */
+/** The project the page is about: `undefined` until the app says, then the project, or `null` when none is open. Follows `wings.onProject`. */
 export function useProject(): WingsProject | null | undefined;
 /** What `wings.openView` opened the tab with, as `check` reads it, or `null` when there were no args or `check` returns `null` or `undefined` for them. Read once. */
 export function useViewArgs<T>(check: Check<T>): T | null;

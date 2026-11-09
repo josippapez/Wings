@@ -100,6 +100,8 @@ enum Command {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Message {
     Projects,
+    /// The JSON of the project on screen, or `null`, for `onProject`.
+    Project,
     Focus,
     Git,
     DiffRefresh,
@@ -136,6 +138,7 @@ impl Message {
     fn name(self) -> &'static str {
         match self {
             Message::Projects => "projects",
+            Message::Project => "project",
             Message::Focus => "focus",
             Message::Git => "git",
             Message::DiffRefresh => "diffRefresh",

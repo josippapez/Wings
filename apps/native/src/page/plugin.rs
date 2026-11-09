@@ -147,6 +147,8 @@ struct Shared {
     tools: Mutex<Tools>,
     notified: Mutex<NotifyLog>,
     projects: Mutex<Vec<Project>>,
+    /// The JSON of the project on screen (or `null`) that the frames were last told, once the app has said.
+    current: Mutex<Option<String>>,
     focused: Mutex<HashMap<u64, bool>>,
     next_window: AtomicU64,
     diffs: Mutex<HashMap<String, (u64, Option<u32>)>>,
@@ -439,6 +441,7 @@ impl PluginHost {
                 tools: Mutex::default(),
                 notified: Mutex::default(),
                 projects: Mutex::default(),
+                current: Mutex::default(),
                 focused: Mutex::new(HashMap::from([(0, true)])),
                 next_window: AtomicU64::new(1),
                 diffs: Mutex::default(),
@@ -496,6 +499,21 @@ impl PluginHost {
             self.shared
                 .tell_all(Message::Projects, &json(&projects).unwrap());
             *old = projects;
+        }
+    }
+
+    /// The project on screen, by its folder: every frame hears it with `onProject` when it is not the one they heard
+    /// last, which is when the user switched projects or that project was renamed. Call after `publish_projects`.
+    pub fn publish_project(&self, path: Option<&std::path::Path>) {
+        let json = {
+            let projects = self.shared.projects.lock().unwrap();
+            json(&path.and_then(|path| projects.iter().find(|project| std::path::Path::new(&project.path) == path)))
+                .unwrap()
+        };
+        let mut current = self.shared.current.lock().unwrap();
+        if current.as_deref() != Some(json.as_str()) {
+            self.shared.tell_all(Message::Project, &json);
+            *current = Some(json);
         }
     }
 
@@ -825,6 +843,9 @@ impl PluginHost {
             0,
             json(&*self.shared.projects.lock().unwrap()).unwrap(),
         );
+        if let Some(current) = self.shared.current.lock().unwrap().clone() {
+            inbox.send(Message::Project, 0, current);
+        }
         let initial = effective_focus(&focused, role, window) && visible.load(Ordering::Relaxed);
         inbox.send(
             Message::Focus,

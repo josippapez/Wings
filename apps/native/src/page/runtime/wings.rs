@@ -72,10 +72,11 @@ const SETUP: &str = r#"
     let deliver;
     if (native.broadcast) {
         const none = () => {};
-        const listeners = { broadcast: [], panes: [], transcript: [], agentActivity: [], action: [], projects: [], focus: [], git: [], diffClosed: [], pluginEvent: [], sectionSort: [] };
+        const listeners = { broadcast: [], panes: [], transcript: [], agentActivity: [], action: [], projects: [], project: [], focus: [], git: [], diffClosed: [], pluginEvent: [], sectionSort: [] };
         let diffRefreshHandler = null;
         let replyHandler = null;
         let projects = null, focused = native.focused, focusKnown = false;
+        let current = null, currentKnown = false;
         const tools = new Map();
         const hooks = new Map();
         // QuickJS has no browser abort globals. Only the signal contract needed by diskFind is supplied.
@@ -209,6 +210,7 @@ const SETUP: &str = r#"
             switch (kind) {
                 case 'tool': void runTool(id, JSON.parse(text)); break;
                 case 'projects': projects = JSON.parse(text); hear(listeners.projects, projects); break;
+                case 'project': current = JSON.parse(text); currentKnown = true; hear(listeners.project, current); break;
                 case 'focus': {
                     const value = JSON.parse(text).focused === true;
                     if (focusKnown && value === focused) break;
@@ -303,6 +305,11 @@ const SETUP: &str = r#"
             diskFind: (path, { names, skip, onProgress, signal } = {}) =>
                 diskCall('diskFind', { path, names, skip }, { onProgress, signal }),
             project: () => call('project', {}),
+            onProject: (listener) => {
+                const off = subscribe(listeners.project, listener);
+                if (currentKnown) Promise.resolve().then(() => { try { listener(current); } catch (error) { defined.console.error(error); } });
+                return off;
+            },
             focusPane: (paneId) => call('focusPane', { paneId: String(paneId) }),
             tabState: () => call('tabState', {}),
             setTabState: (state) => call('setTabState', { state }),

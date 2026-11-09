@@ -613,11 +613,16 @@ export function CodeBlock({ code, lines, title, label, busy }) {
   );
 }
 
-/** The project the page is about, read once: `undefined` until the app says, then the project, or `null` when none is open. */
+/**
+ * The project the page is about: `undefined` until the app says, then the project, or `null` when none is open. Follows
+ * `wings.onProject`, so a sidebar or popover moves with the project on screen. An app without `onProject` is read once.
+ */
 export function useProject() {
   const [project, setProject] = useState(undefined);
   useEffect(() => {
-    globalThis.wings.project().then(setProject, () => setProject(null));
+    const wings = globalThis.wings;
+    if (typeof wings.onProject === "function") return wings.onProject(setProject);
+    wings.project().then(setProject, () => setProject(null));
   }, []);
   return project;
 }
