@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.5 · 2026-11-09
+
+- **Updates get through when GitHub's download links fail.** Since yesterday those links often answer HTTP 504 for minutes at a time. Wings now fetches the update through GitHub's API instead, so Check for updates and Install keep working.
+
 ## 0.2.4 · 2026-11-08
 
 - **See which Claude account a session uses.** Past sessions and the sidebar's Agents list show the account name next to a session from a named account.
