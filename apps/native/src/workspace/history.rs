@@ -734,7 +734,20 @@ impl Workspace {
         let Some(command) = resume_command(session.agent, &session.id) else {
             return;
         };
-        let line = format!("cd {} && {command}", shell_quote(&session.cwd));
+        // A session from another account resumes only under that account's folder.
+        let account = session
+            .transcript
+            .as_deref()
+            .and_then(account_of)
+            .filter(|account| Some(*account) != self.sessions.default_account().as_deref())
+            .map(|account| {
+                format!(
+                    "CLAUDE_CONFIG_DIR={} ",
+                    shell_quote(&account.to_string_lossy())
+                )
+            })
+            .unwrap_or_default();
+        let line = format!("cd {} && {account}{command}", shell_quote(&session.cwd));
         cx.write_to_clipboard(ClipboardItem::new_string(line));
         let id = session.id.clone();
         let Some(sheet) = &mut self.sheet else {

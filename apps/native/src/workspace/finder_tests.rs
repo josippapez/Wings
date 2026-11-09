@@ -694,6 +694,19 @@ fn the_resume_command_can_be_copied() {
         app.read_from_clipboard().and_then(|item| item.text()),
         Some(format!("cd {} && claude --resume {LOGIN}", gone.display()))
     );
+    // A session from another account copies with that account's folder, so it resumes there.
+    let work = folder("copy-work");
+    let mut other = session(LOGIN, &gone);
+    other.transcript = Some(work.join(format!("projects/-g-s/{LOGIN}.jsonl")));
+    window.update(|w, _, cx| w.copy_resume_command(&other, cx));
+    assert_eq!(
+        app.read_from_clipboard().and_then(|item| item.text()),
+        Some(format!(
+            "cd {} && CLAUDE_CONFIG_DIR={} claude --resume {LOGIN}",
+            gone.display(),
+            work.display()
+        ))
+    );
 }
 
 #[test]
