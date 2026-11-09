@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.11 · 2026-11-09
+
+- **Older terminal servers clean up after themselves.** After an update brings a new terminal server, the old one keeps the terminals it runs. Once every terminal on it is idle, its shells move to the new server in the same tab with their output kept, idle agents exit and resume their session there, and the old server ends. Settings, General lists the running servers and their terminals, with a Stop button for an older one, and a terminal still on an older server says so in its header.
+- **The update dialog says what happens to open terminals.** When an update brings a new terminal server, it says open terminals move over once idle. When the server was started without launchd, it warns that open terminals may stop when Wings restarts.
+- **Copy resume command opens the right Claude account.** A session from another account copies with `CLAUDE_CONFIG_DIR` set to that account's folder.
+- **Check logs fit the page.** Long lines in a check's log wrap inside the card instead of running past it, and the text lines up after the line numbers. In PR tracker 0.28.4, picking another step shows it loading at once.
+
 ## 0.2.10 · 2026-11-09
 
 - **Let terminals read Chrome's data without Full Disk Access.** Wings' terminals now run under a small "Wings Terminals" app, so macOS can keep a grant just for Google Chrome's data, which the Chrome DevTools MCP needs. When a terminal is refused, Wings asks once and opens Privacy & Security, Files & Folders: turn on Google Chrome under Wings Terminals. Terminals started before this update keep running on the old server until they end.
