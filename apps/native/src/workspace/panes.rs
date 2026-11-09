@@ -159,9 +159,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let pick = account.filter(|pick| wings_spaces::claude_accounts::pick_dir(pick).is_ok());
-        let folder = cwd
-            .filter(|folder| folder.is_dir())
-            .unwrap_or_else(|| self.config.project.clone());
         let history = history
             .filter(|history| saved::valid_history_id(history))
             .unwrap_or_else(|| {
@@ -170,6 +167,21 @@ impl Workspace {
                     .unwrap_or_default();
                 format!("{:x}-{id}", now.as_nanos())
             });
+        // Started in another folder, its agent's session wouldn't be found there.
+        if let Some(volume) =
+            unmounted_volume(cwd.as_deref(), &self.config.project, &self.config.volumes)
+        {
+            let waiting = format!("Waiting for {} to be mounted", volume.display());
+            self.insert_pane(id, Err(waiting.into()), history, pick, session, cx);
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.mount = Some(MountWait { volume, cwd });
+            }
+            self.watch_mounts(cx);
+            return;
+        }
+        let folder = cwd
+            .filter(|folder| folder.is_dir())
+            .unwrap_or_else(|| self.config.project.clone());
         let mut output = self
             .config
             .state
@@ -185,17 +197,90 @@ impl Workspace {
         let (view, attached) = match served {
             Some((view, attached)) => (Ok(view), attached),
             None => (
-                TerminalView::open(folder, output, account, cx).map_err(SharedString::from),
+                TerminalView::open(folder, output, account.clone(), cx).map_err(SharedString::from),
                 false,
             ),
         };
-        if !attached
-            && let Ok(view) = &view
-            && let Some(line) = session.as_ref().and_then(super::history::resume_line)
-        {
-            view.update(cx, |view, cx| view.write_input(&line, cx));
-        }
+        let line = session.as_ref().filter(|_| !attached).and_then(|session| {
+            let dir = account.as_deref().or(self.config.agents.as_deref());
+            super::history::restore_line(session, dir)
+        });
+        let resuming = match (&view, &line) {
+            (Ok(view), Some(line)) => {
+                view.update(cx, |view, cx| view.write_input(line, cx));
+                true
+            }
+            _ => false,
+        };
         self.insert_pane(id, view, history, pick, session, cx);
+        if resuming && let Some(pane) = self.panes.get_mut(&id) {
+            pane.resuming = Some(cx.background_executor().now());
+            // Its row says it couldn't resume once the time is up, which nothing else would draw.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(RESUME_TIMEOUT).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+    }
+
+    /// Starts the panes waiting for a drive that is now mounted, in the folders they were in, and resumes their agents.
+    /// Whether any still wait.
+    fn start_mounted(&mut self, cx: &mut Context<Self>) -> bool {
+        let mounted: Vec<usize> = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.mount.as_ref().is_some_and(|wait| wait.volume.is_dir()))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &mounted {
+            let Some(pane) = self.panes.remove(id) else {
+                continue;
+            };
+            let cwd = pane.mount.and_then(|wait| wait.cwd);
+            self.open_pane_at(
+                *id,
+                cwd,
+                Some(pane.history),
+                pane.claude_account,
+                pane.session,
+                cx,
+            );
+            if let Some(started) = self.panes.get_mut(id) {
+                started.name = pane.name;
+            }
+        }
+        if !mounted.is_empty() {
+            // Shown only if its tab is, and with the keys if it has focus there.
+            let workspace = cx.entity();
+            cx.defer(move |cx| {
+                cx.with_window(workspace.entity_id(), |window, cx| {
+                    workspace.update(cx, |this, cx| this.show(this.active, window, cx))
+                });
+            });
+        }
+        self.panes.values().any(|pane| pane.mount.is_some())
+    }
+
+    /// Checks for the drives panes wait for until none does. A check is one `stat` of each drive's folder.
+    fn watch_mounts(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.watching_mounts, true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(MOUNT_CHECK).await;
+                let waiting = this.update(cx, |this, cx| {
+                    let waiting = this.start_mounted(cx);
+                    this.watching_mounts = waiting;
+                    waiting
+                });
+                if !matches!(waiting, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// The folder for `CLAUDE_CONFIG_DIR` in a pane of the project on show that was asked for the account `pick`, else
@@ -234,6 +319,8 @@ impl Workspace {
                 claude_account,
                 session,
                 agent_seen: false,
+                resuming: None,
+                mount: None,
                 renaming: None,
                 _exit: exit,
             },
@@ -508,6 +595,46 @@ impl Workspace {
     }
 }
 
+/// How long a resumed agent may take to show up before its row says it couldn't resume, as in the desktop app.
+pub(super) const RESUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How often panes waiting for a drive look for it.
+const MOUNT_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What a pane waiting for a drive starts with once the drive is mounted.
+pub(super) struct MountWait {
+    /// The drive's folder, like `/Volumes/encrypted`.
+    pub(super) volume: PathBuf,
+    pub(super) cwd: Option<PathBuf>,
+}
+
+/// The drive in `volumes` that the pane's folder is on, when that drive isn't mounted: its own folder `cwd`, else the
+/// project's. `None` when the folder is there, or is missing for another reason, which starts the shell in the project
+/// folder as before.
+fn unmounted_volume(
+    cwd: Option<&std::path::Path>,
+    project: &std::path::Path,
+    volumes: &std::path::Path,
+) -> Option<PathBuf> {
+    for folder in cwd.into_iter().chain([project]) {
+        if folder.is_dir() {
+            return None;
+        }
+        let Some(drive) = folder
+            .strip_prefix(volumes)
+            .ok()
+            .and_then(|rest| rest.components().next())
+        else {
+            continue;
+        };
+        let volume = volumes.join(drive);
+        if !volume.is_dir() {
+            return Some(volume);
+        }
+    }
+    None
+}
+
 /// `/Users/me/x` becomes `~/x`, like the desktop's `tildify`.
 pub(super) fn tildify(path: &str) -> String {
     match std::env::home_dir().and_then(|home| Some(path.strip_prefix(home.to_str()?)?.to_owned()))
@@ -516,5 +643,44 @@ pub(super) fn tildify(path: &str) -> String {
             format!("~{rest}")
         }
         _ => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unmounted_volume;
+
+    #[test]
+    fn a_pane_waits_only_for_a_drive_that_isnt_mounted() {
+        let root = std::env::temp_dir().join(format!("wings-volumes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let volumes = root.join("Volumes");
+        let mounted = volumes.join("work");
+        std::fs::create_dir_all(mounted.join("app")).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let locked = volumes.join("encrypted");
+        let wait = |cwd: Option<&std::path::Path>, project: &std::path::Path| {
+            unmounted_volume(cwd, project, &volumes)
+        };
+
+        // Its folder is there.
+        assert_eq!(wait(Some(&mounted.join("app")), &locked.join("x")), None);
+        // Its folder, or with none the project's, is on a drive that isn't mounted.
+        assert_eq!(
+            wait(Some(&locked.join("x/web")), &home),
+            Some(locked.clone())
+        );
+        assert_eq!(wait(None, &locked.join("x")), Some(locked.clone()));
+        assert_eq!(
+            wait(Some(&home.join("gone")), &locked.join("x")),
+            Some(locked.clone()),
+            "a gone folder falls back to the project's, which waits for its drive"
+        );
+        // A folder gone from a mounted drive or from the main disk starts in the project folder, as before.
+        assert_eq!(wait(Some(&mounted.join("gone")), &home), None);
+        assert_eq!(wait(Some(&home.join("gone")), &home), None);
+        assert_eq!(wait(None, &home.join("gone")), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

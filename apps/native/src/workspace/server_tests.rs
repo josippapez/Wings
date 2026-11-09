@@ -691,6 +691,7 @@ fn agent_session() -> crate::saved::SavedSession {
         kind: crate::saved::SessionKind::Claude,
         id: SESSION.into(),
         args: FLAGS.map(String::from).to_vec(),
+        name: None,
     }
 }
 
@@ -739,6 +740,7 @@ fn start_agent(
         format!(r#"{{"sessionId":"{SESSION}"}}"#),
     )
     .unwrap();
+    write_transcript(&projects.claude);
     wait_for(
         app,
         window,
@@ -746,6 +748,147 @@ fn start_agent(
         "the pane never kept its agent's session",
     );
     (pane, pid)
+}
+
+/// `SESSION`'s transcript in the Claude Code folder `claude`, as a session you wrote to has one.
+fn write_transcript(claude: &Path) {
+    let folder = claude.join("projects/-tmp-agent");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(format!("{SESSION}.jsonl")), "{}\n").unwrap();
+}
+
+/// A saved project of one pane in `cwd` that ran `session`, as the app saves it under the history id `history`.
+fn saved_agent_pane(
+    cwd: &Path,
+    history: &str,
+    session: crate::saved::SavedSession,
+) -> crate::saved::SavedProject {
+    crate::saved::SavedProject {
+        tabs: vec![crate::saved::SavedTab {
+            layout: crate::saved::SavedLayout::Pane {
+                cwd: Some(cwd.to_owned()),
+                history: Some(history.into()),
+                name: None,
+                claude_account: None,
+                session: Some(session),
+            },
+            focused: 0,
+            zoomed: None,
+        }],
+        active: Some(0),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn after_a_restart_an_agent_in_a_project_not_shown_is_listed_until_it_is_back() {
+    use crate::workspace::{agent_list::Phase, panes::RESUME_TIMEOUT};
+    let projects = TwoProjects::new("wsp");
+    write_transcript(&projects.claude);
+    // Before the restart, beta's pane ran an agent. The restart ended every pane the server ran.
+    let session = crate::saved::SavedSession {
+        name: Some("beta-fix".into()),
+        ..agent_session()
+    };
+    crate::saved::save(
+        &projects.dir.join("workspace.json"),
+        &projects.beta.to_string_lossy(),
+        saved_agent_pane(&projects.beta, "beta-agent", session),
+        crate::saved::Settings::default(),
+    )
+    .unwrap();
+
+    let (app, mut window) = projects.launch();
+    let pane = window.read(|w, cx| {
+        assert_eq!(w.project(), projects.alpha);
+        let rows = w.pending_agents(cx.background_executor().now());
+        assert_eq!(rows.len(), 1, "beta's agent is listed without opening beta");
+        assert_eq!(rows[0].project, projects.beta);
+        assert_eq!(rows[0].name, "beta-fix", "under the name it had");
+        assert_eq!(rows[0].phase, Phase::Restored);
+        rows[0].pane
+    });
+    assert!(
+        projects.beta_shells().is_empty(),
+        "nothing starts until beta is opened"
+    );
+
+    // Its row opens beta, whose pane resumes the session, and the row stays until the agent shows.
+    window.update(|w, window, cx| w.go_to_pane(projects.beta.clone(), pane, window, cx));
+    window.read(|w, cx| {
+        assert_eq!(w.project(), projects.beta);
+        assert_eq!(w.focused_pane(), Some(pane));
+        assert_eq!(
+            w.terminal(pane).unwrap().read(cx).written(),
+            [resume_line()]
+        );
+        let now = cx.background_executor().now();
+        assert_eq!(w.pending_agents(now)[0].phase, Phase::Resuming);
+        assert_eq!(
+            w.pending_agents(now + RESUME_TIMEOUT)[0].phase,
+            Phase::Failed,
+            "an agent that doesn't show"
+        );
+    });
+    drop((window, app));
+    projects.end();
+}
+
+#[test]
+fn a_pane_on_a_drive_not_mounted_yet_waits_for_it_then_resumes_its_agent_in_its_folder() {
+    use crate::workspace::agent_list::Phase;
+    let dir = PathBuf::from("/tmp").join(format!("wsv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Volumes")).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let volumes = dir.join("Volumes");
+    let project = volumes.join("encrypted/acme");
+    let folder = project.join("web");
+    let claude = dir.join("claude");
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    write_transcript(&claude);
+    let state = dir.join("workspace.json");
+    crate::saved::save(
+        &state,
+        &project.to_string_lossy(),
+        saved_agent_pane(&folder, "acme-agent", agent_session()),
+        crate::saved::Settings::default(),
+    )
+    .unwrap();
+
+    let launch = project.clone();
+    let (app, window) = open_config(move |config| {
+        config.project = launch;
+        config.state = Some(state);
+        config.agents = Some(claude);
+        config.volumes = volumes;
+        config.terminal_server = None;
+    });
+    let pane = window.read(|w, cx| {
+        let pane = w.focused_pane().unwrap();
+        assert!(
+            w.terminal(pane).is_none(),
+            "no shell before the drive mounts"
+        );
+        let rows = w.pending_agents(cx.background_executor().now());
+        assert_eq!(rows[0].phase, Phase::Mounting("encrypted".into()));
+        pane
+    });
+
+    std::fs::create_dir_all(&folder).unwrap();
+    wait_for(
+        &app,
+        &window,
+        |w| w.terminal(pane).is_some(),
+        "the pane never started once the drive was there",
+    );
+    window.read(|w, cx| {
+        let view = w.terminal(pane).unwrap().read(cx);
+        assert_eq!(view.cwd(), Some(folder.clone()), "in the folder it was in");
+        assert_eq!(view.written(), [resume_line()]);
+    });
+    drop((window, app));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The session saved with alpha's first pane.

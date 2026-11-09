@@ -279,6 +279,11 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("accounts") {
         return accounts(&mut cx, &config, &fake_claude, &out);
     }
+    // `-- <out-dir> restored` renders only the Agents list after a restart: a live agent, one restored in a project not
+    // opened yet, and one in a pane waiting for its drive to mount, with that pane.
+    if std::env::args().nth(2).as_deref() == Some("restored") {
+        return restored(&mut cx, &config, &fake, &fake_claude, &out);
+    }
     // `-- <out-dir> images` renders only a pane with a SIXEL and an iTerm2 inline image a program printed.
     if std::env::args().nth(2).as_deref() == Some("images") {
         return images(&mut cx, &config, &fake, &out);
@@ -1310,6 +1315,111 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         let _ = std::process::Command::new("pkill")
             .args(["-f", &fake_claude.display().to_string()])
+            .status();
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// The Agents list after a restart, from a made-up saved workspace: nothing it lists types into a shell, so no real
+/// `claude` starts. Temp folders only.
+fn restored(
+    cx: &mut VisualTestAppContext,
+    base: &Config,
+    fake: &Path,
+    fake_claude: &Path,
+    out: &Path,
+) {
+    use wings_native::saved::{
+        SavedLayout, SavedProject, SavedSession, SavedTab, SessionKind, Settings,
+    };
+    let volumes = fake.join("Volumes");
+    std::fs::create_dir_all(&volumes).expect("make a drives folder");
+    let pane = |cwd: PathBuf, name: Option<&str>| SavedTab {
+        layout: SavedLayout::Pane {
+            cwd: Some(cwd),
+            history: None,
+            name: None,
+            claude_account: None,
+            session: name.map(|name| SavedSession {
+                kind: SessionKind::Claude,
+                id: "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d".into(),
+                args: Vec::new(),
+                name: Some(name.into()),
+            }),
+        },
+        focused: 0,
+        zoomed: None,
+    };
+    let state = fake.join("restored-workspace.json");
+    let web = base.project.clone();
+    wings_native::saved::save(
+        &state,
+        &web.to_string_lossy(),
+        SavedProject {
+            tabs: vec![
+                pane(web.clone(), None),
+                pane(
+                    volumes.join("encrypted/acme-web"),
+                    Some("Migrate the orders table"),
+                ),
+            ],
+            active: Some(1),
+            ..Default::default()
+        },
+        Settings::default(),
+    )
+    .expect("save the made-up workspace");
+    let api = fake.join("acme-api");
+    wings_native::saved::save(
+        &state,
+        &api.to_string_lossy(),
+        SavedProject {
+            tabs: vec![pane(api.clone(), Some("Fix the flaky upload test"))],
+            active: Some(0),
+            ..Default::default()
+        },
+        Settings::default(),
+    )
+    .expect("save the made-up workspace");
+    let mut config = base.clone();
+    config.plugins = None;
+    config.sessions = None;
+    config.state = Some(state);
+    config.volumes = volumes;
+    let claude_dir = base.agents.clone().expect("the made-up Claude folder");
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(3));
+        // A live agent in the first tab, for the rows beside it.
+        cx.simulate_keystrokes(window, "cmd-1");
+        wait(cx, window, Duration::from_millis(300));
+        cx.simulate_input(window, &format!("exec '{}' 142", fake_claude.display()));
+        cx.simulate_keystrokes(window, "enter");
+        wait(cx, window, Duration::from_secs(1));
+        let pids = std::process::Command::new("pgrep")
+            .args(["-f", &format!("{} 142", fake_claude.display())])
+            .output()
+            .expect("run pgrep");
+        for pid in String::from_utf8_lossy(&pids.stdout).split_whitespace() {
+            std::fs::write(
+                claude_dir.join(format!("sessions/{pid}.json")),
+                r#"{"status":"busy","name":"Refactor the API client"}"#,
+            )
+            .expect("write a session file");
+        }
+        wait(cx, window, Duration::from_secs(2));
+        cx.simulate_keystrokes(window, "cmd-2");
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &out.join(format!("restored-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &format!("{} 142", fake_claude.display())])
             .status();
         wait(cx, window, Duration::from_millis(300));
     }

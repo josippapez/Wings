@@ -104,6 +104,7 @@ fn resuming(mut layout: SavedLayout, kind: SessionKind, id: &str, args: &[&str])
             kind,
             id: id.into(),
             args: args.iter().map(ToString::to_string).collect(),
+            name: None,
         });
     }
     layout

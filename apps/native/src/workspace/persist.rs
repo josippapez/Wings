@@ -22,12 +22,12 @@ pub(super) struct Waiting {
 }
 
 pub(super) struct WaitingPane {
-    id: usize,
+    pub(super) id: usize,
     cwd: Option<std::path::PathBuf>,
     history: Option<String>,
-    name: Option<gpui::SharedString>,
+    pub(super) name: Option<gpui::SharedString>,
     claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
-    session: Option<saved::SavedSession>,
+    pub(super) session: Option<saved::SavedSession>,
 }
 
 impl Workspace {
@@ -206,9 +206,11 @@ impl Workspace {
         let pane = |pane: &usize| {
             let pane = self.panes.get(pane);
             SavedLayout::Pane {
-                cwd: pane
-                    .and_then(|pane| pane.view.as_ref().ok())
-                    .and_then(|view| view.read(cx).cwd()),
+                cwd: pane.and_then(|pane| match &pane.view {
+                    Ok(view) => view.read(cx).cwd(),
+                    // Waiting for its drive, it keeps the folder it starts in.
+                    Err(_) => pane.mount.as_ref()?.cwd.clone(),
+                }),
                 history: pane.map(|pane| pane.history.clone()),
                 name: pane.and_then(|pane| pane.name.as_ref().map(ToString::to_string)),
                 claude_account: pane.and_then(|pane| pane.claude_account.clone()),

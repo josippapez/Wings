@@ -115,6 +115,10 @@ struct Pane {
     session: Option<saved::SavedSession>,
     /// Its agent was seen this launch, so the agent leaving ends the session. A restored session waits for its agent.
     agent_seen: bool,
+    /// When Wings typed the line that brings its session back, until its agent shows.
+    resuming: Option<std::time::Instant>,
+    /// Its folder is on a drive that isn't mounted yet: it starts once the drive is there (`panes::start_mounted`).
+    mount: Option<panes::MountWait>,
     /// The name field while you edit it, in place of the title.
     renaming: Option<(Entity<TextField>, Subscription)>,
     /// Closes the pane when its shell exits.
@@ -270,6 +274,8 @@ pub struct Workspace {
     /// Setup commands agents asked to set, waiting for you.
     setup_asks: setup_approval::SetupAsks,
     worktree_setup: Option<worktree_setup::WorktreeSetupDialog>,
+    /// A check for drives mounting runs while a pane waits for one.
+    watching_mounts: bool,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -415,6 +421,7 @@ impl Workspace {
             review_focus: cx.focus_handle(),
             setup_asks: Default::default(),
             worktree_setup: None,
+            watching_mounts: false,
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {

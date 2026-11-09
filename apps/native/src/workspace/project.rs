@@ -57,13 +57,12 @@ impl Workspace {
 
     /// At launch, the other projects the terminal server still runs panes of, restored behind the shown one with those
     /// panes attached, so their agents show in the sidebar before you open them, as the desktop restores every
-    /// project's tabs at launch. Their other panes start, and their pages open, when each is first shown
-    /// (`start_waiting`); a project with nothing running is restored then, as before.
+    /// project's tabs at launch. So are those with a saved agent session, which the sidebar lists until it resumes, as
+    /// after a restart. Their other panes start, and their pages open, when each is first shown (`start_waiting`); a
+    /// project with neither is restored then, as before.
     #[cfg(unix)]
     pub(super) fn restore_hidden(&mut self, cx: &mut Context<Self>) {
-        let Some(servers) = self.config.terminal_server.clone() else {
-            return;
-        };
+        let servers = self.config.terminal_server.clone();
         let state = self.config.state.clone();
         let mut saved = state
             .as_deref()
@@ -91,14 +90,18 @@ impl Workspace {
                 .flat_map(|tab| tab.layout.panes())
                 .any(|pane| self.panes.contains_key(&pane));
             let mut adopted = None;
-            for history in servers.0.orphans(&key, &saved_ids) {
+            let orphans = servers
+                .as_ref()
+                .map(|servers| servers.0.orphans(&key, &saved_ids));
+            for history in orphans.into_iter().flatten() {
                 if let Some(pane) = self.attach_hidden(&history, None, None, cx) {
                     let tab = self.pane_tab(pane, cx);
                     adopted = Some(tab.id);
                     terminals.push(tab);
                 }
             }
-            if !attached && adopted.is_none() {
+            let agents = panes.iter().any(|pane| pane.session.is_some());
+            if !attached && adopted.is_none() && !agents {
                 continue;
             }
             self.parked.insert(

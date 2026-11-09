@@ -337,6 +337,7 @@ impl Workspace {
             kind,
             id,
             args: self.session_args.get(key).cloned().unwrap_or_default(),
+            name: None,
         })
     }
 }

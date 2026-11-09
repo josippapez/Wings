@@ -83,6 +83,9 @@ pub struct Config {
     /// in the app, as tests do unless they start a server of their own.
     #[cfg(unix)]
     pub terminal_server: Option<TerminalServers>,
+    /// Where drives mount, `/Volumes`: a pane whose folder is on one that isn't mounted yet waits for it. Tests use a
+    /// folder of their own.
+    pub volumes: PathBuf,
 }
 
 /// The app's terminal servers, shared by every view of the config.
@@ -188,6 +191,7 @@ impl Config {
             socket: None,
             #[cfg(unix)]
             terminal_server: None,
+            volumes: PathBuf::from("/Volumes"),
         }))
     }
 

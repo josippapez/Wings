@@ -162,6 +162,7 @@ impl Workspace {
                 continue;
             };
             pane.agent_seen = true;
+            pane.resuming = None;
             let kind = match agent.kind {
                 AgentKind::Claude => SessionKind::Claude,
                 AgentKind::Opencode => SessionKind::Opencode,
@@ -170,17 +171,17 @@ impl Workspace {
                     continue;
                 }
             };
-            let id = agent.session_id.clone().or_else(|| {
-                let before = pane
-                    .session
-                    .as_ref()
-                    .filter(|session| session.kind == kind)?;
-                Some(before.id.clone())
-            });
+            let before = pane.session.as_ref().filter(|session| session.kind == kind);
+            let id = agent
+                .session_id
+                .clone()
+                .or_else(|| Some(before?.id.clone()));
+            let name = agent.name.clone().or_else(|| before?.name.clone());
             pane.session = id.map(|id| SavedSession {
                 kind,
                 id,
                 args: agent.args.clone(),
+                name,
             });
         }
     }

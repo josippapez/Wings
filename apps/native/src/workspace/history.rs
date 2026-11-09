@@ -202,14 +202,53 @@ pub(super) fn resume_line(session: &crate::saved::SavedSession) -> Option<String
         SessionKind::Opencode => Agent::OpenCode,
     };
     let mut line = resume_command(agent, &session.id)?;
-    if agent == Agent::Claude && session.args.iter().all(|arg| typeable(arg)) {
-        for arg in &session.args {
+    if agent == Agent::Claude {
+        push_flags(&mut line, &session.args);
+    }
+    line.push('\r');
+    Some(line)
+}
+
+/// What a restored pane types to bring its agent back: `resume_line`, except for a Claude Code session with no
+/// transcript in the account at `claude_dir`, which `--resume` can't find. Claude Code writes the transcript with the
+/// first message, so that is an agent you started and never wrote to, and a new one starts with the same flags.
+pub(super) fn restore_line(
+    session: &crate::saved::SavedSession,
+    claude_dir: Option<&Path>,
+) -> Option<String> {
+    let resume = resume_line(session)?;
+    match claude_dir {
+        Some(dir)
+            if session.kind == crate::saved::SessionKind::Claude
+                && !has_transcript(dir, &session.id) =>
+        {
+            let mut line = String::from("claude");
+            push_flags(&mut line, &session.args);
+            line.push('\r');
+            Some(line)
+        }
+        _ => Some(resume),
+    }
+}
+
+/// Whether the account at `claude_dir` has the Claude Code session `id`: `projects/<folder>/<id>.jsonl`.
+fn has_transcript(claude_dir: &Path, id: &str) -> bool {
+    let file = format!("{id}.jsonl");
+    std::fs::read_dir(claude_dir.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|folder| folder.path().join(&file).is_file())
+}
+
+/// The flags a Claude Code session started with, unless one holds a control character, which would act as a key press.
+fn push_flags(line: &mut String, args: &[String]) {
+    if args.iter().all(|arg| typeable(arg)) {
+        for arg in args {
             line.push(' ');
             line.push_str(&shell_quote(arg));
         }
     }
-    line.push('\r');
-    Some(line)
 }
 
 /// The line that starts a copy of a session. Only Claude Code can fork.
@@ -1519,6 +1558,7 @@ mod tests {
             kind,
             id: id.into(),
             args: args.iter().map(ToString::to_string).collect(),
+            name: None,
         };
         let claude = "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d";
         assert_eq!(
@@ -1560,6 +1600,51 @@ mod tests {
         );
         assert_eq!(
             resume_line(&session(SessionKind::Claude, "$(id)", &[])),
+            None
+        );
+    }
+
+    /// A Claude Code session nobody wrote to has no transcript, and `claude --resume` says it can't find it.
+    #[test]
+    fn a_restored_claude_session_with_no_transcript_starts_a_new_one_with_its_flags() {
+        use crate::saved::{SavedSession, SessionKind};
+        let id = "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d";
+        let session = |kind, id: &str| SavedSession {
+            kind,
+            id: id.into(),
+            args: vec!["--model".into(), "opus".into()],
+            name: None,
+        };
+        let account =
+            std::env::temp_dir().join(format!("wings-restore-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&account);
+        std::fs::create_dir_all(account.join("projects/-tmp-acme")).unwrap();
+        let claude = session(SessionKind::Claude, id);
+        assert_eq!(
+            restore_line(&claude, Some(&account)).as_deref(),
+            Some("claude --model opus\r")
+        );
+        std::fs::write(
+            account.join(format!("projects/-tmp-acme/{id}.jsonl")),
+            "{}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            restore_line(&claude, Some(&account)),
+            resume_line(&claude),
+            "a session with a transcript resumes"
+        );
+        // Without an account to look in, and for OpenCode, which keeps no such file, it resumes as before.
+        let _ = std::fs::remove_dir_all(&account);
+        assert_eq!(restore_line(&claude, None), resume_line(&claude));
+        let opencode = session(SessionKind::Opencode, "ses_01HZabcdefgh");
+        assert_eq!(
+            restore_line(&opencode, Some(&account)),
+            resume_line(&opencode)
+        );
+        // An id a shell could run something from still types nothing.
+        assert_eq!(
+            restore_line(&session(SessionKind::Claude, "$(id)"), Some(&account)),
             None
         );
     }

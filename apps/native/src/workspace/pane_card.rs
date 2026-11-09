@@ -186,19 +186,38 @@ impl Workspace {
                     })
                     .into_any_element()
             }
-            Some((Err(error), focus)) => div()
-                .track_focus(focus)
-                .p(px(24.0))
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Couldn't start the terminal"),
-                )
-                .child(div().text_color(rgb(theme::DANGER)).child(error.clone()))
-                .into_any_element(),
+            Some((Err(error), focus)) => {
+                let mount = self.panes.get(&pane).and_then(|p| p.mount.as_ref());
+                let (heading, detail, color) = match mount {
+                    Some(wait) => (
+                        format!(
+                            "Waiting for {} to mount",
+                            wait.volume
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        ),
+                        "It starts in its folder once the drive is mounted.".into(),
+                        theme::MUTED_FOREGROUND,
+                    ),
+                    None => (
+                        "Couldn't start the terminal".to_owned(),
+                        error.to_string(),
+                        theme::DANGER,
+                    ),
+                };
+                div()
+                    .track_focus(focus)
+                    // A width of its own, so a long line wraps in a narrow pane.
+                    .size_full()
+                    .p(px(24.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(heading))
+                    .child(div().text_color(rgb(color)).child(detail))
+                    .into_any_element()
+            }
             None => div().into_any_element(),
         };
         let badges = self.badge_pills(pane, cx);
