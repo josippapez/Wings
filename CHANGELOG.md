@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.13 · 2026-11-09
+
+- **Plugins use less memory.** A plugin's pages now share one engine, and the plugins that ship with Wings load React once for all their pages, so the installed plugins take about 35 MB instead of 53 MB.
+- **Cyclops looks and works like before the switch.** Its project picker can be searched, its Start and End times edit hours and minutes as separate parts, and its entries show their actions in the row. Needs Cyclops 0.9.5.
+- **Disk usage no longer spins on /System.** Listing the smaller items of /System, or of the whole disk, used several cores and never finished. It now skips the data volume that the disk already counts, and finishes in a few seconds.
+
 ## 0.2.12 · 2026-11-09
 
 - **Agent summaries and session names are back.** Settings, Agents has "Session names and summaries" again: Apple's on-device model, an Ollama model, or off. Each agent in the sidebar shows a line on what its last turn did, and sessions with no title get a short name in Past sessions and the command palette. The choice you made before the switch carries over.
