@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.9 · 2026-11-09
+
+- **Plugin sidebars follow your project.** A plugin's sidebar or popover switches to the project you switch to, instead of showing the one it opened in.
+
 ## 0.2.8 · 2026-11-09
 
 - **Time fields take digits.** In a plugin's time field, like Cyclops' Start and End, type `930` or `0930` and it becomes `09:30`, so you don't type the colon.
