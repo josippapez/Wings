@@ -718,3 +718,49 @@ fn the_palette_and_the_sheet_wait_while_settings_has_the_keys() {
     window.update(|w, window, cx| w.open_history(window, cx));
     assert!(window.read(|w, _| w.palette.is_none() && w.sheet.is_none()));
 }
+
+/// A session with no title of its own shows the name the model made for it, as on the desktop.
+#[test]
+fn an_untitled_session_shows_its_generated_name() {
+    let project = folder("named");
+    let gone = project.join("g/s");
+    let claude = made_up_claude(
+        &folder("named-claude"),
+        &[(
+            LOGIN,
+            &gone,
+            "main",
+            "Fix the login redirect",
+            "I updated the redirect handler",
+        )],
+    );
+    // Names for every session, so nothing is asked of a model.
+    let ai = folder("named-ai");
+    std::fs::write(
+        ai.join("ai.json"),
+        r#"{"engine":"ollama","ollamaModel":"m"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ai.join("ai-names.json"),
+        format!(r#"{{"{LOGIN}":"Login redirect fix"}}"#),
+    )
+    .unwrap();
+    let (app, mut window) = open_config(|config| {
+        config.project = project.clone();
+        config.sessions = Some(SessionSource::Folders(vec![claude.clone()]));
+        config.ai = Some(ai.clone());
+    });
+    press(&mut window, "k");
+    window.simulate_input("login redirect");
+    wait_for(
+        &app,
+        &window,
+        |w| w.palette.as_ref().is_some_and(|p| p.sessions.len() == 1),
+        "the palette never listed the session",
+    );
+    assert_eq!(
+        titles(&window).first().map(String::as_str),
+        Some("Login redirect fix")
+    );
+}

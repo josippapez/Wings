@@ -3,6 +3,7 @@
 use std::{fmt::Arguments, sync::OnceLock};
 
 pub mod agent_activity;
+pub mod ai;
 pub mod detect;
 pub mod history;
 pub mod opencode;

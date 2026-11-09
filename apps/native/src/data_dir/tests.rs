@@ -58,8 +58,8 @@ fn desktop_workspace() -> serde_json::Value {
         "projectTabs": [{ "id": "pt", "spaceId": "/work/both", "project": true, "at": 3 }],
         "sessions": { "p1": "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d", "p2": null, "p3": "ses_01HZabcdefgh", "p4": "codex-1" },
         "sessionKinds": { "p1": "claude", "p3": "opencode", "p4": "codex" },
-        "asleep": [],
-        "sleep": { "enabled": true, "minutes": 15 },
+        "asleep": ["p3"],
+        "sleep": { "enabled": false, "minutes": 30 },
         "notifySound": { "enabled": false, "sound": "pop", "watching": true },
         "agentsRunCommands": true,
         "agentsMessage": false,
@@ -90,6 +90,7 @@ fn pane_as(cwd: &str, history: &str, name: Option<&str>) -> SavedLayout {
         cwd: Some(cwd.into()),
         history: Some(history.into()),
         name: None,
+        asleep: false,
         claude_account: Some(wings_spaces::claude_accounts::AccountPick {
             name: name.map(Into::into),
         }),
@@ -115,6 +116,7 @@ fn pane(cwd: &str, history: Option<&str>, name: Option<&str>) -> SavedLayout {
         cwd: Some(cwd.into()),
         history: history.map(Into::into),
         name: name.map(Into::into),
+        asleep: false,
         claude_account: None,
         session: None,
     }
@@ -191,12 +193,19 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
                         // An account entry that isn't `{ name }` with an account name, or null, is dropped.
                         a: Box::new(pane("/work/both/api", Some("aaaa-2"), Some("server"))),
                         // A history id that isn't a plain name is dropped, as both apps drop it.
-                        b: Box::new(resuming(
-                            pane("/work/both/web", None, None),
-                            SessionKind::Opencode,
-                            "ses_01HZabcdefgh",
-                            &[],
-                        )),
+                        // The desktop put its agent to sleep, so it stays asleep until shown.
+                        b: Box::new({
+                            let mut layout = resuming(
+                                pane("/work/both/web", None, None),
+                                SessionKind::Opencode,
+                                "ses_01HZabcdefgh",
+                                &[],
+                            );
+                            if let SavedLayout::Pane { asleep, .. } = &mut layout {
+                                *asleep = true;
+                            }
+                            layout
+                        }),
                     },
                     focused: 1,
                     zoomed: Some(1),
@@ -257,6 +266,13 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
     assert_eq!(settings.notify_sound.unwrap().sound.as_deref(), Some("pop"));
     assert_eq!(settings.agents_message, Some(false));
     assert_eq!(settings.agent_terminals_open.as_deref(), Some("float"));
+    assert_eq!(
+        settings.sleep,
+        Some(crate::saved::SleepAgents {
+            enabled: Some(false),
+            minutes: Some(30)
+        })
+    );
     assert_eq!(
         settings.pinned_buttons,
         Some(vec!["cyclops:tracker".to_string()])

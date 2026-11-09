@@ -56,8 +56,10 @@ mod right_edge;
 mod settings;
 mod setup_approval;
 mod sidebar;
+mod sleep;
 mod sound;
 mod status;
+mod summaries;
 mod tab_drag;
 mod tabs;
 #[cfg(all(test, feature = "test-support"))]
@@ -120,6 +122,8 @@ struct Pane {
     agent_seen: bool,
     /// When Wings typed the line that brings its session back, until its agent shows.
     resuming: Option<std::time::Instant>,
+    /// Wings ended its idle agent to free memory: `session` resumes when the pane is shown (`sleep.rs`).
+    asleep: bool,
     /// Its folder is on a drive that isn't mounted yet: it starts once the drive is there (`panes::start_mounted`).
     mount: Option<panes::MountWait>,
     /// The name field while you edit it, in place of the title.
@@ -260,6 +264,9 @@ pub struct Workspace {
     palette: Option<palette::Palette>,
     sheet: Option<history::Sheet>,
     sessions: history::Sessions,
+    /// Makes session names and agent summaries, when the app has the desktop's `ai/` folder.
+    ai: Option<Arc<wings_agents::ai::Ai>>,
+    ai_view: summaries::View,
     /// What agents and plugins said, for the sidebar's Inbox.
     inbox: inbox::Inbox,
     /// Claude Code's connection, as Settings, Agents shows it.
@@ -285,6 +292,8 @@ pub struct Workspace {
     #[cfg(unix)]
     older: older_servers::OlderServers,
     _detection: Option<Task<()>>,
+    /// How long each idle agent out of sight has been so, and the timer for the next one due (`sleep.rs`).
+    sleep: sleep::Sleep,
     _plugin_events: Task<()>,
     _activation: Subscription,
     _visibility: Subscription,
@@ -358,7 +367,14 @@ impl Workspace {
             config.socket.clone(),
             config.state.clone(),
         ));
-        let sessions = history::Sessions::new(config.sessions.clone());
+        let ai = config
+            .ai
+            .clone()
+            .map(|dir| Arc::new(wings_agents::ai::Ai::new(dir)));
+        let sessions = history::Sessions::new(config.sessions.clone(), ai.clone());
+        if let Some(ai) = &ai {
+            summaries::start(ai.clone(), sessions.clone());
+        }
         let mut this = Self {
             terminals: Vec::new(),
             plugin_tabs: Vec::new(),
@@ -419,6 +435,8 @@ impl Workspace {
             palette: None,
             sheet: None,
             sessions,
+            ai,
+            ai_view: Default::default(),
             inbox: Default::default(),
             menu: None,
             claude: Default::default(),
@@ -434,6 +452,7 @@ impl Workspace {
             #[cfg(unix)]
             older: Default::default(),
             _detection: None,
+            sleep: Default::default(),
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
                     if this
@@ -536,7 +555,8 @@ impl Workspace {
         // The desktop showed the projects in its own saved order, not the list's. Once, the list takes that order.
         if settings.desktop_order.is_none()
             && let Some(state) = this.config.state.as_deref()
-            && let Some(desktop) = crate::data_dir::desktop::read(&state.with_file_name("workspace.json"))
+            && let Some(desktop) =
+                crate::data_dir::desktop::read(&state.with_file_name("workspace.json"))
             && !desktop.space_order.is_empty()
         {
             this.spaces.sort_by_order(&desktop.space_order);
@@ -607,6 +627,7 @@ impl Workspace {
                 settings.agent_terminals_open.as_deref(),
             ),
             notify_sound: sound::SoundSettings::from_saved(settings.notify_sound.as_ref()),
+            sleep: sleep::SleepSettings::from_saved(settings.sleep.as_ref()),
             seen_plugins: settings.seen_plugins,
             diff_wrap: settings.diff_wrap == Some(true),
             diff_tree: settings.diff_tree == Some(true),

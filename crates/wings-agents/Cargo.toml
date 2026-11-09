@@ -11,6 +11,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 dirs = "7.0.0"
 sysinfo = "0.39.6"
 ureq = "3.4.2"
+# The on-device helper is rebuilt when its source changes, named after the source's hash (`ai.rs`).
+sha2 = "0.11"
 
 [dev-dependencies]
 portable-pty = "0.9.0"

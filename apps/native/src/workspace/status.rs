@@ -114,7 +114,11 @@ impl Workspace {
         (probes, focused)
     }
 
-    pub(super) fn apply(&mut self, scan: Scan, cx: &mut Context<Self>) {
+    pub(super) fn apply(&mut self, mut scan: Scan, cx: &mut Context<Self>) {
+        // Generated names and summaries, from memory: the model runs on its own thread.
+        if let Some(ai) = &self.ai {
+            ai.observe(&mut scan.agents);
+        }
         let by_pane = |id: &str| id.parse::<usize>().ok();
         let agents: HashMap<usize, Agent> = scan
             .agents
@@ -148,6 +152,7 @@ impl Workspace {
             // A program or agent that ended on an older server may let what runs there move to the current one.
             #[cfg(unix)]
             self.tidy_older_servers(cx);
+            self.plan_sleep(cx);
             cx.notify();
         }
     }
@@ -159,7 +164,8 @@ impl Workspace {
     fn sync_sessions(&mut self) {
         for (id, pane) in &mut self.panes {
             let Some(agent) = self.agents.get(id) else {
-                if std::mem::take(&mut pane.agent_seen) {
+                // An agent put to sleep keeps its session to resume.
+                if std::mem::take(&mut pane.agent_seen) && !pane.asleep {
                     pane.session = None;
                 }
                 continue;

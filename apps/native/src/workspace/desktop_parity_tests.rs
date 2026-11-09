@@ -58,6 +58,10 @@ fn the_new_settings_are_saved_and_come_back() {
                         sound: SoundId::Ping,
                         watching: false,
                     };
+                    prefs.sleep = super::sleep::SleepSettings {
+                        enabled: false,
+                        minutes: 30,
+                    };
                     prefs.diff_wrap = true;
                     prefs.diff_tree = true;
                     prefs.diff_dock_files = false;
@@ -98,6 +102,10 @@ fn the_new_settings_are_saved_and_come_back() {
                     enabled: false,
                     sound: SoundId::Ping,
                     watching: false,
+                },
+                sleep: super::sleep::SleepSettings {
+                    enabled: false,
+                    minutes: 30,
                 },
                 seen_plugins: Vec::new(),
                 diff_wrap: true,
@@ -323,4 +331,59 @@ fn the_new_tab_button_and_a_new_project_open_what_settings_say() {
 
 fn open() -> (gpui::TestApp, TestAppWindow<Workspace>) {
     open_config(|_| {})
+}
+
+/// Settings, Agents has the desktop's "Session names and summaries": the model is read from the desktop's `ai/` folder,
+/// the Ollama model picker shows only for Ollama with models pulled, and a new choice is saved there.
+#[test]
+fn settings_agents_chooses_the_model_for_names_and_summaries() {
+    use super::plugin_tests::click_spot;
+    use wings_agents::ai::{Engine, Status};
+    let dir = std::env::temp_dir().join(format!("wings-native-ai-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Off, so reading it starts no model and asks no Ollama.
+    std::fs::write(dir.join("ai.json"), r#"{"engine":"off"}"#).unwrap();
+    let ai_dir = dir.clone();
+    let (app, mut window) = super::tests::open_sized(
+        Some(gpui::size(gpui::px(1280.0), gpui::px(900.0))),
+        move |config| config.ai = Some(ai_dir),
+    );
+    window.update(|w, window, cx| {
+        w.open_settings(window, cx);
+        w.set_settings_section(settings::Section::Agents, cx);
+    });
+    app.run_until_parked();
+    window.draw();
+    assert!(crate::ui::spot_at("select:ai-engine").is_some());
+    assert!(
+        crate::ui::spot_at("select:ai-model").is_none(),
+        "no model to pick when off"
+    );
+
+    window.update(|w, _, cx| {
+        w.show_ai_status(
+            Status {
+                engine: Engine::Ollama,
+                ollama_model: Some("qwen3:4b".into()),
+                available: true,
+                reason: None,
+                models: vec!["llama3.2:latest".into(), "qwen3:4b".into()],
+            },
+            cx,
+        )
+    });
+    window.draw();
+    assert!(
+        crate::ui::spot_at("select:ai-model").is_some(),
+        "Ollama lists its models"
+    );
+
+    click_spot(&mut window, "select:ai-engine");
+    click_spot(&mut window, "select-item:ai-engine-2");
+    app.run_until_parked();
+    assert_eq!(window.read(|w, _| w.ai_view_engine()), Some(Engine::Off));
+    let saved = std::fs::read_to_string(dir.join("ai.json")).unwrap();
+    assert!(saved.contains(r#""engine":"off""#), "{saved}");
+    std::fs::remove_dir_all(dir).unwrap();
 }

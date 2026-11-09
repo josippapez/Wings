@@ -151,8 +151,9 @@ fn main() {
     let mut config = Config::parse(args, &project)
         .expect("parse the options")
         .expect("options, not --help");
-    // Renders never read or change the user's saved tabs.
+    // Renders never read or change the user's saved tabs, or ask the user's model for names and summaries.
     config.state = None;
+    config.ai = None;
     config.projects = Some(fake.join("spaces.json"));
     config.agents = Some(claude_dir.clone());
     // The fixture plugin, installed in a made-up desktop data folder and turned on, never the user's plugins.
@@ -1296,6 +1297,19 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         }
         wait(cx, window, Duration::from_secs(2));
         save(cx, window, &name("sidebar"));
+        // What each agent just did, as the model sums it up, drawn before the next scan clears it.
+        handle
+            .update(cx, |workspace, _, cx| {
+                workspace.show_agent_summaries(
+                    &[
+                        "Moved the retry logic into the client and added tests",
+                        "Waiting for you to approve the redirect fix",
+                    ],
+                    cx,
+                )
+            })
+            .expect("show made-up summaries");
+        save(cx, window, &name("sidebar-summaries"));
         // The sidebar's edge, at its 248 wide start, dragged in past the narrowest.
         cx.simulate_event(
             window,
@@ -1499,6 +1513,7 @@ fn restored(
             cwd: Some(cwd),
             history: None,
             name: None,
+            asleep: false,
             claude_account: None,
             session: name.map(|name| SavedSession {
                 kind: SessionKind::Claude,
@@ -2245,6 +2260,16 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                     cx,
                 );
                 workspace.show_harnesses(made_up_harnesses(), cx);
+                workspace.show_ai_status(
+                    wings_agents::ai::Status {
+                        engine: wings_agents::ai::Engine::Ollama,
+                        ollama_model: Some("qwen3:4b".into()),
+                        available: true,
+                        reason: None,
+                        models: vec!["llama3.2:latest".into(), "qwen3:4b".into()],
+                    },
+                    cx,
+                );
             })
             .expect("show the made-up accounts");
         // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117 as in the desktop.
@@ -2267,6 +2292,21 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             click(cx, window, row);
             wait(cx, window, Duration::from_millis(200));
             save(cx, window, &name(&format!("settings-{section}")));
+            // Agents runs past the first screen: its names, summaries and sleep settings are further down.
+            if section == "agents" {
+                cx.simulate_event(
+                    window,
+                    gpui::ScrollEvent {
+                        position: point(px(width / 2.0 + 100.0), px(400.0)),
+                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-560.0))),
+                        modifiers: Modifiers::default(),
+                        touch_phase: gpui::TouchPhase::Moved,
+                        source: gpui::ScrollSource::Pointer,
+                    },
+                );
+                wait(cx, window, Duration::from_millis(200));
+                save(cx, window, &name("settings-agents-scrolled"));
+            }
         }
         cx.simulate_keystrokes(window, "escape");
         wait(cx, window, Duration::from_millis(200));

@@ -131,6 +131,8 @@ pub(super) struct Prefs {
     pub(super) agent_terminals_open: Opens,
     /// The sound for new notifications.
     pub(super) notify_sound: SoundSettings,
+    /// "Put idle agents to sleep" and "Sleep after".
+    pub(super) sleep: super::sleep::SleepSettings,
     /// Official plugins already announced as new.
     pub(super) seen_plugins: Vec<String>,
     /// The diff viewer wraps long lines.
@@ -159,6 +161,7 @@ impl Default for Prefs {
             agents_message: false,
             agent_terminals_open: Default::default(),
             notify_sound: SoundSettings::default(),
+            sleep: Default::default(),
             seen_plugins: Vec::new(),
             diff_wrap: false,
             diff_tree: false,
@@ -189,9 +192,9 @@ pub(super) struct SettingsDialog {
 }
 
 /// What choosing a select's item does.
-type Choose = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>)>;
+pub(super) type Choose = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>)>;
 /// A select's choice: its label, whether it is the current one, and what choosing it does.
-type Choice = (SharedString, bool, Choose);
+pub(super) type Choice = (SharedString, bool, Choose);
 
 /// Where an agent's connection to Wings stands, as its card in Agents names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,6 +305,7 @@ impl Workspace {
             self.load_claude_status(cx);
             self.load_opencode_status(cx);
             self.load_harnesses(cx);
+            self.load_ai_status(cx);
         }
         cx.notify();
     }
@@ -430,11 +434,13 @@ impl Workspace {
     pub(super) fn set_prefs(&mut self, change: impl FnOnce(&mut Prefs), cx: &mut Context<Self>) {
         change(&mut self.prefs);
         self.save(cx);
+        // "Put idle agents to sleep" may have changed.
+        self.plan_sleep(cx);
         cx.notify();
     }
 
     /// A select: its trigger, and its menu while open. A choice closes the menu.
-    fn select(
+    pub(super) fn select(
         &self,
         id: &'static str,
         label: &'static str,
@@ -518,7 +524,7 @@ impl Workspace {
             .collect()
     }
 
-    fn switch_row(
+    pub(super) fn switch_row(
         &self,
         id: &'static str,
         label: &'static str,
@@ -1168,7 +1174,11 @@ impl Workspace {
             ),
         ];
         // The CLIs first, as the desktop's Agents section starts with them.
-        let mut cards = vec![self.harnesses_card(cx), main];
+        let mut cards = vec![self.harnesses_card(cx)];
+        // Where the desktop puts it: after the CLIs, before the connection.
+        cards.extend(self.summaries_card(cx));
+        cards.push(self.sleep_card(cx));
+        cards.push(main);
         if !accounts.is_empty() {
             cards.push(accounts);
         }

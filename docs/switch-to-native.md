@@ -47,7 +47,7 @@ The `Wings Native` folder is only read. Nothing either app kept is deleted.
 - **Blockers.**
   - Bump the desktop's version (`apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`) to 0.2.0 (decided), above the last desktop release. The replacement takes its version from there, and the desktop's updater offers only a higher version than its own 0.1.124.
 - **Follow-ups**, which the desktop does and native doesn't yet:
-  - AI session naming (`ai/`), and saving Project page tabs.
+  - Saving Project page tabs.
 
 ## Switching this Mac by hand
 

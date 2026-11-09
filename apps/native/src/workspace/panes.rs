@@ -320,6 +320,7 @@ impl Workspace {
                 session,
                 agent_seen: false,
                 resuming: None,
+                asleep: false,
                 mount: None,
                 renaming: None,
                 _exit: exit,

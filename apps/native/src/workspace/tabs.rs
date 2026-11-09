@@ -163,22 +163,16 @@ impl Workspace {
     /// Paints the active tab's panes, unless a sidebar terminal fills the pane area over them, as the desktop's
     /// `invisible` tab under the terminal page. Hidden terminals keep parsing output and keep their size.
     pub(super) fn sync_pane_visibility(&mut self, cx: &mut Context<Self>) {
-        let shown: Vec<usize> = match self.active {
-            _ if self.loose_page().is_some() => Vec::new(),
-            Active::Terminal(id) => self
-                .terminals
-                .iter()
-                .find(|tab| tab.id == id)
-                .map(|tab| self.shown_panes(tab))
-                .unwrap_or_default(),
-            Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
-        };
+        let shown = self.shown_terminal_panes();
         for (id, pane) in &self.panes {
             if let Ok(view) = &pane.view {
                 let visible = shown.contains(id);
                 view.update(cx, |view, cx| view.set_visible(visible, cx));
             }
         }
+        // A sleeping agent shown again wakes, and one out of sight starts its clock.
+        self.wake_shown(cx);
+        self.plan_sleep(cx);
     }
 
     /// Next or previous tab, wrapping round.

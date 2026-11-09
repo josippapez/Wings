@@ -118,6 +118,7 @@ fn session_entry(hit: &Hit) -> Option<Entry> {
     let title = one_line(
         hit.title
             .as_deref()
+            .or(hit.name.as_deref())
             .or(hit.first_prompt.as_deref())
             .unwrap_or("Untitled session"),
     );

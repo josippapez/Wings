@@ -138,6 +138,7 @@ fn main() {
         .expect("parse the options")
         .expect("options, not --help");
     config.state = None;
+    config.ai = None;
     config.projects = None;
     config.agents = None;
     config.plugins = Some(data.paths());

@@ -16,8 +16,9 @@ use gpui::{
     Subscription, Task, Toggled, Window, anchored, deferred, div, hsla, point, prelude::*, px,
     relative, rgb, rgba,
 };
-use wings_agents::history::{
-    Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms,
+use wings_agents::{
+    ai::{Ai, Made},
+    history::{Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms},
 };
 use wings_spaces::claude_accounts;
 
@@ -64,14 +65,30 @@ pub(super) struct SessionRef {
 pub(super) struct Sessions {
     history: Arc<History>,
     source: Option<SessionSource>,
+    /// Names untitled sessions, when Settings chose a model.
+    ai: Option<Arc<Ai>>,
 }
 
 impl Sessions {
-    pub fn new(source: Option<SessionSource>) -> Self {
+    pub fn new(source: Option<SessionSource>, ai: Option<Arc<Ai>>) -> Self {
         Self {
             history: Arc::default(),
             source,
+            ai,
         }
+    }
+
+    /// Makes the next name or summary `ai` has queued, from these sessions. Blocks while the queue is empty and while the
+    /// model runs: call it in a loop on a thread of its own.
+    pub fn ai_work(&self, ai: &Ai) -> Result<Option<Made>, String> {
+        let folders = match &self.source {
+            None => Vec::new(),
+            Some(SessionSource::Folders(folders)) => folders.clone(),
+            Some(SessionSource::Accounts(default)) => {
+                claude_accounts::dirs_with_default(default.clone())
+            }
+        };
+        ai.work(&self.history, &folders)
     }
 
     /// Reads transcripts, which takes a while the first time: call it off the main thread.
@@ -95,7 +112,11 @@ impl Sessions {
                 claude_accounts::dirs_with_default(default.clone())
             }
         };
-        self.history.search(&folders, query, filter, limit)
+        let mut results = self.history.search(&folders, query, filter, limit);
+        if let Some(ai) = &self.ai {
+            ai.name_hits(&mut results.sessions);
+        }
+        results
     }
 
     /// Runs Claude Code's `search_history` or `read_session`, or `None` for another tool. OpenCode's sessions are loaded
@@ -1152,6 +1173,7 @@ impl Workspace {
         let title = one_line(
             hit.title
                 .as_deref()
+                .or(hit.name.as_deref())
                 .or(hit.first_prompt.as_deref())
                 .unwrap_or("Untitled session"),
         );

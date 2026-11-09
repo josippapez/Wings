@@ -42,6 +42,7 @@ pub(super) fn open_sized(
     config.plugins = None;
     config.project_info = None;
     config.sessions = None;
+    config.ai = None;
     config.editors = Some(Vec::new());
     change(&mut config);
     let build =
@@ -1391,6 +1392,46 @@ fn an_agents_row_shows_the_named_account_its_claude_runs_under_and_nothing_for_t
     });
 }
 
+/// As on the desktop, an agent's row says what it just did under its status, once the model has summed up its turn.
+#[test]
+fn an_agents_row_shows_its_summary_under_its_status() {
+    use crate::agents::{AgentKind, AgentState, Scan};
+    let (_app, mut window) = open();
+    let agent = |pane: usize, summary: Option<&str>| crate::agents::Agent {
+        pane_id: pane.to_string(),
+        space_id: String::new(),
+        pid: 1,
+        kind: AgentKind::Claude,
+        session_id: None,
+        name: None,
+        state: AgentState::Done,
+        waiting_for: None,
+        args: Vec::new(),
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: summary.map(String::from),
+        weak_name: false,
+        claude_dir: None,
+    };
+    window.update(|w, _, cx| {
+        let agents = vec![agent(0, Some("Fixed the login redirect")), agent(1, None)];
+        w.apply(
+            Scan {
+                agents,
+                panes: HashMap::new(),
+            },
+            cx,
+        );
+    });
+    window.draw();
+    assert!(crate::ui::spot_at("agent-summary:0").is_some());
+    assert!(
+        crate::ui::spot_at("agent-summary:1").is_none(),
+        "no summary, no line"
+    );
+}
+
 #[test]
 fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst() {
     use super::sound::{PLAYED, SoundId};
@@ -1547,4 +1588,114 @@ fn the_projects_take_the_desktops_order_once() {
     });
     assert_eq!(names(&window), ["beta", "gamma", "alpha"]);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An idle Claude Code agent with a session, started straight from its pane's shell.
+fn sleepy_agent(pane: usize) -> crate::agents::Agent {
+    crate::agents::Agent {
+        pane_id: pane.to_string(),
+        space_id: String::new(),
+        // No such process, so nothing it started still runs.
+        pid: u32::MAX,
+        kind: crate::agents::AgentKind::Claude,
+        session_id: Some("0aa900ec-ed63-4df5-97c1-eecebeb8ef8d".into()),
+        name: None,
+        state: crate::agents::AgentState::Idle,
+        waiting_for: None,
+        args: Vec::new(),
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: None,
+        weak_name: false,
+        claude_dir: None,
+    }
+}
+
+fn written(window: &TestAppWindow<Workspace>, pane: usize) -> Vec<String> {
+    window.read(|w, cx| w.terminal(pane).unwrap().read(cx).written().to_vec())
+}
+
+/// As on the desktop, an idle agent out of sight is ended with `/exit` once "Sleep after" has passed, stays in the
+/// Agents list as sleeping, and resumes its session when its tab is shown again.
+#[test]
+fn an_idle_agent_out_of_sight_sleeps_after_the_set_time_and_wakes_when_shown() {
+    use crate::agents::Scan;
+    let (app, mut window) = open();
+    let first = window.read(|w, _| w.terminals[0].id);
+    // A second tab on screen, so the first tab's agent is out of sight.
+    press(&mut window, "t");
+    window.update(|w, _, cx| {
+        w.prefs.sleep.minutes = 5;
+        w.apply(
+            Scan {
+                agents: vec![sleepy_agent(0)],
+                panes: HashMap::new(),
+            },
+            cx,
+        );
+    });
+    app.advance_clock(std::time::Duration::from_secs(5 * 60 - 1));
+    app.run_until_parked();
+    assert!(
+        !written(&window, 0).contains(&"/exit".to_owned()),
+        "not before its time"
+    );
+    app.advance_clock(std::time::Duration::from_secs(1));
+    app.run_until_parked();
+    app.advance_clock(std::time::Duration::from_millis(200));
+    app.run_until_parked();
+    assert_eq!(written(&window, 0), ["/exit", "\r"]);
+
+    // The agent leaves: its session stays, and its row says it sleeps.
+    window.update(|w, _, cx| {
+        w.apply(
+            Scan {
+                agents: Vec::new(),
+                panes: HashMap::new(),
+            },
+            cx,
+        );
+        let now = cx.background_executor().now();
+        let rows = w.pending_agents(now);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, super::agent_list::Phase::Sleeping);
+    });
+
+    window.update(|w, window, cx| w.show(Active::Terminal(first), window, cx));
+    let typed = written(&window, 0);
+    assert_eq!(typed.len(), 3, "{typed:?}");
+    assert!(
+        typed[2].contains("--resume 0aa900ec-ed63-4df5-97c1-eecebeb8ef8d"),
+        "{typed:?}"
+    );
+    window.read(|w, _| {
+        let pane = &w.panes[&0];
+        assert!(!pane.asleep && pane.resuming.is_some());
+    });
+}
+
+/// An agent you can see is left awake, and so is every agent with the setting off.
+#[test]
+fn an_agent_on_screen_or_with_sleep_off_stays_awake() {
+    use crate::agents::Scan;
+    let (app, mut window) = open();
+    window.update(|w, _, cx| {
+        w.apply(
+            Scan {
+                agents: vec![sleepy_agent(0)],
+                panes: HashMap::new(),
+            },
+            cx,
+        );
+    });
+    app.advance_clock(std::time::Duration::from_secs(60 * 60));
+    app.run_until_parked();
+    assert_eq!(written(&window, 0), Vec::<String>::new(), "on screen");
+
+    press(&mut window, "t");
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.sleep.enabled = false, cx));
+    app.advance_clock(std::time::Duration::from_secs(60 * 60));
+    app.run_until_parked();
+    assert_eq!(written(&window, 0), Vec::<String>::new(), "turned off");
 }

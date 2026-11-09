@@ -14,7 +14,7 @@ use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
 use crate::saved::{
     GlobalHotkey, NotifySound, SavedDir, SavedLayout, SavedPluginTab, SavedProject, SavedSession,
-    SavedTab, SessionKind, Settings, valid_history_id,
+    SavedTab, SessionKind, Settings, SleepAgents, valid_history_id,
 };
 
 /// `LayoutNode` in `apps/desktop/src/lib/layout.ts`.
@@ -156,6 +156,11 @@ pub struct Workspace {
     pub agents_message: Option<bool>,
     #[serde(default)]
     pub agent_terminals_open: Option<String>,
+    #[serde(default)]
+    pub sleep: Option<SleepAgents>,
+    /// The panes whose agent the desktop put to sleep, by pane key.
+    #[serde(default)]
+    pub asleep: Vec<String>,
     /// The folder each pane's shell was in, by pane key.
     #[serde(default)]
     pub cwds: HashMap<String, String>,
@@ -233,6 +238,7 @@ impl Workspace {
             agents_run_commands: self.agents_run_commands,
             agents_message: self.agents_message,
             agent_terminals_open: self.agent_terminals_open.clone(),
+            sleep: self.sleep.clone(),
             pinned_buttons: self.pinned_buttons.clone(),
             ..Settings::default()
         }
@@ -311,6 +317,7 @@ impl Workspace {
                         }
                     }),
                     session: self.session(id),
+                    asleep: self.asleep.contains(id),
                 }
             }
             Layout::Split { dir, ratio, a, b } => SavedLayout::Split {

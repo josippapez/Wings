@@ -1,5 +1,6 @@
 //! Generated names and one-line summaries for agent sessions, made by a small local model: Apple's on-device
 //! model (through a Swift helper compiled on first use) or an Ollama model on localhost. Nothing leaves this Mac.
+//! Both apps use it: each runs `Ai::work` on a thread of its own and calls `observe` on every detection tick.
 //!
 //! Names go to sessions with no title of their own, and are kept in `ai-names.json` in the app data folder; the
 //! agents' own data is never written. Summaries are made when an agent's turn ends, and every two minutes while a long
@@ -20,12 +21,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
-    detect::{Agent, AgentState},
-    history::{self, Excerpt},
-    AppState,
+    detect::{Agent, AgentKind, AgentState},
+    history::{self, Excerpt, History},
 };
 
 const SOURCE: &str = include_str!("ai/describe.swift");
@@ -309,8 +308,8 @@ impl Ai {
             seen.insert(agent.pane_id.clone(), (agent.state, since));
             let Some(id) = agent.session_id.clone() else { continue };
             let kind = match agent.kind {
-                crate::detect::AgentKind::Claude => history::Agent::Claude,
-                crate::detect::AgentKind::Opencode => history::Agent::OpenCode,
+                AgentKind::Claude => history::Agent::Claude,
+                AgentKind::Opencode => history::Agent::OpenCode,
                 // No session id to read for these.
                 _ => continue,
             };
@@ -459,50 +458,61 @@ impl Ai {
         }
     }
 
-    fn run(&self, app: &AppHandle, job: Job) {
+    /// Waits for the next job and does it: reads the session from `history`, asks the model, and keeps what it said.
+    /// Blocks while the queue is empty and while the model runs, so call it in a loop on a thread of its own. `Err` is
+    /// a failed engine call, already counted as a pause, for the caller's log.
+    pub fn work(&self, history: &History, claude_dirs: &[PathBuf]) -> Result<Option<Made>, String> {
+        let job = self.next_job();
+        self.run(history, claude_dirs, job)
+    }
+
+    fn run(&self, history: &History, claude_dirs: &[PathBuf], job: Job) -> Result<Option<Made>, String> {
         if self.engine() == Engine::Off {
-            return;
+            return Ok(None);
         }
-        let state = app.state::<AppState>();
-        let mut excerpt = state.history.excerpt(&crate::claude_accounts::dirs(), &job.id);
+        let mut excerpt = history.excerpt(claude_dirs, &job.id);
         // A running OpenCode session is only known to History once its service has been read.
         if excerpt.is_none() && job.agent == history::Agent::OpenCode {
-            state.history.sync_opencode();
-            excerpt = state.history.excerpt(&crate::claude_accounts::dirs(), &job.id);
+            history.sync_opencode();
+            excerpt = history.excerpt(claude_dirs, &job.id);
         }
         // A session that got a title of its own meanwhile needs no name.
         let Some(excerpt) = excerpt.filter(|e| job.task == Task::Summary || e.title.is_none()) else {
-            return self.retry_later(&job, RETRY_EMPTY);
+            self.retry_later(&job, RETRY_EMPTY);
+            return Ok(None);
         };
-        let Some(input) = build_input(job.task, &excerpt) else { return self.retry_later(&job, RETRY_EMPTY) };
+        let Some(input) = build_input(job.task, &excerpt) else {
+            self.retry_later(&job, RETRY_EMPTY);
+            return Ok(None);
+        };
         match self.generate(job.task, &input) {
             Err(e) => {
-                if cfg!(debug_assertions) {
-                    crate::applog::log_line!("[ai] {:?} for {} failed: {e}", job.task, job.id);
-                }
                 *self.failed.lock().unwrap() = Some(Instant::now());
+                Err(format!("{:?} for {} failed: {e}", job.task, job.id))
             }
-            Ok(raw) => match clean(&raw, if job.task == Task::Name { NAME_WORDS } else { SUMMARY_WORDS }) {
-                None => self.retry_later(&job, RETRY_FAILED),
+            Ok(raw) => Ok(match clean(&raw, if job.task == Task::Name { NAME_WORDS } else { SUMMARY_WORDS }) {
+                None => {
+                    self.retry_later(&job, RETRY_FAILED);
+                    None
+                }
                 Some(text) if job.task == Task::Name => {
                     self.names.lock().unwrap().insert(&job.id, text.clone());
-                    let _ = app.emit("ai-names", HashMap::from([(job.id, text)]));
+                    Some(Made::Name { id: job.id, text })
                 }
                 Some(text) => {
-                    self.summaries.lock().unwrap().insert(job.id, text);
+                    self.summaries.lock().unwrap().insert(job.id.clone(), text.clone());
+                    Some(Made::Summary { id: job.id, text })
                 }
-            },
+            }),
         }
     }
 }
 
-/// Starts the one thread that makes names and summaries.
-pub fn start(app: AppHandle) {
-    let _ = std::thread::Builder::new().name("ai".into()).spawn(move || loop {
-        let state = app.state::<AppState>();
-        let job = state.ai.next_job();
-        state.ai.run(&app, job);
-    });
+/// What one job made, kept by `Ai` already: an app shows a new name in lists it doesn't redraw on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Made {
+    Name { id: String, text: String },
+    Summary { id: String, text: String },
 }
 
 fn http(timeout: Duration) -> ureq::Agent {
@@ -538,17 +548,6 @@ fn ollama_generate(base: &str, model: &str, system: &str, prompt: &str) -> Resul
         .map_err(|e| e.to_string())?;
     let v: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     v["response"].as_str().map(String::from).ok_or_else(|| "Ollama sent no response".into())
-}
-
-#[tauri::command(async)]
-pub fn ai_status(state: tauri::State<AppState>) -> Status {
-    state.ai.status()
-}
-
-#[tauri::command(async)]
-pub fn ai_set(state: tauri::State<AppState>, engine: Engine, ollama_model: Option<String>) -> Status {
-    state.ai.set(Settings { engine, ollama_model });
-    state.ai.status()
 }
 
 #[cfg(test)]

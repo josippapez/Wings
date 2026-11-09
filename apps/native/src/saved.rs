@@ -39,6 +39,10 @@ pub enum SavedLayout {
         /// program again, as the desktop's `sessions`, `sessionKinds` and `sessionArgs`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<SavedSession>,
+        /// Wings ended its idle agent to free memory, and resumes `session` when the pane is next shown, as the
+        /// desktop's `asleep`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        asleep: bool,
     },
     Split {
         dir: SavedDir,
@@ -120,6 +124,15 @@ pub struct NotifySound {
     /// Also for an agent in the pane on screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watching: Option<bool>,
+}
+
+/// "Put idle agents to sleep" and "Sleep after", as the desktop's `sleep`. Either part missing takes the default.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SleepAgents {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u32>,
 }
 
 /// The global shortcut that brings Wings forward from any app, saved as the desktop's `globalHotkey`: on or off, and
@@ -209,6 +222,9 @@ pub struct Settings {
     /// Where the first terminal an agent opens goes: `below`, `right` or `float`, as the desktop's `agentTerminalsOpen`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_terminals_open: Option<String>,
+    /// Idle agents out of sight are ended after a while and resumed when shown, as the desktop's `sleep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<SleepAgents>,
     /// The sidebar's width in points, as last dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<f32>,
@@ -448,6 +464,7 @@ mod tests {
                             cwd: None,
                             history: None,
                             name: None,
+                            asleep: false,
                             claude_account: None,
                             session: None,
                         }),
@@ -455,6 +472,7 @@ mod tests {
                             cwd: None,
                             history: None,
                             name: None,
+                            asleep: false,
                             claude_account: None,
                             session: Some(SavedSession {
                                 kind: SessionKind::Opencode,
@@ -472,6 +490,7 @@ mod tests {
                         cwd: Some("/tmp".into()),
                         history: Some("1a-2".into()),
                         name: Some("server".into()),
+                        asleep: false,
                         claude_account: Some(wings_spaces::claude_accounts::AccountPick {
                             name: Some("work".into()),
                         }),
@@ -657,6 +676,7 @@ mod tests {
                 cwd: None,
                 history: None,
                 name: None,
+                asleep: false,
                 claude_account: None,
                 session: None,
             }

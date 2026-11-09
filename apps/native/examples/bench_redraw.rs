@@ -42,6 +42,7 @@ fn main() {
     .unwrap()
     .unwrap();
     config.state = None;
+    config.ai = None;
     config.projects = Some(fake.join("spaces.json"));
     let claude = fake.join("claude");
     std::fs::create_dir_all(claude.join("sessions")).unwrap();

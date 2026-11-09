@@ -105,10 +105,13 @@ impl Workspace {
         let blocked = agent.state == AgentState::Blocked;
         let path = PathBuf::from(&agent.space_id);
         let account = self.agent_accounts.get(&pane).cloned();
-        let label = match &account {
+        let mut label = match &account {
             Some(account) => format!("{name}, {account} account, {project}, {}", status(agent)),
             None => format!("{name}, {project}, {}", status(agent)),
         };
+        if let Some(summary) = &agent.summary {
+            label.push_str(&format!(". {summary}"));
+        }
         div()
             .id(("agent", pane))
             .role(Role::Button)
@@ -187,7 +190,18 @@ impl Workspace {
                                 format!("agent-{pane}"),
                             ))
                             .child(div().min_w_0().truncate().child(status(agent))),
-                    ),
+                    )
+                    // The desktop's `text-muted-foreground/70`: what the agent just did, from Settings' model.
+                    .children(agent.summary.clone().map(|summary| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.0))
+                            .line_height(px(16.0))
+                            .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
+                            .children(crate::ui::spot(|| format!("agent-summary:{pane}")))
+                            .child(summary)
+                    })),
             )
             .into_any_element()
     }
@@ -248,6 +262,7 @@ impl Workspace {
                                 Phase::Failed
                             }
                             (None, Some(_)) => Phase::Resuming,
+                            (None, None) if open.asleep => Phase::Sleeping,
                             (None, None) => continue,
                         };
                         (&open.session, &open.name, phase)
@@ -298,7 +313,7 @@ impl Workspace {
         let (glyph, color) = match phase {
             Phase::Resuming => (Icon::RotateCcwClock, theme::WORKING),
             Phase::Failed => (Icon::CircleX, theme::BLOCKED),
-            Phase::Restored | Phase::Mounting(_) => {
+            Phase::Restored | Phase::Sleeping | Phase::Mounting(_) => {
                 (Icon::CircleDotDashed, theme::MUTED_FOREGROUND)
             }
         };
@@ -376,6 +391,8 @@ pub(super) struct PendingAgent {
 pub(super) enum Phase {
     /// Its project hasn't been opened since launch.
     Restored,
+    /// Wings ended its idle agent to free memory; showing the pane resumes it.
+    Sleeping,
     Resuming,
     /// Its agent didn't show within `RESUME_TIMEOUT`.
     Failed,
@@ -387,6 +404,7 @@ impl Phase {
     fn label(&self) -> String {
         match self {
             Phase::Restored => "starts when you open it".into(),
+            Phase::Sleeping => "sleeping".into(),
             Phase::Resuming => "resuming…".into(),
             Phase::Failed => "couldn't resume".into(),
             Phase::Mounting(drive) => format!("waiting for {drive}"),

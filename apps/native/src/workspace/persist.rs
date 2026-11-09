@@ -28,9 +28,33 @@ pub(super) struct WaitingPane {
     pub(super) name: Option<gpui::SharedString>,
     claude_account: Option<wings_spaces::claude_accounts::AccountPick>,
     pub(super) session: Option<saved::SavedSession>,
+    asleep: bool,
 }
 
 impl Workspace {
+    /// `open_pane_at` for a saved pane. One whose agent was asleep starts its shell without resuming the session, which
+    /// it keeps to resume once the pane is shown (`wake_shown`).
+    #[allow(clippy::too_many_arguments)]
+    fn open_restored(
+        &mut self,
+        id: usize,
+        cwd: Option<std::path::PathBuf>,
+        history: Option<String>,
+        account: Option<wings_spaces::claude_accounts::AccountPick>,
+        session: Option<saved::SavedSession>,
+        asleep: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !asleep {
+            return self.open_pane_at(id, cwd, history, account, session, cx);
+        }
+        self.open_pane_at(id, cwd, history, account, None, cx);
+        if let Some(pane) = self.panes.get_mut(&id) {
+            pane.session = session;
+            pane.asleep = true;
+        }
+    }
+
     /// Each restored pane starts a new shell in the folder its shell was last in.
     pub(super) fn restore(
         &mut self,
@@ -54,12 +78,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         for pane in waiting.panes {
-            self.open_pane_at(
+            self.open_restored(
                 pane.id,
                 pane.cwd,
                 pane.history,
                 pane.claude_account,
                 pane.session,
+                pane.asleep,
                 cx,
             );
             if let Some(saved) = self.panes.get_mut(&pane.id) {
@@ -137,6 +162,7 @@ impl Workspace {
                 name,
                 claude_account,
                 session,
+                asleep,
             } => {
                 let name: Option<gpui::SharedString> =
                     name.clone().filter(|name| !name.is_empty()).map(Into::into);
@@ -144,12 +170,13 @@ impl Workspace {
                     None => {
                         let id = self.next_pane;
                         self.next_pane += 1;
-                        self.open_pane_at(
+                        self.open_restored(
                             id,
                             cwd.clone(),
                             history.clone(),
                             claude_account.clone(),
                             session.clone(),
+                            *asleep,
                             cx,
                         );
                         id
@@ -157,7 +184,16 @@ impl Workspace {
                     Some(waiting) => {
                         #[cfg(unix)]
                         let attached = history.as_deref().and_then(|history| {
-                            self.attach_hidden(history, claude_account.clone(), session.clone(), cx)
+                            let id = self.attach_hidden(
+                                history,
+                                claude_account.clone(),
+                                session.clone(),
+                                cx,
+                            )?;
+                            if let Some(pane) = self.panes.get_mut(&id) {
+                                pane.asleep = *asleep;
+                            }
+                            Some(id)
                         });
                         #[cfg(not(unix))]
                         let attached = None;
@@ -171,6 +207,7 @@ impl Workspace {
                                 name: name.clone(),
                                 claude_account: claude_account.clone(),
                                 session: session.clone(),
+                                asleep: *asleep,
                             });
                             id
                         })
@@ -215,6 +252,7 @@ impl Workspace {
                 name: pane.and_then(|pane| pane.name.as_ref().map(ToString::to_string)),
                 claude_account: pane.and_then(|pane| pane.claude_account.clone()),
                 session: pane.and_then(|pane| pane.session.clone()),
+                asleep: pane.is_some_and(|pane| pane.asleep),
             }
         };
         let layout = |node: &Layout| saved_layout(node, &pane);
@@ -306,6 +344,7 @@ impl Workspace {
             agents_message: Some(self.prefs.agents_message),
             agent_terminals_open: Some(self.prefs.agent_terminals_open.name().into()),
             notify_sound: Some(self.prefs.notify_sound.to_saved()),
+            sleep: Some(self.prefs.sleep.to_saved()),
             seen_plugins: self.prefs.seen_plugins.clone(),
             diff_wrap: Some(self.prefs.diff_wrap),
             diff_tree: Some(self.prefs.diff_tree),

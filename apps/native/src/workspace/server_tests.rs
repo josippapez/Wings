@@ -600,7 +600,7 @@ fn a_project_restored_behind_the_shown_one_shows_its_tabs_once_and_starts_only_i
         w.switch_project(projects.beta.clone(), window, cx);
         w.new_terminal(window, cx);
         let first = w.terminals[0].id;
-        w.show(Active::Terminal(first), window, cx);
+        w.show(crate::workspace::Active::Terminal(first), window, cx);
     });
     let (kept, ended) = window.read(|w, cx| {
         let pane = |tab: usize| w.terminals[tab].focused;
@@ -797,6 +797,7 @@ fn saved_agent_pane(
                 cwd: Some(cwd.to_owned()),
                 history: Some(history.into()),
                 name: None,
+                asleep: false,
                 claude_account: None,
                 session: Some(session),
             },
@@ -1421,4 +1422,72 @@ fn end_at(socket: &Path) {
             let _ = control.kill(pane.pane);
         }
     }
+}
+
+/// A pane whose agent was asleep when Wings quit starts its shell without resuming the session, says it sleeps, and
+/// resumes once its tab is shown, as the desktop kept a sleeping agent asleep until opened.
+#[test]
+fn an_agent_asleep_at_quit_stays_asleep_until_its_tab_is_shown() {
+    use crate::workspace::agent_list::Phase;
+    let dir = PathBuf::from("/tmp").join(format!("wsl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let claude = dir.join("claude");
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    write_transcript(&claude);
+    let mut saved = saved_agent_pane(&dir, "asleep-agent", agent_session());
+    if let crate::saved::SavedLayout::Pane { asleep, .. } = &mut saved.tabs[0].layout {
+        *asleep = true;
+    }
+    // A second tab is the one on screen.
+    saved.tabs.push(crate::saved::SavedTab {
+        layout: crate::saved::SavedLayout::Pane {
+            cwd: Some(dir.clone()),
+            history: Some("shown".into()),
+            name: None,
+            asleep: false,
+            claude_account: None,
+            session: None,
+        },
+        focused: 0,
+        zoomed: None,
+    });
+    saved.active = Some(1);
+    let state = dir.join("workspace.json");
+    crate::saved::save(
+        &state,
+        &dir.to_string_lossy(),
+        saved,
+        crate::saved::Settings::default(),
+    )
+    .unwrap();
+
+    let project = dir.clone();
+    let (_app, mut window) = open_config(move |config| {
+        config.project = project;
+        config.state = Some(state);
+        config.agents = Some(claude);
+        config.terminal_server = None;
+    });
+    let (pane, first) = window.read(|w, cx| {
+        let tab = &w.terminals[0];
+        let pane = tab.focused;
+        assert_eq!(
+            w.terminal(pane).unwrap().read(cx).written(),
+            Vec::<String>::new()
+        );
+        let rows = w.pending_agents(cx.background_executor().now());
+        assert_eq!(rows[0].phase, Phase::Sleeping);
+        (pane, tab.id)
+    });
+    window.update(|w, window, cx| w.show(crate::workspace::Active::Terminal(first), window, cx));
+    window.read(|w, cx| {
+        assert_eq!(
+            w.terminal(pane).unwrap().read(cx).written(),
+            [resume_line()]
+        );
+    });
+    drop(window);
+    let _ = std::fs::remove_dir_all(&dir);
 }

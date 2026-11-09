@@ -73,6 +73,9 @@ pub struct Config {
     pub project_info: Option<PathBuf>,
     /// Where the history sheet and the command palette look for past sessions. `None` finds none, as in tests.
     pub sessions: Option<SessionSource>,
+    /// The desktop app's `ai/` folder: the model Settings chose for session names and agent summaries, and the names
+    /// made so far. `None` makes none, as in tests.
+    pub ai: Option<PathBuf>,
     /// The editors "Open in" offers: `None` looks for the installed ones; tests and screenshots list their own.
     pub editors: Option<Vec<wings_editors::EditorView>>,
     /// Where the app serves the socket the `wings` command talks to (`wings_connect::cli::socket`), and connects Claude
@@ -187,6 +190,7 @@ impl Config {
             plugins: PluginPaths::desktop().map(|paths| PluginPaths { dev, ..paths }),
             project_info: crate::projects::desktop_dir(),
             sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
+            ai: crate::projects::desktop_dir().map(|dir| dir.join("ai")),
             editors: None,
             socket: None,
             #[cfg(unix)]
