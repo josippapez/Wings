@@ -1,7 +1,8 @@
 //! The app side of the Wings socket. Claude Code starts `wings --mcp` (bridge.rs), which connects here over a socket
 //! only this user can open, and so do `wings hook`, `wings statusline` and the rest of the `wings` CLI (cli.rs). Each
-//! connection sends newline-delimited JSON requests (`{ id, op, ... }`) and gets one reply per request, and the server
-//! also writes `tools_changed` events to every open connection. What the ops do is the app's, behind `Handler`.
+//! connection sends newline-delimited JSON requests (`{ id, op, ... }`) and gets one reply per request, with its id, as
+//! soon as it is ready rather than in the order asked. The server also writes `tools_changed` events to every open
+//! connection. What the ops do is the app's, behind `Handler`.
 
 use std::{
     collections::HashMap,
@@ -25,7 +26,8 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// What the app answers on the socket. Every method is called on a connection's own thread.
+/// What the app answers on the socket. Every method is called on a thread of the request's own, so the requests of
+/// one connection can run at the same time.
 pub trait Handler: Send + Sync + 'static {
     /// Wings' own tools, then those of every plugin that is on, as MCP tool definitions.
     fn tools(&self) -> Vec<Value>;
@@ -40,17 +42,18 @@ pub trait Handler: Send + Sync + 'static {
     fn control(&self, op: &str, request: &Value) -> Option<Result<Value, String>>;
 }
 
-/// The open connections, told when the tool list changes.
+/// The open connections, told when the tool list changes. Each is the connection's writer, which its replies lock too:
+/// a line goes out in many small writes, and an event written between them would split a reply in two.
 #[derive(Default)]
-pub struct Clients(Mutex<Vec<UnixStream>>);
+pub struct Clients(Mutex<Vec<Arc<Mutex<UnixStream>>>>);
 
 impl Clients {
     /// Tells every connected bridge to fetch the tool list again; Claude Code then refreshes its tools.
     pub fn notify_changed(&self) {
-        self.0.lock().unwrap().retain_mut(|client| writeln!(client, "{}", json!({ "event": "tools_changed" })).is_ok());
+        self.0.lock().unwrap().retain(|client| writeln!(client.lock().unwrap(), "{}", json!({ "event": "tools_changed" })).is_ok());
     }
 
-    fn add(&self, stream: UnixStream) {
+    fn add(&self, stream: Arc<Mutex<UnixStream>>) {
         let mut clients = self.0.lock().unwrap();
         drop_closed(&mut clients);
         clients.push(stream);
@@ -83,22 +86,24 @@ pub fn start(path: &Path, handler: Arc<dyn Handler>, clients: Arc<Clients>) -> s
     Ok(())
 }
 
-/// One connection: newline-delimited JSON requests in, responses and `tools_changed` events out.
+/// One connection: newline-delimited JSON requests in, responses and `tools_changed` events out. Each request is
+/// answered on a thread of its own: a bridge sends all of its session's requests on one connection, and a tool call
+/// that scans a disk for a minute mustn't hold up the tool list or another call behind it.
 pub fn serve(handler: &dyn Handler, clients: &Clients, stream: UnixStream) {
     let Ok(writer) = stream.try_clone() else { return };
-    if let Ok(events) = stream.try_clone() {
-        clients.add(events);
-    }
-    let writer = Mutex::new(writer);
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { break };
-        let Ok(request) = serde_json::from_str::<Value>(&line) else { continue };
-        let reply = reply(handler, &request);
-        let mut out = writer.lock().unwrap();
-        if writeln!(out, "{reply}").is_err() {
-            break;
+    let writer = Arc::new(Mutex::new(writer));
+    clients.add(writer.clone());
+    let writer = &writer;
+    thread::scope(|scope| {
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else { break };
+            let Ok(request) = serde_json::from_str::<Value>(&line) else { continue };
+            scope.spawn(move || {
+                let reply = reply(handler, &request);
+                let _ = writeln!(writer.lock().unwrap(), "{reply}");
+            });
         }
-    }
+    });
 }
 
 fn reply(handler: &dyn Handler, request: &Value) -> Value {
@@ -129,8 +134,8 @@ fn reply(handler: &dyn Handler, request: &Value) -> Value {
 /// Lets go of connections that hung up. `wings statusline` connects for every Claude reply and leaves right away,
 /// so without this each one would keep a socket open until plugins next change. Bridges and the CLI skip the
 /// empty line.
-fn drop_closed(clients: &mut Vec<UnixStream>) {
-    clients.retain_mut(|client| writeln!(client).is_ok());
+fn drop_closed(clients: &mut Vec<Arc<Mutex<UnixStream>>>) {
+    clients.retain(|client| writeln!(client.lock().unwrap()).is_ok());
 }
 
 /// The event plugins are asked about for a hook input, or `None` when there is nothing to ask: no event, or a
@@ -203,12 +208,13 @@ pub fn session_pane(agents: &[Agent], session_id: &str) -> Option<String> {
 /// shell. `shells` is each pane's shell process, by pid.
 pub fn pane_of(shells: &HashMap<u32, String>, pid: u32) -> Option<String> {
     let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let mut current = sysinfo::Pid::from_u32(pid);
     for _ in 0..16 {
         if let Some(pane) = shells.get(&current.as_u32()) {
             return Some(pane.clone());
         }
+        // Only the processes on the way up: reading every process on the Mac took 7 ms a call, these few take 0.1 ms.
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[current]), true);
         current = system.process(current)?.parent()?;
     }
     None
@@ -308,12 +314,103 @@ mod tests {
         let (open, open_peer) = UnixStream::pair().unwrap();
         let (closed, closed_peer) = UnixStream::pair().unwrap();
         drop(closed_peer);
-        let mut clients = vec![open, closed];
+        let mut clients = vec![Arc::new(Mutex::new(open)), Arc::new(Mutex::new(closed))];
         drop_closed(&mut clients);
         assert_eq!(clients.len(), 1);
         // The one still open got only an empty line, which a bridge reads as nothing.
         let mut line = String::new();
         BufReader::new(open_peer).read_line(&mut line).unwrap();
         assert_eq!(line, "\n");
+    }
+
+    /// A tool that runs until the test lets it finish, as a disk scan of a home folder runs for a minute. Its tool list
+    /// is long, so a reply with it goes out in many writes.
+    struct Scan(Mutex<std::sync::mpsc::Receiver<()>>);
+
+    impl Handler for Scan {
+        fn tools(&self) -> Vec<Value> {
+            (0..200).map(|i| json!({ "name": format!("tool_{i}"), "description": "Scans a folder" })).collect()
+        }
+        fn instructions(&self) -> Vec<String> {
+            vec![]
+        }
+        fn call(&self, name: &str, _: Value, _: Option<u32>, _: Option<&str>) -> Result<ToolResult, String> {
+            let _ = self.0.lock().unwrap().recv();
+            Ok(ToolResult { text: format!("{name} done"), is_error: false })
+        }
+        fn hook(&self, _: &Value, _: Option<u32>) -> Value {
+            json!({})
+        }
+        fn control(&self, _: &str, _: &Value) -> Option<Result<Value, String>> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_slow_call_does_not_hold_up_the_requests_after_it_on_its_connection() {
+        let (app, peer) = UnixStream::pair().unwrap();
+        let (finish, finished) = std::sync::mpsc::channel();
+        thread::spawn(move || serve(&Scan(Mutex::new(finished)), &Clients::default(), app));
+        // The bridge gives up on the tool list after 5 seconds.
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut lines = BufReader::new(&peer).lines();
+        let mut next = || serde_json::from_str::<Value>(&lines.next().unwrap().unwrap()).unwrap();
+        writeln!(&peer, "{}", json!({ "id": 1, "op": "call", "name": "scan" })).unwrap();
+        writeln!(&peer, "{}", json!({ "id": 2, "op": "list" })).unwrap();
+        // The scan is still running, and the list is answered anyway.
+        assert_eq!(next()["id"], 2);
+        finish.send(()).unwrap();
+        let scan = next();
+        assert_eq!((&scan["id"], &scan["result"]["content"][0]["text"]), (&json!(1), &json!("scan done")));
+    }
+
+    #[test]
+    fn an_event_never_lands_inside_a_reply() {
+        let (app, peer) = UnixStream::pair().unwrap();
+        let clients = Arc::new(Clients::default());
+        let served = clients.clone();
+        thread::spawn(move || serve(&Scan(Mutex::new(std::sync::mpsc::channel().1)), &served, app));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let notifier = {
+            let (clients, done) = (clients.clone(), done.clone());
+            thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    clients.notify_changed();
+                }
+            })
+        };
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        for id in 0..20 {
+            writeln!(&peer, "{}", json!({ "id": id, "op": "list" })).unwrap();
+        }
+        let mut replies = 0;
+        for line in BufReader::new(&peer).lines() {
+            let line = line.unwrap();
+            let message: Value = serde_json::from_str(&line).unwrap_or_else(|_| panic!("a line that is no one message: {line}"));
+            if message.get("id").is_some() {
+                assert_eq!(message["tools"].as_array().map(Vec::len), Some(200));
+                replies += 1;
+                if replies == 20 {
+                    break;
+                }
+            }
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(peer);
+        notifier.join().unwrap();
+    }
+
+    #[test]
+    fn a_call_comes_from_the_pane_whose_shell_is_above_it() {
+        // A command a shell started: its parent is the shell, and the shell's is this test.
+        let mut shell = std::process::Command::new("/bin/sh").args(["-c", "sleep 30 & echo $!; wait"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let command: u32 = line.trim().parse().unwrap();
+        let pane = |pid: u32| pane_of(&HashMap::from([(pid, "p1".to_string())]), command);
+        let found = [pane(command), pane(shell.id()), pane(std::process::id()), pane_of(&HashMap::new(), command)];
+        let _ = std::process::Command::new("kill").arg(command.to_string()).status();
+        let _ = shell.wait();
+        assert_eq!(found, [Some("p1".to_string()), Some("p1".to_string()), Some("p1".to_string()), None]);
     }
 }
