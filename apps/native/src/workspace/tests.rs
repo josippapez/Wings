@@ -1699,3 +1699,32 @@ fn an_agent_on_screen_or_with_sleep_off_stays_awake() {
     app.run_until_parked();
     assert_eq!(written(&window, 0), Vec::<String>::new(), "turned off");
 }
+
+/// As on the desktop, a terminal tab whose pane runs a program instead of sitting at its prompt has a green dot after
+/// its title, saying what runs; a tab whose busy pane is an agent's shows the agent's state instead.
+#[test]
+fn a_tab_running_a_program_shows_a_green_dot() {
+    use crate::agents::{PaneInfo, Scan};
+    let (_app, mut window) = open();
+    press(&mut window, "t");
+    let info = |command: &str| PaneInfo {
+        command: command.into(),
+        cwd: None,
+        busy: true,
+    };
+    let (first, second) = window.read(|w, _| (w.terminals[0].id, w.terminals[1].id));
+    window.update(|w, _, cx| {
+        w.apply(
+            Scan {
+                agents: vec![sleepy_agent(1)],
+                panes: HashMap::from([("0".into(), info("node")), ("1".into(), info("claude"))]),
+            },
+            cx,
+        );
+        assert_eq!(w.tab_running(first), ["node"]);
+        assert_eq!(w.tab_running(second), Vec::<String>::new());
+    });
+    window.draw();
+    assert!(crate::ui::spot_at(&format!("running:{:?}", Active::Terminal(first))).is_some());
+    assert!(crate::ui::spot_at(&format!("running:{:?}", Active::Terminal(second))).is_none());
+}

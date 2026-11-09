@@ -211,6 +211,25 @@ impl Workspace {
             })
     }
 
+    /// The programs a tab's panes run instead of sitting at their shell prompt, like `node`, leaving out agents, which
+    /// show their own state: the desktop's `running`.
+    pub(super) fn tab_running(&self, tab: usize) -> Vec<String> {
+        let Some(tab) = self.terminals.iter().find(|t| t.id == tab) else {
+            return Vec::new();
+        };
+        let mut running: Vec<String> = tab
+            .layout
+            .panes()
+            .iter()
+            .filter(|pane| !self.agents.contains_key(pane))
+            .filter_map(|pane| self.pane_info.get(pane))
+            .filter(|info| info.busy && !info.command.is_empty())
+            .map(|info| info.command.clone())
+            .collect();
+        running.dedup();
+        running
+    }
+
     /// A project's agents, for its sidebar row.
     pub(super) fn project_agents(&self, path: &std::path::Path) -> Vec<AgentState> {
         let key = path.to_string_lossy();

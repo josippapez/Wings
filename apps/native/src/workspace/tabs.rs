@@ -337,6 +337,28 @@ impl Workspace {
                 .and_then(|tab| layout_glyph(tab.id, &tab.layout, tab.focused, color)),
             _ => None,
         };
+        // The desktop's `size-1.5 rounded-full bg-done` after the title. It doesn't pulse here: an endless animation would
+        // redraw the window every frame for as long as a dev server runs.
+        let running = match active {
+            Active::Terminal(tab) => self.tab_running(tab),
+            _ => Vec::new(),
+        };
+        let running_dot = (!running.is_empty()).then(|| {
+            div()
+                .id(SharedString::from(format!("{id}-running")))
+                .role(Role::Image)
+                .aria_label(format!("Running {}", running.join(", ")))
+                .size(px(6.0))
+                .flex_none()
+                .rounded_full()
+                .bg(rgb(theme::DONE))
+                .children(ui::spot(|| format!("running:{active:?}")))
+        });
+        let tooltip_label: SharedString = if running.is_empty() {
+            label.clone()
+        } else {
+            format!("{label}\nRunning {}", running.join(", ")).into()
+        };
         let group = SharedString::from(format!("{id}-group"));
         let close = ui::icon_button(
             SharedString::from(format!("{id}-close")),
@@ -363,7 +385,7 @@ impl Workspace {
             .group(group)
             .role(Role::Tab)
             .aria_label(label.clone())
-            .tooltip(ui::tooltip(label.clone(), key))
+            .tooltip(ui::tooltip(tooltip_label, key))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -443,6 +465,7 @@ impl Workspace {
             .children(ui::spot(|| format!("tab:{active:?}")))
             .child(glyph)
             .child(div().min_w_0().truncate().child(label))
+            .children(running_dot)
             .children(splits)
             .child(close)
     }

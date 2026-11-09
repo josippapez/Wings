@@ -638,6 +638,11 @@ fn tab_drag(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         );
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("dragged"));
+        // A program in the shown terminal: its tab gets the green dot once detection sees it.
+        cx.simulate_input(window, "sleep 600");
+        cx.simulate_keystrokes(window, "enter");
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &name("running"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }
