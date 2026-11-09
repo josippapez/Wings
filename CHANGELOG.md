@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.10 · 2026-11-09
+
+- **Let terminals read Chrome's data without Full Disk Access.** Wings' terminals now run under a small "Wings Terminals" app, so macOS can keep a grant just for Google Chrome's data, which the Chrome DevTools MCP needs. When a terminal is refused, Wings asks once and opens Privacy & Security, Files & Folders: turn on Google Chrome under Wings Terminals. Terminals started before this update keep running on the old server until they end.
+- **Plugin popovers stay open while you type.** Typing in a popover's field, or using a dropdown in it, no longer closes it. A click outside closes it.
+
 ## 0.2.9 · 2026-11-09
 
 - **Plugin sidebars follow your project.** A plugin's sidebar or popover switches to the project you switch to, instead of showing the one it opened in.
