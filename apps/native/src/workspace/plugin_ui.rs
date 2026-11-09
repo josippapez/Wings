@@ -9,9 +9,10 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FontWeight, IntoElement,
-    MouseButton, MouseDownEvent, Pixels, Render, Role, SharedString, StyleRefinement, Task, Window,
-    anchored, canvas, deferred, div, hsla, point, prelude::*, px, relative, rgb, rgba,
+    Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, FontWeight,
+    HoverListenerMode, IntoElement, MouseButton, MouseDownEvent, Pixels, Render, Role,
+    SharedString, StyleRefinement, Subscription, Task, Window, anchored, canvas, deferred, div,
+    hsla, point, prelude::*, px, relative, rgb, rgba,
 };
 
 use crate::{
@@ -839,12 +840,14 @@ impl Workspace {
                     content,
                 )
                 .when(label.is_some(), |button| button.w_auto().px(px(8.0)));
-                // The popover shows more than a tooltip would.
+                // The popover shows more than a tooltip would. Typing in it doesn't take the pointer off its button.
                 let button = if has_popover {
                     let key = key.clone();
-                    button.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        this.hover_popover(key.clone(), false, *hovered, cx)
-                    }))
+                    button
+                        .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+                        .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                            this.hover_popover(key.clone(), false, *hovered, window, cx)
+                        }))
                 } else if let Some(label) = label.filter(|label| !label.rows.is_empty()) {
                     let tip = LabelTip {
                         title: sidebar.title.clone(),
@@ -904,11 +907,30 @@ impl Workspace {
                     inset: false,
                 },
             ])
-            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                this.hover_popover(hovered.clone(), true, *over, cx)
+            .when_some(self.plugin_ui.popover.focus.as_ref(), |card, focus| {
+                card.track_focus(focus)
+            })
+            // gpui reads a key press as the pointer leaving until it moves again: typing in the popover would close it.
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover(cx.listener(move |this, over: &bool, window, cx| {
+                this.hover_popover(hovered.clone(), true, *over, window, cx)
             }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(page.clone());
+            // A press anywhere else closes it, and takes the keyboard from a field in it, as one outside a desktop
+            // popover does; one on a menu its page opened over the window, which can reach past the card, doesn't.
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                let popover = &this.plugin_ui.popover;
+                let menu = popover.open.as_ref().and_then(|key| popover.pages.get(key));
+                if menu.is_some_and(|(page, _)| page.read(cx).shows_menu()) {
+                    return;
+                }
+                if this.popover_has_focus(window, cx) {
+                    window.blur(cx);
+                }
+                this.hide_popover(cx);
+            }))
+            .child(page.clone())
+            .children(ui::spot(|| "plugin-popover".to_owned()));
         Some(motion::with_phase(phase, || {
             // Zero-size, at the button's bottom right: the popover hangs 6pt under it, right edge to right edge, as the
             // desktop's `align="end" sideOffset={6}`.
@@ -936,13 +958,24 @@ impl Workspace {
     /// The pointer came onto (`hovered`) or left the button of the sidebar `key`, or its popover (`card`). It shows
     /// after `POPOVER_OPEN_DELAY` over either and goes `POPOVER_CLOSE_DELAY` after leaving both, as Base UI's
     /// `HoverCardTrigger delay={300} closeDelay={200}`; never over its own open sidebar, which shows the same and more.
+    /// While a field in it has the keyboard or a menu of its page is open it stays, and goes once that ends with the
+    /// pointer away (`popover_focus_left`).
     pub(super) fn hover_popover(
         &mut self,
         key: (String, String),
         card: bool,
         hovered: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plugin_ui.popover.focus.is_none() {
+            let focus = cx.focus_handle();
+            self.plugin_ui.popover.focus_out =
+                Some(cx.on_focus_out(&focus, window, |this, _, window, cx| {
+                    this.popover_focus_left(window, cx)
+                }));
+            self.plugin_ui.popover.focus = Some(focus);
+        }
         let popover = &mut self.plugin_ui.popover;
         if hovered && popover.hovered.as_ref() != Some(&key) {
             popover.hovered = Some(key.clone());
@@ -961,13 +994,58 @@ impl Workspace {
                 let _ = this.update(cx, |this, cx| this.show_popover(key, cx));
             }));
         } else if shown {
-            popover.timer = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(POPOVER_CLOSE_DELAY).await;
-                let _ = this.update(cx, |this, cx| this.hide_popover(cx));
-            }));
+            self.close_popover_later(window, cx);
         } else {
             popover.timer = None;
         }
+    }
+
+    /// Closes the popover after `POPOVER_CLOSE_DELAY`, unless by then a field in it has the keyboard or a menu of its
+    /// page is open.
+    fn close_popover_later(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popover_holds_keyboard(window, cx) {
+            self.plugin_ui.popover.timer = None;
+            return;
+        }
+        self.plugin_ui.popover.timer = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(POPOVER_CLOSE_DELAY).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !this.popover_holds_keyboard(window, cx) {
+                    this.hide_popover(cx);
+                }
+            });
+        }));
+    }
+
+    /// The keyboard left the popover: it goes as it would have when the pointer left, unless the pointer is on it.
+    fn popover_focus_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let popover = &self.plugin_ui.popover;
+        let Some(open) = popover.open.as_ref() else {
+            return;
+        };
+        let over = popover.hovered.as_ref() == Some(open) && popover.over.contains(&true);
+        if !over {
+            self.close_popover_later(window, cx);
+        }
+    }
+
+    /// Whether the keyboard is in the shown popover.
+    fn popover_has_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        let popover = &self.plugin_ui.popover;
+        popover.open.is_some()
+            && popover
+                .focus
+                .as_ref()
+                .is_some_and(|focus| focus.contains_focused(window, cx))
+    }
+
+    /// Whether the shown popover is in use beyond the pointer: a field in it has the keyboard, or its page opened a
+    /// menu, which is drawn over the window and can reach past the card.
+    fn popover_holds_keyboard(&self, window: &Window, cx: &gpui::App) -> bool {
+        let popover = &self.plugin_ui.popover;
+        let menu = popover.open.as_ref().and_then(|key| popover.pages.get(key));
+        self.popover_has_focus(window, cx)
+            || menu.is_some_and(|(page, _)| page.read(cx).shows_menu())
     }
 
     /// Shows the popover page of the sidebar `key`, loading it the first time or after it was unloaded.
@@ -1367,6 +1445,9 @@ pub(super) struct HoverPopover {
     /// Shows or hides it after its delay.
     timer: Option<Task<()>>,
     unload: HashMap<(String, String), Task<()>>,
+    /// Held by the shown card, so it knows when a field in its page has the keyboard, and hears when it leaves.
+    focus: Option<FocusHandle>,
+    focus_out: Option<Subscription>,
 }
 
 impl HoverPopover {
@@ -1617,9 +1698,17 @@ mount(h('Page', null, h('Text', null, 'A page')));
         );
         let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
         window.update(|w, window, cx| {
-            assert_eq!(w.sidebar_buttons(cx).len(), 2, "the sidebar and Disk usage, not One item");
+            assert_eq!(
+                w.sidebar_buttons(cx).len(),
+                2,
+                "the sidebar and Disk usage, not One item"
+            );
             w.open_bar_view("disk", "map", &Kind::Tab, window, cx);
-            assert!(w.plugin_tabs.iter().any(|tab| tab.plugin == "disk" && tab.view == "map"));
+            assert!(
+                w.plugin_tabs
+                    .iter()
+                    .any(|tab| tab.plugin == "disk" && tab.view == "map")
+            );
         });
     }
 }

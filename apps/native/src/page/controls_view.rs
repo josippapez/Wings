@@ -651,6 +651,9 @@ impl PageView {
                 ),
             )
         });
+        if list.is_some() {
+            self.listing.set(true);
+        }
         div()
             .relative()
             .min_w_0()

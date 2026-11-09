@@ -753,7 +753,7 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
         );
     });
     // Pointing at the button shows the popover after its delay, with the popover's own page.
-    window.update(|w, _, cx| w.hover_popover(key.clone(), false, true, cx));
+    window.update(|w, window, cx| w.hover_popover(key.clone(), false, true, window, cx));
     app.advance_clock(Duration::from_millis(250));
     window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None, "not at once"));
     app.advance_clock(Duration::from_millis(60));
@@ -767,24 +767,145 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
         std::thread::sleep(Duration::from_millis(10));
     }
     // Moving from the button onto the popover keeps it; leaving both closes it, and its page stays loaded, hidden.
-    window.update(|w, _, cx| {
-        w.hover_popover(key.clone(), false, false, cx);
-        w.hover_popover(key.clone(), true, true, cx);
+    window.update(|w, window, cx| {
+        w.hover_popover(key.clone(), false, false, window, cx);
+        w.hover_popover(key.clone(), true, true, window, cx);
     });
     app.advance_clock(Duration::from_millis(300));
     window.read(|w, _| assert_eq!(w.plugin_ui.popover.open.as_ref(), Some(&key)));
-    window.update(|w, _, cx| w.hover_popover(key.clone(), true, false, cx));
+    window.update(|w, window, cx| w.hover_popover(key.clone(), true, false, window, cx));
     app.advance_clock(Duration::from_millis(210));
     window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None));
     window.read(|w, _| assert!(w.plugin_ui.popover.pages.contains_key(&key)));
     // Not over its own open sidebar.
     window.update(|w, _, cx| w.show_sidebar("timer", "tracker", cx));
-    window.update(|w, _, cx| w.hover_popover(key.clone(), false, true, cx));
+    window.update(|w, window, cx| w.hover_popover(key.clone(), false, true, window, cx));
     app.advance_clock(Duration::from_millis(400));
     window.read(|w, _| assert_eq!(w.plugin_ui.popover.open, None));
     // Two minutes out of view, its page is dropped, and the next show loads it again.
     app.advance_clock(Duration::from_secs(121));
     window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
+}
+
+/// Typing in Cyclops' popover, or picking from a list or menu in it, keeps it open: gpui reads a key press as the
+/// pointer leaving, and a field or menu in use holds it even once the pointer goes, as does a press on a list drawn past
+/// the card. It goes when the keyboard leaves it with the pointer away, or on a press elsewhere.
+#[test]
+fn a_popover_stays_open_while_you_type_in_it_or_use_its_menu() {
+    let data = Data::temp();
+    let page = r#"
+let text = '';
+function render(){
+  wings.render(JSON.stringify({id:0,type:'#root',children:[
+    {id:9,type:'Text',children:[{id:10,type:'#text',text:'No timer running'}]},
+    {id:4,type:'Select',props:{label:'Project',value:'a',options:[{value:'a',label:'Alpha'},{value:'b',label:'Beta'}]}},
+    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,onChange:'3:onChange'}},
+      {id:5,type:'Row',props:{gap:'s',wrap:true},children:['Code review','Checkout redesign'].map(t=>({id:t.length,type:'Button',props:{chip:true,pressed:false,onClick:t.length+':onClick'},children:[{id:100+t.length,type:'#text',text:t}]}))}]},
+    {id:7,type:'Text',children:[{id:8,type:'#text',text:'Task='+text+'.'}]}]}));
+}
+globalThis.__wingsEvent=(h,json)=>{ text = h==='3:onChange' ? JSON.parse(json).value : 'Checkout redesign'; render(); return true; };
+render();"#;
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
+            "popover": { "page": "dist/popover.html", "width": 360, "height": 160 } }] } }),
+        "",
+        &[("sidebar", page), ("popover", page)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    // gpui tells focus listeners only about an active window's focus.
+    window.update(|_, window, _| window.activate_window());
+    let key = ("timer".to_owned(), "tracker".to_owned());
+    let open = |window: &mut TestAppWindow<Workspace>| {
+        window.read(|w, _| w.plugin_ui.popover.open.is_some())
+    };
+    let point_at_button = |app: &TestApp, window: &mut TestAppWindow<Workspace>| {
+        window.update(|w, window, cx| w.hover_popover(key.clone(), false, true, window, cx));
+        app.advance_clock(Duration::from_millis(310));
+        assert!(open(window), "pointing at the button never showed it");
+    };
+    point_at_button(&app, &mut window);
+    let popover = window.read(|w, _| w.popover_page("timer", "tracker").unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let field = loop {
+        app.run_until_parked();
+        window.draw();
+        if let Some(focus) = window.read(|_, cx| popover.read(cx).first_input_focus(cx)) {
+            break focus;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the popover never drew its field"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // The pointer moves from the button onto the card, and you type in its field.
+    let card = crate::ui::spot_at("plugin-popover").expect("the card was drawn");
+    window.update(|w, window, cx| w.hover_popover(key.clone(), false, false, window, cx));
+    window.simulate_mouse_move(card.center());
+    window.draw();
+    window.update(|_, window, cx| field.focus(window, cx));
+    window.draw();
+    window.simulate_input("re");
+    let shows = |app: &TestApp, window: &mut TestAppWindow<Workspace>, text: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !window.read(|_, cx| popover.read(cx).text().contains(text)) {
+            assert!(Instant::now() < deadline, "the page never showed {text}");
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        window.draw();
+    };
+    shows(&app, &mut window, "Task=re.");
+    app.advance_clock(Duration::from_millis(300));
+    assert!(open(&mut window), "typing in it closed it");
+    // The keyboard leaves it with the pointer still on it, which typing didn't move: it stays.
+    window.update(|_, window, cx| window.blur(cx));
+    window.draw();
+    app.advance_clock(Duration::from_millis(300));
+    assert!(open(&mut window), "it closed under the pointer");
+    window.update(|_, window, cx| field.focus(window, cx));
+    window.draw();
+    // The pointer leaves while the field has the keyboard: it stays.
+    let away = point(card.left() - px(40.0), card.bottom() + px(40.0));
+    window.simulate_mouse_move(away);
+    window.draw();
+    app.advance_clock(Duration::from_millis(300));
+    assert!(open(&mut window), "leaving it while typing closed it");
+    // A press on the field's list, drawn past the card, picks from it and keeps it.
+    let row = crate::ui::spot_at("combobox-option:Checkout redesign").expect("the list was drawn");
+    assert!(!card.contains(&row.center()), "the list ends in the card");
+    window.simulate_click(row.center(), MouseButton::Left);
+    shows(&app, &mut window, "Task=Checkout redesign.");
+    assert!(open(&mut window), "a press on its list closed it");
+    window.simulate_mouse_move(away);
+    window.draw();
+    // The keyboard leaves it with the pointer away: it goes.
+    window.update(|_, window, cx| window.blur(cx));
+    window.draw();
+    app.advance_clock(Duration::from_millis(210));
+    assert!(!open(&mut window), "it stayed once the keyboard left");
+
+    // A menu of its page is open, which may reach past the card: the pointer leaving keeps it.
+    point_at_button(&app, &mut window);
+    window
+        .update(|_, _, cx| popover.update(cx, |page, cx| assert!(page.open_select("Project", cx))));
+    window.draw();
+    window.update(|w, window, cx| w.hover_popover(key.clone(), false, false, window, cx));
+    app.advance_clock(Duration::from_millis(300));
+    assert!(open(&mut window), "leaving it with its menu open closed it");
+    // A press on the card keeps it; one elsewhere closes it.
+    window.simulate_click(
+        point(card.right() - px(20.0), card.top() + px(8.0)),
+        MouseButton::Left,
+    );
+    window.draw();
+    assert!(open(&mut window), "a press on the card closed it");
+    window.simulate_click(away, MouseButton::Left);
+    window.draw();
+    assert!(!open(&mut window), "a press elsewhere left it open");
 }
 
 /// Cyclops' task field, which lists recent tasks over the page as you type. In the popover under the title bar button,
@@ -903,7 +1024,10 @@ fn tab_goes_round_a_popovers_fields_and_stays_in_it() {
         if let Some(focus) = window.read(|_, cx| popover.read(cx).first_input_focus(cx)) {
             break focus;
         }
-        assert!(Instant::now() < deadline, "the popover never drew its fields");
+        assert!(
+            Instant::now() < deadline,
+            "the popover never drew its fields"
+        );
         std::thread::sleep(Duration::from_millis(10));
     };
     window.update(|_, window, cx| first.focus(window, cx));
@@ -2077,7 +2201,10 @@ fn the_sidebar_lists_no_plugin_pages() {
     window.draw();
     // Their icons show only on their buttons in the project bar, right of the 248 sidebar.
     for glyph in ["git-compare", "own"] {
-        assert!(glyph_at(glyph).is_none_or(|at| at.left() >= px(248.0)), "{glyph} in the sidebar");
+        assert!(
+            glyph_at(glyph).is_none_or(|at| at.left() >= px(248.0)),
+            "{glyph} in the sidebar"
+        );
     }
 }
 

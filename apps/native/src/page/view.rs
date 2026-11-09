@@ -1,7 +1,7 @@
 //! Draws a page's tree with the UI kit, in the look of the desktop's plugin pages, and sends its clicks back.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
@@ -84,6 +84,8 @@ pub struct PageView {
     suggestions_closed: bool,
     /// The option of the focused combobox the arrow keys are on.
     highlight: Option<usize>,
+    /// A combobox's options were drawn over the page in the last render.
+    listing: Cell<bool>,
     fields: RefCell<HashMap<u64, SearchState>>,
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
@@ -101,6 +103,12 @@ pub struct PageView {
 }
 
 impl PageView {
+    /// Whether a select's menu or a combobox's options are open over the page. They are drawn above everything else
+    /// and can reach past the page's own bounds, so a press on one may land outside the frame that holds the page.
+    pub fn shows_menu(&self) -> bool {
+        self.menu.is_some() || self.listing.get()
+    }
+
     pub fn set_visible(&self, visible: bool) {
         if let Some(runtime) = &self.runtime {
             runtime.set_visible(visible);
@@ -257,6 +265,7 @@ impl PageView {
             focused: None,
             suggestions_closed: false,
             highlight: None,
+            listing: Cell::new(false),
             fields: RefCell::new(HashMap::new()),
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
@@ -1216,6 +1225,7 @@ impl Render for PageView {
             self.suggestions_closed = false;
             self.highlight = None;
         }
+        self.listing.set(false);
         let body = self
             .tree
             .as_ref()
