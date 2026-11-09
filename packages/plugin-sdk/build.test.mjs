@@ -1,5 +1,6 @@
 // node --test: the build's entries, dist/ output, generated pages and mounts, CSS, and pack.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -253,6 +254,33 @@ test("a plugin with native: true also gets dist/native/, its browser output stay
   assert.deepEqual((await buildPlugin(dir, { check: true })).stale, [join(dir, "dist", "native", "sidebar.js")]);
   const zip = unzipSync(new Uint8Array(readFileSync(await pack(dir))));
   assert.deepEqual(Object.keys(zip).filter((name) => name.startsWith("dist/native/")).sort(), ["dist/native/main.js", "dist/native/sidebar.js"]);
+});
+
+test("a native plugin's pages are built again to share one React and wings-plugin-ui, from dist/native/shared.js, whose hash they name", async (t) => {
+  const dir = plugin({ "src/pages/sidebar.ts": null, "src/pages/sidebar.tsx": nativePage, "src/pages/popover.tsx": nativePage }, { native: true });
+  t.after(() => rmSync(dir, { recursive: true }));
+  fakeUi(dir, { ui: ["Page"], native: ["Page"] });
+  await buildPlugin(dir);
+  const library = readFileSync(join(dir, "dist", "native", "shared.js"), "utf8");
+  const page = readFileSync(join(dir, "dist", "native", "shared", "sidebar.js"), "utf8");
+  assert.equal(page.split("\n")[0], `// wings-shared ${createHash("sha256").update(library).digest("hex")}`);
+  // React is in the library, once, and not in the page.
+  assert.match(library, /react\.transitional\.element/);
+  assert.doesNotMatch(page, /react\.transitional\.element/);
+
+  // The page mounts its default export with the library's mount, as the app runs it: with an instance of the library.
+  const shared = {};
+  runInNewContext(library, shared);
+  runInNewContext(page, { __wingsShared: shared.__wingsLib });
+  assert.equal(shared.mounted.type().props.children, "hi");
+  assert.equal(shared.mountedWith.fill, false);
+});
+
+test("a native page can't be called shared, which is the library's name", async (t) => {
+  const dir = plugin({ "src/pages/sidebar.ts": null, "src/pages/sidebar.tsx": nativePage, "src/pages/shared.tsx": nativePage }, { native: true });
+  t.after(() => rmSync(dir, { recursive: true }));
+  fakeUi(dir, { ui: ["Page"], native: ["Page"] });
+  await assert.rejects(buildPlugin(dir), /can't be called shared/);
 });
 
 test("a native page that says fill: true mounts filling its frame, as the browser mount does, except a block", async (t) => {

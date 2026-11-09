@@ -11,7 +11,8 @@
 //! its main, and a view that opens as a tab and sets `newTab` (what the desktop's + menu lists) has a page at
 //! `<page>.js` for the page file its manifest names, `dist/board.html` being `board.js`; so does each of its sidebars
 //! (`contributes.sidebars`), which opens in the right-hand panel. A plugin without `dist/native/main.js` isn't ported
-//! yet and is skipped without a word.
+//! yet and is skipped without a word. A plugin built since its pages share one React (`runtime::Library`) also has
+//! `dist/native/shared.js` and each page again in `dist/native/shared/`, which run in its place (`page_source`).
 //!
 //! A debug build can also run the plugins of a folder it is given (`--plugins-dev-root`), as the desktop's debug builds
 //! run the repo's `plugins/`: they are always on and approved, and one the desktop has never run stores what it saves
@@ -29,7 +30,7 @@ use crate::{
     host::PluginPaths,
     page::{
         plugin::{Access, Env, PluginConfig, PluginHost},
-        runtime::Event,
+        runtime::{Event, Library},
     },
 };
 
@@ -125,6 +126,27 @@ fn native_file(dir: &Path, name: &str) -> Option<PathBuf> {
     loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.js")).filter(|file| file.is_file())
 }
 
+/// The plugin's `dist/native/shared.js`: the React and `wings-plugin-ui` its pages built to share them run on.
+pub fn library(dir: &Path) -> Option<Arc<Library>> {
+    Some(Library::new(fs::read_to_string(native_file(dir, "shared")?).ok()?))
+}
+
+/// The source of the page whose own build is `bundle` (`dist/native/<page>.js`) in the plugin in `dir`: its build that
+/// shares `library`, `dist/native/shared/<page>.js`, if it was built with that library, and otherwise `bundle`, which
+/// carries its own React, as every page did before.
+pub fn page_source(dir: &Path, bundle: &Path, library: Option<&Library>) -> std::io::Result<String> {
+    let shared = library.and_then(|library| {
+        let stem = bundle.file_stem()?.to_str()?;
+        let file = native_file(dir, &format!("shared/{stem}"))?;
+        let source = fs::read_to_string(file).ok()?;
+        (Library::needed_by(&source) == Some(library.hash())).then_some(source)
+    });
+    match shared {
+        Some(source) => Ok(source),
+        None => fs::read_to_string(bundle),
+    }
+}
+
 /// The plugins that are installed, turned on, approved and have a native build, by name. Plugins the desktop skips
 /// (too new for it, broken, not built) never show up, as `wings-plugins` skips them while loading.
 pub fn discover(paths: &PluginPaths) -> Vec<Found> {
@@ -214,9 +236,16 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
         .into_iter()
         .filter_map(|found| {
             let id = found.id;
+            let dir = &found.plugin.dir;
+            let shared = library(dir);
             let read = |file: &Path| {
                 fs::read_to_string(file)
                     .inspect_err(|error| eprintln!("[plugins] {id}: {}: {error}", file.display()))
+                    .ok()
+            };
+            let read_page = |bundle: &Path| {
+                page_source(dir, bundle, shared.as_deref())
+                    .inspect_err(|error| eprintln!("[plugins] {id}: {}: {error}", bundle.display()))
                     .ok()
             };
             let main = read(&found.main)?;
@@ -232,6 +261,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                     env: env.clone(),
                 },
             ));
+            host.set_library(shared.clone());
             let reported = id.clone();
             host.start_main(&main, move |event| {
                 if let Event::Error { message, .. } = event {
@@ -249,7 +279,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                         title: page.title.clone(),
                         multiple: page.multiple,
                         new_tab: page.new_tab,
-                        source: read(&page.bundle)?.into(),
+                        source: read_page(&page.bundle)?.into(),
                     })
                 })
                 .collect();
@@ -260,7 +290,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                     Some(Sidebar {
                         id: sidebar.id.clone(),
                         title: sidebar.title.clone(),
-                        source: read(&sidebar.bundle)?.into(),
+                        source: read_page(&sidebar.bundle)?.into(),
                     })
                 })
                 .collect();
@@ -268,7 +298,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                 Some(Sidebar {
                     id: settings.id.clone(),
                     title: settings.title.clone(),
-                    source: read(&settings.bundle)?.into(),
+                    source: read_page(&settings.bundle)?.into(),
                 })
             });
             Some(Installed {
@@ -320,7 +350,9 @@ pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
                 icon_svg: installed.plugin.icon_svg.clone(),
                 min_height: block.min_height.unwrap_or(160).clamp(least, most),
                 host: installed.host.clone(),
-                source: fs::read_to_string(file).ok()?.into(),
+                source: page_source(&installed.plugin.dir, &file, installed.host.library().as_deref())
+                    .ok()?
+                    .into(),
             })
         })
         .collect()
@@ -338,7 +370,8 @@ pub fn popover(installed: &Installed, sidebar: &str) -> Option<(Arc<str>, u32, u
         .as_ref()?;
     let stem = Path::new(&popover.page).file_stem()?.to_str()?;
     let file = native_file(&installed.plugin.dir, stem)?;
-    let source = fs::read_to_string(file).ok()?;
+    let source =
+        page_source(&installed.plugin.dir, &file, installed.host.library().as_deref()).ok()?;
     Some((source.into(), popover.width, popover.height))
 }
 

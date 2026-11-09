@@ -1356,6 +1356,8 @@ fn work_item_rig() -> Rig {
         name: "web".into(),
         parent_id: None,
     }]);
+    // The project on screen, which the app always says and the pages follow with `onProject`.
+    rig.host.publish_project(Some(Path::new("/work/web")));
     let fixture =
         fs::read_to_string(repo_plugin("work-item").join("preview/native-host.js")).unwrap();
     let (on_event, _errors) = errors();
@@ -1428,6 +1430,8 @@ fn tasks_rig() -> Rig {
         name: "web".into(),
         parent_id: None,
     }]);
+    // The project on screen, which the app always says and the pages follow with `onProject`.
+    rig.host.publish_project(Some(Path::new("/work/web")));
     let (on_event, _errors) = errors();
     rig.host
         .start_main(&native("tasks", "main.js"), on_event)
@@ -1701,4 +1705,34 @@ fn tasks_issue_tab_draws_the_type_icon_by_its_title() {
         "{}",
         icon.markup
     );
+}
+
+/// Every page of the repo's plugins, built to share React (`dist/native/shared/<page>.js`), draws what its build that
+/// brings its own React draws, side by side on one host, and the app picks it.
+#[test]
+fn each_page_built_to_share_react_draws_what_its_own_build_draws() {
+    let mut checked = 0;
+    for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins")).unwrap() {
+        let dir = entry.unwrap().path();
+        let Some(library) = crate::installed::library(&dir) else {
+            continue;
+        };
+        let name = dir.file_name().unwrap().to_str().unwrap().to_owned();
+        let root = super::tests::Root::new();
+        let host = super::PluginHost::new(root.config(&name));
+        host.set_library(Some(library.clone()));
+        for page in fs::read_dir(dir.join("dist/native/shared")).unwrap() {
+            let stem = page.unwrap().path().file_stem().unwrap().to_str().unwrap().to_owned();
+            let bundle = dir.join("dist/native").join(format!("{stem}.js"));
+            let lean = crate::installed::page_source(&dir, &bundle, Some(&library)).unwrap();
+            assert!(lean.starts_with(crate::page::runtime::SHARED_MARKER), "{name}/{stem}");
+            let first = |source: &str| {
+                let (_page, received) = open_page(&host, source);
+                tree(&received, &format!("{name}/{stem}"), |_| true)
+            };
+            assert_eq!(first(&lean), first(&native(&name, &format!("{stem}.js"))), "{name}/{stem}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 13, "only {checked} pages");
 }

@@ -366,3 +366,123 @@ fn a_timer_that_sets_itself_again_does_not_keep_the_frame_from_its_events() {
     assert!(page.runtime.dispatch("clicked", None));
     assert_eq!(shown(&page.tree()), "clicked");
 }
+
+/// How many times each library, by hash, was compiled, so a test can see its pages shared one copy.
+pub(super) static COMPILED: std::sync::Mutex<std::collections::BTreeMap<String, usize>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// A library like `dist/native/shared.js`: it defines `__wingsLib`, with a count of its own for each instance, a
+/// check of what a page throws, and `show` drawing through the page's own `wings`. `tag` makes it a library of its own.
+fn library(tag: &str) -> Arc<Library> {
+    Library::new(format!(
+        "var __wingsLib = (() => {{ let count = 0; return {{
+            tag: {tag:?},
+            next: () => ++count,
+            isError: (thrown) => thrown instanceof Error,
+            show: (value) => globalThis.wings.render(JSON.stringify({{ id: 0, type: '#root', props: {{}},
+                children: [{{ id: 1, type: '#text', text: JSON.stringify(value) }}] }})),
+        }}; }})();"
+    ))
+}
+
+/// A page built to share `library`, running `body` with the library as `lib`.
+fn shared_page(library: &Library, body: &str) -> String {
+    format!("{SHARED_MARKER}{}\n(() => {{ const lib = __wingsShared; {body} }})();", library.hash())
+}
+
+fn open_in(engine: &Arc<Engine>, source: &str, library: Option<Arc<Library>>) -> Page {
+    let (sender, events) = mpsc::channel();
+    let runtime = PageRuntime::open_plugin(engine, source, Role::Page, Arc::new(NoLink), library, move |event| {
+        let _ = sender.send(event);
+    });
+    Page { runtime, events }
+}
+
+#[test]
+fn pages_built_to_share_a_library_compile_it_once_and_each_get_an_instance_and_globals_of_their_own() {
+    let lib = library("once");
+    let engine = Engine::start(Limits::default()).unwrap();
+    let page = "lib.next(); globalThis.mine = (globalThis.mine ?? 0) + 1;
+        globalThis.__wingsEvent = (handler) => { lib.show({ handler, count: lib.next(), mine: globalThis.mine }); return true; };
+        lib.show({ count: lib.next(), mine: globalThis.mine, wings: typeof wings.render, timers: typeof setTimeout });";
+    let first = open_in(&engine, &shared_page(&lib, page), Some(lib.clone()));
+    assert_eq!(shown(&first.tree()), serde_json::json!({ "count": 2, "mine": 1, "wings": "function", "timers": "function" }));
+    let second = open_in(&engine, &shared_page(&lib, page), Some(lib.clone()));
+    // Its own count and its own globals: the first page's don't show through.
+    assert_eq!(shown(&second.tree()), serde_json::json!({ "count": 2, "mine": 1, "wings": "function", "timers": "function" }));
+    assert!(first.runtime.dispatch("a", None));
+    assert_eq!(shown(&first.tree()), serde_json::json!({ "handler": "a", "count": 3, "mine": 1 }));
+    assert!(second.runtime.dispatch("b", None));
+    assert_eq!(shown(&second.tree()), serde_json::json!({ "handler": "b", "count": 3, "mine": 1 }));
+    assert_eq!(COMPILED.lock().unwrap().get(lib.hash()), Some(&1));
+}
+
+#[test]
+fn a_page_and_its_library_share_a_realm_so_what_the_page_throws_is_an_error_to_the_library() {
+    let lib = library("realm");
+    let engine = Engine::start(Limits::default()).unwrap();
+    let page = open_in(
+        &engine,
+        &shared_page(&lib, "lib.show({ error: lib.isError(new Error('x')), type: lib.isError(new TypeError('y')) });"),
+        Some(lib),
+    );
+    assert_eq!(shown(&page.tree()), serde_json::json!({ "error": true, "type": true }));
+}
+
+#[test]
+fn a_page_that_loops_is_stopped_and_the_other_pages_of_its_engine_go_on() {
+    let lib = library("isolation");
+    let engine = Engine::start(Limits { turn: Duration::from_millis(100), ..Limits::default() }).unwrap();
+    let steady = "globalThis.__wingsEvent = (handler) => { lib.show(handler); return true; };
+        setInterval(() => {}, 5); lib.show('up');";
+    let kept = open_in(&engine, &shared_page(&lib, steady), Some(lib.clone()));
+    let own = open_in(&engine, &report("globalThis.__wingsEvent = (handler) => { show(handler); return true; }; show('up');"), None);
+    assert_eq!(shown(&kept.tree()), "up");
+    assert_eq!(shown(&own.tree()), "up");
+    // One loops in a click, one in a chain of promise jobs that would outlive it, one as it starts.
+    for looping in [
+        "globalThis.__wingsEvent = () => { for (;;) {} }; lib.show('up');",
+        "globalThis.__wingsEvent = () => { const next = () => Promise.resolve().then(next); next(); }; lib.show('up');",
+    ] {
+        let stuck = open_in(&engine, &shared_page(&lib, looping), Some(lib.clone()));
+        assert_eq!(shown(&stuck.tree()), "up");
+        assert!(stuck.runtime.dispatch("loop", None));
+        while !matches!(stuck.next(), Event::Error { fatal: true, .. }) {}
+        assert!(!stuck.runtime.dispatch("again", None));
+        for (page, said) in [(&kept, "after"), (&own, "after too")] {
+            assert!(page.runtime.dispatch(said, None));
+            assert_eq!(shown(&page.tree()), said);
+        }
+    }
+    let starting = open_in(&engine, &shared_page(&lib, "for (;;) {}"), Some(lib.clone()));
+    assert!(matches!(starting.next(), Event::Error { fatal: true, .. }));
+    assert!(kept.runtime.dispatch("still", None));
+    assert_eq!(shown(&kept.tree()), "still");
+}
+
+#[test]
+fn a_page_built_with_another_library_or_none_stops_saying_to_rebuild() {
+    let built_with = library("built");
+    let engine = Engine::start(Limits::default()).unwrap();
+    for given in [None, Some(library("other"))] {
+        let page = open_in(&engine, &shared_page(&built_with, "lib.show('up');"), given);
+        match page.next() {
+            Event::Error { message, fatal: true } => assert!(message.contains("Rebuild the plugin"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_page_that_brings_its_own_react_runs_beside_shared_pages_with_the_globals_it_always_had() {
+    let lib = library("beside");
+    let engine = Engine::start(Limits::default()).unwrap();
+    let shared = open_in(&engine, &shared_page(&lib, "lib.show('shared');"), Some(lib.clone()));
+    assert_eq!(shown(&shared.tree()), "shared");
+    // The pilot page bundles React itself, as every page built before pages shared one did.
+    let own = open_in(&engine, PILOT, Some(lib));
+    let ready = own.until("Ready");
+    let handler = button(&ready.children).unwrap();
+    assert!(own.runtime.dispatch(&handler, None));
+    own.until("Count: 1");
+}

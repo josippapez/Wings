@@ -21,12 +21,12 @@
 //! The Rust functions are handed to one setup script, which builds the frozen objects from them, so a frame can't reach
 //! a raw one except through the object the script made.
 
-use super::{Command, Event, Reply, Services, message, timers::Timers};
+use super::{Event, Queue, Reply, Services, message, timers::Timers};
 use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Persistent};
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
 /// What a frame of a plugin reaches through `wings`. The host that runs the frame implements it; each call is made on
@@ -62,10 +62,11 @@ pub enum Store {
     Entries(String),
 }
 
-/// Takes the natives as `native` and defines the globals. Returns the function that hands what the host tells the frame
+/// Takes the natives as `native` and defines the globals on `target`: the frame's global object, or the object a page
+/// that shares its plugin's library has its globals in (see `runtime::Shared`). Returns the function that hands what the host tells the frame
 /// (`deliver(kind, id, text)`: see `runtime::Message`) to its listeners and promises, when the frame has them.
 const SETUP: &str = r#"
-(native) => {
+(native, target) => {
     const defined = { setTimeout: native.setTimeout, clearTimeout: native.clearTimeout };
     const wings = {};
     if (native.render) wings.render = native.render;
@@ -393,15 +394,16 @@ const SETUP: &str = r#"
     defined.wings = Object.freeze(wings);
     // A frame can read these but not swap them for its own.
     for (const [key, value] of Object.entries(defined)) {
-        Object.defineProperty(globalThis, key, { value, writable: false, configurable: false, enumerable: true });
+        Object.defineProperty(target, key, { value, writable: false, configurable: false, enumerable: true });
     }
     return deliver;
 }
 "#;
 
-/// Gives the frame its globals. The result is the function that delivers what the host tells the frame, for a frame with a link.
+/// Gives the frame its globals, on `target`. The result is the function that delivers what the host tells the frame, for a frame with a link.
 pub(super) fn install<'js>(
     ctx: &Ctx<'js>,
+    target: &Object<'js>,
     services: &Services,
     emit: Rc<RefCell<impl FnMut(Event) + 'static>>,
     timers: &Rc<RefCell<Timers>>,
@@ -431,7 +433,7 @@ pub(super) fn install<'js>(
         }
     }
     let setup: Function = ctx.eval(SETUP).catch(ctx).map_err(message)?;
-    let deliver: Option<Function> = setup.call((native,)).catch(ctx).map_err(message)?;
+    let deliver: Option<Function> = setup.call((native, target.clone())).catch(ctx).map_err(message)?;
     Ok(deliver.map(|deliver| Persistent::save(ctx, deliver)))
 }
 
@@ -463,7 +465,7 @@ fn broadcast<'js>(ctx: &Ctx<'js>, link: &Arc<dyn Link>) -> rquickjs::Result<Func
 fn call<'js>(
     ctx: &Ctx<'js>,
     link: &Arc<dyn Link>,
-    queue: mpsc::SyncSender<Command>,
+    queue: Queue,
 ) -> rquickjs::Result<Function<'js>> {
     let link = link.clone();
     Function::new(

@@ -5,8 +5,9 @@ use std::fs;
 use super::{
     DEV_SCOPE, FoundPage, WINGS_VERSION, discover,
     fixture::{Approval::*, Data},
+    library, page_source,
 };
-use crate::host::PluginPaths;
+use crate::{host::PluginPaths, page::runtime};
 
 /// `WINGS_VERSION` with its last number raised by one: a plugin that needs a newer desktop than this one.
 fn newer() -> String {
@@ -178,4 +179,27 @@ fn a_plugin_that_ships_native_builds_of_its_sidebars_has_them_found_and_one_with
         }]
     );
     assert!(found[0].pages.is_empty());
+}
+
+#[test]
+fn a_page_runs_its_build_that_shares_react_only_when_that_was_built_with_the_plugins_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("dist/native");
+    fs::create_dir_all(native.join("shared")).unwrap();
+    let bundle = native.join("board.js");
+    fs::write(&bundle, "own React").unwrap();
+    // A plugin built before pages shared React has no library, and its pages run as they are.
+    assert!(library(dir.path()).is_none());
+    assert_eq!(page_source(dir.path(), &bundle, None).unwrap(), "own React");
+
+    fs::write(native.join("shared.js"), "var __wingsLib = {};").unwrap();
+    let shared = library(dir.path()).unwrap();
+    let lean = format!("{}{}\nshared React", runtime::SHARED_MARKER, shared.hash());
+    fs::write(native.join("shared/board.js"), &lean).unwrap();
+    assert_eq!(page_source(dir.path(), &bundle, Some(&shared)).unwrap(), lean);
+    // From another build of the library, or with none on file, the page brings its own React again.
+    let other = runtime::Library::new("var __wingsLib = { other: true };");
+    assert_eq!(page_source(dir.path(), &bundle, Some(&other)).unwrap(), "own React");
+    fs::remove_file(native.join("shared/board.js")).unwrap();
+    assert_eq!(page_source(dir.path(), &bundle, Some(&shared)).unwrap(), "own React");
 }

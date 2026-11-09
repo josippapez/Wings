@@ -516,7 +516,7 @@ fn a_frame_that_is_dropped_leaves_the_plugin_and_its_thread_ends() {
     assert_eq!(host.shared.frames.lock().unwrap().len(), 2);
     drop(gone);
     assert_eq!(host.shared.frames.lock().unwrap().len(), 1);
-    // Nothing holds its queue open any more, so its thread ends and lets go of its link.
+    // Its engine lets go of its context, and of its link with it.
     let until = Instant::now() + Duration::from_secs(5);
     while Arc::strong_count(&host.shared) > 3 {
         assert!(
@@ -678,4 +678,22 @@ fn starting_main_again_replaces_it_and_the_old_one_stops() {
         .unwrap();
     listener.report("second", |r| r["heard"] == json!(["first", "second"]));
     assert_eq!(host.shared.frames.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn a_plugins_pages_share_one_engine_which_ends_with_the_last_page_and_main_keeps_its_own() {
+    let root = Root::new();
+    let host = PluginHost::new(root.config("fixture"));
+    host.start_main("", |_| {}).unwrap();
+    // Main started no engine for pages.
+    assert!(host.pages.lock().unwrap().upgrade().is_none());
+    let first = open(&host, PROBE);
+    let engine = host.pages.lock().unwrap().upgrade().unwrap();
+    let second = open(&host, PROBE);
+    assert!(Arc::ptr_eq(&engine, &host.page_engine().unwrap()));
+    second.report("the second page", |_| true);
+    drop(engine);
+    drop((first, second));
+    assert!(host.pages.lock().unwrap().upgrade().is_none());
+    open(&host, PROBE).report("a page on a new engine", |_| true);
 }

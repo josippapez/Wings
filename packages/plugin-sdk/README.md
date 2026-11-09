@@ -134,6 +134,12 @@ mounts its default export with `mount` from `wings-plugin-ui/native`, which draw
 The browser build's output doesn't change, and a plugin without the field gets no `dist/native/`, so a plugin that
 isn't ported builds as before. `--check` and `pack` cover the native files too.
 
+Each page is also built a second time without React and `wings-plugin-ui`, into `dist/native/shared/<page>.js`, beside
+`dist/native/shared.js`, which holds them once for all the plugin's pages. A Wings that knows these runs them: the
+plugin's pages then share one compiled copy of React and one thread, each with its own instance, so each page costs far
+less memory. The page names the hash of the `shared.js` it was built with, and runs only with that one; a Wings from
+before this, or a mismatch, runs `dist/native/<page>.js` as before. A page can't be called `shared`.
+
 A page that imports a component `wings-plugin-ui/native` doesn't have fails the build with a line for each, naming the
 component and the file, like `src/pages/sidebar.tsx:7: Card isn't in wings-plugin-ui/native`. A native page has to be
 a React page (`.tsx`): one that mounts itself with `wings-plugin-sdk/shell` fails too. Props `wings-plugin-ui/native` doesn't take are

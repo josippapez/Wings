@@ -1,5 +1,7 @@
-//! One plugin running natively: its main script and any number of its pages, each in a JS engine of its own, talking
-//! through `wings.broadcast` and keeping what they save in `wings.storage`.
+//! One plugin running natively: its main script and any number of its pages, talking through `wings.broadcast` and
+//! keeping what they save in `wings.storage`. Main runs on an engine of its own, and the pages share one (see
+//! `runtime::Engine`), which ends when the last page closes: one thread and runtime for them all, and, for pages built
+//! to share React and `wings-plugin-ui` (`runtime::Library`), one compiled copy of those.
 //!
 //! This does what the desktop's plugin host does for its frames (`apps/desktop/src/lib/plugins.ts`, the `broadcast` and
 //! `storage*` cases, and `plugin_storage_*` in `src-tauri/src/lib.rs`):
@@ -26,13 +28,13 @@
 //!   `callTool` hands the call over with `run_tool`). A host without access refuses calls.
 
 use super::runtime::{
-    Delivery, Event, Inbox, Limits, Link, Message, PageRuntime, Reply, Role, Store,
+    Delivery, Engine, Event, Inbox, Library, Limits, Link, Message, PageRuntime, Reply, Role, Store,
 };
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -411,6 +413,10 @@ pub struct PluginHost {
     shared: Arc<Shared>,
     limits: Limits,
     main: Mutex<Option<PageRuntime>>,
+    /// The engine the open pages run on, while one is open.
+    pages: Mutex<Weak<Engine>>,
+    /// The plugin's `dist/native/shared.js`, which its pages built to share it need.
+    library: Mutex<Option<Arc<Library>>>,
 }
 
 impl PluginHost {
@@ -450,7 +456,20 @@ impl PluginHost {
             }),
             limits,
             main: Mutex::default(),
+            pages: Mutex::default(),
+            library: Mutex::default(),
         }
+    }
+
+    /// The React and `wings-plugin-ui` the plugin's pages share, read from its `dist/native/shared.js` (see
+    /// `runtime::Library`). A page opened after this that was built with it runs on it.
+    pub fn set_library(&self, library: Option<Arc<Library>>) {
+        *self.library.lock().unwrap() = library;
+    }
+
+    /// The library set with `set_library`.
+    pub fn library(&self) -> Option<Arc<Library>> {
+        self.library.lock().unwrap().clone()
     }
 
     /// Starts the plugin's main script, in place of the one that ran before, which is let go of. Its errors, and the
@@ -789,6 +808,17 @@ impl PluginHost {
         )
     }
 
+    /// The engine the plugin's pages run on: the one its open pages use, or a new one when none is open.
+    fn page_engine(&self) -> std::io::Result<Arc<Engine>> {
+        let mut pages = self.pages.lock().unwrap();
+        if let Some(engine) = pages.upgrade() {
+            return Ok(engine);
+        }
+        let engine = Engine::start(self.limits)?;
+        *pages = Arc::downgrade(&engine);
+        Ok(engine)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn spawn_with_state(
         &self,
@@ -816,14 +846,25 @@ impl PluginHost {
         });
         let shared = Arc::downgrade(&self.shared);
         let mut on_event = on_event;
-        let runtime = PageRuntime::spawn_plugin(source, role, self.limits, link, move |event| {
+        let on_event = move |event| {
             if matches!(&event, Event::Error { fatal: true, .. })
                 && let Some(shared) = shared.upgrade()
             {
                 shared.close_frame_diffs(id);
             }
             on_event(event);
-        })?;
+        };
+        let runtime = match role {
+            Role::Main => PageRuntime::spawn_plugin(source, role, self.limits, link, on_event)?,
+            Role::Page => PageRuntime::open_plugin(
+                &self.page_engine()?,
+                source,
+                role,
+                link,
+                self.library(),
+                on_event,
+            ),
+        };
         let inbox = runtime.inbox();
         let focused = self.shared.focused.lock().unwrap();
         self.shared.frames.lock().unwrap().push(Open {
