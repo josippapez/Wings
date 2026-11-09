@@ -2,7 +2,10 @@
 //! you drag to resize it, the row you drag to move a project, and the question before a project with tabs open is
 //! removed.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use gpui::{
     AnyElement, Axis, Context, Div, ElementId, FontWeight, KeyDownEvent, MouseButton,
@@ -22,6 +25,7 @@ use crate::workspace::{
     context_menu::MenuTarget,
     drag_slot::Slot,
     project::{SIDEBAR_ACCENT, SIDEBAR_FOREGROUND},
+    project_sections::ListItem,
 };
 
 use super::{
@@ -156,6 +160,7 @@ impl Workspace {
             .px(px(8.0))
             .pb(px(8.0))
             .overflow_y_scroll()
+            .track_scroll(&self.side.scroll)
             .children(self.sidebar_rows(&shown, cx))
             .when(tops > 0, |list| {
                 list.child(
@@ -192,6 +197,17 @@ impl Workspace {
             })
             .when(open, |list| list.children(self.sidebar_rows(&older, cx)))
             .into_any_element()
+    }
+
+    /// Scrolls the project list just enough to show the row of `path`, the project on screen, which is never under Older.
+    pub(in crate::workspace) fn reveal_project(&self, path: &Path) {
+        let shown = self.dragged_order(self.project_order().shown);
+        let row = self.sidebar_slots(&shown).iter().position(
+            |item| matches!(item, ListItem::Row(index) if self.projects[*index].path == path),
+        );
+        if let Some(row) = row {
+            self.side.scroll.scroll_to_item(row);
+        }
     }
 
     /// "Projects" and its buttons: refresh the git counts, sort, add.

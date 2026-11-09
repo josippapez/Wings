@@ -194,8 +194,14 @@ fn glyph(icon: SectionIcon) -> Icon {
     }
 }
 
+/// One element of the project list: a project's row, or the sections after a project's last row.
+pub(super) enum ListItem<'a> {
+    Row(usize),
+    Sections(&'a Path, Vec<Group>),
+}
+
 /// A section as the sidebar draws it.
-struct Group {
+pub(super) struct Group {
     key: String,
     plugin: String,
     section: String,
@@ -210,24 +216,36 @@ impl Workspace {
     /// project's sections after it and its worktrees: issues, pull requests and schedules belong to the repo, so they
     /// come once after its worktrees.
     pub(super) fn sidebar_rows(&self, order: &[usize], cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = Vec::new();
+        self.sidebar_slots(order)
+            .into_iter()
+            .map(|slot| match slot {
+                ListItem::Row(index) => self.sidebar_row(index, cx).into_any_element(),
+                ListItem::Sections(project, groups) => self.project_sections(project, groups, cx),
+            })
+            .collect()
+    }
+
+    /// What `sidebar_rows` draws for `order`, one slot per element.
+    pub(super) fn sidebar_slots(&self, order: &[usize]) -> Vec<ListItem<'_>> {
+        let mut slots = Vec::new();
         let mut project: Option<&Path> = None;
         for (at, &index) in order.iter().enumerate() {
             let entry = &self.projects[index];
             if !entry.child {
                 project = Some(&entry.path);
             }
-            rows.push(self.sidebar_row(index, cx).into_any_element());
+            slots.push(ListItem::Row(index));
             let last = !order
                 .get(at + 1)
                 .is_some_and(|&next| self.projects[next].child);
-            if let (true, Some(project)) = (last, project)
-                && let Some(sections) = self.project_sections(project, cx)
-            {
-                rows.push(sections);
+            if let (true, Some(project)) = (last, project) {
+                let groups = self.section_groups(project);
+                if !groups.is_empty() {
+                    slots.push(ListItem::Sections(project, groups));
+                }
             }
         }
-        rows
+        slots
     }
 
     fn section_groups(&self, project: &Path) -> Vec<Group> {
@@ -264,31 +282,30 @@ impl Workspace {
     }
 
     /// The project's sections, or nothing while no plugin has put anything under it.
-    fn project_sections(&self, project: &Path, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let groups = self.section_groups(project);
-        if groups.is_empty() {
-            return None;
-        }
+    fn project_sections(
+        &self,
+        project: &Path,
+        groups: Vec<Group>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let hover = SharedString::from(format!("sections-{}", project.display()));
-        Some(
-            div()
-                .id(SharedString::from(format!(
-                    "project-sections-{}",
-                    project.display()
-                )))
-                .group(hover.clone())
-                .flex()
-                .flex_col()
-                .pt(px(1.0))
-                .pb(px(4.0))
-                .pl(px(20.0))
-                .children(
-                    groups
-                        .into_iter()
-                        .map(|group| self.section_group(project, group, &hover, cx)),
-                )
-                .into_any_element(),
-        )
+        div()
+            .id(SharedString::from(format!(
+                "project-sections-{}",
+                project.display()
+            )))
+            .group(hover.clone())
+            .flex()
+            .flex_col()
+            .pt(px(1.0))
+            .pb(px(4.0))
+            .pl(px(20.0))
+            .children(
+                groups
+                    .into_iter()
+                    .map(|group| self.section_group(project, group, &hover, cx)),
+            )
+            .into_any_element()
     }
 
     fn section_group(

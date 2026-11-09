@@ -192,7 +192,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.switch_project(project, window, cx);
+        self.switch_project(project.clone(), window, cx);
+        self.reveal_project(&project);
         if let Some(tab) = self
             .terminals
             .iter()

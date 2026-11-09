@@ -17,7 +17,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, Task, Window};
+use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, ScrollHandle, Task, Window};
 
 use crate::{projects::ProjectEntry, saved, ui::motion};
 
@@ -57,6 +57,8 @@ pub(super) struct State {
     git: git::Git,
     peek: peek::Peek,
     slide: Slide,
+    /// The project list's scroll, so going to an agent brings its project into view.
+    scroll: ScrollHandle,
 }
 
 /// The docked sidebar sliding open or shut, as the desktop's panel does when you toggle it.
@@ -99,6 +101,7 @@ impl Default for State {
             git: git::Git::default(),
             peek: peek::Peek::default(),
             slide: Slide::default(),
+            scroll: ScrollHandle::new(),
         }
     }
 }

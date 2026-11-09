@@ -836,3 +836,32 @@ fn only_a_listed_project_in_the_manual_sort_can_be_dragged() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn going_to_an_agent_scrolls_the_project_list_to_its_project() {
+    let dir = test_dir("sidebar-reveal");
+    let names: Vec<String> = (0..40).map(|i| format!("p{i:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (_app, mut window, folders) = open(&dir, &names);
+    let last = folders.last().unwrap().clone();
+    // Whether the row of `last` is inside the list's visible part.
+    let shows_last = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            let shown = w.project_order().shown;
+            let row = shown
+                .iter()
+                .position(|&index| w.projects[index].path == last)
+                .unwrap();
+            let (list, offset) = (w.side.scroll.bounds(), w.side.scroll.offset());
+            let bounds = w.side.scroll.bounds_for_item(row).unwrap();
+            bounds.top() + offset.y >= list.top() && bounds.bottom() + offset.y <= list.bottom()
+        })
+    };
+    window.draw();
+    assert!(!shows_last(&window), "40 projects overflow the list");
+
+    window.update(|w, window, cx| w.go_to_pane(last.clone(), usize::MAX, window, cx));
+    window.draw();
+    assert!(shows_last(&window));
+    std::fs::remove_dir_all(dir).unwrap();
+}
