@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.6 · 2026-11-09
+
+- **Clicking an agent shows its project in the sidebar.** The project list scrolls to the agent's project when you pick an agent in the sidebar, the inbox or the command palette.
+
 ## 0.2.5 · 2026-11-09
 
 - **Updates get through when GitHub's download links fail.** Since yesterday those links often answer HTTP 504 for minutes at a time. Wings now fetches the update through GitHub's API instead, so Check for updates and Install keep working.
