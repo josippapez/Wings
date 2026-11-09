@@ -531,8 +531,10 @@ pub struct Input {
     pub on_blur: Option<String>,
     pub auto_focus: bool,
     pub select_on_focus: bool,
-    /// `type="password"`: the text shows as dots and can't be copied. Any other type is plain text here.
+    /// `type="password"`: the text shows as dots and can't be copied. Any other type is plain text here, but time.
     pub password: bool,
+    /// `type="time"`: digits alone make HH:MM, and the page hears "" until it is a whole time, as from a browser.
+    pub time: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1122,6 +1124,7 @@ impl Walk {
                 auto_focus: on("autoFocus"),
                 select_on_focus: on("selectOnFocus"),
                 password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
+                time: kind == "TextInput" && str_prop(&props, "type") == Some("time"),
             }),
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
                 Some(name) => Node::Icon(Icon { id, name }),

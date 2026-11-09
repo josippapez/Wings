@@ -1264,8 +1264,13 @@ impl Render for PageView {
             self.reveal = reveal;
             window.request_animation_frame();
         }
+        // Names this page in the focused control's key contexts, so Tab can tell when focus has left it.
+        let mut page_context = gpui::KeyContext::default();
+        page_context.set(PAGE_CONTEXT, cx.entity_id().to_string());
         div()
             .id("native-page")
+            .key_context(page_context)
+            .on_key_down(cx.listener(Self::tab))
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -1322,6 +1327,40 @@ impl Render for PageView {
                         .child(error),
                 )
             })
+    }
+}
+
+const PAGE_CONTEXT: &str = "plugin-page";
+
+impl PageView {
+    /// Tab and Shift-Tab go to the page's next and previous control, as in a browser, and round to its first and last
+    /// instead of leaving it: a popover's page shares the window with the panes behind it.
+    fn tab(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let mods = event.keystroke.modifiers;
+        if event.keystroke.key != "tab" || mods.number_of_modifiers() != u8::from(mods.shift) {
+            return;
+        }
+        let page = cx.entity_id().to_string();
+        let inside = |window: &Window| {
+            window
+                .context_stack()
+                .iter()
+                .any(|context| context.get(PAGE_CONTEXT).is_some_and(|id| **id == page))
+        };
+        let from = window.focused(cx);
+        // Bounded, as a page with no control besides the focused one comes back to it.
+        for _ in 0..1000 {
+            if mods.shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            if inside(window) || window.focused(cx) == from {
+                break;
+            }
+        }
+        window.prevent_default();
+        cx.stop_propagation();
     }
 }
 

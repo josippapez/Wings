@@ -53,6 +53,8 @@ pub struct TextField {
     /// A password: each character shows as a dot, and copy and cut take nothing, as in a browser's
     /// `<input type="password">`.
     pub secret: bool,
+    /// A browser's `<input type="time">`: it takes digits, and makes HH:MM of them as they are typed.
+    pub time: bool,
     /// Byte offsets into `text`, read through `anchor()` and `head()`. The caret is the head, and the selection runs
     /// from the anchor to it. Both start past the end, so a field with a text set from outside has its caret after it.
     anchor: usize,
@@ -96,6 +98,7 @@ impl TextField {
             disabled: false,
             max_chars: None,
             secret: false,
+            time: false,
             anchor: usize::MAX,
             head: usize::MAX,
             marked: String::new(),
@@ -111,6 +114,16 @@ impl TextField {
     pub fn set_text(&mut self, text: String) {
         self.text = text;
         (self.anchor, self.head) = (usize::MAX, usize::MAX);
+    }
+
+    /// What a page hears the field holds: a time field's text once it is a whole HH:MM, and "" before, as from a
+    /// browser, so an hour typed without its minutes isn't taken for a time.
+    pub fn value(&self) -> &str {
+        if self.time && self.text.len() != 5 {
+            ""
+        } else {
+            &self.text
+        }
     }
 
     /// Where the field's text was last drawn, in the window.
@@ -208,7 +221,22 @@ impl TextField {
             return;
         }
         self.text.replace_range(range.clone(), with);
-        let caret = range.start + with.len();
+        let mut caret = range.start + with.len();
+        if self.time {
+            // The caret stays after as many digits as were before it, or at the end if it was there.
+            let at_end = caret == self.text.len();
+            let digits = self.text[..caret].chars().filter(char::is_ascii_digit).count();
+            self.text = time_of(&self.text);
+            caret = if at_end {
+                self.text.len()
+            } else {
+                self.text
+                    .char_indices()
+                    .filter(|(_, c)| c.is_ascii_digit())
+                    .nth(digits)
+                    .map_or(self.text.len(), |(at, _)| at)
+            };
+        }
         (self.anchor, self.head) = (caret, caret);
         window.notify_text_input_changed(&self.focus);
         cx.emit(FieldEvent::Changed);
@@ -539,6 +567,27 @@ impl TextField {
         let mut layout = Layout::new(doc, lines.into_vec(), font_size, line_height);
         layout.secret = secret;
         layout
+    }
+}
+
+/// The digits of `typed` as much of an HH:MM as they make, filled as a browser's time field fills its hours and then its
+/// minutes: a first digit of the hour above 2, or of the minutes above 5, gets a 0 before it, a digit no time can
+/// have there is dropped, and the colon comes with the first minute digit.
+fn time_of(typed: &str) -> String {
+    let mut digits = String::new();
+    for c in typed.chars().filter(char::is_ascii_digit) {
+        match digits.len() {
+            0 if c > '2' => digits.extend(['0', c]),
+            2 if c > '5' => digits.extend(['0', c]),
+            1 if digits == "2" && c > '3' => {}
+            0..=3 => digits.push(c),
+            _ => break,
+        }
+    }
+    if digits.len() <= 2 {
+        digits
+    } else {
+        format!("{}:{}", &digits[..2], &digits[2..])
     }
 }
 
@@ -1168,6 +1217,39 @@ mod tests {
         // With nothing selected, Backspace takes one character.
         press(&mut window, "backspace");
         assert_eq!(text(&window, &field), "one three");
+    }
+
+    /// Cyclops' start and end: typed as digits, with no colon, as in a browser's `<input type="time">`.
+    #[test]
+    fn a_time_takes_digits_and_puts_the_colon_in() {
+        let (_app, mut window, field) = open("");
+        window.update(|_, _, cx| field.update(cx, |field, _| field.time = true));
+        let value = |window: &TestAppWindow<Host>| window.read(|_, cx| field.read(cx).value().to_string());
+        for (typed, shown) in [("0", "0"), ("9", "09"), ("3", "09:3"), ("0", "09:30"), ("5", "09:30")] {
+            window.simulate_input(typed);
+            assert_eq!(text(&window, &field), shown);
+        }
+        assert_eq!(value(&window), "09:30");
+        press(&mut window, "backspace");
+        assert_eq!(text(&window, &field), "09:3");
+        assert_eq!(value(&window), "", "an unfinished time is no time");
+        press(&mut window, "backspace backspace");
+        assert_eq!(text(&window, &field), "0");
+        // A 9 can only be 09, a 24th hour isn't one, and a colon or a letter is let go.
+        press(&mut window, "cmd-a backspace");
+        for typed in ["9", ":", "a", "7"] {
+            window.simulate_input(typed);
+        }
+        assert_eq!(text(&window, &field), "09:07");
+        press(&mut window, "cmd-a backspace");
+        for typed in ["2", "4", "3", "1", "5"] {
+            window.simulate_input(typed);
+        }
+        assert_eq!(text(&window, &field), "23:15");
+        // A pasted 9:45 is 09:45.
+        window.update(|_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string("9:45".into())));
+        press(&mut window, "cmd-a cmd-v");
+        assert_eq!(text(&window, &field), "09:45");
     }
 
     /// Cyclops' API token: a browser's `<input type="password">` shows a dot a character, and copy and cut take nothing.

@@ -875,6 +875,53 @@ render();"#;
     shows(&app, &mut window, &sidebar, "Task=Code review.");
 }
 
+/// Cyclops' popover shares the window with the panes behind it: Tab goes round its fields and never out to them.
+#[test]
+fn tab_goes_round_a_popovers_fields_and_stays_in_it() {
+    let data = Data::temp();
+    let page = r#"wings.render(JSON.stringify({id:0,type:'#root',children:[
+      {id:3,type:'TextInput',props:{label:'Start',type:'time',value:''}},
+      {id:4,type:'TextInput',props:{label:'End',type:'time',value:''}}]}));"#;
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
+            "popover": { "page": "dist/popover.html", "width": 360, "height": 300 } }] } }),
+        "",
+        &[("sidebar", page), ("popover", page)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| w.shot_popover("timer", "tracker", cx));
+    until(&app, &mut window, "the popover never opened", |w| {
+        w.popover_page("timer", "tracker").is_some()
+    });
+    let popover = window.read(|w, _| w.popover_page("timer", "tracker").unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let first = loop {
+        app.run_until_parked();
+        window.draw();
+        if let Some(focus) = window.read(|_, cx| popover.read(cx).first_input_focus(cx)) {
+            break focus;
+        }
+        assert!(Instant::now() < deadline, "the popover never drew its fields");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    window.update(|_, window, cx| first.focus(window, cx));
+    window.draw();
+    let page = popover.entity_id().to_string();
+    for key in ["tab", "tab", "tab", "shift-tab", "shift-tab", "shift-tab"] {
+        window.simulate_keystroke(key);
+        window.draw();
+        window.update(|_, window, _| {
+            let inside = window
+                .context_stack()
+                .iter()
+                .any(|context| context.get("plugin-page").is_some_and(|id| **id == page));
+            assert!(inside, "{key} took focus out of the popover");
+        });
+    }
+}
+
 /// As on the desktop, Wings goes into a named account's Claude Code when a plugin picks the account for a project, opens
 /// a pane in it, or turns its shared setup on or off. Whether Wings may (you didn't disconnect it) is the system's.
 #[test]

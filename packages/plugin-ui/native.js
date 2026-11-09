@@ -352,10 +352,10 @@ const input = (type, props, extra) => {
   const { onChange } = props;
   return h(type, { ...pick(props, ["value", "placeholder", "disabled", "maxLength", "onBlur", "onKeyDown", "autoFocus", "selectOnFocus"]), ...extra, ...(onChange && { onChange: (event) => onChange(changed(event.value)) }) });
 };
-/** A one-line text input. Outside a `Field`, give it a `label`. `type="password"` shows dots and can't be copied; other types are text. */
+/** A one-line text input. Outside a `Field`, give it a `label`. `type="password"` shows dots and can't be copied, `type="time"` takes HH:MM from digits alone; other types are text. */
 export function TextInput(props) {
   const name = useContext(FieldName);
-  return input("TextInput", props, { label: props.label ?? name, ...(props.type === "password" && { type: "password" }) });
+  return input("TextInput", props, { label: props.label ?? name, ...((props.type === "password" || props.type === "time") && { type: props.type }) });
 }
 /** A multi-line text input, `rows` high at first. Outside a `Field`, give it a `label`. */
 export function Textarea(props) {

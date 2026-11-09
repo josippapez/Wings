@@ -192,11 +192,12 @@ test("a combobox hands autoFocus to its field", () => {
   assert.equal(find(last(), "TextInput").props.autoFocus, true);
 });
 
-test("a password input says so, and other input types are plain text", () => {
-  mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" })));
-  const [token, start] = all(last(), "TextInput");
+test("a password or time input says so, and other input types are plain text", () => {
+  mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" }), h(TextInput, { label: "Mail", type: "email" })));
+  const [token, start, mail] = all(last(), "TextInput");
   assert.equal(token.props.type, "password");
-  assert.equal("type" in start.props, false);
+  assert.equal(start.props.type, "time");
+  assert.equal("type" in mail.props, false);
 });
 
 test("a button with wrap tells the app so, and one without doesn't", () => {

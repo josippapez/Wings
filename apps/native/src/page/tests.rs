@@ -100,6 +100,40 @@ fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea
     settle(&app, &mut window, shows(r#"Note="hi\nyo""#));
 }
 
+/// Cyclops' manual entry: a start and an end, `type="time"`.
+const TIMES: &str = r#"
+let start = '', end = '';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
+{id:3,type:'TextInput',props:{label:'Start',type:'time',value:start,onChange:'3:change'}},
+{id:4,type:'TextInput',props:{label:'End',type:'time',value:end,onChange:'4:change'}},
+{id:5,type:'Text',children:[{id:6,type:'#text',text:'Start='+start+' End='+end+'.'}]}]}]}]}));}
+globalThis.__wingsEvent=(handler,json)=>{const v=JSON.parse(json).value;if(handler==='3:change')start=v;else end=v;render();return true;};render();
+"#;
+
+#[test]
+fn time_fields_take_digits_and_tab_goes_between_them() {
+    let (app, mut window) = open(TIMES);
+    settle(&app, &mut window, shows("Start= End=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("930");
+    // The page hears no time until the minutes are whole.
+    settle(&app, &mut window, shows("Start=09:30 End=."));
+    key(&mut window, "tab");
+    window.draw();
+    window.simulate_input("1745");
+    settle(&app, &mut window, shows("Start=09:30 End=17:45."));
+    // Tab from the last field comes round to the first, and Shift-Tab goes back.
+    key(&mut window, "tab");
+    window.draw();
+    key(&mut window, "backspace");
+    settle(&app, &mut window, shows("Start= End=17:45."));
+    key(&mut window, "shift-tab");
+    window.draw();
+    key(&mut window, "backspace");
+    settle(&app, &mut window, shows("Start= End=."));
+}
+
 #[test]
 fn search_field_can_be_reached_with_tab() {
     let (app, mut window) = open(SEARCH);

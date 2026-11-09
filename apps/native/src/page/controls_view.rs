@@ -340,15 +340,22 @@ impl PageView {
                 } else {
                     Role::TextInput
                 };
+                // A browser's empty time field shows --:--.
+                let placeholder = if input.time && input.placeholder.is_empty() {
+                    "--:--".to_string()
+                } else {
+                    input.placeholder.clone()
+                };
                 let mut field = crate::text_field::TextField::new(
                     role,
                     input.label.clone(),
-                    input.placeholder.clone(),
+                    placeholder,
                     px(0.0),
                     cx,
                 );
                 field.fill = true;
                 field.rows = input.rows;
+                field.time = input.time;
                 field
             });
             let id = input.id;
@@ -384,7 +391,7 @@ impl PageView {
                 view.suggestions_closed = false;
                 view.highlight = None;
                 cx.notify();
-                let text = entity.read(cx).text.clone();
+                let text = entity.read(cx).value().to_string();
                 let handler = view.inputs.borrow_mut().get_mut(&id).and_then(|state| {
                     let handler = state.handler.clone()?;
                     state.sent.push(text.clone());
