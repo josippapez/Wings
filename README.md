@@ -4,7 +4,7 @@ A terminal workspace for coding agents such as Claude Code and opencode. Your pr
 
 ![Wings with three projects in the sidebar, a Claude Code pane with its todo card, a dev server and a git log](docs/images/hero.png)
 
-Wings is a Tauri 2 and React 19 app for macOS. It is MIT licensed. It is inspired by [Herdr](https://herdr.dev), a native home for coding agents.
+Wings is a native macOS app written in Rust. [GPUI](https://gpui.rs), Zed's UI framework, draws its window, and its terminals run on libghostty-vt, Ghostty's terminal library. Plugins run in a QuickJS sandbox, with no browser. It is MIT licensed. It is inspired by [Herdr](https://herdr.dev), a terminal (TUI) multiplexer for coding agents.
 
 ## Features
 
@@ -62,18 +62,16 @@ The app is signed with a self-signed certificate and is not notarized, so the fi
 
 ## Build from source
 
-You need Rust (`rustup`), Node 24 and pnpm.
+You need Rust (`rustup`) and Zig 0.17 or newer, which builds the terminal library. Building plugins also needs Node 24 and pnpm.
 
 ```sh
-cd apps/desktop
-pnpm install
-pnpm tauri dev      # run the app
-pnpm build          # type-check and build the UI
-pnpm test           # UI tests
-cargo test          # Rust tests, run in src-tauri/
+cd apps/native
+cargo run --bin wings-native              # run the app
+cargo test --features test-support        # tests
+WINGS_SWITCH=1 sh scripts/build-mac-app.sh  # build Wings.app
 ```
 
-`pnpm build:mac` builds the macOS app. Signing and releasing are in [docs/signing.md](docs/signing.md) and [docs/releasing.md](docs/releasing.md). More about the desktop app is in [apps/desktop/README.md](apps/desktop/README.md).
+More about the app is in [apps/native/README.md](apps/native/README.md). Signing and releasing are in [docs/signing.md](docs/signing.md), [docs/releasing.md](docs/releasing.md) and [docs/switch-to-native.md](docs/switch-to-native.md). The earlier Tauri app is in `apps/desktop`.
 
 ## Plugins
 
