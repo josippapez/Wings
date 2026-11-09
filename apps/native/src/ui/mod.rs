@@ -452,6 +452,32 @@ pub fn select_item_with(
     select_row(id.into(), label, content.into_any_element(), false)
 }
 
+/// A combobox's option, plugin-ui.css's `.w-option`: its label, cut short with an ellipsis, and its `detail` on the
+/// right at 12px, muted, as a Cyclops project's client is.
+pub fn option_item(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    detail: Option<SharedString>,
+) -> Stateful<Div> {
+    let label = label.into();
+    let content = div()
+        .w_full()
+        .flex()
+        .items_baseline()
+        .gap(px(8.0))
+        .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+        .children(detail.map(|detail| {
+            div()
+                .flex_none()
+                .max_w(relative(0.45))
+                .truncate()
+                .text_size(px(12.0))
+                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .child(detail)
+        }));
+    select_row(id.into(), label, content.into_any_element(), false)
+}
+
 fn select_row(
     id: ElementId,
     label: SharedString,
@@ -476,7 +502,7 @@ fn select_row(
         .text_size(px(13.0))
         .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
         // A label wider than the menu, like a Cyclops project's name and client, ends in an ellipsis inside it.
-        .child(div().min_w_0().truncate().child(content))
+        .child(div().flex_1().min_w_0().truncate().child(content))
         .when(selected, |item| {
             item.child(icon(Icon::Check, 14.0, theme::FOREGROUND))
         })

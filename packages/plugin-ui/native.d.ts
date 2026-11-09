@@ -93,8 +93,8 @@ export function Dot(props: { tone?: Exclude<Tone, "success">; color?: string }):
 export function Gauge(props: { label: string; percent: number; note?: ReactNode; levels?: [number, number] }): ReactElement;
 /** A list of rows. */
 export function List(props: { children?: ReactNode }): ReactElement;
-/** A row in a `List`. */
-export function ListItem(props: { children?: ReactNode }): ReactElement;
+/** A row in a `List`. Its `actions`, like icon buttons, show over the row's end while you point at it or tab into them. */
+export function ListItem(props: { actions?: ReactNode; children?: ReactNode }): ReactElement;
 /** More behind a `summary` line that opens it. The app keeps whether it's open, and it starts closed. */
 /** A summary that folds `children` open and shut, shut at first; with `open` the page decides, and `onOpenChange` hears each click. */
 export function Disclosure(props: { summary: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; children?: ReactNode }): ReactElement;
@@ -147,7 +147,10 @@ export function TextInput(props: { label?: string; /** `"password"` shows dots a
 export function Textarea(props: { label?: string; value?: string; placeholder?: string; disabled?: boolean; maxLength?: number; rows?: number; onChange?: (event: NativeInputEvent) => void; onKeyDown?: (event: NativeKeyEvent) => void; onBlur?: () => void; autoFocus?: boolean; selectOnFocus?: boolean }): ReactElement;
 /** Edits `value` in place: Enter or leaving the field saves it once with `onSave`, Escape cancels, and a failed save keeps the draft and shows why. `onDone` closes it. */
 export function InlineInput(props: { label: string; value: string; required?: boolean; maxLength?: number; placeholder?: string; onSave: (value: string) => Promise<unknown>; onDone: () => void; onChange?: (event: NativeInputEvent) => void }): ReactElement;
-/** A text field with the options that match it under it as chips; the app has no popup list yet. */
+/**
+ * A text field with the options that match it in a list under it. With `freeText` the field is the text `onInput` hears;
+ * without, it is a picker that shows `value` and searches the options as you type, as ui.js's does.
+ */
 export function Combobox(props: {
   label?: string;
   value: string;

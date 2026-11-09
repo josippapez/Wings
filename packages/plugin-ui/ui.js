@@ -511,9 +511,9 @@ export function List({ ordered, compact, className, ...rest }) {
   return h(ordered ? "ol" : "ul", { ...rest, className: cx("w-list", className), "data-density": compact ? "compact" : undefined });
 }
 
-/** A row in a `List`. Holding a `ListButton`, the button is the row. */
-export function ListItem({ align, className, ...rest }) {
-  return h("li", { ...rest, className: cx("w-list-item", className), "data-align": align });
+/** A row in a `List`. Holding a `ListButton`, the button is the row. Its `actions` show over its end while you point at it or tab into them. */
+export function ListItem({ align, actions, className, children, ...rest }) {
+  return h("li", { ...rest, className: cx("w-list-item", className), "data-align": align }, children, actions == null || actions === false ? null : h("div", { className: "w-list-item-actions" }, actions));
 }
 
 /** A row that's a button, inside a `ListItem`. */

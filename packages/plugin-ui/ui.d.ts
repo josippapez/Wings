@@ -261,7 +261,7 @@ export function Properties(props: Props<"dl"> & { items: { label: string; value:
 /** A list of rows: a `ul`, or an `ol` when `ordered`. `compact` rows have no space between them, for long lists. */
 export function List(props: Props<"ul"> & { ordered?: boolean; compact?: boolean }): ReactElement;
 /** A row in a `List`. Holding a `ListButton`, the button is the row. */
-export function ListItem(props: Props<"li"> & { align?: "start" }): ReactElement;
+export function ListItem(props: Props<"li"> & { align?: "start"; /** Buttons that show over the row's end while you point at it or tab into them. */ actions?: ReactNode }): ReactElement;
 /** A row that's a button, inside a `ListItem`. */
 export function ListButton(props: Props<"button"> & { align?: "baseline" }): ReactElement;
 

@@ -451,6 +451,8 @@ pub struct List {
 pub struct ListItem {
     pub id: u64,
     pub children: Vec<Node>,
+    /// Buttons that show over the row's end while it is pointed at or one of them has the keyboard.
+    pub actions: Vec<Node>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -755,7 +757,7 @@ impl Node {
             Node::BoardRow(n) => vec![&n.children],
             Node::BoardColumn(n) => vec![&n.title, &n.actions, &n.body],
             Node::List(n) => vec![&n.children],
-            Node::ListItem(n) => vec![&n.children],
+            Node::ListItem(n) => vec![&n.children, &n.actions],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
             Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
         }
@@ -1081,10 +1083,15 @@ impl Walk {
                 id,
                 children: parts(children),
             }),
-            "ListItem" => Node::ListItem(ListItem {
-                id,
-                children: parts(children),
-            }),
+            "ListItem" => {
+                let mut slots = Slots(children);
+                let actions = slots.take("actions");
+                Node::ListItem(ListItem {
+                    id,
+                    children: parts(slots.0),
+                    actions,
+                })
+            }
             "Disclosure" => {
                 let mut slots = Slots(children);
                 Node::Disclosure(Disclosure {
@@ -1252,22 +1259,27 @@ fn valid_handler(handler: &str) -> bool {
 fn combobox(stack: Stack) -> Node {
     let plain =
         stack.gap == Gap::S && !stack.grow && stack.width.is_none() && stack.max_width.is_none();
+    // A picker's field selects its text when it takes the keyboard, and hears when it loses it.
     let field = |node: &Node| {
         matches!(node, Node::Input(input) if input.rows.is_none()
             && !input.password
-            && input.on_key_down.is_none()
-            && input.on_blur.is_none()
-            && !input.select_on_focus)
+            && input.on_key_down.is_none())
     };
+    // An option's label, and its detail after it as a small muted text.
     let chip = |node: &Node| {
         matches!(node, Node::Button(button) if button.chip
-            && !button.pressed
-            && button.variant == Variant::Default
-            && button.size == ButtonSize::Default
-            && button.label.is_none()
-            && button.on_click.is_some()
-            && button.on_key_down.is_none()
-            && button.children.iter().all(|child| matches!(child, Node::Str { .. })))
+        && !button.pressed
+        && button.variant == Variant::Default
+        && button.size == ButtonSize::Default
+        && button.label.is_none()
+        && button.on_click.is_some()
+        && button.on_key_down.is_none()
+        && match button.children.split_last() {
+            Some((Node::Text(detail), label)) => {
+                option_detail(detail) && label.iter().all(|child| matches!(child, Node::Str { .. }))
+            }
+            _ => button.children.iter().all(|child| matches!(child, Node::Str { .. })),
+        })
     };
     let chips = |node: &Node| {
         matches!(node, Node::Row(row) if row.gap == Gap::S
@@ -1278,16 +1290,7 @@ fn combobox(stack: Stack) -> Node {
             && !row.children.is_empty()
             && row.children.iter().all(chip))
     };
-    let none_match = |node: &Node| {
-        matches!(node, Node::Text(text) if text.size == TextSize::Small
-            && text.tone == Some(Tone::Muted)
-            && text.weight == Weight::Normal
-            && !text.mono
-            && !text.truncate
-            && !text.clamp
-            && !text.grow
-            && text.on_click.is_none())
-    };
+    let none_match = |node: &Node| matches!(node, Node::Text(text) if option_detail(text));
     if !(plain
         && stack.children.len() == 2
         && field(&stack.children[0])
@@ -1307,6 +1310,18 @@ fn combobox(stack: Stack) -> Node {
         options,
         empty,
     })
+}
+
+/// A small muted text with nothing else to it: a combobox option's detail, or its line saying nothing matches.
+fn option_detail(text: &Text) -> bool {
+    text.size == TextSize::Small
+        && text.tone == Some(Tone::Muted)
+        && text.weight == Weight::Normal
+        && !text.mono
+        && !text.truncate
+        && !text.clamp
+        && !text.grow
+        && text.on_click.is_none()
 }
 
 /// A component's named parts, taken out by name.
@@ -1507,6 +1522,19 @@ mod tests {
             panic!("a heading and a list")
         };
         assert!(matches!(list.children.as_slice(), [Node::ListItem(_)]));
+    }
+
+    #[test]
+    fn a_list_items_actions_slot_is_its_actions_and_not_one_of_its_parts() {
+        let Node::ListItem(item) = parse_one(
+            json!({"id":1,"type":"ListItem","props":{},"children":[
+            text(2, "Code review"),
+            slot("actions", json!([{"id":4,"type":"Button","props":{"onClick":"4:click"},"children":[text(5, "Edit")]}]))]}),
+        ) else {
+            panic!("a list item")
+        };
+        assert_eq!(plain_text(&item.children), "Code review");
+        assert!(matches!(item.actions.as_slice(), [Node::Button(_)]));
     }
 
     #[test]

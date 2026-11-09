@@ -1181,6 +1181,122 @@ fn a_combobox_that_does_not_open_on_focus_leaves_the_select_under_it_to_be_picke
     settle(&app, &mut window, shows("Task=FE Standup, project=b."));
 }
 
+/// Cyclops' project picker as wings-plugin-ui/native's `Combobox` renders one without `freeText`: the field shows the
+/// project picked, selects it when it takes the keyboard and hears when it loses it, and every project that matches
+/// what's typed is a chip with its client after its name.
+const PROJECT_PICKER: &str = r#"
+const projects = [['p1','Wings','Prototyp'],['p2','Website','Acme'],...Array.from({length:20},(_,i)=>['q'+i,'Project '+(i+1),'Client '+(i+1)])];
+let picked = 'p1', query = null;
+function render(){
+  const pick = projects.find(p => p[0] === picked);
+  const found = projects.filter(p => (p[1]+' '+p[2]).toLowerCase().includes((query ?? '').toLowerCase()));
+  const under = found.length
+    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(p=>{const i=projects.indexOf(p);return {id:100+3*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+3*i)+':onClick'},children:[{id:101+3*i,type:'#text',text:p[1]},{id:102+3*i,type:'Text',props:{size:'small',tone:'muted'},children:[{id:1000+i,type:'#text',text:p[2]}]}]};})}]
+    : [{id:5,type:'Text',props:{size:'small',tone:'muted'},children:[{id:6,type:'#text',text:'No matching projects.'}]}];
+  wings.render(JSON.stringify({id:0,type:'#root',children:[
+    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Project',value:query ?? pick[1]+' · '+pick[2],maxLength:2000,selectOnFocus:true,onBlur:'3:onBlur',onChange:'3:onChange'}},...under]},
+    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Project='+picked+', query='+query+'.'}]}]}));
+}
+globalThis.__wingsEvent=(handler,json)=>{
+  if(handler==='3:onChange') query=JSON.parse(json).value;
+  else if(handler==='3:onBlur') query=null;
+  else { picked=projects[(parseInt(handler)-100)/3][0]; query=null; }
+  render(); return true;
+};
+render();
+"#;
+
+#[test]
+fn a_picker_lists_every_project_with_its_client_and_typing_replaces_the_pick_to_search_them() {
+    let (app, mut window) = open(PROJECT_PICKER);
+    settle(&app, &mut window, shows("Project=p1, query=null."));
+    // Taking the keyboard lists the projects over the page, each name with its client beside it, not run into it.
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.draw();
+    assert!(
+        crate::ui::spot_at("combobox-option:Wings").is_some(),
+        "Wings is listed on its own"
+    );
+    // The pick is selected, so typing replaces it and searches, by client too; Enter takes the first match.
+    window.simulate_input("client 2");
+    settle(&app, &mut window, shows("query=client 2."));
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Project=q1, query=null."));
+    // Taking the keyboard again selects the new pick; Down from the first match, then Enter, takes the second.
+    window.update(|_, window, cx| window.blur(cx));
+    window.draw();
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.simulate_input("project 1");
+    settle(&app, &mut window, shows("query=project 1."));
+    for name in ["down", "enter"] {
+        key(&mut window, name);
+    }
+    settle(&app, &mut window, shows("Project=q9, query=null."));
+}
+
+/// Cyclops' start time, a `type="time"` input holding 08:30, and what the page hears.
+const START_TIME: &str = r#"
+let start = '08:30';
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:3,type:'TextInput',props:{label:'Start',type:'time',value:start,onChange:'3:onChange'}},
+{id:9,type:'Text',children:[{id:10,type:'#text',text:'Start='+start+'.'}]}]}));}
+globalThis.__wingsEvent=(_,json)=>{start=JSON.parse(json).value;render();return true;};render();
+"#;
+
+#[test]
+fn a_time_input_types_over_its_hours_and_minutes_and_steps_them_with_the_arrows() {
+    let (app, mut window) = open(START_TIME);
+    settle(&app, &mut window, shows("Start=08:30."));
+    // The keyboard comes to the hours: 1 and 0 make them 10, over the 08 that is there, and move on to the minutes.
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("1");
+    window.simulate_input("0");
+    settle(&app, &mut window, shows("Start=10:30."));
+    key(&mut window, "up");
+    settle(&app, &mut window, shows("Start=10:31."));
+    key(&mut window, "left");
+    key(&mut window, "down");
+    settle(&app, &mut window, shows("Start=09:31."));
+    // Emptied, the hours make no time; a 7 is a whole hour, and Tab goes on to the minutes, which 4 and 5 fill.
+    key(&mut window, "backspace");
+    settle(&app, &mut window, shows("Start=."));
+    window.simulate_input("7");
+    settle(&app, &mut window, shows("Start=07:31."));
+    key(&mut window, "left");
+    key(&mut window, "tab");
+    window.simulate_input("4");
+    window.simulate_input("5");
+    settle(&app, &mut window, shows("Start=07:45."));
+}
+
+/// Cyclops' entry: its task and its time, and an edit button among the row's actions.
+const ENTRY_ACTIONS: &str = r#"
+let edited = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'List',children:[{id:2,type:'ListItem',children:[
+  {id:3,type:'Text',props:{grow:true},children:[{id:4,type:'#text',text:'Code review'}]},
+  {id:5,type:'Text',children:[{id:6,type:'#text',text:'45m'}]},
+  {id:7,type:'Slot',props:{name:'actions'},children:[{id:8,type:'Button',props:{variant:'ghost',size:'icon-sm',label:'Edit Code review',onClick:'8:click'},children:[{id:9,type:'#text',text:'E'}]}]}]}]},
+{id:10,type:'Text',children:[{id:11,type:'#text',text:'Edited '+edited+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{edited++;render();return true;};render();
+"#;
+
+#[test]
+fn a_list_items_actions_sit_over_its_end_and_take_a_click_or_the_keyboard() {
+    let (app, mut window) = open_narrow(ENTRY_ACTIONS, 300.0);
+    settle(&app, &mut window, shows("Edited 0."));
+    // Over the row's end, 6pt in from it, where the 45m is: the page dropped them.
+    assert!(pressed_at(&app, &mut window, (266.0, 32.0), "Edited 1."));
+    // Tab reaches the button, and Enter presses it.
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Edited 2."));
+}
+
 /// An issue's title row: a large title that doesn't grow, and its key after it on its baseline.
 const TITLE_ROW: &str = r#"
 let heard = 0;

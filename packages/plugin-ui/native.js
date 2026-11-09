@@ -295,9 +295,9 @@ export function BoardCell({ label, children }) {
 export function List(props) {
   return h("List", null, props.children);
 }
-/** A row in a `List`. */
+/** A row in a `List`. Its `actions` show over the row's end while you point at it or tab into them. */
 export function ListItem(props) {
-  return h("ListItem", null, props.children);
+  return h("ListItem", null, props.children, slot("actions", props.actions));
 }
 /** More behind a `summary` line that opens it. */
 export function Disclosure({ summary, open, onOpenChange, children }) {
@@ -399,19 +399,38 @@ export function InlineInput({ label, value, required, onSave, onDone, onChange, 
 
 const matches = (option, query) => `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.toLowerCase());
 const MOST_SUGGESTIONS = 8;
-/** A text field with its matching `options` under it as chips: the app has no popup list yet. Picking one calls `onPick`. */
-export function Combobox({ label, value, onInput, options, onPick, filter = matches, empty = "No matches.", placeholder, maxLength, disabled, autoFocus, openOnFocus = true }) {
-  const found = options.filter((option) => filter(option, value)).slice(0, MOST_SUGGESTIONS);
+/**
+ * A text field with its matching `options` under it as chips, which the app draws as a list over the page. Picking one
+ * calls `onPick`. With `freeText` the field is the text: `onInput` hears it and the options are filtered by it. Without,
+ * as in ui.js, it is a picker: the field shows `value`, what was picked, until you type, and what you type searches
+ * every option without changing `value`. An option's `detail` shows on its right, muted.
+ */
+export function Combobox({ label, value, onInput, options, onPick, filter = matches, empty = "No matches.", placeholder, maxLength, disabled, autoFocus, openOnFocus = true, freeText = false }) {
+  // The picker's search, null while nothing is typed since it last took the keyboard or a pick.
+  const [query, setQuery] = useState(null);
+  const search = freeText ? value : (query ?? "");
+  const matching = options.filter((option) => filter(option, search));
+  // A picker lists every match, as ui.js's does, in a list that scrolls: a project among a studio's 165 has to be reachable.
+  const found = freeText ? matching.slice(0, MOST_SUGGESTIONS) : matching;
   // What the field holds is an option: nothing is left to pick.
-  const done = found.length === 1 && found[0].value === value;
+  const done = freeText && found.length === 1 && found[0].value === value;
+  const pick = (option) => {
+    if (!freeText) setQuery(null);
+    onPick(option);
+  };
   return h(
     Stack,
     { gap: "s" },
     // The app opens the options when the field takes the keyboard, unless told not to: then a press in it or typing does.
-    h(TextInput, { label, value, placeholder, maxLength, disabled, autoFocus, ...(!openOnFocus && { openOnFocus }), onChange: (event) => onInput?.(event.target.value) }),
+    // A picker's text is selected when it takes the keyboard, so typing replaces the pick, and leaving it shows the pick again.
+    h(TextInput, {
+      label, value: freeText ? value : (query ?? value), placeholder, maxLength, disabled, autoFocus, ...(!openOnFocus && { openOnFocus }),
+      ...(!freeText && { selectOnFocus: true, onBlur: () => setQuery(null) }),
+      onChange: (event) => (freeText ? onInput?.(event.target.value) : setQuery(event.target.value)),
+    }),
     done ? null : found.length
-      ? h(Row, { gap: "s", wrap: true }, found.map((option) => h(Chip, { key: option.value, onClick: () => onPick(option) }, option.label)))
-      : value ? h(Text, { size: "small", tone: "muted" }, empty) : null,
+      ? h(Row, { gap: "s", wrap: true }, found.map((option) => h(Chip, { key: option.value, onClick: () => pick(option) }, option.label, option.detail ? h(Text, { size: "small", tone: "muted" }, option.detail) : null)))
+      : search ? h(Text, { size: "small", tone: "muted" }, empty) : null,
   );
 }
 

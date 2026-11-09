@@ -199,6 +199,44 @@ test("a combobox that doesn't open on focus tells the app so on its field, and o
   assert.equal("openOnFocus" in tag.props, false);
 });
 
+test("a picker combobox shows its pick, searches every option as you type without changing it, and shows each option's detail", () => {
+  const projects = [{ value: "p1", label: "Wings", detail: "Prototyp" }, ...Array.from({ length: 12 }, (_, i) => ({ value: `q${i}`, label: `Project ${i + 1}`, detail: `Client ${i + 1}` }))];
+  const picked = [];
+  let value = "Wings · Prototyp";
+  const render = () => mount(h(Combobox, { label: "Project", value, options: projects, onPick: (o) => { picked.push(o.value); value = `${o.label} · ${o.detail}`; render(); } }));
+  render();
+  const field = () => find(last(), "TextInput");
+  const chips = () => all(last(), "Button");
+  // The pick, selected when the field takes the keyboard, and every project under it, not the first 8 matching the pick.
+  assert.equal(field().props.value, "Wings · Prototyp");
+  assert.equal(field().props.selectOnFocus, true);
+  assert.equal(chips().length, 13);
+  const detail = find(chips()[0], "Text");
+  assert.deepEqual([text(detail), detail.props.tone, detail.props.size], ["Prototyp", "muted", "small"]);
+  // Typing searches by name and client, and the field shows what's typed.
+  globalThis.__wingsEvent(field().props.onChange, '{"value":"client 1"}');
+  assert.equal(field().props.value, "client 1");
+  assert.deepEqual(chips().map((chip) => text(find(chip, "Text"))), ["Client 1", "Client 10", "Client 11", "Client 12"]);
+  globalThis.__wingsEvent(chips()[1].props.onClick, "");
+  assert.deepEqual(picked, ["q9"]);
+  // Picked, the field shows the pick again; leaving it after typing does too.
+  assert.equal(field().props.value, "Project 10 · Client 10");
+  globalThis.__wingsEvent(field().props.onChange, '{"value":"zzz"}');
+  assert.match(text(last()), /No matches\./);
+  globalThis.__wingsEvent(field().props.onBlur, "");
+  assert.equal(field().props.value, "Project 10 · Client 10");
+});
+
+test("a list item's actions go to the app in a slot of their own, and a list item without has none", () => {
+  mount(h(List, null, h(ListItem, { actions: h(Button, { "aria-label": "Edit" }, "E") }, h(Text, null, "Code review")), h(ListItem, null, "Standup")));
+  const [withActions, without] = all(last(), "ListItem");
+  const slot = find(withActions, "Slot");
+  assert.equal(slot.props.name, "actions");
+  assert.equal(find(slot, "Button").props.label, "Edit");
+  assert.equal(text(withActions.children[0]), "Code review");
+  assert.equal(find(without, "Slot"), undefined);
+});
+
 test("a password or time input says so, and other input types are plain text", () => {
   mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" }), h(TextInput, { label: "Mail", type: "email" })));
   const [token, start, mail] = all(last(), "TextInput");

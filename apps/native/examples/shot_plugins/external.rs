@@ -147,10 +147,12 @@ struct State {
     popover: bool,
     presses: &'static [&'static str],
     shows: &'static str,
-    /// Typed into the field that has the keyboard once there.
+    /// The text input, by its name, that takes the keyboard once there; the page's first when there's none.
+    field: Option<&'static str>,
+    /// Typed into that field.
     typed: Option<&'static str>,
-    /// The select, by its name or what it shows, whose menu is opened once there.
-    select: Option<&'static str>,
+    /// Where the pointer rests, in the 1000pt wide window only.
+    hover: Option<(f32, f32)>,
 }
 
 const fn sidebar(
@@ -163,8 +165,9 @@ const fn sidebar(
         popover: false,
         presses,
         shows,
+        field: None,
         typed: None,
-        select: None,
+        hover: None,
     }
 }
 
@@ -174,8 +177,9 @@ const fn popover(name: &'static str, shows: &'static str) -> State {
         popover: true,
         presses: &[],
         shows,
+        field: None,
         typed: None,
-        select: None,
+        hover: None,
     }
 }
 
@@ -234,10 +238,30 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
                 ..sidebar("suggest", &[], "Native plugin popovers")
             },
             sidebar("edit", &["Edit Code review"], "Save"),
-            // The project picker's menu, open over the page.
+            // The pointer on an entry: its buttons take the place of its times.
             State {
-                select: Some("Wings · Prototyp"),
+                hover: Some((815.0, 500.0)),
+                ..sidebar("entry-hover", &[], "Code review")
+            },
+            // The project picker's list, open over the page, and searched.
+            State {
+                field: Some("Project"),
                 ..sidebar("projects", &[], "Native plugin popovers")
+            },
+            State {
+                field: Some("Project"),
+                typed: Some("north"),
+                ..sidebar("projects-typed", &[], "Native plugin popovers")
+            },
+            // An entry's project picker, and its start time with 10 typed over 08:30.
+            State {
+                field: Some("Project"),
+                ..sidebar("edit-projects", &["Edit Code review"], "Save")
+            },
+            State {
+                field: Some("Start"),
+                typed: Some("10"),
+                ..sidebar("edit-time", &["Edit Code review"], "Save")
             },
             popover("popover", "Native plugin popovers"),
             // The recent tasks that match, over the popover.
@@ -246,7 +270,7 @@ pub(super) fn external(out: PathBuf, root: PathBuf) {
                 ..popover("popover-suggest", "Native plugin popovers")
             },
             State {
-                select: Some("Wings · Prototyp"),
+                field: Some("Project"),
                 ..popover("popover-projects", "Native plugin popovers")
             },
         ],
@@ -458,22 +482,29 @@ fn shoot_in(
                 wait(cx, window, Duration::from_millis(200));
             }
             shows(cx, state.shows);
-            if let Some(label) = state.select {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !page.update(cx, |page, cx| page.open_select(label, cx)) {
-                    if Instant::now() > deadline {
-                        eprintln!("{name} {}: no select named {label}", state.name);
-                        break;
+            if state.field.is_some() || state.typed.is_some() {
+                let focus = cx.read(|cx| match state.field {
+                    Some(label) => page.read(cx).input_focus(label, cx),
+                    None => page.read(cx).first_input_focus(cx),
+                });
+                match focus {
+                    Some(focus) => {
+                        let _ = cx.update_window(window, |_, window, cx| focus.focus(window, cx));
                     }
-                    wait(cx, window, Duration::from_millis(50));
+                    None => eprintln!("{name} {}: no field named {:?}", state.name, state.field),
+                }
+                wait(cx, window, Duration::from_millis(100));
+                if let Some(text) = state.typed {
+                    cx.simulate_input(window, text);
                 }
             }
-            if let Some(text) = state.typed {
-                let focus = cx.read(|cx| page.read(cx).first_input_focus(cx));
-                if let Some(focus) = focus {
-                    let _ = cx.update_window(window, |_, window, cx| focus.focus(window, cx));
-                }
-                cx.simulate_input(window, text);
+            if let Some((x, y)) = state.hover.filter(|_| width == 1000.0) {
+                cx.simulate_mouse_move(
+                    window,
+                    gpui::point(px(x), px(y)),
+                    None,
+                    gpui::Modifiers::default(),
+                );
             }
             wait(cx, window, Duration::from_millis(400));
             save(

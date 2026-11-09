@@ -17,7 +17,7 @@ dom.window.Element.prototype.scrollIntoView = () => {};
 dom.window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 const { act, createElement: h, useCallback, useEffect, useState } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, CodeBlock, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Bar, Scroll, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
+const { Board, BoardCell, BoardColumn, BoardLane, BoardLanes, Button, Checkbox, List, ListItem, CodeBlock, Chips, Combobox, Disclosure, Field, FieldGroup, ListDetail, Markdown, Menu, ProjectGate, Bar, Scroll, Select, Split, Tabs, TextInput, TimelineCard, copyText, showBlock, useAction, useBlockState, usePoll, useTabState, useViewArgs } = await import("./ui.js");
 
 /** Renders `element` into the page, and gives back its host and ways to render again and to unmount. */
 async function mount(element) {
@@ -906,4 +906,14 @@ test("Scroll is a w-scroll column, and as picks its element", async () => {
   assert.equal(page.host.querySelector("#plain").className, "w-scroll");
   assert.equal(page.host.querySelector("#named").tagName, "SECTION");
   await page.unmount();
+});
+
+test("a list item's actions sit after its parts in a box of their own, and one without has none", async () => {
+  const { host, unmount } = await mount(h(List, null, h(ListItem, { actions: h(Button, { "aria-label": "Edit" }, "E") }, h("span", null, "Code review")), h(ListItem, null, "Standup")));
+  const [withActions, without] = host.querySelectorAll(".w-list-item");
+  assert.equal(withActions.lastElementChild.className, "w-list-item-actions");
+  assert.equal(withActions.lastElementChild.querySelector("button").getAttribute("aria-label"), "Edit");
+  assert.equal(withActions.hasAttribute("actions"), false);
+  assert.equal(without.querySelector(".w-list-item-actions"), null);
+  await unmount();
 });

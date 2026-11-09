@@ -365,6 +365,7 @@ impl PageView {
                 field.fill = true;
                 field.rows = input.rows;
                 field.time = input.time;
+                field.select_on_focus = input.select_on_focus;
                 field
             });
             let id = input.id;
@@ -448,6 +449,7 @@ impl PageView {
                 field.secret = input.password;
                 cx.notify();
             }
+            field.select_on_focus = input.select_on_focus;
         });
         state.given = input.value.clone();
         state.field.clone().into_any_element()
@@ -575,12 +577,25 @@ impl PageView {
             Node::Input(input) => Some((input.id, input.disabled)),
             _ => None,
         });
+        // A picker, whose field selects its pick when it takes the keyboard, has its first match picked out until the
+        // arrows move, so Enter takes it, as ui.js's `autoHighlight`.
+        let picker = combobox
+            .field
+            .iter()
+            .any(|node| matches!(node, Node::Input(input) if input.select_on_focus));
         let options = combobox
             .options
             .iter()
             .filter_map(|node| match node {
                 Node::Button(button) => {
-                    Some((plain_text(&button.children), button.on_click.clone()?))
+                    // A label, then a detail as a text of its own.
+                    let (label, detail) = match button.children.split_last() {
+                        Some((Node::Text(detail), label)) => {
+                            (plain_text(label), Some(plain_text(&detail.children)))
+                        }
+                        _ => (plain_text(&button.children), None),
+                    };
+                    Some((label, detail, button.on_click.clone()?))
                 }
                 _ => None,
             })
@@ -591,10 +606,13 @@ impl PageView {
                 view.focused == Some(input) && !view.suggestions_closed && !disabled && listed
             })
         };
-        let highlight = self.highlight.filter(|at| *at < options.len());
+        let highlight = self
+            .highlight
+            .or(picker.then_some(0))
+            .filter(|at| *at < options.len());
         let handlers = options
             .iter()
-            .map(|(_, handler)| handler.clone())
+            .map(|(_, _, handler)| handler.clone())
             .collect::<Vec<_>>();
         let measure = Self::measure_menu(id, cx);
         let list = shows(self).then(|| {
@@ -603,14 +621,14 @@ impl PageView {
             let rows = options
                 .into_iter()
                 .enumerate()
-                .map(|(at, (label, handler))| {
-                    ui::select_item(
+                .map(|(at, (label, detail, handler))| {
+                    ui::option_item(
                         ElementId::NamedInteger(
                             format!("page-combobox-{id}-option").into(),
                             at as u64,
                         ),
                         label.clone(),
-                        false,
+                        detail.map(SharedString::from),
                     )
                     .children(ui::spot(|| format!("combobox-option:{label}")))
                     .when(highlight == Some(at), |row| {
@@ -636,11 +654,13 @@ impl PageView {
                 anchored().child(
                     div().child(
                         ui::select_menu(rows.into_iter().chain(empty))
-                            // As wide as the field, as the desktop's `.w-combobox-popup`.
+                            // As wide as the field, and no taller than 252pt, as the desktop's `.w-combobox-popup`:
+                            // Cyclops' 165 projects filled the window over the field they were picked for.
                             .w(bounds.size.width)
-                            .max_h(room)
+                            .max_h(room.min(px(252.0)))
                             .id(ElementId::NamedInteger("page-combobox-list".into(), id))
                             .overflow_y_scroll()
+                            .track_scroll(&self.combobox_scroll)
                             // A press on the list is the list's: the button under it doesn't hear it, and a
                             // focusable frame around the page doesn't take the keyboard from the field.
                             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
@@ -665,8 +685,10 @@ impl PageView {
         if list.is_some() {
             self.listing.set(true);
         }
+        // As wide as its place, as a select is: beside a button, Cyclops' project field shrank to its text.
         div()
             .relative()
+            .w_full()
             .min_w_0()
             .flex()
             .flex_col()
@@ -676,17 +698,16 @@ impl PageView {
                     return;
                 }
                 let count = handlers.len();
+                let highlight = view.highlight.or(picker.then_some(0));
                 match event.keystroke.key.as_str() {
                     "down" if count > 0 => {
-                        view.highlight = Some(view.highlight.map_or(0, |at| (at + 1) % count));
+                        view.highlight = Some(highlight.map_or(0, |at| (at + 1) % count));
                     }
                     "up" if count > 0 => {
-                        view.highlight = Some(
-                            view.highlight
-                                .map_or(count - 1, |at| (at + count - 1) % count),
-                        );
+                        view.highlight =
+                            Some(highlight.map_or(count - 1, |at| (at + count - 1) % count));
                     }
-                    "enter" => match view.highlight.and_then(|at| handlers.get(at)) {
+                    "enter" => match highlight.and_then(|at| handlers.get(at)) {
                         Some(handler) => view.pick_suggestion(handler, cx),
                         None => return,
                     },
@@ -695,6 +716,9 @@ impl PageView {
                         view.highlight = None;
                     }
                     _ => return,
+                }
+                if let Some(at) = view.highlight {
+                    view.combobox_scroll.scroll_to_item(at);
                 }
                 window.prevent_default();
                 cx.stop_propagation();

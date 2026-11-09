@@ -912,6 +912,28 @@ h3.w-heading {
 .w-list-item:hover {
   background: var(--wings-hover);
 }
+/* A row's actions, over its end and hidden until the row is pointed at or one of them is tabbed into. The row's last
+   part, which they stand over, gives way to them. */
+.w-list-item:has(> .w-list-item-actions) {
+  position: relative;
+}
+.w-list-item-actions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+.w-list-item:hover > .w-list-item-actions,
+.w-list-item-actions:focus-within {
+  opacity: 1;
+}
+.w-list-item:hover > :has(+ .w-list-item-actions),
+.w-list-item:has(> .w-list-item-actions:focus-within) > :has(+ .w-list-item-actions) {
+  opacity: 0;
+}
 .w-list-item:has(> .w-list-button) {
   display: block;
   padding: 0;

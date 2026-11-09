@@ -53,8 +53,18 @@ pub struct TextField {
     /// A password: each character shows as a dot, and copy and cut take nothing, as in a browser's
     /// `<input type="password">`.
     pub secret: bool,
-    /// A browser's `<input type="time">`: it takes digits, and makes HH:MM of them as they are typed.
+    /// A browser's `<input type="time">`: its hours and its minutes are each a part that takes the keyboard in turn,
+    /// as in WebKit's. Digits fill the part and move on from the hours, Up and Down step it, Left, Right and Tab move
+    /// between the two, and Backspace empties it.
     pub time: bool,
+    /// Its text is selected each time it takes the keyboard, so typing replaces it, as a browser's `select()` on focus.
+    pub select_on_focus: bool,
+    /// Had the keyboard when it was last drawn.
+    was_focused: bool,
+    /// The part of a time field that has the keyboard: 0 for the hours, 1 for the minutes. None while it hasn't.
+    part: Option<usize>,
+    /// A part took one digit that a second can join, as 1 then 4 make 14.
+    pending: bool,
     /// Byte offsets into `text`, read through `anchor()` and `head()`. The caret is the head, and the selection runs
     /// from the anchor to it. Both start past the end, so a field with a text set from outside has its caret after it.
     anchor: usize,
@@ -99,6 +109,10 @@ impl TextField {
             max_chars: None,
             secret: false,
             time: false,
+            select_on_focus: false,
+            was_focused: false,
+            part: None,
+            pending: false,
             anchor: usize::MAX,
             head: usize::MAX,
             marked: String::new(),
@@ -119,7 +133,7 @@ impl TextField {
     /// What a page hears the field holds: a time field's text once it is a whole HH:MM, and "" before, as from a
     /// browser, so an hour typed without its minutes isn't taken for a time.
     pub fn value(&self) -> &str {
-        if self.time && self.text.len() != 5 {
+        if self.time && (self.text.len() != 5 || self.text.contains('-')) {
             ""
         } else {
             &self.text
@@ -201,6 +215,9 @@ impl TextField {
         if self.disabled {
             return;
         }
+        if self.time {
+            return self.time_input(with, window, cx);
+        }
         // A one-line field takes its text as one line.
         let with = if self.rows.is_none() && with.contains(['\r', '\n']) {
             Cow::Owned(with.replace(['\r', '\n'], " "))
@@ -221,22 +238,7 @@ impl TextField {
             return;
         }
         self.text.replace_range(range.clone(), with);
-        let mut caret = range.start + with.len();
-        if self.time {
-            // The caret stays after as many digits as were before it, or at the end if it was there.
-            let at_end = caret == self.text.len();
-            let digits = self.text[..caret].chars().filter(char::is_ascii_digit).count();
-            self.text = time_of(&self.text);
-            caret = if at_end {
-                self.text.len()
-            } else {
-                self.text
-                    .char_indices()
-                    .filter(|(_, c)| c.is_ascii_digit())
-                    .nth(digits)
-                    .map_or(self.text.len(), |(at, _)| at)
-            };
-        }
+        let caret = range.start + with.len();
         (self.anchor, self.head) = (caret, caret);
         window.notify_text_input_changed(&self.focus);
         cx.emit(FieldEvent::Changed);
@@ -295,6 +297,12 @@ impl TextField {
         } else {
             mods.control
         };
+        if self.time && self.marked.is_empty() && self.time_key(key.key.as_str(), mods, window, cx)
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            return;
+        }
         match key.key.as_str() {
             "escape" => cx.emit(FieldEvent::Cancel),
             "enter" if self.rows.is_some() => {
@@ -419,6 +427,13 @@ impl TextField {
         let clicked = layout.index_at(event.position - layout.origin);
         // What was being composed is text now, and the clicked place counts in it.
         self.commit();
+        if self.time {
+            // A press picks the part under it, the minutes from the colon on.
+            self.part = Some(usize::from(clicked > 2));
+            self.pending = false;
+            self.select_part(window, cx);
+            return;
+        }
         let at = self.at(clicked);
         match event.click_count {
             1 => self.go(at, event.modifiers.shift, window, cx),
@@ -434,6 +449,118 @@ impl TextField {
         self.dragging = true;
     }
 
+    /// A time field's hours and minutes, each None while it is "--".
+    fn time_parts(&self) -> [Option<u8>; 2] {
+        PARTS.map(|(range, most)| {
+            self.text
+                .get(range)
+                .and_then(|part| part.parse::<u8>().ok())
+                .filter(|value| *value <= most)
+        })
+    }
+
+    /// Shows `parts`, "--" for each that is None, with the part that has the keyboard selected, and tells the page when
+    /// that changed the text.
+    fn set_time(&mut self, parts: [Option<u8>; 2], window: &mut Window, cx: &mut Context<Self>) {
+        let shown = |part: Option<u8>| part.map_or_else(|| "--".to_owned(), |v| format!("{v:02}"));
+        let text = format!("{}:{}", shown(parts[0]), shown(parts[1]));
+        if text != self.text {
+            self.text = text;
+            window.notify_text_input_changed(&self.focus);
+            cx.emit(FieldEvent::Changed);
+        }
+        self.select_part(window, cx);
+    }
+
+    fn select_part(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text.is_empty() {
+            self.text = EMPTY_TIME.to_owned();
+        }
+        let range = PARTS[self.part.unwrap_or(0)].0.clone();
+        self.select(range.start, range.end, window, cx);
+    }
+
+    /// A key a time field takes for its parts. False for one it leaves to the rest of the field and the page.
+    fn time_key(
+        &mut self,
+        key: &str,
+        mods: Modifiers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if mods.platform || mods.control || mods.alt {
+            return false;
+        }
+        let part = self.part.unwrap_or(0);
+        let mut parts = self.time_parts();
+        match key {
+            "up" | "down" => {
+                let most = i16::from(PARTS[part].1);
+                parts[part] = Some(match parts[part] {
+                    Some(value) => {
+                        let step = if key == "up" { 1 } else { -1 };
+                        (i16::from(value) + step).rem_euclid(most + 1) as u8
+                    }
+                    None if key == "up" => 0,
+                    None => most as u8,
+                });
+            }
+            "left" | "home" => self.part = Some(0),
+            "right" | "end" => self.part = Some(1),
+            // Tab goes from the hours to the minutes, and Shift-Tab back, before either leaves the field.
+            "tab" if mods.shift && part == 1 => self.part = Some(0),
+            "tab" if !mods.shift && part == 0 => self.part = Some(1),
+            "backspace" | "delete" => parts[part] = None,
+            _ => return false,
+        }
+        self.pending = false;
+        self.set_time(parts, window, cx);
+        true
+    }
+
+    /// What is typed or pasted into a time field. A digit fills the part that has the keyboard, as a browser's does:
+    /// a first digit no second can follow (above 2 for the hours, 5 for the minutes) is the whole part, and the hours
+    /// move on to the minutes once they are whole. A pasted time, like 9:45, is the whole time.
+    fn time_input(&mut self, with: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let mut chars = with.chars();
+        let part = self.part.unwrap_or(0);
+        let mut parts = self.time_parts();
+        match (chars.next(), chars.next()) {
+            (None, _) => parts[part] = None,
+            (Some(c), None) => {
+                // A colon or a letter is let go.
+                let Some(digit) = c.to_digit(10).map(|d| d as u8) else {
+                    return;
+                };
+                let most = PARTS[part].1;
+                let joined = parts[part]
+                    .filter(|_| self.pending)
+                    .map(|first| first * 10 + digit)
+                    .filter(|value| *value <= most);
+                parts[part] = Some(match joined {
+                    Some(value) => {
+                        self.pending = false;
+                        value
+                    }
+                    None => {
+                        self.pending = digit <= most / 10;
+                        digit
+                    }
+                });
+                if !self.pending && part == 0 {
+                    self.part = Some(1);
+                }
+            }
+            _ => {
+                let pasted = time_of(with);
+                parts = [pasted.get(0..2), pasted.get(3..5)]
+                    .map(|part| part.and_then(|p| p.parse::<u8>().ok()));
+                self.pending = false;
+            }
+        }
+        self.set_time(parts, window, cx);
+    }
+
     fn drag_to(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(layout) = &self.layout else {
             return;
@@ -444,7 +571,30 @@ impl TextField {
 }
 
 impl Render for TextField {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.focus.is_focused(window);
+        if self.time {
+            if focused {
+                // The hours take the keyboard first, unless a press picked the minutes.
+                if self.part.is_none() {
+                    (self.part, self.pending) = (Some(0), false);
+                }
+                // A time the page set while it had the keyboard keeps its part selected.
+                let range = PARTS[self.part.unwrap_or(0)].0.clone();
+                if self.text.is_empty() {
+                    self.text = EMPTY_TIME.to_owned();
+                }
+                (self.anchor, self.head) = (range.start, range.end);
+            } else {
+                (self.part, self.pending) = (None, false);
+                if self.text == EMPTY_TIME {
+                    self.text.clear();
+                }
+            }
+        } else if focused && !self.was_focused && self.select_on_focus {
+            (self.anchor, self.head) = (0, self.text.len());
+        }
+        self.was_focused = focused;
         div()
             .id(ElementId::NamedInteger(
                 "text-field".into(),
@@ -590,6 +740,11 @@ fn time_of(typed: &str) -> String {
         format!("{}:{}", &digits[..2], &digits[2..])
     }
 }
+
+/// A time field's hours and minutes: where each sits in HH:MM, and the most it can be.
+const PARTS: [(Range<usize>, u8); 2] = [(0..2, 23), (3..5, 59)];
+/// A time field with the keyboard and no time yet, as a browser shows it.
+const EMPTY_TIME: &str = "--:--";
 
 /// What a password shows for each character.
 const MASK: &str = "•";
@@ -1219,37 +1374,76 @@ mod tests {
         assert_eq!(text(&window, &field), "one three");
     }
 
-    /// Cyclops' start and end: typed as digits, with no colon, as in a browser's `<input type="time">`.
+    /// Cyclops' start and end, as a browser's `<input type="time">`: the hours, then the minutes, each a part that
+    /// digits fill and the arrows step, typed over what is there.
     #[test]
-    fn a_time_takes_digits_and_puts_the_colon_in() {
+    fn a_time_fills_its_hours_then_its_minutes_from_digits_typed_over_it() {
         let (_app, mut window, field) = open("");
         window.update(|_, _, cx| field.update(cx, |field, _| field.time = true));
-        let value = |window: &TestAppWindow<Host>| window.read(|_, cx| field.read(cx).value().to_string());
-        for (typed, shown) in [("0", "0"), ("9", "09"), ("3", "09:3"), ("0", "09:30"), ("5", "09:30")] {
+        window.draw();
+        let value =
+            |window: &TestAppWindow<Host>| window.read(|_, cx| field.read(cx).value().to_string());
+        // Empty, it shows --:-- with the hours selected. A 0 waits for the hour's second digit; 9 makes 09 and moves on.
+        assert_eq!(text(&window, &field), "--:--");
+        assert_eq!(selected(&window, &field), 0..2);
+        for (typed, shown) in [
+            ("0", "00:--"),
+            ("9", "09:--"),
+            ("3", "09:03"),
+            ("0", "09:30"),
+            ("5", "09:05"),
+        ] {
             window.simulate_input(typed);
             assert_eq!(text(&window, &field), shown);
         }
-        assert_eq!(value(&window), "09:30");
+        assert_eq!(
+            selected(&window, &field),
+            3..5,
+            "the minutes keep the keyboard"
+        );
+        assert_eq!(value(&window), "09:05");
+        // Emptied, the minutes are no time.
         press(&mut window, "backspace");
-        assert_eq!(text(&window, &field), "09:3");
+        assert_eq!(text(&window, &field), "09:--");
         assert_eq!(value(&window), "", "an unfinished time is no time");
-        press(&mut window, "backspace backspace");
-        assert_eq!(text(&window, &field), "0");
-        // A 9 can only be 09, a 24th hour isn't one, and a colon or a letter is let go.
-        press(&mut window, "cmd-a backspace");
-        for typed in ["9", ":", "a", "7"] {
+        // A digit no second can follow is the whole part: 7 is 07 and goes on to the minutes, 2 then 4 isn't 24 but 04.
+        press(&mut window, "left");
+        for typed in ["7", ":", "a", "6"] {
             window.simulate_input(typed);
         }
-        assert_eq!(text(&window, &field), "09:07");
-        press(&mut window, "cmd-a backspace");
-        for typed in ["2", "4", "3", "1", "5"] {
+        assert_eq!(text(&window, &field), "07:06");
+        press(&mut window, "left");
+        for typed in ["2", "4"] {
             window.simulate_input(typed);
         }
-        assert_eq!(text(&window, &field), "23:15");
+        assert_eq!(text(&window, &field), "04:06");
+        // Up and Down step the part, round the clock.
+        press(&mut window, "left down down up");
+        assert_eq!(text(&window, &field), "03:06");
+        press(&mut window, "right down down down down down down down");
+        assert_eq!(text(&window, &field), "03:59");
         // A pasted 9:45 is 09:45.
         window.update(|_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string("9:45".into())));
-        press(&mut window, "cmd-a cmd-v");
+        press(&mut window, "cmd-v");
         assert_eq!(text(&window, &field), "09:45");
+    }
+
+    /// A time the page set, like an entry's 08:30: typing over it changes it, where a fifth digit was dropped.
+    #[test]
+    fn a_time_set_from_outside_takes_digits_typed_over_its_hours() {
+        let (_app, mut window, field) = open("08:30");
+        window.update(|_, _, cx| field.update(cx, |field, _| field.time = true));
+        window.draw();
+        window.simulate_input("1");
+        window.simulate_input("0");
+        assert_eq!(text(&window, &field), "10:30");
+        // A press on the minutes picks them.
+        window.simulate_click(gap(&window, &field, 4), MouseButton::Left);
+        window.draw();
+        assert_eq!(selected(&window, &field), 3..5);
+        window.simulate_input("4");
+        window.simulate_input("5");
+        assert_eq!(text(&window, &field), "10:45");
     }
 
     /// Cyclops' API token: a browser's `<input type="password">` shows a dot a character, and copy and cut take nothing.

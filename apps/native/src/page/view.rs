@@ -98,6 +98,12 @@ pub struct PageView {
     popover: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
     shell_scroll: gpui::ScrollHandle,
+    /// Where the open combobox's list is scrolled, so the option the arrow keys reach is brought into view.
+    combobox_scroll: gpui::ScrollHandle,
+    /// A focus handle round each list item's `actions`, by node id, and the items one of whose actions had the
+    /// keyboard when the page was last drawn: those show their actions without the pointer on them.
+    actions_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
+    actions_within: HashSet<u64>,
     /// A field that took the keyboard and is brought into view once it has been drawn.
     reveal: Option<gpui::Entity<crate::text_field::TextField>>,
     _events: Task<()>,
@@ -275,6 +281,9 @@ impl PageView {
             error,
             popover: false,
             shell_scroll: gpui::ScrollHandle::new(),
+            combobox_scroll: gpui::ScrollHandle::new(),
+            actions_focus: RefCell::default(),
+            actions_within: HashSet::new(),
             reveal: None,
             _events: events,
         }
@@ -511,6 +520,28 @@ impl PageView {
         let inputs = self.inputs.borrow();
         let first = inputs.keys().min()?;
         Some(inputs[first].field.read(cx).focus_handle(cx))
+    }
+
+    /// The focus of the last text input named `label`, as the page drew it: an entry's edit form comes after the start
+    /// card's fields of the same names.
+    #[cfg(feature = "test-support")]
+    pub fn input_focus(&self, label: &str, cx: &gpui::App) -> Option<gpui::FocusHandle> {
+        fn find(nodes: &[Node], label: &str, found: &mut Option<u64>) {
+            for node in nodes {
+                match node {
+                    Node::Input(input) if input.label == label => *found = Some(input.id),
+                    other => {
+                        for part in other.parts() {
+                            find(part, label, found);
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = None;
+        find(&self.tree.as_ref()?.children, label, &mut found);
+        let inputs = self.inputs.borrow();
+        Some(inputs.get(&found?)?.field.read(cx).focus_handle(cx))
     }
 
     #[cfg(feature = "test-support")]
@@ -1199,18 +1230,57 @@ impl PageView {
                 .children(self.nodes(&item.children, cx))
                 .into_any_element()
         } else {
+            // Its actions show over the row's end while the row is pointed at or one of them has the keyboard, and the
+            // row's last part gives way to them, as plugin-ui.css's `.w-list-item-actions`: Cyclops' entries' buttons
+            // take the place of their times.
+            let has_actions = !item.actions.is_empty();
+            let within = self.actions_within.contains(&item.id);
+            let actions = has_actions.then(|| {
+                let focus = self
+                    .actions_focus
+                    .borrow_mut()
+                    .entry(item.id)
+                    .or_insert_with(|| cx.focus_handle())
+                    .clone();
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .track_focus(&focus)
+                    .when(!within, |el| {
+                        el.opacity(0.0)
+                            .group_hover(LIST_ITEM_GROUP, |style| style.opacity(1.0))
+                    })
+                    .children(self.nodes(&item.actions, cx))
+            });
+            let last = item.children.len().saturating_sub(1);
             // A card in a row takes the row's width, as a page's own style would have it do.
             ui::list_item(
                 ElementId::NamedInteger("page-list-item".into(), item.id),
-                item.children.iter().map(|child| {
+                item.children.iter().enumerate().map(|(at, child)| {
                     let element = self.node(child, cx);
                     if matches!(child, Node::Card(_)) {
                         div().flex_1().min_w_0().child(element).into_any_element()
+                    } else if has_actions && at == last {
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .when(within, |el| el.opacity(0.0))
+                            .group_hover(LIST_ITEM_GROUP, |style| style.opacity(0.0))
+                            .child(element)
+                            .into_any_element()
                     } else {
                         element
                     }
                 }),
             )
+            .when_some(actions, |row, actions| {
+                row.group(LIST_ITEM_GROUP).relative().child(actions)
+            })
             .into_any_element()
         }
     }
@@ -1233,6 +1303,13 @@ impl Render for PageView {
             self.highlight = None;
         }
         self.listing.set(false);
+        self.actions_within = self
+            .actions_focus
+            .borrow()
+            .iter()
+            .filter(|(_, focus)| focus.contains_focused(window, cx))
+            .map(|(id, _)| *id)
+            .collect();
         let body = self
             .tree
             .as_ref()
@@ -1348,6 +1425,8 @@ impl Render for PageView {
 }
 
 const PAGE_CONTEXT: &str = "plugin-page";
+/// The group a list item with actions names itself, for its actions to show while it is pointed at.
+const LIST_ITEM_GROUP: &str = "page-list-item";
 
 impl PageView {
     /// Tab and Shift-Tab go to the page's next and previous control, as in a browser, and round to its first and last
