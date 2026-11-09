@@ -628,8 +628,12 @@ impl PageView {
     ) -> AnyElement {
         // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
         // word when it has to. A text that grows in a row, squeezed by the buttons beside it, would come apart a
-        // letter or two a line, so it is never narrower than its longest word, as in the desktop.
-        let least = ((text.grow || drop.is_some()) && !text.truncate).then(|| {
+        // letter or two a line, so it is never narrower than its longest word, as in the desktop. A mono text that
+        // grows is a line of code or of a log, which the desktop sets in a box that scrolls sideways and the app
+        // can't scroll: it breaks inside a word wider than its box instead, or a log's "=====" rule and a long link
+        // ran past the card's edge.
+        let code = text.mono && text.grow;
+        let least = ((text.grow || drop.is_some()) && !text.truncate && !code).then(|| {
             let size = match text.size {
                 TextSize::Small => 12.0,
                 TextSize::Tiny => 11.0,
@@ -646,7 +650,7 @@ impl PageView {
         });
         let element = div()
             .when_some(drop.filter(|drop| *drop > 0.0), |el, drop| el.pt(px(drop)))
-            .when(text.truncate, |el| el.min_w_0())
+            .when(text.truncate || code, |el| el.min_w_0())
             .when_some(least, |el, least| el.min_w(px(least)))
             .when(text.grow, |el| el.flex_1())
             .when(text.truncate, |el| el.truncate())
@@ -976,7 +980,7 @@ impl PageView {
             Node::Select(select) => self.select(select, cx),
             Node::Combobox(combobox) => self.combobox(combobox, cx),
             Node::Chips(select) => self.chips(select, cx),
-            Node::ListButton(item) => self.list_button(item, cx),
+            Node::ListButton(item) => self.list_button(item, None, cx),
             Node::SearchField(field) => self.search_field(field, cx),
             Node::Input(input) => self.input(input, cx),
             Node::Icon(icon) => crate::icons::icon(
@@ -1093,6 +1097,7 @@ impl PageView {
                     .map(|(node, drop)| match node {
                         Node::Text(text) => self.text_element(text, Some(drop), cx),
                         Node::Button(button) => self.button(button, drop, cx),
+                        Node::ListButton(item) => self.list_button(item, Some(drop), cx),
                         other => self.node(other, cx),
                     })
                     .collect(),
@@ -1491,12 +1496,17 @@ fn line_height(nodes: &[Node]) -> Option<f32> {
 const WRAPPED_PADDING: f32 = 2.0;
 
 /// The text a baseline row lines `node` up by, and how far into `node` its top is: a text's own, or the one text of a
-/// `wrap` button, under the button's 1pt border and its padding.
+/// `wrap` button or of a list button, under the button's 1pt border and its padding. A log's folded group is its
+/// number beside a list button that holds its title.
 fn row_text(node: &Node) -> Option<(&tree::Text, f32)> {
     match node {
         Node::Text(text) => Some((text, 0.0)),
         Node::Button(button) if button.wrap => match button.children.as_slice() {
             [Node::Text(text)] => Some((text, 1.0 + WRAPPED_PADDING)),
+            _ => None,
+        },
+        Node::ListButton(item) if !item.vertical => match item.button.children.as_slice() {
+            [Node::Text(text)] => Some((text, 1.0 + controls_view::LIST_BUTTON_PADDING)),
             _ => None,
         },
         _ => None,

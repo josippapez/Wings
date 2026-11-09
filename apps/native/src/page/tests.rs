@@ -839,6 +839,50 @@ fn a_log_lines_number_sits_by_its_first_line_when_the_line_wraps() {
     assert!(pressed_at(&app, &mut window, (17.0, 22.0), "Pressed 1."));
 }
 
+/// A line of a check run's log that is one word wider than the frame, an Azure log's "=====" rule, with a text under it
+/// that can be pressed.
+const LOG_RULE: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
+{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted'},children:[{id:3,type:'#text',text:'3'}]},
+{id:4,type:'Text',props:{mono:true,size:'small',grow:true},children:[{id:5,type:'#text',text:'='.repeat(78)}]}]},
+{id:6,type:'Text',props:{onClick:'6:click'},children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_log_line_wider_than_the_frame_wraps_inside_it() {
+    let (app, mut window) = open_narrow(LOG_RULE, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The rule takes three lines inside the frame, so the text under it starts 76pt down. The rule used to be one line
+    // as wide as its 78 characters, past the frame's edge, with the text right under it.
+    assert!(pressed_at(&app, &mut window, (20.0, 85.0), "Pressed 1."));
+}
+
+/// A folded group of a check run's log as PR tracker draws it: its number, which can be pressed, beside a list button
+/// that holds its title, which wraps in a narrow frame.
+const LOG_GROUP: &str = r#"
+let pressed = 0;
+function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
+{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
+{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted',onClick:'2:click'},children:[{id:3,type:'#text',text:'  1'}]},
+{id:4,type:'ListButton',props:{align:'baseline','aria-expanded':false,onClick:'4:open'},children:[
+{id:5,type:'Text',props:{mono:true,size:'small',grow:true,weight:'strong'},children:[{id:6,type:'#text',text:'Run pnpm --filter web test -- --reporter=verbose --coverage.enabled=true'}]}]}]},
+{id:7,type:'Text',children:[{id:8,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
+globalThis.__wingsEvent=(handler)=>{if(handler==='2:click')pressed++;render();return true;};render();
+"#;
+
+#[test]
+fn a_log_groups_number_sits_on_one_line_by_its_titles_first() {
+    let (app, mut window) = open_narrow(LOG_GROUP, 300.0);
+    settle(&app, &mut window, shows("Pressed 0."));
+    // The number is on the title's first line, 17pt to 35pt down: it used to sit by the button's foot, three lines down.
+    assert!(pressed_at(&app, &mut window, (16.0, 26.0), "Pressed 1."));
+    // Under it is the title's second line and no number: squeezed by the button, "  1" broke at its padding there.
+    assert!(!pressed_at(&app, &mut window, (16.0, 45.0), "Pressed 2."));
+}
+
 /// A board of one column with a card in it, as Issues' board in its page with no padding of its own. The card can be
 /// pressed.
 const BOARD: &str = r#"
@@ -1200,6 +1244,15 @@ fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
         let wrapped = baseline_drops(&row(&format!("{button},{key}")), cx).unwrap();
         assert_eq!(wrapped[0], 0.0);
         assert!((wrapped[1] - drops[1] - 3.0).abs() < 0.01, "{wrapped:?}");
+        // A log's folded group: its number beside a list button that holds its title, 3pt into it as well. The row
+        // wasn't one of texts, so the number sat 3pt over the title's baseline.
+        let group = format!(
+            r##"{key},{{"id":9,"type":"ListButton","props":{{"aria-expanded":false}},"children":[{key}]}}"##
+        );
+        assert_eq!(
+            baseline_drops(&row(&group), cx),
+            Some(vec![3.0, 0.0])
+        );
     });
 }
 

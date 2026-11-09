@@ -13,6 +13,9 @@ use super::{
 };
 use crate::{theme, ui};
 
+/// The padding over and under a `ListButton`'s parts, inside its 1pt border.
+pub(super) const LIST_BUTTON_PADDING: f32 = 2.0;
+
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
         let label = plain_text(&checkbox.children);
@@ -187,9 +190,12 @@ impl PageView {
             .into_any_element()
     }
 
+    /// A `ListButton`. In a baseline row it starts `drop` points down, as a text there does, and takes the room the
+    /// row's texts leave: at the row's whole width it squeezed a log line's number beside it onto two lines.
     pub(super) fn list_button(
         &self,
         item: &tree::ListButton,
+        drop: Option<f32>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let button = &item.button;
@@ -210,10 +216,13 @@ impl PageView {
             .items_center()
             .px(px(6.0))
             .pl(px(6.0 + item.indent))
-            .py(px(2.0))
+            .py(px(LIST_BUTTON_PADDING))
             .rounded(px(6.0))
             .border_1()
             .border_color(rgba(0))
+            .when_some(drop, |el, drop| {
+                el.flex_1().when(drop > 0.0, |el| el.mt(px(drop)))
+            })
             // Its lines 2pt apart, as Changes' `.commit` stacks a commit's subject over its hash and author:
             // 8pt between a commit's own lines put them further apart than the commits were.
             .when(item.vertical, |el| {
