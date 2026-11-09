@@ -27,34 +27,39 @@ export interface RunViewProps {
 
 type Load<T> = { state: "loading" } | { state: "error"; message: string } | { state: "done"; value: T };
 
-function useLoad<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Load<T> | null, () => void] {
-  const [value, setValue] = useState<Load<T> | null>(null);
+const LOADING = { state: "loading" } as const;
+
+/** Loads what `id` names, and again when `deps` change. */
+function useLoad<T>(load: (() => Promise<T>) | null, id: unknown, deps: unknown[]): [Load<T> | null, () => void] {
+  const [value, setValue] = useState<{ id: unknown; load: Load<T> } | null>(null);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     if (!load) return;
     let live = true;
     // A reload keeps what is drawn until the new answer comes, so a running log doesn't blink.
-    setValue((v) => (v?.state === "done" ? v : { state: "loading" }));
+    setValue((v) => (v !== null && v.id === id && v.load.state === "done" ? v : { id, load: LOADING }));
     load().then(
-      (v) => live && setValue({ state: "done", value: v }),
-      (e: Error) => live && setValue({ state: "error", message: String(e?.message ?? e) }),
+      (v) => live && setValue({ id, load: { state: "done", value: v } }),
+      (e: Error) => live && setValue({ id, load: { state: "error", message: String(e?.message ?? e) } }),
     );
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, nonce]);
-  return [value, () => setNonce((n) => n + 1)];
+  }, [id, ...deps, nonce]);
+  // What was loaded for another id is never shown for this one: a picked step showed the log of the step picked before
+  // it until its own came, so the click seemed to do nothing for as long as the CLI took.
+  return [value && (value.id === id ? value.load : LOADING), () => setNonce((n) => n + 1)];
 }
 
 export function RunView({ item, version, onLoadRun, onLoadLog, onBack }: RunViewProps) {
   const going = item.state === "running" || item.state === "queued";
-  const [run, reloadRun] = useLoad(onLoadRun, [item.id, item.state, going ? version : null]);
+  const [run, reloadRun] = useLoad(onLoadRun, item.id, [item.state, going ? version : null]);
   const [picked, setPicked] = useState<string | null>(null);
   const opening = useAction();
   const steps = useMemo(() => (run?.state === "done" ? run.value.jobs.flatMap((j) => j.steps) : []), [run]);
   const step = steps.find((s) => s.id === picked) ?? pickStep(steps.filter((s) => s.log));
-  const [log, reloadLog] = useLoad(step?.log ? () => onLoadLog(step) : null, [step?.id, step?.state, step?.seconds]);
+  const [log, reloadLog] = useLoad(step?.log ? () => onLoadLog(step) : null, step?.id, [step?.state, step?.seconds]);
   const runUrl = run?.state === "done" ? run.value.url : null;
   const url = (runUrl ?? item.url)?.startsWith("https://") ? (runUrl ?? item.url) : null;
 
@@ -150,6 +155,8 @@ function StepLog({ step, log }: { step: RunStep; log: Load<string[]> | null }) {
   if (!log || log.state === "loading") return <Loading>Loading the log…</Loading>;
   if (log.state === "error") return <Notice tone="danger">{log.message}</Notice>;
   if (!entries.length) return <Text tone="muted" size="small">{step.state === "running" ? "No output yet." : "This step wrote nothing."}</Text>;
+  const last = shown[shown.length - 1];
+  const digits = String("title" in last ? (last.lines.at(-1) ?? last.title).n : last.n).length;
   return (
     <Stack gap="xs" className="pr-run-log">
       {shown !== entries ? (
@@ -159,7 +166,7 @@ function StepLog({ step, log }: { step: RunStep; log: Load<string[]> | null }) {
         </Row>
       ) : null}
       <Stack gap="none" className="pr-log pr-run-pre" tabIndex={0} role="region" aria-label={`Log of ${step.name}`}>
-        {shown.map((e) => ("title" in e ? <Group key={e.title.n} entry={e} /> : <Line key={e.n} line={e} />))}
+        {shown.map((e) => ("title" in e ? <Group key={e.title.n} entry={e} digits={digits} /> : <Line key={e.n} line={e} digits={digits} />))}
       </Stack>
     </Stack>
   );
@@ -176,26 +183,46 @@ function lastLines(entries: LogEntry[], max: number): LogEntry[] {
   return i === 0 ? entries : entries.slice(i);
 }
 
-function Group({ entry }: { entry: { title: LogLine; lines: LogLine[] } }) {
+/**
+ * A line's number. pr.css sets the numbers right-aligned in a column, which the app has no CSS for: there each is
+ * padded to as many digits as the last line's, and the mono font lines them up, or each line's text started after its
+ * own number.
+ */
+const numberOf = (n: number, digits: number) => (WINGS_NATIVE ? String(n).padStart(digits) : n);
+
+function Group({ entry, digits }: { entry: { title: LogLine; lines: LogLine[] }; digits: number }) {
   const [open, setOpen] = useState(false);
+  const toggle = () => setOpen((o) => !o);
+  const title = (
+    <Text mono size="small" grow weight={WINGS_NATIVE ? "strong" : undefined} className="pr-run-text">
+      {WINGS_NATIVE ? null : <Text aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾ </Text>}
+      <Spans line={entry.title} />
+    </Text>
+  );
   return (
     <>
-      <ListButton className="pr-run-line pr-run-group" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <Text mono size="tiny" tone="muted" numeric className="pr-run-n">{entry.title.n}</Text>
-        <Text mono size="small" grow className="pr-run-text">
-          {WINGS_NATIVE ? null : <Text aria-hidden="true" className="pr-chevron" data-open={open ? "" : undefined}>▾ </Text>}
-          <Spans line={entry.title} />
-        </Text>
-      </ListButton>
-      {open ? entry.lines.map((l) => <Line key={l.n} line={l} />) : null}
+      {WINGS_NATIVE ? (
+        // The app draws a list button's chevron before what it holds, which put the number after it, out of the
+        // numbers' column: the number stays in the column, and the button holds the title in the text's.
+        <Row gap="m" align="baseline">
+          <Text mono size="tiny" tone="muted" numeric>{numberOf(entry.title.n, digits)}</Text>
+          <ListButton align="baseline" aria-expanded={open} onClick={toggle}>{title}</ListButton>
+        </Row>
+      ) : (
+        <ListButton className="pr-run-line pr-run-group" aria-expanded={open} onClick={toggle}>
+          <Text mono size="tiny" tone="muted" numeric className="pr-run-n">{entry.title.n}</Text>
+          {title}
+        </ListButton>
+      )}
+      {open ? entry.lines.map((l) => <Line key={l.n} line={l} digits={digits} />) : null}
     </>
   );
 }
 
-function Line({ line }: { line: LogLine }) {
+function Line({ line, digits }: { line: LogLine; digits: number }) {
   return (
     <Row gap="m" align="baseline" className="pr-run-line" data-tone={line.tone ?? undefined}>
-      <Text mono size="tiny" tone="muted" numeric className="pr-run-n" title={line.time ?? undefined}>{line.n}</Text>
+      <Text mono size="tiny" tone="muted" numeric className="pr-run-n" title={line.time ?? undefined}>{numberOf(line.n, digits)}</Text>
       <Text mono size="small" grow tone={WINGS_NATIVE && line.tone ? LINE_TONE[line.tone] : undefined} className="pr-run-text">
         <Spans line={line} />
       </Text>

@@ -16,17 +16,19 @@ interface ChecksViewProps {
   /** A check's run, for a check whose CI has jobs and steps to show. */
   onLoadRun?: (run: RunRef) => Promise<Run>;
   onLoadRunLog?: (run: RunRef, step: RunStep) => Promise<string[]>;
+  /** The check whose run shows in place of the list. The page keeps it, as it widens while a run is open. */
+  opened: string | null;
+  onOpen: (id: string | null) => void;
 }
 
 type Load = { state: "loading" } | { state: "error"; message: string } | { state: "done"; details: FailureDetail[] };
 
-export function ChecksView({ status, unresolved, onLoadFailure, onLoadRun, onLoadRunLog }: ChecksViewProps) {
+export function ChecksView({ status, unresolved, onLoadFailure, onLoadRun, onLoadRunLog, opened, onOpen }: ChecksViewProps) {
   const items = useMemo(() => withUnresolved(status.items ?? [], unresolved), [status.items, unresolved]);
   const groups = useMemo(() => groupChecks(items), [items]);
   const [open, setOpen] = useState<Partial<Record<GroupId, boolean>>>({});
   const [loads, setLoads] = useState<Record<string, Load>>({});
   const asked = useRef(new Set<string>());
-  const [opened, setOpened] = useState<string | null>(null);
 
   if (!items.length) {
     const { passed, failed, running } = status.checks;
@@ -36,7 +38,7 @@ export function ChecksView({ status, unresolved, onLoadFailure, onLoadRun, onLoa
   const run = items.find((c) => c.id === opened && c.run);
   if (run?.run && onLoadRun && onLoadRunLog) {
     const ref = run.run;
-    return <RunView key={run.id} item={run} version={status} onLoadRun={() => onLoadRun(ref)} onLoadLog={(step) => onLoadRunLog(ref, step)} onBack={() => setOpened(null)} />;
+    return <RunView key={run.id} item={run} version={status} onLoadRun={() => onLoadRun(ref)} onLoadLog={(step) => onLoadRunLog(ref, step)} onBack={() => onOpen(null)} />;
   }
 
   // The log belongs to the commit it ran for, so a new push asks again.
@@ -58,7 +60,7 @@ export function ChecksView({ status, unresolved, onLoadFailure, onLoadRun, onLoa
   return (
     <Stack gap="m" className="pr-checks" data-testid="pr-checks-view">
       {groups.map((g) => (
-        <GroupSection key={g.id} group={g} open={open[g.id] ?? (g.id === "failed" || g.id === "active")} onToggle={() => setOpen((o) => ({ ...o, [g.id]: !(o[g.id] ?? (g.id === "failed" || g.id === "active")) }))} loadKey={loadKey} loads={loads} onAsk={ask} canLoad={Boolean(onLoadFailure)} onOpenRun={onLoadRun && onLoadRunLog ? setOpened : undefined} />
+        <GroupSection key={g.id} group={g} open={open[g.id] ?? (g.id === "failed" || g.id === "active")} onToggle={() => setOpen((o) => ({ ...o, [g.id]: !(o[g.id] ?? (g.id === "failed" || g.id === "active")) }))} loadKey={loadKey} loads={loads} onAsk={ask} canLoad={Boolean(onLoadFailure)} onOpenRun={onLoadRun && onLoadRunLog ? onOpen : undefined} />
       ))}
     </Stack>
   );

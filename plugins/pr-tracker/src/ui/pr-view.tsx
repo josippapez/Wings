@@ -59,6 +59,9 @@ export function PrView(props: PrViewProps) {
   const { args, overview, comments, error, problem, problemBusy, onProblem, notice, busy, onRefresh, onRun, onApprove, onVote, onLoadFailure, onLoadRun, onLoadRunLog, onBack } = props;
   const st = overview?.status;
   const [tab, setTab] = useState<"overview" | "checks" | "files">(props.initialTab ?? "overview");
+  /** The check whose run the Checks tab shows. While one does, the page widens, so its log fits more of each line. */
+  const [opened, setOpened] = useState<string | null>(null);
+  const runOpen = tab === "checks" && Boolean(st?.items?.some((c) => c.id === opened && c.run));
   const checkTotal = st ? st.checks.passed + st.checks.failed + st.checks.running : 0;
   /** Open comment threads, which a comment requirement counts. Null until the conversation has loaded. */
   /** Every comment, a bot's too: the Overview tab's count. Pushes are not comments. */
@@ -139,7 +142,7 @@ export function PrView(props: PrViewProps) {
 
   return (
     <Page toolbar={toolbar} className="pr-page" data-testid="pr-page">
-      <Stack gap="l" maxWidth={860} className="pr-wrap">
+      <Stack gap="l" maxWidth={runOpen ? 1100 : 860} className="pr-wrap">
         <Stack as="header" gap="m" className="pr-header">
           {WINGS_NATIVE ? (
             // pr.css's 20px title, with its number after it, muted and not bold.
@@ -203,7 +206,11 @@ export function PrView(props: PrViewProps) {
               label="Pull request"
               variant="line"
               value={tab}
-              onChange={setTab}
+              onChange={(next) => {
+                // The Checks tab comes back to its list, as it did when it kept the open run itself.
+                if (next !== tab) setOpened(null);
+                setTab(next);
+              }}
               items={[
                 { value: "overview", label: `Overview${people ? ` ${people}` : ""}` },
                 { value: "checks", label: `Checks${checkTotal ? ` ${st.checks.passed}/${checkTotal}` : ""}` },
@@ -211,7 +218,7 @@ export function PrView(props: PrViewProps) {
               ]}
             >
               {tab === "overview" ? <OverviewTab {...props} overview={overview} /> : null}
-              {tab === "checks" ? <Card className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} onLoadRun={onLoadRun} onLoadRunLog={onLoadRunLog} /></Card> : null}
+              {tab === "checks" ? <Card className="pr-card"><ChecksView status={st} unresolved={unresolved} onLoadFailure={onLoadFailure} onLoadRun={onLoadRun} onLoadRunLog={onLoadRunLog} opened={opened} onOpen={setOpened} /></Card> : null}
               {tab === "files" ? (
                 <Card className="pr-card pr-files">
                   <Stack gap="m">

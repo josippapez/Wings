@@ -5,7 +5,7 @@
   display: block;
   overflow-x: hidden;
 }
-/* Its width, the frame's up to 860px and centred, is the Stack's `maxWidth`. */
+/* Its width, the frame's up to 860px (1100px while a check's run is open) and centred, is the Stack's `maxWidth`. */
 .pr-wrap {
   display: flex;
   flex-direction: column;

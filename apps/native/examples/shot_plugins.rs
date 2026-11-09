@@ -986,6 +986,8 @@ fn pr_tracker(out: PathBuf) {
         parent_id: None,
         path: id.clone(),
     }]);
+    // As the window does: the list's `useProject` waits to hear the project on screen.
+    host.publish_project(Some(&project));
     let fixture_main = include_str!("../../../plugins/pr-tracker/preview/native-host.js").replace(
         r#"- `SyncClient.send` retries up to 5 times\n- Delay doubles from 200 ms\n"#,
         r#"- SyncClient retries failed requests with exponential backoff, caps the delay, and reports each retry so operators can diagnose a slow upstream without losing the pull request's complete status history\n1. The retry budget applies to every request in this pull request, including the request that loads the final status after the retry loop has reached its configured limit\n- [ ] Add a metric that records the retry count for this request and explains why it reached the final retry budget before the worker returned\n  - Keep the nested diagnostic note with the parent item so the rendered description still explains the retry decision on a narrow pull request page\n"#,

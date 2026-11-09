@@ -66,19 +66,47 @@ const run = {
     { id: "3", name: "Publish coverage", state: "skipped", seconds: null, log: null },
   ] }],
 };
+// The failed step's log: the task's banner between separator lines wider than the log, a folded install whose lines
+// put the numbers after it in the hundreds, a stack trace line that wraps, and a link with no space to break at.
+const stamp = (s) => `2026-11-06T09:0${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}.000Z `;
+const rule = "=".repeat(78);
 const log = [
-  "2026-11-06T09:00:01.000Z ##[group]Run pnpm test",
-  "2026-11-06T09:00:01.100Z pnpm test sync",
-  "2026-11-06T09:00:01.200Z ##[endgroup]",
-  "2026-11-06T09:00:02.000Z \u001b[32m✓\u001b[0m src/sync/module-1.test.ts (8 tests) \u001b[33m120ms\u001b[0m",
-  "2026-11-06T09:00:03.000Z \u001b[31m✗\u001b[0m src/sync/client.test.ts (14 tests | 3 failed)",
-  "2026-11-06T09:00:03.100Z ##[error]Process completed with exit code 1.",
+  `${stamp(1)}##[group]Run pnpm test`,
+  `${stamp(1)}pnpm test sync`,
+  `${stamp(1)}##[endgroup]`,
+  `${stamp(1)}${rule}`,
+  `${stamp(1)}Task         : Command line`,
+  `${stamp(1)}Description  : Run a command line script using Bash on Linux and macOS and cmd.exe on Windows`,
+  `${stamp(1)}Version      : 2.250.1`,
+  `${stamp(1)}${rule}`,
+  `${stamp(1)}Generating script.`,
+  `${stamp(2)}##[group]Install dependencies`,
+  ...Array.from({ length: 94 }, (_, i) => `${stamp(2 + Math.floor(i / 8))}Progress: resolved ${(i + 1) * 9}, reused ${(i + 1) * 9}, downloaded 0, added ${i * 9}`),
+  `${stamp(14)}##[endgroup]`,
+  `${stamp(14)}> web@0.0.0 test /home/runner/work/web/web`,
+  `${stamp(14)}> vitest run --reporter=verbose --coverage.enabled=true src/sync`,
+  ...Array.from({ length: 12 }, (_, i) => `${stamp(15 + i)} \u001b[32m✓\u001b[0m src/sync/module-${i + 1}.test.ts (${8 + i} tests) \u001b[33m${120 + i * 7}ms\u001b[0m`),
+  `${stamp(28)} \u001b[31m✗\u001b[0m src/sync/client.test.ts (14 tests | 3 failed)`,
+  `${stamp(28)}   \u001b[31m✗\u001b[0m retries with backoff > waits for Retry-After`,
+  `${stamp(28)}     \u001b[31mAssertionError: expected 1200 to be 30000 // Object.is equality\u001b[0m`,
+  `${stamp(28)}       at processTicksAndRejections (node:internal/process/task_queues:95:5) at runTest (file:///home/runner/work/web/web/node_modules/@vitest/runner/dist/index.js:781:11)`,
+  `${stamp(29)}${"=".repeat(150)}`,
+  `${stamp(29)}Coverage: https://github.com/acme/web/actions/runs/16893571234/artifacts/3720129876?check_suite_focus=true&pr=482&lines=covered,uncovered,partial`,
+  `${stamp(29)}##[error]Process completed with exit code 1.`,
 ];
-const asked = { "pr-run": () => run, "pr-run-log": () => log };
+const installLog = [
+  `${stamp(0)}##[group]Run pnpm install --frozen-lockfile`,
+  `${stamp(0)}pnpm install --frozen-lockfile`,
+  `${stamp(0)}##[endgroup]`,
+  `${stamp(0)}Lockfile is up to date, resolution step is skipped`,
+  `${stamp(30)}Packages: +812`,
+  `${stamp(40)}Done in 41.2s`,
+];
+const asked = { "pr-run": () => run, "pr-run-log": (request) => (request?.step?.id === "1" ? installLog : log) };
 const respond = (message) => wings.broadcast({ "wings:sdk": 1, ...message });
 wings.onBroadcast((m) => {
   if (m?.["wings:sdk"] !== 1) return;
-  if (m.kind === "ask") void respond({ kind: "answer", id: m.id, response: asked[m.name]?.() ?? null });
+  if (m.kind === "ask") void respond({ kind: "answer", id: m.id, response: asked[m.name]?.(m.request) ?? null });
   if (m.kind === "sub") for (const [name, key] of m.subs) void respond({ kind: "state", name, key, data: (key?.provider === "azure" ? azure : data)[name], at: Date.now() });
 });
 // A page that subscribed before this listener existed lost its sub. "up" asks every page to subscribe again, as the

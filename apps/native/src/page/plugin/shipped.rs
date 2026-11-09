@@ -931,6 +931,9 @@ fn pr_rig() -> Rig {
         name: "web".into(),
         parent_id: None,
     }]);
+    // As the window does: the list's `useProject` waits to hear the project on screen.
+    rig.host
+        .publish_project(Some(std::path::Path::new(PR_PROJECT)));
     let fixture = fs::read_to_string(repo_plugin("pr-tracker").join("preview/native-host.js"))
         .unwrap()
         .replace("__ROOT__", PR_PROJECT);
@@ -1063,6 +1066,134 @@ fn pr_tracker_tab_opened_with_args_shows_that_pull_request_and_its_checks() {
     ] {
         assert!(text.contains(shown), "{shown:?} in {text:?}");
     }
+}
+
+/// The width of the page's reading column.
+fn column_width(nodes: &[Node]) -> Option<f32> {
+    nodes.iter().find_map(|node| match node {
+        Node::Stack(stack) if stack.max_width.is_some() => stack.max_width,
+        other => other.parts().into_iter().find_map(column_width),
+    })
+}
+
+/// The name of the step a run shows the log of: the one step whose name is bold.
+fn picked_step(nodes: &[Node]) -> Option<String> {
+    use crate::page::tree::Weight;
+    nodes.iter().find_map(|node| match node {
+        Node::ListButton(row) => row.button.children.iter().find_map(|child| match child {
+            Node::Text(name) if name.truncate && name.weight == Weight::Strong => {
+                Some(plain_text(&name.children))
+            }
+            _ => None,
+        }),
+        other => other.parts().into_iter().find_map(picked_step),
+    })
+}
+
+/// A check's run: its log's numbers are one column, each as many characters as the last one's, with a folded group's
+/// number in that column and not in the button that opens the group; the page is wider than its reading column while
+/// the run is open; and a step picked says it's loading at once. It went on showing the step before's log until its
+/// own came, so a click seemed to do nothing for as long as the CLI took.
+#[test]
+fn pr_tracker_run_numbers_its_lines_in_a_column_widens_the_page_and_loads_a_picked_step_at_once() {
+    let rig = pr_rig();
+    let args = json!({
+        "provider": "github", "url": "https://github.com/acme/web/pull/482", "number": 482,
+        "repo": "acme/web", "title": "Add retry with backoff to the sync client", "cwd": PR_PROJECT,
+    });
+    let (sent, events) = mpsc::channel();
+    let page = rig
+        .host
+        .open_hidden_page_with_args(&native("pr-tracker", "pr.js"), Some(&args), move |event| {
+            let _ = sent.send(event);
+        })
+        .unwrap();
+    page.set_visible(true);
+    let pull = tree(&events, "the pull request", |tree| {
+        tree.text().contains("Conversation")
+    });
+    let tabs = chips_named(&pull.children, "Pull request").expect("the tabs");
+    assert!(page.dispatch(&tabs, Some(&json!({ "value": "checks" }))));
+    let checks = tree(&events, "the checks", |tree| {
+        tree.text().contains("Unit tests")
+    });
+    assert_eq!(column_width(&checks.children), Some(860.0));
+    let open = list_button_showing(&checks.children, "Unit tests").expect("the failed check");
+    assert!(page.dispatch(&open, None));
+    let run = tree(&events, "the failed step's log", |tree| {
+        tree.text().contains("Process completed with exit code 1.")
+    });
+    assert_eq!(column_width(&run.children), Some(1100.0));
+
+    fn numbers(nodes: &[Node], found: &mut Vec<String>) {
+        for node in nodes {
+            if let Node::Text(text) = node
+                && text.mono
+                && text.size == crate::page::tree::TextSize::Tiny
+            {
+                found.push(plain_text(&text.children));
+            }
+            for part in node.parts() {
+                numbers(part, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    numbers(&run.children, &mut found);
+    // 1 and 9 open folded groups; 2 and 10 to 103 are folded in them.
+    let shown: Vec<String> = [1, 3, 4, 5, 6, 7, 8, 9]
+        .into_iter()
+        .chain(104..=124)
+        .map(|n| format!("{n:>3}"))
+        .collect();
+    assert_eq!(found, shown);
+    fn group_rows(nodes: &[Node], found: &mut Vec<(String, String)>) {
+        for node in nodes {
+            if let Node::Row(row) = node
+                && let [Node::Text(number), Node::ListButton(button)] = row.children.as_slice()
+            {
+                found.push((
+                    plain_text(&number.children),
+                    plain_text(&button.button.children),
+                ));
+            }
+            for part in node.parts() {
+                group_rows(part, found);
+            }
+        }
+    }
+    let mut groups = Vec::new();
+    group_rows(&run.children, &mut groups);
+    assert_eq!(
+        groups,
+        [
+            ("  1".to_owned(), "Run pnpm test".to_owned()),
+            ("  9".to_owned(), "Install dependencies".to_owned())
+        ]
+    );
+
+    assert_eq!(picked_step(&run.children).as_deref(), Some("Unit tests"));
+    let install = list_button_showing(&run.children, "Install dependencies").expect("the step");
+    assert!(page.dispatch(&install, None));
+    let picked = tree(&events, "the step picked", |tree| {
+        picked_step(&tree.children).as_deref() == Some("Install dependencies")
+    });
+    let text = picked.text();
+    assert!(
+        text.contains("Loading the log…") && !text.contains("Process completed with exit code 1."),
+        "{text:?}"
+    );
+    tree(&events, "the picked step's log", |tree| {
+        tree.text().contains("Packages: +812")
+    });
+
+    let mut back = Vec::new();
+    buttons_named(&run.children, "← Checks", &mut back);
+    assert!(page.dispatch(&back[0], None));
+    let checks = tree(&events, "the checks again", |tree| {
+        tree.text().contains("Running and queued")
+    });
+    assert_eq!(column_width(&checks.children), Some(860.0));
 }
 
 /// The Checks tab of the fixture's Azure DevOps pull request draws each check's mark as the desktop's: a red cross for
