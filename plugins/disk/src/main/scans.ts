@@ -182,7 +182,7 @@ async function deepen(root: string, scan: DoneScan, path: string, entry: Entry):
   scan.refining = [...scan.refining, path];
   keep(root, scan, true);
   try {
-    const result = await wings.diskUsage(path, { minBytes: detailFor(entry.size), maxEntries: MAX_ENTRIES });
+    const result = await wings.diskUsage(path, { minBytes: detailFor(entry.size), maxEntries: MAX_ENTRIES, reuse: true });
     // A scan that was forgotten or run again while this one ran isn't the tree this result is for.
     if (scans.get(root) === scan) graft(scan.tree, path, result.root, result.floor);
   } finally {
@@ -195,7 +195,7 @@ async function deepen(root: string, scan: DoneScan, path: string, entry: Entry):
 
 /** Every entry directly in the folder at `path`, small ones included. */
 export async function listAll(path: string): Promise<Entry> {
-  return (await wings.diskUsage(path, { minBytes: 0, depth: 1, maxEntries: 20_000 })).root;
+  return (await wings.diskUsage(path, { minBytes: 0, depth: 1, maxEntries: 20_000, reuse: true })).root;
 }
 
 /** How small the entries under `trail`'s last one are kept: by its scan's floor, or by the nearest folder above it, itself included, that was scanned again in more detail. */

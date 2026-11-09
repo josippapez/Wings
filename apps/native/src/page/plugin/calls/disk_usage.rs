@@ -31,6 +31,10 @@ fn a_scan_needs_the_disk_usage_permission_and_checks_its_arguments_first() {
             "return await wings.diskUsage('/', { maxEntries: '9' });",
             "diskUsage maxEntries must be a whole number, 0 or more",
         ),
+        (
+            "return await wings.diskUsage('/', { reuse: 1 });",
+            "diskUsage reuse must be true or false",
+        ),
     ] {
         assert_eq!(rig.refused(body), said, "{body}");
     }

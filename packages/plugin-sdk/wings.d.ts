@@ -567,6 +567,13 @@ interface Wings {
       depth?: number;
       /** At most this many entries come back, 1 to 100,000: past it the floor goes up. 20,000 by default. */
       maxEntries?: number;
+      /**
+       * Wings 0.2.14: answers from an earlier scan of a folder that holds `path`, as it was then minus what is gone from
+       * the disk since, instead of walking it again. Used when that scan kept entries down to at most four times
+       * `minBytes`, and `floor` is then the earlier scan's when that is bigger. With `depth` 1, the folders it sized
+       * aren't walked again, and what is new in `path` still shows. Older Wings walk. False by default.
+       */
+      reuse?: boolean;
       onProgress?: (progress: WingsDiskScanProgress) => void;
       signal?: AbortSignal;
     },

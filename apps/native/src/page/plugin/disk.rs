@@ -90,7 +90,13 @@ impl Work {
             let min_bytes = count(params, "minBytes", MAX_SAFE_INTEGER, false)?;
             let depth = count(params, "depth", u32::MAX as f64, true)?;
             let max_entries = count(params, "maxEntries", u32::MAX as f64, true)?;
+            let reuse = match params.get("reuse") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(reuse)) => *reuse,
+                _ => return Err("diskUsage reuse must be true or false".into()),
+            };
             return Ok(Self::Usage(wings_disk_usage::Options {
+                reuse,
                 min_bytes: min_bytes.map_or(defaults.min_bytes, |v| v as u64),
                 depth: depth.map_or(defaults.depth, |d| {
                     (d as u32).min(wings_disk_usage::MAX_DEPTH)

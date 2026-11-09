@@ -1311,6 +1311,7 @@ fn plugin_disk_usage(state: State<AppState>, plugin_id: String, request: DiskUsa
         min_bytes: min_bytes.unwrap_or(defaults.min_bytes),
         depth: depth.map_or(defaults.depth, |d| d.min(disk_usage::MAX_DEPTH)),
         max_entries: max_entries.map_or(defaults.max_entries, |n| n.clamp(1, disk_usage::MAX_ENTRIES)),
+        ..defaults
     };
     let start = std::time::Instant::now();
     let running = disk_usage::Running::new(format!("{plugin_id}:{token}"));

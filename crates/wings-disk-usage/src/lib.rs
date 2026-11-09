@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::{collections::HashSet, os::unix::fs::MetadataExt};
 
@@ -25,8 +26,16 @@ pub const MAX_DEPTH: u32 = 64;
 pub const MAX_ENTRIES: usize = 100_000;
 /// The most paths `find` returns.
 pub const MAX_FOUND: usize = 10_000;
-/// Measured on /Applications on an SSD: 4, 8 and 16 threads take about the same, and one takes three times as long.
-const MAX_THREADS: usize = 8;
+/// Measured on a home folder of 4.5 million entries on an 8-core Mac: 8 threads took 48 s and 150 s of CPU, 4 took 62 s and
+/// 106 s, 2 took 103 s and 85 s. Past 4 the threads mostly wait on each other in the file system, and burn CPU doing it.
+const MAX_THREADS: usize = 4;
+/// The most entries the scans kept for `Options::reuse` hold together, about 20 MB.
+const CACHE_ENTRIES: usize = 150_000;
+/// The least size a scan keeps for `Options::reuse`, below what it returns. A home folder of 4.5 million entries has
+/// 130,000 of 256 KiB or more, and 320,000 of 64 KiB or more, which took 60 MB more at the peak of its walk.
+const CACHE_FLOOR: u64 = 256 * 1024;
+/// How much coarser than `min_bytes` a kept scan may be and still answer a scan with `Options::reuse`.
+const REUSE_COARSER: u64 = 4;
 /// Files smaller than this aren't asked whether they share blocks with a clone, see `counted`.
 #[cfg(target_os = "macos")]
 const CLONE_CHECK_MIN: u64 = 64 * 1024;
@@ -39,11 +48,16 @@ pub struct Options {
     pub min_bytes: u64,
     pub depth: u32,
     pub max_entries: usize,
+    /// Answers from an earlier scan of a folder that holds `path` instead of walking it again, when one is kept and is
+    /// at most `REUSE_COARSER` times coarser than `min_bytes`. What is gone from the disk since is left out, and the
+    /// floor is the earlier scan's when that is above `min_bytes`. With `depth` 1, the folders the earlier scan sized
+    /// aren't walked again.
+    pub reuse: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { min_bytes: 1 << 20, depth: MAX_DEPTH, max_entries: 20_000 }
+        Self { min_bytes: 1 << 20, depth: MAX_DEPTH, max_entries: 20_000, reuse: false }
     }
 }
 
@@ -145,6 +159,8 @@ struct Walk<'a> {
     /// APFS clone ids already counted in full, see `cloned`.
     #[cfg(target_os = "macos")]
     clones: Mutex<HashSet<u64>>,
+    /// Folders in the root that a kept scan already sized, by name: they aren't walked again, see `Options::reuse`.
+    known: HashMap<&'a str, &'a Entry>,
     pulse: Pulse,
 }
 
@@ -185,10 +201,10 @@ impl Pulse {
 }
 
 impl<'a> Walk<'a> {
-    fn new(options: &Options, cancel: &'a AtomicBool, root: &Path, meta: &Metadata) -> Self {
+    fn new(floor: u64, depth: u32, cancel: &'a AtomicBool, root: &Path, meta: &Metadata, known: HashMap<&'a str, &'a Entry>) -> Self {
         Self {
-            floor: options.min_bytes,
-            depth: options.depth,
+            floor,
+            depth,
             cancel,
             volume: volume(meta),
             skip: skipped(root),
@@ -196,6 +212,7 @@ impl<'a> Walk<'a> {
             linked: Mutex::new(HashSet::new()),
             #[cfg(target_os = "macos")]
             clones: Mutex::new(HashSet::new()),
+            known,
             pulse: Pulse::new(1, allocated(meta)),
         }
     }
@@ -232,6 +249,13 @@ impl<'a> Walk<'a> {
                 if self.skip.as_deref() == Some(path.as_path()) {
                     continue;
                 }
+                let name = entry.file_name();
+                if let Some(sized) = name.to_str().filter(|_| depth == 0).and_then(|name| self.known.get(name)) {
+                    let kid = trimmed(sized, self.floor, self.depth.saturating_sub(1));
+                    (seen, bytes) = (seen + 1, bytes + kid.size);
+                    self.add(&mut out, keep, kid, || name.to_string_lossy().into_owned());
+                    continue;
+                }
                 let own = allocated(&meta);
                 (seen, bytes) = (seen + 1, bytes + own);
                 subdirs.push((path, own));
@@ -251,18 +275,22 @@ impl<'a> Walk<'a> {
         self.pulse.entries.fetch_add(seen, Ordering::Relaxed);
         self.pulse.bytes.fetch_add(bytes, Ordering::Relaxed);
         let kids: Vec<Entry> = subdirs.par_iter().map(|(path, own)| self.folder(path, depth + 1, *own)).collect();
-        for ((path, _), mut kid) in subdirs.iter().zip(kids) {
-            out.size += kid.size;
-            out.items += kid.items + 1;
-            if keep && (kid.size >= self.floor || kid.restricted) {
-                kid.name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                out.children.push(kid);
-            } else {
-                out.fold(kid.size, kid.items + 1);
-            }
+        for ((path, _), kid) in subdirs.iter().zip(kids) {
+            self.add(&mut out, keep, kid, || path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
         }
         out.children.sort_unstable_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
         out
+    }
+
+    /// Adds `kid`, a folder in `out`: kept, with its name, when `keep` and it is big enough or restricted, else folded.
+    fn add(&self, out: &mut Entry, keep: bool, kid: Entry, name: impl FnOnce() -> String) {
+        out.size += kid.size;
+        out.items += kid.items + 1;
+        if keep && (kid.size >= self.floor || kid.restricted) {
+            out.children.push(Entry { name: name(), ..kid });
+        } else {
+            out.fold(kid.size, kid.items + 1);
+        }
     }
 
     /// What a file adds to the total: a file with several hard links only the first time one of them is seen.
@@ -465,7 +493,21 @@ pub fn scan(path: &str, options: Options, cancel: &AtomicBool, progress: impl Fn
     if cancel.load(Ordering::Relaxed) {
         return Err(STOPPED.into());
     }
-    let walk = Walk::new(&options, cancel, &root, &meta);
+    let held = if options.reuse && meta.is_dir() { held(&root) } else { None };
+    if let Some(held) = held.as_ref().filter(|held| held.floor <= options.min_bytes.saturating_mul(REUSE_COARSER)) {
+        return reused(held, &root, name, &options, cancel, &progress, start);
+    }
+    // A whole folder walked is kept finer than asked, for a later scan of a folder in it. A walk that a kept scan already
+    // holds isn't, so it doesn't push that scan out.
+    let keep = meta.is_dir() && options.depth == MAX_DEPTH && held.is_none();
+    let floor = if keep { options.min_bytes.min(CACHE_FLOOR.max(options.min_bytes / 16)) } else { options.min_bytes };
+    let known = match &held {
+        Some(held) if options.depth == 1 => {
+            held.entry().children.iter().filter(|c| c.kind == Kind::Dir && !c.restricted).map(|c| (c.name.as_str(), c)).collect()
+        }
+        _ => HashMap::new(),
+    };
+    let walk = Walk::new(floor, options.depth, cancel, &root, &meta, known);
     let mut tree = if meta.is_dir() {
         let own = allocated(&meta);
         on_pool(&walk.pulse, &progress, || walk.folder(&root, 0, own))?
@@ -476,7 +518,15 @@ pub fn scan(path: &str, options: Options, cancel: &AtomicBool, progress: impl Fn
         return Err(STOPPED.into());
     }
     tree.name = name;
-    let floor = fit(&mut tree, options.min_bytes, options.max_entries);
+    let mut least = options.min_bytes;
+    if keep {
+        let kept_floor = fit(&mut tree, floor, CACHE_ENTRIES);
+        // Over the budget, the kept floor can rise past `min_bytes`, and what it pruned isn't in the answer either.
+        least = least.max(kept_floor);
+        let answer = trimmed(&tree, least, MAX_DEPTH);
+        remember(root, std::mem::replace(&mut tree, answer), kept_floor);
+    }
+    let floor = fit(&mut tree, least, options.max_entries);
     Ok(Scan {
         root: tree,
         floor,
@@ -636,6 +686,133 @@ fn prune(entry: &mut Entry, floor: u64) {
     });
 }
 
+/// A copy of `entry` with what is under `floor` or deeper than `levels` folded into its folders' `smaller`, as a scan with
+/// that floor and depth would have kept it.
+fn trimmed(entry: &Entry, floor: u64, levels: u32) -> Entry {
+    let mut out =
+        Entry { name: entry.name.clone(), items: entry.items, smaller: entry.smaller, restricted: entry.restricted, ..Entry::new(entry.kind, entry.size) };
+    for child in &entry.children {
+        if levels > 0 && (child.size >= floor || child.restricted) {
+            out.children.push(trimmed(child, floor, levels - 1));
+        } else {
+            out.fold(child.size, child.items + 1);
+        }
+    }
+    out
+}
+
+/// A whole folder's walk, kept for `Options::reuse`.
+struct Kept {
+    root: PathBuf,
+    tree: Arc<Entry>,
+    /// The least size it kept an entry at.
+    floor: u64,
+    /// The entries under its root.
+    entries: usize,
+}
+
+/// The kept walks, oldest first.
+static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
+
+/// Keeps `tree`, the walk of `root` down to `floor`, in place of kept walks of `root` or a folder in it, and of the oldest
+/// others while they are over `CACHE_ENTRIES` together.
+fn remember(root: PathBuf, tree: Entry, floor: u64) {
+    let entries = count(&tree);
+    let mut kept = KEPT.lock().unwrap();
+    kept.retain(|k| !k.root.starts_with(&root));
+    kept.push(Kept { root, tree: Arc::new(tree), floor, entries });
+    let mut total: usize = kept.iter().map(|k| k.entries).sum();
+    while total > CACHE_ENTRIES && kept.len() > 1 {
+        total -= kept.remove(0).entries;
+    }
+}
+
+fn count(entry: &Entry) -> usize {
+    entry.children.iter().map(|child| 1 + count(child)).sum()
+}
+
+/// A folder a kept walk holds: the walk's tree, the names from its root down to the folder, and its floor.
+struct Held {
+    tree: Arc<Entry>,
+    names: Vec<String>,
+    floor: u64,
+}
+
+impl Held {
+    fn entry(&self) -> &Entry {
+        self.names.iter().fold(&*self.tree, |entry, name| entry.children.iter().find(|c| c.name == *name).expect("found by `held`"))
+    }
+}
+
+/// The newest kept walk that holds the folder at `path` with what is in it: not one it folded, or couldn't open.
+fn held(path: &Path) -> Option<Held> {
+    let kept = KEPT.lock().unwrap();
+    kept.iter().rev().find_map(|k| {
+        let names: Vec<String> = path.strip_prefix(&k.root).ok()?.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let mut entry = &*k.tree;
+        for name in &names {
+            entry = entry.children.iter().find(|c| c.name == *name)?;
+        }
+        (entry.kind == Kind::Dir && !entry.restricted).then(|| Held { tree: k.tree.clone(), names, floor: k.floor })
+    })
+}
+
+/// A scan of `root` answered from the kept walk that holds it, without what is gone from the disk since.
+fn reused(
+    held: &Held,
+    root: &Path,
+    name: String,
+    options: &Options,
+    cancel: &AtomicBool,
+    progress: &(impl Fn(&Progress) + Sync),
+    start: Instant,
+) -> Result<Scan, String> {
+    let least = options.min_bytes.max(held.floor);
+    let mut tree = trimmed(held.entry(), least, options.depth);
+    on_pool(&Pulse::new(1, 0), progress, || drop_missing(root, &mut tree))?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(STOPPED.into());
+    }
+    tree.name = name;
+    let floor = fit(&mut tree, least, options.max_entries);
+    Ok(Scan { entries: tree.items + 1, restricted: restricted(&tree), root: tree, floor, ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX) })
+}
+
+/// Takes out of `entry`, the folder at `dir`, the entries no longer on the disk, like what moved to the Trash after the walk
+/// it was kept from, and returns their bytes and items.
+fn drop_missing(dir: &Path, entry: &mut Entry) -> (u64, u64) {
+    let gone: Vec<Option<(u64, u64)>> = entry
+        .children
+        .par_iter_mut()
+        .map(|child| {
+            let path = dir.join(&child.name);
+            fs::symlink_metadata(&path).ok()?;
+            Some(if child.kind == Kind::Dir { drop_missing(&path, child) } else { (0, 0) })
+        })
+        .collect();
+    let (mut size, mut items) = (0, 0);
+    let mut gone = gone.into_iter();
+    entry.children.retain(|child| match gone.next().expect("one per child") {
+        // Still there: what went from inside it.
+        Some((s, i)) => {
+            (size, items) = (size + s, items + i);
+            true
+        }
+        None => {
+            (size, items) = (size + child.size, items + child.items + 1);
+            false
+        }
+    });
+    entry.size -= size;
+    entry.items -= items;
+    entry.children.sort_unstable_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    (size, items)
+}
+
+fn restricted(entry: &Entry) -> u64 {
+    entry.children.iter().map(|child| u64::from(child.restricted) + restricted(child)).sum()
+}
+
 /// The scans running, by `<plugin id>:<token>`, so a plugin can stop one it started.
 static RUNNING: Mutex<Vec<(String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
 
@@ -750,7 +927,11 @@ mod tests {
         }
 
         fn scan(&self, options: Options) -> Scan {
-            scan(self.0.to_str().unwrap(), options, &AtomicBool::new(false), |_| {}).unwrap()
+            self.scan_at(&self.0, options)
+        }
+
+        fn scan_at(&self, path: &Path, options: Options) -> Scan {
+            scan(path.to_str().unwrap(), options, &AtomicBool::new(false), |_| {}).unwrap()
         }
     }
 
@@ -1007,6 +1188,87 @@ mod tests {
         for root in ["/System/Volumes", "/System/Volumes/Data", "/System/Library", "/Users", "/Systems"] {
             assert_eq!(skipped(Path::new(root)), None, "{root}");
         }
+    }
+
+    fn child<'e>(entry: &'e Entry, name: &str) -> Option<&'e Entry> {
+        entry.children.iter().find(|c| c.name == name)
+    }
+
+    fn reuse(path: &Path, options: Options) -> Scan {
+        scan(path.to_str().unwrap(), Options { reuse: true, ..options }, &AtomicBool::new(false), |_| {}).unwrap()
+    }
+
+    #[test]
+    fn a_scan_with_reuse_answers_from_the_walk_that_holds_the_folder() {
+        let tree = Tree::new("reuse");
+        tree.file("sub/big.bin", 300);
+        tree.file("sub/deep/more.bin", 200);
+        let first = tree.scan(keep_all());
+        let sub = tree.0.join("sub");
+        tree.file("sub/later.bin", 100);
+
+        let reused = reuse(&sub, keep_all());
+        let before = child(&first.root, "sub").unwrap();
+        assert_eq!((reused.root.size, reused.root.items), (before.size, before.items), "as the first walk found it");
+        assert!(child(&reused.root, "later.bin").is_none());
+        assert_eq!(reused.root.name, sub.to_str().unwrap());
+
+        let walked = tree.scan_at(&sub, keep_all());
+        assert!(child(&walked.root, "later.bin").is_some(), "without reuse it walks");
+    }
+
+    #[test]
+    fn a_scan_with_reuse_leaves_out_what_is_gone_since() {
+        let tree = Tree::new("reuse-gone");
+        let big = tree.file("sub/big.bin", 300);
+        tree.file("sub/deep/more.bin", 200);
+        tree.file("sub/keep.bin", 100);
+        let first = tree.scan(keep_all());
+        let before = child(&first.root, "sub").unwrap();
+        let deep = child(before, "deep").unwrap();
+        let (big_size, deep_size, deep_items) = (own(&big), deep.size, deep.items);
+        fs::remove_file(&big).unwrap();
+        fs::remove_dir_all(tree.0.join("sub/deep")).unwrap();
+
+        let reused = reuse(&tree.0.join("sub"), keep_all());
+        let names: Vec<_> = reused.root.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["keep.bin"]);
+        assert_eq!(reused.root.size, before.size - big_size - deep_size);
+        assert_eq!(reused.root.items, before.items - 1 - (deep_items + 1));
+    }
+
+    #[test]
+    fn a_scan_with_reuse_walks_when_the_kept_walk_is_too_coarse() {
+        let tree = Tree::new("reuse-coarse");
+        tree.file("sub/big.bin", 300);
+        // Kept down to 64 KiB, coarser than 4 times 4 KiB.
+        let first = tree.scan(Options { min_bytes: 100 * 1024, ..Options::default() });
+        assert_eq!(first.floor, 100 * 1024);
+        tree.file("sub/later.bin", 8);
+        let fine = reuse(&tree.0.join("sub"), Options { min_bytes: 4096, ..Options::default() });
+        assert!(child(&fine.root, "later.bin").is_some());
+        assert_eq!(fine.floor, 4096);
+    }
+
+    #[test]
+    fn listing_a_folder_with_reuse_doesnt_walk_the_folders_a_kept_walk_sized() {
+        let tree = Tree::new("reuse-list");
+        tree.file("sub/big.bin", 300);
+        tree.file("other/big.bin", 200);
+        let first = tree.scan(Options { min_bytes: 100 * 1024, ..Options::default() });
+        let sized = child(&first.root, "sub").unwrap().size;
+        tree.file("sub/later.bin", 300);
+        tree.file("small/new.bin", 8);
+        tree.file("top.txt", 1);
+
+        let listed = reuse(&tree.0, Options { min_bytes: 0, depth: 1, ..Options::default() });
+        let sub = child(&listed.root, "sub").unwrap();
+        assert_eq!(sub.size, sized, "sized by the kept walk");
+        assert!(sub.children.is_empty() && sub.smaller.unwrap().items == 1);
+        assert!(child(&listed.root, "top.txt").is_some() && child(&listed.root, "small").is_some(), "what is new in the folder shows");
+
+        let walked = tree.scan_at(&tree.0, Options { min_bytes: 0, depth: 1, ..Options::default() });
+        assert!(child(&walked.root, "sub").unwrap().size > sized);
     }
 
     /// `cp -c` makes an APFS clone: both files report their full blocks, but they share them.

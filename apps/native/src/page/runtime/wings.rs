@@ -301,8 +301,8 @@ const SETUP: &str = r#"
             },
             onGitChange: (listener) => subscribe(listeners.git, listener),
             disks: () => call('disks', {}),
-            diskUsage: (path, { minBytes, depth, maxEntries, onProgress, signal } = {}) =>
-                diskCall('diskUsage', { path, minBytes, depth, maxEntries }, { onProgress, signal }),
+            diskUsage: (path, { minBytes, depth, maxEntries, reuse, onProgress, signal } = {}) =>
+                diskCall('diskUsage', { path, minBytes, depth, maxEntries, reuse }, { onProgress, signal }),
             diskFind: (path, { names, skip, onProgress, signal } = {}) =>
                 diskCall('diskFind', { path, names, skip }, { onProgress, signal }),
             project: () => call('project', {}),
