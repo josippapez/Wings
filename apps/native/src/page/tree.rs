@@ -531,6 +531,8 @@ pub struct Input {
     pub on_blur: Option<String>,
     pub auto_focus: bool,
     pub select_on_focus: bool,
+    /// A combobox's field shows its options when it takes the keyboard, unless the page sends `openOnFocus: false`.
+    pub open_on_focus: bool,
     /// `type="password"`: the text shows as dots and can't be copied. Any other type is plain text here, but time.
     pub password: bool,
     /// `type="time"`: digits alone make HH:MM, and the page hears "" until it is a whole time, as from a browser.
@@ -1123,6 +1125,7 @@ impl Walk {
                 on_blur: handler("onBlur"),
                 auto_focus: on("autoFocus"),
                 select_on_focus: on("selectOnFocus"),
+                open_on_focus: props.get("openOnFocus") != Some(&Value::Bool(false)),
                 password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
                 time: kind == "TextInput" && str_prop(&props, "type") == Some("time"),
             }),

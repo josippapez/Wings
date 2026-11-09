@@ -53,6 +53,7 @@ struct InputState {
     initialized: bool,
     auto_focus: bool,
     select_on_focus: bool,
+    open_on_focus: bool,
     blur_subscription: Option<gpui::Subscription>,
     /// The text the page last gave it. The field takes the page's text when this changes, which is when the page set it
     /// (a form filled in once it loaded), and not on every render, which would undo a key the page hasn't heard yet.
@@ -1224,10 +1225,11 @@ impl Render for PageView {
             .borrow()
             .iter()
             .find(|(_, state)| state.field.read(cx).focus_handle(cx).is_focused(window))
-            .map(|(id, _)| *id);
-        if focused != self.focused {
-            self.focused = focused;
-            self.suggestions_closed = false;
+            .map(|(id, state)| (*id, state.open_on_focus));
+        if focused.map(|(id, _)| id) != self.focused {
+            self.focused = focused.map(|(id, _)| id);
+            // One the page asked not to open on focus stays shut, as the desktop's: a press in it or typing opens it.
+            self.suggestions_closed = focused.is_some_and(|(_, open)| !open);
             self.highlight = None;
         }
         self.listing.set(false);

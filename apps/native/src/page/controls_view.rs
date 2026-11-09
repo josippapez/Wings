@@ -419,6 +419,7 @@ impl PageView {
                 initialized: false,
                 auto_focus: input.auto_focus,
                 select_on_focus: input.select_on_focus,
+                open_on_focus: input.open_on_focus,
                 blur_subscription: None,
                 given: String::new(),
                 sent: Vec::new(),
@@ -427,6 +428,7 @@ impl PageView {
         state.handler = input.on_change.clone();
         state.key_handler = input.on_key_down.clone();
         state.blur_handler = input.on_blur.clone();
+        state.open_on_focus = input.open_on_focus;
         let (disabled, max_chars) = (input.disabled, input.max_length);
         let echo = state.sent.iter().position(|sent| *sent == input.value);
         if let Some(echo) = echo {
@@ -699,8 +701,15 @@ impl PageView {
                 cx.notify();
             }))
             // A press in the field brings the options back, as focusing it does: one outside put them away, and left
-            // the field the keyboard.
-            .capture_any_mouse_down(cx.listener(|view, _, _, cx| {
+            // the field the keyboard. The field takes the keyboard from this press, so it is counted as focused now,
+            // and the next render doesn't shut the options again for a field that doesn't open on focus.
+            .capture_any_mouse_down(cx.listener(move |view, _, _, cx| {
+                if let Some((input, false)) = field
+                    && view.focused != Some(input)
+                {
+                    view.focused = Some(input);
+                    view.highlight = None;
+                }
                 if view.suggestions_closed {
                     view.suggestions_closed = false;
                     cx.notify();

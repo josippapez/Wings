@@ -1132,6 +1132,55 @@ fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_
     );
 }
 
+/// Cyclops' edit form: the task field takes the keyboard when the form opens, holding a task that more than one recent
+/// task matches, and the project select sits right under it. The page asks for the tasks not to open on focus
+/// (`openOnFocus: false`, sent on the field by wings-plugin-ui/native's `Combobox`), as the desktop's form does.
+const EDIT_FORM: &str = r#"
+const tasks = ['Standup', 'FE Standup'];
+let text = 'Standup', project = 'a';
+function render(){
+  const found = tasks.filter(t => t.toLowerCase().includes(text.toLowerCase()));
+  const under = found.length === 1 && found[0] === text ? [] : found.length
+    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(t=>{const i=tasks.indexOf(t);return {id:100+2*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+2*i)+':onClick'},children:[{id:101+2*i,type:'#text',text:t}]};})}]
+    : [];
+  wings.render(JSON.stringify({id:0,type:'#root',children:[
+    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,maxLength:2000,autoFocus:true,openOnFocus:false,onChange:'3:onChange'}},...under]},
+    {id:7,type:'Select',props:{label:'Project',value:project,onChange:'7:onChange',options:[{value:'a',label:'Healthcare'},{value:'b',label:'57hours'}]}},
+    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Task='+text+', project='+project+'.'}]}]}));
+}
+globalThis.__wingsEvent=(handler,json)=>{
+  if(handler==='3:onChange') text=JSON.parse(json).value;
+  else if(handler==='7:onChange') project=JSON.parse(json).value;
+  else text=tasks[(parseInt(handler)-100)/2];
+  render(); return true;
+};
+render();
+"#;
+
+/// The project select, 10pt under the task field.
+const PROJECT: (f32, f32) = (100.0, 72.0);
+/// Its second option, in the menu under it (from 97pt, 32pt a row).
+const SECOND_PROJECT: (f32, f32) = (100.0, 145.0);
+
+#[test]
+fn a_combobox_that_does_not_open_on_focus_leaves_the_select_under_it_to_be_picked() {
+    let (app, mut window) = open(EDIT_FORM);
+    settle(&app, &mut window, shows("Task=Standup, project=a."));
+    // The field has the keyboard, and its two tasks aren't listed over the select: a press there opens the select. The
+    // list was open, and the press picked "FE Standup" as the task, so the project couldn't be changed.
+    click(&mut window, PROJECT);
+    settle(&app, &mut window, PageView::menu_open);
+    click(&mut window, SECOND_PROJECT);
+    settle(&app, &mut window, shows("Task=Standup, project=b."));
+
+    // A press in the field lists its tasks, as on the desktop, and a click picks one: the second, a row under the first.
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.draw();
+    click(&mut window, (FIRST_TASK.0, FIRST_TASK.1 + 32.0));
+    settle(&app, &mut window, shows("Task=FE Standup, project=b."));
+}
+
 /// An issue's title row: a large title that doesn't grow, and its key after it on its baseline.
 const TITLE_ROW: &str = r#"
 let heard = 0;

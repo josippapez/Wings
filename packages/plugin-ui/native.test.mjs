@@ -192,6 +192,13 @@ test("a combobox hands autoFocus to its field", () => {
   assert.equal(find(last(), "TextInput").props.autoFocus, true);
 });
 
+test("a combobox that doesn't open on focus tells the app so on its field, and one that does sends nothing", () => {
+  mount(h(Stack, null, h(Combobox, { label: "Task", value: "", options: [], onPick: () => {}, openOnFocus: false }), h(Combobox, { label: "Tag", value: "", options: [], onPick: () => {} })));
+  const [task, tag] = all(last(), "TextInput");
+  assert.equal(task.props.openOnFocus, false);
+  assert.equal("openOnFocus" in tag.props, false);
+});
+
 test("a password or time input says so, and other input types are plain text", () => {
   mount(h(Stack, null, h(TextInput, { label: "API token", type: "password", value: "secret" }), h(TextInput, { label: "Start", type: "time", value: "09:00" }), h(TextInput, { label: "Mail", type: "email" })));
   const [token, start, mail] = all(last(), "TextInput");

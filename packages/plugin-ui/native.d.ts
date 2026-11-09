@@ -160,6 +160,8 @@ export function Combobox(props: {
   disabled?: boolean;
   /** Takes the keyboard when it first shows, and the page scrolls it into view. */
   autoFocus?: boolean;
+  /** Open the options when the field gets focus, by default; false opens them on a press in the field or typing only. */
+  openOnFocus?: boolean;
   filter?: (option: ComboboxOption, query: string) => boolean;
   empty?: ReactNode;
 }): ReactElement;
