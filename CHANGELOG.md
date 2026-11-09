@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.14 · 2026-11-09
+
+- **Disk usage reuses what it already scanned.** Going into a folder, or opening its smaller items, used to scan that folder again from scratch: 20 seconds on several cores for ~/Library. It now answers from the scan you already ran, in under a second, and leaves out what you moved to the Trash since. Needs Disk usage 0.2.2.
+- **Scans use about half the CPU.** A scan runs on 4 threads instead of 8, which takes a home folder from about 300% CPU to 170%, for a few seconds more.
+- **Wings tools don't wait on each other.** A slow Wings tool call, like a disk scan, held up every other Wings tool in the same Claude session, and could make the session lose its Wings tools. Each call now runs on its own, and each one finds its pane in 0.1 ms instead of 7 ms.
+
 ## 0.2.13 · 2026-11-09
 
 - **Plugins use less memory.** A plugin's pages now share one engine, and the plugins that ship with Wings load React once for all their pages, so the installed plugins take about 35 MB instead of 53 MB.
