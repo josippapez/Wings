@@ -364,10 +364,12 @@ fn kind_of(meta: &Metadata) -> Kind {
 }
 
 /// On macOS `/System/Volumes/Data` is on the same volume as `/`, which already reaches everything in it through
-/// firmlinks, so a scan of `/` that walked it would count every file twice.
+/// firmlinks, so a scan of `/` that walked it would count every file twice. A scan of `/System` would walk the whole
+/// disk through it, so it is skipped from every folder above it too. A scan of `/System/Volumes` itself walks it.
 #[cfg(target_os = "macos")]
 fn skipped(root: &Path) -> Option<PathBuf> {
-    (root == Path::new("/")).then(|| PathBuf::from("/System/Volumes"))
+    let volumes = Path::new("/System/Volumes");
+    (volumes.starts_with(root) && root != volumes).then(|| volumes.to_owned())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -991,6 +993,19 @@ mod tests {
         assert!(is_internal(Path::new("/System/Volumes/VM")));
         for mount in ["/", "/Volumes/Backup", "/System", "/System/Library", "/SystemVolumes/Data", "/Users/me/System/Volumes/Data"] {
             assert!(!is_internal(Path::new(mount)), "{mount}");
+        }
+    }
+
+    /// A walk of `/System` would reach the whole disk through `/System/Volumes/Data`, as a walk of `/` would.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_walk_of_system_or_above_it_skips_the_volumes_inside_it() {
+        let volumes = Some(PathBuf::from("/System/Volumes"));
+        assert_eq!(skipped(Path::new("/")), volumes);
+        assert_eq!(skipped(Path::new("/System")), volumes);
+        assert_eq!(skipped(Path::new("/System/")), volumes);
+        for root in ["/System/Volumes", "/System/Volumes/Data", "/System/Library", "/Users", "/Systems"] {
+            assert_eq!(skipped(Path::new(root)), None, "{root}");
         }
     }
 
