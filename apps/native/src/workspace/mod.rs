@@ -277,7 +277,7 @@ pub struct Workspace {
     worktree_setup: Option<worktree_setup::WorktreeSetupDialog>,
     /// A check for drives mounting runs while a pane waits for one.
     watching_mounts: bool,
-    /// Whether the terminals have Full Disk Access, and the dialog that asks for it.
+    /// Whether the terminals can read other apps' data, and the dialog that asks for it.
     disk_access: disk_access::DiskAccess,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
@@ -606,7 +606,7 @@ impl Workspace {
             diff_dock_files: settings.diff_dock_files != Some(false),
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
             terminal_server: settings.terminal_server,
-            full_disk_access_asked: settings.full_disk_access_asked == Some(true),
+            app_data_asked: settings.app_data_asked == Some(true),
         };
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);

@@ -56,11 +56,17 @@ const APP: Identity = if crate::data_dir::REPLACEMENT {
     }
 };
 const ROOT: &str = APP.root;
+/// In the bundle. The terminal server is the helper app's (`terminal_server::HELPER`); the copy in `Contents/MacOS` is
+/// there only for the updaters of apps before it, which require it.
 const EXECUTABLES: [&str; 4] = [
-    "wings-native",
-    "wings-plugin-worker",
-    "wings",
-    "wings-terminal-server",
+    "Contents/MacOS/wings-native",
+    "Contents/MacOS/wings-plugin-worker",
+    "Contents/MacOS/wings",
+    if crate::data_dir::REPLACEMENT {
+        "Contents/Library/Wings Terminals.app/Contents/MacOS/wings-terminal-server"
+    } else {
+        "Contents/Library/Wings-native Terminals.app/Contents/MacOS/wings-terminal-server"
+    },
 ];
 const REPO: &str = "https://github.com/josippapez/Wings/releases";
 /// The same releases through GitHub's API, for when github.com's download links fail.
@@ -488,7 +494,7 @@ fn validate_bundle(bundle: &Path, version: &str) -> Result<()> {
         }
     }
     for name in EXECUTABLES {
-        let meta = fs::symlink_metadata(bundle.join("Contents/MacOS").join(name)).map_err(err)?;
+        let meta = fs::symlink_metadata(bundle.join(name)).map_err(err)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -509,7 +515,7 @@ fn codesign(bundle: &Path) -> Result<()> {
             "x86_64"
         };
         for name in EXECUTABLES {
-            verify_binary_architecture(&bundle.join("Contents/MacOS").join(name), arch)?;
+            verify_binary_architecture(&bundle.join(name), arch)?;
         }
         let result = Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict"])

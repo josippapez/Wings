@@ -260,9 +260,9 @@ pub struct Settings {
     /// (`terminal_server::enabled`). The desktop has no such setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_server: Option<bool>,
-    /// Wings asked once to give its terminals Full Disk Access, which macOS never asks for itself.
+    /// Wings asked once to turn on other apps' data for its terminals, which macOS never asks for itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub full_disk_access_asked: Option<bool>,
+    pub app_data_asked: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

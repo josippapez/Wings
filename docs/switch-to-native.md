@@ -15,7 +15,7 @@ The native app (`apps/native`) replaces the Tauri desktop app (`apps/desktop`). 
 | Update feed | `native-latest-darwin-<arch>.json`, release `native-v<version>` | `wings-latest-darwin-<arch>.json`, release `v<version>`, plus the desktop's `latest.json` |
 | Signed with | "Wings Local Signing" | "Wings Local Signing" |
 
-Both bundles hold `wings-native` (the app, `CFBundleExecutable`), `wings` (the command Claude Code runs), `wings-plugin-worker` and `wings-terminal-server`. The folder and the identity are decided in one place, `apps/native/src/data_dir.rs`, and the updater's identity in `apps/native/src/updater.rs` (`APP`).
+Both bundles hold `wings-native` (the app, `CFBundleExecutable`), `wings` (the command Claude Code runs), `wings-plugin-worker`, and `wings-terminal-server` in the helper app `Contents/Library/Wings Terminals.app` (`dev.wings.terminals`; the side-by-side app's is `Wings-native Terminals.app`, `dev.wings.native.terminals`). The folder and the identity are decided in one place, `apps/native/src/data_dir.rs`, and the updater's identity in `apps/native/src/updater.rs` (`APP`).
 
 ## What happens to your data
 
@@ -87,7 +87,7 @@ Run these from Terminal.app, not from a pane in Wings: quitting Wings ends the s
 - [ ] Plugins are on as they were, and none asks for approval again. A plugin with a saved secret (a token) still works without a keychain prompt.
 - [ ] `wings plugin list` in a pane answers (the socket is served). In Claude Code, `/mcp` shows `wings` connected, and a Wings tool such as `list_sessions` works. If the socket isn't served (the desktop had not let go of it yet after an updater restart), quit and reopen Wings.
 - [ ] Settings, Agents shows Claude Code connected in each account, without changing `~/.claude.json`: `jq .mcpServers.wings ~/.claude.json` still runs `/Applications/Wings.app/Contents/MacOS/wings`.
-- [ ] No new macOS privacy prompt for folders you already allowed (Desktop, Documents, Downloads, Full Disk Access, Automation). Approvals are keyed by bundle id and certificate, which match. Panes run in the terminal server by default (Settings > General > "Keep terminals running when Wings quits"; `WINGS_TERMINAL_SERVER=0` or `=1` overrides it), under `wings-terminal-server`'s own signature, so they ask once, as they did in the side-by-side app.
+- [ ] No new macOS privacy prompt for folders you already allowed (Desktop, Documents, Downloads, Full Disk Access, Automation). Approvals are keyed by bundle id and certificate, which match. Panes run in the terminal server by default (Settings > General > "Keep terminals running when Wings quits"; `WINGS_TERMINAL_SERVER=0` or `=1` overrides it), under the helper app's own bundle id and signature, so they ask once, as they did in the side-by-side app.
 - [ ] The global shortcut and the quick terminal key work.
 - [ ] Check for Updates answers. Until a release has `wings-latest-darwin-<arch>.json` it reports an error, which is expected.
 - [ ] `launchctl print gui/$(id -u)/dev.wings.ptyd` still finds nothing.

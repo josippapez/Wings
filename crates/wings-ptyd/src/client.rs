@@ -97,6 +97,19 @@ impl Control {
         &self.welcome
     }
 
+    /// The server's process id, from the socket, so an app can tell which file the server runs from.
+    #[cfg(target_os = "macos")]
+    pub fn server_pid(&self) -> io::Result<u32> {
+        use std::os::fd::AsRawFd;
+        let mut pid: libc::pid_t = 0;
+        let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        let got = unsafe { libc::getsockopt(self.stream.as_raw_fd(), libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&raw mut pid).cast(), &mut len) };
+        if got != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(pid as u32)
+    }
+
     fn call(&mut self, req: Request) -> io::Result<(Value, Vec<u8>)> {
         let id = self.next_id;
         self.next_id += 1;

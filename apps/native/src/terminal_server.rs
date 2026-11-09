@@ -3,21 +3,23 @@
 //! each saved pane attaches to its program again by its history id. Settings turns it off and on for new panes; it's on
 //! unless turned off, except in a debug build (`enabled`).
 //!
-//! The server never runs from the app bundle: an update deletes the old bundle, and macOS can't attribute a program
-//! whose file is gone, so its panes would lose the privacy grants (Screen Recording, hard links into Desktop). The app
-//! copies the server out to `terminal-server/bin/`, always under the same name, since macOS keys a grant to a program
-//! without a bundle by its path: Full Disk Access, which macOS never asks for (`full_disk_access`), lasts across
-//! updates. A release app on macOS starts that copy as a
+//! A release app carries the server in a helper app of its own, `Contents/Library/Wings Terminals.app`
+//! (`scripts/build-mac-app.sh`), which macOS names by its bundle id: in System Settings, Files & Folders lists it with a
+//! switch for each app whose data its terminals asked for, as it never does for a bare program (`app_data_access`). The
+//! server never runs from the app bundle: an update deletes the old bundle, and macOS can't attribute a program whose
+//! file is gone, so its panes would lose the privacy grants (Screen Recording, hard links into Desktop). The app copies
+//! the helper out to `terminal-server/`, always under the same name (`install`). A release app on macOS starts that
+//! copy as a
 //! one-shot launchd job that forks the server off and ends (`wings_ptyd::launchd`), so the server is in no coalition of
 //! the app's and lives on when the app quits; no job stays loaded. The server owns its privacy responsibility, and the
 //! shells it runs inherit it (`wings_ptyd::responsibility`). When launchd fails, the app starts the server directly in
 //! a session of its own, which may end with the app, and says so in the server's log. A debug build runs it as its own
 //! child instead, which ends with the app and keeps the app's privacy responsibility.
 //!
-//! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket and a binary copy per version.
-//! One older than the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have
-//! ended, while new panes go to the app's version. Nothing kills a pane on an upgrade. The copy of an older version is
-//! deleted once no server of that version answers.
+//! A server is versioned apart from the app (`wings_ptyd::SERVER_VERSION`), with a socket per version. One older than
+//! the app's is told to drain: it keeps its panes, which the app still attaches, and exits once they have ended, while
+//! new panes go to the app's version. Nothing kills a pane on an upgrade. A copy the app replaced is put aside, and
+//! deleted once no server runs from it (`remove_old_copies`).
 //!
 //! When no server answers, or the server is turned off, the app runs new panes in its own process, and saves them under
 //! the same history ids. Panes a server still runs are attached either way, and keep running until they're closed.
@@ -45,8 +47,21 @@ use wings_ptyd::{SERVER_VERSION, client::Control, proto::PaneInfo};
 /// debugging.
 pub const ENV: &str = "WINGS_TERMINAL_SERVER";
 
-/// The server binary's name, beside the app's own in its bundle and in the build folder.
+/// The server binary's name: the helper app's executable, and beside the app's own in the build folder.
 pub const BINARY: &str = "wings-terminal-server";
+
+/// The helper app's name, `<HELPER>.app` in the app's `Contents/Library`, as System Settings shows it. The side-by-side
+/// app's has its own, as it has its own bundle id. `scripts/build-mac-app.sh` names it the same.
+pub const HELPER: &str = if crate::data_dir::REPLACEMENT {
+    "Wings Terminals"
+} else {
+    "Wings-native Terminals"
+};
+
+/// The server's executable in the helper app `bundle`.
+pub fn executable(bundle: &Path) -> PathBuf {
+    bundle.join("Contents/MacOS").join(BINARY)
+}
 
 /// The `space_id` of the sidebar's terminals and the quick terminal. Like the desktop's they're in no tab, so nothing
 /// saves them: they end when the app quits, and one an earlier app left running (it crashed) ends when the next starts.
@@ -109,8 +124,8 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 /// How a server starts when none answers.
 #[derive(Clone)]
 pub enum Start {
-    /// A release app: copy `bundled` out of the bundle and start the copy with a one-shot launchd job, or directly
-    /// in a session of its own when launchd fails.
+    /// A release app: copy the helper app `bundled` out of the bundle and start the copy with a one-shot launchd job,
+    /// or directly in a session of its own when launchd fails.
     Launchd { bundled: PathBuf },
     /// A plain child of this process, which ends with it: debug builds and tests.
     Child(PathBuf),
@@ -120,16 +135,23 @@ pub enum Start {
 }
 
 impl Start {
-    /// What this app does: launchd for a release build, else a child; from the server binary beside the app's.
+    /// What this app does: a release build starts the helper app in its bundle with launchd, a debug build the server
+    /// binary beside its own as a child. `None` without one, as a release build run outside its bundle.
     pub fn for_this_app() -> Option<Start> {
-        let bundled = std::env::current_exe().ok()?.with_file_name(BINARY);
-        if !bundled.is_file() {
-            return None;
-        }
+        let exe = std::env::current_exe().ok()?;
         if cfg!(debug_assertions) {
-            return Some(Start::Child(bundled));
+            let bin = exe.with_file_name(BINARY);
+            return bin.is_file().then_some(Start::Child(bin));
         }
-        Some(Start::Launchd { bundled })
+        // `Contents/MacOS/wings-native` to `Contents/Library/<HELPER>.app`.
+        let bundled = exe
+            .parent()?
+            .parent()?
+            .join("Library")
+            .join(format!("{HELPER}.app"));
+        executable(&bundled)
+            .is_file()
+            .then_some(Start::Launchd { bundled })
     }
 
     fn run(&self, dir: &Path, version: u32) -> io::Result<()> {
@@ -228,65 +250,109 @@ fn start_in_own_session(mut cmd: Command, log: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// The version a socket or an earlier app's binary copy in the server's folder is named for: `v4.sock`,
-/// `wings-terminal-server-v4`.
-fn version_of(name: &str, prefix: &str, suffix: &str) -> Option<u32> {
-    name.strip_prefix(prefix)?
-        .strip_suffix(suffix)?
-        .parse()
-        .ok()
+/// The file the server answering `control` runs from. `None` when it can't be told.
+#[cfg(target_os = "macos")]
+fn running_from(control: &Control) -> Option<PathBuf> {
+    let pid = control.server_pid().ok()?;
+    let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let count =
+        unsafe { libc::proc_pidpath(pid as i32, path.as_mut_ptr().cast(), path.len() as u32) };
+    use std::os::unix::ffi::OsStrExt;
+    (count > 0).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(&path[..count as usize])))
 }
 
-/// Deletes the copies earlier apps made under their version, `wings-terminal-server-v4`, of versions older than `ours`
-/// that no server in `live` runs from, so each is kept only while its server still has panes.
-fn remove_old_copies(dir: &Path, ours: u32, live: &[u32]) {
-    let prefix = format!("{BINARY}-v");
-    for entry in fs::read_dir(dir.join("bin"))
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let name = entry.file_name();
-        let Some(version) = version_of(&name.to_string_lossy(), &prefix, "") else {
-            continue;
-        };
-        if version < ours
-            && !live.contains(&version)
-            && let Err(error) = fs::remove_file(entry.path())
-        {
-            eprintln!(
-                "Couldn't delete an older terminal server's copy {}: {error}",
-                entry.path().display()
-            );
+#[cfg(not(target_os = "macos"))]
+fn running_from(_: &Control) -> Option<PathBuf> {
+    None
+}
+
+/// Deletes the copies of the server no server in `running` runs from: the bundles `install` put aside in `replaced/`,
+/// and the bare binaries apps before the helper app copied to `bin/`. Each is kept while a server still runs from it,
+/// as a drained one does until its panes end. `None`, when a running server's file couldn't be told, keeps them all.
+fn remove_old_copies(dir: &Path, running: Option<&[PathBuf]>) {
+    let Some(running) = running else {
+        return;
+    };
+    for folder in ["bin", "replaced"].map(|folder| dir.join(folder)) {
+        for entry in fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let path = path.canonicalize().unwrap_or(path);
+            if running.iter().any(|exe| exe.starts_with(&path)) {
+                continue;
+            }
+            let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                eprintln!(
+                    "Couldn't delete an older terminal server's copy {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        // Gone once empty.
+        let _ = fs::remove_dir(&folder);
+    }
+}
+
+/// One install at a time: the app checks access and starts a server on other threads, which may install at once.
+static INSTALLING: Mutex<()> = Mutex::new(());
+
+/// Copies the helper app `bundled` to `dir`, under its own name, the same path every time, when the copy there isn't
+/// already this one, and returns the server's executable in it. A server still running from the copy it replaces keeps
+/// its files: the copy is moved aside to `replaced/`, and deleted once no server runs from it (`remove_old_copies`).
+pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
+    let _installing = INSTALLING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    private_dir(dir)?;
+    let name = bundled
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the helper app has no name"))?;
+    let copy = dir.join(name);
+    // The executable carries the signature, which covers the rest of the bundle; `Info.plist` names it to macOS.
+    let same = |file: &Path| fs::read(bundled.join(file)).ok() == fs::read(copy.join(file)).ok();
+    if same(&Path::new("Contents/MacOS").join(BINARY)) && same(Path::new("Contents/Info.plist")) {
+        return Ok(executable(&copy));
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".install-")
+        .tempdir_in(dir)?;
+    let staged = staging.path().join(name);
+    copy_dir(bundled, &staged)?;
+    if copy.exists() {
+        let replaced = dir.join("replaced");
+        fs::create_dir_all(&replaced)?;
+        let aside = tempfile::Builder::new().tempdir_in(&replaced)?.keep();
+        fs::rename(&copy, aside.join(name))?;
+    }
+    fs::rename(&staged, &copy)?;
+    Ok(executable(&copy))
+}
+
+/// Copies the folder `from` to `to`, which mustn't exist yet.
+fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
         }
     }
+    Ok(())
 }
 
-/// Copies the bundle's server to `dir/bin/wings-terminal-server`, the same path every time, when the copy there isn't
-/// already this one. A server still running from the copy it replaces keeps that file until it exits, as the rename
-/// leaves it in place.
-pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
-    let bin = dir.join("bin");
-    private_dir(&bin)?;
-    let program = bin.join(BINARY);
-    let bytes = fs::read(bundled)?;
-    if fs::read(&program).is_ok_and(|copied| copied == bytes) {
-        return Ok(program);
-    }
-    // A file of its own: the app checks access and starts a server on other threads, which may install at once.
-    let mut partial = tempfile::NamedTempFile::new_in(&bin)?;
-    partial.write_all(&bytes)?;
-    fs::set_permissions(partial.path(), fs::Permissions::from_mode(0o700))?;
-    partial.persist(&program).map_err(|error| error.error)?;
-    Ok(program)
-}
-
-/// Whether programs in the server's panes can read what macOS keeps for Full Disk Access, such as other apps' data:
-/// the server's copy checks under its own privacy responsibility, which its panes have (`check-access` in its `main`).
-/// `None` when this app's server keeps the app's responsibility, or the check couldn't tell. It starts a process, so
-/// call it off the main thread.
+/// Whether programs in the server's panes can read other apps' data, which macOS refuses unless that app's data is
+/// turned on for the helper app in Files & Folders: the server's copy checks Chrome's under its own privacy
+/// responsibility, which its panes have (`check-access` in its `main`). `None` when this app's server keeps the app's
+/// responsibility, or the check couldn't tell, as without Chrome. It starts a process, so call it off the main thread.
 #[cfg(target_os = "macos")]
-pub fn full_disk_access(start: &Start, dir: &Path) -> Option<bool> {
+pub fn app_data_access(start: &Start, dir: &Path) -> Option<bool> {
     let (Start::Launchd { bundled } | Start::Direct { bundled }) = start else {
         return None;
     };
@@ -342,7 +408,8 @@ impl Servers {
         let ours = version;
         let mut found = Vec::new();
         let mut current: Option<(u32, PathBuf)> = None;
-        let mut live = Vec::new();
+        // The file each answering server runs from, `None` once one can't be told.
+        let mut running = Some(Vec::new());
         if let Err(error) = private_dir(dir) {
             eprintln!(
                 "Couldn't make the terminal server's folder {}: {error}",
@@ -369,7 +436,10 @@ impl Servers {
                 continue;
             };
             let version = control.welcome().server_version;
-            live.extend(version_of(&name, "v", ".sock"));
+            match (running_from(&control), running.as_mut()) {
+                (Some(exe), Some(running)) => running.push(exe),
+                _ => running = None,
+            }
             if version < ours {
                 if let Err(error) = control.drain() {
                     eprintln!(
@@ -398,7 +468,7 @@ impl Servers {
                 ),
             }
         }
-        remove_old_copies(dir, ours, &live);
+        remove_old_copies(dir, running.as_deref());
         let servers = Servers {
             current: Mutex::new(current.map(|(_, path)| path)),
             on: AtomicBool::new(on),
@@ -453,19 +523,18 @@ impl Servers {
         }
     }
 
-    /// The copy of the server that Full Disk Access is granted to, when the server owns its privacy responsibility.
-    pub fn program(&self) -> Option<PathBuf> {
+    /// Whether this app's server owns its privacy responsibility, so Files & Folders lists it as the helper app.
+    pub fn owns_responsibility(&self) -> bool {
         matches!(
             self.start,
             Some(Start::Launchd { .. } | Start::Direct { .. })
         )
-        .then(|| self.dir.join("bin").join(BINARY))
     }
 
-    /// `full_disk_access` for this app's server.
+    /// `app_data_access` for this app's server.
     #[cfg(target_os = "macos")]
-    pub fn full_disk_access(&self) -> Option<bool> {
-        full_disk_access(self.start.as_ref()?, &self.dir)
+    pub fn app_data_access(&self) -> Option<bool> {
+        app_data_access(self.start.as_ref()?, &self.dir)
     }
 
     /// The server new panes start in, if any. `None` while turned off.

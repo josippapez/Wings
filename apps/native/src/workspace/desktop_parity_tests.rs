@@ -105,7 +105,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 diff_dock_files: false,
                 global_hotkey: Default::default(),
                 terminal_server: Some(false),
-                full_disk_access_asked: false,
+                app_data_asked: false,
             }
         );
     });

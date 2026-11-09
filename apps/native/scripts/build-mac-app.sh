@@ -14,12 +14,17 @@ if [ "${WINGS_SWITCH-}" = 1 ]; then
   # The desktop's version, which the replacement carries (build.rs, updater.rs).
   VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' ../desktop/src-tauri/Cargo.toml | head -n 1)
   APP=target/release/Wings.app
+  # The terminal server's helper app (src/terminal_server.rs, `HELPER`), named apart from the side-by-side app's.
+  HELPER_NAME="Wings Terminals"
+  HELPER_IDENTIFIER=dev.wings.terminals
 else
   cargo build --release --bins
   NAME=Wings-native
   IDENTIFIER=dev.wings.native
   VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
   APP=target/release/Wings-native.app
+  HELPER_NAME="Wings-native Terminals"
+  HELPER_IDENTIFIER=dev.wings.native.terminals
 fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -56,4 +61,28 @@ if [ -n "$APPLE" ]; then
 elif security find-identity -p codesigning | grep -q '"Wings Local Signing"'; then
   IDENTITY="Wings Local Signing"
 fi
+# The terminal server runs from a helper app of its own, which macOS names by its bundle id, so System Settings, Files &
+# Folders lists it with a switch for each app whose data its terminals ask for; it does neither for a bare program.
+# The copy in Contents/MacOS stays only for the updaters of apps before it, which require it.
+HELPER="$APP/Contents/Library/$HELPER_NAME.app"
+mkdir -p "$HELPER/Contents/MacOS"
+cp target/release/wings-terminal-server "$HELPER/Contents/MacOS/"
+cat > "$HELPER/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>$HELPER_NAME</string>
+  <key>CFBundleDisplayName</key><string>$HELPER_NAME</string>
+  <key>CFBundleIdentifier</key><string>$HELPER_IDENTIFIER</string>
+  <key>CFBundleExecutable</key><string>wings-terminal-server</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+EOF
+codesign --force --sign "$IDENTITY" "$HELPER"
 codesign --force --deep --sign "$IDENTITY" "$APP"

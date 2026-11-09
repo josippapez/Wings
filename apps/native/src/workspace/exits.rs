@@ -259,7 +259,7 @@ impl Workspace {
             cx,
         );
         let disk_access = self.layer(
-            "full-disk-access",
+            "app-data-access",
             |this| &mut this.disk_access.asking,
             Self::disk_access_dialog,
             cx,
@@ -290,7 +290,7 @@ impl Workspace {
             dialog("settings", settings),
             dialog("plugin-review", review),
             dialog("setup-approval", setup),
-            dialog("full-disk-access", disk_access),
+            dialog("app-data-access", disk_access),
             dialog("worktree-setup", worktree_setup),
             sheet.map(|(sheet, phase)| motion::sheet_layer(phase, sheet)),
             dialog("palette", palette),

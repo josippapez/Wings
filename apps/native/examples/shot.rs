@@ -279,7 +279,7 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("accounts") {
         return accounts(&mut cx, &config, &fake_claude, &out);
     }
-    // `-- <out-dir> disk-access` renders only the dialog that asks for Full Disk Access, and its row in Settings.
+    // `-- <out-dir> disk-access` renders only the dialog that asks to turn on other apps' data, and its row in Settings.
     if std::env::args().nth(2).as_deref() == Some("disk-access") {
         return disk_access(&mut cx, &config, &fake, &out);
     }
@@ -1324,8 +1324,8 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
     }
 }
 
-/// The dialog that asks for Full Disk Access, as a launch that finds the terminals without it shows it, and the row in
-/// Settings, General. The server is a made-up file in a temp folder that never starts.
+/// The dialog that asks to turn on other apps' data, as a launch that finds the terminals refused it shows it, and the
+/// row in Settings, General. The server is a made-up helper app in a temp folder that never starts.
 fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &Path) {
     use wings_native::{
         host::TerminalServers,

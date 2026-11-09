@@ -8,8 +8,9 @@
 //!
 //! A debug build also takes `--server-version <n>`, to play a newer server in tests of an update.
 //!
-//! `wings-terminal-server check-access --own-responsibility` says whether the shells it runs could read what macOS
-//! keeps for Full Disk Access, such as other apps' data, and exits: 0 if they could, 1 if not, 3 when it can't tell.
+//! `wings-terminal-server check-access --own-responsibility` says whether the shells it runs could read other apps'
+//! data, which macOS refuses unless it's turned on for the server's helper app in Files & Folders, and exits: 0 if they
+//! could, 1 if not, 3 when it can't tell. Run, it also has Files & Folders list Chrome under the helper app.
 
 #[cfg(unix)]
 fn main() {
@@ -62,20 +63,18 @@ fn main() {
     }
 }
 
-/// Lists a folder of the home that only Full Disk Access opens: the first of them that is there decides.
+/// Lists Chrome's data folder, the other app's data the Chrome DevTools MCP reads. Without Chrome, it can't tell.
 #[cfg(unix)]
 fn check_access() -> i32 {
     let Some(home) = std::env::var_os("HOME") else {
         return 3;
     };
-    for folder in ["Library/Safari", "Library/Mail", "Library/Messages"] {
-        match std::fs::read_dir(std::path::Path::new(&home).join(folder)) {
-            Ok(_) => return 0,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return 1,
-            Err(_) => {}
-        }
+    let chrome = std::path::Path::new(&home).join("Library/Application Support/Google/Chrome");
+    match std::fs::read_dir(chrome) {
+        Ok(_) => 0,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => 1,
+        Err(_) => 3,
     }
-    3
 }
 
 #[cfg(not(unix))]

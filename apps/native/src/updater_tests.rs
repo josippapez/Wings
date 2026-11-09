@@ -68,6 +68,7 @@ fn archive(version: &str, omit: Option<&str>, extra: Option<(&str, tar::EntryTyp
         ("Contents/MacOS/wings-plugin-worker", b"worker", 0o755),
         ("Contents/MacOS/wings", b"cli", 0o755),
         ("Contents/MacOS/wings-terminal-server", b"server", 0o755),
+        (EXECUTABLES[3], b"server", 0o755),
     ] {
         if omit == Some(path) {
             continue;
@@ -295,10 +296,7 @@ fn failed_new_app_reopens_the_restored_original() {
 
 #[test]
 fn native_updates_must_include_the_terminal_server() {
-    let fixture = fixture(
-        archive("0.2.0", Some("Contents/MacOS/wings-terminal-server"), None),
-        |_| {},
-    );
+    let fixture = fixture(archive("0.2.0", Some(EXECUTABLES[3]), None), |_| {});
     let available = checked(&fixture).unwrap().unwrap();
     let dir = temp();
     assert!(
