@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.8 · 2026-11-09
+
+- **Time fields take digits.** In a plugin's time field, like Cyclops' Start and End, type `930` or `0930` and it becomes `09:30`, so you don't type the colon.
+- **Tab moves between a plugin page's fields.** Tab and Shift-Tab go to the next and previous field or button, and stay inside a popover.
+
 ## 0.2.7 · 2026-11-09
 
 - **Agents come back after a restart.** The sidebar lists the agents that were running before, also in projects you haven't opened yet, and opening one resumes it. Its row says "resuming…" until the agent is back, and "couldn't resume" if it doesn't show.
