@@ -72,6 +72,12 @@ test("packages a signed native bundle and matching local metadata", (t) => {
       "Wings-native.app/",
       "Wings-native.app/Contents/",
       "Wings-native.app/Contents/Info.plist",
+      "Wings-native.app/Contents/Library/",
+      "Wings-native.app/Contents/Library/Wings-native Terminals.app/",
+      "Wings-native.app/Contents/Library/Wings-native Terminals.app/Contents/",
+      "Wings-native.app/Contents/Library/Wings-native Terminals.app/Contents/Info.plist",
+      "Wings-native.app/Contents/Library/Wings-native Terminals.app/Contents/MacOS/",
+      "Wings-native.app/Contents/Library/Wings-native Terminals.app/Contents/MacOS/wings-terminal-server",
       "Wings-native.app/Contents/MacOS/",
       "Wings-native.app/Contents/MacOS/wings",
       "Wings-native.app/Contents/MacOS/wings-native",
@@ -109,7 +115,16 @@ test("packages a signed native bundle and matching local metadata", (t) => {
   for (const executable of ["wings-native", "wings-plugin-worker", "wings", "wings-terminal-server"]) {
     assert.notEqual(statSync(join(bundle, "Contents/MacOS", executable)).mode & 0o111, 0, `${executable} is executable`);
   }
-  assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign Wings Local Signing target/release/Wings-native.app\n");
+  // The terminal server's own app, so macOS keys its privacy grants to an app id rather than a file path.
+  const helper = join(bundle, "Contents/Library/Wings-native Terminals.app");
+  const helperPlist = readFileSync(join(helper, "Contents/Info.plist"), "utf8");
+  assert.match(helperPlist, /<key>CFBundleIdentifier<\/key><string>dev\.wings\.native\.terminals<\/string>/);
+  assert.notEqual(statSync(join(helper, "Contents/MacOS/wings-terminal-server")).mode & 0o111, 0, "the helper's server is executable");
+  assert.equal(
+    readFileSync(setup.log, "utf8"),
+    "--force --sign Wings Local Signing target/release/Wings-native.app/Contents/Library/Wings-native Terminals.app\n" +
+      "--force --deep --sign Wings Local Signing target/release/Wings-native.app\n",
+  );
   assert.equal(existsSync(join(setup.root, "Applications")), false);
 });
 
@@ -126,7 +141,11 @@ esac
   t.after(() => rmSync(setup.root, { recursive: true, force: true }));
   const result = run(setup);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign DEF target/release/Wings-native.app\n");
+  assert.equal(
+    readFileSync(setup.log, "utf8"),
+    "--force --sign DEF target/release/Wings-native.app/Contents/Library/Wings-native Terminals.app\n" +
+      "--force --deep --sign DEF target/release/Wings-native.app\n",
+  );
 });
 
 test("maps Intel macOS output and rejects unsupported architectures", (t) => {
@@ -212,7 +231,11 @@ test("WINGS_SWITCH=1 packages Wings.app under the desktop's id and version, with
   for (const [key, value] of Object.entries({ CFBundleIdentifier: "dev.wings.app", CFBundleName: "Wings", CFBundleExecutable: "wings-native", CFBundleShortVersionString: "0.2.0" })) {
     assert.match(plist, new RegExp(`<key>${key}</key><string>${value}</string>`));
   }
-  assert.equal(readFileSync(setup.log, "utf8"), "--force --deep --sign Wings Local Signing target/release/Wings.app\n");
+  assert.equal(
+    readFileSync(setup.log, "utf8"),
+    "--force --sign Wings Local Signing target/release/Wings.app/Contents/Library/Wings Terminals.app\n" +
+      "--force --deep --sign Wings Local Signing target/release/Wings.app\n",
+  );
   // The side-by-side bundle and its feed are left alone.
   assert.equal(existsSync(join(setup.native, "target/release/Wings-native.app")), false);
   assert.equal(existsSync(join(output, "native-latest-darwin-aarch64.json")), false);
