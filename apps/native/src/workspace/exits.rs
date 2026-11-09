@@ -258,6 +258,12 @@ impl Workspace {
             Self::setup_approval_dialog,
             cx,
         );
+        let disk_access = self.layer(
+            "full-disk-access",
+            |this| &mut this.disk_access.asking,
+            Self::disk_access_dialog,
+            cx,
+        );
         let worktree_setup = self.layer(
             "worktree-setup",
             |this| &mut this.worktree_setup,
@@ -284,6 +290,7 @@ impl Workspace {
             dialog("settings", settings),
             dialog("plugin-review", review),
             dialog("setup-approval", setup),
+            dialog("full-disk-access", disk_access),
             dialog("worktree-setup", worktree_setup),
             sheet.map(|(sheet, phase)| motion::sheet_layer(phase, sheet)),
             dialog("palette", palette),

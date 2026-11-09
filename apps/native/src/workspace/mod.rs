@@ -11,6 +11,7 @@ mod context_menu;
 #[cfg(all(test, feature = "test-support"))]
 mod desktop_parity_tests;
 mod diff;
+mod disk_access;
 mod drag_slot;
 mod editor;
 mod exits;
@@ -276,6 +277,8 @@ pub struct Workspace {
     worktree_setup: Option<worktree_setup::WorktreeSetupDialog>,
     /// A check for drives mounting runs while a pane waits for one.
     watching_mounts: bool,
+    /// Whether the terminals have Full Disk Access, and the dialog that asks for it.
+    disk_access: disk_access::DiskAccess,
     _detection: Option<Task<()>>,
     _plugin_events: Task<()>,
     _activation: Subscription,
@@ -422,6 +425,7 @@ impl Workspace {
             setup_asks: Default::default(),
             worktree_setup: None,
             watching_mounts: false,
+            disk_access: Default::default(),
             _detection: None,
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -454,6 +458,10 @@ impl Workspace {
                 crate::ui::motion::follow_reduce_motion(cx);
                 for installed in &this.plugins {
                     installed.host.publish_focus(this.window_active);
+                }
+                // Back from System Settings, where you may have just given the terminals Full Disk Access.
+                if this.window_active && this.disk_access.granting {
+                    this.check_disk_access(cx);
                 }
                 if this.window_active && this.manage.check_due {
                     this.manage.check_due = false;
@@ -598,12 +606,14 @@ impl Workspace {
             diff_dock_files: settings.diff_dock_files != Some(false),
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
             terminal_server: settings.terminal_server,
+            full_disk_access_asked: settings.full_disk_access_asked == Some(true),
         };
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);
         this.enter_project(window, cx);
         #[cfg(unix)]
         this.restore_hidden(cx);
+        this.check_disk_access(cx);
         this.start_update_checks(window, cx);
         this.start_plugin_update_checks(window, cx);
         // The cached pieces need the workspace's entity, which exists once this returns (see `parts`).

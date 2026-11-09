@@ -316,29 +316,50 @@ fn orphans_are_running_panes_of_the_project_no_saved_pane_names() {
     assert_eq!(servers.orphans("/project", &["h-saved".into()]), ["h-lost"]);
 }
 
+/// Always to the same path, which a Full Disk Access grant names, so the grant outlasts updates.
 #[test]
-fn the_server_is_copied_out_of_the_bundle_once() {
+fn the_server_is_copied_out_of_the_bundle_to_the_same_path_each_time() {
     let folder = Folder::new("install");
     std::fs::create_dir_all(&folder.0).unwrap();
-    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
-    assert_eq!(
-        program,
-        folder
-            .0
-            .join(format!("bin/wings-terminal-server-v{SERVER_VERSION}"))
-    );
+    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
+    assert_eq!(program, folder.0.join("bin/wings-terminal-server"));
     assert_eq!(
         std::fs::metadata(&program).unwrap().permissions().mode() & 0o777,
         0o700
     );
     let first = std::fs::metadata(&program).unwrap().modified().unwrap();
     std::thread::sleep(Duration::from_millis(20));
-    terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
+    terminal_server::install(Path::new(BIN), &folder.0).unwrap();
     assert_eq!(
         std::fs::metadata(&program).unwrap().modified().unwrap(),
         first,
-        "a running server keeps its file"
+        "the same server isn't copied again"
     );
+
+    // An update brings another server: it takes the same path, and the one running from the old copy goes on while it
+    // has a pane.
+    let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
+    let mut running = serve(&program, &socket).spawn().unwrap();
+    answers(&socket);
+    let (pane, _events) = Pane::spawn(&socket, spawn_request("h-keep"), b"").unwrap();
+    let newer = folder.0.join("newer");
+    let mut bytes = std::fs::read(BIN).unwrap();
+    bytes.extend_from_slice(b"another build");
+    std::fs::write(&newer, &bytes).unwrap();
+    assert_eq!(
+        terminal_server::install(&newer, &folder.0).unwrap(),
+        program
+    );
+    assert_eq!(std::fs::read(&program).unwrap(), bytes);
+    // Past the second in which it looks at its file.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        Control::connect(&socket).is_ok(),
+        "the old server still answers"
+    );
+    pane.kill().unwrap();
+    let _ = running.kill();
+    let _ = running.wait();
 }
 
 /// A build's app bundle, holding its own server binary, as each update brings a new one and deletes the old one.
@@ -379,6 +400,8 @@ fn still_runs(socket: &Path, info: &wings_ptyd::proto::PaneInfo, before: &str, w
 fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
     let folder = Folder::new("update");
     let dir = folder.0.join("srv");
+    let program = dir.join("bin").join(terminal_server::BINARY);
+    // What an app from before the fixed path left: a copy named for its server's version.
     let copy = |version: u32| dir.join(format!("bin/{}-v{version}", terminal_server::BINARY));
 
     let a = bundle(&folder, "a");
@@ -389,7 +412,7 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
     #[cfg(target_os = "macos")]
     assert_eq!(
         executable(pid),
-        copy(SERVER_VERSION).canonicalize().unwrap(),
+        program.canonicalize().unwrap(),
         "it runs from the copy, not the bundle"
     );
     let mut opened = Vec::new();
@@ -401,10 +424,7 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
         opened.push(pane);
     }
     let shells: Vec<_> = opened.iter().map(Pane::shell_pid).collect();
-    let copied_at = std::fs::metadata(copy(SERVER_VERSION))
-        .unwrap()
-        .modified()
-        .unwrap();
+    let copied_at = std::fs::metadata(&program).unwrap().modified().unwrap();
     // The app quits to install the update: its panes let go, and the old bundle is deleted.
     drop(servers);
     for pane in opened {
@@ -429,10 +449,7 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
         "the same shells"
     );
     assert_eq!(
-        std::fs::metadata(copy(SERVER_VERSION))
-            .unwrap()
-            .modified()
-            .unwrap(),
+        std::fs::metadata(&program).unwrap().modified().unwrap(),
         copied_at,
         "the copy is kept"
     );
@@ -441,7 +458,9 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
         pane.detach();
     }
 
-    // Build C ships a newer server: the old one drains and keeps its panes, and C starts its own from a new copy.
+    // Build C ships a newer server: the old one drains and keeps its panes, and C starts its own from the same path.
+    // An app from before the fixed path had left the old version's copy, which goes once its server does.
+    std::fs::copy(&program, copy(SERVER_VERSION)).unwrap();
     let newer = SERVER_VERSION + 1;
     let c = bundle(&folder, "c");
     let start = Start::Direct { bundled: c };
@@ -455,10 +474,10 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
             .server_version,
         newer
     );
-    assert!(copy(newer).is_file(), "the newer server's copy");
+    assert!(program.is_file(), "the newer server's copy");
     assert!(
         copy(SERVER_VERSION).is_file(),
-        "the old server still runs from its copy"
+        "an older copy stays while its server runs"
     );
     assert!(
         Pane::spawn(&socket, spawn_request("h-refused"), b"").is_err(),
@@ -509,7 +528,7 @@ fn an_update_keeps_the_panes_running_and_the_new_app_attaches_them_again() {
         !copy(SERVER_VERSION).exists(),
         "the old copy is gone with its server"
     );
-    assert!(copy(newer).is_file());
+    assert!(program.is_file());
 }
 
 /// Turned off, an app starts no server and runs new panes in itself, yet finds the panes a server runs. Turned on, it
@@ -633,6 +652,30 @@ fn serve(program: &Path, socket: &Path) -> Command {
     cmd
 }
 
+/// `check-access` lists the first folder of the home that only Full Disk Access opens: 0 when it can, 1 when it's
+/// refused, 3 when none is there. A folder this user can't open stands in for one macOS refuses, with the same error.
+#[test]
+fn the_server_says_whether_its_shells_have_full_disk_access() {
+    let folder = Folder::new("access");
+    let home = folder.0.join("home");
+    let safari = home.join("Library/Safari");
+    std::fs::create_dir_all(&safari).unwrap();
+    let check = || {
+        Command::new(BIN)
+            .arg("check-access")
+            .env("HOME", &home)
+            .status()
+            .unwrap()
+            .code()
+    };
+    assert_eq!(check(), Some(0));
+    std::fs::set_permissions(&safari, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(check(), Some(1));
+    std::fs::set_permissions(&safari, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(home.join("Library")).unwrap();
+    assert_eq!(check(), Some(3), "nothing to tell from");
+}
+
 /// A release app's server: the copy outside the bundle, started directly as when launchd fails. Disclaimed, the
 /// server needs its own grant to read a binary under `~/Desktop`, so it runs the copy in the temp folder as the app does.
 #[cfg(target_os = "macos")]
@@ -642,7 +685,7 @@ fn a_release_server_owns_its_privacy_responsibility_and_its_shells_inherit_it() 
     std::fs::create_dir_all(&folder.0).unwrap();
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let cmd = serve(
-        &terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap(),
+        &terminal_server::install(Path::new(BIN), &folder.0).unwrap(),
         &socket,
     );
     terminal_server::start_detached(cmd, &folder.0.join("v.log"), |_, _| {
@@ -677,7 +720,7 @@ fn the_launchd_job_detaches_the_server_from_the_app() {
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let log = folder.0.join("v.log");
     // `/tmp`, as in a release app: the job's folder under `folder` would be too long for the `ready` socket.
-    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
+    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
     terminal_server::start_detached(serve(&program, &socket), &log, |cmd, log| {
         wings_ptyd::launchd::spawn_without_launchd(cmd, log, Path::new("/tmp"))
     })
@@ -700,7 +743,7 @@ fn when_launchd_fails_the_server_starts_directly_in_its_own_session() {
     std::fs::create_dir_all(&folder.0).unwrap();
     let socket = terminal_server::socket(&folder.0, SERVER_VERSION);
     let log = folder.0.join("v.log");
-    let program = terminal_server::install(Path::new(BIN), &folder.0, SERVER_VERSION).unwrap();
+    let program = terminal_server::install(Path::new(BIN), &folder.0).unwrap();
     terminal_server::start_detached(serve(&program, &socket), &log, |_, _| {
         Err(std::io::Error::other("bootstrap refused"))
     })

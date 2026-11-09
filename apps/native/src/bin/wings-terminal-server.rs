@@ -7,6 +7,9 @@
 //! itself to (`responsibility`). A debug app's plain child keeps the app's.
 //!
 //! A debug build also takes `--server-version <n>`, to play a newer server in tests of an update.
+//!
+//! `wings-terminal-server check-access --own-responsibility` says whether the shells it runs could read what macOS
+//! keeps for Full Disk Access, such as other apps' data, and exits: 0 if they could, 1 if not, 3 when it can't tell.
 
 #[cfg(unix)]
 fn main() {
@@ -26,6 +29,9 @@ fn main() {
             .collect(),
         None => std::env::args().skip(1).collect(),
     };
+    if args.first().map(String::as_str) == Some("check-access") {
+        std::process::exit(check_access());
+    }
     let value = |flag: &str| args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone());
     let (Some("serve"), Some(socket)) = (args.first().map(String::as_str), value("--socket"))
     else {
@@ -54,6 +60,22 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Lists a folder of the home that only Full Disk Access opens: the first of them that is there decides.
+#[cfg(unix)]
+fn check_access() -> i32 {
+    let Some(home) = std::env::var_os("HOME") else {
+        return 3;
+    };
+    for folder in ["Library/Safari", "Library/Mail", "Library/Messages"] {
+        match std::fs::read_dir(std::path::Path::new(&home).join(folder)) {
+            Ok(_) => return 0,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return 1,
+            Err(_) => {}
+        }
+    }
+    3
 }
 
 #[cfg(not(unix))]

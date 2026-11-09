@@ -144,6 +144,8 @@ pub(super) struct Prefs {
     /// "Keep terminals running when Wings quits", as saved: `None` until changed, which is on. What this app does now
     /// is `Servers::is_on`.
     pub(super) terminal_server: Option<bool>,
+    /// Wings asked once to give its terminals Full Disk Access (`disk_access`).
+    pub(super) full_disk_access_asked: bool,
 }
 
 impl Default for Prefs {
@@ -163,6 +165,7 @@ impl Default for Prefs {
             diff_dock_files: true,
             global_hotkey: Default::default(),
             terminal_server: None,
+            full_disk_access_asked: false,
         }
     }
 }
@@ -228,6 +231,8 @@ impl Workspace {
             dialog.focus.focus(window, cx);
             return;
         }
+        // Its row says whether the terminals have Full Disk Access now, which may have changed in System Settings.
+        self.check_disk_access(cx);
         let family = cx.new(|cx| {
             let mut field = TextField::new(
                 Role::TextInput,
@@ -723,7 +728,7 @@ impl Workspace {
             ),
         ]];
         if cfg!(unix) {
-            cards.push(vec![self.switch_row(
+            let mut card = vec![self.switch_row(
                 "terminal-server",
                 "Keep terminals running when Wings quits",
                 "New terminals run in a background process, so what runs in them keeps going when Wings \
@@ -733,7 +738,9 @@ impl Workspace {
                 self.terminal_server_on(),
                 |this, on, cx| this.set_terminal_server(on, cx),
                 cx,
-            )]);
+            )];
+            card.extend(self.disk_access_row(cx));
+            cards.push(card);
         }
         cards
     }

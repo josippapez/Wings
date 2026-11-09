@@ -279,6 +279,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("accounts") {
         return accounts(&mut cx, &config, &fake_claude, &out);
     }
+    // `-- <out-dir> disk-access` renders only the dialog that asks for Full Disk Access, and its row in Settings.
+    if std::env::args().nth(2).as_deref() == Some("disk-access") {
+        return disk_access(&mut cx, &config, &fake, &out);
+    }
     // `-- <out-dir> restored` renders only the Agents list after a restart: a live agent, one restored in a project not
     // opened yet, and one in a pane waiting for its drive to mount, with that pane.
     if std::env::args().nth(2).as_deref() == Some("restored") {
@@ -1316,6 +1320,59 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         let _ = std::process::Command::new("pkill")
             .args(["-f", &fake_claude.display().to_string()])
             .status();
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// The dialog that asks for Full Disk Access, as a launch that finds the terminals without it shows it, and the row in
+/// Settings, General. The server is a made-up file in a temp folder that never starts.
+fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &Path) {
+    use wings_native::{
+        host::TerminalServers,
+        terminal_server::{Servers, Start},
+    };
+    let folder = fake.join("terminal-server");
+    std::fs::create_dir_all(&folder).expect("make a server folder");
+    let bundled = fake.join("wings-terminal-server");
+    std::fs::write(&bundled, "not a server").expect("write a made-up server");
+    let servers = Servers::connect_off(&folder, Some(&Start::Direct { bundled }));
+    servers.set_on(true);
+    let mut config = base.clone();
+    config.plugins = None;
+    config.sessions = None;
+    config.terminal_server = Some(TerminalServers(std::sync::Arc::new(servers)));
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(2));
+        handle
+            .update(cx, |w, _, cx| w.disk_access_checked(Some(false), cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(400));
+        save(
+            cx,
+            window,
+            &out.join(format!("disk-access-dialog-{width}.png")),
+        );
+        cx.simulate_keystrokes(window, "escape");
+        wait(cx, window, Duration::from_millis(400));
+        cx.simulate_keystrokes(window, "cmd-,");
+        wait(cx, window, Duration::from_millis(600));
+        // Settings, General, the first section.
+        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
+        click(cx, window, point(px(left + 70.0), px(150.0)));
+        wait(cx, window, Duration::from_millis(300));
+        save(
+            cx,
+            window,
+            &out.join(format!("disk-access-settings-{width}.png")),
+        );
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }
 }

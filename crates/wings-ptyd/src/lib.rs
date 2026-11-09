@@ -16,7 +16,7 @@ pub mod responsibility;
 
 /// The server's own version, apart from the app's, in its `welcome`. Bump it when `host.rs` changes, so an app can
 /// tell an older server that still runs from before an update, and leave it to finish its panes.
-pub const SERVER_VERSION: u32 = 4;
+pub const SERVER_VERSION: u32 = 5;
 
 /// The id a pane's shell gets in `WINGS_PANE_ID`, from the number the server gave it.
 pub fn pane_id(number: u32) -> String {

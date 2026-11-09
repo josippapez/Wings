@@ -5,7 +5,9 @@
 //!
 //! The server never runs from the app bundle: an update deletes the old bundle, and macOS can't attribute a program
 //! whose file is gone, so its panes would lose the privacy grants (Screen Recording, hard links into Desktop). The app
-//! copies the server out to `terminal-server/bin/` under its version. A release app on macOS starts that copy as a
+//! copies the server out to `terminal-server/bin/`, always under the same name, since macOS keys a grant to a program
+//! without a bundle by its path: Full Disk Access, which macOS never asks for (`full_disk_access`), lasts across
+//! updates. A release app on macOS starts that copy as a
 //! one-shot launchd job that forks the server off and ends (`wings_ptyd::launchd`), so the server is in no coalition of
 //! the app's and lives on when the app quits; no job stays loaded. The server owns its privacy responsibility, and the
 //! shells it runs inherit it (`wings_ptyd::responsibility`). When launchd fails, the app starts the server directly in
@@ -165,7 +167,7 @@ impl Start {
 
 /// The command that serves `socket` from the copy of `bundled` for `version`, as a release app runs it.
 fn copied(bundled: &Path, dir: &Path, version: u32, socket: &Path) -> io::Result<Command> {
-    let mut cmd = Command::new(install(bundled, dir, version)?);
+    let mut cmd = Command::new(install(bundled, dir)?);
     cmd.arg("serve")
         .arg("--socket")
         .arg(socket)
@@ -226,7 +228,8 @@ fn start_in_own_session(mut cmd: Command, log: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// The version a socket or a binary copy in the server's folder is named for: `v4.sock`, `wings-terminal-server-v4`.
+/// The version a socket or an earlier app's binary copy in the server's folder is named for: `v4.sock`,
+/// `wings-terminal-server-v4`.
 fn version_of(name: &str, prefix: &str, suffix: &str) -> Option<u32> {
     name.strip_prefix(prefix)?
         .strip_suffix(suffix)?
@@ -234,8 +237,8 @@ fn version_of(name: &str, prefix: &str, suffix: &str) -> Option<u32> {
         .ok()
 }
 
-/// Deletes the binary copies of versions older than `ours` that no server in `live` runs from, so each update that
-/// brings a new server version leaves one copy behind only while its server still has panes.
+/// Deletes the copies earlier apps made under their version, `wings-terminal-server-v4`, of versions older than `ours`
+/// that no server in `live` runs from, so each is kept only while its server still has panes.
 fn remove_old_copies(dir: &Path, ours: u32, live: &[u32]) {
     let prefix = format!("{BINARY}-v");
     for entry in fs::read_dir(dir.join("bin"))
@@ -259,20 +262,48 @@ fn remove_old_copies(dir: &Path, ours: u32, live: &[u32]) {
     }
 }
 
-/// Copies the bundle's server to `dir/bin/` under its `version`, once: a server that still runs from an earlier copy
-/// keeps its file, and its version never names other code (bump `SERVER_VERSION` when the server changes).
-pub fn install(bundled: &Path, dir: &Path, version: u32) -> io::Result<PathBuf> {
+/// Copies the bundle's server to `dir/bin/wings-terminal-server`, the same path every time, when the copy there isn't
+/// already this one. A server still running from the copy it replaces keeps that file until it exits, as the rename
+/// leaves it in place.
+pub fn install(bundled: &Path, dir: &Path) -> io::Result<PathBuf> {
     let bin = dir.join("bin");
     private_dir(&bin)?;
-    let program = bin.join(format!("{BINARY}-v{version}"));
-    if program.is_file() {
+    let program = bin.join(BINARY);
+    let bytes = fs::read(bundled)?;
+    if fs::read(&program).is_ok_and(|copied| copied == bytes) {
         return Ok(program);
     }
-    let partial = bin.join(format!(".{BINARY}-v{version}.{}", std::process::id()));
-    fs::copy(bundled, &partial)?;
-    fs::set_permissions(&partial, fs::Permissions::from_mode(0o700))?;
-    fs::rename(&partial, &program)?;
+    // A file of its own: the app checks access and starts a server on other threads, which may install at once.
+    let mut partial = tempfile::NamedTempFile::new_in(&bin)?;
+    partial.write_all(&bytes)?;
+    fs::set_permissions(partial.path(), fs::Permissions::from_mode(0o700))?;
+    partial.persist(&program).map_err(|error| error.error)?;
     Ok(program)
+}
+
+/// Whether programs in the server's panes can read what macOS keeps for Full Disk Access, such as other apps' data:
+/// the server's copy checks under its own privacy responsibility, which its panes have (`check-access` in its `main`).
+/// `None` when this app's server keeps the app's responsibility, or the check couldn't tell. It starts a process, so
+/// call it off the main thread.
+#[cfg(target_os = "macos")]
+pub fn full_disk_access(start: &Start, dir: &Path) -> Option<bool> {
+    let (Start::Launchd { bundled } | Start::Direct { bundled }) = start else {
+        return None;
+    };
+    let program = install(bundled, dir).ok()?;
+    let status = Command::new(program)
+        .arg("check-access")
+        .arg(wings_ptyd::responsibility::FLAG)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?;
+    match status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
 }
 
 /// The servers this app uses: the one new panes start in, and the panes all of them ran when the app started, until
@@ -420,6 +451,21 @@ impl Servers {
                 None
             }
         }
+    }
+
+    /// The copy of the server that Full Disk Access is granted to, when the server owns its privacy responsibility.
+    pub fn program(&self) -> Option<PathBuf> {
+        matches!(
+            self.start,
+            Some(Start::Launchd { .. } | Start::Direct { .. })
+        )
+        .then(|| self.dir.join("bin").join(BINARY))
+    }
+
+    /// `full_disk_access` for this app's server.
+    #[cfg(target_os = "macos")]
+    pub fn full_disk_access(&self) -> Option<bool> {
+        full_disk_access(self.start.as_ref()?, &self.dir)
     }
 
     /// The server new panes start in, if any. `None` while turned off.

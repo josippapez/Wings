@@ -315,6 +315,7 @@ impl Workspace {
             desktop_order: Some(true),
             global_hotkey: Some(self.prefs.global_hotkey.clone()),
             terminal_server: self.prefs.terminal_server,
+            full_disk_access_asked: self.prefs.full_disk_access_asked.then_some(true),
             right_width: Some(self.plugin_ui.right_size.width),
             ..self.side.saved()
         };
