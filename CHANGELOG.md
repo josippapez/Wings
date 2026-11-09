@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.12 · 2026-11-09
+
+- **Agent summaries and session names are back.** Settings, Agents has "Session names and summaries" again: Apple's on-device model, an Ollama model, or off. Each agent in the sidebar shows a line on what its last turn did, and sessions with no title get a short name in Past sessions and the command palette. The choice you made before the switch carries over.
+- **Idle agents go to sleep again.** "Put idle agents to sleep" and "Sleep after" are back in Settings, Agents, on after 15 minutes. An idle Claude Code or opencode you aren't looking at ends to free its memory, shows as sleeping in the Agents list, and resumes when you open its tab, also after a restart. One that is working, needs you, has text typed in its prompt or still runs something it started is left alone.
+- **Tabs show when a terminal runs something.** A terminal tab with a program running in it, like a dev server, has a green dot after its title, and its tooltip says what runs.
+
 ## 0.2.11 · 2026-11-09
 
 - **Older terminal servers clean up after themselves.** After an update brings a new terminal server, the old one keeps the terminals it runs. Once every terminal on it is idle, its shells move to the new server in the same tab with their output kept, idle agents exit and resume their session there, and the old server ends. Settings, General lists the running servers and their terminals, with a Stop button for an older one, and a terminal still on an older server says so in its header.
