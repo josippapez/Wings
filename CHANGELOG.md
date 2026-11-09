@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.7 · 2026-11-09
+
+- **Agents come back after a restart.** The sidebar lists the agents that were running before, also in projects you haven't opened yet, and opening one resumes it. Its row says "resuming…" until the agent is back, and "couldn't resume" if it doesn't show.
+- **A Claude session you never wrote in starts fresh.** Restoring a pane whose Claude Code session has no conversation yet starts a new `claude` with the same flags, instead of a resume that can't find it.
+- **Panes on a drive that mounts late wait for it.** A pane whose folder is on a drive that isn't mounted yet, like an encrypted one, says so and starts in its folder once the drive is there.
+- **Terminals can get Full Disk Access.** macOS never asks before it refuses programs in Wings' terminals another app's data, like Chrome's profile that the Chrome DevTools MCP reads. Wings now checks at launch and asks once, and its button opens the Full Disk Access list and shows the terminal server to add. Settings, General has the same button. The terminal server now keeps one path across updates, so the grant lasts. Add it once more after this update.
+
 ## 0.2.6 · 2026-11-09
 
 - **Clicking an agent shows its project in the sidebar.** The project list scrolls to the agent's project when you pick an agent in the sidebar, the inbox or the command palette.
