@@ -63,6 +63,10 @@ const EXECUTABLES: [&str; 4] = [
     "wings-terminal-server",
 ];
 const REPO: &str = "https://github.com/josippapez/Wings/releases";
+/// The same releases through GitHub's API, for when github.com's download links fail.
+const API: &str = "https://api.github.com/repos/josippapez/Wings/releases";
+/// The API's answer for a release: its notes and each file's details.
+const MAX_RELEASE: u64 = 1024 * 1024;
 const MAX_META: u64 = 64 * 1024;
 const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 const MAX_EXPANDED: u64 = 2 * 1024 * 1024 * 1024;
@@ -141,16 +145,13 @@ impl Release {
         Ok(version > semver::Version::parse(current).map_err(err)?)
     }
 
-    fn url(&self) -> String {
-        format!(
-            "{REPO}/download/{}{}/{}",
-            APP.tag, self.version, self.artifact
-        )
+    fn tag(&self) -> String {
+        format!("{}{}", APP.tag, self.version)
     }
 
     /// The release's page on GitHub, where the dialog sends you when it has no notes.
     pub fn page(&self) -> String {
-        format!("{REPO}/tag/{}{}", APP.tag, self.version)
+        format!("{REPO}/tag/{}", self.tag())
     }
 }
 
@@ -181,21 +182,122 @@ impl Available {
     }
 }
 
-trait Transport: Sync {
-    fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()>;
+/// Why a request failed: GitHub's own trouble (5xx), which its API may get past, or anything else.
+#[derive(Debug)]
+enum Refused {
+    Server(u16),
+    Other(String),
 }
 
-/// What a refused request says. GitHub answers 5xx, mostly 504, for a while after a release is published: like the
-/// desktop's updater, the update isn't asked for again on its own, the dialog says so and offers Retry.
+impl From<String> for Refused {
+    fn from(message: String) -> Self {
+        Refused::Other(message)
+    }
+}
+
+impl From<&str> for Refused {
+    fn from(message: &str) -> Self {
+        Refused::Other(message.into())
+    }
+}
+
+impl From<Refused> for String {
+    fn from(refused: Refused) -> Self {
+        match refused {
+            Refused::Server(code) => status_error(code),
+            Refused::Other(message) => message,
+        }
+    }
+}
+
+trait Transport: Sync {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused>;
+}
+
+/// What a refused request says. When both routes fail, the update isn't asked for again on its own: the dialog says so
+/// and offers Retry.
 fn status_error(code: u16) -> String {
     if code >= 500 {
         format!(
-            "GitHub couldn't send the update just now (HTTP {code}). A new release can take a few minutes to become \
-             available. Try again shortly."
+            "GitHub couldn't send the update just now (HTTP {code}). Try again in a few minutes."
         )
     } else {
         format!("Update request failed: HTTP {code}")
     }
+}
+
+/// A file of the release tagged `tag`, or of the latest one. github.com's download links answer 5xx for minutes at a
+/// time, for every repo at once, while GitHub's API still serves the same files: then the file comes from there.
+fn download(
+    transport: &impl Transport,
+    tag: Option<&str>,
+    name: &str,
+    max: u64,
+    output: &mut dyn Write,
+) -> Result<()> {
+    let (link, release) = match tag {
+        Some(tag) => (
+            format!("{REPO}/download/{tag}/{name}"),
+            format!("{API}/tags/{tag}"),
+        ),
+        None => (
+            format!("{REPO}/latest/download/{name}"),
+            format!("{API}/latest"),
+        ),
+    };
+    match transport.get(&link, "*/*", max, output) {
+        Err(Refused::Server(code)) => {
+            from_api(transport, &release, name, max, output).map_err(|_| status_error(code))
+        }
+        result => result.map_err(String::from),
+    }
+}
+
+fn from_api(
+    transport: &impl Transport,
+    release: &str,
+    name: &str,
+    max: u64,
+    output: &mut dyn Write,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Listing {
+        assets: Vec<Asset>,
+    }
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        url: String,
+    }
+    let mut json = Vec::new();
+    transport.get(
+        release,
+        "application/vnd.github+json",
+        MAX_RELEASE,
+        &mut json,
+    )?;
+    let listing: Listing = serde_json::from_slice(&json).map_err(err)?;
+    let asset = listing
+        .assets
+        .into_iter()
+        .find(|asset| asset.name == name)
+        .ok_or("The release has no such file")?;
+    let id = asset
+        .url
+        .strip_prefix(API)
+        .and_then(|rest| rest.strip_prefix("/assets/"));
+    if !id.is_some_and(|id| !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit())) {
+        return Err("Update file is not one of this repo's release files".into());
+    }
+    // Asked for as a file, the API redirects to it instead of describing it.
+    transport.get(&asset.url, "application/octet-stream", max, output)?;
+    Ok(())
 }
 
 /// The archive as it arrives, telling `progress` how many bytes have so far.
@@ -226,6 +328,7 @@ fn trusted_url(url: &str) -> Result<()> {
             uri.authority().map(|a| a.as_str()),
             Some(
                 "github.com"
+                    | "api.github.com"
                     | "release-assets.githubusercontent.com"
                     | "objects.githubusercontent.com"
             )
@@ -237,7 +340,13 @@ fn trusted_url(url: &str) -> Result<()> {
 }
 
 impl Transport for Https {
-    fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()> {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .https_only(true)
             .timeout_global(Some(Duration::from_secs(300)))
@@ -247,10 +356,16 @@ impl Transport for Https {
         let mut url = url.to_owned();
         for _ in 0..6 {
             trusted_url(&url)?;
-            let mut response = agent.get(&url).call().map_err(|error| match error {
-                ureq::Error::StatusCode(code) => status_error(code),
-                error => err(error),
-            })?;
+            let mut response =
+                agent
+                    .get(&url)
+                    .header("Accept", accept)
+                    .call()
+                    .map_err(|error| match error {
+                        ureq::Error::StatusCode(code) if code >= 500 => Refused::Server(code),
+                        ureq::Error::StatusCode(code) => Refused::Other(status_error(code)),
+                        error => Refused::Other(err(error)),
+                    })?;
             if response.status().is_redirection() {
                 let location = response
                     .headers()
@@ -271,7 +386,7 @@ impl Transport for Https {
                 continue;
             }
             if !response.status().is_success() {
-                return Err(format!("Update request failed: {}", response.status()));
+                return Err(format!("Update request failed: {}", response.status()).into());
             }
             let count = std::io::copy(&mut response.body_mut().as_reader().take(max + 1), output)
                 .map_err(err)?;
@@ -290,18 +405,18 @@ fn check_with(
     current: &str,
     arch: &str,
 ) -> Result<Option<Available>> {
-    let url = format!("{REPO}/latest/download/{}-{arch}.json", APP.feed);
-    let fetch = |url: &str, max: u64| -> Result<Vec<u8>> {
+    let name = format!("{}-{arch}.json", APP.feed);
+    let fetch = |name: &str, max: u64| -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        transport.get(url, max, &mut bytes)?;
+        download(transport, None, name, max, &mut bytes)?;
         Ok(bytes)
     };
     // The feed and its signature are asked for together, so a check waits for one trip through GitHub's redirects, as
     // the desktop's single `latest.json` does, not two in a row.
-    let signature_url = format!("{url}.sig");
+    let signature_name = format!("{name}.sig");
     let (manifest, signature) = std::thread::scope(|scope| {
-        let signature = scope.spawn(|| fetch(&signature_url, 4096));
-        let manifest = fetch(&url, MAX_META);
+        let signature = scope.spawn(|| fetch(&signature_name, 4096));
+        let manifest = fetch(&name, MAX_META);
         (manifest, signature.join().unwrap())
     });
     let (manifest, signature) = (manifest?, signature?);
@@ -521,8 +636,10 @@ fn prepare_with(
         .map_err(err)?;
     let archive = directory.path().join("update.tar.gz");
     let mut file = File::create(&archive).map_err(err)?;
-    transport.get(
-        &available.release.url(),
+    download(
+        transport,
+        Some(&available.release.tag()),
+        &available.release.artifact,
         available.release.size,
         &mut Counting {
             inner: &mut file,

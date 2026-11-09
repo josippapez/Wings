@@ -433,7 +433,7 @@ mod tests {
         });
     }
 
-    /// A download GitHub refused (a 504 right after a release) is tried again from Retry without a new check.
+    /// A download GitHub refused (a 504) is tried again from Retry without a new check.
     #[test]
     fn retry_after_a_failed_download_downloads_again() {
         let (_app, mut window) = open_config(|_| {});
@@ -1130,8 +1130,7 @@ impl Workspace {
             _ => (
                 State::Error {
                     title: INSTALL_FAILED,
-                    message: "GitHub couldn't send the update just now (HTTP 504). A new release can take a few \
-                              minutes to become available. Try again shortly."
+                    message: "GitHub couldn't send the update just now (HTTP 504). Try again in a few minutes."
                         .into(),
                     retry: Some(update),
                 },

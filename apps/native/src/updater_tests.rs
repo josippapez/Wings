@@ -13,7 +13,13 @@ struct Fixture {
     calls: Mutex<Vec<String>>,
 }
 impl Transport for Fixture {
-    fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()> {
+    fn get(
+        &self,
+        url: &str,
+        _: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused> {
         self.calls.lock().unwrap().push(url.to_owned());
         let bytes = if url.ends_with(".sig") {
             &self.signature
@@ -395,6 +401,7 @@ fn source_runs_and_symlink_destinations_are_not_installable() {
 fn only_https_github_asset_hosts_are_allowed() {
     for url in [
         "https://github.com/josippapez/Wings/releases/latest/download/native.json",
+        "https://api.github.com/repos/josippapez/Wings/releases/assets/1",
         "https://release-assets.githubusercontent.com/asset?signature=test",
         "https://objects.githubusercontent.com/asset",
     ] {
@@ -618,7 +625,13 @@ struct Together {
     arrived: Condvar,
 }
 impl Transport for Together {
-    fn get(&self, url: &str, max: u64, output: &mut dyn Write) -> Result<()> {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused> {
         let mut waiting = self.waiting.lock().unwrap();
         *waiting += 1;
         self.arrived.notify_all();
@@ -628,9 +641,9 @@ impl Transport for Together {
             .unwrap();
         drop(waiting);
         if timeout.timed_out() {
-            return Err(format!("{url} was asked for alone"));
+            return Err(format!("{url} was asked for alone").into());
         }
-        self.inner.get(url, max, output)
+        self.inner.get(url, accept, max, output)
     }
 }
 
@@ -669,7 +682,7 @@ fn a_download_reports_the_bytes_received_as_they_arrive() {
 }
 
 #[test]
-fn a_release_github_is_still_publishing_says_to_try_again_later() {
+fn github_failing_says_to_try_again_later() {
     for code in [502, 503, 504] {
         let message = status_error(code);
         assert!(
@@ -678,4 +691,141 @@ fn a_release_github_is_still_publishing_says_to_try_again_later() {
         );
     }
     assert!(!status_error(404).contains("Try again"));
+}
+
+/// github.com's download links answer `link`, as they did for minutes at a time, while GitHub's API answers `api` or
+/// serves the fixture's files, listing each under `asset_url`.
+struct Outage {
+    inner: Fixture,
+    link: u16,
+    api: Option<u16>,
+    asset_url: fn(usize) -> String,
+    asked: Mutex<Vec<(String, String)>>,
+}
+impl Outage {
+    fn new(inner: Fixture, link: u16, api: Option<u16>) -> Self {
+        Outage {
+            inner,
+            link,
+            api,
+            asset_url: |i| format!("{API}/assets/{i}"),
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn names() -> [String; 3] {
+        let feed = format!("{}-{}.json", APP.feed, platform());
+        [
+            format!("{feed}.sig"),
+            feed,
+            format!("{}-0.2.0-{}.app.tar.gz", APP.archive, platform()),
+        ]
+    }
+
+    fn asked(&self) -> Vec<(String, String)> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+impl Transport for Outage {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        max: u64,
+        output: &mut dyn Write,
+    ) -> std::result::Result<(), Refused> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((url.to_owned(), accept.to_owned()));
+        if url.starts_with(REPO) {
+            return Err(match self.link {
+                code @ 500.. => Refused::Server(code),
+                code => status_error(code).into(),
+            });
+        }
+        if let Some(code) = self.api {
+            return Err(Refused::Server(code));
+        }
+        if url == format!("{API}/latest") || url.starts_with(&format!("{API}/tags/")) {
+            let assets: Vec<_> = Self::names()
+                .iter()
+                .enumerate()
+                .map(|(i, name)| serde_json::json!({ "name": name, "url": (self.asset_url)(i) }))
+                .collect();
+            let listing = serde_json::to_vec(&serde_json::json!({ "assets": assets })).unwrap();
+            return output.write_all(&listing).map_err(|e| err(e).into());
+        }
+        let i: usize = url
+            .strip_prefix(&format!("{API}/assets/"))
+            .and_then(|i| i.parse().ok())
+            .ok_or_else(|| format!("{url} isn't a release file"))?;
+        let name = &Self::names()[i];
+        self.inner
+            .get(&format!("{REPO}/download/x/{name}"), accept, max, output)
+    }
+}
+
+#[test]
+fn when_github_com_fails_the_update_comes_through_the_api() {
+    let outage = Outage::new(fixture(archive("0.2.0", None, None), |_| {}), 504, None);
+    let available = check_with(&outage, &outage.inner.key, "0.1.0", platform())
+        .unwrap()
+        .unwrap();
+    assert_eq!(available.release.version, "0.2.0");
+    let dir = temp();
+    let target = dir.path().join("Installed.app");
+    fs::create_dir(&target).unwrap();
+    prepare_with(&available, &target, &outage, |_| Ok(()), |_| {}).unwrap();
+    let asked = outage.asked();
+    assert!(
+        asked.contains(&(
+            format!("{API}/tags/{}0.2.0", APP.tag),
+            "application/vnd.github+json".into()
+        )),
+        "{asked:?}"
+    );
+    let files: Vec<_> = asked
+        .iter()
+        .filter(|(url, _)| url.contains("/assets/"))
+        .collect();
+    assert_eq!(files.len(), 3, "{asked:?}");
+    assert!(
+        files
+            .iter()
+            .all(|(_, accept)| accept == "application/octet-stream")
+    );
+}
+
+#[test]
+fn when_the_api_fails_too_the_check_says_what_github_com_said() {
+    let outage = Outage::new(
+        fixture(archive("0.2.0", None, None), |_| {}),
+        504,
+        Some(503),
+    );
+    let error = check_with(&outage, &outage.inner.key, "0.1.0", platform()).unwrap_err();
+    assert_eq!(error, status_error(504));
+}
+
+#[test]
+fn a_file_github_com_says_is_missing_is_not_asked_of_the_api() {
+    let outage = Outage::new(fixture(archive("0.2.0", None, None), |_| {}), 404, None);
+    let error = check_with(&outage, &outage.inner.key, "0.1.0", platform()).unwrap_err();
+    assert_eq!(error, "Update request failed: HTTP 404");
+    assert!(outage.asked().iter().all(|(url, _)| url.starts_with(REPO)));
+}
+
+#[test]
+fn a_file_the_api_lists_outside_this_repo_is_not_downloaded() {
+    let mut outage = Outage::new(fixture(archive("0.2.0", None, None), |_| {}), 504, None);
+    outage.asset_url = |i| format!("https://api.github.com/repos/someone/else/releases/assets/{i}");
+    let error = check_with(&outage, &outage.inner.key, "0.1.0", platform()).unwrap_err();
+    assert_eq!(error, status_error(504));
+    assert!(
+        !outage
+            .asked()
+            .iter()
+            .any(|(url, _)| url.contains("someone"))
+    );
 }
