@@ -470,3 +470,35 @@ test("mount puts fill on the tree's root, so the app lays the page out edge to e
   mount(h(Page, null, "Padded"));
   assert.deepEqual(last().props, {});
 });
+
+function Reorder({ steps }) {
+  const [step, setStep] = useState(0);
+  return h(Stack, null, h(Button, { onClick: () => setStep(step + 1) }, "Next"), h(Row, null, steps[step].map((key) => h(Text, { key }, key))));
+}
+
+test("rows that change order move, and none shows twice", () => {
+  // React moves a row to the end by appending it and to the middle by inserting it, while it's still in its old place.
+  mount(h(Reorder, { steps: [["a", "b", "c"], ["a", "c", "b"], ["c", "a", "b"]] }));
+  const rows = () => find(last(), "Row").children.map(text);
+  assert.deepEqual(rows(), ["a", "b", "c"]);
+  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  assert.deepEqual(rows(), ["a", "c", "b"]);
+  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  assert.deepEqual(rows(), ["c", "a", "b"]);
+});
+
+test("top-level parts that change order move, and none shows twice", () => {
+  mount(h(Reorder2));
+  const parts = () => last().children.map(text);
+  assert.deepEqual(parts(), ["a", "b", "c", "Next"]);
+  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  assert.deepEqual(parts(), ["a", "c", "b", "Next"]);
+  globalThis.__wingsEvent(find(last(), "Button").props.onClick, "");
+  assert.deepEqual(parts(), ["b", "a", "c", "Next"]);
+});
+
+function Reorder2() {
+  const steps = [["a", "b", "c"], ["a", "c", "b"], ["b", "a", "c"]];
+  const [step, setStep] = useState(0);
+  return h(Fragment, null, steps[step].map((key) => h(Text, { key }, key)), h(Button, { key: "next", onClick: () => setStep(step + 1) }, "Next"));
+}

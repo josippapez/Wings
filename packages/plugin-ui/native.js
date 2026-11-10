@@ -52,6 +52,13 @@ function commit() {
   globalThis.wings.render(json);
 }
 
+/** Puts a child before another, or last. React moves a child this way too, so it leaves its old place first. */
+function place(parent, child, before) {
+  const from = parent.children.indexOf(child);
+  if (from !== -1) parent.children.splice(from, 1);
+  parent.children.splice(before ? parent.children.indexOf(before) : parent.children.length, 0, child);
+}
+
 const host = {
   supportsMutation: true,
   supportsPersistence: false,
@@ -71,12 +78,12 @@ const host = {
   },
   createTextInstance: (text) => ({ id: nextId++, type: "#text", text }),
   appendInitialChild: (parent, child) => parent.children.push(child),
-  appendChild: (parent, child) => parent.children.push(child),
-  appendChildToContainer: (container, child) => container.children.push(child),
+  appendChild: place,
+  appendChildToContainer: place,
   removeChild: (parent, child) => parent.children.splice(parent.children.indexOf(child), 1),
   removeChildFromContainer: (container, child) => container.children.splice(container.children.indexOf(child), 1),
-  insertBefore: (parent, child, before) => parent.children.splice(parent.children.indexOf(before), 0, child),
-  insertInContainerBefore: (container, child, before) => container.children.splice(container.children.indexOf(before), 0, child),
+  insertBefore: place,
+  insertInContainerBefore: place,
   commitUpdate: (instance, _type, _old, props) => setProps(instance, props),
   commitTextUpdate: (text, _old, next) => {
     text.text = next;
