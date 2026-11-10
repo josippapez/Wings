@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.15 · 2026-11-10
+
+- **A list row no longer shows twice.** In the native app, a row that changed place in a plugin's list stayed in its old place too, so a Cyclops entry could show twice while the day's total was right. A moved row now shows once. Cyclops needs 0.9.6.
+
 ## 0.2.14 · 2026-11-09
 
 - **Disk usage reuses what it already scanned.** Going into a folder, or opening its smaller items, used to scan that folder again from scratch: 20 seconds on several cores for ~/Library. It now answers from the scan you already ran, in under a second, and leaves out what you moved to the Trash since. Needs Disk usage 0.2.2.
