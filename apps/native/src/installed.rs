@@ -135,21 +135,33 @@ pub fn library(dir: &Path) -> Option<Arc<Library>> {
 /// shares `library`, `dist/native/shared/<page>.js`, if it was built with that library, and otherwise `bundle`, which
 /// carries its own React, as every page did before.
 pub fn page_source(dir: &Path, bundle: &Path, library: Option<&Library>) -> std::io::Result<String> {
-    // A page built to WebAssembly, `dist/native/<page>.wasm`, runs in place of its JS build (`runtime::wasm`).
-    let module = bundle.with_extension("wasm");
-    if module.is_file() {
-        return Ok(format!("{}{}", crate::page::runtime::wasm::MARKER, module.display()));
+    use crate::page::runtime::wasm::MARKER;
+    // A page built to WebAssembly, `dist/native/<page>.wasm`, runs in place of its JS build (`runtime::wasm`): only a
+    // file inside the plugin's folder, links followed.
+    let stem = bundle.file_stem().and_then(|stem| stem.to_str());
+    let module = stem
+        .and_then(|stem| loading::resolve(dir, &format!("{NATIVE_DIR}/{stem}.wasm")))
+        .filter(|module| module.is_file());
+    if let Some(module) = module {
+        return Ok(format!("{MARKER}{}", module.display()));
     }
     let shared = library.and_then(|library| {
-        let stem = bundle.file_stem()?.to_str()?;
-        let file = native_file(dir, &format!("shared/{stem}"))?;
+        let file = native_file(dir, &format!("shared/{}", stem?))?;
         let source = fs::read_to_string(file).ok()?;
         (Library::needed_by(&source) == Some(library.hash())).then_some(source)
     });
-    match shared {
-        Some(source) => Ok(source),
-        None => fs::read_to_string(bundle),
+    let source = match shared {
+        Some(source) => source,
+        None => fs::read_to_string(bundle)?,
+    };
+    // The marker is how this says "the module at this path", so a script of the plugin's can't say it for itself.
+    if source.starts_with(MARKER) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "a page script can't start with the WebAssembly marker",
+        ));
     }
+    Ok(source)
 }
 
 /// The plugins that are installed, turned on, approved and have a native build, by name. Plugins the desktop skips

@@ -203,3 +203,32 @@ fn a_page_runs_its_build_that_shares_react_only_when_that_was_built_with_the_plu
     fs::remove_file(native.join("shared/board.js")).unwrap();
     assert_eq!(page_source(dir.path(), &bundle, Some(&shared)).unwrap(), "own React");
 }
+
+/// A page is a WebAssembly module only when its `.wasm` is in the plugin's folder: a script that starts with the marker,
+/// naming a module anywhere on disk, is refused, and so is a `.wasm` that is a link out of the folder.
+#[cfg(unix)]
+#[test]
+fn only_a_module_in_the_plugin_folder_runs_as_a_webassembly_page() {
+    use crate::page::runtime::wasm::MARKER;
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("dist/native");
+    std::fs::create_dir_all(&native).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let elsewhere = outside.path().join("other.wasm");
+    std::fs::write(&elsewhere, b"\0asm\x01\0\0\0").unwrap();
+
+    let faked = native.join("faked.js");
+    std::fs::write(&faked, format!("{MARKER}{}", elsewhere.display())).unwrap();
+    assert!(page_source(dir.path(), &faked, None).is_err());
+
+    let linked = native.join("linked.js");
+    std::fs::write(&linked, "wings.render('{}');").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, native.join("linked.wasm")).unwrap();
+    assert_eq!(page_source(dir.path(), &linked, None).unwrap(), "wings.render('{}');");
+
+    let built = native.join("built.js");
+    std::fs::write(&built, "").unwrap();
+    std::fs::write(native.join("built.wasm"), b"\0asm\x01\0\0\0").unwrap();
+    let source = page_source(dir.path(), &built, None).unwrap();
+    assert!(source.starts_with(MARKER) && source.ends_with("built.wasm"), "{source}");
+}
