@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.16 · 2026-11-11
+
+- **Plugins no longer stop when the Mac is busy.** A plugin was stopped for good when one of its steps took over a second, even when it spent that second waiting for a busy Mac. Cyclops' sidebar showed "the page ran for too long and was stopped", and Changes said "plugin changes is not running". Only a step that really runs for a second is stopped now.
+- **A stopped plugin comes back.** A plugin's background script that stops starts again by itself after 2 seconds, so its badges, tools and actions return without restarting Wings. A sidebar that stopped shows Reload by its error.
+
 ## 0.2.15 · 2026-11-10
 
 - **A list row no longer shows twice.** In the native app, a row that changed place in a plugin's list stayed in its old place too, so a Cyclops entry could show twice while the day's total was right. A moved row now shows once. Cyclops needs 0.9.6.
