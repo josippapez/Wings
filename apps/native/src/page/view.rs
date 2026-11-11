@@ -3,6 +3,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -37,6 +38,8 @@ use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme, ui};
 struct Pending {
     tree: Option<Tree>,
     error: Option<String>,
+    /// The error was the page's last: it has stopped.
+    stopped: bool,
 }
 
 struct SearchState {
@@ -62,6 +65,9 @@ struct InputState {
     /// and taking one of those would undo the keys typed since.
     sent: Vec<String>,
 }
+
+/// What a stopped page's Reload button runs.
+pub type Reload = Rc<dyn Fn(&mut Window, &mut gpui::App)>;
 
 pub struct PageView {
     runtime: Option<PageRuntime>,
@@ -94,6 +100,11 @@ pub struct PageView {
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
+    /// The page has stopped for good: nothing in it answers a click any more.
+    stopped: bool,
+    /// Loads the page again, for the button a stopped page shows by its error. None where whoever holds the page gave
+    /// no way to (`on_reload`).
+    reload: Option<Reload>,
     /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
     popover: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
@@ -120,6 +131,24 @@ impl PageView {
         if let Some(runtime) = &self.runtime {
             runtime.set_visible(visible);
         }
+    }
+
+    /// Gives a stopped page a Reload button by its error, which calls `reload`: whoever holds the page drops it and
+    /// opens it again.
+    pub fn on_reload(&mut self, reload: impl Fn(&mut Window, &mut gpui::App) + 'static) {
+        self.reload = Some(Rc::new(reload));
+    }
+
+    /// Whether the page has stopped for good.
+    #[cfg(feature = "test-support")]
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    /// What a stopped page's Reload button runs, for a test to press it. None when it shows none.
+    #[cfg(feature = "test-support")]
+    pub fn reload_button(&self) -> Option<Reload> {
+        self.reload.clone().filter(|_| self.stopped)
     }
 
     /// Starts the page bundle `source`; its first tree is drawn when it arrives.
@@ -198,7 +227,10 @@ impl PageView {
                     let mut pending = pending.lock().unwrap();
                     match event {
                         Event::Tree(tree) => pending.tree = Some(tree),
-                        Event::Error { message, .. } => pending.error = Some(message),
+                        Event::Error { message, fatal } => {
+                            pending.error = Some(message);
+                            pending.stopped |= fatal;
+                        }
                     }
                 }
                 let _ = wake.try_send(());
@@ -254,6 +286,7 @@ impl PageView {
                         if let Some(error) = taken.error {
                             view.error = Some(error.into());
                         }
+                        view.stopped |= taken.stopped;
                         cx.notify();
                     })
                     .is_err()
@@ -279,6 +312,8 @@ impl PageView {
             sunbursts: RefCell::new(HashMap::new()),
             chip_focus: RefCell::new(HashMap::new()),
             error,
+            stopped: false,
+            reload: None,
             popover: false,
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
@@ -1406,19 +1441,35 @@ impl Render for PageView {
                     .children(body),
             )
             .when_some(self.error.clone(), |page, error| {
+                // A page that stopped can't be clicked back to life, so its error comes with a way to load it again.
+                let reload = self.reload.clone().filter(|_| self.stopped);
                 page.child(
                     div()
-                        .id("page-error")
-                        .role(Role::Alert)
-                        .aria_label(error.clone())
                         .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.0))
                         .px(px(14.0))
                         .py(px(8.0))
                         .border_t_1()
                         .border_color(rgba(ui::HAIRLINE))
-                        .text_size(px(12.0))
-                        .text_color(rgb(theme::DANGER))
-                        .child(error),
+                        .child(
+                            div()
+                                .id("page-error")
+                                .role(Role::Alert)
+                                .aria_label(error.clone())
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(12.0))
+                                .text_color(rgb(theme::DANGER))
+                                .child(error),
+                        )
+                        .when_some(reload, |row, reload| {
+                            row.child(
+                                ui::button("page-reload", "Reload", ui::Variant::Outline, false, "Reload")
+                                    .on_click(move |_, window, cx| reload(window, cx)),
+                            )
+                        }),
                 )
             })
     }

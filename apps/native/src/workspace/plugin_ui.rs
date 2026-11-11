@@ -532,12 +532,32 @@ impl Workspace {
                 return;
             };
             let (host, source) = (installed.host.clone(), page.source.clone());
-            let page = cx.new(|cx| PageView::in_plugin(&host, &source, cx));
+            let (workspace, reloaded) = (cx.weak_entity(), key.clone());
+            let page = cx.new(|cx| {
+                let mut page = PageView::in_plugin(&host, &source, cx);
+                // After the click: the page is dropped here, and it is the page's own button that was pressed.
+                page.on_reload(move |_, cx| {
+                    let (workspace, reloaded) = (workspace.clone(), reloaded.clone());
+                    cx.defer(move |cx| {
+                        let _ = workspace.update(cx, |workspace, cx| workspace.reload_sidebar(&reloaded, cx));
+                    });
+                });
+                page
+            });
             self.sidebar_pages.insert(key.clone(), page);
         }
         self.right = Some(key);
         self.sync_plugin_visibility(cx);
         cx.notify();
+    }
+
+    /// Loads a sidebar's page again from its start, for one that stopped: its page is kept for as long as the app
+    /// runs, so a stopped one would otherwise stay stopped.
+    fn reload_sidebar(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+        self.sidebar_pages.remove(key);
+        if self.right.as_ref() == Some(key) {
+            self.show_sidebar(&key.0, &key.1, cx);
+        }
     }
 
     /// The title bar button of a sidebar: open, it closes the panel.

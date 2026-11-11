@@ -787,6 +787,48 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
     window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
 }
 
+/// A sidebar's page is kept for as long as the app runs, so one that stopped stayed stopped, its buttons dead, as
+/// Cyclops' did. Its error now comes with Reload, which loads the page again in the panel.
+#[test]
+fn a_sidebar_page_that_stopped_is_loaded_again_by_its_reload_button() {
+    let data = Data::temp();
+    // Draws, then loops until it is stopped.
+    let sidebar = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
+        setTimeout(() => { for (;;) {} }, 300);";
+    data.install_script(
+        "timer",
+        json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html" }] } }),
+        "",
+        &[("sidebar", sidebar)],
+        "timer-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let key = ("timer".to_owned(), "tracker".to_owned());
+    window.update(|w, _, cx| w.show_sidebar("timer", "tracker", cx));
+    let first = window.read(|w, _| w.sidebar_pages[&key].clone());
+    let wait = |window: &mut TestAppWindow<Workspace>, what: &str, done: &dyn Fn(&crate::page::PageView) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !window.read(|w, cx| done(w.sidebar_pages[&key].read(cx))) {
+            assert!(Instant::now() < deadline, "{what}");
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    // A page that runs has no Reload to press.
+    wait(&mut window, "the page never drew", &|page| page.text().contains("Up"));
+    assert!(window.read(|_, cx| first.read(cx).reload_button().is_none()));
+    wait(&mut window, "the page was never stopped", &|page| page.stopped());
+    let reload = window.read(|_, cx| first.read(cx).reload_button()).expect("Reload by the error");
+    window.update(|_, window, cx| reload(window, cx));
+    app.run_until_parked();
+    // Another page in the same place, drawn again and running.
+    let second = window.read(|w, _| w.sidebar_pages[&key].clone());
+    assert_ne!(first.entity_id(), second.entity_id());
+    window.read(|w, _| assert_eq!(w.right.as_ref(), Some(&key)));
+    wait(&mut window, "the reloaded page never drew", &|page| page.text().contains("Up") && !page.stopped());
+}
+
 /// Typing in Cyclops' popover, or picking from a list or menu in it, keeps it open: gpui reads a key press as the
 /// pointer leaving, and a field or menu in use holds it even once the pointer goes, as does a press on a list drawn past
 /// the card. It goes when the keyboard leaves it with the pointer away, or on a press elsewhere.
