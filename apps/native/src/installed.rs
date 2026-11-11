@@ -135,6 +135,11 @@ pub fn library(dir: &Path) -> Option<Arc<Library>> {
 /// shares `library`, `dist/native/shared/<page>.js`, if it was built with that library, and otherwise `bundle`, which
 /// carries its own React, as every page did before.
 pub fn page_source(dir: &Path, bundle: &Path, library: Option<&Library>) -> std::io::Result<String> {
+    // A page built to WebAssembly, `dist/native/<page>.wasm`, runs in place of its JS build (`runtime::wasm`).
+    let module = bundle.with_extension("wasm");
+    if module.is_file() {
+        return Ok(format!("{}{}", crate::page::runtime::wasm::MARKER, module.display()));
+    }
     let shared = library.and_then(|library| {
         let stem = bundle.file_stem()?.to_str()?;
         let file = native_file(dir, &format!("shared/{stem}"))?;

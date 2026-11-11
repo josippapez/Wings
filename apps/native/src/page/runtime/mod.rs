@@ -21,6 +21,7 @@
 
 mod script;
 mod timers;
+pub mod wasm;
 mod wings;
 
 use super::tree::Tree;
@@ -463,12 +464,16 @@ impl PageRuntime {
         library: Option<Arc<Library>>,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> Self {
+        let source = source.into();
+        if let Some(path) = source.strip_prefix(wasm::MARKER) {
+            return wasm::open(path, link, on_event);
+        }
         let services = Services {
             render: role == Role::Page,
             link: Some(link),
             queue: None,
         };
-        Self::open(engine, source.into(), services, library, on_event)
+        Self::open(engine, source, services, library, on_event)
     }
 
     fn open(

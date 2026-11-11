@@ -109,7 +109,7 @@ pub fn socket(dir: &Path, version: u32) -> PathBuf {
 }
 
 /// Makes `dir` a folder only this user can open, so nobody else reaches the sockets in it.
-fn private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)

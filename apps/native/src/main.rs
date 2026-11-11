@@ -212,6 +212,9 @@ fn main() {
     }
     #[cfg(target_os = "macos")]
     without_large_malloc_cache();
+    if let Some(dir) = data_dir::state_file().as_deref().and_then(std::path::Path::parent) {
+        wings_native::page::runtime::wasm::keep_compiled_in(dir.join("wasm-cache"));
+    }
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
