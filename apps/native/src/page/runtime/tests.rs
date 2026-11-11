@@ -251,6 +251,37 @@ fn a_page_that_never_stops_is_stopped_wherever_it_loops() {
     }
 }
 
+/// A turn that waits hasn't run: here in a host call that takes three times the budget, as any turn does on a Mac too
+/// busy to give the page's thread the CPU. Cyclops' sidebar was stopped for good that way.
+#[test]
+fn a_turn_that_waits_past_its_budget_is_not_stopped() {
+    struct Slow;
+    impl Link for Slow {
+        fn broadcast(&self, _: String) -> Result<(), String> {
+            Ok(())
+        }
+        fn storage(&self, _: Store) -> Result<String, String> {
+            thread::sleep(Duration::from_millis(300));
+            Ok("null".into())
+        }
+        fn call(&self, method: &str, _: serde_json::Value, reply: Reply) {
+            reply.err(format!("no {method}"));
+        }
+    }
+    let (sender, events) = mpsc::channel();
+    // The loop is long enough for the engine to ask whether the turn's time is up.
+    let source = report("wings.storage.get('x').then(() => { let n = 0; for (let i = 0; i < 200000; i++) n += i; show('after'); });");
+    let limits = Limits {
+        turn: Duration::from_millis(100),
+        ..Limits::default()
+    };
+    let runtime = PageRuntime::spawn_plugin(source, Role::Page, limits, Arc::new(Slow), move |event| {
+        let _ = sender.send(event);
+    })
+    .unwrap();
+    assert_eq!(shown(&Page { runtime, events }.tree()), "after");
+}
+
 #[test]
 fn a_page_that_loops_in_a_click_or_a_timer_is_stopped_too() {
     let source = report("show('up'); globalThis.__wingsEvent = () => { for (;;) {} };");

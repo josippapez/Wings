@@ -563,18 +563,39 @@ struct Opening {
     stopped: Arc<AtomicBool>,
 }
 
-/// When the turn the engine is in has to end. The engine asks `expired` while it runs.
+/// When the turn the engine is in has to end, on the clock of `used`. The engine asks `expired` while it runs. All of
+/// it is called on the engine's thread.
 struct Budget {
-    start: Instant,
-    /// Nanoseconds after `start`.
+    /// On that clock, in nanoseconds.
     until: AtomicU64,
     turn: Duration,
 }
 
+/// How long the engine's thread has run, in nanoseconds: its own CPU time, not the time that passed. A turn that
+/// waits for the CPU on a busy Mac, or in a host call, has not run for that long, and a page was stopped for good for
+/// it when a second went by.
+#[cfg(unix)]
+fn used() -> u64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `clock_gettime` writes the `timespec` it is given and keeps no pointer.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
+}
+
+/// debt: the time that passed, where the thread's CPU time isn't read yet (Windows: `GetThreadTimes`).
+#[cfg(not(unix))]
+fn used() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
 impl Budget {
     fn begin(&self) {
-        let until = self.start.elapsed() + self.turn;
-        self.until.store(until.as_nanos() as u64, Ordering::Relaxed);
+        self.until
+            .store(used() + self.turn.as_nanos() as u64, Ordering::Relaxed);
     }
 
     /// Ends the turn now: whatever runs next is stopped at the engine's next check.
@@ -583,7 +604,7 @@ impl Budget {
     }
 
     fn expired(&self) -> bool {
-        self.start.elapsed().as_nanos() as u64 >= self.until.load(Ordering::Relaxed)
+        used() >= self.until.load(Ordering::Relaxed)
     }
 }
 
@@ -640,7 +661,6 @@ fn serve(limits: Limits, jobs: &mpsc::Receiver<Job>, quit: &AtomicBool) {
     runtime.set_memory_limit(limits.heap_bytes);
     runtime.set_max_stack_size(STACK_BYTES);
     let budget = Arc::new(Budget {
-        start: Instant::now(),
         until: AtomicU64::new(0),
         turn: limits.turn,
     });
