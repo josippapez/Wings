@@ -263,11 +263,14 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
             ));
             host.set_library(shared.clone());
             let reported = id.clone();
-            host.start_main(&main, move |event| {
-                if let Event::Error { message, .. } = event {
-                    eprintln!("[plugins] {reported}: {message}");
-                }
-            })
+            host.keep_main(
+                main.into(),
+                Arc::new(move |event| {
+                    if let Event::Error { message, .. } = event {
+                        eprintln!("[plugins] {reported}: {message}");
+                    }
+                }),
+            )
             .inspect_err(|error| eprintln!("[plugins] {id}: main didn't start: {error}"))
             .ok()?;
             let pages = found

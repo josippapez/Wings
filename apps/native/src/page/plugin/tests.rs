@@ -697,3 +697,35 @@ fn a_plugins_pages_share_one_engine_which_ends_with_the_last_page_and_main_keeps
     assert!(host.pages.lock().unwrap().upgrade().is_none());
     open(&host, PROBE).report("a page on a new engine", |_| true);
 }
+
+/// A main that stops for good is started again, so its badges, tools and actions come back without restarting Wings:
+/// Changes' and Tasks' mains stopped on a busy Mac and stayed stopped. Once the plugin is dropped, nothing restarts.
+#[test]
+fn a_main_that_stops_is_started_again_until_its_plugin_is_dropped() {
+    let root = Root::new();
+    let limits = Limits {
+        turn: Duration::from_millis(100),
+        ..Limits::default()
+    };
+    let host = Arc::new(PluginHost::with_limits(root.config("fixture"), limits));
+    // Counts its starts, then loops until it is stopped.
+    let main = "wings.storage.get('starts').then((n) => wings.storage.set('starts', (n ?? 0) + 1)).then(() => setTimeout(() => { for (;;) {} }, 50));";
+    let (stops, stopped) = mpsc::channel();
+    host.keep_main(
+        main.into(),
+        Arc::new(move |event| {
+            if matches!(event, Event::Error { fatal: true, .. }) {
+                let _ = stops.send(());
+            }
+        }),
+    )
+    .unwrap();
+    let starts = |root: &Root| root.saved("fixture", "starts").and_then(|n| n.as_u64()).unwrap_or(0);
+    stopped.recv_timeout(WAIT).expect("the first main to stop");
+    stopped.recv_timeout(WAIT).expect("the main started again, and stopped again");
+    assert_eq!(starts(&root), 2);
+    drop(host);
+    // The next restart would have come 4 s after that stop.
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(starts(&root), 2, "a dropped plugin's main started again");
+}

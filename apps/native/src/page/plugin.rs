@@ -407,6 +407,46 @@ impl Drop for Membership {
     }
 }
 
+/// How long after a main stops it starts again, the first time.
+const RESTART_FIRST: Duration = Duration::from_secs(2);
+/// The longest wait before a restart.
+const RESTART_MOST: Duration = Duration::from_secs(10 * 60);
+/// A main that ran this long before it stopped is restarted after `RESTART_FIRST` again.
+const RESTART_RESET: Duration = Duration::from_secs(10 * 60);
+
+/// `PluginHost::keep_main`, waiting `wait` before the next restart.
+fn keep_main(
+    host: Weak<PluginHost>,
+    source: Arc<str>,
+    report: Arc<dyn Fn(Event) + Send + Sync>,
+    wait: Duration,
+) -> std::io::Result<()> {
+    let Some(this) = host.upgrade() else {
+        return Ok(());
+    };
+    let started = Instant::now();
+    let (again, report_here) = ((host, source.clone(), report.clone()), report);
+    this.start_main(&source, move |event| {
+        let stopped = matches!(event, Event::Error { fatal: true, .. });
+        report_here(event);
+        if stopped {
+            let next = if started.elapsed() >= RESTART_RESET {
+                RESTART_FIRST
+            } else {
+                (wait * 2).min(RESTART_MOST)
+            };
+            let (host, source, report) = again.clone();
+            // Not on this thread: it is the stopped main's, still unwinding it.
+            std::thread::spawn(move || {
+                std::thread::sleep(wait);
+                if let Err(error) = keep_main(host, source, report.clone(), next) {
+                    report(Event::Error { message: format!("main didn't start again: {error}"), fatal: true });
+                }
+            });
+        }
+    })
+}
+
 /// A plugin: its main script, and the pages opened from it. Frames hear and answer each other until they're dropped;
 /// a frame that stops for good (it threw while starting, or ran too long) leaves the others going.
 pub struct PluginHost {
@@ -491,6 +531,15 @@ impl PluginHost {
             ));
         }
         Ok(())
+    }
+
+    /// Starts the plugin's main as `start_main` does, and starts it again each time it stops for good, as it does when a
+    /// turn runs past its limit: badges, tools and actions all go through main, so a stopped one leaves the plugin dead
+    /// until Wings restarts. The first restart comes `RESTART_FIRST` after the stop, and each one that follows a short
+    /// run waits twice as long, up to `RESTART_MOST`, so a main that stops again at once costs little. `report` hears
+    /// every main's events. Nothing restarts once the host is dropped.
+    pub fn keep_main(self: &Arc<Self>, source: Arc<str>, report: Arc<dyn Fn(Event) + Send + Sync>) -> std::io::Result<()> {
+        keep_main(Arc::downgrade(self), source, report, RESTART_FIRST)
     }
 
     /// The panes the app has open now. Every frame hears the list with `onPanes`, now and as a frame starts, and nothing
