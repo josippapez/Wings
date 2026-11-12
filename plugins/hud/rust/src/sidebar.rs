@@ -91,11 +91,16 @@ fn view() -> Vec<Node> {
         let account = |account: &Value| account.as_str().unwrap_or("default").to_owned();
 
         let mut usage = card();
+        // Nothing says which account the session runs as, so every account's limits are named.
+        let silent = s.is_some_and(|s| s["silent"] == true);
+        if silent {
+            usage = usage.child(text("This session's Claude account isn't connected to Wings, so its limits aren't known. Connect Claude Code in Plugins.").prop("tone", "warn"));
+        }
         if let (true, Some(s)) = (missing, s) {
             usage = usage.child(muted(format!("This session runs as the {} account, which hasn't reported its limits yet.", account(&s["account"]))));
         }
         for a in limits {
-            let of = if all.len() > 1 || missing { format!(" · {}", account(&a["account"])) } else { String::new() };
+            let of = if all.len() > 1 || missing || silent { format!(" · {}", account(&a["account"])) } else { String::new() };
             usage = usage.maybe(limit("5-hour limit", &of, &a["fiveHour"])).maybe(limit("Weekly limit", &of, &a["sevenDay"]));
         }
         if o["statusline"] != true {

@@ -9,7 +9,7 @@ use crate::{
     LIMIT_CRITICAL, LIMIT_WARN, SNAPSHOT, WANT,
     format::MINUTE,
     session::{Session, ingest, session, start_run},
-    view::{limits, pane_status, snapshot, state},
+    view::{REPORT_WITHIN, limits, pane_status, snapshot, state},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap};
@@ -192,6 +192,7 @@ fn backlog(id: String) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<Value
 
 #[unsafe(no_mangle)]
 pub fn start() {
+    state(|state| state.started = host::now());
     let follow = sessions::follow(Handlers {
         create: session,
         pane: |s, pane| {
@@ -247,6 +248,11 @@ pub fn start() {
             host::sleep(MINUTE as u32).await;
             refresh_status(true);
         }
+    });
+    // By then a session Claude Code hasn't reported counts as not connected, which the strips and the sidebar say.
+    task::spawn(async {
+        host::sleep(REPORT_WITHIN as u32 + 1000).await;
+        changed();
     });
     poll::while_focused(STATUS_EVERY, false, || refresh_status(false));
     poll::while_focused(MINUTE as u32, false, refresh_memory);

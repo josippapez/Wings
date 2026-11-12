@@ -17,6 +17,8 @@ pub struct State {
     pub saved_limits: Vec<Value>,
     /// Bytes in use, and all there is.
     pub memory: Option<(f64, f64)>,
+    /// When the plugin started, in ms.
+    pub started: f64,
 }
 
 thread_local! {
@@ -50,6 +52,16 @@ fn context(state: &State, s: &Session) -> Option<Context> {
     let tokens = s.tokens?;
     let window = s.window.unwrap_or(200_000.0);
     Some(Context { percent: (tokens / window * 100.0).round().min(100.0), tokens, window, cache: Value::Null })
+}
+
+/// How long Claude Code has to report a session after the plugin starts: its status line runs every few seconds.
+pub const REPORT_WITHIN: f64 = 15_000.0;
+
+/// Whether Claude has replied in the session while its Claude Code has told Wings nothing about this run: its account
+/// isn't connected to Wings, so nothing says which account it is or what its limits are.
+pub fn silent(state: &State, s: &Session, now: f64) -> bool {
+    let reported = |reported: &Value| reported["sessions"][&s.id]["at"].as_f64().is_some_and(|at| at >= s.started_at);
+    s.tokens.is_some() && now - state.started > REPORT_WITHIN && state.reported.as_ref().is_some_and(|all| !reported(all))
 }
 
 struct Limit {
@@ -116,10 +128,12 @@ const ROW_VALUE: usize = 200;
 pub fn pane_status(state: &State, s: &Session, now: f64) -> Value {
     let ctx = context(state, s);
     // The limits of the account the session runs as, named when there is more than one. Before Claude Code has
-    // reported the session, the newest account's.
+    // reported the session, the newest account's. For a session it never reports, none: another account's would pass
+    // for its own.
     let all = all_limits(state);
     let account = state.reported.as_ref().and_then(|reported| reported["sessions"][&s.id].get("account"));
-    let own = account.and_then(|account| all.iter().find(|l| l["account"] == *account)).or(all.first());
+    let silent = silent(state, s, now);
+    let own = if silent { None } else { account.and_then(|account| all.iter().find(|l| l["account"] == *account)).or(all.first()) };
     let (five_hour, seven_day) = own.map_or((None, None), |l| (limit(&l["fiveHour"], now), limit(&l["sevenDay"], now)));
     let named = own.filter(|_| all.len() > 1).map(|l| l["account"].as_str().unwrap_or("default").to_owned());
 
@@ -149,7 +163,9 @@ pub fn pane_status(state: &State, s: &Session, now: f64) -> Value {
     if let Some(account) = &named {
         rows.push(json!({ "label": "Account", "value": account }));
     }
-    if !statusline(state) {
+    if silent {
+        rows.push(json!({ "label": "Usage limits", "value": "This session's Claude account isn't connected to Wings", "tone": "warning" }));
+    } else if !statusline(state) {
         rows.push(json!({ "label": "Usage limits", "value": "After Claude Code's next reply" }));
     }
     rows.push(match &ctx {
@@ -235,6 +251,9 @@ pub fn snapshot(state: &State, sessions: &[&Session]) -> Value {
             if let Some(account) = state.reported.as_ref().and_then(|reported| reported["sessions"][&s.id].get("account")) {
                 view["account"] = account.clone();
             }
+            if silent(state, s, now) {
+                view["silent"] = true.into();
+            }
             view
         })
         .collect();
@@ -294,6 +313,29 @@ mod tests {
         assert_eq!(accounts(limits_for(&both, None)), (vec![Value::Null, "work".into()], false));
         assert_eq!(accounts(limits_for(&both[..1], Some(&"work".into()))), (vec![Value::Null], true));
         assert_eq!(accounts(limits_for(&[], Some(&"work".into()))), (vec![], false));
+    }
+
+    #[test]
+    fn a_session_claude_code_never_reports_shows_no_limits_and_says_its_account_isnt_connected() {
+        let (mut quiet, mut loud) = (session("quiet"), session("loud"));
+        (quiet.tokens, loud.tokens) = (Some(1000.0), Some(1000.0));
+        let limits = json!([{ "account": null, "fiveHour": { "usedPercentage": 40, "resetsAt": null }, "sevenDay": null, "at": 0 }]);
+        let state = State { reported: Some(json!({ "rateLimits": limits, "sessions": { "loud": { "account": null, "at": 5 } } })), ..State::default() };
+        let later = REPORT_WITHIN + 1.0;
+        let strip = |s: &Session, now: f64| {
+            let status = pane_status(&state, s, now);
+            let warned = status["rows"].as_array().unwrap().iter().any(|row| row["value"] == "This session's Claude account isn't connected to Wings");
+            (status["items"][0]["value"].clone(), warned)
+        };
+        assert_eq!(strip(&quiet, later), ("–".into(), true));
+        assert_eq!(strip(&loud, later), ("40%".into(), false));
+        // Right after the plugin starts Claude Code hasn't had its turn yet, and before a reply there is nothing to report.
+        assert_eq!(strip(&quiet, 1000.0), ("40%".into(), false));
+        quiet.tokens = None;
+        assert_eq!(strip(&quiet, later), ("40%".into(), false));
+        // Wings itself couldn't be asked: nothing is known, so nothing is claimed.
+        quiet.tokens = Some(1000.0);
+        assert!(!silent(&State::default(), &quiet, later));
     }
 
     #[test]
