@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.20 · 2026-11-12
+
+- **Sessions on one Claude login show the same limits.** With the same login in two account folders, like the default one and a named account, the HUD could show an old reading for one of them. Wings now gives every folder signed in to that login the newest limits any of them reported.
+- **Session detail is no longer offered.** What it showed is in the HUD, the terminal and Changes.
+
 ## 0.2.19 · 2026-11-12
 
 - **Settings, Plugins is easier to read.** Each plugin's row says what it does, and an amber label marks only what needs you: approval, an update, or no native build. No plugin's page is open to begin with. Click a row to open its page and click it again to close it. When a plugin can't be turned on or updated, the reason shows in its row.
