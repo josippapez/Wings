@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.17 · 2026-11-12
+
+- **Plugins can be written in Rust.** A plugin's background script and its pages can each be a WebAssembly module built from Rust. Wings runs it sandboxed, draws its pages with the same controls, and gives it the same permissions as a TypeScript plugin. It installs from GitHub the same way. This is a first version: a Rust plugin runs with the default time and memory limits, and each of its parts on a thread of its own.
+- **Cyclops is the first.** Cyclops 0.9.7 runs its title bar button, its tools for Claude, its sidebar and its popover from Rust. Needs Cyclops 0.9.7.
+- **Wings is about 10 MB bigger**, for the WebAssembly engine.
+
 ## 0.2.16 · 2026-11-11
 
 - **Plugins no longer stop when the Mac is busy.** A plugin was stopped for good when one of its steps took over a second, even when it spent that second waiting for a busy Mac. Cyclops' sidebar showed "the page ran for too long and was stopped", and Changes said "plugin changes is not running". Only a step that really runs for a second is stopped now.
